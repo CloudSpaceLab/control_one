@@ -43,6 +43,7 @@ mesh:
 
 provisioning:
   template: ubuntu-web-tier
+  provider: vmware # options: vmware, libvirt, aws, azure
   metadata:
     provider: vmware
     cluster: prod-cluster-1
@@ -53,6 +54,13 @@ provisioning:
     - cis-ubuntu-24
     - control-one-hardening
   auto_remediation: true
+  # Example for AWS instead:
+  # provider: aws
+  # metadata:
+  #   region: eu-west-1
+  #   vpc_id: vpc-123456
+  #   subnet_id: subnet-abc123
+  #   iam_profile: EC2InstanceProfile
 
 compliance:
   region: eu

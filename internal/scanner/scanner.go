@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -28,77 +29,108 @@ type Result struct {
 }
 
 // Runner defines the interface for compliance scanners.
-type Runner interface {
-	Run(ctx context.Context, rules []policy.Rule) ([]Result, error)
-}
-
 // Options tunes the builtin scanner runtime behavior.
 type Options struct {
-	Timeout time.Duration
-	Shell   string
+    Timeout       time.Duration
+    Shell         string
+    MaxConcurrent int
 }
 
 // BuiltinScanner executes rule checks using shell commands.
 type BuiltinScanner struct {
-	log       *zap.Logger
-	opts      Options
-	shellName string
-	shellArgs []string
+    log       *zap.Logger
+    opts      Options
+    shellName string
+    shellArgs []string
 }
 
 // NewBuiltinScanner creates the builtin scanner with provided options.
 func NewBuiltinScanner(log *zap.Logger, opts Options) *BuiltinScanner {
-	if opts.Timeout <= 0 {
-		opts.Timeout = 30 * time.Second
-	}
-
-	shellName, shellArgs := resolveShell(opts.Shell)
-
-	return &BuiltinScanner{
-		log:       log,
-		opts:      opts,
-		shellName: shellName,
-		shellArgs: shellArgs,
-	}
+    if opts.Timeout <= 0 {
+        opts.Timeout = 30 * time.Second
+    }
+    name, args := resolveShell(opts.Shell)
+    return &BuiltinScanner{
+        log:       log,
+        opts:      opts,
+        shellName: name,
+        shellArgs: args,
+    }
 }
 
 // Run evaluates each policy rule by executing the associated command using the configured shell.
 func (b *BuiltinScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, error) {
-	results := make([]Result, 0, len(rules))
-	for _, rule := range rules {
-		r := Result{RuleID: rule.ID, CheckedAt: time.Now().UTC()}
-		cmdCtx := ctx
-		var cancel context.CancelFunc
-		if b.opts.Timeout > 0 {
-			cmdCtx, cancel = context.WithTimeout(ctx, b.opts.Timeout)
-		}
+    n := len(rules)
+    results := make([]Result, n)
+    if n == 0 {
+        return results, nil
+    }
 
-		output, err := b.runCommand(cmdCtx, rule.Check)
-		if cancel != nil {
-			cancel()
-		}
-		trimmed := strings.TrimSpace(output)
-		if err == nil {
-			r.Status = StatusCompliant
-			r.Details = trimmed
-		} else {
-			if errors.Is(err, context.DeadlineExceeded) {
-				r.Status = StatusError
-				r.Details = "check timed out"
-			} else if exitErr, ok := err.(*exec.ExitError); ok {
-				r.Status = StatusNonCompliant
-				r.Details = trimmed
-				if r.Details == "" {
-					r.Details = exitErr.Error()
-				}
-			} else {
-				r.Status = StatusError
-				r.Details = err.Error()
-			}
-		}
-		b.log.Debug("check executed", zap.String("rule_id", rule.ID), zap.String("status", r.Status))
-		results = append(results, r)
+	workers := b.opts.MaxConcurrent
+	if workers <= 0 {
+		workers = 1
 	}
+	if workers > n {
+		workers = n
+	}
+
+	type job struct{ idx int }
+	jobs := make(chan job)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	worker := func() {
+		defer wg.Done()
+		for j := range jobs {
+			rule := rules[j.idx]
+			r := Result{RuleID: rule.ID, CheckedAt: time.Now().UTC()}
+			cmdCtx := ctx
+			var cancel context.CancelFunc
+			if b.opts.Timeout > 0 {
+				cmdCtx, cancel = context.WithTimeout(ctx, b.opts.Timeout)
+			}
+			output, err := b.runCommand(cmdCtx, rule.Check)
+			if cancel != nil {
+				cancel()
+			}
+			trimmed := strings.TrimSpace(output)
+			if err == nil {
+				r.Status = StatusCompliant
+				r.Details = trimmed
+			} else {
+				if errors.Is(err, context.DeadlineExceeded) {
+					r.Status = StatusError
+					r.Details = "check timed out"
+				} else if exitErr, ok := err.(*exec.ExitError); ok {
+					r.Status = StatusNonCompliant
+					r.Details = trimmed
+					if r.Details == "" {
+						r.Details = exitErr.Error()
+					}
+				} else {
+					r.Status = StatusError
+					r.Details = err.Error()
+				}
+			}
+			b.log.Debug("check executed", zap.String("rule_id", rule.ID), zap.String("status", r.Status))
+			results[j.idx] = r
+		}
+	}
+
+	for i := 0; i < workers; i++ {
+		go worker()
+	}
+	for i := 0; i < n; i++ {
+		select {
+		case jobs <- job{idx: i}:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return results, ctx.Err()
+		}
+	}
+	close(jobs)
+	wg.Wait()
 	return results, nil
 }
 

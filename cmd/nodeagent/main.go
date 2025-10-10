@@ -72,7 +72,6 @@ func main() {
 	}
 	state, err := registrar.Register(ctx, req, cfg.StateFile)
 	if err != nil {
-		log.Fatal("registration failed", zap.Error(err))
 	}
 	emitHook(ctx, hooksService, log, "agent.registration.success", state.NodeID, map[string]any{
 		"hostname": sysInfo.Hostname,
@@ -94,8 +93,9 @@ func main() {
 		log.Fatal("policy syncer init failed", zap.Error(err))
 	}
 	scannerSvc := scanner.NewBuiltinScanner(log, scanner.Options{
-		Timeout: cfg.Scanner.Timeout,
-		Shell:   cfg.Scanner.Shell,
+		Timeout:       cfg.Scanner.Timeout,
+		Shell:         cfg.Scanner.Shell,
+		MaxConcurrent: cfg.Scanner.MaxConcurrent,
 	})
 
 	telemetrySvc := telemetry.New(client, log, hooksService)
@@ -123,6 +123,7 @@ func main() {
 
 	provEngine := provisioning.NewEngine(log, client, provisioning.Options{
 		Template:        cfg.Provisioning.Template,
+		Provider:        cfg.Provisioning.Provider,
 		Baselines:       cfg.Provisioning.Baselines,
 		AutoRemediation: cfg.Provisioning.AutoRemediation,
 	})
@@ -166,7 +167,22 @@ func main() {
 
 	if cfg.Intervals.Provisioning > 0 {
 		if _, err := sched.AddInterval("provisioning", cfg.Intervals.Provisioning, func() {
-			if err := provEngine.ApplyTemplate(ctx, state.NodeID, state.Metadata); err != nil {
+			// Merge scheduler metadata with config and registration state
+			metadata := map[string]string{
+				"scheduler":    "true",
+				"node_name":    cfg.NodeName,
+				"generated_by": "control_one_scheduler",
+			}
+			for k, v := range cfg.Provisioning.Metadata {
+				metadata[k] = v
+			}
+			if state.Metadata != nil {
+				for k, v := range state.Metadata {
+					metadata[k] = v
+				}
+			}
+
+			if err := provEngine.ApplyTemplate(ctx, state.NodeID, metadata); err != nil {
 				log.Warn("apply provisioning template", zap.Error(err))
 				emitHook(ctx, hooksService, log, "provisioning.template.failed", state.NodeID, map[string]any{"error": err.Error()})
 			}

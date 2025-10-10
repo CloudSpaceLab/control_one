@@ -38,6 +38,8 @@ func DetectProvider() (string, map[string]string) {
                 return "libvirt", map[string]string{}
             case strings.Contains(low, "amazonec2") || strings.Contains(low, "amazon ec2"):
                 return "aws", map[string]string{}
+            case strings.Contains(low, "google compute engine") || strings.Contains(low, "google"):
+                return "gcp", map[string]string{}
             case strings.Contains(low, "microsoft corporation") || exists("/var/lib/waagent"):
                 return "azure", map[string]string{}
             }
