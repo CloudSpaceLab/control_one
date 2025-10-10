@@ -1,0 +1,20 @@
+[Unit]
+Description=Control One Node Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/control-one/nodeagent/nodeagent -config /etc/control-one/nodeagent.yaml
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+LimitNOFILE=65536
+AmbientCapabilities=CAP_SYSLOG CAP_DAC_OVERRIDE
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/control-one/nodeagent /var/log/control-one/nodeagent
+
+[Install]
+WantedBy=multi-user.target

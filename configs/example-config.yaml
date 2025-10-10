@@ -1,0 +1,86 @@
+api_url: https://control-plane.example.com/api
+bootstrap_token: CHANGE_ME
+node_name: example-node
+state_file: /var/lib/control-one/nodeagent/state.json
+policy_dir: /var/lib/control-one/nodeagent/policies
+log_dir: /var/log/control-one/nodeagent
+plugin_dir: /opt/control-one/nodeagent/plugins
+
+policy:
+  public_key_file: /var/lib/control-one/nodeagent/keys/policy_pub.pem
+  metadata_file: /var/lib/control-one/nodeagent/policies/policies.meta.json
+
+scanner:
+  timeout: 30s
+  shell: ""
+  max_concurrent: 4
+
+mesh:
+  enabled: true
+  coordinator_url: https://mesh-control.example.com
+  auth_token: CHANGE_ME
+  namespace: default
+  private_cidr: 10.1.0.0/16
+  relay_nodes: []
+  state_file: /var/lib/control-one/nodeagent/mesh/state.json
+  poll_interval: 10m
+  key_rotation: 168h
+
+provisioning:
+  template: ubuntu-web-tier
+  baselines:
+    - cis-ubuntu-24
+    - control-one-hardening
+  auto_remediation: true
+
+compliance:
+  region: eu
+  rule_sets:
+    - cis-level1
+    - iso27001-section8
+  certifications:
+    - gdpr
+    - soc2
+  auto_apply_templates: true
+
+access:
+  provider: active_directory
+  sync_interval: 30m
+  default_role: operator
+  api_endpoint: https://directory.example.com
+
+secrets:
+  backend: vault
+  endpoint: https://vault.example.com
+  groups:
+    - production
+    - shared-services
+  sync_interval: 15m
+
+hardening:
+  profiles:
+    - baseline
+    - pci-dss
+  allow_overrides: false
+
+telemetry_prefs:
+  collect_logs: true
+  log_namespaces:
+    - system
+    - application
+    - security
+  file_integrity: true
+  metrics_interval: 30s
+  activity_interval: 2m
+
+tls:
+  cert_file: /var/lib/control-one/nodeagent/certs/nodeagent.crt
+  key_file: /var/lib/control-one/nodeagent/certs/nodeagent.key
+  ca_cert_file: /var/lib/control-one/nodeagent/certs/ca.crt
+
+intervals:
+  heartbeat: 60s
+  policy_sync: 30m
+  scan: 15m
+  telemetry: 1m
+  provisioning: 30m
