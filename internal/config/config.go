@@ -66,6 +66,22 @@ type Config struct {
 		ActivityInterval time.Duration `mapstructure:"activity_interval"`
 	} `mapstructure:"telemetry_prefs"`
 
+	Wizard struct {
+		Enabled                  bool          `mapstructure:"enabled"`
+		AutoGenerateCertificates bool          `mapstructure:"auto_generate_certificates"`
+		CertValidity             time.Duration `mapstructure:"cert_validity"`
+		Hosts                    []string      `mapstructure:"hosts"`
+		Organization             string        `mapstructure:"organization"`
+		RunAccessSync            bool          `mapstructure:"run_access_sync"`
+		RunSecretsSync           bool          `mapstructure:"run_secrets_sync"`
+		RunProvisioning          bool          `mapstructure:"run_provisioning"`
+		RunCompliance            bool          `mapstructure:"run_compliance"`
+		EmitSummary              bool          `mapstructure:"emit_summary"`
+		Timeout                  time.Duration `mapstructure:"timeout"`
+	} `mapstructure:"wizard"`
+
+	Hooks HooksConfig `mapstructure:"hooks"`
+
 	Mesh struct {
 		Enabled        bool          `mapstructure:"enabled"`
 		CoordinatorURL string        `mapstructure:"coordinator_url"`
@@ -119,6 +135,9 @@ const (
 	defaultSecretsSyncInterval  = 15 * time.Minute
 	defaultTelemetryMetrics     = time.Minute
 	defaultTelemetryActivity    = 5 * time.Minute
+	defaultWizardCertValidity   = 365 * 24 * time.Hour
+	defaultHooksMaxQueue        = 1024
+	defaultHooksMaxConcurrency  = 4
 )
 
 // Load reads configuration from the provided path. If path is empty it falls back to defaultConfigPath.
@@ -231,6 +250,24 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("telemetry_prefs.metrics_interval", defaultTelemetryMetrics.String())
 	v.SetDefault("telemetry_prefs.activity_interval", defaultTelemetryActivity.String())
 
+	v.SetDefault("wizard.enabled", true)
+	v.SetDefault("wizard.auto_generate_certificates", true)
+	v.SetDefault("wizard.cert_validity", defaultWizardCertValidity.String())
+	v.SetDefault("wizard.hosts", []string{})
+	v.SetDefault("wizard.organization", "Control One")
+	v.SetDefault("wizard.run_access_sync", true)
+	v.SetDefault("wizard.run_secrets_sync", true)
+	v.SetDefault("wizard.run_provisioning", false)
+	v.SetDefault("wizard.run_compliance", false)
+	v.SetDefault("wizard.emit_summary", true)
+	v.SetDefault("wizard.timeout", "45s")
+
+	v.SetDefault("hooks.enabled", true)
+	v.SetDefault("hooks.auto_run_default", true)
+	v.SetDefault("hooks.max_queue_size", defaultHooksMaxQueue)
+	v.SetDefault("hooks.max_concurrency", defaultHooksMaxConcurrency)
+	v.SetDefault("hooks.bootstrap_subscriptions", []map[string]any{})
+
 	v.SetDefault("policy.public_key_file", defaultPolicyPublicKeyFile)
 	v.SetDefault("policy.metadata_file", defaultPolicyMetadataFile)
 
@@ -302,7 +339,15 @@ func applyFallbacks(cfg *Config) {
 	if cfg.TelemetryPrefs.ActivityInterval == 0 {
 		cfg.TelemetryPrefs.ActivityInterval = defaultTelemetryActivity
 	}
-
+	if cfg.Wizard.CertValidity == 0 {
+		cfg.Wizard.CertValidity = defaultWizardCertValidity
+	}
+	if cfg.Hooks.MaxQueueSize <= 0 {
+		cfg.Hooks.MaxQueueSize = defaultHooksMaxQueue
+	}
+	if cfg.Hooks.MaxConcurrency <= 0 {
+		cfg.Hooks.MaxConcurrency = defaultHooksMaxConcurrency
+	}
 	if cfg.TLS.CertFile == "" {
 		cfg.TLS.CertFile = defaultTLSCertFile
 	}
@@ -325,4 +370,38 @@ func applyFallbacks(cfg *Config) {
 	if cfg.Intervals.Telemetry == 0 {
 		cfg.Intervals.Telemetry = time.Minute
 	}
+}
+
+// HooksConfig captures configuration for the event hook system.
+type HooksConfig struct {
+	Enabled               bool                     `mapstructure:"enabled"`
+	AutoRunDefault        bool                     `mapstructure:"auto_run_default"`
+	MaxQueueSize          int                      `mapstructure:"max_queue_size"`
+	MaxConcurrency        int                      `mapstructure:"max_concurrency"`
+	BootstrapSubscriptions []HookSubscriptionConfig `mapstructure:"bootstrap_subscriptions"`
+}
+
+// HookSubscriptionConfig defines bootstrap subscriptions loaded from config.
+type HookSubscriptionConfig struct {
+	ID        string        `mapstructure:"id"`
+	EventID   string        `mapstructure:"event_id"`
+	Filter    string        `mapstructure:"filter"`
+	Mode      string        `mapstructure:"mode"`
+	Handler   HandlerConfig `mapstructure:"handler"`
+	RunPolicy struct {
+		Timeout     time.Duration `mapstructure:"timeout"`
+		MemoryMB    int           `mapstructure:"memory_mb"`
+		Concurrency int           `mapstructure:"concurrency"`
+		MaxRetries  int           `mapstructure:"max_retries"`
+	} `mapstructure:"run_policy"`
+	RemediateAllowed bool     `mapstructure:"remediate_allowed"`
+	RBACRoles        []string `mapstructure:"rbac_roles"`
+}
+
+// HandlerConfig describes handler bootstrap configuration.
+type HandlerConfig struct {
+	Type     string `mapstructure:"type"`
+	Language string `mapstructure:"language"`
+	Inline   string `mapstructure:"inline"`
+	Source   string `mapstructure:"source"`
 }

@@ -6,6 +6,21 @@ policy_dir: /var/lib/control-one/nodeagent/policies
 log_dir: /var/log/control-one/nodeagent
 plugin_dir: /opt/control-one/nodeagent/plugins
 
+wizard:
+  enabled: true
+  auto_generate_certificates: true
+  cert_validity: 2160h
+  hosts:
+    - ${HOSTNAME}
+    - 127.0.0.1
+  organization: Control One
+  run_access_sync: true
+  run_secrets_sync: true
+  run_provisioning: false
+  run_compliance: false
+  emit_summary: true
+  timeout: 45s
+
 policy:
   public_key_file: /var/lib/control-one/nodeagent/keys/policy_pub.pem
   metadata_file: /var/lib/control-one/nodeagent/policies/policies.meta.json
