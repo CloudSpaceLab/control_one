@@ -255,16 +255,37 @@ func (r *Runner) runProvisioning(ctx context.Context) error {
 		return newSkipError("template not configured")
 	}
 
+	// Detect provider if not set in config
+	provider := strings.ToLower(strings.TrimSpace(r.cfg.Provisioning.Provider))
+	if provider == "" {
+		if p, hints := provisioning.DetectProvider(); p != "unknown" {
+			provider = p
+			if r.cfg.Provisioning.Metadata == nil {
+				r.cfg.Provisioning.Metadata = map[string]string{}
+			}
+			for k, v := range hints {
+				if _, exists := r.cfg.Provisioning.Metadata[k]; !exists {
+					r.cfg.Provisioning.Metadata[k] = v
+				}
+			}
+		}
+	}
+
 	engine := provisioning.NewEngine(r.log, r.client, provisioning.Options{
 		Template:        r.cfg.Provisioning.Template,
+		Provider:        provider,
 		Baselines:       r.cfg.Provisioning.Baselines,
 		AutoRemediation: r.cfg.Provisioning.AutoRemediation,
 	})
 
+	// Merge wizard metadata with config-provided metadata
 	metadata := map[string]string{
 		"wizard":       "true",
 		"node_name":    r.cfg.NodeName,
 		"generated_by": "control_one_wizard",
+	}
+	for k, v := range r.cfg.Provisioning.Metadata {
+		metadata[k] = v
 	}
 
 	if err := engine.ApplyTemplate(ctx, r.resolvedNodeID(), metadata); err != nil {
@@ -275,27 +296,26 @@ func (r *Runner) runProvisioning(ctx context.Context) error {
 }
 
 func (r *Runner) runCompliance(ctx context.Context) error {
-	if r.client == nil {
-		return fmt.Errorf("api client unavailable")
-	}
-	if len(r.cfg.Compliance.RuleSets) == 0 {
-		return newSkipError("no compliance rule sets configured")
-	}
+    if r.client == nil {
+        return fmt.Errorf("api client unavailable")
+    }
+    if len(r.cfg.Compliance.RuleSets) == 0 {
+        return newSkipError("no compliance rule sets configured")
+    }
 
-	engine := compliance.NewEngine(r.log, r.client, compliance.Options{
-		Region:         r.cfg.Compliance.Region,
-		RuleSets:       r.cfg.Compliance.RuleSets,
-		Certifications: r.cfg.Compliance.Certifications,
-		AutoApply:      r.cfg.Compliance.AutoApplyTemplates,
-	})
-	_, err := engine.Evaluate(ctx, r.resolvedNodeID(), map[string]string{})
-	return err
+    engine := compliance.NewEngine(r.log, r.client, compliance.Options{
+        Region:         r.cfg.Compliance.Region,
+        RuleSets:       r.cfg.Compliance.RuleSets,
+        Certifications: r.cfg.Compliance.Certifications,
+        AutoApply:      r.cfg.Compliance.AutoApplyTemplates,
+    })
+    _, err := engine.Evaluate(ctx, r.resolvedNodeID(), map[string]string{})
+    return err
 }
 
 func (r *Runner) emitSummary() {
 	summaryJSON, err := json.MarshalIndent(r.summary, "", "  ")
 	if err != nil {
-		r.log.Warn("wizard summary marshal failed", zap.Error(err))
 		return
 	}
 

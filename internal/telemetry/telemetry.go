@@ -94,10 +94,35 @@ func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources
 	s.logsActive = true
 	s.logsMu.Unlock()
 
-	for _, src := range sources {
+	prepared := logs.PrepareSources(sources)
+
+	for _, src := range prepared {
 		source := src
 		if source.Disabled {
 			continue
+		}
+
+		bufferSize := source.BufferSize
+		if bufferSize <= 0 {
+			bufferSize = 128
+		}
+		rawCh := make(chan logs.RawLog, bufferSize)
+
+		go s.runCollectorLoop(ctx, nodeID, source, rawCh)
+
+		formatter := logs.GetFormatter(source.Formatter)
+		go s.consumeLogs(ctx, nodeID, source, formatter, rawCh)
+	}
+}
+
+func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source config.LogSourceConfig, out chan<- logs.RawLog) {
+	defer close(out)
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+
+	for {
+		if ctx.Err() != nil {
+			return
 		}
 
 		collector, err := logs.NewCollector(source, s.log)
@@ -108,28 +133,40 @@ func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources
 				"type":    source.Type,
 				"error":   err.Error(),
 			})
+			s.sleepWithBackoff(ctx, backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
 			continue
 		}
 
-		bufferSize := source.BufferSize
-		if bufferSize <= 0 {
-			bufferSize = 128
-		}
-		rawCh := make(chan logs.RawLog, bufferSize)
-
-		go func(program string) {
-			defer close(rawCh)
-			if err := collector.Run(ctx, rawCh); err != nil && ctx.Err() == nil {
-				s.log.Warn("log collector exited", zap.String("program", program), zap.Error(err))
-				s.publishHook(ctx, "telemetry.logs.collector.exited", nodeID, map[string]any{
-					"program": program,
-					"error":   err.Error(),
-				})
+		if err := collector.Run(ctx, out); err != nil && ctx.Err() == nil {
+			s.log.Warn("log collector exited", zap.String("program", source.Program), zap.Error(err))
+			s.publishHook(ctx, "telemetry.logs.collector.exited", nodeID, map[string]any{
+				"program": source.Program,
+				"error":   err.Error(),
+			})
+			s.sleepWithBackoff(ctx, backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
-		}(source.Program)
+			continue
+		}
 
-		formatter := logs.GetFormatter(source.Formatter)
-		go s.consumeLogs(ctx, nodeID, source, formatter, rawCh)
+		return
+	}
+}
+
+func (s *Service) sleepWithBackoff(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
 	}
 }
 

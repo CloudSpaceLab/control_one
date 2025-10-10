@@ -13,6 +13,7 @@ import (
 
 type Options struct {
 	Template        string
+	Provider        string
 	Baselines       []string
 	AutoRemediation bool
 }
@@ -54,6 +55,7 @@ func (e *Engine) ApplyTemplate(ctx context.Context, nodeID string, metadata map[
 	payload := map[string]any{
 		"node_id":          nodeID,
 		"template":         e.opts.Template,
+		"provider":         e.opts.Provider,
 		"metadata":         metadata,
 		"auto_remediation": e.opts.AutoRemediation,
 		"baselines":        e.opts.Baselines,

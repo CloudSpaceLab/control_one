@@ -43,6 +43,12 @@ mesh:
 
 provisioning:
   template: ubuntu-web-tier
+  metadata:
+    provider: vmware
+    cluster: prod-cluster-1
+    datacenter: dc-west
+    datastore: vsan-primary
+    network: web-tier
   baselines:
     - cis-ubuntu-24
     - control-one-hardening
@@ -103,6 +109,56 @@ telemetry_prefs:
         Information: info
         Warning: warn
         Error: error
+    - program: postgresql
+      type: file
+      paths:
+        - /var/log/postgresql/postgresql-14-main.log
+      formatter: generic
+      format_rules:
+        - regex: "^(?P<ts>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d+\\s+\\w+)\\s+\\[(?P<pid>\\d+)\\]\\s+(?P<level>\\w+):\\s+(?P<message>.*)$"
+          timestamp_layout: "2006-01-02 15:04:05.999 MST"
+          severity_field: level
+          severity_map:
+            LOG: info
+            WARNING: warn
+            ERROR: error
+            FATAL: critical
+            default: info
+          fields:
+            pid: "${pid}"
+    - program: redis
+      type: file
+      paths:
+        - /var/log/redis/redis-server.log
+      formatter: generic
+      format_rules:
+        - regex: "^(?P<ts>\\d{2}\\s\\w+\\s\\d{2}:\\d{2}:\\d{2})\\s+(?P<level>\\w+)\\s+(?P<pid>\\d+):\\s*(?P<message>.*)$"
+          timestamp_layout: "02 Jan 15:04:05"
+          severity_field: level
+          severity_map:
+            warning: warn
+            notice: notice
+            default: info
+          fields:
+            pid: "${pid}"
+    - program: kafka
+      type: file
+      paths:
+        - /var/log/kafka/server.log
+      formatter: generic
+      format_rules:
+        - regex: "^(?P<ts>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2},\\d{3})\\s+(?P<level>\\w+)\\s+\\[(?P<thread>[^]]+)\\]\\s+(?P<class>[^ ]+)\\s+-\\s+(?P<message>.*)$"
+          timestamp_layout: "2006-01-02 15:04:05,000"
+          severity_field: level
+          severity_map:
+            WARN: warn
+            ERROR: error
+            INFO: info
+            FATAL: critical
+            default: info
+          fields:
+            thread: "${thread}"
+            class: "${class}"
   file_integrity: true
   metrics_interval: 30s
   activity_interval: 2m

@@ -10,21 +10,37 @@ The Control One Node Agent is a Go-based service deployed on managed hosts acros
 - **Registration** (`internal/registration/`): bootstraps the node, persists state, and prevents duplicate registrations.
 - **Mesh Manager** (`internal/mesh/`): prepares zero-touch WireGuard mesh state, polls the coordinator, and rotates keys.
 - **Provisioning Engine** (`internal/provisioning/`): applies node templates, baseline hardening, and optional auto-remediation.
+  - Templates are authored in the control plane and referenced by name via `provisioning.template`; metadata keys (e.g. `cluster`, `resource_group`) are forwarded untouched in the apply payload, enabling provider-specific workflows.
 - **Policy Management** (`internal/policy/`): fetches signed policy bundles and caches them locally.
 - **Compliance Engine** (`internal/compliance/`): evaluates rulesets/certifications and feeds telemetry summaries.
 - **Scheduler** (`internal/scheduler/`): cron-based job runner used for policy sync, provisioning, compliance evaluation, telemetry, access sync, secrets sync, and heartbeat.
 - **Scanner** (`internal/scanner/`): executes compliance checks with timeout/concurrency controls.
-- **Telemetry** (`internal/telemetry/`): handles metrics, compliance reports, and heartbeats.
   - Log ingestion helpers live in `internal/telemetry/logs/` with pluggable collectors/formatters driven by `telemetry_prefs.log_sources`.
+  - Built-in presets cover nginx, Apache, MySQL, PostgreSQL, Redis, Kafka, IIS, and more; custom entries only need to provide overrides such as log paths or additional labels.
+  - The generic formatter (`formatter_generic.go`) consumes declarative `format_rules` (regex capture groups + templates) so complex log formats can be normalized without bespoke Go code.
 - **Access Manager** (`internal/access/`): syncs user/groups from AD/API/local providers for fine-grained control.
 - **Secrets Store** (`internal/secrets/`): manages secure retrieval/refresh of secrets across groups.
-- **Utilities** (`internal/util/`): gathers system metadata, host metrics, and other helpers.
+- **Utilities** (`internal/util/`): gathers system metadata, host metrics, and
+### Provisioning Templates
+- **Overview**
+  - **`provisioning.template`** selects a control-plane workflow; templates should be created per provider (VMware, Libvirt, AWS, Azure) using matching names.
+  - **Metadata** supplied at runtime is passed verbatim; choose keys expected by the template (e.g. `datacenter`, `vpc_id`).
+  - **Baselines** listed in `provisioning.baselines` are replayed after template application and can include CIS or custom hardening bundles.
+
+- **Recommended keys**
+  - **VMware**: `cluster`, `datacenter`, `datastore`, `folder`, `network`.
+  - **Libvirt**: `pool`, `network`, `image`, `cpu`, `memory`.
+  - **AWS**: `region`, `vpc_id`, `subnet_id`, `iam_profile`, `security_groups`.
+  - **Azure**: `subscription_id`, `resource_group`, `vnet`, `subnet`, `availability_zone`.
+
+- **Testing**
+  - **Dry run** using the control plane’s preview mode (if available) before enabling `auto_remediation`.
+  - **Verify baselines** by confirming completion status in `/api/v1/provisioning/baselines` responses and reviewing remediation notes.
 
 ## Build & Tooling
 - **Go version**: `go 1.23.0` per `go.mod`.
 - **GoReleaser**: `.goreleaser.yaml` produces multi-OS archives, checksums, and optional Docker images using `build/docker/Dockerfile`.
 - **CI**: `.github/workflows/ci.yaml` runs gofmt, vet, tests, and cross-platform builds; tags trigger GoReleaser.
-
 ### Local Commands
 ```
 go fmt ./...
@@ -81,44 +97,30 @@ secrets:
     - production
     - shared-services
 
-telemetry_prefs:
   collect_logs: true
   log_namespaces:
     - system
     - application
     - security
+  # log_sources may be omitted to use baked-in presets. Provide entries only when overrides are required.
   log_sources:
     - program: nginx
-      type: file
       paths:
-        - /var/log/nginx/access.log
-        - /var/log/nginx/error.log
-      formatter: default
-      severity_map:
-        notice: info
-        crit: critical
+        - /custom/path/nginx/access.log
+        - /custom/path/nginx/error.log
       labels:
-        stack: web
-    - program: windows-iis
-      type: eventlog
-      event_channels:
-        - "Microsoft-Windows-IIS-Logging/Operational"
-      severity_map:
-        Information: info
-        Warning: warn
-        Error: error
-  metrics_interval: 30s
-  activity_interval: 2m
-```
-
-Tune bootstrap token, TLS material locations, mesh coordinator URL, sync intervals, and node naming before deployment. The agent will automatically ensure required directories for state, policies, mesh, and secrets.
-
-## Next Implementation Steps
-- Integrate `internal/mesh` manager with the control-plane coordinator (e.g., Headscale via `wgctrl`).
-- Implement provisioning engine support for cloud-init, Ansible-lite, and Terraform provider hooks.
-- Connect compliance engine to policy metadata and remediation playbooks.
-- Extend access manager with Active Directory/SCIM connectors and role-mapping rules.
-- Back the secrets store with Vault or cloud secret managers and add envelope encryption.
-- Add command channel listener (REST/WebSocket) for orchestration directives.
-- Extend telemetry batching with compression/backpressure and include provisioning/access/secrets status streams.
-- Write integration tests with a mock control plane and environment simulators.
+        stack: web-tier
+    - program: kafka
+      formatter: generic
+      format_rules:
+        - regex: "^(?P<ts>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2},\\d{3})\\s+(?P<level>\\w+)\\s+\\[(?P<thread>[^]]+)\\]\\s+(?P<class>[^ ]+)\\s+-\\s+(?P<message>.*)$"
+          timestamp_layout: "2006-01-02 15:04:05,000"
+          severity_field: level
+          severity_map:
+            WARN: warn
+            ERROR: error
+            INFO: info
+            FATAL: critical
+          fields:
+            thread: "${thread}"
+            class: "${class}"

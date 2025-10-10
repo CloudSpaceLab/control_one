@@ -96,9 +96,11 @@ type Config struct {
 	} `mapstructure:"mesh"`
 
 	Provisioning struct {
-		Template        string   `mapstructure:"template"`
-		Baselines       []string `mapstructure:"baselines"`
-		AutoRemediation bool     `mapstructure:"auto_remediation"`
+		Template        string            `mapstructure:"template"`
+		Provider        string            `mapstructure:"provider"`
+		Metadata        map[string]string `mapstructure:"metadata"`
+		Baselines       []string          `mapstructure:"baselines"`
+		AutoRemediation bool              `mapstructure:"auto_remediation"`
 	} `mapstructure:"provisioning"`
 
 	TLS struct {
@@ -114,6 +116,62 @@ type Config struct {
 		Telemetry    time.Duration `mapstructure:"telemetry"`
 		Provisioning time.Duration `mapstructure:"provisioning"`
 	} `mapstructure:"intervals"`
+}
+
+// NormalizeLogSourceConfig applies default values and sanitizes the provided log source configuration.
+func NormalizeLogSourceConfig(src *LogSourceConfig) {
+    if src == nil {
+        return
+    }
+    src.applyDefaults()
+}
+
+// NormalizeLogSources returns a new slice where defaults have been applied to each log source config.
+func NormalizeLogSources(sources []LogSourceConfig) []LogSourceConfig {
+    if len(sources) == 0 {
+        return nil
+    }
+    normalized := make([]LogSourceConfig, len(sources))
+    for i := range sources {
+        normalized[i] = sources[i]
+        normalized[i].applyDefaults()
+    }
+    return normalized
+}
+
+// LogFormatRuleConfig describes a regex-driven formatting rule usable by the
+// generic formatter to normalize heterogeneous program logs.
+type LogFormatRuleConfig struct {
+	Regex           string            `mapstructure:"regex"`
+	TimestampField  string            `mapstructure:"timestamp_field"`
+	TimestampLayout string            `mapstructure:"timestamp_layout"`
+	SeverityField   string            `mapstructure:"severity_field"`
+	SeverityMap     map[string]string `mapstructure:"severity_map"`
+	ProgramField    string            `mapstructure:"program_field"`
+	MessageTemplate string            `mapstructure:"message_template"`
+	Fields          map[string]string `mapstructure:"fields"`
+	Labels          map[string]string `mapstructure:"labels"`
+}
+
+func (r *LogFormatRuleConfig) applyDefaults() {
+	if r.SeverityMap == nil {
+		r.SeverityMap = map[string]string{}
+	}
+	if r.Fields == nil {
+		r.Fields = map[string]string{}
+	}
+	if r.Labels == nil {
+		r.Labels = map[string]string{}
+	}
+	if strings.TrimSpace(r.Regex) == "" {
+		r.Regex = ".*"
+	}
+	if r.TimestampLayout == "" {
+		r.TimestampLayout = time.RFC3339Nano
+	}
+	if r.SeverityMap["default"] == "" {
+		r.SeverityMap["default"] = defaultLogDefaultSeverity
+	}
 }
 
 const (
@@ -229,6 +287,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("mesh.key_rotation", "168h")
 
 	v.SetDefault("provisioning.template", "")
+	v.SetDefault("provisioning.provider", "")
+	v.SetDefault("provisioning.metadata", map[string]any{})
 	v.SetDefault("provisioning.baselines", []string{})
 	v.SetDefault("provisioning.auto_remediation", true)
 
@@ -334,6 +394,12 @@ func applyFallbacks(cfg *Config) {
 		cfg.Intervals.Provisioning = defaultProvisioningInterval
 	}
 
+	// Provisioning: ensure maps and normalize provider
+	if cfg.Provisioning.Metadata == nil {
+		cfg.Provisioning.Metadata = map[string]string{}
+	}
+	cfg.Provisioning.Provider = strings.ToLower(strings.TrimSpace(cfg.Provisioning.Provider))
+
 	if cfg.Access.SyncInterval == 0 {
 		cfg.Access.SyncInterval = defaultAccessSyncInterval
 	}
@@ -408,6 +474,7 @@ type LogSourceConfig struct {
 	PollInterval    time.Duration     `mapstructure:"poll_interval"`
 	Labels          map[string]string `mapstructure:"labels"`
 	Disabled        bool              `mapstructure:"disabled"`
+	FormatRules     []LogFormatRuleConfig `mapstructure:"format_rules"`
 }
 
 func (l *LogSourceConfig) applyDefaults() {
@@ -445,6 +512,12 @@ func (l *LogSourceConfig) applyDefaults() {
 		} else {
 			l.Program = "generic"
 		}
+	}
+	for i := range l.FormatRules {
+		l.FormatRules[i].applyDefaults()
+	}
+	if len(l.FormatRules) > 0 && strings.TrimSpace(l.Formatter) == "" {
+		l.Formatter = "generic"
 	}
 }
 
