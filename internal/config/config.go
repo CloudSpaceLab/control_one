@@ -64,6 +64,7 @@ type Config struct {
 		FileIntegrity    bool          `mapstructure:"file_integrity"`
 		MetricsInterval  time.Duration `mapstructure:"metrics_interval"`
 		ActivityInterval time.Duration `mapstructure:"activity_interval"`
+		LogSources       []LogSourceConfig `mapstructure:"log_sources"`
 	} `mapstructure:"telemetry_prefs"`
 
 	Wizard struct {
@@ -138,6 +139,11 @@ const (
 	defaultWizardCertValidity   = 365 * 24 * time.Hour
 	defaultHooksMaxQueue        = 1024
 	defaultHooksMaxConcurrency  = 4
+	defaultLogBatchSize         = 200
+	defaultLogBufferSize        = 512
+	defaultLogFlushInterval     = 5 * time.Second
+	defaultLogPollInterval      = time.Second
+	defaultLogDefaultSeverity   = "info"
 )
 
 // Load reads configuration from the provided path. If path is empty it falls back to defaultConfigPath.
@@ -249,6 +255,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("telemetry_prefs.file_integrity", false)
 	v.SetDefault("telemetry_prefs.metrics_interval", defaultTelemetryMetrics.String())
 	v.SetDefault("telemetry_prefs.activity_interval", defaultTelemetryActivity.String())
+	v.SetDefault("telemetry_prefs.log_sources", []map[string]any{})
 
 	v.SetDefault("wizard.enabled", true)
 	v.SetDefault("wizard.auto_generate_certificates", true)
@@ -370,6 +377,10 @@ func applyFallbacks(cfg *Config) {
 	if cfg.Intervals.Telemetry == 0 {
 		cfg.Intervals.Telemetry = time.Minute
 	}
+
+	for i := range cfg.TelemetryPrefs.LogSources {
+		cfg.TelemetryPrefs.LogSources[i].applyDefaults()
+	}
 }
 
 // HooksConfig captures configuration for the event hook system.
@@ -379,6 +390,62 @@ type HooksConfig struct {
 	MaxQueueSize          int                      `mapstructure:"max_queue_size"`
 	MaxConcurrency        int                      `mapstructure:"max_concurrency"`
 	BootstrapSubscriptions []HookSubscriptionConfig `mapstructure:"bootstrap_subscriptions"`
+}
+
+// LogSourceConfig describes how the telemetry service should collect and parse logs
+// for a specific program or subsystem across supported operating systems.
+type LogSourceConfig struct {
+	Program         string            `mapstructure:"program"`
+	Type            string            `mapstructure:"type"`
+	Paths           []string          `mapstructure:"paths"`
+	JournalUnits    []string          `mapstructure:"journal_units"`
+	EventChannels   []string          `mapstructure:"event_channels"`
+	Formatter       string            `mapstructure:"formatter"`
+	SeverityMap     map[string]string `mapstructure:"severity_map"`
+	BatchSize       int               `mapstructure:"batch_size"`
+	BufferSize      int               `mapstructure:"buffer_size"`
+	FlushInterval   time.Duration     `mapstructure:"flush_interval"`
+	PollInterval    time.Duration     `mapstructure:"poll_interval"`
+	Labels          map[string]string `mapstructure:"labels"`
+	Disabled        bool              `mapstructure:"disabled"`
+}
+
+func (l *LogSourceConfig) applyDefaults() {
+	if l.BatchSize <= 0 {
+		l.BatchSize = defaultLogBatchSize
+	}
+	if l.BufferSize <= 0 {
+		l.BufferSize = defaultLogBufferSize
+	}
+	if l.FlushInterval <= 0 {
+		l.FlushInterval = defaultLogFlushInterval
+	}
+	if l.PollInterval <= 0 {
+		l.PollInterval = defaultLogPollInterval
+	}
+	if strings.TrimSpace(l.Type) == "" {
+		l.Type = "auto"
+	}
+	if l.SeverityMap == nil {
+		l.SeverityMap = map[string]string{}
+	}
+	if l.Labels == nil {
+		l.Labels = map[string]string{}
+	}
+	if l.SeverityMap["default"] == "" {
+		l.SeverityMap["default"] = defaultLogDefaultSeverity
+	}
+	if strings.TrimSpace(l.Program) == "" {
+		if len(l.Paths) > 0 {
+			l.Program = filepath.Base(l.Paths[0])
+		} else if len(l.JournalUnits) > 0 {
+			l.Program = l.JournalUnits[0]
+		} else if len(l.EventChannels) > 0 {
+			l.Program = l.EventChannels[0]
+		} else {
+			l.Program = "generic"
+		}
+	}
 }
 
 // HookSubscriptionConfig defines bootstrap subscriptions loaded from config.

@@ -15,6 +15,7 @@ The Control One Node Agent is a Go-based service deployed on managed hosts acros
 - **Scheduler** (`internal/scheduler/`): cron-based job runner used for policy sync, provisioning, compliance evaluation, telemetry, access sync, secrets sync, and heartbeat.
 - **Scanner** (`internal/scanner/`): executes compliance checks with timeout/concurrency controls.
 - **Telemetry** (`internal/telemetry/`): handles metrics, compliance reports, and heartbeats.
+  - Log ingestion helpers live in `internal/telemetry/logs/` with pluggable collectors/formatters driven by `telemetry_prefs.log_sources`.
 - **Access Manager** (`internal/access/`): syncs user/groups from AD/API/local providers for fine-grained control.
 - **Secrets Store** (`internal/secrets/`): manages secure retrieval/refresh of secrets across groups.
 - **Utilities** (`internal/util/`): gathers system metadata, host metrics, and other helpers.
@@ -86,6 +87,26 @@ telemetry_prefs:
     - system
     - application
     - security
+  log_sources:
+    - program: nginx
+      type: file
+      paths:
+        - /var/log/nginx/access.log
+        - /var/log/nginx/error.log
+      formatter: default
+      severity_map:
+        notice: info
+        crit: critical
+      labels:
+        stack: web
+    - program: windows-iis
+      type: eventlog
+      event_channels:
+        - "Microsoft-Windows-IIS-Logging/Operational"
+      severity_map:
+        Information: info
+        Warning: warn
+        Error: error
   metrics_interval: 30s
   activity_interval: 2m
 ```

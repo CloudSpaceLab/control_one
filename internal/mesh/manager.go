@@ -281,12 +281,6 @@ func (m *Manager) loadState() error {
 	return nil
 }
 
-func (m *Manager) saveState() error {
-	m.stateLock.Lock()
-	defer m.stateLock.Unlock()
-	return m.saveStateLocked()
-}
-
 func (m *Manager) saveStateLocked() error {
 	data, err := json.MarshalIndent(m.state, "", "  ")
 	if err != nil {

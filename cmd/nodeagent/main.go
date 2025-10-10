@@ -93,13 +93,15 @@ func main() {
 	if err != nil {
 		log.Fatal("policy syncer init failed", zap.Error(err))
 	}
-
 	scannerSvc := scanner.NewBuiltinScanner(log, scanner.Options{
 		Timeout: cfg.Scanner.Timeout,
 		Shell:   cfg.Scanner.Shell,
 	})
 
-	telemetrySvc := telemetry.New(client, log)
+	telemetrySvc := telemetry.New(client, log, hooksService)
+	if cfg.TelemetryPrefs.CollectLogs && len(cfg.TelemetryPrefs.LogSources) > 0 {
+		telemetrySvc.StartLogCollection(ctx, state.NodeID, cfg.TelemetryPrefs.LogSources)
+	}
 
 	meshMgr := mesh.New(log, client, mesh.Options{
 		Enabled:        cfg.Mesh.Enabled,

@@ -84,6 +84,25 @@ telemetry_prefs:
     - system
     - application
     - security
+  log_sources:
+    - program: nginx
+      type: file
+      paths:
+        - /var/log/nginx/access.log
+        - /var/log/nginx/error.log
+      severity_map:
+        notice: info
+        crit: critical
+      labels:
+        stack: web
+    - program: windows-iis
+      type: eventlog
+      event_channels:
+        - "Microsoft-Windows-IIS-Logging/Operational"
+      severity_map:
+        Information: info
+        Warning: warn
+        Error: error
   file_integrity: true
   metrics_interval: 30s
   activity_interval: 2m
