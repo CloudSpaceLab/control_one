@@ -1,0 +1,22 @@
+http:
+  address: ":8443"
+  read_timeout: 15s
+  write_timeout: 15s
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+  client_ca_file: ""
+  require_client_tls: false
+
+observability:
+  enable_metrics: true
+  metrics_path: /metrics
+
+database:
+  url: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
+  max_open_conns: 10
+  max_idle_conns: 5
+  conn_max_lifetime: 15m
+  apply_migrations: true

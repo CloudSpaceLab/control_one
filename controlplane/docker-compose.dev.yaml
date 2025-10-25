@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: controlone
+      POSTGRES_USER: controlone
+      POSTGRES_PASSWORD: controlone
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U controlone"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  controlplane:
+    build:
+      context: ..
+      dockerfile: controlplane/Dockerfile.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CONTROLONE_CONFIG: /app/config/controlplane.local.yaml
+    volumes:
+      - ../controlplane:/app
+    ports:
+      - "8443:8443"
+    command: ["go", "run", "./cmd/controlplane", "--config", "/app/config/controlplane.local.yaml"]
+
+volumes:
+  postgres-data:

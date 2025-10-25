@@ -22,49 +22,52 @@ const (
 
 // Result captures compliance evaluation outcome for a rule.
 type Result struct {
-	RuleID    string    `json:"rule_id"`
-	Status    string    `json:"status"`
-	Details   string    `json:"details,omitempty"`
-	CheckedAt time.Time `json:"checked_at"`
+	RuleID    string            `json:"rule_id"`
+	Status    string            `json:"status"`
+	Details   string            `json:"details,omitempty"`
+	CheckedAt time.Time         `json:"checked_at"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
-// Runner defines the interface for compliance scanners.
-// Options tunes the builtin scanner runtime behavior.
+type Runner interface {
+	Run(ctx context.Context, rules []policy.Rule) ([]Result, error)
+}
+
 type Options struct {
-    Timeout       time.Duration
-    Shell         string
-    MaxConcurrent int
+	Timeout       time.Duration
+	Shell         string
+	MaxConcurrent int
+	Env           map[string]string
 }
 
-// BuiltinScanner executes rule checks using shell commands.
 type BuiltinScanner struct {
-    log       *zap.Logger
-    opts      Options
-    shellName string
-    shellArgs []string
+	log       *zap.Logger
+	opts      Options
+	shellName string
+	shellArgs []string
 }
 
 // NewBuiltinScanner creates the builtin scanner with provided options.
 func NewBuiltinScanner(log *zap.Logger, opts Options) *BuiltinScanner {
-    if opts.Timeout <= 0 {
-        opts.Timeout = 30 * time.Second
-    }
-    name, args := resolveShell(opts.Shell)
-    return &BuiltinScanner{
-        log:       log,
-        opts:      opts,
-        shellName: name,
-        shellArgs: args,
-    }
+	if opts.Timeout <= 0 {
+		opts.Timeout = 30 * time.Second
+	}
+	name, args := resolveShell(opts.Shell)
+	return &BuiltinScanner{
+		log:       log,
+		opts:      opts,
+		shellName: name,
+		shellArgs: args,
+	}
 }
 
 // Run evaluates each policy rule by executing the associated command using the configured shell.
 func (b *BuiltinScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, error) {
-    n := len(rules)
-    results := make([]Result, n)
-    if n == 0 {
-        return results, nil
-    }
+	n := len(rules)
+	results := make([]Result, n)
+	if n == 0 {
+		return results, nil
+	}
 
 	workers := b.opts.MaxConcurrent
 	if workers <= 0 {
@@ -83,7 +86,16 @@ func (b *BuiltinScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result
 		defer wg.Done()
 		for j := range jobs {
 			rule := rules[j.idx]
-			r := Result{RuleID: rule.ID, CheckedAt: time.Now().UTC()}
+			r := Result{RuleID: rule.ID, CheckedAt: time.Now().UTC(), Metadata: map[string]string{
+				"severity": rule.Severity,
+				"version":  rule.Version,
+			}}
+			for k, v := range b.opts.Env {
+				if r.Metadata == nil {
+					r.Metadata = map[string]string{}
+				}
+				r.Metadata[k] = v
+			}
 			cmdCtx := ctx
 			var cancel context.CancelFunc
 			if b.opts.Timeout > 0 {

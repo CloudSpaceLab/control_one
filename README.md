@@ -41,6 +41,19 @@ The Control One Node Agent is a Go-based service deployed on managed hosts acros
 - **Go version**: `go 1.23.0` per `go.mod`.
 - **GoReleaser**: `.goreleaser.yaml` produces multi-OS archives, checksums, and optional Docker images using `build/docker/Dockerfile`.
 - **CI**: `.github/workflows/ci.yaml` runs gofmt, vet, tests, and cross-platform builds; tags trigger GoReleaser.
+- **Deployment Wizard**: `scripts/wizard/setup_control_one.sh` generates self-contained control plane and node agent bundles (config, binaries, optional TLS assets). The CI workflow publishes a ready-made wizard artifact named `control-one-wizard-<commit>` for Ubuntu runners.
+
+### Wizard Usage
+Run the guided setup to emit binaries, configuration, and summary docs:
+
+```
+bash scripts/wizard/setup_control_one.sh \
+  --output ./dist/wizard \
+  --config-name controlplane.yaml
+```
+
+Flags such as `--non-interactive` and `--no-certs` allow automated pipelines. Generated assets include `bin/controlplane`, `bin/nodeagent`, TLS placeholders (`certs/`), and a summary README for operators.
+
 ### Local Commands
 ```
 go fmt ./...

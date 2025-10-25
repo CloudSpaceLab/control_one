@@ -42,8 +42,28 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Build
+      - name: Storage integration tests
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: go test -v ./controlplane/internal/storage -run TestJobLifecycleWithPostgres -count=1
+
+      - name: Build agent
         run: go build ./cmd/nodeagent
+
+      - name: Build control plane
+        run: go build ./controlplane/cmd/controlplane
+
+      - name: Generate wizard bundle
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/wizard/setup_control_one.sh --output ./build/wizard --non-interactive --no-certs
+
+      - name: Upload wizard bundle
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-one-wizard-${{ github.sha }}
+          path: build/wizard
 
   goreleaser:
     needs: lint-test-build

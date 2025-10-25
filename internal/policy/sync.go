@@ -10,6 +10,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,7 +22,13 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 )
 
-// Syncer fetches policies and persists them locally.
+type Options struct {
+	PolicyDir     string
+	PublicKeyPath string
+	MetadataPath  string
+	OnChange      func(ctx context.Context, set *PolicySet)
+}
+
 type Syncer struct {
 	client       *api.Client
 	log          *zap.Logger
@@ -27,22 +36,17 @@ type Syncer struct {
 	metadataPath string
 	publicKey    ed25519.PublicKey
 	fingerprint  string
+	lastHash     uint64
+	onChange     func(ctx context.Context, set *PolicySet)
 }
 
-// Options configures Syncer initialization.
-type Options struct {
-	PolicyDir     string
-	PublicKeyPath string
-	MetadataPath  string
-}
-
-// NewSyncer constructs a Syncer and loads the verification key when provided.
 func NewSyncer(client *api.Client, log *zap.Logger, opts Options) (*Syncer, error) {
 	s := &Syncer{
 		client:       client,
 		log:          log,
 		policyDir:    opts.PolicyDir,
 		metadataPath: opts.MetadataPath,
+		onChange:     opts.OnChange,
 	}
 
 	if s.policyDir == "" {
@@ -59,28 +63,57 @@ func NewSyncer(client *api.Client, log *zap.Logger, opts Options) (*Syncer, erro
 		}
 		s.publicKey = pub
 		s.fingerprint = fp
-	} else {
+	} else if log != nil {
 		log.Warn("policy public key path not configured; signature verification disabled")
+	}
+
+	if err := s.loadLastHash(); err != nil {
+		s.log.Debug("policy metadata load failed", zap.Error(err))
 	}
 
 	return s, nil
 }
 
-// FetchAndPersist pulls policies for nodeID and stores them to disk.
 func (s *Syncer) FetchAndPersist(ctx context.Context, nodeID string) (*PolicySet, error) {
+	attempt := 0
+	for {
+		set, err := s.fetch(ctx, nodeID)
+		if err == nil {
+			return set, nil
+		}
+		attempt++
+		if !isRetryable(err) || attempt >= 3 {
+			return nil, err
+		}
+		backoff := time.Duration(1<<attempt) * 200 * time.Millisecond
+		s.log.Warn("policy fetch retry", zap.Int("attempt", attempt), zap.Duration("backoff", backoff), zap.Error(err))
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (s *Syncer) fetch(ctx context.Context, nodeID string) (*PolicySet, error) {
 	resp, err := s.client.Do(ctx, httpMethodGet, fmt.Sprintf("/api/v1/policies?node_id=%s", nodeID), nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch policies: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 500 {
+		return nil, retryableError{fmt.Errorf("policy fetch failed: status %d", resp.StatusCode)}
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("policy fetch failed: status %d", resp.StatusCode)
 	}
 
+	var buf bytes.Buffer
+	tee := io.TeeReader(resp.Body, &buf)
 	var set PolicySet
-	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
-		return nil, fmt.Errorf("decode policy set: %w", err)
+	if err := json.NewDecoder(tee).Decode(&set); err != nil {
+		return nil, retryableError{fmt.Errorf("decode policy set: %w", err)}
 	}
 	set.FetchedAt = time.Now().UTC()
 
@@ -88,14 +121,23 @@ func (s *Syncer) FetchAndPersist(ctx context.Context, nodeID string) (*PolicySet
 		return nil, err
 	}
 
-	if err := s.persist(nodeID, &set); err != nil {
+	hash := hashPolicies(buf.Bytes())
+	if hash == s.lastHash {
+		s.log.Debug("policy set unchanged", zap.Uint64("hash", hash))
+		return &set, nil
+	}
+
+	if err := s.persist(nodeID, &set, hash); err != nil {
 		return nil, err
 	}
 
+	s.lastHash = hash
+	if s.onChange != nil {
+		go s.onChange(context.Background(), &set)
+	}
 	return &set, nil
 }
 
-// LoadCached reads the most recent policy set from disk.
 func (s *Syncer) LoadCached() ([]Rule, error) {
 	path := s.cachePath()
 	b, err := os.ReadFile(path)
@@ -109,7 +151,7 @@ func (s *Syncer) LoadCached() ([]Rule, error) {
 	return set.Policies, nil
 }
 
-func (s *Syncer) persist(nodeID string, set *PolicySet) error {
+func (s *Syncer) persist(nodeID string, set *PolicySet, hash uint64) error {
 	if err := os.MkdirAll(s.policyDir, 0o750); err != nil {
 		return fmt.Errorf("create policy dir: %w", err)
 	}
@@ -129,6 +171,7 @@ func (s *Syncer) persist(nodeID string, set *PolicySet) error {
 			VerifiedAt: time.Now().UTC(),
 			Policies:   len(set.Policies),
 			PublicKey:  s.fingerprint,
+			Hash:       hash,
 		}
 		metaBytes, err := json.MarshalIndent(meta, "", "  ")
 		if err != nil {
@@ -139,12 +182,28 @@ func (s *Syncer) persist(nodeID string, set *PolicySet) error {
 		}
 	}
 
-	s.log.Info("policies cached", zap.Int("count", len(set.Policies)))
+	s.log.Info("policies cached", zap.Int("count", len(set.Policies)), zap.Uint64("hash", hash))
 	return nil
 }
 
 func (s *Syncer) cachePath() string {
 	return filepath.Join(s.policyDir, "policies.json")
+}
+
+func (s *Syncer) loadLastHash() error {
+	if s.metadataPath == "" {
+		return nil
+	}
+	b, err := os.ReadFile(s.metadataPath)
+	if err != nil {
+		return err
+	}
+	var meta CacheMetadata
+	if err := json.Unmarshal(b, &meta); err != nil {
+		return err
+	}
+	s.lastHash = meta.Hash
+	return nil
 }
 
 const (
@@ -183,6 +242,44 @@ func (s *Syncer) verifySignature(set *PolicySet) error {
 
 	s.log.Info("policy signature verified", zap.Int("policies", len(set.Policies)), zap.String("version", set.Version))
 	return nil
+}
+
+func hashPolicies(data []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return h.Sum64()
+}
+
+func (s *Syncer) cachePathExists() bool {
+	if s.metadataPath == "" {
+		return false
+	}
+	_, err := os.Stat(s.metadataPath)
+	return err == nil
+}
+
+type retryableError struct {
+	err error
+}
+
+func (r retryableError) Error() string {
+	return r.err.Error()
+}
+
+func (r retryableError) Unwrap() error {
+	return r.err
+}
+
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var r retryableError
+	if errors.As(err, &r) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Temporary()
 }
 
 func loadEd25519PublicKey(path string) (ed25519.PublicKey, string, error) {

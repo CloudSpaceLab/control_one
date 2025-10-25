@@ -1,0 +1,32 @@
+{
+  "name": "control-one",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "workspace",
+  "workspaceFolder": "/workspaces/control_one",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-from-docker:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "go.toolsManagement.autoUpdate": true,
+        "go.testFlags": ["-v"],
+        "go.lintTool": "golangci-lint",
+        "go.useLanguageServer": true
+      },
+      "extensions": [
+        "golang.go",
+        "ms-azuretools.vscode-docker",
+        "github.vscode-github-actions",
+        "grafana.vscode-grafana"
+      ]
+    }
+  },
+  "forwardPorts": [8080, 8443, 9090, 3000],
+  "postCreateCommand": "go mod tidy",
+  "remoteEnv": {
+    "GOMEMLIMIT": "1GiB",
+    "CONTROL_ONE_PROMETHEUS_CONFIG": "/etc/prometheus/prometheus.yml"
+  }
+}

@@ -27,4 +27,5 @@ type CacheMetadata struct {
 	VerifiedAt  time.Time `json:"verified_at"`
 	Policies    int       `json:"policies"`
 	PublicKey   string    `json:"public_key"`
+	Hash        uint64    `json:"hash,omitempty"`
 }

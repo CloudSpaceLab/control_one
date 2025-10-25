@@ -1,0 +1,38 @@
+# Build artifacts
+/bin/
+/build/
+/dist/
+/tmp/
+coverage.out
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go module caches
+vendor/
+
+# IDE/editor files
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs and runtime data
+*.log
+*.pid
+*.run
+
+# Environment and secrets
+.env
+*.env
+.env.local
+.env.*
+
+# Test containers data
+postgres-data/

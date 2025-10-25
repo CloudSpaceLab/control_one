@@ -251,11 +251,10 @@ func (r *Runner) runProvisioning(ctx context.Context) error {
 	if r.client == nil {
 		return fmt.Errorf("api client unavailable")
 	}
-	if r.cfg.Provisioning.Template == "" {
+	if strings.TrimSpace(r.cfg.Provisioning.Template) == "" {
 		return newSkipError("template not configured")
 	}
 
-	// Detect provider if not set in config
 	provider := strings.ToLower(strings.TrimSpace(r.cfg.Provisioning.Provider))
 	if provider == "" {
 		if p, hints := provisioning.DetectProvider(); p != "unknown" {
@@ -271,14 +270,6 @@ func (r *Runner) runProvisioning(ctx context.Context) error {
 		}
 	}
 
-	engine := provisioning.NewEngine(r.log, r.client, provisioning.Options{
-		Template:        r.cfg.Provisioning.Template,
-		Provider:        provider,
-		Baselines:       r.cfg.Provisioning.Baselines,
-		AutoRemediation: r.cfg.Provisioning.AutoRemediation,
-	})
-
-	// Merge wizard metadata with config-provided metadata
 	metadata := map[string]string{
 		"wizard":       "true",
 		"node_name":    r.cfg.NodeName,
@@ -288,6 +279,26 @@ func (r *Runner) runProvisioning(ctx context.Context) error {
 		metadata[k] = v
 	}
 
+	autofilled := populateMetadataFromEnv(provider, metadata)
+	if len(autofilled) > 0 {
+		r.log.Info("provisioning metadata populated from environment", zap.String("provider", provider), zap.Strings("keys", autofilled))
+	}
+
+	if provider != "" {
+		if missing := missingKeys(requiredKeysForProvider(provider), metadata); len(missing) > 0 {
+			r.log.Warn("provisioning metadata missing required keys for provider",
+				zap.String("provider", provider),
+				zap.Strings("missing", missing))
+		}
+	}
+
+	engine := provisioning.NewEngine(r.log, r.client, provisioning.Options{
+		Template:        r.cfg.Provisioning.Template,
+		Provider:        provider,
+		Baselines:       r.cfg.Provisioning.Baselines,
+		AutoRemediation: r.cfg.Provisioning.AutoRemediation,
+	})
+
 	if err := engine.ApplyTemplate(ctx, r.resolvedNodeID(), metadata); err != nil {
 		return err
 	}
@@ -296,21 +307,21 @@ func (r *Runner) runProvisioning(ctx context.Context) error {
 }
 
 func (r *Runner) runCompliance(ctx context.Context) error {
-    if r.client == nil {
-        return fmt.Errorf("api client unavailable")
-    }
-    if len(r.cfg.Compliance.RuleSets) == 0 {
-        return newSkipError("no compliance rule sets configured")
-    }
+	if r.client == nil {
+		return fmt.Errorf("api client unavailable")
+	}
+	if len(r.cfg.Compliance.RuleSets) == 0 {
+		return newSkipError("no compliance rule sets configured")
+	}
 
-    engine := compliance.NewEngine(r.log, r.client, compliance.Options{
-        Region:         r.cfg.Compliance.Region,
-        RuleSets:       r.cfg.Compliance.RuleSets,
-        Certifications: r.cfg.Compliance.Certifications,
-        AutoApply:      r.cfg.Compliance.AutoApplyTemplates,
-    })
-    _, err := engine.Evaluate(ctx, r.resolvedNodeID(), map[string]string{})
-    return err
+	engine := compliance.NewEngine(r.log, r.client, compliance.Options{
+		Region:         r.cfg.Compliance.Region,
+		RuleSets:       r.cfg.Compliance.RuleSets,
+		Certifications: r.cfg.Compliance.Certifications,
+		AutoApply:      r.cfg.Compliance.AutoApplyTemplates,
+	})
+	_, err := engine.Evaluate(ctx, r.resolvedNodeID(), map[string]string{})
+	return err
 }
 
 func (r *Runner) emitSummary() {
@@ -354,6 +365,92 @@ func (r *Runner) publishEvent(eventID string, payload map[string]any) {
 	if err != nil {
 		r.log.Debug("wizard hook publish failed", zap.String("event", eventID), zap.Error(err))
 	}
+}
+
+var providerEnvFallbacks = map[string]map[string][]string{
+	"vmware": {
+		"cluster":    {"VMWARE_CLUSTER"},
+		"datacenter": {"VMWARE_DATACENTER"},
+		"datastore":  {"VMWARE_DATASTORE"},
+		"network":    {"VMWARE_NETWORK"},
+	},
+	"libvirt": {
+		"pool":    {"LIBVIRT_POOL"},
+		"network": {"LIBVIRT_NETWORK"},
+		"image":   {"LIBVIRT_IMAGE", "LIBVIRT_IMAGE_PATH"},
+	},
+	"aws": {
+		"region":      {"AWS_REGION", "AWS_DEFAULT_REGION"},
+		"vpc_id":      {"AWS_VPC_ID"},
+		"subnet_id":   {"AWS_SUBNET_ID"},
+		"iam_profile": {"AWS_IAM_INSTANCE_PROFILE"},
+	},
+	"azure": {
+		"subscription_id": {"AZURE_SUBSCRIPTION_ID"},
+		"resource_group":  {"AZURE_RESOURCE_GROUP"},
+		"vnet":            {"AZURE_VNET"},
+		"subnet":          {"AZURE_SUBNET"},
+	},
+	"gcp": {
+		"project": {"GOOGLE_CLOUD_PROJECT", "GCP_PROJECT"},
+		"zone":    {"GOOGLE_CLOUD_ZONE", "GCP_ZONE"},
+		"network": {"GCP_NETWORK"},
+	},
+}
+
+func populateMetadataFromEnv(provider string, metadata map[string]string) []string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return nil
+	}
+	fallbacks, ok := providerEnvFallbacks[provider]
+	if !ok {
+		return nil
+	}
+	populated := make([]string, 0, len(fallbacks))
+	for key, envVars := range fallbacks {
+		if strings.TrimSpace(metadata[key]) != "" {
+			continue
+		}
+		for _, envKey := range envVars {
+			if val := strings.TrimSpace(os.Getenv(envKey)); val != "" {
+				metadata[key] = val
+				populated = append(populated, key)
+				break
+			}
+		}
+	}
+	return populated
+}
+
+func requiredKeysForProvider(provider string) []string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "vmware":
+		return []string{"cluster", "datacenter", "datastore", "network"}
+	case "libvirt":
+		return []string{"pool", "network", "image"}
+	case "aws":
+		return []string{"region", "vpc_id", "subnet_id"}
+	case "azure":
+		return []string{"subscription_id", "resource_group", "vnet", "subnet"}
+	case "gcp":
+		return []string{"project", "zone", "network"}
+	default:
+		return nil
+	}
+}
+
+func missingKeys(required []string, metadata map[string]string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(required))
+	for _, key := range required {
+		if strings.TrimSpace(metadata[key]) == "" {
+			missing = append(missing, key)
+		}
+	}
+	return missing
 }
 
 func generateSelfSigned(hosts []string, organization string, validity time.Duration) ([]byte, []byte, error) {
