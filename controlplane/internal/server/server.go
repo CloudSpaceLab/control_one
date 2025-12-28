@@ -28,11 +28,16 @@ import (
 // Store defines persistence operations used by the server.
 type Store interface {
 	CreateTenant(context.Context, *storage.Tenant) (*storage.Tenant, error)
-	ListTenants(context.Context) ([]storage.Tenant, error)
+	ListTenants(context.Context, string, int, int) ([]storage.Tenant, int, error)
 	GetTenant(context.Context, uuid.UUID) (*storage.Tenant, error)
 	EnsureTenant(context.Context, uuid.UUID, string) (*storage.Tenant, error)
+	GetNodeByHostname(context.Context, uuid.UUID, string) (*storage.Node, error)
 	CreateNode(context.Context, *storage.Node) (*storage.Node, error)
-	ListNodes(context.Context) ([]storage.Node, error)
+	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
+	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
+	GetUserByExternalID(context.Context, string) (*storage.User, error)
+	ListUserRoles(context.Context, uuid.UUID) ([]string, error)
+	ListJobs(context.Context, uuid.UUID, string, storage.JobStatus, int, int) ([]storage.Job, int, error)
 	CreateJob(context.Context, *storage.Job, *storage.JobEvent) (*storage.Job, error)
 	UpdateJobStatus(context.Context, uuid.UUID, storage.JobStatus, string, map[string]any) error
 	GetJob(context.Context, uuid.UUID) (*storage.Job, error)
@@ -86,6 +91,12 @@ func (r registerNodeRequest) validate() error {
 	if strings.TrimSpace(r.Hostname) == "" {
 		return fmt.Errorf("hostname is required")
 	}
+	if strings.TrimSpace(r.BootstrapToken) == "" {
+		return fmt.Errorf("bootstrap_token is required")
+	}
+	if r.TenantID == uuid.Nil && strings.TrimSpace(r.TenantName) == "" {
+		return fmt.Errorf("tenant_name is required when tenant_id is not provided")
+	}
 	return nil
 }
 
@@ -134,10 +145,15 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			tenantID = parsed
-		} else {
-			http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		}
+	}
+
+	if tenantID == uuid.Nil {
+		if strings.TrimSpace(req.TenantName) == "" {
+			http.Error(w, "tenant_id or tenant_name required", http.StatusBadRequest)
 			return
 		}
+		tenantID = uuid.New()
 	}
 
 	var bootstrapAllowed bool
@@ -157,6 +173,11 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if s.store == nil {
+		http.Error(w, "registration store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	tenant, err := s.store.EnsureTenant(r.Context(), tenantID, req.TenantName)
 	if err != nil {
 		s.logger.Error("ensure tenant", zap.Error(err))
@@ -164,10 +185,30 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	hostname := strings.TrimSpace(req.Hostname)
+	if existing, err := s.store.GetNodeByHostname(r.Context(), tenant.ID, hostname); err != nil {
+		s.logger.Error("lookup existing node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	} else if existing != nil {
+		s.logger.Info("node already registered",
+			zap.String("tenant_id", tenant.ID.String()),
+			zap.String("node_id", existing.ID.String()),
+			zap.String("hostname", hostname),
+		)
+		respondRegistration(w, s.logger, registerNodeResponse{
+			NodeID:            existing.ID.String(),
+			TenantID:          tenant.ID.String(),
+			Intervals:         defaultNodeIntervals(),
+			ProvisioningHints: tenant.Name,
+		})
+		return
+	}
+
 	node := &storage.Node{
 		ID:       uuid.New(),
 		TenantID: tenant.ID,
-		Hostname: strings.TrimSpace(req.Hostname),
+		Hostname: hostname,
 		OS:       toNullString(req.OS),
 		Arch:     toNullString(req.Arch),
 		PublicIP: toNullString(req.PublicIP),
@@ -180,16 +221,18 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	response := registerNodeResponse{
+	respondRegistration(w, s.logger, registerNodeResponse{
 		NodeID:            created.ID.String(),
 		TenantID:          tenant.ID.String(),
 		Intervals:         defaultNodeIntervals(),
 		ProvisioningHints: tenant.Name,
-	}
+	})
+}
 
+func respondRegistration(w http.ResponseWriter, logger *zap.Logger, resp registerNodeResponse) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.logger.Warn("encode registration response", zap.Error(err))
+	if err := json.NewEncoder(w).Encode(resp); err != nil && logger != nil {
+		logger.Warn("encode registration response", zap.Error(err))
 	}
 }
 
@@ -200,6 +243,14 @@ const (
 	roleViewer   = "viewer"
 	roleOperator = "operator"
 	roleAdmin    = "admin"
+
+	requestIDHeader = "X-Request-Id"
+)
+
+type contextKey string
+
+const (
+	contextKeyRequestID contextKey = "controlone.request_id"
 )
 
 func parseLimitOffset(values map[string][]string) (int, int, error) {
@@ -275,10 +326,77 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/ping", s.handlePing)
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
+	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
 	s.baseRouter.HandleFunc("/api/v1/jobs/", s.handleJobResource)
+	s.baseRouter.HandleFunc("/api/v1/me", s.handleProfile)
 	s.baseRouter.HandleFunc("/api/v1/register", s.handleNodeRegistration)
+}
+
+func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+
+	resp := profileResponse{
+		Subject: principal.Subject,
+		Name:    principal.Name,
+		Email:   principal.Email,
+		Type:    principal.Type,
+		Roles:   principal.Roles,
+		Groups:  principal.Groups,
+	}
+
+	if s.store != nil && strings.TrimSpace(principal.Subject) != "" {
+		user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject)
+		if err != nil {
+			s.logger.Warn("lookup profile user", zap.Error(err))
+		} else if user != nil {
+			resp.User = &profileUserDetails{
+				ID:          user.ID.String(),
+				DisplayName: nullStringPtr(user.DisplayName),
+				Email:       nullStringPtr(user.Email),
+				CreatedAt:   user.CreatedAt.UTC().Format(time.RFC3339),
+			}
+			if roles, err := s.store.ListUserRoles(r.Context(), user.ID); err != nil {
+				s.logger.Warn("list profile roles", zap.Error(err))
+			} else if len(roles) > 0 {
+				resp.StoredRoles = append([]string{}, roles...)
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Warn("encode profile response", zap.Error(err))
+	}
+}
+
+type profileResponse struct {
+	Subject     string              `json:"subject"`
+	Name        string              `json:"name"`
+	Email       string              `json:"email"`
+	Type        string              `json:"type"`
+	Roles       []string            `json:"roles"`
+	Groups      []string            `json:"groups"`
+	StoredRoles []string            `json:"stored_roles,omitempty"`
+	User        *profileUserDetails `json:"user,omitempty"`
+}
+
+type profileUserDetails struct {
+	ID          string  `json:"id"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Email       *string `json:"email,omitempty"`
+	CreatedAt   string  `json:"created_at"`
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
@@ -319,27 +437,33 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenants, err := s.store.ListTenants(r.Context())
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	namePrefix := strings.TrimSpace(r.URL.Query().Get("name_prefix"))
+
+	tenants, total, err := s.store.ListTenants(r.Context(), namePrefix, limit, offset)
 	if err != nil {
 		s.logger.Error("list tenants", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	limit, offset, err := parseLimitOffset(r.URL.Query())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	tenants = paginate(tenants, offset, limit)
-
 	resp := make([]tenantResponse, 0, len(tenants))
 	for _, t := range tenants {
 		resp = append(resp, tenantResponseFromModel(t))
 	}
 
+	payload := paginatedResponse[tenantResponse]{
+		Data:       resp,
+		Pagination: newPaginationMeta(total, limit, offset, len(resp)),
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		s.logger.Warn("encode tenants response", zap.Error(err))
 	}
 }
@@ -432,42 +556,43 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, err := s.store.ListNodes(r.Context())
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var tenantID uuid.UUID
+	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
+		parsed, err := uuid.Parse(tenantParam)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		tenantID = parsed
+	}
+
+	hostnamePrefix := strings.TrimSpace(r.URL.Query().Get("hostname_prefix"))
+
+	nodes, total, err := s.store.ListNodes(r.Context(), tenantID, hostnamePrefix, limit, offset)
 	if err != nil {
 		s.logger.Error("list nodes", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		tenantID, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filtered := nodes[:0]
-		for _, n := range nodes {
-			if n.TenantID == tenantID {
-				filtered = append(filtered, n)
-			}
-		}
-		nodes = filtered
-	}
-
-	limit, offset, err := parseLimitOffset(r.URL.Query())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	nodes = paginate(nodes, offset, limit)
-
 	resp := make([]nodeResponse, 0, len(nodes))
 	for _, n := range nodes {
 		resp = append(resp, nodeResponseFromModel(n))
 	}
 
+	payload := paginatedResponse[nodeResponse]{
+		Data:       resp,
+		Pagination: newPaginationMeta(total, limit, offset, len(resp)),
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		s.logger.Warn("encode nodes response", zap.Error(err))
 	}
 }
@@ -529,6 +654,46 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*created)); err != nil {
+		s.logger.Warn("encode node response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.store == nil {
+		http.Error(w, "node store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
+
+	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/nodes/")
+	nodeID, err := uuid.Parse(idStr)
+	if err != nil {
+		http.Error(w, "invalid node id", http.StatusBadRequest)
+		return
+	}
+
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*node)); err != nil {
 		s.logger.Warn("encode node response", zap.Error(err))
 	}
 }
@@ -602,45 +767,38 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string) func(context
 			return fmt.Errorf("no handler registered for job type %s", jobType)
 		}
 
-		record := metricsTrackJob(jobType)
-		defer func() {
-			recoverOutcome := metricsStatusSuccess
-			if err := recover(); err != nil {
-				recoverOutcome = metricsStatusError
-				record(recoverOutcome)
-				panic(err)
-			}
-			record(recoverOutcome)
-		}()
-
-		startTime := time.Now()
-		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, "job started", map[string]any{"started_at": startTime}); err != nil {
-			record(metricsStatusFailure)
-			return fmt.Errorf("set job running: %w", err)
-		}
+		finish := metricsTrackJob(jobType)
 
 		job, err := s.store.GetJob(ctx, jobID)
 		if err != nil {
-			record(metricsStatusFailure)
+			finish(metricsStatusError)
 			return fmt.Errorf("load job: %w", err)
 		}
 		if job == nil {
-			record(metricsStatusFailure)
+			finish(metricsStatusFailure)
 			return fmt.Errorf("job %s not found", jobID)
 		}
 
-		err = handler(ctx, job)
-		if err != nil {
-			s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, err.Error(), map[string]any{"finished_at": time.Now(), "retries": job.Retries + 1})
-			record(metricsStatusFailure)
-			return fmt.Errorf("job handler failed: %w", err)
+		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, "job started", map[string]any{"started_at": time.Now()}); err != nil {
+			finish(metricsStatusError)
+			return fmt.Errorf("update job running: %w", err)
+		}
+
+		if err := handler(ctx, job); err != nil {
+			s.logger.Error("job execution failed", zap.String("job_type", jobType), zap.String("job_id", jobID.String()), zap.Error(err))
+			finish(metricsStatusFailure)
+			if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, err.Error(), map[string]any{"finished_at": time.Now()}); err != nil {
+				s.logger.Error("update job failed", zap.Error(err))
+			}
+			return err
 		}
 
 		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "job completed", map[string]any{"finished_at": time.Now()}); err != nil {
-			record(metricsStatusFailure)
-			return fmt.Errorf("set job succeeded: %w", err)
+			finish(metricsStatusError)
+			return fmt.Errorf("update job success: %w", err)
 		}
-		record(metricsStatusSuccess)
+
+		finish(metricsStatusSuccess)
 		return nil
 	}
 }
@@ -662,11 +820,19 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		mux.Handle(path, promhttp.Handler())
 	}
 
-	authMW := auth.NewMiddleware(logger, cfg.TLS.RequireClientTLS, cfg.Auth)
+	var identityStore auth.IdentityStore
+	if store != nil {
+		if typed, ok := store.(auth.IdentityStore); ok {
+			identityStore = typed
+		}
+	}
+
+	authMW := auth.NewMiddleware(logger, cfg.TLS.RequireClientTLS, cfg.Auth, identityStore)
 
 	httpServer := &http.Server{
-		Addr:         cfg.HTTP.Address,
-		Handler:      loggingMiddleware(logger, authMW.Wrap(mux)),
+		Addr: cfg.HTTP.Address,
+		Handler: loggingMiddleware(logger,
+			requestIDMiddleware(authMW.Wrap(mux))),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
@@ -704,14 +870,43 @@ func loggingMiddleware(logger *zap.Logger, next http.Handler) http.Handler {
 		start := time.Now()
 		ww := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(ww, r)
-		logger.Info("http request",
+		fields := []zap.Field{
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
 			zap.Int("status", ww.status),
 			zap.Int64("bytes", ww.bytes),
 			zap.Duration("duration", time.Since(start)),
+		}
+		if requestID, ok := requestIDFromContext(r.Context()); ok {
+			fields = append(fields, zap.String("request_id", requestID))
+		}
+		logger.Info("http request",
+			fields...,
 		)
 	})
+}
+
+func requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := strings.TrimSpace(r.Header.Get(requestIDHeader))
+		if requestID == "" {
+			requestID = uuid.NewString()
+		}
+		ctx := context.WithValue(r.Context(), contextKeyRequestID, requestID)
+		w.Header().Set(requestIDHeader, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func requestIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	val := ctx.Value(contextKeyRequestID)
+	if requestID, ok := val.(string); ok && strings.TrimSpace(requestID) != "" {
+		return requestID, true
+	}
+	return "", false
 }
 
 func (s *Server) buildTLSConfig() (*tls.Config, error) {

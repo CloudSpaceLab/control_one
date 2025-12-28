@@ -1,0 +1,74 @@
+http:
+  address: ":8443"
+  read_timeout: 15s
+  write_timeout: 15s
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+  client_ca_file: ""
+  require_client_tls: false
+
+observability:
+  enable_metrics: true
+  metrics_path: /metrics
+
+database:
+  url: postgresql://controlone:controlone@postgres:5432/controlone?sslmode=disable
+  max_open_conns: 5
+  max_idle_conns: 5
+  conn_max_lifetime: 15m
+  apply_migrations: true
+
+worker:
+  concurrency: 2
+  queue_size: 64
+  backend: asynq
+  asynq:
+    enabled: true
+    redis_address: "127.0.0.1:6379"
+    redis_db: 0
+    redis_password: ""
+
+auth:
+  oidc:
+    enabled: false
+    issuer_url: "https://issuer.example.com"
+    client_id: "control-one"
+    audience: []
+    username_claim: preferred_username
+    groups_claim: groups
+    cache_ttl: 1m
+  rbac:
+    default_role: viewer
+    role_mappings: {}
+
+registration:
+  bootstrap_tokens:
+    - "dev-bootstrap-token"
+  default_tenant_id: ""
+
+jobs:
+  provisioning:
+    api_base_url: ""
+    token: ""
+    template: ""
+    provider: ""
+    baselines: []
+    auto_remediation: true
+    tls:
+      cert_file: ""
+      key_file: ""
+      ca_cert_file: ""
+  compliance:
+    api_base_url: ""
+    token: ""
+    region: ""
+    rule_sets: []
+    certifications: []
+    auto_apply: true
+    tls:
+      cert_file: ""
+      key_file: ""
+      ca_cert_file: ""

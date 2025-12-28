@@ -71,6 +71,29 @@ Control One delivers a unified control plane and node agent for regulated indust
 - Audit logging for all configuration changes, provisioning actions, access approvals, and session replay usage.  
 - Encryption at rest for databases, telemetry storage, and session archives.
 
+## Tenancy & RBAC Model
+- **Isolation**: Every resource (nodes, jobs, policies, telemetry artifacts) is owned by a tenant. Tenant context is enforced via database foreign keys and middleware lookups.  
+- **Agent Trust**: Agents authenticate with client certificates bound to a tenant/cluster. Certificates are rotated via the bootstrap wizard and revoked through the audit trail.  
+- **Human Roles**: RBAC roles (`viewer`, `operator`, `admin`, `compliance`) map to IdP groups. The control plane persists role grants in `users`, `roles`, `user_roles`, enabling historic audit and delegated administration.  
+- **Least Privilege Defaults**: Unknown users fall back to `viewer`; write paths (provisioning, access approvals, policy edits) demand `operator` or `admin`. Compliance exports require `compliance` or `admin`.  
+- **Cross-Tenant Safety**: API handlers require tenant IDs from headers or tokens; background jobs validate tenant ownership before invoking external providers.
+- **Schema Source**: RBAC tables and audit logs are seeded via `controlplane/internal/migrate/sql/0003_auth.up.sql`; keep migrations in sync with middleware expectations.
+
+## Data Residency & Compliance Targets
+- **Regional Deployment**: Control plane clusters are deployed per-region; telemetry buckets (S3/Blob) adhere to residency policies.  
+- **Boundary Enforcement**: Multi-region data egress is disabled by default. Cross-region analytics rely on anonymized aggregates.  
+- **Control Mapping**: SOC 2 CC2/CC6, ISO 27001 A.9/A.12, and GDPR Articles 32/33 mapped to automation hooks (policy enforcement, incident logging, consent tracking).  
+- **Retention Strategy**: Default retention—telemetry 90 days, session recordings 365 days, audit logs 7 years—configurable per tenant.  
+- **Regulatory Evidence**: Jobs emit signed artifacts stored in immutable buckets referenced in the audit log for certification evidence.
+
+## Diagram References
+- `docs/diagrams/context.mmd`: system context diagram (C4 Level 1) showing actors and external dependencies.  
+- `docs/diagrams/container-control-plane.mmd`: container diagram (C4 Level 2) detailing API, worker, telemetry, and UI components.  
+- `docs/diagrams/sequence-provisioning.mmd`: sequence flow for provisioning template execution (UI ➜ API ➜ job queue ➜ provider adapter).  
+- `docs/diagrams/sequence-compliance.mmd`: sequence flow for scheduled compliance scan and remediation feedback loop.  
+
+These diagrams act as living artifacts; updates to architecture should include synchronized diagram revisions.
+
 ## Compliance Targets & Controls (Initial)
 - **SOC 2 / ISO 27001**: Change management, access control, logging, incident response, vulnerability management.  
 - **PCI / SWIFT / GDPR** (banks/telcos): Data residency, encryption, segmentation, retention policies.  

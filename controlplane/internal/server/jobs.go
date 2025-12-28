@@ -29,8 +29,30 @@ const (
 
 type jobHandler func(ctx context.Context, job *storage.Job) error
 
+func isValidJobStatus(status storage.JobStatus) bool {
+	switch status {
+	case storage.JobStatusQueued,
+		storage.JobStatusRunning,
+		storage.JobStatusSucceeded,
+		storage.JobStatusFailed,
+		storage.JobStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 func defaultJobHandlers() map[string]jobHandler {
 	return map[string]jobHandler{}
+}
+
+func jobRequiresTenant(jobType string) bool {
+	switch jobType {
+	case JobTypeProvisionApply, JobTypeComplianceScan:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) configureJobIntegrations() {
@@ -54,6 +76,17 @@ func (s *Server) configureJobIntegrations() {
 			s.provisioningEngine = provisioning.NewEngine(s.logger.Named("provisioning-engine"), client, opts)
 			s.jobHandlers[JobTypeProvisionApply] = s.handleProvisionApply
 		}
+		if s.provisioningEngine == nil {
+			opts := provisioning.Options{
+				Template:        "demo-template",
+				Provider:        "mock",
+				Baselines:       []string{"cis-aws-foundations"},
+				AutoRemediation: s.cfg.Jobs.Provisioning.AutoRemediation,
+			}
+			s.logger.Warn("provisioning client unavailable; using mock engine")
+			s.provisioningEngine = provisioning.NewEngine(s.logger.Named("provisioning-engine"), nil, opts)
+			s.jobHandlers[JobTypeProvisionApply] = s.handleProvisionApply
+		}
 	}
 
 	if _, exists := s.jobHandlers[JobTypeComplianceScan]; !exists {
@@ -72,6 +105,17 @@ func (s *Server) configureJobIntegrations() {
 			s.complianceEngine = compliance.NewEngine(s.logger.Named("compliance-engine"), client, opts)
 			s.jobHandlers[JobTypeComplianceScan] = s.handleComplianceScan
 		}
+		if s.complianceEngine == nil {
+			opts := compliance.Options{
+				Region:         "us-mock-1",
+				RuleSets:       []string{"mock-best-practices"},
+				Certifications: []string{"soc2"},
+				AutoApply:      s.cfg.Jobs.Compliance.AutoApply,
+			}
+			s.logger.Warn("compliance client unavailable; using mock engine")
+			s.complianceEngine = compliance.NewEngine(s.logger.Named("compliance-engine"), nil, opts)
+			s.jobHandlers[JobTypeComplianceScan] = s.handleComplianceScan
+		}
 	}
 }
 
@@ -84,6 +128,7 @@ type provisionPayload struct {
 
 type compliancePayload struct {
 	ScanID   string            `json:"scan_id"`
+	TenantID string            `json:"tenant_id"`
 	NodeID   string            `json:"node_id"`
 	Policies map[string]string `json:"policies"`
 }
@@ -186,22 +231,25 @@ func decodeCompliancePayload(data []byte) (*compliancePayload, error) {
 	if strings.TrimSpace(payload.ScanID) == "" {
 		return nil, fmt.Errorf("scan_id is required")
 	}
+	if strings.TrimSpace(payload.TenantID) == "" {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
 	if strings.TrimSpace(payload.NodeID) == "" {
 		return nil, fmt.Errorf("node_id is required")
 	}
 	return &payload, nil
 }
 
-func validateJobPayload(jobType string, payload json.RawMessage) error {
+func validateJobPayload(jobType string, payload json.RawMessage) (any, error) {
 	switch jobType {
 	case JobTypeProvisionApply:
-		_, err := decodeProvisionPayload(payload)
-		return err
+		val, err := decodeProvisionPayload(payload)
+		return val, err
 	case JobTypeComplianceScan:
-		_, err := decodeCompliancePayload(payload)
-		return err
+		val, err := decodeCompliancePayload(payload)
+		return val, err
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -229,11 +277,74 @@ func (r createJobRequest) validate() error {
 
 func (s *Server) handleJobsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case http.MethodGet:
+		s.handleListJobs(w, r)
 	case http.MethodPost:
 		s.handleCreateJob(w, r)
 	default:
-		w.Header().Set("Allow", "POST")
+		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "job store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
+
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var tenantID uuid.UUID
+	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
+		parsed, err := uuid.Parse(tenantParam)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		tenantID = parsed
+	}
+
+	jobType := strings.TrimSpace(r.URL.Query().Get("type"))
+	statusParam := strings.TrimSpace(r.URL.Query().Get("status"))
+	var status storage.JobStatus
+	if statusParam != "" {
+		candidate := storage.JobStatus(statusParam)
+		if !isValidJobStatus(candidate) {
+			http.Error(w, "invalid status", http.StatusBadRequest)
+			return
+		}
+		status = candidate
+	}
+
+	jobs, total, err := s.store.ListJobs(r.Context(), tenantID, jobType, status, limit, offset)
+	if err != nil {
+		s.logger.Error("list jobs", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]jobResponse, 0, len(jobs))
+	for i := range jobs {
+		resp = append(resp, jobResponseFromModel(&jobs[i], nil))
+	}
+
+	payload := paginatedResponse[jobResponse]{
+		Data:       resp,
+		Pagination: newPaginationMeta(total, limit, offset, len(resp)),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		s.logger.Warn("encode jobs response", zap.Error(err))
 	}
 }
 
@@ -286,8 +397,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := auth.PrincipalFromContext(r.Context()); !ok {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
 		return
 	}
 
@@ -310,7 +420,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateJobPayload(req.Type, req.Payload); err != nil {
+	payloadDetails, err := validateJobPayload(req.Type, req.Payload)
+	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -328,6 +439,29 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		if tenant == nil {
 			http.Error(w, "tenant not found", http.StatusBadRequest)
 			return
+		}
+	}
+
+	if jobRequiresTenant(req.Type) {
+		if req.TenantID == nil {
+			http.Error(w, "tenant_id is required for this job type", http.StatusBadRequest)
+			return
+		}
+		if tenantID == uuid.Nil {
+			http.Error(w, "tenant_id is invalid", http.StatusBadRequest)
+			return
+		}
+		switch v := payloadDetails.(type) {
+		case *provisionPayload:
+			if v != nil && v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
+				http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+				return
+			}
+		case *compliancePayload:
+			if v != nil && v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
+				http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+				return
+			}
 		}
 	}
 

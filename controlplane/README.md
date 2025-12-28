@@ -66,3 +66,33 @@ The embedded worker manager (@controlplane/internal/worker/manager.go#1-117) wil
 5. **Observability & Alerting**: instrument Prometheus metrics (queue depth, job latency, failure counts) and integrate with hooks to notify operators on SLA breaches.
 
 Initial implementation will focus on provisioning baseline jobs, followed by compliance scans and remediation workflows.
+
+### Worker Backend Configuration
+
+The control plane can execute background work using an in-memory queue or an external Redis-backed Asynq deployment.
+
+#### In-memory (default)
+
+```
+worker:
+  backend: memory
+  concurrency: 4
+  queue_size: 256
+```
+
+This mode keeps tasks in-process and is suitable for local development or low-volume single-instance control planes.
+
+#### Asynq (Redis)
+
+```
+worker:
+  backend: asynq
+  concurrency: 8
+  asynq:
+    enabled: true
+    redis_address: 127.0.0.1:6379
+    redis_db: 2
+    redis_password: "${REDIS_PASSWORD}"
+```
+
+Enable this when running multiple control plane replicas or when durable queues are required. The server embeds an Asynq worker and client; configure Redis TLS/credentials via environment variables if needed. Job handlers map to task names prefixed with `control_one:`, and Asynq retries are respected through `jobs.max_retries` fields.

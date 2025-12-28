@@ -1,7 +1,14 @@
-# Control One Node Agent Scaffold
+# Control One Platform
 
 ## Overview
-The Control One Node Agent is a Go-based service deployed on managed hosts across VMware, LibVirt, AWS, Azure, and OpenStack environments. It handles secure bootstrap with the Control Plane, continuous compliance evaluations, telemetry streaming, and optional remediation actions.
+Control One delivers a unified control plane, background worker service, and node agent that together provision infrastructure, enforce compliance, and surface telemetry across hybrid environments (VMware, LibVirt, AWS, Azure). The repository also hosts a React-based operator UI and infrastructure tooling to stand up a complete development stack.
+
+### Core Components
+- **Control Plane API** (`controlplane/cmd/controlplane`): Go service that exposes authenticated REST endpoints for tenants, nodes, jobs, and registration. Integrates Postgres for persistence, Asynq for background work, and optional observability endpoints.
+- **Worker Manager** (`controlplane/internal/worker`): Dispatches provisioning and compliance jobs via in-memory queues or Asynq/Redis, coordinating with the job store and external integrations.
+- **Node Agent** (`cmd/nodeagent`): Runs on managed hosts, orchestrating bootstrap, scheduling, provisioning, compliance, telemetry, access, and secrets workflows.
+- **Web UI** (`ui/`): React + TypeScript SPA providing authenticated dashboards, routing, and placeholders for tenants, nodes, and login surfaces.
+- **Docs & Diagrams** (`docs/`): Architecture brief, threat model, and C4/sequence diagrams underpinning Phase 0 planning.
 
 ## Architecture
 - **Agent Core** (`cmd/nodeagent/main.go`): wires configuration, registration, scheduling, telemetry, mesh, provisioning, access, and secrets workflows.
@@ -38,10 +45,53 @@ The Control One Node Agent is a Go-based service deployed on managed hosts acros
   - **Verify baselines** by confirming completion status in `/api/v1/provisioning/baselines` responses and reviewing remediation notes.
 
 ## Build & Tooling
-- **Go version**: `go 1.23.0` per `go.mod`.
+- **Go version**: `go 1.24.0` per `go.mod`.
 - **GoReleaser**: `.goreleaser.yaml` produces multi-OS archives, checksums, and optional Docker images using `build/docker/Dockerfile`.
-- **CI**: `.github/workflows/ci.yaml` runs gofmt, vet, tests, and cross-platform builds; tags trigger GoReleaser.
+- **CI**: `.github/workflows/ci.yaml` runs Go formatting, vetting, unit tests, storage integration tests, UI lint/tests, and binary builds across Linux/macOS/Windows runners.
 - **Deployment Wizard**: `scripts/wizard/setup_control_one.sh` generates self-contained control plane and node agent bundles (config, binaries, optional TLS assets). The CI workflow publishes a ready-made wizard artifact named `control-one-wizard-<commit>` for Ubuntu runners.
+
+## Local Development
+
+### Prerequisites
+- Go 1.24+
+- Node.js 20+
+- Docker & Docker Compose
+
+### Quick Start (API + Worker + Postgres + Observability)
+1. Copy the sample config and adjust as needed:
+   ```bash
+   cp controlplane/config/controlplane.example.yaml controlplane/config/controlplane.dev.yaml
+   ```
+2. Launch the local stack (Postgres, control plane API, Prometheus, Grafana):
+   ```bash
+   make docker-up
+   ```
+   Services expose:
+   - Control Plane API: https://localhost:8443 (self-signed during dev)
+   - Postgres: localhost:5432 (`controlone`/`controlone`)
+   - Prometheus: http://localhost:9090
+   - Grafana: http://localhost:3000 (admin/admin)
+3. Apply database migrations and start the API/worker locally (if not using Docker):
+   ```bash
+   CONTROL_ONE_CONFIG=controlplane/config/controlplane.dev.yaml make go-run
+   ```
+4. Tear down when finished:
+   ```bash
+   make docker-down
+   ```
+
+### Background Jobs
+The worker manager defaults to an in-memory queue. Enable Asynq/Redis by configuring `worker.backend: asynq` and `worker.asynq.*` fields in `controlplane/config/controlplane.dev.yaml`. When Asynq is enabled, ensure a Redis instance is reachable at the configured address.
+
+### Web UI
+1. Install dependencies: `npm install --prefix ui`
+2. Run the dev server: `npm run dev --prefix ui`
+3. The SPA expects the API to be reachable via the configured proxy (see `ui/vite.config.ts`).
+
+### Testing
+- Backend: `make go-test`
+- UI: `npm test --prefix ui`
+- Storage integration (Postgres via Testcontainers): `go test -v ./controlplane/internal/storage -run TestJobLifecycleWithPostgres`
 
 ### Wizard Usage
 Run the guided setup to emit binaries, configuration, and summary docs:
@@ -62,12 +112,23 @@ go test ./...
 go build ./cmd/nodeagent
 ```
 
+## Production Authentication
+The control plane enforces role-based access control (RBAC) for all HTTPS endpoints. Recommended production setup:
+
+1. **OIDC Provider** – Configure `auth.oidc` in `controlplane/config/controlplane.example.yaml` (issuer URL, client ID, optional audiences). Tokens are validated using `github.com/coreos/go-oidc/v3` with claim-based role resolution.
+2. **RBAC Defaults** – Map IdP groups to Control One roles via `auth.rbac.role_mappings`. Users without matches inherit `auth.rbac.default_role` (viewer).
+3. **Database Migration** – Apply `controlplane/internal/migrate/sql/0003_auth.up.sql` to seed `users`, `roles`, `user_roles`, and `audit_logs` tables.
+4. **Bootstrapping** – After running migrations, insert at least one admin assignment (e.g. `INSERT INTO roles` and `user_roles`) or supply an OIDC group mapped to `admin`.
+5. **CI Artifacts** – The wizard bundle published in CI contains binaries, configs, and TLS placeholders. Update its `auth` section before promotion.
+
+Reference `controlplane/internal/server/server_test.go` for RBAC integration tests covering viewer vs. admin paths.
+
 ## Installation Scripts
 - **Linux/Unix**: `scripts/install.sh` deploys binary, config, and systemd unit (`build/nodeagent.service`).
 - **Windows**: `scripts/install.ps1` installs the agent under `Program Files` and registers a Windows service.
 
 ## Configuration
-Sample file: `configs/example-config.yaml`
+Sample node-agent file: `configs/example-config.yaml`
 ```
 api_url: https://control-plane.example.com/api
 bootstrap_token: CHANGE_ME

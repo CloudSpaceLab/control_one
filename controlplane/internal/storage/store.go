@@ -23,6 +23,136 @@ type Store struct {
 	clock func() time.Time
 }
 
+// GetNode returns a node by ID.
+func (s *Store) GetNode(ctx context.Context, id uuid.UUID) (*Node, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("node id is required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		FROM nodes
+		WHERE id = $1
+	`, id)
+
+	var node Node
+	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.CreatedAt, &node.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get node: %w", err)
+	}
+
+	return &node, nil
+}
+
+// ListJobs returns jobs filtered by tenant, type, and status with pagination.
+func (s *Store) ListJobs(ctx context.Context, tenantID uuid.UUID, jobType string, status JobStatus, limit, offset int) ([]Job, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	jobType = strings.TrimSpace(jobType)
+
+	var (
+		clauses = []string{"TRUE"}
+		args    []any
+	)
+
+	if tenantID != uuid.Nil {
+		args = append(args, tenantID)
+		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+
+	if jobType != "" {
+		args = append(args, jobType)
+		clauses = append(clauses, fmt.Sprintf("type = $%d", len(args)))
+	}
+
+	if status != "" {
+		args = append(args, status)
+		clauses = append(clauses, fmt.Sprintf("status = $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, type, status, payload, retries, max_retries, scheduled_at, started_at, finished_at, created_at, updated_at
+		FROM jobs
+		WHERE %s
+		ORDER BY created_at DESC
+	`, strings.Join(clauses, " AND "))
+
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM jobs WHERE %s`, strings.Join(clauses, " AND "))
+	countRow := s.db.QueryRowContext(ctx, countQuery, args[:len(args)-(func() int {
+		if limit > 0 {
+			return 1
+		}
+		return 0
+	}())-(func() int {
+		if offset > 0 {
+			return 1
+		}
+		return 0
+	}())]...)
+
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count jobs: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var jobs []Job
+	for rows.Next() {
+		var job Job
+		var tenant sql.NullString
+		var scheduled, started, finished sql.NullTime
+		if err := rows.Scan(&job.ID, &tenant, &job.Type, &job.Status, &job.Payload, &job.Retries, &job.MaxRetries, &scheduled, &started, &finished, &job.CreatedAt, &job.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan job: %w", err)
+		}
+		if tenant.Valid {
+			job.TenantID, _ = uuid.Parse(tenant.String)
+		}
+		if scheduled.Valid {
+			t := scheduled.Time
+			job.ScheduledAt = &t
+		}
+		if started.Valid {
+			t := started.Time
+			job.StartedAt = &t
+		}
+		if finished.Valid {
+			t := finished.Time
+			job.FinishedAt = &t
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate jobs: %w", err)
+	}
+
+	return jobs, total, nil
+}
+
 // EnsureTenant returns the tenant or creates it if absent.
 func (s *Store) EnsureTenant(ctx context.Context, id uuid.UUID, name string) (*Tenant, error) {
 	if s.db == nil {
@@ -343,19 +473,65 @@ func (s *Store) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, erro
 	return tenant, nil
 }
 
-// ListTenants returns all tenants ordered by creation time.
-func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
+// ListTenants returns tenants ordered by creation time. If limit is zero, all rows are returned.
+func (s *Store) ListTenants(ctx context.Context, prefix string, limit, offset int) ([]Tenant, int, error) {
 	if s.db == nil {
-		return nil, errors.New("store database not initialized")
+		return nil, 0, errors.New("store database not initialized")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	prefix = strings.TrimSpace(prefix)
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	var (
+		args    []any
+		clauses []string
+	)
+
+	clauses = append(clauses, "TRUE")
+	if prefix != "" {
+		args = append(args, prefix+"%")
+		clauses = append(clauses, fmt.Sprintf("name ILIKE $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
 		SELECT id, name, created_at
 		FROM tenants
+		WHERE %s
 		ORDER BY created_at DESC
-	`)
+	`, strings.Join(clauses, " AND "))
+
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM tenants WHERE %s`, strings.Join(clauses, " AND "))
+	countRow := s.db.QueryRowContext(ctx, countQuery, args[:len(args)-(func() int {
+		if limit > 0 {
+			return 1
+		}
+		return 0
+	}())-(func() int {
+		if offset > 0 {
+			return 1
+		}
+		return 0
+	}())]...)
+
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count tenants: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query tenants: %w", err)
+		return nil, 0, fmt.Errorf("query tenants: %w", err)
 	}
 	defer rows.Close()
 
@@ -363,15 +539,15 @@ func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
 	for rows.Next() {
 		var t Tenant
 		if err := rows.Scan(&t.ID, &t.Name, &t.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan tenant: %w", err)
+			return nil, 0, fmt.Errorf("scan tenant: %w", err)
 		}
 		tenants = append(tenants, t)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenants: %w", err)
+		return nil, 0, fmt.Errorf("iterate tenants: %w", err)
 	}
 
-	return tenants, nil
+	return tenants, total, nil
 }
 
 // Node represents a managed node record.
@@ -478,6 +654,34 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// GetNodeByHostname returns a node for the tenant if it exists.
+func (s *Store) GetNodeByHostname(ctx context.Context, tenantID uuid.UUID, hostname string) (*Node, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	hostname = strings.TrimSpace(hostname)
+	if tenantID == uuid.Nil || hostname == "" {
+		return nil, errors.New("tenant id and hostname are required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		FROM nodes
+		WHERE tenant_id = $1 AND hostname = $2
+		LIMIT 1
+	`, tenantID, hostname)
+
+	var node Node
+	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.CreatedAt, &node.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get node by hostname: %w", err)
+	}
+
+	return &node, nil
+}
+
 // CreateNode inserts a node record.
 func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 	if s.db == nil {
@@ -521,19 +725,70 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 	return node, nil
 }
 
-// ListNodes returns all nodes.
-func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
+// ListNodes returns nodes filtered by tenant and hostname prefix with pagination.
+func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefix string, limit, offset int) ([]Node, int, error) {
 	if s.db == nil {
-		return nil, errors.New("store database not initialized")
+		return nil, 0, errors.New("store database not initialized")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-        SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
-        FROM nodes
-        ORDER BY created_at DESC
-    `)
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	hostnamePrefix = strings.TrimSpace(hostnamePrefix)
+
+	var (
+		clauses = []string{"TRUE"}
+		args    []any
+	)
+
+	if tenantID != uuid.Nil {
+		args = append(args, tenantID)
+		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+
+	if hostnamePrefix != "" {
+		args = append(args, hostnamePrefix+"%")
+		clauses = append(clauses, fmt.Sprintf("hostname ILIKE $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		FROM nodes
+		WHERE %s
+		ORDER BY created_at DESC
+	`, strings.Join(clauses, " AND "))
+
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM nodes WHERE %s`, strings.Join(clauses, " AND "))
+	countRow := s.db.QueryRowContext(ctx, countQuery, args[:len(args)-(func() int {
+		if limit > 0 {
+			return 1
+		}
+		return 0
+	}())-(func() int {
+		if offset > 0 {
+			return 1
+		}
+		return 0
+	}())]...)
+
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count nodes: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query nodes: %w", err)
+		return nil, 0, fmt.Errorf("query nodes: %w", err)
 	}
 	defer rows.Close()
 
@@ -541,13 +796,13 @@ func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
 	for rows.Next() {
 		var n Node
 		if err := rows.Scan(&n.ID, &n.TenantID, &n.Hostname, &n.OS, &n.Arch, &n.PublicIP, &n.CreatedAt, &n.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan node: %w", err)
+			return nil, 0, fmt.Errorf("scan node: %w", err)
 		}
 		nodes = append(nodes, n)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate nodes: %w", err)
+		return nil, 0, fmt.Errorf("iterate nodes: %w", err)
 	}
 
-	return nodes, nil
+	return nodes, total, nil
 }

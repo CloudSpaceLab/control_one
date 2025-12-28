@@ -3,11 +3,13 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -77,8 +79,161 @@ func TestPingEndpointAuthentication(t *testing.T) {
 	})
 }
 
+func TestProfileEndpoint(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: config.AuthConfig{
+			RBAC: config.RBACConfig{DefaultRole: "viewer"},
+		},
+	}
+
+	bearerReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		return req
+	}
+
+	t.Run("returns inline principal without backing store", func(t *testing.T) {
+		srv := New(logger, cfg, nil, nil)
+		rec := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(rec, bearerReq())
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+
+		var resp profileResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("expected valid json: %v", err)
+		}
+		if resp.Subject != "test-token" {
+			t.Fatalf("expected subject propagated, got %s", resp.Subject)
+		}
+		if resp.User != nil {
+			t.Fatalf("expected user payload omitted when store unavailable, got %+v", resp.User)
+		}
+		if len(resp.StoredRoles) != 0 {
+			t.Fatalf("expected stored roles omitted, got %v", resp.StoredRoles)
+		}
+	})
+
+	t.Run("returns stored roles and persisted metadata", func(t *testing.T) {
+		userID := uuid.New()
+		store := &fakeStore{
+			users: map[string]*storage.User{
+				"test-token": {
+					ID:          userID,
+					ExternalID:  "test-token",
+					Email:       storageNullString("stored@example.com"),
+					DisplayName: storageNullString("Stored User"),
+					CreatedAt:   time.Unix(1700000600, 0),
+				},
+			},
+			userRoles: map[uuid.UUID][]string{
+				userID: {"viewer", "operator"},
+			},
+			overrideRoles: map[uuid.UUID][]string{
+				userID: {"viewer", "operator"},
+			},
+		}
+		srv := New(logger, cfg, store, nil)
+		rec := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(rec, bearerReq())
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+
+		var resp profileResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("expected valid json: %v", err)
+		}
+		if resp.User == nil || resp.User.Email == nil || *resp.User.Email != "stored@example.com" {
+			t.Fatalf("expected stored email propagated, got %+v", resp.User)
+		}
+		if resp.User.DisplayName == nil || *resp.User.DisplayName != "Stored User" {
+			t.Fatalf("expected stored display name propagated, got %+v", resp.User)
+		}
+		if len(resp.StoredRoles) != 2 {
+			t.Fatalf("expected stored roles returned, got %v", resp.StoredRoles)
+		}
+	})
+
+	t.Run("omits stored metadata when user not persisted", func(t *testing.T) {
+		store := &fakeStore{skipUserPersistence: true}
+		srv := New(logger, cfg, store, nil)
+		rec := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(rec, bearerReq())
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("expected valid json: %v", err)
+		}
+		if _, ok := resp["user"]; ok {
+			t.Fatalf("expected user field omitted when not stored, got %v", resp["user"])
+		}
+		if _, ok := resp["stored_roles"]; ok {
+			t.Fatalf("expected stored roles omitted when user missing, got %v", resp["stored_roles"])
+		}
+	})
+}
+
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
+}
+
+func TestRBACAuthorization(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: config.AuthConfig{RBAC: config.RBACConfig{DefaultRole: "viewer"}},
+	}
+
+	store := &fakeStore{userRoles: map[uuid.UUID][]string{}}
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	call := func(method, path string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer subject-123")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("viewer can access tenant list", func(t *testing.T) {
+		rec := call(http.MethodGet, "/api/v1/tenants", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d", rec.Code)
+		}
+	})
+
+	t.Run("viewer denied control plane operations", func(t *testing.T) {
+		rec := call(http.MethodPost, "/api/v1/tenants", []byte(`{"name":"Tenant X"}`))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 got %d", rec.Code)
+		}
+	})
+
+	if store.lastUserID == uuid.Nil {
+		t.Fatalf("expected user to be persisted")
+	}
+	store.overrideRoles = map[uuid.UUID][]string{store.lastUserID: {"admin"}}
+	t.Run("admin role grants access", func(t *testing.T) {
+		rec := call(http.MethodPost, "/api/v1/tenants", []byte(`{"name":"Tenant Y"}`))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 got %d", rec.Code)
+		}
+	})
 }
 
 func TestNodesEndpoints(t *testing.T) {
@@ -94,7 +249,7 @@ func TestNodesEndpoints(t *testing.T) {
 	store := &fakeStore{}
 	srv := New(logger, cfg, store, &stubQueue{})
 	srv.jobHandlers = map[string]jobHandler{
-		"provision": func(ctx context.Context, job *storage.Job) error {
+		JobTypeProvisionApply: func(ctx context.Context, job *storage.Job) error {
 			return nil
 		},
 	}
@@ -142,6 +297,31 @@ func TestNodesEndpoints(t *testing.T) {
 		if !contains(body, "primary") || contains(body, "secondary") {
 			t.Fatalf("expected filtered response, got %s", body)
 		}
+	})
+
+	t.Run("GET /api/v1/nodes/:id returns node detail", func(t *testing.T) {
+		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "detail-node", CreatedAt: time.Unix(1700000010, 0), UpdatedAt: time.Unix(1700000010, 0)}
+		store.nodes = []storage.Node{targetNode}
+
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodGet, "/api/v1/nodes/"+targetNode.ID.String(), nil)
+		srv.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d", rec.Code)
+		}
+		if !contains(rec.Body.String(), "detail-node") {
+			t.Fatalf("expected node detail response, got %s", rec.Body.String())
+		}
+
+		t.Run("returns 404 for missing node", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := bearerReq(http.MethodGet, "/api/v1/nodes/"+uuid.New().String(), nil)
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404 got %d", rec.Code)
+			}
+		})
 	})
 
 	t.Run("POST /api/v1/nodes creates node", func(t *testing.T) {
@@ -248,18 +428,41 @@ func TestNodesEndpoints(t *testing.T) {
 	})
 
 	t.Run("POST /api/v1/jobs enqueues job", func(t *testing.T) {
-		payload := []byte(`{"type":"provision","payload":{}}`)
+		store.tenants = []storage.Tenant{
+			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
+		}
+		body := fmt.Sprintf(`{
+			"type":"%s",
+			"tenant_id":"%s",
+			"payload":{
+				"plan_id":"plan-1",
+				"tenant_id":"%s",
+				"node_id":"node-123",
+				"metadata":{"env":"dev"}
+			}
+		}`, JobTypeProvisionApply, tenantID.String(), tenantID.String())
+		payload := []byte(body)
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
 
 		if rec.Code != http.StatusAccepted {
-			t.Fatalf("expected 202 got %d", rec.Code)
+			t.Fatalf("expected 202 got %d body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
 	t.Run("POST /api/v1/jobs validates tenant existence", func(t *testing.T) {
 		tenant := uuid.New()
-		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"plan-1","tenant_id":"%s"}}`, tenant.String(), tenant.String()))
+		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"plan-1","tenant_id":"%s","node_id":"node-999"}}`, tenant.String(), tenant.String()))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("POST /api/v1/jobs rejects tenant mismatch", func(t *testing.T) {
+		otherTenant := uuid.New()
+		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"plan-1","tenant_id":"%s","node_id":"node-abc"}}`, tenantID.String(), otherTenant.String()))
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
 		if rec.Code != http.StatusBadRequest {
@@ -280,15 +483,94 @@ func TestNodesEndpoints(t *testing.T) {
 			t.Fatalf("expected response to contain job id")
 		}
 	})
+
+	t.Run("GET /api/v1/jobs filters by status", func(t *testing.T) {
+		jobA, _ := store.CreateJob(context.Background(), &storage.Job{Type: "provision.apply", Status: storage.JobStatusQueued, CreatedAt: time.Now().Add(-2 * time.Minute)}, nil)
+		jobB, _ := store.CreateJob(context.Background(), &storage.Job{Type: "provision.apply", Status: storage.JobStatusFailed, CreatedAt: time.Now().Add(-time.Minute)}, nil)
+
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodGet, "/api/v1/jobs?status="+string(storage.JobStatusFailed), nil)
+		srv.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d", rec.Code)
+		}
+		body := rec.Body.String()
+		if !contains(body, jobB.ID.String()) {
+			t.Fatalf("expected failed job in response, got %s", body)
+		}
+		if contains(body, jobA.ID.String()) {
+			t.Fatalf("expected queued job to be filtered out, got %s", body)
+		}
+	})
+
+	t.Run("GET /api/v1/me returns principal profile", func(t *testing.T) {
+		userID := uuid.New()
+		store.users = map[string]*storage.User{
+			"test-token": {
+				ID:          userID,
+				ExternalID:  "test-token",
+				Email:       storageNullString("stored@example.com"),
+				DisplayName: storageNullString("Stored User"),
+				CreatedAt:   time.Unix(1700000500, 0),
+			},
+		}
+		store.userRoles = map[uuid.UUID][]string{
+			userID: {"viewer", "operator"},
+		}
+		store.overrideRoles = map[uuid.UUID][]string{
+			userID: {"viewer", "operator"},
+		}
+
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodGet, "/api/v1/me", nil)
+		srv.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("expected application/json got %s", ct)
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("expected valid json: %v", err)
+		}
+		if subject, _ := resp["subject"].(string); subject != "test-token" {
+			t.Fatalf("expected subject test-token got %v", subject)
+		}
+
+		storedRoles, _ := resp["stored_roles"].([]any)
+		if len(storedRoles) != 2 {
+			t.Fatalf("expected stored roles to be returned, got %v", storedRoles)
+		}
+
+		userPayload, _ := resp["user"].(map[string]any)
+		if userPayload == nil {
+			t.Fatalf("expected user payload")
+		}
+		if email, _ := userPayload["email"].(string); email != "stored@example.com" {
+			t.Fatalf("expected stored email propagated, got %v", email)
+		}
+		if display, _ := userPayload["display_name"].(string); display != "Stored User" {
+			t.Fatalf("expected display name propagated, got %v", display)
+		}
+	})
 }
 
 type fakeStore struct {
-	nodes         []storage.Node
-	tenants       []storage.Tenant
-	createdNode   *storage.Node
-	createdTenant *storage.Tenant
-	jobs          map[uuid.UUID]*storage.Job
-	events        map[uuid.UUID][]storage.JobEvent
+	nodes               []storage.Node
+	tenants             []storage.Tenant
+	createdNode         *storage.Node
+	createdTenant       *storage.Tenant
+	jobs                map[uuid.UUID]*storage.Job
+	events              map[uuid.UUID][]storage.JobEvent
+	users               map[string]*storage.User
+	userRoles           map[uuid.UUID][]string
+	lastUserID          uuid.UUID
+	overrideRoles       map[uuid.UUID][]string
+	skipUserPersistence bool
 }
 
 type stubQueue struct{}
@@ -312,8 +594,53 @@ func (f *fakeStore) CreateNode(_ context.Context, node *storage.Node) (*storage.
 	return node, nil
 }
 
-func (f *fakeStore) ListNodes(context.Context) ([]storage.Node, error) {
-	return f.nodes, nil
+func (f *fakeStore) GetNodeByHostname(_ context.Context, tenantID uuid.UUID, hostname string) (*storage.Node, error) {
+	hostname = strings.TrimSpace(hostname)
+	for _, node := range f.nodes {
+		if node.TenantID == tenantID && strings.EqualFold(node.Hostname, hostname) {
+			copy := node
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListNodes(_ context.Context, tenantID uuid.UUID, hostnamePrefix string, limit, offset int) ([]storage.Node, int, error) {
+	var filtered []storage.Node
+	for _, node := range f.nodes {
+		if tenantID != uuid.Nil && node.TenantID != tenantID {
+			continue
+		}
+		if hostnamePrefix != "" && !strings.HasPrefix(strings.ToLower(node.Hostname), strings.ToLower(hostnamePrefix)) {
+			continue
+		}
+		filtered = append(filtered, node)
+	}
+	total := len(filtered)
+	if offset > len(filtered) {
+		return []storage.Node{}, total, nil
+	}
+	end := len(filtered)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
+}
+
+func (f *fakeStore) GetNode(_ context.Context, id uuid.UUID) (*storage.Node, error) {
+	for _, node := range f.nodes {
+		if node.ID == id {
+			copy := node
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*storage.Tenant, error) {
@@ -328,8 +655,64 @@ func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*st
 	return tenant, nil
 }
 
-func (f *fakeStore) ListTenants(context.Context) ([]storage.Tenant, error) {
-	return f.tenants, nil
+func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset int) ([]storage.Tenant, int, error) {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	var filtered []storage.Tenant
+	for _, tenant := range f.tenants {
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(tenant.Name), prefix) {
+			continue
+		}
+		filtered = append(filtered, tenant)
+	}
+	total := len(filtered)
+	if offset > len(filtered) {
+		return []storage.Tenant{}, total, nil
+	}
+	end := len(filtered)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
+}
+
+func (f *fakeStore) ListJobs(_ context.Context, tenantID uuid.UUID, jobType string, status storage.JobStatus, limit, offset int) ([]storage.Job, int, error) {
+	var filtered []storage.Job
+	for _, job := range f.jobs {
+		if tenantID != uuid.Nil && job.TenantID != tenantID {
+			continue
+		}
+		if strings.TrimSpace(jobType) != "" && !strings.EqualFold(job.Type, jobType) {
+			continue
+		}
+		if status != "" && job.Status != status {
+			continue
+		}
+		filtered = append(filtered, *job)
+	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if filtered[i].CreatedAt.Equal(filtered[j].CreatedAt) {
+			return strings.Compare(filtered[i].ID.String(), filtered[j].ID.String()) < 0
+		}
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
+	total := len(filtered)
+	if offset > len(filtered) {
+		return []storage.Job{}, total, nil
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
 }
 
 func (f *fakeStore) GetTenant(_ context.Context, id uuid.UUID) (*storage.Tenant, error) {
@@ -349,6 +732,76 @@ func (f *fakeStore) EnsureTenant(ctx context.Context, id uuid.UUID, name string)
 	tenant := storage.Tenant{ID: id, Name: name, CreatedAt: time.Now()}
 	f.tenants = append(f.tenants, tenant)
 	return &tenant, nil
+}
+
+func (f *fakeStore) EnsureUser(_ context.Context, externalID, email, displayName string) (*storage.User, error) {
+	if f.users == nil {
+		f.users = make(map[string]*storage.User)
+	}
+
+	if existing, ok := f.users[externalID]; ok {
+		f.lastUserID = existing.ID
+		return existing, nil
+	}
+
+	user := &storage.User{
+		ID:          uuid.New(),
+		ExternalID:  externalID,
+		Email:       storageNullString(email),
+		DisplayName: storageNullString(displayName),
+		CreatedAt:   time.Now(),
+	}
+	f.lastUserID = user.ID
+
+	if f.skipUserPersistence {
+		return user, nil
+	}
+
+	f.users[externalID] = user
+	return user, nil
+}
+
+func (f *fakeStore) AssignRolesToUser(_ context.Context, userID uuid.UUID, roles []string) error {
+	if f.userRoles == nil {
+		f.userRoles = make(map[uuid.UUID][]string)
+	}
+	f.userRoles[userID] = sanitizeRoles(roles)
+	return nil
+}
+
+func (f *fakeStore) ListUserRoles(_ context.Context, userID uuid.UUID) ([]string, error) {
+	if f.overrideRoles != nil {
+		if roles, ok := f.overrideRoles[userID]; ok {
+			return sanitizeRoles(roles), nil
+		}
+	}
+	return f.userRoles[userID], nil
+}
+
+func storageNullString(val string) sql.NullString {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: val, Valid: true}
+}
+
+func sanitizeRoles(roles []string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, role := range roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		key := strings.ToLower(role)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, role)
+	}
+	return out
 }
 
 func (f *fakeStore) CreateJob(_ context.Context, job *storage.Job, event *storage.JobEvent) (*storage.Job, error) {
@@ -423,4 +876,18 @@ func (f *fakeStore) GetJob(_ context.Context, jobID uuid.UUID) (*storage.Job, er
 
 func (f *fakeStore) ListJobEvents(_ context.Context, jobID uuid.UUID) ([]storage.JobEvent, error) {
 	return f.events[jobID], nil
+}
+
+func (f *fakeStore) GetUserByExternalID(_ context.Context, externalID string) (*storage.User, error) {
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" {
+		return nil, errors.New("external id required")
+	}
+	if f.users == nil {
+		return nil, nil
+	}
+	if user, ok := f.users[externalID]; ok {
+		return user, nil
+	}
+	return nil, nil
 }

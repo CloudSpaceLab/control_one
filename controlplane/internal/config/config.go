@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -52,8 +53,18 @@ type DatabaseConfig struct {
 
 // WorkerConfig controls background job processing.
 type WorkerConfig struct {
-	Concurrency int `mapstructure:"concurrency"`
-	QueueSize   int `mapstructure:"queue_size"`
+	Concurrency int         `mapstructure:"concurrency"`
+	QueueSize   int         `mapstructure:"queue_size"`
+	Backend     string      `mapstructure:"backend"`
+	Asynq       AsynqConfig `mapstructure:"asynq"`
+}
+
+// AsynqConfig captures Redis-backed queue options.
+type AsynqConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	RedisAddress  string `mapstructure:"redis_address"`
+	RedisDB       int    `mapstructure:"redis_db"`
+	RedisPassword string `mapstructure:"redis_password"`
 }
 
 // AuthConfig captures identity provider and RBAC settings.
@@ -71,6 +82,16 @@ type OIDCConfig struct {
 	UsernameClaim string        `mapstructure:"username_claim"`
 	GroupsClaim   string        `mapstructure:"groups_claim"`
 	CacheTTL      time.Duration `mapstructure:"cache_ttl"`
+	StaticTokens  map[string]StaticPrincipalConfig `mapstructure:"static_tokens"`
+}
+
+// StaticPrincipalConfig defines mock principals for local development/testing.
+type StaticPrincipalConfig struct {
+	Subject string   `mapstructure:"subject"`
+	Email   string   `mapstructure:"email"`
+	Name    string   `mapstructure:"name"`
+	Roles   []string `mapstructure:"roles"`
+	Groups  []string `mapstructure:"groups"`
 }
 
 // RBACConfig defines role mapping and defaults.
@@ -160,6 +181,11 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("worker.concurrency", 2)
 	v.SetDefault("worker.queue_size", 128)
+	v.SetDefault("worker.backend", "memory")
+	v.SetDefault("worker.asynq.enabled", false)
+	v.SetDefault("worker.asynq.redis_address", "127.0.0.1:6379")
+	v.SetDefault("worker.asynq.redis_db", 0)
+	v.SetDefault("worker.asynq.redis_password", "")
 
 	v.SetDefault("jobs.provisioning.auto_remediation", true)
 	v.SetDefault("jobs.compliance.auto_apply", true)
@@ -200,5 +226,8 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.Worker.QueueSize <= 0 {
 		cfg.Worker.QueueSize = 128
+	}
+	if strings.TrimSpace(cfg.Worker.Backend) == "" {
+		cfg.Worker.Backend = "memory"
 	}
 }

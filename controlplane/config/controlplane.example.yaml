@@ -20,3 +20,54 @@ database:
   max_idle_conns: 5
   conn_max_lifetime: 15m
   apply_migrations: true
+
+worker:
+  concurrency: 4
+  queue_size: 256
+
+jobs:
+  provisioning:
+    api_base_url: ""
+    token: ""
+    template: ""
+    provider: ""
+    baselines: []
+    auto_remediation: true
+    tls:
+      cert_file: ""
+      key_file: ""
+      ca_cert_file: ""
+  compliance:
+    api_base_url: ""
+    token: ""
+    region: ""
+    rule_sets: []
+    certifications: []
+    auto_apply: true
+    tls:
+      cert_file: ""
+      key_file: ""
+      ca_cert_file: ""
+
+auth:
+  oidc:
+    enabled: true
+    issuer_url: "https://issuer.example.com"
+    client_id: "control-one"
+    audience:
+      - "control-one-api"
+    username_claim: preferred_username
+    groups_claim: groups
+    cache_ttl: 5m
+  rbac:
+    default_role: viewer
+    role_mappings:
+      operator:
+        - "ops-team"
+      admin:
+        - "platform-admins"
+
+registration:
+  bootstrap_tokens:
+    - "CHANGE_ME_TOKEN"
+  default_tenant_id: ""

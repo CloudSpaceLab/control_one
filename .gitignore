@@ -36,3 +36,8 @@ Thumbs.db
 
 # Test containers data
 postgres-data/
+
+# Frontend artifacts
+/ui/node_modules/
+/ui/dist/
+/ui/.vite/
