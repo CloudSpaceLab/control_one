@@ -493,6 +493,65 @@ func TestNodesEndpoints(t *testing.T) {
 		})
 	})
 
+	t.Run("PATCH /api/v1/nodes/:id updates node", func(t *testing.T) {
+		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "patch-node", CreatedAt: time.Unix(1700000020, 0), UpdatedAt: time.Unix(1700000020, 0)}
+		store.nodes = []storage.Node{targetNode}
+
+		payload := []byte(`{"hostname":"updated-node","public_ip":"10.10.0.5"}`)
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodPatch, "/api/v1/nodes/"+targetNode.ID.String(), payload)
+		srv.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if !contains(rec.Body.String(), "updated-node") || !contains(rec.Body.String(), "10.10.0.5") {
+			t.Fatalf("expected updated fields, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("PATCH /api/v1/nodes/:id validates payload", func(t *testing.T) {
+		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "invalid-node", CreatedAt: time.Unix(1700000030, 0), UpdatedAt: time.Unix(1700000030, 0)}
+		store.nodes = []storage.Node{targetNode}
+
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodPatch, "/api/v1/nodes/"+targetNode.ID.String(), []byte(`{"hostname":""}`))
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("PATCH /api/v1/nodes/:id handles missing node", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodPatch, "/api/v1/nodes/"+uuid.New().String(), []byte(`{"hostname":"noop"}`))
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 got %d", rec.Code)
+		}
+	})
+
+	t.Run("DELETE /api/v1/nodes/:id removes node", func(t *testing.T) {
+		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "delete-node", CreatedAt: time.Unix(1700000040, 0), UpdatedAt: time.Unix(1700000040, 0)}
+		store.nodes = []storage.Node{targetNode}
+
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodDelete, "/api/v1/nodes/"+targetNode.ID.String(), nil)
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 got %d", rec.Code)
+		}
+	})
+
+	t.Run("DELETE /api/v1/nodes/:id handles missing node", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := bearerReq(http.MethodDelete, "/api/v1/nodes/"+uuid.New().String(), nil)
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 got %d", rec.Code)
+		}
+	})
+
 	t.Run("POST /api/v1/nodes creates node", func(t *testing.T) {
 		payload := map[string]any{
 			"tenant_id": tenantID.String(),
@@ -593,6 +652,79 @@ func TestNodesEndpoints(t *testing.T) {
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/tenants", []byte(`{"name":""}`)))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("GET /api/v1/tenants/:id returns tenant", func(t *testing.T) {
+		store.tenants = []storage.Tenant{
+			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
+		}
+		rec := httptest.NewRecorder()
+		path := "/api/v1/tenants/" + tenantID.String()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d", rec.Code)
+		}
+		if !contains(rec.Body.String(), tenantID.String()) {
+			t.Fatalf("expected tenant id in response: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("GET /api/v1/tenants/:id handles missing tenant", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		path := "/api/v1/tenants/" + uuid.New().String()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 got %d", rec.Code)
+		}
+	})
+
+	t.Run("PATCH /api/v1/tenants/:id updates tenant", func(t *testing.T) {
+		store.tenants = []storage.Tenant{
+			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
+		}
+		payload := []byte(`{"name":"Renamed Tenant"}`)
+		path := "/api/v1/tenants/" + tenantID.String()
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPatch, path, payload))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if !contains(rec.Body.String(), "Renamed Tenant") {
+			t.Fatalf("expected updated name, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("PATCH /api/v1/tenants/:id validates payload", func(t *testing.T) {
+		path := "/api/v1/tenants/" + tenantID.String()
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPatch, path, []byte(`{"name":""}`)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("DELETE /api/v1/tenants/:id removes tenant", func(t *testing.T) {
+		store.tenants = []storage.Tenant{
+			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
+		}
+		path := "/api/v1/tenants/" + tenantID.String()
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodDelete, path, nil))
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 got %d", rec.Code)
+		}
+	})
+
+	t.Run("DELETE /api/v1/tenants/:id handles missing tenant", func(t *testing.T) {
+		path := "/api/v1/tenants/" + uuid.New().String()
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodDelete, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 got %d", rec.Code)
 		}
 	})
 
@@ -803,6 +935,27 @@ func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.
 	return filtered, total, nil
 }
 
+func (f *fakeStore) UpdateTenant(_ context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
+	for i, tenant := range f.tenants {
+		if tenant.ID == id {
+			f.tenants[i].Name = name
+			copy := f.tenants[i]
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) DeleteTenant(_ context.Context, id uuid.UUID) error {
+	for i, tenant := range f.tenants {
+		if tenant.ID == id {
+			f.tenants = append(f.tenants[:i], f.tenants[i+1:]...)
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
 func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error) {
 	if tpl.ID == uuid.Nil {
 		tpl.ID = uuid.New()
@@ -901,6 +1054,25 @@ func (f *fakeStore) GetPromotedProvisioningTemplateVersion(ctx context.Context, 
 	return nil, nil
 }
 
+func (f *fakeStore) ListProvisioningTemplateVersions(_ context.Context, templateID uuid.UUID, limit, offset int) ([]storage.ProvisioningTemplateVersion, int, error) {
+	versions := f.templateVersions[templateID]
+	total := len(versions)
+	if offset > total {
+		return []storage.ProvisioningTemplateVersion{}, total, nil
+	}
+
+	end := total
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	slice := versions[offset:end]
+
+	// Return copies to avoid mutation issues.
+	out := make([]storage.ProvisioningTemplateVersion, len(slice))
+	copy(out, slice)
+	return out, total, nil
+}
+
 func (f *fakeStore) ListNodes(_ context.Context, tenantID uuid.UUID, hostnamePrefix string, limit, offset int) ([]storage.Node, int, error) {
 	var filtered []storage.Node
 	for _, node := range f.nodes {
@@ -937,6 +1109,33 @@ func (f *fakeStore) GetNode(_ context.Context, id uuid.UUID) (*storage.Node, err
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeStore) UpdateNode(_ context.Context, node *storage.Node) (*storage.Node, error) {
+	for i, existing := range f.nodes {
+		if existing.ID == node.ID {
+			if strings.TrimSpace(node.Hostname) != "" {
+				f.nodes[i].Hostname = node.Hostname
+			}
+			f.nodes[i].OS = node.OS
+			f.nodes[i].Arch = node.Arch
+			f.nodes[i].PublicIP = node.PublicIP
+			f.nodes[i].UpdatedAt = time.Now()
+			copy := f.nodes[i]
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) DeleteNode(_ context.Context, id uuid.UUID) error {
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes = append(f.nodes[:i], f.nodes[i+1:]...)
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*storage.Tenant, error) {

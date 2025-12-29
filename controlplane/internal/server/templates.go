@@ -53,6 +53,7 @@ type createTemplateVersionRequest struct {
 	Checksum       *string         `json:"checksum"`
 	MetadataSchema json.RawMessage `json:"metadata_schema"`
 	RolloutNotes   *string         `json:"rollout_notes"`
+	Metadata       map[string]any  `json:"metadata"`
 }
 
 func (s *Server) handleTemplatesCollection(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +129,40 @@ func (s *Server) handleTemplateResource(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	switch r.Method {
+	case http.MethodGet:
+		if _, ok := s.authorize(w, r, roleViewer); !ok {
+			return
+		}
+		if s.store == nil {
+			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		limit, offset, err := parseLimitOffset(r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		versions, total, err := s.store.ListProvisioningTemplateVersions(r.Context(), templateID, limit, offset)
+		if err != nil {
+			s.logger.Error("list template versions", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		items := make([]templateVersionResponse, 0, len(versions))
+		for i := range versions {
+			if resp := newTemplateVersionResponse(&versions[i]); resp != nil {
+				items = append(items, *resp)
+			}
+		}
+
+		resp := paginatedResponse[templateVersionResponse]{
+			Data:       items,
+			Pagination: newPaginationMeta(total, limit, offset, len(items)),
+		}
+		writeJSON(w, http.StatusOK, resp)
 	case http.MethodPost:
 		principal, ok := s.authorize(w, r, roleAdmin)
 		if !ok {
@@ -135,7 +170,7 @@ func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, 
 		}
 		s.handleCreateTemplateVersion(w, r, templateID, principal)
 	default:
-		w.Header().Set("Allow", http.MethodPost)
+		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }

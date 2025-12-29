@@ -547,8 +547,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	if s.worker != nil {
 		task := worker.Task{
-			Name: fmt.Sprintf("job-%s", created.ID),
-			Job:  s.buildJobExecution(created.ID, created.Type),
+			Name:         fmt.Sprintf("job-%s", created.ID),
+			Job:          s.buildJobExecution(created.ID, created.Type, created.MaxRetries),
+			MaxAttempts:  created.MaxRetries,
+			RetryBackoff: s.cfg.Worker.RetryBackoff,
 		}
 		if err := s.worker.Enqueue(task); err != nil {
 			s.logger.Error("enqueue job", zap.Error(err))
@@ -557,11 +559,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		go func(jobID uuid.UUID, jobType string) {
-			if err := s.buildJobExecution(jobID, jobType)(context.Background()); err != nil {
-				s.logger.Error("execute job inline", zap.Error(err))
+		go func(jobID uuid.UUID, jobType string, attempts int) {
+			exec := s.buildJobExecution(jobID, jobType, attempts)
+			for attempt := 1; attempt <= attempts; attempt++ {
+				if err := exec(context.Background()); err == nil {
+					return
+				}
+				time.Sleep(s.cfg.Worker.RetryBackoff)
 			}
-		}(created.ID, created.Type)
+		}(created.ID, created.Type, created.MaxRetries)
 	}
 
 	events := []storage.JobEvent{*initialEvent}

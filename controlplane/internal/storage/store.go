@@ -550,6 +550,61 @@ func (s *Store) ListTenants(ctx context.Context, prefix string, limit, offset in
 	return tenants, total, nil
 }
 
+// UpdateTenant renames a tenant by ID.
+func (s *Store) UpdateTenant(ctx context.Context, id uuid.UUID, name string) (*Tenant, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("tenant id is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("tenant name is required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		UPDATE tenants
+		SET name = $2
+		WHERE id = $1
+		RETURNING id, name, created_at
+	`, id, name)
+
+	var tenant Tenant
+	if err := row.Scan(&tenant.ID, &tenant.Name, &tenant.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update tenant: %w", err)
+	}
+
+	return &tenant, nil
+}
+
+// DeleteTenant removes a tenant by ID.
+func (s *Store) DeleteTenant(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return errors.New("tenant id is required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `DELETE FROM tenants WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete tenant: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete tenant rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
+}
+
 // Node represents a managed node record.
 type Node struct {
 	ID        uuid.UUID
@@ -805,4 +860,72 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 	}
 
 	return nodes, total, nil
+}
+
+// UpdateNode persists changes to a node record.
+func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if node == nil {
+		return nil, errors.New("node cannot be nil")
+	}
+	if node.ID == uuid.Nil {
+		return nil, errors.New("node id is required")
+	}
+
+	node.UpdatedAt = s.clock()
+
+	query := `
+		UPDATE nodes
+		SET hostname = $2,
+		    os = $3,
+		    arch = $4,
+		    public_ip = $5,
+		    updated_at = $6
+		WHERE id = $1
+		RETURNING id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+	`
+
+	row := s.db.QueryRowContext(ctx, query,
+		node.ID,
+		node.Hostname,
+		node.OS,
+		node.Arch,
+		node.PublicIP,
+		node.UpdatedAt,
+	)
+
+	var updated Node
+	if err := row.Scan(&updated.ID, &updated.TenantID, &updated.Hostname, &updated.OS, &updated.Arch, &updated.PublicIP, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update node: %w", err)
+	}
+
+	return &updated, nil
+}
+
+// DeleteNode removes a node by ID.
+func (s *Store) DeleteNode(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return errors.New("node id is required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `DELETE FROM nodes WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete node: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete node rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

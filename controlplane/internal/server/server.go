@@ -6,11 +6,13 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,9 +32,13 @@ type Store interface {
 	CreateTenant(context.Context, *storage.Tenant) (*storage.Tenant, error)
 	ListTenants(context.Context, string, int, int) ([]storage.Tenant, int, error)
 	GetTenant(context.Context, uuid.UUID) (*storage.Tenant, error)
+	UpdateTenant(context.Context, uuid.UUID, string) (*storage.Tenant, error)
+	DeleteTenant(context.Context, uuid.UUID) error
 	EnsureTenant(context.Context, uuid.UUID, string) (*storage.Tenant, error)
 	GetNodeByHostname(context.Context, uuid.UUID, string) (*storage.Node, error)
 	CreateNode(context.Context, *storage.Node) (*storage.Node, error)
+	UpdateNode(context.Context, *storage.Node) (*storage.Node, error)
+	DeleteNode(context.Context, uuid.UUID) error
 	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
 	GetUserByExternalID(context.Context, string) (*storage.User, error)
@@ -49,6 +55,7 @@ type Store interface {
 	PromoteProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
 	GetProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
 	GetPromotedProvisioningTemplateVersion(context.Context, uuid.UUID) (*storage.ProvisioningTemplateVersion, error)
+	ListProvisioningTemplateVersions(context.Context, uuid.UUID, int, int) ([]storage.ProvisioningTemplateVersion, int, error)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles ...string) (*auth.Principal, bool) {
@@ -335,6 +342,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
+	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
 	s.baseRouter.HandleFunc("/api/v1/jobs/", s.handleJobResource)
 	s.baseRouter.HandleFunc("/api/v1/templates", s.handleTemplatesCollection)
@@ -518,6 +526,108 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "tenant store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/tenants/")
+	tenantID, err := uuid.Parse(idStr)
+	if err != nil {
+		http.Error(w, "invalid tenant id", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetTenant(w, r, tenantID)
+	case http.MethodPatch:
+		s.handleUpdateTenant(w, r, tenantID)
+	case http.MethodDelete:
+		s.handleDeleteTenant(w, r, tenantID)
+	default:
+		w.Header().Set("Allow", "GET, PATCH, DELETE")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleGetTenant(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
+
+	tenant, err := s.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		s.logger.Error("get tenant", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if tenant == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(tenantResponseFromModel(*tenant)); err != nil {
+		s.logger.Warn("encode tenant response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleUpdateTenant(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+		return
+	}
+
+	var req updateTenantRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := req.validate(); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	name := strings.TrimSpace(*req.Name)
+	updated, err := s.store.UpdateTenant(r.Context(), tenantID, name)
+	if err != nil {
+		s.logger.Error("update tenant", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(tenantResponseFromModel(*updated)); err != nil {
+		s.logger.Warn("encode tenant response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	if err := s.store.DeleteTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Error("delete tenant", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type createTenantRequest struct {
 	Name string `json:"name"`
 }
@@ -541,6 +651,20 @@ func tenantResponseFromModel(t storage.Tenant) tenantResponse {
 		Name:      t.Name,
 		CreatedAt: t.CreatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+type updateTenantRequest struct {
+	Name *string `json:"name"`
+}
+
+func (r updateTenantRequest) validate() error {
+	if r.Name == nil {
+		return fmt.Errorf("name is required")
+	}
+	if strings.TrimSpace(*r.Name) == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	return nil
 }
 
 func (s *Server) handleNodesCollection(w http.ResponseWriter, r *http.Request) {
@@ -668,18 +792,8 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
 	if s.store == nil {
 		http.Error(w, "node store unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
 
@@ -687,6 +801,24 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := uuid.Parse(idStr)
 	if err != nil {
 		http.Error(w, "invalid node id", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetNode(w, r, nodeID)
+	case http.MethodPatch:
+		s.handleUpdateNode(w, r, nodeID)
+	case http.MethodDelete:
+		s.handleDeleteNode(w, r, nodeID)
+	default:
+		w.Header().Set("Allow", "GET, PATCH, DELETE")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
 
@@ -705,6 +837,88 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*node)); err != nil {
 		s.logger.Warn("encode node response", zap.Error(err))
 	}
+}
+
+func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+		return
+	}
+
+	var req updateNodeRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := req.validate(); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if req.Hostname != nil {
+		name := strings.TrimSpace(*req.Hostname)
+		if name == "" {
+			http.Error(w, "hostname cannot be empty", http.StatusBadRequest)
+			return
+		}
+		node.Hostname = name
+	}
+	if req.OS != nil {
+		node.OS = toNullString(req.OS)
+	}
+	if req.Arch != nil {
+		node.Arch = toNullString(req.Arch)
+	}
+	if req.PublicIP != nil {
+		node.PublicIP = toNullString(req.PublicIP)
+	}
+
+	updated, err := s.store.UpdateNode(r.Context(), node)
+	if err != nil {
+		s.logger.Error("update node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*updated)); err != nil {
+		s.logger.Warn("encode node response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+		return
+	}
+
+	if err := s.store.DeleteNode(r.Context(), nodeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Error("delete node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type createNodeRequest struct {
@@ -749,6 +963,23 @@ func nodeResponseFromModel(n storage.Node) nodeResponse {
 	}
 }
 
+type updateNodeRequest struct {
+	Hostname *string `json:"hostname"`
+	OS       *string `json:"os"`
+	Arch     *string `json:"arch"`
+	PublicIP *string `json:"public_ip"`
+}
+
+func (r updateNodeRequest) validate() error {
+	if r.Hostname == nil && r.OS == nil && r.Arch == nil && r.PublicIP == nil {
+		return fmt.Errorf("at least one field must be provided")
+	}
+	if r.Hostname != nil && strings.TrimSpace(*r.Hostname) == "" {
+		return fmt.Errorf("hostname cannot be empty")
+	}
+	return nil
+}
+
 func toNullString(value *string) sql.NullString {
 	if value == nil {
 		return sql.NullString{}
@@ -768,8 +999,14 @@ func nullStringPtr(ns sql.NullString) *string {
 	return &value
 }
 
-func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string) func(context.Context) error {
+func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts int) func(context.Context) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	var attemptCounter int32
 	return func(ctx context.Context) error {
+		currentAttempt := int(atomic.AddInt32(&attemptCounter, 1))
+
 		s.configureJobIntegrations()
 		handler, ok := s.jobHandlers[jobType]
 		if !ok {
@@ -777,37 +1014,64 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string) func(context
 		}
 
 		finish := metricsTrackJob(jobType)
+		outcome := metricsStatusSuccess
+		defer func() { finish(outcome) }()
 
 		job, err := s.store.GetJob(ctx, jobID)
 		if err != nil {
-			finish(metricsStatusError)
+			outcome = metricsStatusError
 			return fmt.Errorf("load job: %w", err)
 		}
 		if job == nil {
-			finish(metricsStatusFailure)
+			outcome = metricsStatusFailure
 			return fmt.Errorf("job %s not found", jobID)
 		}
 
-		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, "job started", map[string]any{"started_at": time.Now()}); err != nil {
-			finish(metricsStatusError)
+		startFields := map[string]any{}
+		if job.StartedAt == nil {
+			startFields["started_at"] = time.Now()
+		}
+		startMsg := fmt.Sprintf("job started (attempt %d)", currentAttempt)
+		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, startMsg, startFields); err != nil {
+			outcome = metricsStatusError
 			return fmt.Errorf("update job running: %w", err)
 		}
 
 		if err := handler(ctx, job); err != nil {
-			s.logger.Error("job execution failed", zap.String("job_type", jobType), zap.String("job_id", jobID.String()), zap.Error(err))
-			finish(metricsStatusFailure)
-			if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, err.Error(), map[string]any{"finished_at": time.Now()}); err != nil {
-				s.logger.Error("update job failed", zap.Error(err))
+			outcome = metricsStatusFailure
+			s.logger.Error("job execution failed",
+				zap.String("job_type", jobType),
+				zap.String("job_id", jobID.String()),
+				zap.Int("attempt", currentAttempt),
+				zap.Error(err),
+			)
+
+			retries := job.Retries + 1
+			fields := map[string]any{"retries": retries}
+			status := storage.JobStatusQueued
+			msg := fmt.Sprintf("attempt %d/%d failed: %v", currentAttempt, maxAttempts, err)
+			if currentAttempt >= maxAttempts {
+				status = storage.JobStatusFailed
+				fields["finished_at"] = time.Now()
+				msg = fmt.Sprintf("job failed after %d attempts: %v", currentAttempt, err)
+			}
+			if storeErr := s.store.UpdateJobStatus(ctx, jobID, status, msg, fields); storeErr != nil {
+				s.logger.Error("update job failed", zap.Error(storeErr))
 			}
 			return err
 		}
 
-		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "job completed", map[string]any{"finished_at": time.Now()}); err != nil {
-			finish(metricsStatusError)
+		successFields := map[string]any{"finished_at": time.Now()}
+		successMsg := "job completed"
+		if currentAttempt > 1 {
+			successMsg = fmt.Sprintf("job completed after %d attempts", currentAttempt)
+		}
+		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, successMsg, successFields); err != nil {
+			outcome = metricsStatusError
 			return fmt.Errorf("update job success: %w", err)
 		}
 
-		finish(metricsStatusSuccess)
+		outcome = metricsStatusSuccess
 		return nil
 	}
 }

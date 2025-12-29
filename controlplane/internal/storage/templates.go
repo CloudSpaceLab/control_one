@@ -244,7 +244,7 @@ func (s *Store) CreateProvisioningTemplateVersion(ctx context.Context, params Cr
 	}()
 
 	// lock template to ensure consistent numbering
-	if err = s.ensureTemplateExistsForUpdate(ctx, tx, params.TemplateID); err != nil {
+	if err = ensureTemplateExistsForUpdate(ctx, tx, params.TemplateID); err != nil {
 		return nil, err
 	}
 
@@ -399,6 +399,75 @@ func (s *Store) PromoteProvisioningTemplateVersion(ctx context.Context, template
 	return &version, nil
 }
 
+func ensureTemplateExistsForUpdate(ctx context.Context, tx *sql.Tx, templateID uuid.UUID) error {
+	if templateID == uuid.Nil {
+		return errors.New("template id is required")
+	}
+
+	row := tx.QueryRowContext(ctx, `SELECT id FROM provisioning_templates WHERE id = $1 FOR UPDATE`, templateID)
+	var tmp uuid.UUID
+	if err := row.Scan(&tmp); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("template not found")
+		}
+		return fmt.Errorf("lock template: %w", err)
+	}
+	return nil
+}
+
+// ListProvisioningTemplateVersions returns versions for a template with pagination.
+func (s *Store) ListProvisioningTemplateVersions(ctx context.Context, templateID uuid.UUID, limit, offset int) ([]ProvisioningTemplateVersion, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if templateID == uuid.Nil {
+		return nil, 0, errors.New("template id is required")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM provisioning_template_versions WHERE template_id = $1`, templateID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count template versions: %w", err)
+	}
+
+	query := `
+        SELECT id, template_id, version, checksum, body, metadata_schema, rollout_notes, created_by, created_at, promoted_at
+        FROM provisioning_template_versions
+        WHERE template_id = $1
+        ORDER BY version DESC
+    `
+	args := []any{templateID}
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit)
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", len(args)+1)
+		args = append(args, offset)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query template versions: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []ProvisioningTemplateVersion
+	for rows.Next() {
+		version, err := scanTemplateVersion(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		versions = append(versions, *version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate template versions: %w", err)
+	}
+	return versions, total, nil
+}
+
 // GetProvisioningTemplateVersion fetches a version by template ID and version number.
 func (s *Store) GetProvisioningTemplateVersion(ctx context.Context, templateID uuid.UUID, versionNumber int) (*ProvisioningTemplateVersion, error) {
 	if s.db == nil {
@@ -446,25 +515,17 @@ func (s *Store) GetPromotedProvisioningTemplateVersion(ctx context.Context, temp
 	return result, nil
 }
 
-func (s *Store) ensureTemplateExistsForUpdate(ctx context.Context, tx *sql.Tx, id uuid.UUID) error {
-	row := tx.QueryRowContext(ctx, `SELECT id FROM provisioning_templates WHERE id = $1 FOR UPDATE`, id)
-	var tmp uuid.UUID
-	if err := row.Scan(&tmp); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("template not found")
-		}
-		return fmt.Errorf("lock template: %w", err)
-	}
-	return nil
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
-func scanTemplateVersion(row *sql.Row) (*ProvisioningTemplateVersion, error) {
+func scanTemplateVersion(scanner rowScanner) (*ProvisioningTemplateVersion, error) {
 	var version ProvisioningTemplateVersion
 	var checksum sql.NullString
 	var notes sql.NullString
 	var metadata []byte
 	var createdBy sql.NullString
-	if err := row.Scan(
+	if err := scanner.Scan(
 		&version.ID,
 		&version.TemplateID,
 		&version.Version,

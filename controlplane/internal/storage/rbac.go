@@ -133,8 +133,10 @@ func (s *Store) AssignRolesToUser(ctx context.Context, userID uuid.UUID, roles [
 	if userID == uuid.Nil {
 		return errors.New("user id required")
 	}
+
+	roles = sanitizeRoles(roles)
 	if len(roles) == 0 {
-		return nil
+		return errors.New("roles required")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -197,6 +199,24 @@ func (s *Store) ensureRole(ctx context.Context, tx *sql.Tx, name string) (uuid.U
 		}
 	}
 	return roleID, nil
+}
+
+func sanitizeRoles(roles []string) []string {
+	seen := make(map[string]struct{})
+	var normalized []string
+	for _, role := range roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		key := strings.ToLower(role)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, role)
+	}
+	return normalized
 }
 
 // ListUserRoles returns role names for the given user.
