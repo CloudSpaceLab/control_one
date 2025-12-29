@@ -2,6 +2,7 @@ package provisioning
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -29,14 +30,32 @@ type Engine struct {
 	adapter Adapter
 	mu      sync.RWMutex
 	status  map[string]Status
+
+	// providerMeta holds metadata detected locally (e.g., region, subscription).
+	// It is merged into ApplyTemplate metadata to enrich downstream requests.
+	providerMeta map[string]string
 }
 
 func NewEngine(log *zap.Logger, client Client, opts Options) *Engine {
+	detectedProvider := strings.TrimSpace(opts.Provider)
+	providerMeta := map[string]string{}
+	if detectedProvider == "" || detectedProvider == "auto" {
+		if p, md := DetectProvider(); p != "" && p != "unknown" {
+			detectedProvider = p
+			providerMeta = md
+			log.Info("provisioning provider auto-detected", zap.String("provider", p), zap.Any("metadata", md))
+		} else {
+			log.Warn("provisioning provider not specified; defaulting to generic adapter")
+		}
+	}
+	opts.Provider = detectedProvider
+
 	return &Engine{
-		log:     log,
-		opts:    opts,
-		adapter: newAdapter(opts.Provider, log, client),
-		status:  make(map[string]Status),
+		log:          log,
+		opts:         opts,
+		adapter:      newAdapter(opts.Provider, log, client),
+		status:       make(map[string]Status),
+		providerMeta: providerMeta,
 	}
 }
 
@@ -46,8 +65,16 @@ func (e *Engine) ApplyTemplate(ctx context.Context, nodeID string, metadata map[
 		return nil
 	}
 
+	mergedMeta := make(map[string]string, len(metadata)+len(e.providerMeta))
+	for k, v := range e.providerMeta {
+		mergedMeta[k] = v
+	}
+	for k, v := range metadata {
+		mergedMeta[k] = v
+	}
+
 	e.setStatus(nodeID, StatusRunning)
-	result, err := e.adapter.Apply(ctx, nodeID, e.opts, metadata)
+	result, err := e.adapter.Apply(ctx, nodeID, e.opts, mergedMeta)
 	if err != nil {
 		e.setStatus(nodeID, StatusFailed)
 		return err

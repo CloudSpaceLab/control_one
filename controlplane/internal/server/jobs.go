@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,61 @@ func isValidJobStatus(status storage.JobStatus) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (s *Server) enrichProvisioningMetadata(ctx context.Context, planID string, metadata map[string]string) {
+	if s == nil || s.store == nil {
+		return
+	}
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return
+	}
+	tplID, err := uuid.Parse(planID)
+	if err != nil {
+		return
+	}
+
+	var version *storage.ProvisioningTemplateVersion
+	if current, ok := metadata["template_version"]; ok {
+		if verNum, err := strconv.Atoi(strings.TrimSpace(current)); err == nil && verNum > 0 {
+			version, err = s.store.GetProvisioningTemplateVersion(ctx, tplID, verNum)
+			if err != nil {
+				s.logger.Warn("fetch template version",
+					zap.Error(err),
+					zap.String("template_id", tplID.String()),
+					zap.Int("version", verNum),
+				)
+				return
+			}
+		}
+	}
+
+	if version == nil {
+		var err error
+		version, err = s.store.GetPromotedProvisioningTemplateVersion(ctx, tplID)
+		if err != nil {
+			s.logger.Warn("fetch promoted template version", zap.Error(err), zap.String("template_id", tplID.String()))
+			return
+		}
+		if version == nil {
+			s.logger.Warn("template version unavailable", zap.String("template_id", tplID.String()))
+			return
+		}
+	}
+
+	if metadata == nil {
+		return
+	}
+
+	metadata["template_id"] = tplID.String()
+	metadata["template_version"] = strconv.Itoa(version.Version)
+	if version.Checksum.Valid {
+		metadata["template_checksum"] = version.Checksum.String
+	}
+	if len(version.MetadataSchema) > 0 {
+		metadata["template_schema"] = string(version.MetadataSchema)
 	}
 }
 
@@ -150,6 +206,8 @@ func (s *Server) handleProvisionApply(ctx context.Context, job *storage.Job) err
 	for k, v := range payload.Metadata {
 		metadata[k] = v
 	}
+
+	s.enrichProvisioningMetadata(ctx, payload.PlanID, metadata)
 
 	s.logger.Info("provisioning job starting",
 		zap.String("job_id", job.ID.String()),

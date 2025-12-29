@@ -40,6 +40,9 @@ func newAdapter(provider string, log *zap.Logger, client Client) Adapter {
 		return &mockAdapter{log: log}
 	case "aws":
 		return &awsAdapter{httpAdapter: newHTTPAdapter(log, client)}
+	case "vmware", "azure", "libvirt", "gcp":
+		// Use generic HTTP adapter for now; provider is carried in payload.
+		return newHTTPAdapter(log, client)
 	default:
 		return newHTTPAdapter(log, client)
 	}

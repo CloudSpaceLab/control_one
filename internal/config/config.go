@@ -13,13 +13,13 @@ import (
 
 // Config captures all node agent settings loaded from YAML.
 type Config struct {
-	APIURL         string        `mapstructure:"api_url"`
-	BootstrapToken string        `mapstructure:"bootstrap_token"`
-	NodeName       string        `mapstructure:"node_name"`
-	StateFile      string        `mapstructure:"state_file"`
-	PolicyDir      string        `mapstructure:"policy_dir"`
-	LogDir         string        `mapstructure:"log_dir"`
-	PluginDir      string        `mapstructure:"plugin_dir"`
+	APIURL         string `mapstructure:"api_url"`
+	BootstrapToken string `mapstructure:"bootstrap_token"`
+	NodeName       string `mapstructure:"node_name"`
+	StateFile      string `mapstructure:"state_file"`
+	PolicyDir      string `mapstructure:"policy_dir"`
+	LogDir         string `mapstructure:"log_dir"`
+	PluginDir      string `mapstructure:"plugin_dir"`
 
 	Scanner struct {
 		Timeout       time.Duration `mapstructure:"timeout"`
@@ -59,12 +59,13 @@ type Config struct {
 	} `mapstructure:"hardening"`
 
 	TelemetryPrefs struct {
-		CollectLogs      bool          `mapstructure:"collect_logs"`
-		LogNamespaces    []string      `mapstructure:"log_namespaces"`
-		FileIntegrity    bool          `mapstructure:"file_integrity"`
-		MetricsInterval  time.Duration `mapstructure:"metrics_interval"`
-		ActivityInterval time.Duration `mapstructure:"activity_interval"`
-		LogSources       []LogSourceConfig `mapstructure:"log_sources"`
+		CollectLogs      bool               `mapstructure:"collect_logs"`
+		LogNamespaces    []string           `mapstructure:"log_namespaces"`
+		FileIntegrity    bool               `mapstructure:"file_integrity"`
+		MetricsInterval  time.Duration      `mapstructure:"metrics_interval"`
+		ActivityInterval time.Duration      `mapstructure:"activity_interval"`
+		LogSources       []LogSourceConfig  `mapstructure:"log_sources"`
+		Triggers         []LogTriggerConfig `mapstructure:"triggers"`
 	} `mapstructure:"telemetry_prefs"`
 
 	Wizard struct {
@@ -120,23 +121,36 @@ type Config struct {
 
 // NormalizeLogSourceConfig applies default values and sanitizes the provided log source configuration.
 func NormalizeLogSourceConfig(src *LogSourceConfig) {
-    if src == nil {
-        return
-    }
-    src.applyDefaults()
+	if src == nil {
+		return
+	}
+	src.applyDefaults()
 }
 
 // NormalizeLogSources returns a new slice where defaults have been applied to each log source config.
 func NormalizeLogSources(sources []LogSourceConfig) []LogSourceConfig {
-    if len(sources) == 0 {
-        return nil
-    }
-    normalized := make([]LogSourceConfig, len(sources))
-    for i := range sources {
-        normalized[i] = sources[i]
-        normalized[i].applyDefaults()
-    }
-    return normalized
+	if len(sources) == 0 {
+		return nil
+	}
+	normalized := make([]LogSourceConfig, len(sources))
+	for i := range sources {
+		normalized[i] = sources[i]
+		normalized[i].applyDefaults()
+	}
+	return normalized
+}
+
+// NormalizeLogTriggers returns a new slice where defaults have been applied to each trigger config.
+func NormalizeLogTriggers(triggers []LogTriggerConfig) []LogTriggerConfig {
+	if len(triggers) == 0 {
+		return nil
+	}
+	normalized := make([]LogTriggerConfig, len(triggers))
+	for i := range triggers {
+		normalized[i] = triggers[i]
+		normalized[i].applyDefaults()
+	}
+	return normalized
 }
 
 // LogFormatRuleConfig describes a regex-driven formatting rule usable by the
@@ -151,6 +165,41 @@ type LogFormatRuleConfig struct {
 	MessageTemplate string            `mapstructure:"message_template"`
 	Fields          map[string]string `mapstructure:"fields"`
 	Labels          map[string]string `mapstructure:"labels"`
+}
+
+// LogTriggerConfig defines a regex-based trigger that can emit hooks and optionally run a script.
+type LogTriggerConfig struct {
+	ID             string            `mapstructure:"id"`
+	Program        string            `mapstructure:"program"`
+	Regex          string            `mapstructure:"regex"`
+	Labels         map[string]string `mapstructure:"labels"`
+	Script         string            `mapstructure:"script"`
+	Timeout        time.Duration     `mapstructure:"timeout"`
+	MaxRuns        int               `mapstructure:"max_runs"`
+	Cooldown       time.Duration     `mapstructure:"cooldown"`
+	HooksEnabled   bool              `mapstructure:"hooks_enabled"`
+	ScriptsEnabled bool              `mapstructure:"scripts_enabled"`
+}
+
+func (t *LogTriggerConfig) applyDefaults() {
+	if t.Labels == nil {
+		t.Labels = map[string]string{}
+	}
+	if strings.TrimSpace(t.ID) == "" {
+		t.ID = "trigger-" + strings.TrimSpace(t.Program)
+	}
+	if strings.TrimSpace(t.Regex) == "" {
+		t.Regex = ".*"
+	}
+	if t.Timeout == 0 {
+		t.Timeout = 10 * time.Second
+	}
+	if t.MaxRuns == 0 {
+		t.MaxRuns = -1 // unlimited unless specified
+	}
+	if t.Cooldown == 0 {
+		t.Cooldown = 5 * time.Second
+	}
 }
 
 func (r *LogFormatRuleConfig) applyDefaults() {
@@ -175,20 +224,20 @@ func (r *LogFormatRuleConfig) applyDefaults() {
 }
 
 const (
-	defaultConfigPath          = "/etc/control-one/nodeagent.yaml"
-	defaultStateFile           = "/var/lib/control-one/nodeagent/state.json"
-	defaultPolicyDir           = "/var/lib/control-one/nodeagent/policies"
-	defaultLogDir              = "/var/log/control-one/nodeagent"
-	defaultPluginDir           = "/opt/control-one/nodeagent/plugins"
-	defaultTLSCertFile         = "/var/lib/control-one/nodeagent/certs/nodeagent.crt"
-	defaultTLSKeyFile          = "/var/lib/control-one/nodeagent/certs/nodeagent.key"
-	defaultTLSCACertFile       = "/var/lib/control-one/nodeagent/certs/ca.crt"
-	defaultPolicyPublicKeyFile = "/var/lib/control-one/nodeagent/keys/policy_pub.pem"
-	defaultPolicyMetadataFile  = "/var/lib/control-one/nodeagent/policies/policies.meta.json"
-	defaultScannerTimeout      = 30 * time.Second
-	defaultMeshStateFile       = "/var/lib/control-one/nodeagent/mesh/state.json"
-	defaultMeshNamespace       = "default"
-	defaultMeshCIDR            = "10.1.0.0/16"
+	defaultConfigPath           = "/etc/control-one/nodeagent.yaml"
+	defaultStateFile            = "/var/lib/control-one/nodeagent/state.json"
+	defaultPolicyDir            = "/var/lib/control-one/nodeagent/policies"
+	defaultLogDir               = "/var/log/control-one/nodeagent"
+	defaultPluginDir            = "/opt/control-one/nodeagent/plugins"
+	defaultTLSCertFile          = "/var/lib/control-one/nodeagent/certs/nodeagent.crt"
+	defaultTLSKeyFile           = "/var/lib/control-one/nodeagent/certs/nodeagent.key"
+	defaultTLSCACertFile        = "/var/lib/control-one/nodeagent/certs/ca.crt"
+	defaultPolicyPublicKeyFile  = "/var/lib/control-one/nodeagent/keys/policy_pub.pem"
+	defaultPolicyMetadataFile   = "/var/lib/control-one/nodeagent/policies/policies.meta.json"
+	defaultScannerTimeout       = 30 * time.Second
+	defaultMeshStateFile        = "/var/lib/control-one/nodeagent/mesh/state.json"
+	defaultMeshNamespace        = "default"
+	defaultMeshCIDR             = "10.1.0.0/16"
 	defaultProvisioningInterval = 30 * time.Minute
 	defaultAccessSyncInterval   = 30 * time.Minute
 	defaultSecretsSyncInterval  = 15 * time.Minute
@@ -316,6 +365,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("telemetry_prefs.metrics_interval", defaultTelemetryMetrics.String())
 	v.SetDefault("telemetry_prefs.activity_interval", defaultTelemetryActivity.String())
 	v.SetDefault("telemetry_prefs.log_sources", []map[string]any{})
+	v.SetDefault("telemetry_prefs.triggers", []map[string]any{})
 
 	v.SetDefault("wizard.enabled", true)
 	v.SetDefault("wizard.auto_generate_certificates", true)
@@ -447,34 +497,37 @@ func applyFallbacks(cfg *Config) {
 	for i := range cfg.TelemetryPrefs.LogSources {
 		cfg.TelemetryPrefs.LogSources[i].applyDefaults()
 	}
+	for i := range cfg.TelemetryPrefs.Triggers {
+		cfg.TelemetryPrefs.Triggers[i].applyDefaults()
+	}
 }
 
 // HooksConfig captures configuration for the event hook system.
 type HooksConfig struct {
-	Enabled               bool                     `mapstructure:"enabled"`
-	AutoRunDefault        bool                     `mapstructure:"auto_run_default"`
-	MaxQueueSize          int                      `mapstructure:"max_queue_size"`
-	MaxConcurrency        int                      `mapstructure:"max_concurrency"`
+	Enabled                bool                     `mapstructure:"enabled"`
+	AutoRunDefault         bool                     `mapstructure:"auto_run_default"`
+	MaxQueueSize           int                      `mapstructure:"max_queue_size"`
+	MaxConcurrency         int                      `mapstructure:"max_concurrency"`
 	BootstrapSubscriptions []HookSubscriptionConfig `mapstructure:"bootstrap_subscriptions"`
 }
 
 // LogSourceConfig describes how the telemetry service should collect and parse logs
 // for a specific program or subsystem across supported operating systems.
 type LogSourceConfig struct {
-	Program         string            `mapstructure:"program"`
-	Type            string            `mapstructure:"type"`
-	Paths           []string          `mapstructure:"paths"`
-	JournalUnits    []string          `mapstructure:"journal_units"`
-	EventChannels   []string          `mapstructure:"event_channels"`
-	Formatter       string            `mapstructure:"formatter"`
-	SeverityMap     map[string]string `mapstructure:"severity_map"`
-	BatchSize       int               `mapstructure:"batch_size"`
-	BufferSize      int               `mapstructure:"buffer_size"`
-	FlushInterval   time.Duration     `mapstructure:"flush_interval"`
-	PollInterval    time.Duration     `mapstructure:"poll_interval"`
-	Labels          map[string]string `mapstructure:"labels"`
-	Disabled        bool              `mapstructure:"disabled"`
-	FormatRules     []LogFormatRuleConfig `mapstructure:"format_rules"`
+	Program       string                `mapstructure:"program"`
+	Type          string                `mapstructure:"type"`
+	Paths         []string              `mapstructure:"paths"`
+	JournalUnits  []string              `mapstructure:"journal_units"`
+	EventChannels []string              `mapstructure:"event_channels"`
+	Formatter     string                `mapstructure:"formatter"`
+	SeverityMap   map[string]string     `mapstructure:"severity_map"`
+	BatchSize     int                   `mapstructure:"batch_size"`
+	BufferSize    int                   `mapstructure:"buffer_size"`
+	FlushInterval time.Duration         `mapstructure:"flush_interval"`
+	PollInterval  time.Duration         `mapstructure:"poll_interval"`
+	Labels        map[string]string     `mapstructure:"labels"`
+	Disabled      bool                  `mapstructure:"disabled"`
+	FormatRules   []LogFormatRuleConfig `mapstructure:"format_rules"`
 }
 
 func (l *LogSourceConfig) applyDefaults() {

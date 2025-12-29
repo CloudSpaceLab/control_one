@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +50,115 @@ func TestManagerProcessesTaskMemory(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("task was not processed")
+	}
+}
+
+func TestManagerRetriesTaskUntilSuccess(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	cfg := config.WorkerConfig{
+		Concurrency:  1,
+		QueueSize:    1,
+		Backend:      "memory",
+		MaxAttempts:  3,
+		RetryBackoff: 10 * time.Millisecond,
+	}
+	mgr := New(logger, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		if err := mgr.Stop(stopCtx); err != nil {
+			t.Fatalf("stop manager: %v", err)
+		}
+	}()
+
+	var attempts int32
+	done := make(chan struct{})
+	task := Task{
+		Name: "retry-success",
+		Job: func(context.Context) error {
+			if atomic.AddInt32(&attempts, 1) < 3 {
+				return errors.New("boom")
+			}
+			close(done)
+			return nil
+		},
+	}
+
+	if err := mgr.Enqueue(task); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("task did not eventually succeed")
+	}
+
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Fatalf("expected 3 attempts, got %d", got)
+	}
+}
+
+func TestManagerRespectsTaskMaxAttemptsOverride(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	cfg := config.WorkerConfig{
+		Concurrency:  1,
+		QueueSize:    1,
+		Backend:      "memory",
+		MaxAttempts:  1,
+		RetryBackoff: 5 * time.Millisecond,
+	}
+	mgr := New(logger, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		if err := mgr.Stop(stopCtx); err != nil {
+			t.Fatalf("stop manager: %v", err)
+		}
+	}()
+
+	var attempts int32
+	secondAttempt := make(chan struct{})
+
+	task := Task{
+		Name:         "override-failure",
+		MaxAttempts:  2,
+		RetryBackoff: 5 * time.Millisecond,
+		Job: func(context.Context) error {
+			if atomic.AddInt32(&attempts, 1) == 2 {
+				close(secondAttempt)
+			}
+			return errors.New("fail")
+		},
+	}
+
+	if err := mgr.Enqueue(task); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	select {
+	case <-secondAttempt:
+	case <-time.After(time.Second):
+		t.Fatal("second attempt was not observed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("expected exactly 2 attempts, got %d", got)
 	}
 }
 

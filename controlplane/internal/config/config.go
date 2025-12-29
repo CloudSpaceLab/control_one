@@ -53,10 +53,12 @@ type DatabaseConfig struct {
 
 // WorkerConfig controls background job processing.
 type WorkerConfig struct {
-	Concurrency int         `mapstructure:"concurrency"`
-	QueueSize   int         `mapstructure:"queue_size"`
-	Backend     string      `mapstructure:"backend"`
-	Asynq       AsynqConfig `mapstructure:"asynq"`
+	Concurrency  int           `mapstructure:"concurrency"`
+	QueueSize    int           `mapstructure:"queue_size"`
+	Backend      string        `mapstructure:"backend"`
+	MaxAttempts  int           `mapstructure:"max_attempts"`
+	RetryBackoff time.Duration `mapstructure:"retry_backoff"`
+	Asynq        AsynqConfig   `mapstructure:"asynq"`
 }
 
 // AsynqConfig captures Redis-backed queue options.
@@ -75,13 +77,13 @@ type AuthConfig struct {
 
 // OIDCConfig defines OpenID Connect verification options.
 type OIDCConfig struct {
-	Enabled       bool          `mapstructure:"enabled"`
-	IssuerURL     string        `mapstructure:"issuer_url"`
-	ClientID      string        `mapstructure:"client_id"`
-	Audience      []string      `mapstructure:"audience"`
-	UsernameClaim string        `mapstructure:"username_claim"`
-	GroupsClaim   string        `mapstructure:"groups_claim"`
-	CacheTTL      time.Duration `mapstructure:"cache_ttl"`
+	Enabled       bool                             `mapstructure:"enabled"`
+	IssuerURL     string                           `mapstructure:"issuer_url"`
+	ClientID      string                           `mapstructure:"client_id"`
+	Audience      []string                         `mapstructure:"audience"`
+	UsernameClaim string                           `mapstructure:"username_claim"`
+	GroupsClaim   string                           `mapstructure:"groups_claim"`
+	CacheTTL      time.Duration                    `mapstructure:"cache_ttl"`
 	StaticTokens  map[string]StaticPrincipalConfig `mapstructure:"static_tokens"`
 }
 
@@ -108,13 +110,13 @@ type JobsConfig struct {
 
 // ProvisioningJobConfig defines outbound settings for provisioning jobs.
 type ProvisioningJobConfig struct {
-	APIBaseURL     string          `mapstructure:"api_base_url"`
-	Token          string          `mapstructure:"token"`
-	Template       string          `mapstructure:"template"`
-	Provider       string          `mapstructure:"provider"`
-	Baselines      []string        `mapstructure:"baselines"`
-	AutoRemediation bool           `mapstructure:"auto_remediation"`
-	TLS            ClientTLSConfig `mapstructure:"tls"`
+	APIBaseURL      string          `mapstructure:"api_base_url"`
+	Token           string          `mapstructure:"token"`
+	Template        string          `mapstructure:"template"`
+	Provider        string          `mapstructure:"provider"`
+	Baselines       []string        `mapstructure:"baselines"`
+	AutoRemediation bool            `mapstructure:"auto_remediation"`
+	TLS             ClientTLSConfig `mapstructure:"tls"`
 }
 
 // ComplianceJobConfig defines outbound settings for compliance jobs.
@@ -182,6 +184,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("worker.concurrency", 2)
 	v.SetDefault("worker.queue_size", 128)
 	v.SetDefault("worker.backend", "memory")
+	v.SetDefault("worker.max_attempts", 1)
+	v.SetDefault("worker.retry_backoff", time.Second*5)
 	v.SetDefault("worker.asynq.enabled", false)
 	v.SetDefault("worker.asynq.redis_address", "127.0.0.1:6379")
 	v.SetDefault("worker.asynq.redis_db", 0)

@@ -42,6 +42,13 @@ type Store interface {
 	UpdateJobStatus(context.Context, uuid.UUID, storage.JobStatus, string, map[string]any) error
 	GetJob(context.Context, uuid.UUID) (*storage.Job, error)
 	ListJobEvents(context.Context, uuid.UUID) ([]storage.JobEvent, error)
+	ListProvisioningTemplates(context.Context, storage.ProvisioningTemplateFilter, int, int) ([]storage.ProvisioningTemplate, int, error)
+	CreateProvisioningTemplate(context.Context, *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error)
+	GetProvisioningTemplate(context.Context, uuid.UUID) (*storage.ProvisioningTemplate, error)
+	CreateProvisioningTemplateVersion(context.Context, storage.CreateTemplateVersionParams) (*storage.ProvisioningTemplateVersion, error)
+	PromoteProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
+	GetProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
+	GetPromotedProvisioningTemplateVersion(context.Context, uuid.UUID) (*storage.ProvisioningTemplateVersion, error)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles ...string) (*auth.Principal, bool) {
@@ -330,6 +337,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
 	s.baseRouter.HandleFunc("/api/v1/jobs/", s.handleJobResource)
+	s.baseRouter.HandleFunc("/api/v1/templates", s.handleTemplatesCollection)
+	s.baseRouter.HandleFunc("/api/v1/templates/", s.handleTemplateSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/me", s.handleProfile)
 	s.baseRouter.HandleFunc("/api/v1/register", s.handleNodeRegistration)
 }

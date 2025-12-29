@@ -79,6 +79,175 @@ func TestPingEndpointAuthentication(t *testing.T) {
 	})
 }
 
+func TestTemplateEndpoints(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: config.AuthConfig{
+			RBAC: config.RBACConfig{DefaultRole: "viewer"},
+		},
+	}
+
+	store := &fakeStore{}
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	call := func(method, path string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer subject-templates")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Warm up to persist user and grant admin role.
+	rec := call(http.MethodGet, "/api/v1/tenants", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected tenants call success, got %d", rec.Code)
+	}
+	if store.lastUserID == uuid.Nil {
+		t.Fatalf("expected user to be persisted")
+	}
+	store.overrideRoles = map[uuid.UUID][]string{
+		store.lastUserID: {"admin"},
+	}
+
+	createPayload := map[string]any{
+		"name":        "web-template",
+		"provider":    "aws",
+		"description": "Sample template",
+		"labels": map[string]string{
+			"env": "dev",
+		},
+	}
+	body, _ := json.Marshal(createPayload)
+	rec = call(http.MethodPost, "/api/v1/templates", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create template 201 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var created templateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("expected template id")
+	}
+
+	rec = call(http.MethodGet, "/api/v1/templates", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list template 200 got %d", rec.Code)
+	}
+	var listResp struct {
+		Data []templateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listResp.Data) != 1 {
+		t.Fatalf("expected 1 template, got %d", len(listResp.Data))
+	}
+
+	versionPayload := map[string]any{
+		"body":     "#cloud-config",
+		"checksum": "abc123",
+	}
+	body, _ = json.Marshal(versionPayload)
+	path := fmt.Sprintf("/api/v1/templates/%s/versions", created.ID)
+	rec = call(http.MethodPost, path, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create version 201 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var version templateVersionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &version); err != nil {
+		t.Fatalf("decode version response: %v", err)
+	}
+	if version.Version != 1 {
+		t.Fatalf("expected version 1, got %d", version.Version)
+	}
+
+	promotePath := fmt.Sprintf("/api/v1/templates/%s/versions/1/promote", created.ID)
+	rec = call(http.MethodPost, promotePath, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected promote 200 got %d", rec.Code)
+	}
+
+	rec = call(http.MethodGet, "/api/v1/templates/"+created.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected get template 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var detail templateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail response: %v", err)
+	}
+	if detail.PromotedVersionID == nil || detail.PromotedVersion == nil {
+		t.Fatalf("expected promoted version metadata in detail response")
+	}
+}
+
+func TestEnrichProvisioningMetadata(t *testing.T) {
+	logger := zap.NewNop()
+	store := &fakeStore{}
+	srv := New(logger, &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+	}, store, &stubQueue{})
+
+	templateID := uuid.New()
+	store.templates = []storage.ProvisioningTemplate{
+		{
+			ID:        templateID,
+			Name:      "web",
+			Provider:  "aws",
+			Labels:    map[string]string{},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	store.templateVersions = map[uuid.UUID][]storage.ProvisioningTemplateVersion{
+		templateID: {
+			{
+				ID:         uuid.New(),
+				TemplateID: templateID,
+				Version:    1,
+				Checksum:   sql.NullString{String: "sha256:abc", Valid: true},
+				Body:       "#cloud-config",
+				CreatedAt:  time.Now(),
+			},
+			{
+				ID:         uuid.New(),
+				TemplateID: templateID,
+				Version:    2,
+				Checksum:   sql.NullString{String: "sha256:def", Valid: true},
+				Body:       "#cloud-config v2",
+				CreatedAt:  time.Now(),
+			},
+		},
+	}
+	versionID := store.templateVersions[templateID][1].ID
+	store.templates[0].PromotedVersionID = &versionID
+
+	t.Run("uses promoted version when template_version absent", func(t *testing.T) {
+		meta := map[string]string{}
+		srv.enrichProvisioningMetadata(context.Background(), templateID.String(), meta)
+		if meta["template_version"] != "2" {
+			t.Fatalf("expected promoted version 2, got %s", meta["template_version"])
+		}
+		if meta["template_checksum"] != "sha256:def" {
+			t.Fatalf("expected checksum sha256:def, got %s", meta["template_checksum"])
+		}
+	})
+
+	t.Run("uses explicit version when provided", func(t *testing.T) {
+		meta := map[string]string{"template_version": "1"}
+		srv.enrichProvisioningMetadata(context.Background(), templateID.String(), meta)
+		if meta["template_version"] != "1" {
+			t.Fatalf("expected version 1, got %s", meta["template_version"])
+		}
+		if meta["template_checksum"] != "sha256:abc" {
+			t.Fatalf("expected checksum sha256:abc, got %s", meta["template_checksum"])
+		}
+	})
+}
+
 func TestProfileEndpoint(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
@@ -571,6 +740,8 @@ type fakeStore struct {
 	lastUserID          uuid.UUID
 	overrideRoles       map[uuid.UUID][]string
 	skipUserPersistence bool
+	templates           []storage.ProvisioningTemplate
+	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 }
 
 type stubQueue struct{}
@@ -599,6 +770,131 @@ func (f *fakeStore) GetNodeByHostname(_ context.Context, tenantID uuid.UUID, hos
 	for _, node := range f.nodes {
 		if node.TenantID == tenantID && strings.EqualFold(node.Hostname, hostname) {
 			copy := node
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.ProvisioningTemplateFilter, limit, offset int) ([]storage.ProvisioningTemplate, int, error) {
+	var filtered []storage.ProvisioningTemplate
+	for _, tpl := range f.templates {
+		if !filter.IncludeArchived && tpl.ArchivedAt.Valid {
+			continue
+		}
+		if filter.Provider != "" && !strings.EqualFold(filter.Provider, tpl.Provider) {
+			continue
+		}
+		if filter.NamePrefix != "" && !strings.HasPrefix(strings.ToLower(tpl.Name), strings.ToLower(filter.NamePrefix)) {
+			continue
+		}
+		filtered = append(filtered, tpl)
+	}
+	total := len(filtered)
+	if offset > total {
+		return []storage.ProvisioningTemplate{}, total, nil
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
+}
+
+func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error) {
+	if tpl.ID == uuid.Nil {
+		tpl.ID = uuid.New()
+	}
+	if tpl.CreatedAt.IsZero() {
+		tpl.CreatedAt = time.Now()
+	}
+	if tpl.UpdatedAt.IsZero() {
+		tpl.UpdatedAt = tpl.CreatedAt
+	}
+	f.templates = append(f.templates, *tpl)
+	return tpl, nil
+}
+
+func (f *fakeStore) GetProvisioningTemplate(_ context.Context, id uuid.UUID) (*storage.ProvisioningTemplate, error) {
+	for _, tpl := range f.templates {
+		if tpl.ID == id {
+			copy := tpl
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) CreateProvisioningTemplateVersion(_ context.Context, params storage.CreateTemplateVersionParams) (*storage.ProvisioningTemplateVersion, error) {
+	if params.TemplateID == uuid.Nil {
+		return nil, errors.New("template id required")
+	}
+	if f.templateVersions == nil {
+		f.templateVersions = make(map[uuid.UUID][]storage.ProvisioningTemplateVersion)
+	}
+	versionNumber := len(f.templateVersions[params.TemplateID]) + 1
+	version := storage.ProvisioningTemplateVersion{
+		ID:         uuid.New(),
+		TemplateID: params.TemplateID,
+		Version:    versionNumber,
+		Body:       params.Body,
+		CreatedAt:  time.Now(),
+	}
+	if params.Checksum != nil {
+		version.Checksum = sql.NullString{String: *params.Checksum, Valid: true}
+	}
+	if len(params.MetadataSchema) > 0 {
+		version.MetadataSchema = params.MetadataSchema
+	}
+	if params.RolloutNotes != nil {
+		version.RolloutNotes = sql.NullString{String: *params.RolloutNotes, Valid: true}
+	}
+	if params.CreatedBy != nil {
+		version.CreatedBy = params.CreatedBy
+	}
+	f.templateVersions[params.TemplateID] = append(f.templateVersions[params.TemplateID], version)
+	return &version, nil
+}
+
+func (f *fakeStore) PromoteProvisioningTemplateVersion(_ context.Context, templateID uuid.UUID, versionNumber int) (*storage.ProvisioningTemplateVersion, error) {
+	versions := f.templateVersions[templateID]
+	if versionNumber <= 0 || versionNumber > len(versions) {
+		return nil, errors.New("version not found")
+	}
+	version := versions[versionNumber-1]
+	version.PromotedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	for i, tpl := range f.templates {
+		if tpl.ID == templateID {
+			id := version.ID
+			f.templates[i].PromotedVersionID = &id
+			f.templates[i].UpdatedAt = time.Now()
+			break
+		}
+	}
+	versions[versionNumber-1] = version
+	f.templateVersions[templateID] = versions
+	return &version, nil
+}
+
+func (f *fakeStore) GetProvisioningTemplateVersion(_ context.Context, templateID uuid.UUID, versionNumber int) (*storage.ProvisioningTemplateVersion, error) {
+	versions := f.templateVersions[templateID]
+	if versionNumber <= 0 || versionNumber > len(versions) {
+		return nil, nil
+	}
+	version := versions[versionNumber-1]
+	return &version, nil
+}
+
+func (f *fakeStore) GetPromotedProvisioningTemplateVersion(ctx context.Context, templateID uuid.UUID) (*storage.ProvisioningTemplateVersion, error) {
+	tpl, err := f.GetProvisioningTemplate(ctx, templateID)
+	if err != nil || tpl == nil || tpl.PromotedVersionID == nil {
+		return nil, err
+	}
+	for _, version := range f.templateVersions[templateID] {
+		if version.ID == *tpl.PromotedVersionID {
+			copy := version
 			return &copy, nil
 		}
 	}

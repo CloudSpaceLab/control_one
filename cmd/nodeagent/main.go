@@ -102,6 +102,9 @@ func main() {
 	if cfg.TelemetryPrefs.CollectLogs && len(cfg.TelemetryPrefs.LogSources) > 0 {
 		telemetrySvc.StartLogCollection(ctx, state.NodeID, cfg.TelemetryPrefs.LogSources)
 	}
+	if len(cfg.TelemetryPrefs.Triggers) > 0 {
+		telemetrySvc.LoadTriggers(cfg.TelemetryPrefs.Triggers)
+	}
 
 	meshMgr := mesh.New(log, client, mesh.Options{
 		Enabled:        cfg.Mesh.Enabled,

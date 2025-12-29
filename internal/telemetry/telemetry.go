@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +28,16 @@ type Service struct {
 
 	logsMu     sync.Mutex
 	logsActive bool
+
+	triggerMu sync.Mutex
+	triggers  []*compiledTrigger
+}
+
+type compiledTrigger struct {
+	cfg     config.LogTriggerConfig
+	re      *regexp.Regexp
+	lastRun time.Time
+	runs    int
 }
 
 // SendHeartbeat notifies the control plane that the node is alive.
@@ -44,6 +57,26 @@ func (s *Service) SendHeartbeat(ctx context.Context, nodeID, heartbeatID string)
 // New creates a telemetry service.
 func New(client *api.Client, log *zap.Logger, hooks hooks.Publisher) *Service {
 	return &Service{client: client, log: log, hooks: hooks}
+}
+
+// LoadTriggers compiles and stores log triggers.
+func (s *Service) LoadTriggers(triggers []config.LogTriggerConfig) {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+
+	compiled := make([]*compiledTrigger, 0, len(triggers))
+	for _, t := range triggers {
+		re, err := regexp.Compile(t.Regex)
+		if err != nil {
+			s.log.Warn("log trigger regex compile failed", zap.String("id", t.ID), zap.String("regex", t.Regex), zap.Error(err))
+			continue
+		}
+		compiled = append(compiled, &compiledTrigger{cfg: t, re: re})
+	}
+	s.triggers = compiled
+	if len(compiled) > 0 {
+		s.log.Info("log triggers configured", zap.Int("count", len(compiled)))
+	}
 }
 
 // SendMetrics pushes periodic host metrics.
@@ -229,6 +262,7 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 				})
 				continue
 			}
+			s.evaluateTriggers(ctx, nodeID, entry)
 			batch = append(batch, entry)
 			if source.BatchSize > 0 && len(batch) >= source.BatchSize {
 				flush("batch_size")
@@ -314,4 +348,92 @@ func (s *Service) postJSON(ctx context.Context, path string, payload any) error 
 	}
 
 	return nil
+}
+
+func (s *Service) evaluateTriggers(ctx context.Context, nodeID string, entry logs.StructuredLog) {
+	s.triggerMu.Lock()
+	triggers := make([]*compiledTrigger, len(s.triggers))
+	copy(triggers, s.triggers)
+	s.triggerMu.Unlock()
+
+	if len(triggers) == 0 {
+		return
+	}
+
+	now := time.Now()
+	for _, t := range triggers {
+		if t == nil {
+			continue
+		}
+		if strings.TrimSpace(t.cfg.Program) != "" && !strings.EqualFold(t.cfg.Program, entry.Program) {
+			continue
+		}
+		if !t.re.MatchString(entry.Message) {
+			continue
+		}
+		// cooldown and max-runs checks (shared by pointer, so guard with triggerMu)
+		s.triggerMu.Lock()
+		skip := false
+		if t.cfg.MaxRuns > 0 && t.runs >= t.cfg.MaxRuns {
+			skip = true
+		}
+		if !skip && t.cfg.Cooldown > 0 && !t.lastRun.IsZero() && now.Sub(t.lastRun) < t.cfg.Cooldown {
+			skip = true
+		}
+		if !skip {
+			t.runs++
+			t.lastRun = now
+		}
+		s.triggerMu.Unlock()
+
+		if skip {
+			continue
+		}
+
+		if t.cfg.HooksEnabled {
+			payload := map[string]any{
+				"trigger_id": t.cfg.ID,
+				"program":    entry.Program,
+				"severity":   entry.Severity,
+				"message":    entry.Message,
+			}
+			if len(entry.Labels) > 0 {
+				payload["labels"] = entry.Labels
+			}
+			s.publishHook(ctx, "telemetry.logs.trigger.matched", nodeID, payload)
+		}
+
+		if t.cfg.ScriptsEnabled && strings.TrimSpace(t.cfg.Script) != "" {
+			go s.runTriggerScript(ctx, nodeID, t.cfg, entry)
+		}
+	}
+}
+
+func (s *Service) runTriggerScript(parent context.Context, nodeID string, cfg config.LogTriggerConfig, entry logs.StructuredLog) {
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, cfg.Script) // #nosec G204 — script path is admin-configured
+	output, err := cmd.CombinedOutput()
+
+	payload := map[string]any{
+		"trigger_id": cfg.ID,
+		"program":    entry.Program,
+		"message":    entry.Message,
+		"exit_code":  cmd.ProcessState.ExitCode(),
+		"output":     string(output),
+	}
+	if len(entry.Labels) > 0 {
+		payload["labels"] = entry.Labels
+	}
+	if err != nil {
+		s.log.Warn("log trigger script failed", zap.String("id", cfg.ID), zap.Error(err))
+		s.publishHook(parent, "telemetry.logs.trigger.script.failed", nodeID, payload)
+		return
+	}
+	s.publishHook(parent, "telemetry.logs.trigger.script.completed", nodeID, payload)
 }

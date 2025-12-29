@@ -18,6 +18,30 @@ Control One delivers a unified control plane, background worker service, and nod
 - **Mesh Manager** (`internal/mesh/`): prepares zero-touch WireGuard mesh state, polls the coordinator, and rotates keys.
 - **Provisioning Engine** (`internal/provisioning/`): applies node templates, baseline hardening, and optional auto-remediation.
   - Templates are authored in the control plane and referenced by name via `provisioning.template`; metadata keys (e.g. `cluster`, `resource_group`) are forwarded untouched in the apply payload, enabling provider-specific workflows.
+- **Provisioning Adapter Architecture**
+  - `Engine` now delegates to pluggable adapters (`internal/provisioning/adapter.go`) so each provider can customize how templates/baselines are applied.
+  - The default HTTP adapter invokes the control plane’s `/api/v1/provisioning/*` endpoints; a mock adapter provides deterministic local behavior, while the AWS adapter enriches metadata (e.g., region detection from `AWS_REGION`/`AWS_DEFAULT_REGION`).
+  - Auto-detected provider metadata (from `DetectProvider`) is merged with caller-supplied metadata before invoking adapters, ensuring downstream workflows always receive consistent hints.
+  - Tests covering metadata merge semantics, AWS region injection, and baseline delegation live in `internal/provisioning/engine_test.go` and `internal/provisioning/detect_test.go`. Run `go test ./internal/provisioning` when iterating on adapters.
+- **Provisioning Templates API**
+  - Control plane stores templates and their versions via the new `/api/v1/templates` endpoints. Templates persist provider metadata, labels, and a promoted version pointer backed by the migration `0004_provisioning_templates`.
+  - Use the API to create templates and upload versions, then promote a version before triggering provisioning jobs. Example:
+    ```bash
+    # create template shell
+    curl -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+      -d '{"name":"web-tier","provider":"aws","labels":{"env":"dev"}}' \
+      https://localhost:8443/api/v1/templates
+
+    # upload version body
+    curl -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+      -d '{"body":"#cloud-config ...","checksum":"sha256:..."}' \
+      https://localhost:8443/api/v1/templates/<template_id>/versions
+
+    # promote version 1
+    curl -X POST -H "Authorization: Bearer <token>" \
+      https://localhost:8443/api/v1/templates/<template_id>/versions/1/promote
+    ```
+  - Listing and detail responses include pagination metadata plus promoted version details so operators can audit rollouts.
 - **Policy Management** (`internal/policy/`): fetches signed policy bundles and caches them locally.
 - **Compliance Engine** (`internal/compliance/`): evaluates rulesets/certifications and feeds telemetry summaries.
 - **Scheduler** (`internal/scheduler/`): cron-based job runner used for policy sync, provisioning, compliance evaluation, telemetry, access sync, secrets sync, and heartbeat.
@@ -82,6 +106,13 @@ Control One delivers a unified control plane, background worker service, and nod
 
 ### Background Jobs
 The worker manager defaults to an in-memory queue. Enable Asynq/Redis by configuring `worker.backend: asynq` and `worker.asynq.*` fields in `controlplane/config/controlplane.dev.yaml`. When Asynq is enabled, ensure a Redis instance is reachable at the configured address.
+
+Newer builds expose worker resiliency knobs:
+
+- `worker.max_attempts` – default `1`. Controls how many times the manager will retry a task before surfacing a failure.
+- `worker.retry_backoff` – default `5s`. Governs the base delay between attempts (the manager multiplies this delay by the attempt number for simple linear backoff). Individual tasks can override both fields.
+
+Metrics for queue depth, backend availability, enqueue success/failure, and execution duration are published under the API’s Prometheus endpoint (`/metrics` by default). Look for the `controlone_worker_*` series to confirm worker health in dashboards.
 
 ### Web UI
 1. Install dependencies: `npm install --prefix ui`
