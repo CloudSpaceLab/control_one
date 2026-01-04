@@ -1,0 +1,56 @@
+%% Control One Container Diagram
+flowchart TB
+    subgraph Internet
+        Operator["UI Users"]
+        Agent["Node Agent"]
+    end
+
+    subgraph ControlPlane["Control Plane Cluster"]
+        subgraph APIGroup["API Service (Go)"]
+            HTTP[("HTTP Router" )]:::component
+            Auth[("Auth Middleware (mTLS/OIDC/RBAC)")]:::component
+            Handlers[("API Handlers: Tenants, Nodes, Jobs") ]:::component
+        end
+
+        subgraph Workers["Worker Service"]
+            Queue[("In-memory Queue")]:::component
+            Executors[("Job Executors: Provisioning, Compliance") ]:::component
+        end
+
+        DB[("Postgres") ]:::storage
+        Telemetry[("Telemetry Gateway (OTel Exporter)")]:::component
+        Metrics[("Prometheus Metrics Endpoint") ]:::component
+    end
+
+    subgraph Integrations["External Integrations"]
+        IdP[("OIDC IdP")]:::external
+        PKI[("PKI / CA")]:::external
+        Vault[("Vault / Secrets") ]:::external
+        Providers[("Cloud & Hypervisor APIs") ]:::external
+        Observability[("Prometheus/Loki/Grafana") ]:::external
+    end
+
+    Operator -->|HTTPS + OIDC| HTTP
+    Agent -->|mTLS Register/Sync| HTTP
+    HTTP --> Auth
+    Auth --> Handlers
+    Handlers --> DB
+    Handlers --> Queue
+    Executors --> DB
+    Executors --> Providers
+    Executors --> Vault
+    Queue --> Executors
+
+    Handlers --> IdP
+    Auth --> PKI
+    Agent -->|Telemetry| Telemetry
+    Telemetry --> Observability
+    Metrics --> Observability
+
+    classDef component fill:#38bdf8,stroke:#0f172a,color:#0f172a;
+    classDef storage fill:#0f172a,stroke:#38bdf8,color:#fff;
+    classDef external fill:#e2e8f0,stroke:#64748b,color:#111827;
+
+    class HTTP,Auth,Handlers,Queue,Executors,Telemetry,Metrics component;
+    class DB storage;
+    class IdP,PKI,Vault,Providers,Observability,Operator,Agent external;

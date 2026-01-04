@@ -67,6 +67,11 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: go test -v ./controlplane/internal/storage -run TestJobLifecycleWithPostgres -count=1
+      - name: Migration integration test
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: go test -v ./controlplane/internal/migrate -run TestMigrationsUpAndDown -count=1
 
       - name: Build agent
         run: go build ./cmd/nodeagent

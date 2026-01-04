@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -622,6 +623,208 @@ type Tenant struct {
 	ID        uuid.UUID
 	Name      string
 	CreatedAt time.Time
+}
+
+// AuditLog captures security-relevant actions across the platform.
+type AuditLog struct {
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	ActorID      uuid.UUID
+	ActorType    string
+	Action       string
+	ResourceType string
+	ResourceID   *string
+	Metadata     map[string]any
+	CreatedAt    time.Time
+}
+
+// AuditLogFilter narrows audit log queries.
+type AuditLogFilter struct {
+	TenantID     uuid.UUID
+	ActorType    string
+	Action       string
+	ResourceType string
+	ResourceID   string
+	Since        *time.Time
+	Until        *time.Time
+}
+
+// CreateAuditLog persists an audit entry.
+func (s *Store) CreateAuditLog(ctx context.Context, entry *AuditLog) (*AuditLog, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if entry == nil {
+		return nil, errors.New("audit log entry cannot be nil")
+	}
+	entry.Action = strings.TrimSpace(entry.Action)
+	entry.ResourceType = strings.TrimSpace(entry.ResourceType)
+	if entry.Action == "" || entry.ResourceType == "" {
+		return nil, errors.New("action and resource_type are required")
+	}
+	if entry.ID == uuid.Nil {
+		entry.ID = uuid.New()
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = s.clock()
+	}
+	actorType := strings.TrimSpace(entry.ActorType)
+	if actorType == "" {
+		actorType = "system"
+	}
+	var tenantVal any = nil
+	if entry.TenantID != uuid.Nil {
+		tenantVal = entry.TenantID
+	}
+	var actorIDVal any = nil
+	if entry.ActorID != uuid.Nil {
+		actorIDVal = entry.ActorID
+	}
+	resourceID := sql.NullString{}
+	if entry.ResourceID != nil && strings.TrimSpace(*entry.ResourceID) != "" {
+		resourceID = sql.NullString{String: strings.TrimSpace(*entry.ResourceID), Valid: true}
+	}
+	var metadataBytes []byte
+	if len(entry.Metadata) > 0 {
+		bytes, err := json.Marshal(entry.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("marshal metadata: %w", err)
+		}
+		metadataBytes = bytes
+	}
+	if metadataBytes == nil {
+		metadataBytes = []byte("{}")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO audit_logs (id, tenant_id, actor_id, actor_type, action, resource_type, resource_id, metadata, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, entry.ID, tenantVal, actorIDVal, actorType, entry.Action, entry.ResourceType, resourceID, metadataBytes, entry.CreatedAt); err != nil {
+		return nil, fmt.Errorf("insert audit log: %w", err)
+	}
+	entry.ActorType = actorType
+	return entry, nil
+}
+
+// ListAuditLogs returns audit entries based on the provided filter.
+func (s *Store) ListAuditLogs(ctx context.Context, filter AuditLogFilter, limit, offset int) ([]AuditLog, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	var (
+		clauses = []string{"TRUE"}
+		args    []any
+	)
+
+	if filter.TenantID != uuid.Nil {
+		args = append(args, filter.TenantID)
+		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if trimmed := strings.TrimSpace(filter.ActorType); trimmed != "" {
+		args = append(args, trimmed)
+		clauses = append(clauses, fmt.Sprintf("actor_type = $%d", len(args)))
+	}
+	if trimmed := strings.TrimSpace(filter.Action); trimmed != "" {
+		args = append(args, trimmed)
+		clauses = append(clauses, fmt.Sprintf("action = $%d", len(args)))
+	}
+	if trimmed := strings.TrimSpace(filter.ResourceType); trimmed != "" {
+		args = append(args, trimmed)
+		clauses = append(clauses, fmt.Sprintf("resource_type = $%d", len(args)))
+	}
+	if trimmed := strings.TrimSpace(filter.ResourceID); trimmed != "" {
+		args = append(args, trimmed)
+		clauses = append(clauses, fmt.Sprintf("resource_id = $%d", len(args)))
+	}
+	if filter.Since != nil {
+		args = append(args, filter.Since.UTC())
+		clauses = append(clauses, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if filter.Until != nil {
+		args = append(args, filter.Until.UTC())
+		clauses = append(clauses, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, actor_id, actor_type, action, resource_type, resource_id, metadata, created_at
+		FROM audit_logs
+		WHERE %s
+		ORDER BY created_at DESC
+	`, strings.Join(clauses, " AND "))
+
+	argsWithPagination := append([]any{}, args...)
+	if limit > 0 {
+		argsWithPagination = append(argsWithPagination, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(argsWithPagination))
+	}
+	if offset > 0 {
+		argsWithPagination = append(argsWithPagination, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(argsWithPagination))
+	}
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM audit_logs WHERE %s`, strings.Join(clauses, " AND "))
+	countRow := s.db.QueryRowContext(ctx, countQuery, args...)
+
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count audit logs: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, argsWithPagination...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []AuditLog
+	for rows.Next() {
+		var (
+			entry      AuditLog
+			tenantID   sql.NullString
+			actorID    sql.NullString
+			resourceID sql.NullString
+			metadata   []byte
+		)
+		if err := rows.Scan(
+			&entry.ID,
+			&tenantID,
+			&actorID,
+			&entry.ActorType,
+			&entry.Action,
+			&entry.ResourceType,
+			&resourceID,
+			&metadata,
+			&entry.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan audit log: %w", err)
+		}
+		if tenantID.Valid {
+			entry.TenantID, _ = uuid.Parse(tenantID.String)
+		}
+		if actorID.Valid {
+			entry.ActorID, _ = uuid.Parse(actorID.String)
+		}
+		if resourceID.Valid {
+			val := resourceID.String
+			entry.ResourceID = &val
+		}
+		if len(metadata) > 0 {
+			var meta map[string]any
+			if err := json.Unmarshal(metadata, &meta); err != nil {
+				return nil, 0, fmt.Errorf("unmarshal audit metadata: %w", err)
+			}
+			entry.Metadata = meta
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate audit logs: %w", err)
+	}
+
+	return entries, total, nil
 }
 
 // JobStatus represents the state of a job.

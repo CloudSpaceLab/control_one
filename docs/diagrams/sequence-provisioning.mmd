@@ -1,0 +1,25 @@
+%% Control One Provisioning Sequence
+sequenceDiagram
+    participant Operator as Operator UI
+    participant UI as Web UI (React)
+    participant API as Control Plane API
+    participant Queue as Worker Queue
+    participant Worker as Worker Executor
+    participant Provider as Cloud/Hypervisor Provider
+    participant Agent as Node Agent
+
+    Operator->>UI: Select provisioning template
+    UI->>API: POST /api/v1/jobs {type: provisioning, tenant_id, payload}
+    API-->>UI: 202 Accepted + Job ID
+    API->>Queue: Enqueue provisioning job
+    activate Queue
+    Queue->>Worker: Deliver job for execution
+    deactivate Queue
+    activate Worker
+    Worker->>API: Update job status = running
+    Worker->>Provider: Call provider adapter with template payload
+    Provider-->>Worker: Provisioning result / artifacts
+    Worker->>API: Update job status = succeeded/failed + event log
+    deactivate Worker
+    API->>Agent: Notify via hooks / polling (optional)
+    API-->>UI: Job status stream (poll/WebSocket)

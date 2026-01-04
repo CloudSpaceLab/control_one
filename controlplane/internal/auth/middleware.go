@@ -132,14 +132,8 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 				principal = m.persistPrincipal(r.Context(), principal)
 				return principal, nil
 			}
-			principal := &Principal{
-				Type:    "user",
-				Name:    "bearer",
-				Subject: token,
-				Email:   "",
-				Roles:   []string{m.defaultRole()},
-			}
-			return m.persistPrincipal(r.Context(), principal), nil
+			// Reject opaque bearer tokens when OIDC is disabled and no static token matched.
+			return nil, http.ErrNoCookie
 		}
 	}
 

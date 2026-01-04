@@ -42,7 +42,11 @@ type Store interface {
 	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
 	GetUserByExternalID(context.Context, string) (*storage.User, error)
+	GetUser(context.Context, uuid.UUID) (*storage.User, error)
+	ListUsers(context.Context, int, int) ([]storage.User, int, error)
+	SetUserRoles(context.Context, uuid.UUID, []string) error
 	ListUserRoles(context.Context, uuid.UUID) ([]string, error)
+	ListRoles(context.Context) ([]storage.Role, error)
 	ListJobs(context.Context, uuid.UUID, string, storage.JobStatus, int, int) ([]storage.Job, int, error)
 	CreateJob(context.Context, *storage.Job, *storage.JobEvent) (*storage.Job, error)
 	UpdateJobStatus(context.Context, uuid.UUID, storage.JobStatus, string, map[string]any) error
@@ -51,11 +55,39 @@ type Store interface {
 	ListProvisioningTemplates(context.Context, storage.ProvisioningTemplateFilter, int, int) ([]storage.ProvisioningTemplate, int, error)
 	CreateProvisioningTemplate(context.Context, *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error)
 	GetProvisioningTemplate(context.Context, uuid.UUID) (*storage.ProvisioningTemplate, error)
+	UpdateProvisioningTemplate(context.Context, uuid.UUID, storage.UpdateProvisioningTemplateParams) (*storage.ProvisioningTemplate, error)
 	CreateProvisioningTemplateVersion(context.Context, storage.CreateTemplateVersionParams) (*storage.ProvisioningTemplateVersion, error)
 	PromoteProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
 	GetProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
 	GetPromotedProvisioningTemplateVersion(context.Context, uuid.UUID) (*storage.ProvisioningTemplateVersion, error)
 	ListProvisioningTemplateVersions(context.Context, uuid.UUID, int, int) ([]storage.ProvisioningTemplateVersion, int, error)
+	CreateAuditLog(context.Context, *storage.AuditLog) (*storage.AuditLog, error)
+	ListAuditLogs(context.Context, storage.AuditLogFilter, int, int) ([]storage.AuditLog, int, error)
+}
+
+func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
+	if s.worker == nil {
+		http.Error(w, "worker unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	provider, ok := s.worker.(workerStatusProvider)
+	if !ok {
+		http.Error(w, "worker status unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	status := provider.Status()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		s.logger.Warn("encode worker status", zap.Error(err))
+	}
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles ...string) (*auth.Principal, bool) {
@@ -318,6 +350,10 @@ type TaskQueue interface {
 	Enqueue(worker.Task) error
 }
 
+type workerStatusProvider interface {
+	Status() worker.Status
+}
+
 // Server wraps the HTTP server lifecycle for the control plane API.
 type Server struct {
 	logger             *zap.Logger
@@ -344,11 +380,16 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
-	s.baseRouter.HandleFunc("/api/v1/jobs/", s.handleJobResource)
+	s.baseRouter.HandleFunc("/api/v1/jobs/", s.handleJobSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/templates", s.handleTemplatesCollection)
 	s.baseRouter.HandleFunc("/api/v1/templates/", s.handleTemplateSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/users", s.handleUsersCollection)
+	s.baseRouter.HandleFunc("/api/v1/users/", s.handleUserSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/roles", s.handleRolesCollection)
 	s.baseRouter.HandleFunc("/api/v1/me", s.handleProfile)
 	s.baseRouter.HandleFunc("/api/v1/register", s.handleNodeRegistration)
+	s.baseRouter.HandleFunc("/api/v1/audit", s.handleAuditCollection)
+	s.baseRouter.HandleFunc("/api/v1/worker/status", s.handleWorkerStatus)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +439,201 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleUsersCollection(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "user store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListUsers(w, r)
+	default:
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleUserSubroutes(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "user store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/users/")
+	userID, err := uuid.Parse(idStr)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetUser(w, r, userID)
+	case http.MethodPatch:
+		s.handleUpdateUserRoles(w, r, userID)
+	default:
+		w.Header().Set("Allow", "GET, PATCH")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	users, total, err := s.store.ListUsers(r.Context(), limit, offset)
+	if err != nil {
+		s.logger.Error("list users", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]userResponse, 0, len(users))
+	for _, user := range users {
+		roles, roleErr := s.store.ListUserRoles(r.Context(), user.ID)
+		if roleErr != nil {
+			s.logger.Warn("list roles for user", zap.Error(roleErr), zap.String("user_id", user.ID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		resp = append(resp, userResponseFromModel(user, roles))
+	}
+
+	payload := paginatedResponse[userResponse]{
+		Data:       resp,
+		Pagination: newPaginationMeta(total, limit, offset, len(resp)),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		s.logger.Warn("encode users response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	user, err := s.store.GetUser(r.Context(), userID)
+	if err != nil {
+		s.logger.Error("get user", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	roles, err := s.store.ListUserRoles(r.Context(), user.ID)
+	if err != nil {
+		s.logger.Error("list user roles", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(userResponseFromModel(*user, roles)); err != nil {
+		s.logger.Warn("encode user response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
+		return
+	}
+
+	var req updateUserRolesRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := req.validate(); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.SetUserRoles(r.Context(), userID, req.Roles); err != nil {
+		s.logger.Error("set user roles", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	user, err := s.store.GetUser(r.Context(), userID)
+	if err != nil {
+		s.logger.Error("get user after update", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	roles, err := s.store.ListUserRoles(r.Context(), userID)
+	if err != nil {
+		s.logger.Error("list user roles after update", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(userResponseFromModel(*user, roles)); err != nil {
+		s.logger.Warn("encode updated user response", zap.Error(err))
+	}
+
+	s.recordAudit(r.Context(), principal, uuid.Nil, "user.roles.update", "user", userID.String(), map[string]any{
+		"roles": roles,
+	})
+}
+
+func (s *Server) handleRolesCollection(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "role store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	roles, err := s.store.ListRoles(r.Context())
+	if err != nil {
+		s.logger.Error("list roles", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]roleResponse, 0, len(roles))
+	for _, role := range roles {
+		resp = append(resp, roleResponseFromModel(role))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Warn("encode roles response", zap.Error(err))
+	}
+}
+
 type profileResponse struct {
 	Subject     string              `json:"subject"`
 	Name        string              `json:"name"`
@@ -407,6 +643,60 @@ type profileResponse struct {
 	Groups      []string            `json:"groups"`
 	StoredRoles []string            `json:"stored_roles,omitempty"`
 	User        *profileUserDetails `json:"user,omitempty"`
+}
+
+type userResponse struct {
+	ID          string   `json:"id"`
+	ExternalID  string   `json:"external_id"`
+	DisplayName *string  `json:"display_name,omitempty"`
+	Email       *string  `json:"email,omitempty"`
+	Roles       []string `json:"roles"`
+	CreatedAt   string   `json:"created_at"`
+}
+
+func userResponseFromModel(u storage.User, roles []string) userResponse {
+	return userResponse{
+		ID:          u.ID.String(),
+		ExternalID:  u.ExternalID,
+		DisplayName: nullStringPtr(u.DisplayName),
+		Email:       nullStringPtr(u.Email),
+		Roles:       append([]string{}, roles...),
+		CreatedAt:   u.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+type roleResponse struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+func roleResponseFromModel(role storage.Role) roleResponse {
+	return roleResponse{
+		ID:          role.ID.String(),
+		Name:        role.Name,
+		Description: nullStringPtr(role.Description),
+		CreatedAt:   role.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+type updateUserRolesRequest struct {
+	Roles []string `json:"roles"`
+}
+
+func (r updateUserRolesRequest) validate() error {
+	if len(r.Roles) == 0 {
+		return fmt.Errorf("roles are required")
+	}
+	for i, role := range r.Roles {
+		trimmed := strings.TrimSpace(role)
+		if trimmed == "" {
+			return fmt.Errorf("roles[%d] cannot be empty", i)
+		}
+		r.Roles[i] = trimmed
+	}
+	return nil
 }
 
 type profileUserDetails struct {
@@ -491,7 +781,8 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -524,6 +815,9 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(tenantResponseFromModel(*created)); err != nil {
 		s.logger.Warn("encode tenant response", zap.Error(err))
 	}
+	s.recordAudit(r.Context(), principal, created.ID, "tenant.create", "tenant", created.ID.String(), map[string]any{
+		"name": created.Name,
+	})
 }
 
 func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
@@ -575,7 +869,8 @@ func (s *Server) handleGetTenant(w http.ResponseWriter, r *http.Request, tenantI
 }
 
 func (s *Server) handleUpdateTenant(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -608,10 +903,14 @@ func (s *Server) handleUpdateTenant(w http.ResponseWriter, r *http.Request, tena
 	if err := json.NewEncoder(w).Encode(tenantResponseFromModel(*updated)); err != nil {
 		s.logger.Warn("encode tenant response", zap.Error(err))
 	}
+	s.recordAudit(r.Context(), principal, tenantID, "tenant.update", "tenant", tenantID.String(), map[string]any{
+		"name": updated.Name,
+	})
 }
 
 func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -626,6 +925,7 @@ func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request, tena
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	s.recordAudit(r.Context(), principal, tenantID, "tenant.delete", "tenant", tenantID.String(), nil)
 }
 
 type createTenantRequest struct {
@@ -736,7 +1036,8 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -789,6 +1090,9 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*created)); err != nil {
 		s.logger.Warn("encode node response", zap.Error(err))
 	}
+	s.recordAudit(r.Context(), principal, tenantID, "node.create", "node", created.ID.String(), map[string]any{
+		"hostname": created.Hostname,
+	})
 }
 
 func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
@@ -840,7 +1144,8 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request, nodeID uu
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -901,10 +1206,25 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*updated)); err != nil {
 		s.logger.Warn("encode node response", zap.Error(err))
 	}
+	s.recordAudit(r.Context(), principal, updated.TenantID, "node.update", "node", nodeID.String(), map[string]any{
+		"hostname": updated.Hostname,
+	})
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -919,6 +1239,9 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, nodeID
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	s.recordAudit(r.Context(), principal, node.TenantID, "node.delete", "node", nodeID.String(), map[string]any{
+		"hostname": node.Hostname,
+	})
 }
 
 type createNodeRequest struct {
@@ -999,6 +1322,15 @@ func nullStringPtr(ns sql.NullString) *string {
 	return &value
 }
 
+var systemPrincipal = &auth.Principal{
+	Type: "system",
+	Name: "controlplane",
+}
+
+func (s *Server) systemActor() *auth.Principal {
+	return systemPrincipal
+}
+
 func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts int) func(context.Context) error {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
@@ -1006,6 +1338,7 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 	var attemptCounter int32
 	return func(ctx context.Context) error {
 		currentAttempt := int(atomic.AddInt32(&attemptCounter, 1))
+		principal := s.systemActor()
 
 		s.configureJobIntegrations()
 		handler, ok := s.jobHandlers[jobType]
@@ -1036,6 +1369,11 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 			outcome = metricsStatusError
 			return fmt.Errorf("update job running: %w", err)
 		}
+		s.recordAudit(ctx, principal, job.TenantID, "job.running", "job", job.ID.String(), map[string]any{
+			"type":         job.Type,
+			"attempt":      currentAttempt,
+			"max_attempts": maxAttempts,
+		})
 
 		if err := handler(ctx, job); err != nil {
 			outcome = metricsStatusFailure
@@ -1058,6 +1396,18 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 			if storeErr := s.store.UpdateJobStatus(ctx, jobID, status, msg, fields); storeErr != nil {
 				s.logger.Error("update job failed", zap.Error(storeErr))
 			}
+			failureMetadata := map[string]any{
+				"type":         job.Type,
+				"attempt":      currentAttempt,
+				"max_attempts": maxAttempts,
+				"retries":      retries,
+				"error":        err.Error(),
+			}
+			if status == storage.JobStatusQueued {
+				s.recordAudit(ctx, principal, job.TenantID, "job.retry_scheduled", "job", job.ID.String(), failureMetadata)
+			} else {
+				s.recordAudit(ctx, principal, job.TenantID, "job.failed", "job", job.ID.String(), failureMetadata)
+			}
 			return err
 		}
 
@@ -1070,6 +1420,11 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 			outcome = metricsStatusError
 			return fmt.Errorf("update job success: %w", err)
 		}
+		s.recordAudit(ctx, principal, job.TenantID, "job.succeeded", "job", job.ID.String(), map[string]any{
+			"type":         job.Type,
+			"attempt":      currentAttempt,
+			"max_attempts": maxAttempts,
+		})
 
 		outcome = metricsStatusSuccess
 		return nil

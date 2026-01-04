@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ListTenantsParams, PaginatedResponse, Tenant } from '../lib/api';
 import { useApiClient } from './useApiClient';
+import { useApiErrorHandler } from './useApiErrorHandler';
 
 interface TenantState extends PaginatedResponse<Tenant> {
   loading: boolean;
   error: string | null;
 }
 
-export function useTenants(params: ListTenantsParams = {}): TenantState {
+interface UseTenantsResult extends TenantState {
+  reload: () => void;
+}
+
+export function useTenants(params: ListTenantsParams = {}): UseTenantsResult {
   const api = useApiClient();
+  const handleError = useApiErrorHandler('Failed to load tenants');
   const [state, setState] = useState<TenantState>({
     data: [],
     pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
     loading: true,
     error: null,
   });
+  const [reloadToken, setReloadToken] = useState(0);
 
   const normalizedParams = useMemo(
     () => ({
@@ -42,7 +49,7 @@ export function useTenants(params: ListTenantsParams = {}): TenantState {
             data: [],
             pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
             loading: false,
-            error: error.message,
+            error: handleError(error),
           });
         }
       });
@@ -50,7 +57,11 @@ export function useTenants(params: ListTenantsParams = {}): TenantState {
     return () => {
       cancelled = true;
     };
-  }, [api, normalizedParams]);
+  }, [api, normalizedParams, reloadToken, handleError]);
 
-  return state;
+  return {
+    ...state,
+    reload: () => setReloadToken((token) => token + 1),
+  };
 }
+

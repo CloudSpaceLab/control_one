@@ -141,6 +141,29 @@ func (f *fakeIdentityStore) GetUserByExternalID(_ context.Context, externalID st
 	return &storage.User{ID: f.userID, ExternalID: externalID}, nil
 }
 
+func TestMiddlewareRejectsOpaqueBearerWhenOIDCDisabled(t *testing.T) {
+	store := &fakeIdentityStore{}
+	cfg := config.AuthConfig{
+		OIDC: config.OIDCConfig{
+			Enabled: false,
+		},
+		RBAC: config.RBACConfig{DefaultRole: "viewer"},
+	}
+
+	mw := NewMiddleware(zap.NewNop(), false, cfg, store)
+
+	req := httptest.NewRequest("GET", "/api/v1/ping", nil)
+	req.Header.Set("Authorization", "Bearer some-opaque-token")
+
+	principal, err := mw.authenticate(req)
+	if err == nil {
+		t.Fatalf("expected opaque token to be rejected when OIDC disabled, got principal %+v", principal)
+	}
+	if principal != nil {
+		t.Fatalf("expected nil principal, got %+v", principal)
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -161,6 +161,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyFallbacks(cfg)
+	if err := Validate(cfg); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
 
 	return cfg, nil
 }
@@ -225,13 +228,48 @@ func applyFallbacks(cfg *Config) {
 	if cfg.Database.ConnMaxLifetime == 0 {
 		cfg.Database.ConnMaxLifetime = 15 * time.Minute
 	}
-	if cfg.Worker.Concurrency <= 0 {
-		cfg.Worker.Concurrency = 2
+}
+
+// Validate performs basic consistency checks on the loaded configuration.
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
 	}
-	if cfg.Worker.QueueSize <= 0 {
-		cfg.Worker.QueueSize = 128
+	if strings.TrimSpace(cfg.HTTP.Address) == "" {
+		return fmt.Errorf("http.address is required")
 	}
-	if strings.TrimSpace(cfg.Worker.Backend) == "" {
-		cfg.Worker.Backend = "memory"
+	if cfg.TLS.Enabled {
+		if strings.TrimSpace(cfg.TLS.CertFile) == "" || strings.TrimSpace(cfg.TLS.KeyFile) == "" {
+			return fmt.Errorf("tls.enabled requires tls.cert_file and tls.key_file")
+		}
+		if cfg.TLS.RequireClientTLS && strings.TrimSpace(cfg.TLS.ClientCAFile) == "" {
+			return fmt.Errorf("tls.require_client_tls requires tls.client_ca_file")
+		}
 	}
+	if strings.TrimSpace(cfg.Database.URL) == "" {
+		return fmt.Errorf("database.url is required")
+	}
+
+	if backend := strings.ToLower(strings.TrimSpace(cfg.Worker.Backend)); backend == "asynq" || cfg.Worker.Asynq.Enabled {
+		if strings.TrimSpace(cfg.Worker.Asynq.RedisAddress) == "" {
+			return fmt.Errorf("worker.asynq.redis_address is required when asynq backend is enabled")
+		}
+	}
+
+	if cfg.Auth.OIDC.Enabled {
+		if strings.TrimSpace(cfg.Auth.OIDC.IssuerURL) == "" {
+			return fmt.Errorf("auth.oidc.issuer_url is required when oidc is enabled")
+		}
+		if strings.TrimSpace(cfg.Auth.OIDC.ClientID) == "" {
+			return fmt.Errorf("auth.oidc.client_id is required when oidc is enabled")
+		}
+	}
+
+	if len(cfg.Registration.BootstrapTokens) > 0 || strings.TrimSpace(cfg.Registration.DefaultTenantID) != "" {
+		if len(cfg.Registration.BootstrapTokens) == 0 && strings.TrimSpace(cfg.Registration.DefaultTenantID) == "" {
+			return fmt.Errorf("registration requires at least one bootstrap token or a default tenant id")
+		}
+	}
+
+	return nil
 }

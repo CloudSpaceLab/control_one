@@ -1,6 +1,15 @@
 version: "3.9"
 
 services:
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+
   postgres:
     image: postgres:15
     restart: unless-stopped
@@ -22,6 +31,7 @@ services:
     environment:
       - CONTROL_ONE_CONFIG=controlplane/config/controlplane.dev.yaml
     depends_on:
+      - redis
       - postgres
     ports:
       - "8443:8443"
@@ -43,10 +53,16 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     ports:
       - "3000:3000"
+    volumes:
+      - ./infra/observability/grafana-provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/observability/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/observability/dashboards:/var/lib/grafana/dashboards/control-one:ro
     depends_on:
       - prometheus
 
 volumes:
   postgres-data:
+  redis-data:

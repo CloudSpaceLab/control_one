@@ -27,7 +27,7 @@ worker:
   backend: asynq
   asynq:
     enabled: true
-    redis_address: "127.0.0.1:6379"
+    redis_address: "redis:6379"
     redis_db: 0
     redis_password: ""
 

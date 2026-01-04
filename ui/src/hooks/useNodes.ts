@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ListNodesParams, PaginatedResponse, NodeSummary } from '../lib/api';
 import { useApiClient } from './useApiClient';
+import { useApiErrorHandler } from './useApiErrorHandler';
 
 interface NodeState extends PaginatedResponse<NodeSummary> {
   loading: boolean;
   error: string | null;
 }
 
-export function useNodes(params: ListNodesParams = {}): NodeState {
+interface UseNodesResult extends NodeState {
+  reload: () => void;
+}
+
+export function useNodes(params: ListNodesParams = {}): UseNodesResult {
   const api = useApiClient();
+  const handleError = useApiErrorHandler('Failed to load nodes');
   const [state, setState] = useState<NodeState>({
     data: [],
     pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
     loading: true,
     error: null,
   });
+  const [reloadToken, setReloadToken] = useState(0);
 
   const normalizedParams = useMemo(
     () => ({
@@ -43,7 +50,7 @@ export function useNodes(params: ListNodesParams = {}): NodeState {
             data: [],
             pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
             loading: false,
-            error: error.message,
+            error: handleError(error),
           });
         }
       });
@@ -51,7 +58,10 @@ export function useNodes(params: ListNodesParams = {}): NodeState {
     return () => {
       cancelled = true;
     };
-  }, [api, normalizedParams]);
+  }, [api, normalizedParams, reloadToken, handleError]);
 
-  return state;
+  return {
+    ...state,
+    reload: () => setReloadToken((token) => token + 1),
+  };
 }

@@ -56,6 +56,14 @@ type createTemplateVersionRequest struct {
 	Metadata       map[string]any  `json:"metadata"`
 }
 
+type updateTemplateRequest struct {
+	Name        *string            `json:"name"`
+	Provider    *string            `json:"provider"`
+	Description *string            `json:"description"`
+	Labels      *map[string]string `json:"labels"`
+	Archived    *bool              `json:"archived"`
+}
+
 func (s *Server) handleTemplatesCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -121,8 +129,13 @@ func (s *Server) handleTemplateResource(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		s.handleGetTemplate(w, r, templateID)
+	case http.MethodPatch:
+		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+			return
+		}
+		s.handleUpdateTemplate(w, r, templateID)
 	default:
-		w.Header().Set("Allow", http.MethodGet)
+		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
@@ -301,6 +314,75 @@ func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request, templ
 	}
 
 	resp := newTemplateResponse(*template, promotedResp)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req updateTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	params := storage.UpdateProvisioningTemplateParams{}
+	var hasUpdate bool
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		req.Name = &name
+		params.Name = req.Name
+		hasUpdate = true
+	}
+	if req.Provider != nil {
+		provider := strings.TrimSpace(*req.Provider)
+		req.Provider = &provider
+		params.Provider = req.Provider
+		hasUpdate = true
+	}
+	if req.Description != nil {
+		desc := strings.TrimSpace(*req.Description)
+		req.Description = &desc
+		params.Description = req.Description
+		hasUpdate = true
+	}
+	if req.Labels != nil {
+		sanitized := sanitizeLabels(*req.Labels)
+		params.Labels = &sanitized
+		hasUpdate = true
+	}
+	if req.Archived != nil {
+		params.Archived = req.Archived
+		hasUpdate = true
+	}
+
+	if !hasUpdate {
+		http.Error(w, "no fields to update", http.StatusBadRequest)
+		return
+	}
+
+	updated, err := s.store.UpdateProvisioningTemplate(r.Context(), templateID, params)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("update template: %v", err), http.StatusBadRequest)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var promotedResp *templateVersionResponse
+	if updated.PromotedVersionID != nil {
+		if version, err := s.store.GetPromotedProvisioningTemplateVersion(r.Context(), updated.ID); err == nil && version != nil {
+			promotedResp = newTemplateVersionResponse(version)
+		}
+	}
+
+	resp := newTemplateResponse(*updated, promotedResp)
 	writeJSON(w, http.StatusOK, resp)
 }
 

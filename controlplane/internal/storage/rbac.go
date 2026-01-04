@@ -20,6 +20,14 @@ type User struct {
 	CreatedAt   time.Time
 }
 
+// Role captures RBAC role metadata.
+type Role struct {
+	ID          uuid.UUID
+	Name        string
+	Description sql.NullString
+	CreatedAt   time.Time
+}
+
 // GetUserByExternalID returns a user if it exists.
 func (s *Store) GetUserByExternalID(ctx context.Context, externalID string) (*User, error) {
 	if s.db == nil {
@@ -123,6 +131,84 @@ func (s *Store) EnsureUser(ctx context.Context, externalID, email, displayName s
 	}
 
 	return &user, nil
+}
+
+// GetUser returns a user by ID.
+func (s *Store) GetUser(ctx context.Context, userID uuid.UUID) (*User, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if userID == uuid.Nil {
+		return nil, errors.New("user id required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id, external_id, email, display_name, created_at
+        FROM users
+        WHERE id = $1
+    `, userID)
+
+	var user User
+	if err := row.Scan(&user.ID, &user.ExternalID, &user.Email, &user.DisplayName, &user.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("select user: %w", err)
+	}
+
+	return &user, nil
+}
+
+// ListUsers returns paginated users ordered by creation date.
+func (s *Store) ListUsers(ctx context.Context, limit, offset int) ([]User, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	baseQuery := `
+        SELECT id, external_id, email, display_name, created_at
+        FROM users
+        ORDER BY created_at DESC
+    `
+	args := []any{}
+	query := baseQuery
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit)
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", len(args)+1)
+		args = append(args, offset)
+	}
+
+	countRow := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`)
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var user User
+		if err := rows.Scan(&user.ID, &user.ExternalID, &user.Email, &user.DisplayName, &user.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan user: %w", err)
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate users: %w", err)
+	}
+
+	return users, total, nil
 }
 
 // AssignRolesToUser ensures the provided roles exist and associates them with the user.
@@ -247,6 +333,86 @@ func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, 
 			return nil, fmt.Errorf("scan role: %w", err)
 		}
 		roles = append(roles, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate roles: %w", err)
+	}
+
+	return roles, nil
+}
+
+// SetUserRoles replaces tenant-global role assignments for the user.
+func (s *Store) SetUserRoles(ctx context.Context, userID uuid.UUID, roles []string) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if userID == uuid.Nil {
+		return errors.New("user id required")
+	}
+
+	roles = sanitizeRoles(roles)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, `
+        DELETE FROM user_roles
+        WHERE user_id = $1 AND tenant_id IS NULL
+    `, userID); err != nil {
+		return fmt.Errorf("clear user roles: %w", err)
+	}
+
+	for _, roleName := range roles {
+		roleID, roleErr := s.ensureRole(ctx, tx, roleName)
+		if roleErr != nil {
+			return roleErr
+		}
+		if _, roleErr = tx.ExecContext(ctx, `
+            INSERT INTO user_roles (user_id, role_id, tenant_id, assigned_by, expires_at)
+            VALUES ($1, $2, NULL, NULL, NULL)
+        `, userID, roleID); roleErr != nil {
+			return fmt.Errorf("assign role %s: %w", roleName, roleErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user role update: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// ListRoles returns all defined roles.
+func (s *Store) ListRoles(ctx context.Context) ([]Role, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, name, description, created_at
+        FROM roles
+        ORDER BY name ASC
+    `)
+	if err != nil {
+		return nil, fmt.Errorf("query roles: %w", err)
+	}
+	defer rows.Close()
+
+	var roles []Role
+	for rows.Next() {
+		var role Role
+		if err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan role: %w", err)
+		}
+		roles = append(roles, role)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate roles: %w", err)

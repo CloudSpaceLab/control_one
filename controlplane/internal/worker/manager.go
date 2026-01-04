@@ -25,10 +25,21 @@ type Task struct {
 	RetryBackoff time.Duration
 }
 
+// Status describes the worker backend state for health checks and diagnostics.
+type Status struct {
+	Backend    string `json:"backend"`
+	Started    bool   `json:"started"`
+	QueueDepth int    `json:"queue_depth"`
+	Active     int    `json:"active"`
+	LastError  string `json:"last_error,omitempty"`
+}
+
 func (m *Manager) startMemory(ctx context.Context) {
 	m.queue = make(chan Task, m.cfg.QueueSize)
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.useAsynq = false
+	m.recordQueueDepth(metricsBackendMemory, 0)
+	m.setLastError(nil)
 
 	for i := 0; i < m.cfg.Concurrency; i++ {
 		m.wg.Add(1)
@@ -70,8 +81,10 @@ func (m *Manager) startAsynq(ctx context.Context) error {
 		Queues:         map[string]int{"default": 1},
 		RetryDelayFunc: delayFunc,
 	})
+	inspector := asynq.NewInspector(opt)
 	m.asynqClient = client
 	m.asynqServer = server
+	m.asynqInspector = inspector
 	m.useAsynq = true
 	m.queue = nil
 	m.ctx, m.cancel = context.WithCancel(ctx)
@@ -82,12 +95,16 @@ func (m *Manager) startAsynq(ctx context.Context) error {
 		m.asynqClient.Close()
 		m.asynqClient = nil
 		m.asynqServer = nil
+		m.asynqInspector.Close()
+		m.asynqInspector = nil
 		metricsRecordBackendState(metricsBackendAsynq, false)
 		return fmt.Errorf("start asynq server: %w", err)
 	}
 
 	metricsRecordBackendState(metricsBackendMemory, false)
 	metricsRecordBackendState(metricsBackendAsynq, true)
+	m.recordQueueDepth(metricsBackendAsynq, 0)
+	m.setLastError(nil)
 	m.started = true
 	return nil
 }
@@ -116,6 +133,11 @@ func (m *Manager) stopAsynq(ctx context.Context) error {
 			m.log.Warn("asynq client close", zap.Error(err))
 		}
 	}
+	if m.asynqInspector != nil {
+		if err := m.asynqInspector.Close(); err != nil {
+			m.log.Warn("asynq inspector close", zap.Error(err))
+		}
+	}
 
 	m.tasks.Range(func(key, _ any) bool {
 		m.tasks.Delete(key)
@@ -124,7 +146,10 @@ func (m *Manager) stopAsynq(ctx context.Context) error {
 	m.useAsynq = false
 	m.asynqClient = nil
 	m.asynqServer = nil
+	m.asynqInspector = nil
 	metricsRecordBackendState(metricsBackendAsynq, false)
+	m.recordQueueDepth(metricsBackendAsynq, 0)
+	m.setLastError(nil)
 	m.log.Info("stopAsynq: cleanup complete")
 	return nil
 }
@@ -158,6 +183,8 @@ func (m *Manager) handleAsynqTask(ctx context.Context, t *asynq.Task) error {
 	finish := metricsTrackWorkerTask(metricsBackendAsynq)
 	outcome := metricsStatusSuccess
 	defer func() { finish(outcome) }()
+	m.adjustActive(1)
+	defer m.adjustActive(-1)
 
 	var payload asynqTaskPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
@@ -203,13 +230,20 @@ type Manager struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 
-	useAsynq    bool
-	asynqClient *asynq.Client
-	asynqServer *asynq.Server
-	tasks       sync.Map
+	useAsynq       bool
+	asynqClient    *asynq.Client
+	asynqServer    *asynq.Server
+	asynqInspector *asynq.Inspector
+	tasks          sync.Map
+
+	statusMu         sync.RWMutex
+	statusQueueDepth int
+	statusActive     int
+	statusError      string
 }
 
 const asynqTaskType = "control_one:execute"
+const asynqQueueDefault = "default"
 
 type asynqTaskPayload struct {
 	Name string `json:"name"`
@@ -234,6 +268,33 @@ func New(log *zap.Logger, cfg config.WorkerConfig) *Manager {
 		log: log.Named("worker"),
 		cfg: cfg,
 	}
+}
+
+// Status returns a snapshot of the worker manager state.
+func (m *Manager) Status() Status {
+	m.mu.RLock()
+	started := m.started
+	useAsynq := m.useAsynq
+	queue := m.queue
+	m.mu.RUnlock()
+
+	status := Status{
+		Backend: "memory",
+		Started: started,
+	}
+	if useAsynq {
+		status.Backend = "asynq"
+		m.refreshAsynqQueueDepth()
+	} else if started && queue != nil {
+		m.recordQueueDepth(metricsBackendMemory, len(queue))
+	}
+
+	m.statusMu.RLock()
+	status.QueueDepth = m.statusQueueDepth
+	status.Active = m.statusActive
+	status.LastError = m.statusError
+	m.statusMu.RUnlock()
+	return status
 }
 
 // Start launches worker goroutines.
@@ -341,7 +402,7 @@ func (m *Manager) Enqueue(task Task) error {
 		return errStopped
 	case queue <- task:
 		metricsRecordEnqueueResult(backendLabel, metricsStatusSuccess)
-		metricsRecordQueueDepth(backendLabel, len(queue))
+		m.recordQueueDepth(backendLabel, len(queue))
 		return nil
 	default:
 		metricsRecordEnqueueResult(backendLabel, metricsStatusFailure)
@@ -360,6 +421,7 @@ func (m *Manager) runWorker(id int) {
 			if !ok {
 				return
 			}
+			m.recordQueueDepth(metricsBackendMemory, len(m.queue))
 			m.executeTask(task, id)
 		}
 	}
@@ -368,7 +430,11 @@ func (m *Manager) runWorker(id int) {
 func (m *Manager) executeTask(task Task, workerID int) {
 	finish := metricsTrackWorkerTask(metricsBackendMemory)
 	outcome := metricsStatusSuccess
-	defer func() { finish(outcome) }()
+	m.adjustActive(1)
+	defer func() {
+		m.adjustActive(-1)
+		finish(outcome)
+	}()
 
 	maxAttempts := m.effectiveMaxAttempts(task)
 	backoff := m.effectiveRetryBackoff(task)
@@ -441,4 +507,46 @@ func (m *Manager) effectiveRetryBackoff(task Task) time.Duration {
 		return m.cfg.RetryBackoff
 	}
 	return defaultRetryBackoff
+}
+
+func (m *Manager) recordQueueDepth(backend string, depth int) {
+	metricsRecordQueueDepth(backend, depth)
+	m.statusMu.Lock()
+	m.statusQueueDepth = depth
+	m.statusMu.Unlock()
+}
+
+func (m *Manager) setLastError(err error) {
+	m.statusMu.Lock()
+	if err != nil {
+		m.statusError = err.Error()
+	} else {
+		m.statusError = ""
+	}
+	m.statusMu.Unlock()
+}
+
+func (m *Manager) adjustActive(delta int) {
+	m.statusMu.Lock()
+	m.statusActive += delta
+	if m.statusActive < 0 {
+		m.statusActive = 0
+	}
+	m.statusMu.Unlock()
+}
+
+func (m *Manager) refreshAsynqQueueDepth() {
+	inspector := m.asynqInspector
+	if inspector == nil {
+		m.recordQueueDepth(metricsBackendAsynq, 0)
+		return
+	}
+	stats, err := inspector.GetQueueInfo(asynqQueueDefault)
+	if err != nil {
+		m.setLastError(err)
+		return
+	}
+	m.setLastError(nil)
+	depth := stats.Pending + stats.Active
+	m.recordQueueDepth(metricsBackendAsynq, depth)
 }

@@ -81,18 +81,19 @@ Control One delivers a unified control plane, background worker service, and nod
 - Node.js 20+
 - Docker & Docker Compose
 
-### Quick Start (API + Worker + Postgres + Observability)
+### Quick Start (API + Worker + Redis + Postgres + Observability)
 1. Copy the sample config and adjust as needed:
    ```bash
    cp controlplane/config/controlplane.example.yaml controlplane/config/controlplane.dev.yaml
    ```
-2. Launch the local stack (Postgres, control plane API, Prometheus, Grafana):
+2. Launch the local stack (Redis, Postgres, control plane API, Prometheus, Grafana):
    ```bash
    make docker-up
    ```
    Services expose:
    - Control Plane API: https://localhost:8443 (self-signed during dev)
    - Postgres: localhost:5432 (`controlone`/`controlone`)
+   - Redis: localhost:6379
    - Prometheus: http://localhost:9090
    - Grafana: http://localhost:3000 (admin/admin)
 3. Apply database migrations and start the API/worker locally (if not using Docker):

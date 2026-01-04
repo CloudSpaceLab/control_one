@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
@@ -26,6 +26,13 @@ const (
 	JobTypeProvisionApply = "provision.apply"
 	// JobTypeComplianceScan represents a compliance scan across nodes.
 	JobTypeComplianceScan = "compliance.scan"
+)
+
+var (
+	errPlanIDInvalid            = errors.New("plan_id must be a valid UUID")
+	errPlanTemplateNotFound     = errors.New("provisioning template not found")
+	errPlanTemplateUnpromoted   = errors.New("provisioning template has no promoted version")
+	errProvisioningStoreMissing = errors.New("provisioning templates unavailable")
 )
 
 type jobHandler func(ctx context.Context, job *storage.Job) error
@@ -100,15 +107,6 @@ func (s *Server) enrichProvisioningMetadata(ctx context.Context, planID string, 
 
 func defaultJobHandlers() map[string]jobHandler {
 	return map[string]jobHandler{}
-}
-
-func jobRequiresTenant(jobType string) bool {
-	switch jobType {
-	case JobTypeProvisionApply, JobTypeComplianceScan:
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Server) configureJobIntegrations() {
@@ -299,16 +297,10 @@ func decodeCompliancePayload(data []byte) (*compliancePayload, error) {
 }
 
 func validateJobPayload(jobType string, payload json.RawMessage) (any, error) {
-	switch jobType {
-	case JobTypeProvisionApply:
-		val, err := decodeProvisionPayload(payload)
-		return val, err
-	case JobTypeComplianceScan:
-		val, err := decodeCompliancePayload(payload)
-		return val, err
-	default:
-		return nil, nil
+	if def, ok := jobDefinitionForType(jobType); ok && def.Validate != nil {
+		return def.Validate(payload)
 	}
+	return nil, nil
 }
 
 type createJobRequest struct {
@@ -406,28 +398,52 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+func (s *Server) handleJobSubroutes(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "job store unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	if _, ok := auth.PrincipalFromContext(r.Context()); !ok {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/jobs/")
+	trimmed = strings.Trim(trimmed, "/")
+	if trimmed == "" {
+		http.NotFound(w, r)
 		return
 	}
 
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/jobs/")
-	jobID, err := uuid.Parse(idStr)
+	segments := strings.Split(trimmed, "/")
+	jobID, err := uuid.Parse(segments[0])
 	if err != nil {
 		http.Error(w, "invalid job id", http.StatusBadRequest)
 		return
 	}
 
-	job, err := s.store.GetJob(r.Context(), jobID)
+	if len(segments) == 1 {
+		s.handleJobResource(w, r, jobID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "cancel" {
+		s.handleCancelJob(w, r, jobID)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
+func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
+
+	job, events, err := s.loadJobWithEvents(r.Context(), jobID)
 	if err != nil {
-		s.logger.Error("get job", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -436,16 +452,86 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := s.store.ListJobEvents(r.Context(), jobID)
+	writeJSON(w, http.StatusOK, jobResponseFromModel(job, events))
+}
+
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+	job, err := s.store.GetJob(ctx, jobID)
 	if err != nil {
-		s.logger.Error("list job events", zap.Error(err))
+		s.logger.Error("get job for cancel", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if job == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if !jobCancelable(job.Status) {
+		http.Error(w, "job cannot be cancelled in its current state", http.StatusConflict)
+		return
+	}
+
+	fields := map[string]any{
+		"finished_at": time.Now(),
+	}
+	if job.StartedAt == nil {
+		fields["started_at"] = time.Now()
+	}
+
+	if err := s.store.UpdateJobStatus(ctx, job.ID, storage.JobStatusCancelled, "job cancelled", fields); err != nil {
+		s.logger.Error("cancel job", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(jobResponseFromModel(job, events)); err != nil {
-		s.logger.Warn("encode job response", zap.Error(err))
+	s.recordAudit(ctx, principal, job.TenantID, "job.cancelled", "job", job.ID.String(), map[string]any{
+		"type": job.Type,
+	})
+
+	updated, events, err := s.loadJobWithEvents(ctx, job.ID)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, jobResponseFromModel(updated, events))
+}
+
+func (s *Server) loadJobWithEvents(ctx context.Context, jobID uuid.UUID) (*storage.Job, []storage.JobEvent, error) {
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		s.logger.Error("load job", zap.Error(err))
+		return nil, nil, err
+	}
+	if job == nil {
+		return nil, nil, nil
+	}
+	events, err := s.store.ListJobEvents(ctx, jobID)
+	if err != nil {
+		s.logger.Error("load job events", zap.Error(err))
+		return nil, nil, err
+	}
+	return job, events, nil
+}
+
+func jobCancelable(status storage.JobStatus) bool {
+	switch status {
+	case storage.JobStatusQueued, storage.JobStatusRunning:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -455,7 +541,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -473,6 +560,11 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.configureJobIntegrations()
+	definition, ok := jobDefinitionForType(req.Type)
+	if !ok {
+		http.Error(w, "unsupported job type", http.StatusBadRequest)
+		return
+	}
 	if _, ok := s.jobHandlers[req.Type]; !ok {
 		http.Error(w, "unsupported job type", http.StatusBadRequest)
 		return
@@ -500,7 +592,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if jobRequiresTenant(req.Type) {
+	if definition.RequiresTenant {
 		if req.TenantID == nil {
 			http.Error(w, "tenant_id is required for this job type", http.StatusBadRequest)
 			return
@@ -509,17 +601,28 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "tenant_id is invalid", http.StatusBadRequest)
 			return
 		}
-		switch v := payloadDetails.(type) {
-		case *provisionPayload:
-			if v != nil && v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
-				http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
-				return
+	}
+
+	if v, ok := payloadDetails.(*provisionPayload); ok && v != nil {
+		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
+			http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+			return
+		}
+		if err := s.ensureProvisioningPlan(r.Context(), v.PlanID); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, errPlanIDInvalid) ||
+				errors.Is(err, errPlanTemplateNotFound) ||
+				errors.Is(err, errPlanTemplateUnpromoted) {
+				status = http.StatusBadRequest
 			}
-		case *compliancePayload:
-			if v != nil && v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
-				http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
-				return
-			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+	}
+	if v, ok := payloadDetails.(*compliancePayload); ok && v != nil {
+		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
+			http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+			return
 		}
 	}
 
@@ -538,12 +641,17 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Message: fmt.Sprintf("job queued: %s", job.Type),
 	}
 
-	created, err := s.store.CreateJob(r.Context(), job, initialEvent)
+	ctx := r.Context()
+	created, err := s.store.CreateJob(ctx, job, initialEvent)
 	if err != nil {
 		s.logger.Error("create job", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	s.recordAudit(ctx, principal, created.TenantID, "job.created", "job", created.ID.String(), map[string]any{
+		"type":        created.Type,
+		"max_retries": created.MaxRetries,
+	})
 
 	if s.worker != nil {
 		task := worker.Task{
@@ -555,6 +663,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		if err := s.worker.Enqueue(task); err != nil {
 			s.logger.Error("enqueue job", zap.Error(err))
 			_ = s.store.UpdateJobStatus(r.Context(), created.ID, storage.JobStatusFailed, fmt.Sprintf("enqueue failed: %v", err), map[string]any{"finished_at": time.Now()})
+			s.recordAudit(ctx, principal, created.TenantID, "job.failed_enqueue", "job", created.ID.String(), map[string]any{
+				"type":    created.Type,
+				"message": fmt.Sprintf("enqueue failed: %v", err),
+			})
 			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 			return
 		}
@@ -569,6 +681,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}(created.ID, created.Type, created.MaxRetries)
 	}
+	s.recordAudit(ctx, principal, created.TenantID, "job.enqueued", "job", created.ID.String(), map[string]any{
+		"type": created.Type,
+	})
 
 	events := []storage.JobEvent{*initialEvent}
 	w.Header().Set("Content-Type", "application/json")
@@ -576,6 +691,35 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(jobResponseFromModel(created, events)); err != nil {
 		s.logger.Warn("encode job response", zap.Error(err))
 	}
+}
+
+func (s *Server) ensureProvisioningPlan(ctx context.Context, planID string) error {
+	if s.store == nil {
+		return errProvisioningStoreMissing
+	}
+	trimmed := strings.TrimSpace(planID)
+	if trimmed == "" {
+		return errPlanIDInvalid
+	}
+	tplID, err := uuid.Parse(trimmed)
+	if err != nil {
+		return errPlanIDInvalid
+	}
+	template, err := s.store.GetProvisioningTemplate(ctx, tplID)
+	if err != nil {
+		return fmt.Errorf("lookup template: %w", err)
+	}
+	if template == nil {
+		return errPlanTemplateNotFound
+	}
+	version, err := s.store.GetPromotedProvisioningTemplateVersion(ctx, tplID)
+	if err != nil {
+		return fmt.Errorf("lookup promoted template version: %w", err)
+	}
+	if version == nil {
+		return errPlanTemplateUnpromoted
+	}
+	return nil
 }
 
 type jobResponse struct {

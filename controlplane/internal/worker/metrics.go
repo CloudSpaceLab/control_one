@@ -61,7 +61,7 @@ func initWorkerMetrics() {
 			Namespace: "controlone",
 			Subsystem: "worker",
 			Name:      "queue_depth",
-			Help:      "Current queue depth for the in-memory worker backend.",
+			Help:      "Current queue depth per worker backend.",
 		}, []string{"backend"})
 
 		workerBackendUp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -106,7 +106,7 @@ func metricsRecordEnqueueResult(backend, outcome string) {
 }
 
 func metricsRecordQueueDepth(backend string, depth int) {
-	if backend != metricsBackendMemory {
+	if backend == "" {
 		return
 	}
 	initWorkerMetrics()

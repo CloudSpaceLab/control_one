@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Job, ListJobsParams, PaginatedResponse } from '../lib/api';
 import { useApiClient } from './useApiClient';
+import { useApiErrorHandler } from './useApiErrorHandler';
 
 export interface UseJobsOptions extends Omit<ListJobsParams, 'tenantId'> {
   tenantId?: string;
@@ -12,14 +13,20 @@ interface JobsState extends PaginatedResponse<Job> {
   error: string | null;
 }
 
-export function useJobs(options: UseJobsOptions = {}): JobsState {
+interface UseJobsResult extends JobsState {
+  refresh: () => void;
+}
+
+export function useJobs(options: UseJobsOptions = {}): UseJobsResult {
   const api = useApiClient();
+  const handleError = useApiErrorHandler('Failed to load jobs');
   const [state, setState] = useState<JobsState>({
     data: [],
     pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
     loading: true,
     error: null,
   });
+  const [reloadToken, setReloadToken] = useState(0);
 
   const { tenantId, status, type, limit, offset, pollIntervalMs } = options;
 
@@ -60,7 +67,7 @@ export function useJobs(options: UseJobsOptions = {}): JobsState {
             data: [],
             pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
             loading: false,
-            error: (error as Error).message,
+            error: handleError(error, 'Unable to fetch jobs'),
           });
         }
       }
@@ -78,7 +85,10 @@ export function useJobs(options: UseJobsOptions = {}): JobsState {
         clearInterval(timer);
       }
     };
-  }, [api, params, pollIntervalMs]);
+  }, [api, params, pollIntervalMs, reloadToken, handleError]);
 
-  return state;
+  return {
+    ...state,
+    refresh: () => setReloadToken((token) => token + 1),
+  };
 }

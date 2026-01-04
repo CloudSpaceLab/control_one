@@ -38,9 +38,7 @@ func TestPingEndpointAuthentication(t *testing.T) {
 			MetricsPath:   "/metrics",
 		},
 		Worker: config.WorkerConfig{},
-		Auth: config.AuthConfig{
-			RBAC: config.RBACConfig{DefaultRole: "admin"},
-		},
+		Auth:   authWithTokens("admin", "test-token"),
 	}
 
 	srv := New(logger, cfg, nil, nil)
@@ -79,14 +77,146 @@ func TestPingEndpointAuthentication(t *testing.T) {
 	})
 }
 
+func TestUserAndRoleEndpoints(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "admin-token"),
+	}
+
+	targetUserID := uuid.New()
+	targetUser := storage.User{
+		ID:          targetUserID,
+		ExternalID:  "user-123",
+		DisplayName: storageNullString("Sample User"),
+		Email:       storageNullString("sample@example.com"),
+		CreatedAt:   time.Unix(1700000500, 0),
+	}
+
+	store := &fakeStore{
+		users: map[string]*storage.User{
+			targetUser.ExternalID: &targetUser,
+		},
+		usersByID: map[uuid.UUID]*storage.User{
+			targetUserID: &targetUser,
+		},
+		userList: []storage.User{targetUser},
+		userRoles: map[uuid.UUID][]string{
+			targetUserID: {"viewer"},
+		},
+		overrideRoles: map[uuid.UUID][]string{},
+		rolesCatalog: []storage.Role{
+			{ID: uuid.New(), Name: "viewer", CreatedAt: time.Unix(1700000000, 0)},
+			{ID: uuid.New(), Name: "operator", CreatedAt: time.Unix(1700000000, 0)},
+			{ID: uuid.New(), Name: "admin", CreatedAt: time.Unix(1700000000, 0)},
+		},
+	}
+
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	call := func(method, path string, body any) *httptest.ResponseRecorder {
+		var reader *bytes.Reader
+		if body != nil {
+			payload, _ := json.Marshal(body)
+			reader = bytes.NewReader(payload)
+		} else {
+			reader = bytes.NewReader(nil)
+		}
+		req := httptest.NewRequest(method, path, reader)
+		req.Header.Set("Authorization", "Bearer admin-token")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Warm-up request to persist admin principal and then elevate via override.
+	rec := call(http.MethodGet, "/api/v1/tenants", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected tenant warm-up 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.overrideRoles == nil {
+		store.overrideRoles = map[uuid.UUID][]string{}
+	}
+	store.overrideRoles[store.lastUserID] = []string{"admin"}
+
+	t.Run("list users", func(t *testing.T) {
+		rec := call(http.MethodGet, "/api/v1/users", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp paginatedResponse[userResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(resp.Data) != 1 {
+			t.Fatalf("expected 1 user, got %d", len(resp.Data))
+		}
+		if resp.Data[0].ID != targetUserID.String() {
+			t.Fatalf("expected user id %s got %s", targetUserID, resp.Data[0].ID)
+		}
+	})
+
+	t.Run("get user details", func(t *testing.T) {
+		rec := call(http.MethodGet, "/api/v1/users/"+targetUserID.String(), nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp userResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode user response: %v", err)
+		}
+		if len(resp.Roles) != 1 || resp.Roles[0] != "viewer" {
+			t.Fatalf("expected viewer role, got %+v", resp.Roles)
+		}
+		if resp.Email == nil || *resp.Email != "sample@example.com" {
+			t.Fatalf("expected stored email propagated, got %+v", resp.Email)
+		}
+	})
+
+	t.Run("update user roles", func(t *testing.T) {
+		payload := updateUserRolesRequest{Roles: []string{"operator", "admin"}}
+		rec := call(http.MethodPatch, "/api/v1/users/"+targetUserID.String(), payload)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp userResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode patch response: %v", err)
+		}
+		if len(resp.Roles) != 2 {
+			t.Fatalf("expected updated roles, got %+v", resp.Roles)
+		}
+		storedRoles, err := store.ListUserRoles(context.Background(), targetUserID)
+		if err != nil {
+			t.Fatalf("list roles after update: %v", err)
+		}
+		if len(storedRoles) != 2 || storedRoles[0] != "operator" {
+			t.Fatalf("expected stored roles updated, got %+v", storedRoles)
+		}
+	})
+
+	t.Run("list roles catalog", func(t *testing.T) {
+		rec := call(http.MethodGet, "/api/v1/roles", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp []roleResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode list roles response: %v", err)
+		}
+		if len(resp) != len(store.rolesCatalog) {
+			t.Fatalf("expected %d roles, got %d", len(store.rolesCatalog), len(resp))
+		}
+	})
+}
+
 func TestTemplateEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{Address: ":0"},
 		TLS:  config.TLSConfig{RequireClientTLS: false},
-		Auth: config.AuthConfig{
-			RBAC: config.RBACConfig{DefaultRole: "viewer"},
-		},
+		Auth: authWithTokens("viewer", "subject-templates", "test-token"),
 	}
 
 	store := &fakeStore{}
@@ -182,6 +312,35 @@ func TestTemplateEndpoints(t *testing.T) {
 	if detail.PromotedVersionID == nil || detail.PromotedVersion == nil {
 		t.Fatalf("expected promoted version metadata in detail response")
 	}
+
+	updatePayload := map[string]any{
+		"name":        "web-template-renamed",
+		"provider":    "aws",
+		"description": "Updated description",
+		"labels": map[string]string{
+			"env":  "prod",
+			"team": "platform",
+		},
+		"archived": true,
+	}
+	body, _ = json.Marshal(updatePayload)
+	rec = call(http.MethodPatch, "/api/v1/templates/"+created.ID, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected patch template 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var patched templateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
+		t.Fatalf("decode patch response: %v", err)
+	}
+	if patched.Name != "web-template-renamed" {
+		t.Fatalf("expected updated name, got %s", patched.Name)
+	}
+	if patched.ArchivedAt == nil {
+		t.Fatalf("expected archived timestamp")
+	}
+	if patched.Labels["team"] != "platform" {
+		t.Fatalf("expected labels merged, got %+v", patched.Labels)
+	}
 }
 
 func TestEnrichProvisioningMetadata(t *testing.T) {
@@ -248,110 +407,92 @@ func TestEnrichProvisioningMetadata(t *testing.T) {
 	})
 }
 
-func TestProfileEndpoint(t *testing.T) {
+func TestJobDetailAndCancelEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{Address: ":0"},
 		TLS:  config.TLSConfig{RequireClientTLS: false},
-		Auth: config.AuthConfig{
-			RBAC: config.RBACConfig{DefaultRole: "viewer"},
+		Auth: authWithTokens("viewer", "job-admin"),
+	}
+
+	jobID := uuid.New()
+	store := &fakeStore{
+		jobs: map[uuid.UUID]*storage.Job{
+			jobID: {
+				ID:        jobID,
+				Type:      JobTypeProvisionApply,
+				Status:    storage.JobStatusRunning,
+				CreatedAt: time.Unix(1700000700, 0),
+				UpdatedAt: time.Unix(1700000700, 0),
+			},
 		},
-	}
-
-	bearerReq := func() *http.Request {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
-		req.Header.Set("Authorization", "Bearer test-token")
-		return req
-	}
-
-	t.Run("returns inline principal without backing store", func(t *testing.T) {
-		srv := New(logger, cfg, nil, nil)
-		rec := httptest.NewRecorder()
-
-		srv.Handler().ServeHTTP(rec, bearerReq())
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
-		}
-
-		var resp profileResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("expected valid json: %v", err)
-		}
-		if resp.Subject != "test-token" {
-			t.Fatalf("expected subject propagated, got %s", resp.Subject)
-		}
-		if resp.User != nil {
-			t.Fatalf("expected user payload omitted when store unavailable, got %+v", resp.User)
-		}
-		if len(resp.StoredRoles) != 0 {
-			t.Fatalf("expected stored roles omitted, got %v", resp.StoredRoles)
-		}
-	})
-
-	t.Run("returns stored roles and persisted metadata", func(t *testing.T) {
-		userID := uuid.New()
-		store := &fakeStore{
-			users: map[string]*storage.User{
-				"test-token": {
-					ID:          userID,
-					ExternalID:  "test-token",
-					Email:       storageNullString("stored@example.com"),
-					DisplayName: storageNullString("Stored User"),
-					CreatedAt:   time.Unix(1700000600, 0),
+		events: map[uuid.UUID][]storage.JobEvent{
+			jobID: {
+				{
+					ID:        uuid.New(),
+					JobID:     jobID,
+					Status:    storage.JobStatusQueued,
+					Message:   "queued",
+					CreatedAt: time.Unix(1700000700, 0),
 				},
 			},
-			userRoles: map[uuid.UUID][]string{
-				userID: {"viewer", "operator"},
-			},
-			overrideRoles: map[uuid.UUID][]string{
-				userID: {"viewer", "operator"},
-			},
-		}
-		srv := New(logger, cfg, store, nil)
+		},
+		userRoles: map[uuid.UUID][]string{},
+	}
+	srv := New(logger, cfg, store, &stubQueue{})
+	srv.configureJobIntegrations()
+
+	call := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer job-admin")
 		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
 
-		srv.Handler().ServeHTTP(rec, bearerReq())
+	// Persist user and upgrade to admin/operator.
+	rec := call(http.MethodGet, "/api/v1/tenants")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected warm-up ok got %d", rec.Code)
+	}
+	store.overrideRoles = map[uuid.UUID][]string{
+		store.lastUserID: {"viewer", "operator"},
+	}
 
+	t.Run("returns job detail with events", func(t *testing.T) {
+		rec := call(http.MethodGet, "/api/v1/jobs/"+jobID.String())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 		}
-
-		var resp profileResponse
+		var resp jobResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("expected valid json: %v", err)
+			t.Fatalf("decode job response: %v", err)
 		}
-		if resp.User == nil || resp.User.Email == nil || *resp.User.Email != "stored@example.com" {
-			t.Fatalf("expected stored email propagated, got %+v", resp.User)
+		if resp.ID != jobID.String() {
+			t.Fatalf("expected job id %s got %s", jobID, resp.ID)
 		}
-		if resp.User.DisplayName == nil || *resp.User.DisplayName != "Stored User" {
-			t.Fatalf("expected stored display name propagated, got %+v", resp.User)
-		}
-		if len(resp.StoredRoles) != 2 {
-			t.Fatalf("expected stored roles returned, got %v", resp.StoredRoles)
+		if len(resp.Events) != 1 {
+			t.Fatalf("expected 1 event got %d", len(resp.Events))
 		}
 	})
 
-	t.Run("omits stored metadata when user not persisted", func(t *testing.T) {
-		store := &fakeStore{skipUserPersistence: true}
-		srv := New(logger, cfg, store, nil)
-		rec := httptest.NewRecorder()
-
-		srv.Handler().ServeHTTP(rec, bearerReq())
-
+	t.Run("cancels running job", func(t *testing.T) {
+		rec := call(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/cancel")
 		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("expected cancel 200 got %d body=%s", rec.Code, rec.Body.String())
 		}
-
-		var resp map[string]any
+		var resp jobResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("expected valid json: %v", err)
+			t.Fatalf("decode cancel response: %v", err)
 		}
-		if _, ok := resp["user"]; ok {
-			t.Fatalf("expected user field omitted when not stored, got %v", resp["user"])
+		if resp.Status != string(storage.JobStatusCancelled) {
+			t.Fatalf("expected cancelled status, got %s", resp.Status)
 		}
-		if _, ok := resp["stored_roles"]; ok {
-			t.Fatalf("expected stored roles omitted when user missing, got %v", resp["stored_roles"])
+		if store.jobs[jobID].Status != storage.JobStatusCancelled {
+			t.Fatalf("store job status not updated")
+		}
+		if len(resp.Events) < 2 {
+			t.Fatalf("expected cancel event appended, got %d", len(resp.Events))
 		}
 	})
 }
@@ -360,16 +501,33 @@ func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
+func authWithTokens(defaultRole string, tokens ...string) config.AuthConfig {
+	static := make(map[string]config.StaticPrincipalConfig, len(tokens))
+	for _, tok := range tokens {
+		static[tok] = config.StaticPrincipalConfig{
+			Subject: tok,
+		}
+	}
+	return config.AuthConfig{
+		OIDC: config.OIDCConfig{
+			Enabled:      true,
+			StaticTokens: static,
+		},
+		RBAC: config.RBACConfig{DefaultRole: defaultRole},
+	}
+}
+
 func TestRBACAuthorization(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{Address: ":0"},
 		TLS:  config.TLSConfig{RequireClientTLS: false},
-		Auth: config.AuthConfig{RBAC: config.RBACConfig{DefaultRole: "viewer"}},
+		Auth: authWithTokens("viewer", "subject-123", "test-token"),
 	}
 
 	store := &fakeStore{userRoles: map[uuid.UUID][]string{}}
 	srv := New(logger, cfg, store, &stubQueue{})
+	srv.configureJobIntegrations()
 
 	call := func(method, path string, body []byte) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
@@ -403,40 +561,55 @@ func TestRBACAuthorization(t *testing.T) {
 			t.Fatalf("expected 201 got %d", rec.Code)
 		}
 	})
-}
-
-func TestNodesEndpoints(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{Address: ":0"},
-		TLS:  config.TLSConfig{RequireClientTLS: false},
-		Auth: config.AuthConfig{
-			RBAC: config.RBACConfig{DefaultRole: "admin"},
-		},
-	}
-
-	store := &fakeStore{}
-	srv := New(logger, cfg, store, &stubQueue{})
-	srv.jobHandlers = map[string]jobHandler{
-		JobTypeProvisionApply: func(ctx context.Context, job *storage.Job) error {
-			return nil
-		},
-	}
 
 	bearerReq := func(method, path string, body []byte) *http.Request {
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Authorization", "Bearer subject-123")
 		return req
 	}
 
 	tenantID := uuid.New()
 	store.tenants = []storage.Tenant{{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)}}
-	t.Run("GET /api/v1/nodes returns nodes", func(t *testing.T) {
-		store.nodes = []storage.Node{
-			{ID: uuid.New(), TenantID: tenantID, Hostname: "node-1", CreatedAt: time.Unix(1700000000, 0), UpdatedAt: time.Unix(1700000000, 0)},
+	store.jobs = map[uuid.UUID]*storage.Job{}
+	store.events = map[uuid.UUID][]storage.JobEvent{}
+	templateID := uuid.New()
+	store.templates = []storage.ProvisioningTemplate{
+		{
+			ID:        templateID,
+			Name:      "demo",
+			Provider:  "mock",
+			Labels:    map[string]string{},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	store.templateVersions = map[uuid.UUID][]storage.ProvisioningTemplateVersion{
+		templateID: {
+			{
+				ID:         uuid.New(),
+				TemplateID: templateID,
+				Version:    1,
+				Body:       "body",
+				CreatedAt:  time.Now(),
+				PromotedAt: sql.NullTime{Time: time.Now(), Valid: true},
+			},
+		},
+	}
+	id := store.templateVersions[templateID][0].ID
+	store.templates[0].PromotedVersionID = &id
+
+	t.Run("GET /api/v1/jobs returns jobs", func(t *testing.T) {
+		jobID := uuid.New()
+		store.jobs[jobID] = &storage.Job{
+			ID:        jobID,
+			TenantID:  tenantID,
+			Type:      "provision.apply",
+			Status:    storage.JobStatusQueued,
+			CreatedAt: time.Unix(1700000000, 0),
+			UpdatedAt: time.Unix(1700000000, 0),
 		}
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, "/api/v1/nodes", nil))
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, "/api/v1/jobs", nil))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 got %d", rec.Code)
@@ -444,287 +617,8 @@ func TestNodesEndpoints(t *testing.T) {
 		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 			t.Fatalf("expected json response, got %s", ct)
 		}
-		if !contains(rec.Body.String(), "node-1") {
-			t.Fatalf("expected response to contain hostname: %s", rec.Body.String())
-		}
-	})
-
-	t.Run("GET /api/v1/nodes filters by tenant", func(t *testing.T) {
-		otherTenant := uuid.New()
-		store.nodes = []storage.Node{
-			{ID: uuid.New(), TenantID: tenantID, Hostname: "primary", CreatedAt: time.Unix(1700000001, 0), UpdatedAt: time.Unix(1700000001, 0)},
-			{ID: uuid.New(), TenantID: otherTenant, Hostname: "secondary", CreatedAt: time.Unix(1700000002, 0), UpdatedAt: time.Unix(1700000002, 0)},
-		}
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodGet, "/api/v1/nodes?tenant_id="+tenantID.String(), nil)
-		srv.Handler().ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d", rec.Code)
-		}
-		body := rec.Body.String()
-		if !contains(body, "primary") || contains(body, "secondary") {
-			t.Fatalf("expected filtered response, got %s", body)
-		}
-	})
-
-	t.Run("GET /api/v1/nodes/:id returns node detail", func(t *testing.T) {
-		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "detail-node", CreatedAt: time.Unix(1700000010, 0), UpdatedAt: time.Unix(1700000010, 0)}
-		store.nodes = []storage.Node{targetNode}
-
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodGet, "/api/v1/nodes/"+targetNode.ID.String(), nil)
-		srv.Handler().ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d", rec.Code)
-		}
-		if !contains(rec.Body.String(), "detail-node") {
-			t.Fatalf("expected node detail response, got %s", rec.Body.String())
-		}
-
-		t.Run("returns 404 for missing node", func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := bearerReq(http.MethodGet, "/api/v1/nodes/"+uuid.New().String(), nil)
-			srv.Handler().ServeHTTP(rec, req)
-			if rec.Code != http.StatusNotFound {
-				t.Fatalf("expected 404 got %d", rec.Code)
-			}
-		})
-	})
-
-	t.Run("PATCH /api/v1/nodes/:id updates node", func(t *testing.T) {
-		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "patch-node", CreatedAt: time.Unix(1700000020, 0), UpdatedAt: time.Unix(1700000020, 0)}
-		store.nodes = []storage.Node{targetNode}
-
-		payload := []byte(`{"hostname":"updated-node","public_ip":"10.10.0.5"}`)
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodPatch, "/api/v1/nodes/"+targetNode.ID.String(), payload)
-		srv.Handler().ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
-		}
-		if !contains(rec.Body.String(), "updated-node") || !contains(rec.Body.String(), "10.10.0.5") {
-			t.Fatalf("expected updated fields, got %s", rec.Body.String())
-		}
-	})
-
-	t.Run("PATCH /api/v1/nodes/:id validates payload", func(t *testing.T) {
-		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "invalid-node", CreatedAt: time.Unix(1700000030, 0), UpdatedAt: time.Unix(1700000030, 0)}
-		store.nodes = []storage.Node{targetNode}
-
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodPatch, "/api/v1/nodes/"+targetNode.ID.String(), []byte(`{"hostname":""}`))
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 got %d", rec.Code)
-		}
-	})
-
-	t.Run("PATCH /api/v1/nodes/:id handles missing node", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodPatch, "/api/v1/nodes/"+uuid.New().String(), []byte(`{"hostname":"noop"}`))
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 got %d", rec.Code)
-		}
-	})
-
-	t.Run("DELETE /api/v1/nodes/:id removes node", func(t *testing.T) {
-		targetNode := storage.Node{ID: uuid.New(), TenantID: tenantID, Hostname: "delete-node", CreatedAt: time.Unix(1700000040, 0), UpdatedAt: time.Unix(1700000040, 0)}
-		store.nodes = []storage.Node{targetNode}
-
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodDelete, "/api/v1/nodes/"+targetNode.ID.String(), nil)
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusNoContent {
-			t.Fatalf("expected 204 got %d", rec.Code)
-		}
-	})
-
-	t.Run("DELETE /api/v1/nodes/:id handles missing node", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodDelete, "/api/v1/nodes/"+uuid.New().String(), nil)
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 got %d", rec.Code)
-		}
-	})
-
-	t.Run("POST /api/v1/nodes creates node", func(t *testing.T) {
-		payload := map[string]any{
-			"tenant_id": tenantID.String(),
-			"hostname":  "node-2",
-			"os":        "linux",
-		}
-		body, _ := json.Marshal(payload)
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/nodes", body))
-
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("expected 201 got %d", rec.Code)
-		}
-		if store.createdNode == nil || store.createdNode.Hostname != "node-2" {
-			t.Fatalf("expected store to create node-2, got %#v", store.createdNode)
-		}
-	})
-
-	t.Run("POST /api/v1/nodes validates payload", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/nodes", []byte(`{"hostname":""}`)))
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 got %d", rec.Code)
-		}
-	})
-
-	t.Run("POST /api/v1/nodes rejects unknown tenant", func(t *testing.T) {
-		payload := map[string]any{
-			"tenant_id": uuid.New().String(),
-			"hostname":  "node-3",
-		}
-		body, _ := json.Marshal(payload)
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/nodes", body))
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 got %d", rec.Code)
-		}
-	})
-
-	t.Run("GET /api/v1/tenants returns tenants", func(t *testing.T) {
-		store.tenants = []storage.Tenant{
-			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000003, 0)},
-		}
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, "/api/v1/tenants", nil))
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d", rec.Code)
-		}
-		if !contains(rec.Body.String(), "Tenant A") {
-			t.Fatalf("expected tenant in response: %s", rec.Body.String())
-		}
-	})
-
-	t.Run("GET /api/v1/tenants paginates results", func(t *testing.T) {
-		store.tenants = []storage.Tenant{
-			{ID: uuid.New(), Name: "Tenant B", CreatedAt: time.Unix(1700000004, 0)},
-			{ID: uuid.New(), Name: "Tenant C", CreatedAt: time.Unix(1700000005, 0)},
-			{ID: uuid.New(), Name: "Tenant D", CreatedAt: time.Unix(1700000006, 0)},
-		}
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodGet, "/api/v1/tenants?limit=2&offset=1", nil)
-		srv.Handler().ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d", rec.Code)
-		}
-		body := rec.Body.String()
-		if contains(body, "Tenant B") || !contains(body, "Tenant C") || !contains(body, "Tenant D") {
-			t.Fatalf("expected windowed tenants, got %s", body)
-		}
-	})
-
-	t.Run("GET /api/v1/tenants validates limit", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodGet, "/api/v1/tenants?limit=abc", nil)
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 got %d", rec.Code)
-		}
-	})
-
-	t.Run("POST /api/v1/tenants creates tenant", func(t *testing.T) {
-		payload := []byte(`{"name":"Tenant B"}`)
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/tenants", payload))
-
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("expected 201 got %d", rec.Code)
-		}
-		if store.createdTenant == nil || store.createdTenant.Name != "Tenant B" {
-			t.Fatalf("expected tenant creation, got %#v", store.createdTenant)
-		}
-	})
-
-	t.Run("POST /api/v1/tenants validates payload", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/tenants", []byte(`{"name":""}`)))
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 got %d", rec.Code)
-		}
-	})
-
-	t.Run("GET /api/v1/tenants/:id returns tenant", func(t *testing.T) {
-		store.tenants = []storage.Tenant{
-			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
-		}
-		rec := httptest.NewRecorder()
-		path := "/api/v1/tenants/" + tenantID.String()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, path, nil))
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d", rec.Code)
-		}
-		if !contains(rec.Body.String(), tenantID.String()) {
-			t.Fatalf("expected tenant id in response: %s", rec.Body.String())
-		}
-	})
-
-	t.Run("GET /api/v1/tenants/:id handles missing tenant", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		path := "/api/v1/tenants/" + uuid.New().String()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, path, nil))
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 got %d", rec.Code)
-		}
-	})
-
-	t.Run("PATCH /api/v1/tenants/:id updates tenant", func(t *testing.T) {
-		store.tenants = []storage.Tenant{
-			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
-		}
-		payload := []byte(`{"name":"Renamed Tenant"}`)
-		path := "/api/v1/tenants/" + tenantID.String()
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPatch, path, payload))
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
-		}
-		if !contains(rec.Body.String(), "Renamed Tenant") {
-			t.Fatalf("expected updated name, got %s", rec.Body.String())
-		}
-	})
-
-	t.Run("PATCH /api/v1/tenants/:id validates payload", func(t *testing.T) {
-		path := "/api/v1/tenants/" + tenantID.String()
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPatch, path, []byte(`{"name":""}`)))
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 got %d", rec.Code)
-		}
-	})
-
-	t.Run("DELETE /api/v1/tenants/:id removes tenant", func(t *testing.T) {
-		store.tenants = []storage.Tenant{
-			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
-		}
-		path := "/api/v1/tenants/" + tenantID.String()
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodDelete, path, nil))
-
-		if rec.Code != http.StatusNoContent {
-			t.Fatalf("expected 204 got %d", rec.Code)
-		}
-	})
-
-	t.Run("DELETE /api/v1/tenants/:id handles missing tenant", func(t *testing.T) {
-		path := "/api/v1/tenants/" + uuid.New().String()
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodDelete, path, nil))
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 got %d", rec.Code)
+		if !contains(rec.Body.String(), jobID.String()) {
+			t.Fatalf("expected response to contain job id: %s", rec.Body.String())
 		}
 	})
 
@@ -736,12 +630,12 @@ func TestNodesEndpoints(t *testing.T) {
 			"type":"%s",
 			"tenant_id":"%s",
 			"payload":{
-				"plan_id":"plan-1",
+				"plan_id":"%s",
 				"tenant_id":"%s",
 				"node_id":"node-123",
 				"metadata":{"env":"dev"}
 			}
-		}`, JobTypeProvisionApply, tenantID.String(), tenantID.String())
+		}`, JobTypeProvisionApply, tenantID.String(), templateID.String(), tenantID.String())
 		payload := []byte(body)
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
@@ -753,7 +647,7 @@ func TestNodesEndpoints(t *testing.T) {
 
 	t.Run("POST /api/v1/jobs validates tenant existence", func(t *testing.T) {
 		tenant := uuid.New()
-		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"plan-1","tenant_id":"%s","node_id":"node-999"}}`, tenant.String(), tenant.String()))
+		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"%s","tenant_id":"%s","node_id":"node-999"}}`, tenant.String(), templateID.String(), tenant.String()))
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
 		if rec.Code != http.StatusBadRequest {
@@ -763,7 +657,43 @@ func TestNodesEndpoints(t *testing.T) {
 
 	t.Run("POST /api/v1/jobs rejects tenant mismatch", func(t *testing.T) {
 		otherTenant := uuid.New()
-		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"plan-1","tenant_id":"%s","node_id":"node-abc"}}`, tenantID.String(), otherTenant.String()))
+		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"%s","tenant_id":"%s","node_id":"node-abc"}}`, tenantID.String(), templateID.String(), otherTenant.String()))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("POST /api/v1/jobs rejects missing template plan", func(t *testing.T) {
+		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"%s","tenant_id":"%s","node_id":"node-abc"}}`, tenantID.String(), uuid.New().String(), tenantID.String()))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("POST /api/v1/jobs rejects unpromoted template plan", func(t *testing.T) {
+		unpromotedID := uuid.New()
+		store.templates = append(store.templates, storage.ProvisioningTemplate{
+			ID:        unpromotedID,
+			Name:      "unpromoted",
+			Provider:  "mock",
+			Labels:    map[string]string{},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		})
+		store.templateVersions[unpromotedID] = []storage.ProvisioningTemplateVersion{
+			{
+				ID:         uuid.New(),
+				TemplateID: unpromotedID,
+				Version:    1,
+				Body:       "body",
+				CreatedAt:  time.Now(),
+			},
+		}
+		payload := []byte(fmt.Sprintf(`{"type":"provision.apply","tenant_id":"%s","payload":{"plan_id":"%s","tenant_id":"%s","node_id":"node-abc"}}`, tenantID.String(), unpromotedID.String(), tenantID.String()))
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
 		if rec.Code != http.StatusBadRequest {
@@ -805,6 +735,180 @@ func TestNodesEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("buildJobExecution persists success state", func(t *testing.T) {
+		origAsync := auditAsync
+		auditAsync = false
+		defer func() { auditAsync = origAsync }()
+
+		logger := zap.NewNop()
+		cfg := &config.Config{
+			HTTP:   config.HTTPConfig{Address: ":0"},
+			TLS:    config.TLSConfig{RequireClientTLS: false},
+			Auth:   authWithTokens("operator", "job-success"),
+			Worker: config.WorkerConfig{RetryBackoff: 5 * time.Millisecond},
+		}
+		successStore := &fakeStore{}
+		srv := New(logger, cfg, successStore, &stubQueue{})
+
+		const jobType = "test.job.success"
+		srv.jobHandlers = map[string]jobHandler{
+			jobType: func(ctx context.Context, job *storage.Job) error {
+				return nil
+			},
+		}
+
+		job := &storage.Job{
+			ID:         uuid.New(),
+			Type:       jobType,
+			Status:     storage.JobStatusQueued,
+			MaxRetries: 3,
+		}
+		if _, err := successStore.CreateJob(context.Background(), job, &storage.JobEvent{Status: storage.JobStatusQueued}); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+
+		exec := srv.buildJobExecution(job.ID, job.Type, job.MaxRetries)
+		if err := exec(context.Background()); err != nil {
+			t.Fatalf("execute job: %v", err)
+		}
+
+		persisted := successStore.jobs[job.ID]
+		if persisted == nil {
+			t.Fatalf("job not persisted")
+		}
+		if persisted.Status != storage.JobStatusSucceeded {
+			t.Fatalf("expected succeeded status, got %s", persisted.Status)
+		}
+		if persisted.StartedAt == nil {
+			t.Fatalf("expected started timestamp recorded")
+		}
+		if persisted.FinishedAt == nil {
+			t.Fatalf("expected finished timestamp recorded")
+		}
+
+		events := successStore.events[job.ID]
+		if len(events) != 3 {
+			t.Fatalf("expected 3 events (queued, running, succeeded), got %d", len(events))
+		}
+		if events[1].Status != storage.JobStatusRunning {
+			t.Fatalf("expected running event, got %s", events[1].Status)
+		}
+		if events[2].Status != storage.JobStatusSucceeded {
+			t.Fatalf("expected succeeded event, got %s", events[2].Status)
+		}
+
+		logs := successStore.auditLogs
+		if len(logs) != 2 {
+			t.Fatalf("expected 2 audit logs, got %d", len(logs))
+		}
+		if logs[0].Action != "job.running" {
+			t.Fatalf("expected first audit action job.running, got %s", logs[0].Action)
+		}
+		if attempt, _ := logs[0].Metadata["attempt"].(int); attempt != 1 {
+			t.Fatalf("expected running attempt metadata 1, got %v", logs[0].Metadata["attempt"])
+		}
+		if logs[1].Action != "job.succeeded" {
+			t.Fatalf("expected second audit action job.succeeded, got %s", logs[1].Action)
+		}
+		if attempt, _ := logs[1].Metadata["attempt"].(int); attempt != 1 {
+			t.Fatalf("expected succeeded attempt metadata 1, got %v", logs[1].Metadata["attempt"])
+		}
+	})
+
+	t.Run("buildJobExecution persists retries and failures", func(t *testing.T) {
+		origAsync := auditAsync
+		auditAsync = false
+		defer func() { auditAsync = origAsync }()
+
+		logger := zap.NewNop()
+		cfg := &config.Config{
+			HTTP:   config.HTTPConfig{Address: ":0"},
+			TLS:    config.TLSConfig{RequireClientTLS: false},
+			Auth:   authWithTokens("operator", "job-retry"),
+			Worker: config.WorkerConfig{RetryBackoff: 5 * time.Millisecond},
+		}
+		retryStore := &fakeStore{}
+		srv := New(logger, cfg, retryStore, &stubQueue{})
+
+		const jobType = "test.job.retry"
+		handlerErr := errors.New("boom")
+		srv.jobHandlers = map[string]jobHandler{
+			jobType: func(ctx context.Context, job *storage.Job) error {
+				return handlerErr
+			},
+		}
+
+		job := &storage.Job{
+			ID:         uuid.New(),
+			Type:       jobType,
+			Status:     storage.JobStatusQueued,
+			MaxRetries: 2,
+		}
+		if _, err := retryStore.CreateJob(context.Background(), job, &storage.JobEvent{Status: storage.JobStatusQueued}); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+
+		exec := srv.buildJobExecution(job.ID, job.Type, job.MaxRetries)
+
+		if err := exec(context.Background()); err == nil {
+			t.Fatalf("expected error on first attempt")
+		}
+		persisted := retryStore.jobs[job.ID]
+		if persisted.Status != storage.JobStatusQueued {
+			t.Fatalf("expected job to remain queued after first failure, got %s", persisted.Status)
+		}
+		if persisted.Retries != 1 {
+			t.Fatalf("expected retries=1 after first failure, got %d", persisted.Retries)
+		}
+		if persisted.FinishedAt != nil {
+			t.Fatalf("expected no finished timestamp after first failure")
+		}
+		events := retryStore.events[job.ID]
+		if len(events) != 3 {
+			t.Fatalf("expected 3 events after first failure, got %d", len(events))
+		}
+		if events[2].Status != storage.JobStatusQueued {
+			t.Fatalf("expected queued event recorded, got %s", events[2].Status)
+		}
+
+		if err := exec(context.Background()); err == nil {
+			t.Fatalf("expected error on final attempt")
+		}
+		persisted = retryStore.jobs[job.ID]
+		if persisted.Status != storage.JobStatusFailed {
+			t.Fatalf("expected failed status after final attempt, got %s", persisted.Status)
+		}
+		if persisted.Retries != 2 {
+			t.Fatalf("expected retries=2 after final attempt, got %d", persisted.Retries)
+		}
+		if persisted.FinishedAt == nil {
+			t.Fatalf("expected finished timestamp recorded on failure")
+		}
+		events = retryStore.events[job.ID]
+		if len(events) != 5 {
+			t.Fatalf("expected 5 events after final failure, got %d", len(events))
+		}
+		if events[len(events)-1].Status != storage.JobStatusFailed {
+			t.Fatalf("expected final event to be failed, got %s", events[len(events)-1].Status)
+		}
+
+		logs := retryStore.auditLogs
+		if len(logs) != 4 {
+			t.Fatalf("expected 4 audit logs recorded, got %d", len(logs))
+		}
+		expected := []string{"job.running", "job.retry_scheduled", "job.running", "job.failed"}
+		for idx, action := range expected {
+			if logs[idx].Action != action {
+				t.Fatalf("expected audit action %s at index %d, got %s", action, idx, logs[idx].Action)
+			}
+		}
+		for attemptIdx, attempt := range []int{1, 1, 2, 2} {
+			if got, _ := logs[attemptIdx].Metadata["attempt"].(int); got != attempt {
+				t.Fatalf("expected audit attempt %d at index %d, got %v", attempt, attemptIdx, logs[attemptIdx].Metadata["attempt"])
+			}
+		}
+	})
+
 	t.Run("GET /api/v1/me returns principal profile", func(t *testing.T) {
 		userID := uuid.New()
 		store.users = map[string]*storage.User{
@@ -824,7 +928,8 @@ func TestNodesEndpoints(t *testing.T) {
 		}
 
 		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodGet, "/api/v1/me", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
 		srv.Handler().ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
@@ -868,12 +973,16 @@ type fakeStore struct {
 	jobs                map[uuid.UUID]*storage.Job
 	events              map[uuid.UUID][]storage.JobEvent
 	users               map[string]*storage.User
+	usersByID           map[uuid.UUID]*storage.User
+	userList            []storage.User
 	userRoles           map[uuid.UUID][]string
+	rolesCatalog        []storage.Role
 	lastUserID          uuid.UUID
 	overrideRoles       map[uuid.UUID][]string
 	skipUserPersistence bool
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
+	auditLogs           []storage.AuditLog
 }
 
 type stubQueue struct{}
@@ -956,6 +1065,53 @@ func (f *fakeStore) DeleteTenant(_ context.Context, id uuid.UUID) error {
 	return sql.ErrNoRows
 }
 
+func (f *fakeStore) CreateAuditLog(_ context.Context, entry *storage.AuditLog) (*storage.AuditLog, error) {
+	if entry == nil {
+		return nil, errors.New("audit entry required")
+	}
+	if entry.ID == uuid.Nil {
+		entry.ID = uuid.New()
+	}
+	entryCopy := *entry
+	f.auditLogs = append(f.auditLogs, entryCopy)
+	return &entryCopy, nil
+}
+
+func (f *fakeStore) ListAuditLogs(_ context.Context, filter storage.AuditLogFilter, limit, offset int) ([]storage.AuditLog, int, error) {
+	var filtered []storage.AuditLog
+	for _, entry := range f.auditLogs {
+		if filter.TenantID != uuid.Nil && entry.TenantID != filter.TenantID {
+			continue
+		}
+		if strings.TrimSpace(filter.ActorType) != "" && !strings.EqualFold(entry.ActorType, filter.ActorType) {
+			continue
+		}
+		if strings.TrimSpace(filter.Action) != "" && !strings.EqualFold(entry.Action, filter.Action) {
+			continue
+		}
+		if strings.TrimSpace(filter.ResourceType) != "" && !strings.EqualFold(entry.ResourceType, filter.ResourceType) {
+			continue
+		}
+		if strings.TrimSpace(filter.ResourceID) != "" {
+			if entry.ResourceID == nil || !strings.EqualFold(*entry.ResourceID, filter.ResourceID) {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	total := len(filtered)
+	if offset > total {
+		return []storage.AuditLog{}, total, nil
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
+}
+
 func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error) {
 	if tpl.ID == uuid.Nil {
 		tpl.ID = uuid.New()
@@ -968,6 +1124,41 @@ func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.P
 	}
 	f.templates = append(f.templates, *tpl)
 	return tpl, nil
+}
+
+func (f *fakeStore) UpdateProvisioningTemplate(_ context.Context, id uuid.UUID, params storage.UpdateProvisioningTemplateParams) (*storage.ProvisioningTemplate, error) {
+	for i, tpl := range f.templates {
+		if tpl.ID != id {
+			continue
+		}
+		if params.Name != nil {
+			f.templates[i].Name = strings.TrimSpace(*params.Name)
+		}
+		if params.Provider != nil {
+			f.templates[i].Provider = strings.TrimSpace(*params.Provider)
+		}
+		if params.Description != nil {
+			desc := strings.TrimSpace(*params.Description)
+			if desc == "" {
+				f.templates[i].Description = sql.NullString{}
+			} else {
+				f.templates[i].Description = sql.NullString{String: desc, Valid: true}
+			}
+		}
+		if params.Labels != nil {
+			f.templates[i].Labels = sanitizeLabels(*params.Labels)
+		}
+		if params.Archived != nil {
+			if *params.Archived {
+				f.templates[i].ArchivedAt = sql.NullTime{Time: time.Now(), Valid: true}
+			} else {
+				f.templates[i].ArchivedAt = sql.NullTime{}
+			}
+		}
+		copy := f.templates[i]
+		return &copy, nil
+	}
+	return nil, nil
 }
 
 func (f *fakeStore) GetProvisioningTemplate(_ context.Context, id uuid.UUID) (*storage.ProvisioningTemplate, error) {
@@ -1233,6 +1424,9 @@ func (f *fakeStore) EnsureUser(_ context.Context, externalID, email, displayName
 	if f.users == nil {
 		f.users = make(map[string]*storage.User)
 	}
+	if f.usersByID == nil {
+		f.usersByID = make(map[uuid.UUID]*storage.User)
+	}
 
 	if existing, ok := f.users[externalID]; ok {
 		f.lastUserID = existing.ID
@@ -1253,6 +1447,8 @@ func (f *fakeStore) EnsureUser(_ context.Context, externalID, email, displayName
 	}
 
 	f.users[externalID] = user
+	f.usersByID[user.ID] = user
+	f.userList = append(f.userList, *user)
 	return user, nil
 }
 
@@ -1271,6 +1467,71 @@ func (f *fakeStore) ListUserRoles(_ context.Context, userID uuid.UUID) ([]string
 		}
 	}
 	return f.userRoles[userID], nil
+}
+
+func (f *fakeStore) GetUser(_ context.Context, userID uuid.UUID) (*storage.User, error) {
+	if f.usersByID == nil {
+		return nil, nil
+	}
+	if user, ok := f.usersByID[userID]; ok {
+		copy := *user
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListUsers(_ context.Context, limit, offset int) ([]storage.User, int, error) {
+	total := len(f.userList)
+	if offset > total {
+		return []storage.User{}, total, nil
+	}
+	end := total
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	slice := f.userList
+	if offset > 0 {
+		slice = slice[offset:]
+	}
+	if limit > 0 && len(slice) > limit {
+		slice = slice[:limit]
+	}
+	copies := make([]storage.User, len(slice))
+	copy(copies, slice)
+	return copies, total, nil
+}
+
+func (f *fakeStore) SetUserRoles(_ context.Context, userID uuid.UUID, roles []string) error {
+	if f.userRoles == nil {
+		f.userRoles = make(map[uuid.UUID][]string)
+	}
+	f.userRoles[userID] = sanitizeRoles(roles)
+	return nil
+}
+
+func (f *fakeStore) ListRoles(_ context.Context) ([]storage.Role, error) {
+	if len(f.rolesCatalog) == 0 {
+		return []storage.Role{
+			{
+				ID:        uuid.New(),
+				Name:      "viewer",
+				CreatedAt: time.Now(),
+			},
+			{
+				ID:        uuid.New(),
+				Name:      "operator",
+				CreatedAt: time.Now(),
+			},
+			{
+				ID:        uuid.New(),
+				Name:      "admin",
+				CreatedAt: time.Now(),
+			},
+		}, nil
+	}
+	out := make([]storage.Role, len(f.rolesCatalog))
+	copy(out, f.rolesCatalog)
+	return out, nil
 }
 
 func storageNullString(val string) sql.NullString {

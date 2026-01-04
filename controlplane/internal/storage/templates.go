@@ -56,6 +56,15 @@ type CreateTemplateVersionParams struct {
 	CreatedBy      *uuid.UUID
 }
 
+// UpdateProvisioningTemplateParams captures patchable fields on a template.
+type UpdateProvisioningTemplateParams struct {
+	Name        *string
+	Provider    *string
+	Description *string
+	Labels      *map[string]string
+	Archived    *bool
+}
+
 // ListProvisioningTemplates returns templates matching the provided filter.
 func (s *Store) ListProvisioningTemplates(ctx context.Context, filter ProvisioningTemplateFilter, limit, offset int) ([]ProvisioningTemplate, int, error) {
 	if s.db == nil {
@@ -182,6 +191,119 @@ func (s *Store) CreateProvisioningTemplate(ctx context.Context, tpl *Provisionin
 		return nil, fmt.Errorf("insert provisioning template: %w", err)
 	}
 	return tpl, nil
+}
+
+// UpdateProvisioningTemplate applies partial updates to a template.
+func (s *Store) UpdateProvisioningTemplate(ctx context.Context, id uuid.UUID, params UpdateProvisioningTemplateParams) (*ProvisioningTemplate, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("template id is required")
+	}
+
+	var updated bool
+	now := s.clock()
+	setFragments := []string{"updated_at = $1"}
+	args := []any{now}
+	idx := 2
+
+	if params.Name != nil {
+		name := strings.TrimSpace(*params.Name)
+		if name == "" {
+			return nil, errors.New("name cannot be empty")
+		}
+		setFragments = append(setFragments, fmt.Sprintf("name = $%d", idx))
+		args = append(args, name)
+		idx++
+		updated = true
+	}
+	if params.Provider != nil {
+		provider := strings.TrimSpace(*params.Provider)
+		if provider == "" {
+			return nil, errors.New("provider cannot be empty")
+		}
+		setFragments = append(setFragments, fmt.Sprintf("provider = $%d", idx))
+		args = append(args, provider)
+		idx++
+		updated = true
+	}
+	if params.Description != nil {
+		desc := strings.TrimSpace(*params.Description)
+		var value any = nil
+		if desc != "" {
+			value = desc
+		}
+		setFragments = append(setFragments, fmt.Sprintf("description = $%d", idx))
+		args = append(args, value)
+		idx++
+		updated = true
+	}
+	if params.Labels != nil {
+		labels := sanitizeLabelMap(*params.Labels)
+		encoded, err := encodeStringMap(labels)
+		if err != nil {
+			return nil, err
+		}
+		setFragments = append(setFragments, fmt.Sprintf("labels = $%d", idx))
+		args = append(args, encoded)
+		idx++
+		updated = true
+	}
+	if params.Archived != nil {
+		if *params.Archived {
+			setFragments = append(setFragments, fmt.Sprintf("archived_at = $%d", idx))
+			args = append(args, now)
+			idx++
+		} else {
+			setFragments = append(setFragments, "archived_at = NULL")
+		}
+		updated = true
+	}
+
+	if !updated {
+		return nil, errors.New("no fields to update")
+	}
+
+	query := fmt.Sprintf(`
+        UPDATE provisioning_templates
+        SET %s
+        WHERE id = $%d
+        RETURNING id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+    `, strings.Join(setFragments, ", "), idx)
+	args = append(args, id)
+
+	var tpl ProvisioningTemplate
+	var labelsRaw []byte
+	var promoted sql.NullString
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&tpl.ID,
+		&tpl.Name,
+		&tpl.Provider,
+		&tpl.Description,
+		&labelsRaw,
+		&tpl.CreatedAt,
+		&tpl.UpdatedAt,
+		&tpl.ArchivedAt,
+		&promoted,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update provisioning template: %w", err)
+	}
+
+	labels, err := decodeStringMap(labelsRaw)
+	if err != nil {
+		return nil, err
+	}
+	tpl.Labels = labels
+	if promoted.Valid {
+		if pid, err := uuid.Parse(promoted.String); err == nil {
+			tpl.PromotedVersionID = &pid
+		}
+	}
+	return &tpl, nil
 }
 
 // GetProvisioningTemplate returns a template by ID.
@@ -592,4 +714,19 @@ func nullableUUIDPtr(id *uuid.UUID) any {
 		return nil
 	}
 	return *id
+}
+
+func sanitizeLabelMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return map[string]string{}
+	}
+	result := make(map[string]string, len(input))
+	for k, v := range input {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		result[key] = strings.TrimSpace(v)
+	}
+	return result
 }
