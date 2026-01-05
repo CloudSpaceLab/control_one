@@ -445,6 +445,266 @@ func nullString(val string) sql.NullString {
 	return sql.NullString{String: val, Valid: true}
 }
 
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
+func nullStringPtr(ptr *string) sql.NullString {
+	if ptr == nil {
+		return sql.NullString{}
+	}
+	return nullString(*ptr)
+}
+
+// CreateComplianceResults persists multiple compliance results in a single batch.
+func (s *Store) CreateComplianceResults(ctx context.Context, results []ComplianceResult) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if len(results) == 0 {
+		return nil
+	}
+
+	query := `
+        INSERT INTO compliance_results (
+            id, job_id, tenant_id, node_id, scan_id, rule_id, passed,
+            severity, details, remediation, metadata, checked_at, created_at
+        ) VALUES
+    `
+
+	args := make([]any, 0, len(results)*13)
+	valueStrings := make([]string, 0, len(results))
+
+	for i := range results {
+		result := &results[i]
+		if result.ID == uuid.Nil {
+			result.ID = uuid.New()
+		}
+		if result.JobID == uuid.Nil {
+			return fmt.Errorf("compliance result %d missing job_id", i)
+		}
+		if strings.TrimSpace(result.RuleID) == "" {
+			return fmt.Errorf("compliance result %d missing rule_id", i)
+		}
+		if result.CreatedAt.IsZero() {
+			result.CreatedAt = s.clock()
+		}
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5, len(args)+6, len(args)+7,
+			len(args)+8, len(args)+9, len(args)+10, len(args)+11, len(args)+12, len(args)+13))
+
+		args = append(args,
+			result.ID,
+			result.JobID,
+			nullableUUID(result.TenantID),
+			nullableUUID(result.NodeID),
+			nullStringPtr(result.ScanID),
+			result.RuleID,
+			result.Passed,
+			nullStringPtr(result.Severity),
+			nullStringPtr(result.Details),
+			nullStringPtr(result.Remediation),
+		)
+		if len(result.Metadata) == 0 {
+			args = append(args, []byte("{}"))
+		} else {
+			data, err := json.Marshal(result.Metadata)
+			if err != nil {
+				return fmt.Errorf("marshal compliance metadata: %w", err)
+			}
+			args = append(args, data)
+		}
+		if result.CheckedAt != nil {
+			args = append(args, *result.CheckedAt)
+		} else {
+			args = append(args, nil)
+		}
+		args = append(args, result.CreatedAt)
+	}
+
+	query += strings.Join(valueStrings, ",")
+
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("insert compliance results: %w", err)
+	}
+	return nil
+}
+
+// ComplianceResultFilter captures filters for listing compliance results.
+type ComplianceResultFilter struct {
+	JobID    uuid.UUID
+	TenantID uuid.UUID
+	NodeID   uuid.UUID
+	ScanID   string
+	RuleID   string
+	Passed   *bool
+	Severity string
+	Since    *time.Time
+	Until    *time.Time
+}
+
+// ListComplianceResults returns persisted compliance results for a job.
+func (s *Store) ListComplianceResults(ctx context.Context, jobID uuid.UUID) ([]ComplianceResult, error) {
+	results, _, err := s.ListComplianceResultsFiltered(ctx, ComplianceResultFilter{JobID: jobID}, 0, 0)
+	return results, err
+}
+
+// ListComplianceResultsFiltered returns compliance results matching the filter with pagination.
+func (s *Store) ListComplianceResultsFiltered(ctx context.Context, filter ComplianceResultFilter, limit, offset int) ([]ComplianceResult, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	clauses := []string{"TRUE"}
+	args := []any{}
+
+	if filter.JobID != uuid.Nil {
+		args = append(args, filter.JobID)
+		clauses = append(clauses, fmt.Sprintf("job_id = $%d", len(args)))
+	}
+	if filter.TenantID != uuid.Nil {
+		args = append(args, filter.TenantID)
+		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if filter.NodeID != uuid.Nil {
+		args = append(args, filter.NodeID)
+		clauses = append(clauses, fmt.Sprintf("node_id = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.ScanID) != "" {
+		args = append(args, strings.TrimSpace(filter.ScanID))
+		clauses = append(clauses, fmt.Sprintf("scan_id = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.RuleID) != "" {
+		args = append(args, strings.TrimSpace(filter.RuleID))
+		clauses = append(clauses, fmt.Sprintf("rule_id = $%d", len(args)))
+	}
+	if filter.Passed != nil {
+		args = append(args, *filter.Passed)
+		clauses = append(clauses, fmt.Sprintf("passed = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.Severity) != "" {
+		args = append(args, strings.TrimSpace(filter.Severity))
+		clauses = append(clauses, fmt.Sprintf("severity = $%d", len(args)))
+	}
+	if filter.Since != nil {
+		args = append(args, *filter.Since)
+		clauses = append(clauses, fmt.Sprintf("checked_at >= $%d", len(args)))
+	}
+	if filter.Until != nil {
+		args = append(args, *filter.Until)
+		clauses = append(clauses, fmt.Sprintf("checked_at <= $%d", len(args)))
+	}
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM compliance_results WHERE %s`, strings.Join(clauses, " AND "))
+	argsForCount := make([]any, len(args))
+	copy(argsForCount, args)
+
+	countRow := s.db.QueryRowContext(ctx, countQuery, argsForCount...)
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count compliance results: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+        SELECT id, job_id, tenant_id, node_id, scan_id, rule_id, passed,
+               severity, details, remediation, metadata, checked_at, created_at
+        FROM compliance_results
+        WHERE %s
+        ORDER BY checked_at DESC, created_at DESC
+    `, strings.Join(clauses, " AND "))
+
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query compliance results: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ComplianceResult
+	for rows.Next() {
+		var (
+			result      ComplianceResult
+			tenantID    sql.NullString
+			nodeID      sql.NullString
+			scanID      sql.NullString
+			severity    sql.NullString
+			details     sql.NullString
+			remediation sql.NullString
+			metadataRaw []byte
+			checkedAt   sql.NullTime
+		)
+		if err := rows.Scan(
+			&result.ID,
+			&result.JobID,
+			&tenantID,
+			&nodeID,
+			&scanID,
+			&result.RuleID,
+			&result.Passed,
+			&severity,
+			&details,
+			&remediation,
+			&metadataRaw,
+			&checkedAt,
+			&result.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan compliance result: %w", err)
+		}
+		if tenantID.Valid {
+			result.TenantID, _ = uuid.Parse(tenantID.String)
+		}
+		if nodeID.Valid {
+			result.NodeID, _ = uuid.Parse(nodeID.String)
+		}
+		if scanID.Valid {
+			val := scanID.String
+			result.ScanID = &val
+		}
+		if severity.Valid {
+			val := severity.String
+			result.Severity = &val
+		}
+		if details.Valid {
+			val := details.String
+			result.Details = &val
+		}
+		if remediation.Valid {
+			val := remediation.String
+			result.Remediation = &val
+		}
+		if len(metadataRaw) > 0 {
+			var meta map[string]any
+			if err := json.Unmarshal(metadataRaw, &meta); err != nil {
+				return nil, 0, fmt.Errorf("unmarshal compliance metadata: %w", err)
+			}
+			result.Metadata = meta
+		}
+		if checkedAt.Valid {
+			t := checkedAt.Time
+			result.CheckedAt = &t
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate compliance results: %w", err)
+	}
+	return results, total, nil
+}
+
 // CreateTenant inserts a tenant record.
 func (s *Store) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
 	if s.db == nil {
@@ -861,6 +1121,23 @@ type JobEvent struct {
 	Status    JobStatus
 	Message   string
 	CreatedAt time.Time
+}
+
+// ComplianceResult captures rule-level evaluation outcomes for compliance jobs.
+type ComplianceResult struct {
+	ID          uuid.UUID
+	JobID       uuid.UUID
+	TenantID    uuid.UUID
+	NodeID      uuid.UUID
+	ScanID      *string
+	RuleID      string
+	Passed      bool
+	Severity    *string
+	Details     *string
+	Remediation *string
+	Metadata    map[string]any
+	CheckedAt   *time.Time
+	CreatedAt   time.Time
 }
 
 // Options allows injection of testing helpers.

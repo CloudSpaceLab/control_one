@@ -1,0 +1,39 @@
+aws_region = "us-east-1"
+environment = "dev"
+
+name_prefix = "control-one"
+
+vpc_cidr = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b"]
+
+enable_ha = true
+
+database_instance_class      = "db.t3.medium"
+database_allocated_storage   = 100
+database_master_username     = "controlone"
+database_master_password     = "CHANGE_ME_SECURE_PASSWORD"
+
+redis_node_type      = "cache.t3.medium"
+redis_num_cache_nodes = 1
+
+control_plane_instance_type   = "t3.large"
+control_plane_min_size        = 2
+control_plane_max_size        = 4
+control_plane_desired_capacity = 2
+
+s3_bucket_name = "control-one-artifacts-dev"
+
+enable_ssl_certificate = false
+domain_name           = ""
+
+allowed_cidr_blocks = ["0.0.0.0/0"]
+
+enable_nat_gateway = true
+enable_vpn         = false
+
+common_tags = {
+  Team        = "Platform"
+  CostCenter  = "Engineering"
+}
+
+

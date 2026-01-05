@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../providers/AuthProvider';
+import { useTheme } from '../providers/ThemeProvider';
 import './MainLayout.css';
 
 const NAV_ITEMS = [
@@ -9,10 +10,17 @@ const NAV_ITEMS = [
   { to: '/nodes', label: 'Nodes' },
   { to: '/jobs', label: 'Jobs' },
   { to: '/templates', label: 'Templates' },
+  { to: '/compliance', label: 'Compliance' },
+  { to: '/audit', label: 'Audit Log' },
+  { to: '/users', label: 'Users & Roles' },
+  { to: '/telemetry', label: 'Telemetry' },
+  { to: '/secrets', label: 'Secrets' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 export function MainLayout(): JSX.Element {
   const { signOut } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
 
@@ -51,9 +59,20 @@ export function MainLayout(): JSX.Element {
             <h1>Operator Console</h1>
             <p className="subtitle">Provision infrastructure, enforce policy, and monitor node posture.</p>
           </div>
-          <button type="button" onClick={signOut} className="signout-button">
-            Sign out
-          </button>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="theme-toggle"
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              {theme === 'dark' ? '☀️' : '🌙'}
+            </button>
+            <button type="button" onClick={signOut} className="signout-button">
+              Sign out
+            </button>
+          </div>
           <button
             type="button"
             className="nav-toggle"

@@ -118,6 +118,24 @@
   color: #94a3b8;
 }
 
+.theme-toggle {
+  background: rgba(148, 163, 184, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  color: #f8fafc;
+  border-radius: 0.75rem;
+  padding: 0.6rem 1rem;
+  font-size: 1.2rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.theme-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(99, 102, 241, 0.25);
+}
+
 .signout-button {
   background: rgba(148, 163, 184, 0.15);
   border: 1px solid rgba(99, 102, 241, 0.5);

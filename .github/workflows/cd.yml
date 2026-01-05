@@ -1,0 +1,180 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
+    environment:
+      name: dev
+      url: https://dev.control-one.example.com
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBECONFIG_DEV }}" | base64 -d > kubeconfig
+          export KUBECONFIG=./kubeconfig
+      
+      - name: Deploy with Helm
+        run: |
+          export KUBECONFIG=./kubeconfig
+          helm upgrade --install control-one ./infra/helm/control-one \
+            --namespace control-one \
+            --create-namespace \
+            --set controlplane.image.tag=${{ github.sha }} \
+            --set worker.image.tag=${{ github.sha }} \
+            --set ui.image.tag=${{ github.sha }} \
+            --set global.environment=dev
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://staging.control-one.example.com
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > kubeconfig
+          export KUBECONFIG=./kubeconfig
+      
+      - name: Deploy with Helm
+        run: |
+          export KUBECONFIG=./kubeconfig
+          helm upgrade --install control-one ./infra/helm/control-one \
+            --namespace control-one \
+            --create-namespace \
+            --set controlplane.image.tag=${{ github.ref_name }} \
+            --set worker.image.tag=${{ github.ref_name }} \
+            --set ui.image.tag=${{ github.ref_name }} \
+            --set global.environment=staging \
+            --wait \
+            --timeout 10m
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'prod') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod')
+    environment:
+      name: production
+      url: https://control-one.example.com
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBECONFIG_PROD }}" | base64 -d > kubeconfig
+          export KUBECONFIG=./kubeconfig
+      
+      - name: Deploy with Helm
+        run: |
+          export KUBECONFIG=./kubeconfig
+          helm upgrade --install control-one ./infra/helm/control-one \
+            --namespace control-one \
+            --create-namespace \
+            --set controlplane.image.tag=${{ github.ref_name }} \
+            --set worker.image.tag=${{ github.ref_name }} \
+            --set ui.image.tag=${{ github.ref_name }} \
+            --set global.environment=production \
+            --wait \
+            --timeout 15m \
+            --atomic
+      
+      - name: Run smoke tests
+        run: |
+          export KUBECONFIG=./kubeconfig
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=control-one -n control-one --timeout=5m
+          # Add smoke test commands here
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deploy-staging, deploy-prod]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Generate changelog
+        id: changelog
+        run: |
+          CHANGELOG=$(git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD)
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            ## Changes
+            
+            ${{ steps.changelog.outputs.changelog }}
+            
+            ## Installation
+            
+            ```bash
+            helm install control-one ./infra/helm/control-one --set controlplane.image.tag=${{ github.ref_name }}
+            ```
+          draft: false
+          prerelease: false
+
+

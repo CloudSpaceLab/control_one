@@ -1,0 +1,108 @@
+{{- if .Values.controlplane.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "control-one.fullname" . }}-controlplane
+  labels:
+    {{- include "control-one.labels" . | nindent 4 }}
+    component: controlplane
+spec:
+  replicas: {{ .Values.controlplane.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "control-one.selectorLabels" . | nindent 6 }}
+      component: controlplane
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "control-one.selectorLabels" . | nindent 8 }}
+        component: controlplane
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: controlplane
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        image: "{{ .Values.controlplane.image.repository }}:{{ .Values.controlplane.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.controlplane.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.controlplane.service.targetPort }}
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        {{- range .Values.controlplane.env }}
+        - name: {{ .name }}
+          {{- if .value }}
+          value: {{ .value | quote }}
+          {{- end }}
+          {{- if .valueFrom }}
+          valueFrom:
+            {{- toYaml .valueFrom | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        - name: CONFIG_FILE
+          value: /etc/control-one/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/control-one
+          readOnly: true
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.controlplane.resources | nindent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "control-one.fullname" . }}-config
+      - name: tls
+        secret:
+          secretName: {{ include "control-one.fullname" . }}-tls
+          optional: true
+      {{- with .Values.controlplane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlplane.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlplane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+

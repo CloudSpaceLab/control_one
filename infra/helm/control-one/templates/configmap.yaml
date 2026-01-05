@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "control-one.fullname" . }}-config
+  labels:
+    {{- include "control-one.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml .Values.controlplane.config | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "control-one.fullname" . }}-worker-config
+  labels:
+    {{- include "control-one.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml .Values.worker.config | nindent 4 }}
+
+

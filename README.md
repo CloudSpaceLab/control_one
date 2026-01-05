@@ -4,11 +4,11 @@
 Control One delivers a unified control plane, background worker service, and node agent that together provision infrastructure, enforce compliance, and surface telemetry across hybrid environments (VMware, LibVirt, AWS, Azure). The repository also hosts a React-based operator UI and infrastructure tooling to stand up a complete development stack.
 
 ### Core Components
-- **Control Plane API** (`controlplane/cmd/controlplane`): Go service that exposes authenticated REST endpoints for tenants, nodes, jobs, and registration. Integrates Postgres for persistence, Asynq for background work, and optional observability endpoints.
+- **Control Plane API** (`controlplane/cmd/controlplane`): Go service that exposes authenticated REST endpoints for tenants, nodes, jobs, policies, compliance, telemetry, templates, and rollouts. Integrates Postgres for persistence, Asynq for background work, and optional observability endpoints.
 - **Worker Manager** (`controlplane/internal/worker`): Dispatches provisioning and compliance jobs via in-memory queues or Asynq/Redis, coordinating with the job store and external integrations.
 - **Node Agent** (`cmd/nodeagent`): Runs on managed hosts, orchestrating bootstrap, scheduling, provisioning, compliance, telemetry, access, and secrets workflows.
 - **Web UI** (`ui/`): React + TypeScript SPA providing authenticated dashboards, routing, and placeholders for tenants, nodes, and login surfaces.
-- **Docs & Diagrams** (`docs/`): Architecture brief, threat model, and C4/sequence diagrams underpinning Phase 0 planning.
+- **Docs & Diagrams** (`docs/`): Architecture brief, threat model, provider setup guide, and C4/sequence diagrams underpinning Phase 0 planning.
 
 ## Architecture
 - **Agent Core** (`cmd/nodeagent/main.go`): wires configuration, registration, scheduling, telemetry, mesh, provisioning, access, and secrets workflows.
@@ -20,9 +20,12 @@ Control One delivers a unified control plane, background worker service, and nod
   - Templates are authored in the control plane and referenced by name via `provisioning.template`; metadata keys (e.g. `cluster`, `resource_group`) are forwarded untouched in the apply payload, enabling provider-specific workflows.
 - **Provisioning Adapter Architecture**
   - `Engine` now delegates to pluggable adapters (`internal/provisioning/adapter.go`) so each provider can customize how templates/baselines are applied.
-  - The default HTTP adapter invokes the control plane’s `/api/v1/provisioning/*` endpoints; a mock adapter provides deterministic local behavior, while the AWS adapter enriches metadata (e.g., region detection from `AWS_REGION`/`AWS_DEFAULT_REGION`).
+  - Supported providers: AWS, Azure, VMware, Libvirt, and Mock (for testing).
+  - Provider adapters automatically enrich metadata from environment variables (e.g., AWS region, Azure subscription, VMware datacenter).
+  - The default HTTP adapter invokes the control plane's `/api/v1/provisioning/*` endpoints; a mock adapter provides deterministic local behavior.
   - Auto-detected provider metadata (from `DetectProvider`) is merged with caller-supplied metadata before invoking adapters, ensuring downstream workflows always receive consistent hints.
-  - Tests covering metadata merge semantics, AWS region injection, and baseline delegation live in `internal/provisioning/engine_test.go` and `internal/provisioning/detect_test.go`. Run `go test ./internal/provisioning` when iterating on adapters.
+  - Tests covering metadata merge semantics and provider-specific adapters live in `internal/provisioning/engine_test.go`, `internal/provisioning/detect_test.go`, and `internal/provisioning/adapter_provider_test.go`. Run `go test ./internal/provisioning` when iterating on adapters.
+  - See [Provider Setup Guide](docs/provider-setup.md) for detailed configuration instructions.
 - **Provisioning Templates API**
   - Control plane stores templates and their versions via the new `/api/v1/templates` endpoints. Templates persist provider metadata, labels, and a promoted version pointer backed by the migration `0004_provisioning_templates`.
   - Use the API to create templates and upload versions, then promote a version before triggering provisioning jobs. Example:
@@ -42,8 +45,14 @@ Control One delivers a unified control plane, background worker service, and nod
       https://localhost:8443/api/v1/templates/<template_id>/versions/1/promote
     ```
   - Listing and detail responses include pagination metadata plus promoted version details so operators can audit rollouts.
+  - Template rollouts can be scheduled and managed via `/api/v1/templates/{id}/rollouts` endpoints for controlled version deployments.
 - **Policy Management** (`internal/policy/`): fetches signed policy bundles and caches them locally.
+  - Control plane provides `/api/v1/policies` endpoints for policy CRUD, versioning, and promotion.
+  - Policies are stored in Postgres with version history and assignment tracking.
 - **Compliance Engine** (`internal/compliance/`): evaluates rulesets/certifications and feeds telemetry summaries.
+  - Control plane provides `/api/v1/compliance/results` for querying compliance results with filters.
+  - `/api/v1/compliance/summary` provides aggregated compliance statistics.
+  - `/api/v1/compliance/trends` provides compliance trends over time.
 - **Scheduler** (`internal/scheduler/`): cron-based job runner used for policy sync, provisioning, compliance evaluation, telemetry, access sync, secrets sync, and heartbeat.
 - **Scanner** (`internal/scanner/`): executes compliance checks with timeout/concurrency controls.
   - Log ingestion helpers live in `internal/telemetry/logs/` with pluggable collectors/formatters driven by `telemetry_prefs.log_sources`.

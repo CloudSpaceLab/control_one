@@ -25,6 +25,10 @@ type Config struct {
 		Timeout       time.Duration `mapstructure:"timeout"`
 		Shell         string        `mapstructure:"shell"`
 		MaxConcurrent int           `mapstructure:"max_concurrent"`
+		Enabled       bool          `mapstructure:"enabled"`
+		Preferred     []string      `mapstructure:"preferred"`
+		Fallback      string        `mapstructure:"fallback"`
+		UseRealScan   bool          `mapstructure:"use_real_scan"`
 	} `mapstructure:"scanner"`
 
 	Policy struct {
@@ -117,6 +121,24 @@ type Config struct {
 		Telemetry    time.Duration `mapstructure:"telemetry"`
 		Provisioning time.Duration `mapstructure:"provisioning"`
 	} `mapstructure:"intervals"`
+
+	SessionRecording struct {
+		Enabled          bool          `mapstructure:"enabled"`
+		Backend          string        `mapstructure:"backend"`
+		StoragePath      string        `mapstructure:"storage_path"`
+		RetentionDays    int           `mapstructure:"retention_days"`
+		MaxSizeMB        int           `mapstructure:"max_size_mb"`
+		Compress         bool          `mapstructure:"compress"`
+		UploadInterval   time.Duration `mapstructure:"upload_interval"`
+		SessionTypes     []string      `mapstructure:"session_types"`
+		RecordSSH        bool          `mapstructure:"record_ssh"`
+		RecordTerminal   bool          `mapstructure:"record_terminal"`
+		RecordCommands   bool          `mapstructure:"record_commands"`
+		TlogPath         string        `mapstructure:"tlog_path"`
+		AuditxPath       string        `mapstructure:"auditx_path"`
+		OpenReplayAPIKey string        `mapstructure:"openreplay_api_key"`
+		OpenReplayURL    string        `mapstructure:"openreplay_url"`
+	} `mapstructure:"session_recording"`
 }
 
 // NormalizeLogSourceConfig applies default values and sanitizes the provided log source configuration.
@@ -301,6 +323,9 @@ func (c *Config) EnsureDirectories() error {
 	if c.Mesh.StateFile != "" {
 		dirs = append(dirs, filepath.Dir(c.Mesh.StateFile))
 	}
+	if c.SessionRecording.Enabled && c.SessionRecording.StoragePath != "" {
+		dirs = append(dirs, c.SessionRecording.StoragePath)
+	}
 
 	for _, dir := range dirs {
 		if dir == "" {
@@ -324,6 +349,26 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scanner.timeout", defaultScannerTimeout.String())
 	v.SetDefault("scanner.shell", "")
 	v.SetDefault("scanner.max_concurrent", 4)
+	v.SetDefault("scanner.enabled", true)
+	v.SetDefault("scanner.preferred", []string{"openscap", "inspec", "ansible", "trivy"})
+	v.SetDefault("scanner.fallback", "builtin")
+	v.SetDefault("scanner.use_real_scan", true)
+
+	v.SetDefault("session_recording.enabled", false)
+	v.SetDefault("session_recording.backend", "tlog")
+	v.SetDefault("session_recording.storage_path", "/var/lib/control-one/nodeagent/sessions")
+	v.SetDefault("session_recording.retention_days", 90)
+	v.SetDefault("session_recording.max_size_mb", 1024)
+	v.SetDefault("session_recording.compress", true)
+	v.SetDefault("session_recording.upload_interval", "5m")
+	v.SetDefault("session_recording.session_types", []string{"terminal", "ssh"})
+	v.SetDefault("session_recording.record_ssh", true)
+	v.SetDefault("session_recording.record_terminal", true)
+	v.SetDefault("session_recording.record_commands", true)
+	v.SetDefault("session_recording.tlog_path", "/usr/bin/tlog-rec")
+	v.SetDefault("session_recording.auditx_path", "/usr/bin/auditx")
+	v.SetDefault("session_recording.openreplay_api_key", "")
+	v.SetDefault("session_recording.openreplay_url", "")
 
 	v.SetDefault("mesh.enabled", true)
 	v.SetDefault("mesh.coordinator_url", "")
@@ -397,6 +442,27 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intervals.scan", "15m")
 	v.SetDefault("intervals.telemetry", "1m")
 	v.SetDefault("intervals.provisioning", defaultProvisioningInterval.String())
+
+	v.SetDefault("scanner.enabled", true)
+	v.SetDefault("scanner.preferred", []string{"openscap", "inspec", "ansible", "trivy"})
+	v.SetDefault("scanner.fallback", "builtin")
+	v.SetDefault("scanner.use_real_scan", true)
+
+	v.SetDefault("session_recording.enabled", false)
+	v.SetDefault("session_recording.backend", "tlog")
+	v.SetDefault("session_recording.storage_path", "/var/lib/control-one/nodeagent/sessions")
+	v.SetDefault("session_recording.retention_days", 90)
+	v.SetDefault("session_recording.max_size_mb", 1024)
+	v.SetDefault("session_recording.compress", true)
+	v.SetDefault("session_recording.upload_interval", "5m")
+	v.SetDefault("session_recording.session_types", []string{"terminal", "ssh"})
+	v.SetDefault("session_recording.record_ssh", true)
+	v.SetDefault("session_recording.record_terminal", true)
+	v.SetDefault("session_recording.record_commands", true)
+	v.SetDefault("session_recording.tlog_path", "/usr/bin/tlog-rec")
+	v.SetDefault("session_recording.auditx_path", "/usr/bin/auditx")
+	v.SetDefault("session_recording.openreplay_api_key", "")
+	v.SetDefault("session_recording.openreplay_url", "")
 }
 
 func applyFallbacks(cfg *Config) {
@@ -417,6 +483,27 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.Scanner.MaxConcurrent <= 0 {
 		cfg.Scanner.MaxConcurrent = 4
+	}
+	if cfg.Scanner.Fallback == "" {
+		cfg.Scanner.Fallback = "builtin"
+	}
+	if len(cfg.Scanner.Preferred) == 0 {
+		cfg.Scanner.Preferred = []string{"openscap", "inspec", "ansible", "trivy"}
+	}
+	if cfg.SessionRecording.StoragePath == "" {
+		cfg.SessionRecording.StoragePath = "/var/lib/control-one/nodeagent/sessions"
+	}
+	if cfg.SessionRecording.RetentionDays <= 0 {
+		cfg.SessionRecording.RetentionDays = 90
+	}
+	if cfg.SessionRecording.MaxSizeMB <= 0 {
+		cfg.SessionRecording.MaxSizeMB = 1024
+	}
+	if cfg.SessionRecording.UploadInterval == 0 {
+		cfg.SessionRecording.UploadInterval = 5 * time.Minute
+	}
+	if len(cfg.SessionRecording.SessionTypes) == 0 {
+		cfg.SessionRecording.SessionTypes = []string{"terminal", "ssh"}
 	}
 	if cfg.Policy.PublicKeyFile == "" {
 		cfg.Policy.PublicKeyFile = defaultPolicyPublicKeyFile

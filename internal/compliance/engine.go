@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,13 @@ func (e *Engine) Evaluate(ctx context.Context, nodeID string, policies map[strin
 		return out, nil
 	}
 
+	useRealScan := false
+	if policies != nil {
+		if val, ok := policies["use_real_scan"]; ok && strings.ToLower(val) == "true" {
+			useRealScan = true
+		}
+	}
+
 	payload := map[string]any{
 		"node_id":        nodeID,
 		"region":         e.opts.Region,
@@ -62,6 +70,7 @@ func (e *Engine) Evaluate(ctx context.Context, nodeID string, policies map[strin
 		"certifications": e.opts.Certifications,
 		"policies":       policies,
 		"auto_apply":     e.opts.AutoApply,
+		"use_real_scan":  useRealScan,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

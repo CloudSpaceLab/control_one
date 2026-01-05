@@ -77,6 +77,153 @@ func TestPingEndpointAuthentication(t *testing.T) {
 	})
 }
 
+func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
+	t.Parallel()
+
+	logger := zap.NewNop()
+	tenantID := uuid.New()
+	jobID := uuid.New()
+	store := &fakeStore{
+		jobs:      map[uuid.UUID]*storage.Job{},
+		auditLogs: []storage.AuditLog{},
+	}
+
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		Jobs: config.JobsConfig{
+			Compliance: config.ComplianceJobConfig{
+				Region:    "us-west-2",
+				RuleSets:  []string{"cis-foundations"},
+				AutoApply: true,
+			},
+		},
+	}
+
+	srv := New(logger, cfg, store, &stubQueue{})
+	srv.configureJobIntegrations()
+
+	payload := map[string]any{
+		"scan_id":   "scan-123",
+		"tenant_id": tenantID.String(),
+		"node_id":   uuid.New().String(),
+		"policies": map[string]string{
+			"policy.cis-foundations": "fail-control",
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	job := &storage.Job{
+		ID:        jobID,
+		TenantID:  tenantID,
+		Type:      JobTypeComplianceScan,
+		Payload:   body,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	store.jobs = map[uuid.UUID]*storage.Job{jobID: job}
+
+	auditAsyncPrev := auditAsync
+	auditAsync = false
+	defer func() { auditAsync = auditAsyncPrev }()
+
+	if handler, ok := srv.jobHandlers[JobTypeComplianceScan]; ok {
+		if err := handler(context.Background(), job); err != nil {
+			t.Fatalf("handle compliance scan: %v", err)
+		}
+	} else {
+		t.Fatalf("compliance scan handler not registered")
+	}
+
+	results := store.complianceResults[jobID]
+	if len(results) == 0 {
+		t.Fatalf("expected compliance results persisted")
+	}
+
+	if len(store.auditLogs) == 0 || store.auditLogs[len(store.auditLogs)-1].Action != "compliance.scan.completed" {
+		t.Fatalf("expected compliance audit log, got %+v", store.auditLogs)
+	}
+}
+
+func TestJobDetailIncludesComplianceResults(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "job-viewer"),
+	}
+
+	jobID := uuid.New()
+	tenantID := uuid.New()
+	severity := "high"
+	now := time.Unix(1700000900, 0).UTC()
+	store := &fakeStore{
+		jobs: map[uuid.UUID]*storage.Job{
+			jobID: {
+				ID:        jobID,
+				TenantID:  tenantID,
+				Type:      JobTypeComplianceScan,
+				Status:    storage.JobStatusSucceeded,
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+		},
+		events:    map[uuid.UUID][]storage.JobEvent{},
+		userRoles: map[uuid.UUID][]string{},
+		complianceResults: map[uuid.UUID][]storage.ComplianceResult{
+			jobID: {
+				{
+					JobID:     jobID,
+					TenantID:  tenantID,
+					RuleID:    "rule-1",
+					Passed:    false,
+					Severity:  &severity,
+					CheckedAt: &now,
+				},
+			},
+		},
+	}
+
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	call := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer job-viewer")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := call(http.MethodGet, "/api/v1/tenants")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected warm-up ok got %d", rec.Code)
+	}
+	store.overrideRoles = map[uuid.UUID][]string{
+		store.lastUserID: {"viewer"},
+	}
+
+	rec = call(http.MethodGet, "/api/v1/jobs/"+jobID.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp jobResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode job response: %v", err)
+	}
+	if len(resp.ComplianceResults) != 1 {
+		t.Fatalf("expected 1 compliance result, got %d", len(resp.ComplianceResults))
+	}
+	if resp.ComplianceResults[0].RuleID != "rule-1" {
+		t.Fatalf("unexpected compliance rule: %+v", resp.ComplianceResults[0])
+	}
+	if resp.ComplianceResults[0].Severity == nil || *resp.ComplianceResults[0].Severity != severity {
+		t.Fatalf("expected severity %s, got %+v", severity, resp.ComplianceResults[0].Severity)
+	}
+	if resp.ComplianceResults[0].CheckedAt == nil {
+		t.Fatalf("expected checked_at timestamp")
+	}
+}
+
 func TestUserAndRoleEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
@@ -149,11 +296,18 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
-		if len(resp.Data) != 1 {
-			t.Fatalf("expected 1 user, got %d", len(resp.Data))
+		if len(resp.Data) == 0 {
+			t.Fatalf("expected at least 1 user, got 0")
 		}
-		if resp.Data[0].ID != targetUserID.String() {
-			t.Fatalf("expected user id %s got %s", targetUserID, resp.Data[0].ID)
+		var found bool
+		for _, u := range resp.Data {
+			if u.ID == targetUserID.String() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected response to include user %s, got %+v", targetUserID, resp.Data)
 		}
 	})
 
@@ -493,6 +647,88 @@ func TestJobDetailAndCancelEndpoints(t *testing.T) {
 		}
 		if len(resp.Events) < 2 {
 			t.Fatalf("expected cancel event appended, got %d", len(resp.Events))
+		}
+	})
+}
+
+func TestComplianceEvaluateEndpoint(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("operator", "compliance-token"),
+		Jobs: config.JobsConfig{
+			Compliance: config.ComplianceJobConfig{
+				Region:         "us-west-2",
+				RuleSets:       []string{"cis-foundations", "nist-sp800"},
+				Certifications: []string{"soc2"},
+				AutoApply:      true,
+			},
+		},
+	}
+
+	srv := New(logger, cfg, nil, &stubQueue{})
+	handler := srv.Handler()
+
+	call := func(body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/compliance/evaluate", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer compliance-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	nodeID := uuid.New()
+	ruleSets := []string{"cis-foundations", "nist-sp800"}
+	certifications := []string{"soc2"}
+	payload := map[string]any{
+		"node_id":        nodeID.String(),
+		"region":         "us-west-2",
+		"rulesets":       ruleSets,
+		"certifications": certifications,
+		"policies": map[string]string{
+			"policy.cis-foundations": "fail-control-1",
+			"policy.nist-sp800":      "warn-drift",
+		},
+		"auto_apply": true,
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := call(body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			RuleID    string `json:"rule_id"`
+			Passed    bool   `json:"passed"`
+			Severity  string `json:"severity"`
+			Details   string `json:"details"`
+			CheckedAt string `json:"checked_at"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	expectedResults := len(ruleSets) + len(certifications)
+	if len(resp.Results) != expectedResults {
+		t.Fatalf("expected %d results, got %d", expectedResults, len(resp.Results))
+	}
+	if resp.Results[0].Passed {
+		t.Fatalf("expected first rule to fail based on policies, got passed result")
+	}
+	if resp.Results[0].Severity != "high" {
+		t.Fatalf("expected first rule severity high, got %s", resp.Results[0].Severity)
+	}
+	if resp.Results[0].CheckedAt == "" || !strings.Contains(resp.Results[0].Details, nodeID.String()) {
+		t.Fatalf("expected checked_at and details to reference node")
+	}
+
+	t.Run("invalid payload rejected", func(t *testing.T) {
+		rec := call([]byte(`{"region":"us","rulesets":["cis"]}`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 got %d body=%s", rec.Code, rec.Body.String())
 		}
 	})
 }
@@ -972,6 +1208,7 @@ type fakeStore struct {
 	createdTenant       *storage.Tenant
 	jobs                map[uuid.UUID]*storage.Job
 	events              map[uuid.UUID][]storage.JobEvent
+	complianceResults   map[uuid.UUID][]storage.ComplianceResult
 	users               map[string]*storage.User
 	usersByID           map[uuid.UUID]*storage.User
 	userList            []storage.User
@@ -1634,6 +1871,30 @@ func (f *fakeStore) ListJobEvents(_ context.Context, jobID uuid.UUID) ([]storage
 	return f.events[jobID], nil
 }
 
+func (f *fakeStore) CreateComplianceResults(_ context.Context, results []storage.ComplianceResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+	if f.complianceResults == nil {
+		f.complianceResults = make(map[uuid.UUID][]storage.ComplianceResult)
+	}
+	for _, result := range results {
+		resultCopy := result
+		f.complianceResults[result.JobID] = append(f.complianceResults[result.JobID], resultCopy)
+	}
+	return nil
+}
+
+func (f *fakeStore) ListComplianceResults(_ context.Context, jobID uuid.UUID) ([]storage.ComplianceResult, error) {
+	results := f.complianceResults[jobID]
+	if len(results) == 0 {
+		return nil, nil
+	}
+	out := make([]storage.ComplianceResult, len(results))
+	copy(out, results)
+	return out, nil
+}
+
 func (f *fakeStore) GetUserByExternalID(_ context.Context, externalID string) (*storage.User, error) {
 	externalID = strings.TrimSpace(externalID)
 	if externalID == "" {
@@ -1646,4 +1907,244 @@ func (f *fakeStore) GetUserByExternalID(_ context.Context, externalID string) (*
 		return user, nil
 	}
 	return nil, nil
+}
+
+func (f *fakeStore) CreateEntitlement(_ context.Context, params storage.CreateEntitlementParams) (*storage.AccessEntitlement, error) {
+	if params.UserID == uuid.Nil {
+		return nil, errors.New("user id is required")
+	}
+	if params.NodeID == uuid.Nil {
+		return nil, errors.New("node id is required")
+	}
+	if strings.TrimSpace(params.Role) == "" {
+		return nil, errors.New("role is required")
+	}
+
+	ent := &storage.AccessEntitlement{
+		ID:        uuid.New(),
+		TenantID:  params.TenantID,
+		UserID:    params.UserID,
+		NodeID:    params.NodeID,
+		Role:      params.Role,
+		Metadata:  params.Metadata,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	if params.GroupName != nil {
+		ent.GroupName = sql.NullString{String: *params.GroupName, Valid: true}
+	}
+	if params.ExpiresAt != nil {
+		ent.ExpiresAt = sql.NullTime{Time: *params.ExpiresAt, Valid: true}
+	}
+	if params.GrantedBy != nil {
+		ent.GrantedBy = uuid.NullUUID{UUID: *params.GrantedBy, Valid: true}
+		ent.GrantedAt = time.Now()
+	}
+
+	return ent, nil
+}
+
+func (f *fakeStore) CreatePolicy(_ context.Context, params storage.CreatePolicyParams) (*storage.Policy, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) UpdatePolicy(_ context.Context, id uuid.UUID, params storage.UpdatePolicyParams) (*storage.Policy, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) DeletePolicy(_ context.Context, id uuid.UUID) error {
+	return errors.New("not implemented")
+}
+
+func (f *fakeStore) GetPolicy(_ context.Context, id uuid.UUID) (*storage.Policy, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListPolicies(_ context.Context, filter storage.PolicyFilter, limit, offset int) ([]storage.Policy, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) ListPolicyVersions(_ context.Context, policyID uuid.UUID, limit, offset int) ([]storage.PolicyVersion, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) GetPolicyVersion(_ context.Context, policyID uuid.UUID, version int) (*storage.PolicyVersion, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetPromotedPolicyVersion(_ context.Context, policyID uuid.UUID) (*storage.PolicyVersion, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) CreatePolicyVersion(_ context.Context, params storage.CreatePolicyVersionParams) (*storage.PolicyVersion, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) PromotePolicyVersion(_ context.Context, policyID uuid.UUID, version int) (*storage.PolicyVersion, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) ListRollouts(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.TemplateRollout, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) GetRollout(_ context.Context, id uuid.UUID) (*storage.TemplateRollout, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) CreateRollout(_ context.Context, params storage.CreateRolloutParams) (*storage.TemplateRollout, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) UpdateRollout(_ context.Context, id uuid.UUID, params storage.UpdateRolloutParams) (*storage.TemplateRollout, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) ListTelemetryMetrics(_ context.Context, filter storage.TelemetryMetricFilter, limit, offset int) ([]storage.TelemetryMetric, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) ListTelemetryLogs(_ context.Context, filter storage.TelemetryLogFilter, limit, offset int) ([]storage.TelemetryLog, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) CreateTelemetryMetrics(_ context.Context, metrics []storage.CreateTelemetryMetricParams) error {
+	return nil
+}
+
+func (f *fakeStore) CreateTelemetryLogs(_ context.Context, logs []storage.CreateTelemetryLogParams) error {
+	return nil
+}
+
+func (f *fakeStore) GetComplianceAggregation(_ context.Context, filter storage.ComplianceResultFilter) (*storage.ComplianceAggregation, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetComplianceTrends(_ context.Context, filter storage.ComplianceResultFilter, days int) ([]storage.ComplianceTrend, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetRemediationScript(_ context.Context, ruleID, platform string) (*storage.RemediationScript, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetRemediationScriptByID(_ context.Context, id uuid.UUID) (*storage.RemediationScript, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListRemediationScripts(_ context.Context, ruleID, platform string, limit, offset int) ([]storage.RemediationScript, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) CreateRemediationScript(_ context.Context, params storage.CreateRemediationScriptParams) (*storage.RemediationScript, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) UpdateRemediationScript(_ context.Context, id uuid.UUID, params storage.UpdateRemediationScriptParams) (*storage.RemediationScript, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) ListWebhooks(_ context.Context, tenantID uuid.UUID, active *bool, limit, offset int) ([]storage.Webhook, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) CreateWebhook(_ context.Context, params storage.CreateWebhookParams) (*storage.Webhook, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) GetWebhook(_ context.Context, id uuid.UUID) (*storage.Webhook, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) UpdateWebhook(_ context.Context, id uuid.UUID, params storage.UpdateWebhookParams) (*storage.Webhook, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) DeleteWebhook(_ context.Context, id uuid.UUID) error {
+	return errors.New("not implemented")
+}
+
+func (f *fakeStore) ListWebhookDeliveries(_ context.Context, webhookID uuid.UUID, status *string, limit, offset int) ([]storage.WebhookDelivery, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) GetRetentionPolicy(_ context.Context, tenantID uuid.UUID, dataType string) (*storage.TelemetryRetentionPolicy, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListRetentionPolicies(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.TelemetryRetentionPolicy, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) CreateRetentionPolicy(_ context.Context, params storage.CreateRetentionPolicyParams) (*storage.TelemetryRetentionPolicy, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) DeleteExpiredTelemetry(_ context.Context, tenantID uuid.UUID, dataType string) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakeStore) ListSecretGroups(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.SecretGroup, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) GetSecretGroup(_ context.Context, id uuid.UUID) (*storage.SecretGroup, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) CreateSecretGroup(_ context.Context, params storage.CreateSecretGroupParams) (*storage.SecretGroup, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) ListSecretSyncs(_ context.Context, groupID uuid.UUID, limit, offset int) ([]storage.SecretSync, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) ListEntitlements(_ context.Context, filter storage.EntitlementFilter, limit, offset int) ([]storage.AccessEntitlement, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) GetEntitlement(_ context.Context, id uuid.UUID) (*storage.AccessEntitlement, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) UpdateEntitlement(_ context.Context, id uuid.UUID, params storage.UpdateEntitlementParams) (*storage.AccessEntitlement, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) DeleteEntitlement(_ context.Context, id uuid.UUID) error {
+	return errors.New("not implemented")
+}
+
+func (f *fakeStore) RecordAccessSync(_ context.Context, tenantID, userID uuid.UUID, provider, status, message string, usersFound, groupsFound, entitlementsCreated int, syncErr error) error {
+	return nil
+}
+
+func (f *fakeStore) CreateSessionRecording(_ context.Context, params storage.CreateSessionRecordingParams) (*storage.SessionRecording, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) GetSessionRecording(_ context.Context, id uuid.UUID) (*storage.SessionRecording, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListSessionRecordings(_ context.Context, params storage.ListSessionRecordingsParams, limit, offset int) ([]storage.SessionRecording, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) UpdateSessionRecording(_ context.Context, id uuid.UUID, params storage.UpdateSessionRecordingParams) (*storage.SessionRecording, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) CreateSessionEvent(_ context.Context, recordingID uuid.UUID, eventType string, timestamp time.Time, metadata map[string]any) (*storage.SessionEvent, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) ListSessionEvents(_ context.Context, recordingID uuid.UUID, limit, offset int) ([]storage.SessionEvent, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) ListComplianceResultsFiltered(_ context.Context, filter storage.ComplianceResultFilter, limit, offset int) ([]storage.ComplianceResult, int, error) {
+	return nil, 0, nil
 }

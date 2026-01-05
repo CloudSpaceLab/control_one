@@ -105,6 +105,10 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 			s.handleTemplateVersions(w, r, templateID)
 			return
 		}
+		if segments[1] == "rollouts" {
+			s.handleTemplateRollouts(w, r, templateID)
+			return
+		}
 		http.NotFound(w, r)
 	case 4:
 		if segments[1] == "versions" && segments[3] == "promote" {
@@ -114,6 +118,19 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			s.handlePromoteTemplateVersion(w, r, templateID, versionNumber)
+			return
+		}
+		if segments[1] == "rollouts" {
+			rolloutID, err := uuid.Parse(segments[2])
+			if err != nil {
+				http.Error(w, "invalid rollout id", http.StatusBadRequest)
+				return
+			}
+			if segments[3] == "cancel" {
+				s.handleCancelRollout(w, r, templateID, rolloutID)
+				return
+			}
+			s.handleRolloutResource(w, r, templateID, rolloutID)
 			return
 		}
 		http.NotFound(w, r)

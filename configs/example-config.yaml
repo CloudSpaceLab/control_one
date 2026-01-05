@@ -29,6 +29,14 @@ scanner:
   timeout: 30s
   shell: ""
   max_concurrent: 4
+  enabled: true
+  preferred:
+    - openscap
+    - inspec
+    - ansible
+    - trivy
+  fallback: builtin
+  use_real_scan: true
 
 mesh:
   enabled: true
@@ -182,3 +190,25 @@ intervals:
   scan: 15m
   telemetry: 1m
   provisioning: 30m
+
+# Session Recording Configuration
+# Enable session recording only on nodes where required
+session_recording:
+  enabled: false  # Set to true to enable session recording on this node
+  backend: tlog   # Options: tlog, auditx
+  storage_path: /var/lib/control-one/nodeagent/sessions
+  retention_days: 90
+  max_size_mb: 1024
+  compress: true
+  upload_interval: 5m
+  session_types:
+    - terminal
+    - ssh
+  record_ssh: true
+  record_terminal: true
+  record_commands: true
+  tlog_path: /usr/bin/tlog-rec
+  auditx_path: /usr/bin/auditx
+  # Optional: OpenReplay integration
+  # openreplay_api_key: ""
+  # openreplay_url: ""

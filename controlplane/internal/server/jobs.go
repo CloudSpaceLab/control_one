@@ -233,26 +233,32 @@ func (s *Server) handleComplianceScan(ctx context.Context, job *storage.Job) err
 	if err != nil {
 		return err
 	}
-	if s.complianceEngine == nil {
-		return fmt.Errorf("compliance engine not configured")
-	}
-
 	s.logger.Info("compliance job starting",
 		zap.String("job_id", job.ID.String()),
 		zap.String("node_id", payload.NodeID),
 		zap.String("scan_id", payload.ScanID),
 	)
 
-	results, err := s.complianceEngine.Evaluate(ctx, payload.NodeID, payload.Policies)
+	results, err := s.evaluateCompliance(ctx, payload)
 	if err != nil {
-		return fmt.Errorf("compliance evaluate: %w", err)
+		return s.handleComplianceFailure(ctx, job, payload, err)
 	}
+
+	if err := s.persistComplianceResults(ctx, job, payload, results); err != nil {
+		return s.handleComplianceFailure(ctx, job, payload, err)
+	}
+
 	s.logger.Info("compliance job completed",
 		zap.String("job_id", job.ID.String()),
 		zap.String("node_id", payload.NodeID),
 		zap.String("scan_id", payload.ScanID),
 		zap.Int("results", len(results)),
 	)
+	s.recordAudit(ctx, nil, job.TenantID, "compliance.scan.completed", "job", job.ID.String(), map[string]any{
+		"node_id": payload.NodeID,
+		"scan_id": payload.ScanID,
+		"rules":   len(results),
+	})
 	return nil
 }
 
@@ -274,6 +280,124 @@ func decodeProvisionPayload(data []byte) (*provisionPayload, error) {
 		return nil, fmt.Errorf("node_id is required")
 	}
 	return &payload, nil
+}
+
+func (s *Server) evaluateCompliance(ctx context.Context, payload *compliancePayload) ([]compliance.Result, error) {
+	if payload == nil {
+		return nil, fmt.Errorf("compliance payload required")
+	}
+
+	if strings.TrimSpace(s.cfg.Jobs.Compliance.APIBaseURL) == "" {
+		req := complianceEvaluateRequest{
+			NodeID:         payload.NodeID,
+			Region:         s.defaultComplianceRegion(),
+			RuleSets:       s.defaultComplianceRuleSets(),
+			Certifications: s.cfg.Jobs.Compliance.Certifications,
+			Policies:       payload.Policies,
+			AutoApply:      s.cfg.Jobs.Compliance.AutoApply,
+			UseRealScan:    s.shouldUseRealScan(payload.Policies),
+		}
+		if req.Policies == nil {
+			req.Policies = map[string]string{}
+		}
+		if req.UseRealScan {
+			return evaluateComplianceWithRealScanners(req), nil
+		}
+		return synthesizeComplianceResults(req), nil
+	}
+
+	if s.complianceEngine == nil {
+		return nil, fmt.Errorf("compliance engine not configured")
+	}
+
+	return s.complianceEngine.Evaluate(ctx, payload.NodeID, payload.Policies)
+}
+
+func (s *Server) defaultComplianceRuleSets() []string {
+	if len(s.cfg.Jobs.Compliance.RuleSets) > 0 {
+		return s.cfg.Jobs.Compliance.RuleSets
+	}
+	return []string{"mock-best-practices"}
+}
+
+func (s *Server) defaultComplianceRegion() string {
+	if region := strings.TrimSpace(s.cfg.Jobs.Compliance.Region); region != "" {
+		return region
+	}
+	return "us-mock-1"
+}
+
+func (s *Server) shouldUseRealScan(policies map[string]string) bool {
+	if policies == nil {
+		return false
+	}
+	if useRealScan, ok := policies["use_real_scan"]; ok {
+		return strings.ToLower(useRealScan) == "true"
+	}
+	return false
+}
+
+
+func (s *Server) persistComplianceResults(ctx context.Context, job *storage.Job, payload *compliancePayload, results []compliance.Result) error {
+	if s.store == nil || job == nil || len(results) == 0 {
+		return nil
+	}
+	stored := make([]storage.ComplianceResult, 0, len(results))
+	var nodeID uuid.UUID
+	if payload != nil {
+		if id, err := uuid.Parse(payload.NodeID); err == nil {
+			nodeID = id
+		}
+	}
+	for _, result := range results {
+		record := storage.ComplianceResult{
+			JobID:    job.ID,
+			TenantID: job.TenantID,
+			NodeID:   nodeID,
+			RuleID:   result.RuleID,
+			Passed:   result.Passed,
+		}
+		if payload != nil && strings.TrimSpace(payload.ScanID) != "" {
+			scanID := payload.ScanID
+			record.ScanID = &scanID
+		}
+		if strings.TrimSpace(result.Severity) != "" {
+			sev := result.Severity
+			record.Severity = &sev
+		}
+		if strings.TrimSpace(result.Details) != "" {
+			details := result.Details
+			record.Details = &details
+		}
+		if strings.TrimSpace(result.Remediation) != "" {
+			remediation := result.Remediation
+			record.Remediation = &remediation
+		}
+		if !result.CheckedAt.IsZero() {
+			checkedAt := result.CheckedAt
+			record.CheckedAt = &checkedAt
+		}
+		stored = append(stored, record)
+	}
+	return s.store.CreateComplianceResults(ctx, stored)
+}
+
+func (s *Server) handleComplianceFailure(ctx context.Context, job *storage.Job, payload *compliancePayload, err error) error {
+	if job != nil {
+		metadata := map[string]any{
+			"error": err.Error(),
+		}
+		if payload != nil {
+			if strings.TrimSpace(payload.ScanID) != "" {
+				metadata["scan_id"] = payload.ScanID
+			}
+			if strings.TrimSpace(payload.NodeID) != "" {
+				metadata["node_id"] = payload.NodeID
+			}
+		}
+		s.recordAudit(ctx, nil, job.TenantID, "compliance.scan.failed", "job", job.ID.String(), metadata)
+	}
+	return fmt.Errorf("compliance evaluate: %w", err)
 }
 
 func decodeCompliancePayload(data []byte) (*compliancePayload, error) {
@@ -384,7 +508,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]jobResponse, 0, len(jobs))
 	for i := range jobs {
-		resp = append(resp, jobResponseFromModel(&jobs[i], nil))
+		resp = append(resp, jobResponseFromModel(&jobs[i], nil, nil))
 	}
 
 	payload := paginatedResponse[jobResponse]{
@@ -395,6 +519,89 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		s.logger.Warn("encode jobs response", zap.Error(err))
+	}
+}
+
+func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
+
+	jobIDParam := strings.TrimSpace(r.URL.Query().Get("job_id"))
+	if jobIDParam == "" {
+		http.Error(w, "job_id is required", http.StatusBadRequest)
+		return
+	}
+
+	jobID, err := uuid.Parse(jobIDParam)
+	if err != nil {
+		http.Error(w, "invalid job_id", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	sendUpdate := func() {
+		if s.store == nil {
+			return
+		}
+		job, err := s.store.GetJob(ctx, jobID)
+		if err != nil {
+			s.logger.Warn("get job for stream", zap.Error(err))
+			return
+		}
+		if job == nil {
+			fmt.Fprintf(w, "data: %s\n\n", `{"error":"job not found"}`)
+			flusher.Flush()
+			return
+		}
+
+		jobResp := jobResponseFromModel(job, nil, nil)
+
+		jobJSON, err := json.Marshal(jobResp)
+		if err != nil {
+			s.logger.Warn("marshal job for stream", zap.Error(err))
+			return
+		}
+
+		fmt.Fprintf(w, "data: %s\n\n", string(jobJSON))
+		flusher.Flush()
+	}
+
+	sendUpdate()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sendUpdate()
+			if job, _ := s.store.GetJob(ctx, jobID); job != nil {
+				if job.Status == storage.JobStatusSucceeded || job.Status == storage.JobStatusFailed || job.Status == storage.JobStatusCancelled {
+					sendUpdate()
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -412,6 +619,11 @@ func (s *Server) handleJobSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	segments := strings.Split(trimmed, "/")
+	if len(segments) == 2 && segments[1] == "stream" {
+		s.handleJobStream(w, r)
+		return
+	}
+
 	jobID, err := uuid.Parse(segments[0])
 	if err != nil {
 		http.Error(w, "invalid job id", http.StatusBadRequest)
@@ -442,7 +654,7 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 		return
 	}
 
-	job, events, err := s.loadJobWithEvents(r.Context(), jobID)
+	job, events, results, err := s.loadJobWithDetails(r.Context(), jobID)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
@@ -452,7 +664,7 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 		return
 	}
 
-	writeJSON(w, http.StatusOK, jobResponseFromModel(job, events))
+	writeJSON(w, http.StatusOK, jobResponseFromModel(job, events, results))
 }
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
@@ -501,29 +713,37 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 		"type": job.Type,
 	})
 
-	updated, events, err := s.loadJobWithEvents(ctx, job.ID)
+	updated, events, results, err := s.loadJobWithDetails(ctx, job.ID)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, jobResponseFromModel(updated, events))
+	writeJSON(w, http.StatusOK, jobResponseFromModel(updated, events, results))
 }
 
-func (s *Server) loadJobWithEvents(ctx context.Context, jobID uuid.UUID) (*storage.Job, []storage.JobEvent, error) {
+func (s *Server) loadJobWithDetails(ctx context.Context, jobID uuid.UUID) (*storage.Job, []storage.JobEvent, []storage.ComplianceResult, error) {
 	job, err := s.store.GetJob(ctx, jobID)
 	if err != nil {
 		s.logger.Error("load job", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if job == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	events, err := s.store.ListJobEvents(ctx, jobID)
 	if err != nil {
 		s.logger.Error("load job events", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return job, events, nil
+	var results []storage.ComplianceResult
+	if job.Type == JobTypeComplianceScan {
+		results, err = s.store.ListComplianceResults(ctx, jobID)
+		if err != nil {
+			s.logger.Error("load compliance results", zap.Error(err), zap.String("job_id", jobID.String()))
+			return nil, nil, nil, err
+		}
+	}
+	return job, events, results, nil
 }
 
 func jobCancelable(status storage.JobStatus) bool {
@@ -688,7 +908,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	events := []storage.JobEvent{*initialEvent}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(jobResponseFromModel(created, events)); err != nil {
+	if err := json.NewEncoder(w).Encode(jobResponseFromModel(created, events, nil)); err != nil {
 		s.logger.Warn("encode job response", zap.Error(err))
 	}
 }
@@ -723,19 +943,20 @@ func (s *Server) ensureProvisioningPlan(ctx context.Context, planID string) erro
 }
 
 type jobResponse struct {
-	ID         string            `json:"id"`
-	TenantID   *string           `json:"tenant_id,omitempty"`
-	Type       string            `json:"type"`
-	Status     string            `json:"status"`
-	Payload    json.RawMessage   `json:"payload"`
-	Retries    int               `json:"retries"`
-	MaxRetries int               `json:"max_retries"`
-	Scheduled  *string           `json:"scheduled_at,omitempty"`
-	Started    *string           `json:"started_at,omitempty"`
-	Finished   *string           `json:"finished_at,omitempty"`
-	Created    string            `json:"created_at"`
-	Updated    string            `json:"updated_at"`
-	Events     []jobEventPayload `json:"events"`
+	ID                string                    `json:"id"`
+	TenantID          *string                   `json:"tenant_id,omitempty"`
+	Type              string                    `json:"type"`
+	Status            string                    `json:"status"`
+	Payload           json.RawMessage           `json:"payload"`
+	Retries           int                       `json:"retries"`
+	MaxRetries        int                       `json:"max_retries"`
+	Scheduled         *string                   `json:"scheduled_at,omitempty"`
+	Started           *string                   `json:"started_at,omitempty"`
+	Finished          *string                   `json:"finished_at,omitempty"`
+	Created           string                    `json:"created_at"`
+	Updated           string                    `json:"updated_at"`
+	Events            []jobEventPayload         `json:"events"`
+	ComplianceResults []complianceResultPayload `json:"compliance_results,omitempty"`
 }
 
 type jobEventPayload struct {
@@ -745,7 +966,19 @@ type jobEventPayload struct {
 	CreatedAt string  `json:"created_at"`
 }
 
-func jobResponseFromModel(job *storage.Job, events []storage.JobEvent) jobResponse {
+type complianceResultPayload struct {
+	RuleID      string         `json:"rule_id"`
+	Passed      bool           `json:"passed"`
+	Severity    *string        `json:"severity,omitempty"`
+	Details     *string        `json:"details,omitempty"`
+	Remediation *string        `json:"remediation,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CheckedAt   *string        `json:"checked_at,omitempty"`
+	NodeID      *string        `json:"node_id,omitempty"`
+	ScanID      *string        `json:"scan_id,omitempty"`
+}
+
+func jobResponseFromModel(job *storage.Job, events []storage.JobEvent, complianceResults []storage.ComplianceResult) jobResponse {
 	resp := jobResponse{
 		ID:         job.ID.String(),
 		Type:       job.Type,
@@ -785,6 +1018,39 @@ func jobResponseFromModel(job *storage.Job, events []storage.JobEvent) jobRespon
 				payload.Message = &msg
 			}
 			resp.Events = append(resp.Events, payload)
+		}
+	}
+	if len(complianceResults) > 0 {
+		resp.ComplianceResults = make([]complianceResultPayload, 0, len(complianceResults))
+		for _, result := range complianceResults {
+			payload := complianceResultPayload{
+				RuleID: result.RuleID,
+				Passed: result.Passed,
+			}
+			if len(result.Metadata) > 0 {
+				payload.Metadata = result.Metadata
+			}
+			if result.Severity != nil {
+				payload.Severity = result.Severity
+			}
+			if result.Details != nil {
+				payload.Details = result.Details
+			}
+			if result.Remediation != nil {
+				payload.Remediation = result.Remediation
+			}
+			if result.CheckedAt != nil {
+				ts := result.CheckedAt.UTC().Format(time.RFC3339)
+				payload.CheckedAt = &ts
+			}
+			if result.NodeID != uuid.Nil {
+				id := result.NodeID.String()
+				payload.NodeID = &id
+			}
+			if result.ScanID != nil {
+				payload.ScanID = result.ScanID
+			}
+			resp.ComplianceResults = append(resp.ComplianceResults, payload)
 		}
 	}
 	return resp

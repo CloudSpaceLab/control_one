@@ -226,6 +226,228 @@ export interface CreateTemplateVersionPayload {
   rollout_notes?: string;
 }
 
+export interface ComplianceResult {
+  id: string;
+  job_id: string;
+  tenant_id?: string;
+  node_id?: string;
+  scan_id?: string;
+  rule_id: string;
+  passed: boolean;
+  severity?: string;
+  details?: string;
+  remediation?: string;
+  metadata?: Record<string, unknown>;
+  checked_at?: string;
+  created_at: string;
+}
+
+export interface ComplianceSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  by_severity: Record<string, number>;
+  by_rule_id?: Record<string, number>;
+  last_checked?: string;
+}
+
+export interface ComplianceTrend {
+  date: string;
+  passed: number;
+  failed: number;
+  total: number;
+}
+
+export interface ListComplianceResultsParams {
+  tenant_id?: string;
+  node_id?: string;
+  job_id?: string;
+  scan_id?: string;
+  rule_id?: string;
+  passed?: boolean;
+  severity?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ComplianceTrendsParams {
+  tenant_id?: string;
+  node_id?: string;
+  days?: number;
+}
+
+export interface AuditLog {
+  id: string;
+  tenant_id?: string;
+  actor_id?: string;
+  actor_type: string;
+  action: string;
+  resource_type: string;
+  resource_id?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ListAuditLogsParams {
+  tenant_id?: string;
+  actor_type?: string;
+  action?: string;
+  resource_type?: string;
+  resource_id?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TelemetryMetric {
+  id: string;
+  tenant_id?: string;
+  node_id?: string;
+  metric_name: string;
+  metric_value: number;
+  metric_unit?: string;
+  labels?: Record<string, string>;
+  timestamp: string;
+  created_at: string;
+}
+
+export interface TelemetryLog {
+  id: string;
+  tenant_id?: string;
+  node_id?: string;
+  log_level: string;
+  log_message: string;
+  log_source?: string;
+  log_program?: string;
+  labels?: Record<string, string>;
+  timestamp: string;
+  created_at: string;
+}
+
+export interface ListTelemetryMetricsParams {
+  tenant_id?: string;
+  node_id?: string;
+  metric_name?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListTelemetryLogsParams {
+  tenant_id?: string;
+  node_id?: string;
+  log_level?: string;
+  log_source?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface Webhook {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  verify_ssl: boolean;
+  timeout_seconds: number;
+  retry_count: number;
+  headers?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  last_triggered_at?: string;
+  last_success_at?: string;
+  last_failure_at?: string;
+  failure_count: number;
+  created_at: string;
+  updated_at: string;
+  created_by?: string;
+}
+
+export interface CreateWebhookPayload {
+  tenant_id?: string;
+  name: string;
+  url: string;
+  events: string[];
+  secret?: string;
+  enabled?: boolean;
+  verify_ssl?: boolean;
+  timeout_seconds?: number;
+  retry_count?: number;
+  headers?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SecretGroup {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  backend: string;
+  endpoint?: string;
+  sync_interval_seconds?: number;
+  last_sync_at?: string;
+  sync_status: string;
+  sync_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSecretGroupPayload {
+  tenant_id?: string;
+  name: string;
+  backend: string;
+  endpoint?: string;
+  sync_interval_seconds?: number;
+}
+
+export interface SecretSync {
+  id: string;
+  secret_group_id: string;
+  node_id?: string;
+  secret_path: string;
+  secret_version?: string;
+  synced_at: string;
+  sync_status: string;
+  sync_error?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ListSecretGroupsParams {
+  tenant_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListSecretSyncsParams {
+  limit?: number;
+  offset?: number;
+}
+
+export interface UpdateWebhookPayload {
+  name?: string;
+  url?: string;
+  events?: string[];
+  secret?: string;
+  enabled?: boolean;
+  verify_ssl?: boolean;
+  timeout_seconds?: number;
+  retry_count?: number;
+  headers?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ListWebhooksParams {
+  tenant_id?: string;
+  enabled?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 interface ServerPaginationMeta {
   total: number;
   count: number;
@@ -562,6 +784,240 @@ export class APIClient {
       `/api/v1/templates/${encoded}/versions/${versionNumber}/promote`,
       { method: 'POST' },
     );
+  }
+
+  async listComplianceResults(
+    params: ListComplianceResultsParams = {},
+  ): Promise<PaginatedResponse<ComplianceResult>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    if (params.job_id) search.set('job_id', params.job_id);
+    if (params.scan_id) search.set('scan_id', params.scan_id);
+    if (params.rule_id) search.set('rule_id', params.rule_id);
+    if (typeof params.passed === 'boolean') search.set('passed', params.passed.toString());
+    if (params.severity) search.set('severity', params.severity);
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<ComplianceResult>>(
+      `/api/v1/compliance/results${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getComplianceSummary(params: { tenant_id?: string; node_id?: string } = {}): Promise<ComplianceSummary> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<ComplianceSummary>(`/api/v1/compliance/summary${suffix}`);
+  }
+
+  async getComplianceTrends(params: ComplianceTrendsParams = {}): Promise<ComplianceTrend[]> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    if (typeof params.days === 'number') search.set('days', params.days.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<{ trends: ComplianceTrend[] }>(`/api/v1/compliance/trends${suffix}`);
+    return response.trends || [];
+  }
+
+  async listAuditLogs(params: ListAuditLogsParams = {}): Promise<PaginatedResponse<AuditLog>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.actor_type) search.set('actor_type', params.actor_type);
+    if (params.action) search.set('action', params.action);
+    if (params.resource_type) search.set('resource_type', params.resource_type);
+    if (params.resource_id) search.set('resource_id', params.resource_id);
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<AuditLog>>(`/api/v1/audit${suffix}`);
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async listTelemetryMetrics(
+    params: ListTelemetryMetricsParams = {},
+  ): Promise<PaginatedResponse<TelemetryMetric>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    if (params.metric_name) search.set('metric_name', params.metric_name);
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<TelemetryMetric>>(
+      `/api/v1/telemetry/metrics${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async listTelemetryLogs(
+    params: ListTelemetryLogsParams = {},
+  ): Promise<PaginatedResponse<TelemetryLog>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    if (params.log_level) search.set('log_level', params.log_level);
+    if (params.log_source) search.set('log_source', params.log_source);
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<TelemetryLog>>(
+      `/api/v1/telemetry/logs${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getNodeTelemetryMetrics(nodeId: string, params: { tenant_id?: string; metric_name?: string } = {}): Promise<PaginatedResponse<TelemetryMetric>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.metric_name) search.set('metric_name', params.metric_name);
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const encoded = encodeURIComponent(nodeId);
+    const response = await this.request<RawPaginatedResponse<TelemetryMetric>>(
+      `/api/v1/telemetry/nodes/${encoded}/metrics${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async listWebhooks(params: ListWebhooksParams = {}): Promise<PaginatedResponse<Webhook>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (typeof params.enabled === 'boolean') search.set('enabled', params.enabled.toString());
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<{ items: Webhook[]; total: number; limit: number; offset: number }>(
+      `/api/v1/webhooks${suffix}`,
+    );
+    return {
+      data: response.items,
+      pagination: {
+        total: response.total,
+        count: response.items.length,
+        limit: response.limit,
+        offset: response.offset,
+        nextOffset: response.offset + response.items.length < response.total ? response.offset + response.items.length : null,
+        prevOffset: response.offset > 0 ? Math.max(0, response.offset - response.limit) : null,
+      },
+    };
+  }
+
+  async getWebhook(webhookId: string): Promise<Webhook> {
+    const encoded = encodeURIComponent(webhookId);
+    return this.request<Webhook>(`/api/v1/webhooks/${encoded}`);
+  }
+
+  async createWebhook(payload: CreateWebhookPayload): Promise<Webhook> {
+    return this.request<Webhook>('/api/v1/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateWebhook(webhookId: string, payload: UpdateWebhookPayload): Promise<Webhook> {
+    const encoded = encodeURIComponent(webhookId);
+    return this.request<Webhook>(`/api/v1/webhooks/${encoded}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteWebhook(webhookId: string): Promise<void> {
+    const encoded = encodeURIComponent(webhookId);
+    return this.request<void>(`/api/v1/webhooks/${encoded}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async testWebhook(webhookId: string, payload: { event_type: string; payload?: Record<string, unknown> }): Promise<{ success: boolean; http_status_code?: number; response_body?: string; error?: string }> {
+    const encoded = encodeURIComponent(webhookId);
+    return this.request(`/api/v1/webhooks/${encoded}/test`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listSecretGroups(params: ListSecretGroupsParams = {}): Promise<PaginatedResponse<SecretGroup>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<SecretGroup>>(
+      `/api/v1/secrets/groups${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getSecretGroup(groupId: string): Promise<SecretGroup> {
+    const encoded = encodeURIComponent(groupId);
+    return this.request<SecretGroup>(`/api/v1/secrets/groups/${encoded}`);
+  }
+
+  async createSecretGroup(payload: CreateSecretGroupPayload): Promise<SecretGroup> {
+    return this.request<SecretGroup>('/api/v1/secrets/groups', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSecretGroup(groupId: string): Promise<void> {
+    const encoded = encodeURIComponent(groupId);
+    return this.request<void>(`/api/v1/secrets/groups/${encoded}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async syncSecretGroup(groupId: string): Promise<void> {
+    const encoded = encodeURIComponent(groupId);
+    return this.request<void>(`/api/v1/secrets/groups/${encoded}/sync`, {
+      method: 'POST',
+    });
+  }
+
+  async listSecretSyncs(groupId: string, params: ListSecretSyncsParams = {}): Promise<PaginatedResponse<SecretSync>> {
+    const search = new URLSearchParams();
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const encoded = encodeURIComponent(groupId);
+    const response = await this.request<RawPaginatedResponse<SecretSync>>(
+      `/api/v1/secrets/groups/${encoded}/syncs${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

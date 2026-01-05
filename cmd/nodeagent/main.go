@@ -25,6 +25,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/scanner"
 	"github.com/CloudSpaceLab/control_one/internal/scheduler"
 	"github.com/CloudSpaceLab/control_one/internal/secrets"
+	"github.com/CloudSpaceLab/control_one/internal/sessionrecording"
 	"github.com/CloudSpaceLab/control_one/internal/telemetry"
 	"github.com/CloudSpaceLab/control_one/internal/util"
 	"github.com/CloudSpaceLab/control_one/internal/wizard"
@@ -92,11 +93,27 @@ func main() {
 	if err != nil {
 		log.Fatal("policy syncer init failed", zap.Error(err))
 	}
-	scannerSvc := scanner.NewBuiltinScanner(log, scanner.Options{
-		Timeout:       cfg.Scanner.Timeout,
-		Shell:         cfg.Scanner.Shell,
-		MaxConcurrent: cfg.Scanner.MaxConcurrent,
-	})
+	var scannerSvc scanner.Runner
+	if cfg.Scanner.Enabled && cfg.Scanner.UseRealScan {
+		fallbackScanner := scanner.NewBuiltinScanner(log, scanner.Options{
+			Timeout:       cfg.Scanner.Timeout,
+			Shell:         cfg.Scanner.Shell,
+			MaxConcurrent: cfg.Scanner.MaxConcurrent,
+		})
+		multiScanner := scanner.NewMultiScanner(log, fallbackScanner)
+		for _, preferred := range cfg.Scanner.Preferred {
+			if adapter, ok := multiScanner.GetAdapter(preferred); ok && adapter.IsAvailable() {
+				log.Info("using scanner adapter", zap.String("adapter", preferred))
+			}
+		}
+		scannerSvc = multiScanner
+	} else {
+		scannerSvc = scanner.NewBuiltinScanner(log, scanner.Options{
+			Timeout:       cfg.Scanner.Timeout,
+			Shell:         cfg.Scanner.Shell,
+			MaxConcurrent: cfg.Scanner.MaxConcurrent,
+		})
+	}
 
 	telemetrySvc := telemetry.New(client, log, hooksService)
 	if cfg.TelemetryPrefs.CollectLogs && len(cfg.TelemetryPrefs.LogSources) > 0 {
@@ -137,6 +154,32 @@ func main() {
 		Certifications: cfg.Compliance.Certifications,
 		AutoApply:      cfg.Compliance.AutoApplyTemplates,
 	})
+
+	var sessionRecordingSvc *sessionrecording.Service
+	if cfg.SessionRecording.Enabled {
+		sessionRecordingSvc = sessionrecording.NewService(log, client, state.NodeID, sessionrecording.Config{
+			Enabled:          cfg.SessionRecording.Enabled,
+			Backend:          cfg.SessionRecording.Backend,
+			StoragePath:      cfg.SessionRecording.StoragePath,
+			RetentionDays:    cfg.SessionRecording.RetentionDays,
+			MaxSizeMB:        cfg.SessionRecording.MaxSizeMB,
+			Compress:         cfg.SessionRecording.Compress,
+			UploadInterval:   cfg.SessionRecording.UploadInterval,
+			SessionTypes:     cfg.SessionRecording.SessionTypes,
+			RecordSSH:        cfg.SessionRecording.RecordSSH,
+			RecordTerminal:   cfg.SessionRecording.RecordTerminal,
+			RecordCommands:   cfg.SessionRecording.RecordCommands,
+			TlogPath:         cfg.SessionRecording.TlogPath,
+			AuditxPath:       cfg.SessionRecording.AuditxPath,
+			OpenReplayAPIKey: cfg.SessionRecording.OpenReplayAPIKey,
+			OpenReplayURL:    cfg.SessionRecording.OpenReplayURL,
+		})
+		log.Info("session recording service initialized", zap.Bool("enabled", true))
+		emitHook(ctx, hooksService, log, "session_recording.initialized", state.NodeID, map[string]any{
+			"backend": cfg.SessionRecording.Backend,
+		})
+		_ = sessionRecordingSvc
+	}
 
 	accessMgr := access.NewManager(log, client, access.Options{
 		Provider:     access.ProviderType(cfg.Access.Provider),
@@ -232,6 +275,12 @@ func main() {
 			for _, rule := range policies {
 				ruleMap[rule.ID] = rule.Check
 			}
+			
+			useRealScan := cfg.Scanner.UseRealScan && cfg.Scanner.Enabled
+			if useRealScan {
+				ruleMap["use_real_scan"] = "true"
+			}
+			
 			if compResults, err := complianceEngine.Evaluate(ctx, state.NodeID, ruleMap); err != nil {
 				log.Warn("compliance evaluation", zap.Error(err))
 				emitHook(ctx, hooksService, log, "compliance.evaluate.failed", state.NodeID, map[string]any{"error": err.Error()})

@@ -5,6 +5,12 @@ import { Jobs } from './pages/Jobs';
 import { Templates } from './pages/Templates';
 import { Nodes } from './pages/Nodes';
 import { Tenants } from './pages/Tenants';
+import { Compliance } from './pages/Compliance';
+import { Audit } from './pages/Audit';
+import { Users } from './pages/Users';
+import { Telemetry } from './pages/Telemetry';
+import { Settings } from './pages/Settings';
+import { Secrets } from './pages/Secrets';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
@@ -25,6 +31,12 @@ export function App(): JSX.Element {
         <Route path="nodes" element={<Nodes />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />
+        <Route path="compliance" element={<Compliance />} />
+        <Route path="audit" element={<Audit />} />
+        <Route path="users" element={<Users />} />
+        <Route path="telemetry" element={<Telemetry />} />
+        <Route path="secrets" element={<Secrets />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />
     </Routes>

@@ -1,0 +1,24 @@
+apiVersion: v2
+name: control-one
+description: Control One Platform - Unified control plane for infrastructure provisioning, compliance, and telemetry
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - control-plane
+  - infrastructure
+  - compliance
+  - telemetry
+maintainers:
+  - name: Control One Team
+dependencies:
+  - name: postgresql
+    version: "~12.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "~18.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+
+

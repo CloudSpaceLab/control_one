@@ -1,0 +1,345 @@
+global:
+  environment: production
+  imageRegistry: ""
+  imagePullSecrets: []
+
+controlplane:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: ghcr.io/cloudspacelab/control-one-controlplane
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 8443
+    targetPort: 8443
+  
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    hosts:
+      - host: control-one.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: control-one-tls
+        hosts:
+          - control-one.example.com
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  config:
+    http:
+      address: ":8443"
+      read_timeout: 15s
+      write_timeout: 15s
+    
+    tls:
+      enabled: true
+      cert_file: /etc/tls/tls.crt
+      key_file: /etc/tls/tls.key
+      client_ca_file: ""
+      require_client_tls: false
+    
+    observability:
+      enable_metrics: true
+      metrics_path: /metrics
+    
+    database:
+      url: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 10
+      conn_max_lifetime: 15m
+      apply_migrations: true
+    
+    worker:
+      concurrency: 4
+      queue_size: 256
+    
+    auth:
+      oidc:
+        enabled: true
+        issuer_url: "https://issuer.example.com"
+        client_id: "control-one"
+        audience:
+          - "control-one-api"
+        username_claim: preferred_username
+        groups_claim: groups
+        cache_ttl: 5m
+      rbac:
+        default_role: viewer
+        role_mappings:
+          operator:
+            - "ops-team"
+          admin:
+            - "platform-admins"
+    
+    registration:
+      bootstrap_tokens:
+        - "CHANGE_ME_TOKEN"
+      default_tenant_id: ""
+  
+  env:
+    - name: POSTGRES_HOST
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: host
+    - name: POSTGRES_USER
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: username
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: password
+    - name: POSTGRES_DB
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: database
+    - name: REDIS_HOST
+      valueFrom:
+        secretKeyRef:
+          name: control-one-redis
+          key: host
+    - name: REDIS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: control-one-redis
+          key: password
+  
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: ghcr.io/cloudspacelab/control-one-worker
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  
+  config:
+    database:
+      url: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 10
+      conn_max_lifetime: 15m
+    
+    worker:
+      concurrency: 8
+      queue_size: 512
+  
+  env:
+    - name: POSTGRES_HOST
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: host
+    - name: POSTGRES_USER
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: username
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: password
+    - name: POSTGRES_DB
+      valueFrom:
+        secretKeyRef:
+          name: control-one-postgres
+          key: database
+    - name: REDIS_HOST
+      valueFrom:
+        secretKeyRef:
+          name: control-one-redis
+          key: host
+    - name: REDIS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: control-one-redis
+          key: password
+  
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ui:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: ghcr.io/cloudspacelab/control-one-ui
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+  
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    hosts:
+      - host: control-one.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: control-one-ui-tls
+        hosts:
+          - control-one.example.com
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  env:
+    - name: VITE_API_BASE_URL
+      value: "https://control-one.example.com/api/v1"
+    - name: VITE_OIDC_ISSUER
+      value: "https://issuer.example.com"
+    - name: VITE_OIDC_CLIENT_ID
+      value: "control-one"
+  
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "CHANGE_ME"
+    database: "controlone"
+    username: "controlone"
+  primary:
+    persistence:
+      enabled: true
+      size: 100Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+  readReplicas:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 100Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "CHANGE_ME"
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+  replica:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 8Gi
+
+observability:
+  enabled: true
+  
+  prometheus:
+    enabled: true
+    retention: 30d
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+  
+  grafana:
+    enabled: true
+    adminUser: admin
+    adminPassword: "CHANGE_ME"
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  
+  loki:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 50Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+
