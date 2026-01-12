@@ -18,7 +18,7 @@
 }
 
 .page-header .subtitle {
-  color: #6b7280;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -29,19 +29,19 @@
 
 .error-banner {
   padding: 1rem;
-  background: #fee2e2;
-  border: 1px solid #fecaca;
+  background: var(--accent-error);
+  border: 1px solid var(--accent-error);
   border-radius: 6px;
-  color: #991b1b;
+  color: white;
   margin-bottom: 1.5rem;
 }
 
 .success-banner {
   padding: 1rem;
-  background: #d1fae5;
-  border: 1px solid #a7f3d0;
+  background: var(--accent-success);
+  border: 1px solid var(--accent-success);
   border-radius: 6px;
-  color: #065f46;
+  color: white;
   margin-bottom: 1.5rem;
 }
 
@@ -64,12 +64,12 @@
   font-size: 2rem;
   font-weight: 700;
   margin-bottom: 0.5rem;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .stat-label {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -102,7 +102,7 @@
 
 .results-count {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .table-container {
@@ -116,26 +116,26 @@
 }
 
 .users-table thead {
-  background: #f9fafb;
+  background: var(--bg-secondary);
 }
 
 .users-table th {
-  padding: 0.75rem;
+  padding: 0.75rem 1rem;
   text-align: left;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #374151;
-  border-bottom: 2px solid #e5e7eb;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
 }
 
 .users-table td {
   padding: 0.75rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-color);
   font-size: 0.875rem;
 }
 
 .users-table tbody tr:hover {
-  background: #f9fafb;
+  background: var(--bg-hover);
 }
 
 .user-info {
@@ -146,7 +146,7 @@
 
 .user-name {
   font-weight: 500;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .user-id {

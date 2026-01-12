@@ -337,7 +337,6 @@ func (s *Server) shouldUseRealScan(policies map[string]string) bool {
 	return false
 }
 
-
 func (s *Server) persistComplianceResults(ctx context.Context, job *storage.Job, payload *compliancePayload, results []compliance.Result) error {
 	if s.store == nil || job == nil || len(results) == 0 {
 		return nil

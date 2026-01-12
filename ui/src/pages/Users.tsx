@@ -5,7 +5,14 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { User, Role } from '../lib/api';
-import './Users.css';
+import { 
+  EnterpriseLayout, 
+  ExecutiveOverview, 
+  ManagementPanel, 
+  ActionZone,
+  ContentGrid 
+} from '../components/EnterpriseLayout';
+import './EnterpriseLayout.css';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -32,7 +39,6 @@ export function Users(): JSX.Element {
   const {
     data: users,
     loading: usersLoading,
-    error: usersError,
     pagination,
     reload: reloadUsers,
   } = useUsers({ limit, offset });
@@ -40,7 +46,6 @@ export function Users(): JSX.Element {
   const {
     data: roles,
     loading: rolesLoading,
-    error: rolesError,
     reload: reloadRoles,
   } = useRoles();
 
@@ -54,11 +59,15 @@ export function Users(): JSX.Element {
   const { showToast } = useToast();
   const [updating, setUpdating] = useState(false);
 
-  const roleMap = useMemo(() => {
-    const map = new Map<string, Role>();
-    roles.forEach((role) => map.set(role.name, role));
-    return map;
-  }, [roles]);
+  const summary = useMemo(() => {
+    const usersWithRoles = users.filter((u) => u.roles && u.roles.length > 0);
+    return {
+      total: pagination.total,
+      totalRoles: roles.length,
+      usersWithRoles: usersWithRoles.length,
+      activeUsers: users.length,
+    };
+  }, [pagination.total, roles.length, users]);
 
   const handleEditRoles = (user: User) => {
     setSelectedUser(user);
@@ -163,209 +172,297 @@ export function Users(): JSX.Element {
     }
   };
 
+  const roleMap = useMemo(() => {
+    const map = new Map<string, Role>();
+    roles.forEach((role) => map.set(role.name, role));
+    return map;
+  }, [roles]);
+
   return (
-    <div className="users-page">
-      <div className="page-header">
-        <div>
-          <h1>Users & Roles</h1>
-          <p className="subtitle">Manage users and their role assignments</p>
-        </div>
-        <div className="page-actions">
+    <EnterpriseLayout variant="management">
+      {/* Executive Overview */}
+      <ExecutiveOverview 
+        title="👥 User & Role Management"
+        subtitle="Manage user access control and role assignments across your organization"
+      >
+        <article className="stat-card">
+          <span className="muted">Total Users</span>
+          <strong>{summary.total}</strong>
+          <small className="muted">All registered users</small>
+        </article>
+        <article className="stat-card">
+          <span className="muted">Available Roles</span>
+          <strong>{summary.totalRoles}</strong>
+          <small className="muted">Access control levels</small>
+        </article>
+        <article className="stat-card">
+          <span className="muted">Users with Roles</span>
+          <strong>{summary.usersWithRoles}</strong>
+          <small className="muted">Assigned permissions</small>
+        </article>
+        <article className="stat-card">
+          <span className="muted">Active Session</span>
+          <strong>{summary.activeUsers}</strong>
+          <small className="muted">Currently loaded</small>
+        </article>
+      </ExecutiveOverview>
+
+      <div className="management-dashboard">
+        {/* Main Content Area */}
+        <div className="management-main">
+          {/* Bulk Actions */}
           {selectedUserIds.size > 0 && (
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                {selectedUserIds.size} selected
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsBulkAssigning(true)}
-                className="btn-primary"
-                disabled={isBulkAssigning}
-              >
-                Bulk Assign Roles
-              </button>
-            </div>
-          )}
-          <button type="button" onClick={handleRefresh} className="btn-secondary">
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {usersError && (
-        <div className="error-banner">
-          <p>Error loading users: {usersError}</p>
-        </div>
-      )}
-
-      {rolesError && (
-        <div className="error-banner">
-          <p>Error loading roles: {rolesError}</p>
-        </div>
-      )}
-
-      <div className="users-stats">
-        <div className="stat-card">
-          <div className="stat-value">{pagination.total}</div>
-          <div className="stat-label">Total Users</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{roles.length}</div>
-          <div className="stat-label">Available Roles</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">
-            {users.filter((u) => u.roles && u.roles.length > 0).length}
-          </div>
-          <div className="stat-label">Users with Roles</div>
-        </div>
-      </div>
-
-      <div className="content-grid">
-        <div className="users-section">
-          <div className="section-header">
-            <h2>Users</h2>
-            <div className="results-count">
-              Showing {users.length} of {pagination.total}
-            </div>
-          </div>
-
-          {usersLoading ? (
-            <div className="loading-placeholder">Loading users...</div>
-          ) : users.length === 0 ? (
-            <div className="empty-state">
-              <p>No users found.</p>
-            </div>
-          ) : (
-            <>
-              <div className="table-container">
-                <table className="users-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '40px' }}>
+            <ManagementPanel 
+              title="🔧 Bulk Actions"
+              subtitle={`${selectedUserIds.size} user(s) selected`}
+              position="primary"
+            >
+              <ContentGrid columns={1} gap="md">
+                <div className="form-field">
+                  <label>Select Roles to Assign</label>
+                  <div className="roles-checkboxes">
+                    {roles.map((role) => (
+                      <label key={role.id} className="role-checkbox">
                         <input
                           type="checkbox"
-                          checked={selectedUserIds.size === users.length && users.length > 0}
-                          onChange={(e) => handleSelectAll(e.target.checked)}
-                          title="Select all"
+                          checked={bulkAssignRoles.includes(role.name)}
+                          onChange={() => {
+                            setBulkAssignRoles((prev) =>
+                              prev.includes(role.name)
+                                ? prev.filter((r) => r !== role.name)
+                                : [...prev, role.name]
+                            );
+                          }}
                         />
-                      </th>
-                      <th>User</th>
-                      <th>Email</th>
-                      <th>Roles</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((user) => (
-                      <tr key={user.id}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedUserIds.has(user.id)}
-                            onChange={(e) => handleSelectUser(user.id, e.target.checked)}
-                          />
-                        </td>
-                        <td>
-                          <div className="user-info">
-                            <div className="user-name">
-                              {user.display_name || user.external_id}
-                            </div>
-                            <div className="user-id">ID: {user.id.slice(0, 8)}...</div>
-                          </div>
-                        </td>
-                        <td>{user.email || '—'}</td>
-                        <td>
-                          <div className="roles-list">
-                            {user.roles && user.roles.length > 0 ? (
-                              user.roles.map((roleName) => {
-                                const role = roleMap.get(roleName);
-                                return (
-                                  <span key={roleName} className="role-badge" title={role?.description}>
-                                    {roleName}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="no-roles">No roles assigned</span>
-                            )}
-                          </div>
-                        </td>
-                        <td>{formatDate(user.created_at)}</td>
-                        <td>
-                          <button
-                            type="button"
-                            onClick={() => handleEditRoles(user)}
-                            className="btn-link"
-                          >
-                            Edit Roles
-                          </button>
-                        </td>
-                      </tr>
+                        <div className="checkbox-content">
+                          <span className="checkbox-role-name">{role.name}</span>
+                          {role.description && (
+                            <span className="checkbox-role-desc">{role.description}</span>
+                          )}
+                        </div>
+                      </label>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="pagination">
-                <button
-                  type="button"
-                  onClick={() => setOffset(Math.max(0, offset - limit))}
-                  disabled={offset === 0 || usersLoading}
-                  className="btn-secondary"
-                >
-                  Previous
-                </button>
-                <span className="pagination-info">
-                  Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setOffset(offset + limit)}
-                  disabled={offset + limit >= pagination.total || usersLoading}
-                  className="btn-secondary"
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="roles-section">
-          <div className="section-header">
-            <h2>Available Roles</h2>
-          </div>
-
-          {rolesLoading ? (
-            <div className="loading-placeholder">Loading roles...</div>
-          ) : roles.length === 0 ? (
-            <div className="empty-state">
-              <p>No roles found.</p>
-            </div>
-          ) : (
-            <div className="roles-list-container">
-              {roles.map((role) => (
-                <div key={role.id} className="role-card">
-                  <div className="role-header">
-                    <h3 className="role-name">{role.name}</h3>
-                  </div>
-                  {role.description && (
-                    <p className="role-description">{role.description}</p>
-                  )}
-                  <div className="role-meta">
-                    <span className="role-users-count">
-                      {users.filter((u) => u.roles?.includes(role.name)).length} user(s)
-                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
+              </ContentGrid>
+              <ActionZone alignment="right" variant="primary">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedUserIds(new Set());
+                    setBulkAssignRoles([]);
+                  }}
+                  className="ghost-button"
+                  disabled={isBulkAssigning}
+                >
+                  Cancel Selection
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkAssignRoles}
+                  className="primary-button"
+                  disabled={isBulkAssigning || bulkAssignRoles.length === 0}
+                >
+                  {isBulkAssigning ? 'Assigning...' : `Assign to ${selectedUserIds.size} User(s)`}
+                </button>
+              </ActionZone>
+            </ManagementPanel>
           )}
+
+          {/* Users Table */}
+          <ManagementPanel 
+            title="👤 User Registry"
+            subtitle="Manage user accounts and role assignments"
+            position="primary"
+          >
+            {usersLoading ? (
+              <p className="muted">Loading users…</p>
+            ) : users.length === 0 ? (
+              <div className="empty-state">
+                <p>No users found. Users will appear here once they are created.</p>
+              </div>
+            ) : (
+              <>
+                <div className="table-container">
+                  <table className="users-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '40px' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedUserIds.size === users.length && users.length > 0}
+                            onChange={(e) => handleSelectAll(e.target.checked)}
+                            title="Select all"
+                          />
+                        </th>
+                        <th>User</th>
+                        <th>Email</th>
+                        <th>Roles</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.map((user) => (
+                        <tr key={user.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selectedUserIds.has(user.id)}
+                              onChange={(e) => handleSelectUser(user.id, e.target.checked)}
+                            />
+                          </td>
+                          <td>
+                            <div className="user-info">
+                              <div className="user-name">
+                                {user.display_name || user.external_id}
+                              </div>
+                              <div className="user-id">ID: {user.id.slice(0, 8)}...</div>
+                            </div>
+                          </td>
+                          <td>{user.email || '—'}</td>
+                          <td>
+                            <div className="roles-list">
+                              {user.roles && user.roles.length > 0 ? (
+                                user.roles.map((roleName) => {
+                                  const role = roleMap.get(roleName);
+                                  return (
+                                    <span key={roleName} className="role-badge" title={role?.description}>
+                                      {roleName}
+                                    </span>
+                                  );
+                                })
+                              ) : (
+                                <span className="no-roles">No roles assigned</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>{formatDate(user.created_at)}</td>
+                          <td>
+                            <button
+                              type="button"
+                              onClick={() => handleEditRoles(user)}
+                              className="btn-link"
+                            >
+                              Edit Roles
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination */}
+                <ManagementPanel 
+                  title="Pagination"
+                  position="tertiary"
+                >
+                  <div className="pagination-controls">
+                    <div className="pagination-info">
+                      Showing {users.length} of {pagination.total} users
+                    </div>
+                    <ActionZone alignment="center" variant="secondary">
+                      <button
+                        type="button"
+                        onClick={() => setOffset(Math.max(0, offset - limit))}
+                        disabled={offset === 0 || usersLoading}
+                        className="ghost-button"
+                      >
+                        Previous
+                      </button>
+                      <span className="pagination-info">
+                        Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setOffset(offset + limit)}
+                        disabled={offset + limit >= pagination.total || usersLoading}
+                        className="ghost-button"
+                      >
+                        Next
+                      </button>
+                    </ActionZone>
+                  </div>
+                </ManagementPanel>
+              </>
+            )}
+          </ManagementPanel>
+        </div>
+
+        {/* Sidebar */}
+        <div className="management-sidebar">
+          {/* Quick Actions */}
+          <ManagementPanel 
+            title="⚡ Quick Actions"
+            subtitle="Common user management tasks"
+            position="secondary"
+          >
+            <ContentGrid columns={1} gap="md">
+              <button 
+                type="button" 
+                onClick={handleRefresh} 
+                className="secondary-button"
+                style={{ width: '100%' }}
+              >
+                🔄 Refresh Data
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setSelectedUserIds(new Set(users.map((u) => u.id)))}
+                className="ghost-button"
+                style={{ width: '100%' }}
+                disabled={usersLoading}
+              >
+                ✅ Select All Users
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setSelectedUserIds(new Set())}
+                className="ghost-button"
+                style={{ width: '100%' }}
+              >
+                ❌ Clear Selection
+              </button>
+            </ContentGrid>
+          </ManagementPanel>
+
+          {/* Available Roles */}
+          <ManagementPanel 
+            title="🔐 Available Roles"
+            subtitle={`${roles.length} defined roles`}
+            position="secondary"
+          >
+            {rolesLoading ? (
+              <p className="muted">Loading roles…</p>
+            ) : roles.length === 0 ? (
+              <div className="empty-state">
+                <p>No roles found. Roles will appear here once defined.</p>
+              </div>
+            ) : (
+              <div className="roles-list-container">
+                {roles.map((role) => (
+                  <div key={role.id} className="role-card">
+                    <div className="role-header">
+                      <h3 className="role-name">{role.name}</h3>
+                    </div>
+                    {role.description && (
+                      <p className="role-description">{role.description}</p>
+                    )}
+                    <div className="role-meta">
+                      <span className="role-users-count">
+                        {users.filter((u) => u.roles?.includes(role.name)).length} user(s)
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ManagementPanel>
         </div>
       </div>
 
+      {/* Edit Roles Modal */}
       {isEditingRoles && selectedUser && (
         <div className="modal-overlay" onClick={handleCancelEdit}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -379,13 +476,13 @@ export function Users(): JSX.Element {
             <form onSubmit={handleSaveRoles}>
               <div className="modal-body">
                 {formError && (
-                  <div className="error-banner">
+                  <div className="form-error">
                     <p>{formError}</p>
                   </div>
                 )}
 
                 {formSuccess && (
-                  <div className="success-banner">
+                  <div className="form-success">
                     <p>{formSuccess}</p>
                   </div>
                 )}
@@ -413,10 +510,10 @@ export function Users(): JSX.Element {
               </div>
 
               <div className="modal-footer">
-                <button type="button" onClick={handleCancelEdit} className="btn-secondary" disabled={updating}>
+                <button type="button" onClick={handleCancelEdit} className="secondary-button" disabled={updating}>
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={updating}>
+                <button type="submit" className="primary-button" disabled={updating}>
                   {updating ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
@@ -424,71 +521,7 @@ export function Users(): JSX.Element {
           </div>
         </div>
       )}
-
-      {isBulkAssigning && (
-        <div className="modal-overlay" onClick={() => setIsBulkAssigning(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Bulk Assign Roles</h2>
-              <button type="button" onClick={() => setIsBulkAssigning(false)} className="modal-close">
-                ×
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <p className="selection-hint">
-                Assign roles to {selectedUserIds.size} selected user(s):
-              </p>
-              <div className="roles-checkboxes">
-                {roles.map((role) => (
-                  <label key={role.id} className="role-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={bulkAssignRoles.includes(role.name)}
-                      onChange={() => {
-                        setBulkAssignRoles((prev) =>
-                          prev.includes(role.name)
-                            ? prev.filter((r) => r !== role.name)
-                            : [...prev, role.name]
-                        );
-                      }}
-                    />
-                    <div className="checkbox-content">
-                      <span className="checkbox-role-name">{role.name}</span>
-                      {role.description && (
-                        <span className="checkbox-role-desc">{role.description}</span>
-                      )}
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsBulkAssigning(false);
-                  setBulkAssignRoles([]);
-                }}
-                className="btn-secondary"
-                disabled={isBulkAssigning}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleBulkAssignRoles}
-                className="btn-primary"
-                disabled={isBulkAssigning || bulkAssignRoles.length === 0}
-              >
-                {isBulkAssigning ? 'Assigning...' : `Assign to ${selectedUserIds.size} User(s)`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </EnterpriseLayout>
   );
 }
 

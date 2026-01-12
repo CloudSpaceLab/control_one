@@ -19,6 +19,7 @@ type ProvisioningTemplate struct {
 	Provider          string
 	Description       sql.NullString
 	Labels            map[string]string
+	TemplateType      string // 'job', 'config', 'compliance'
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	ArchivedAt        sql.NullTime
@@ -43,6 +44,7 @@ type ProvisioningTemplateVersion struct {
 type ProvisioningTemplateFilter struct {
 	Provider        string
 	NamePrefix      string
+	TemplateType    string // 'job', 'config', 'compliance', or empty for all
 	IncludeArchived bool
 }
 
@@ -58,11 +60,64 @@ type CreateTemplateVersionParams struct {
 
 // UpdateProvisioningTemplateParams captures patchable fields on a template.
 type UpdateProvisioningTemplateParams struct {
-	Name        *string
-	Provider    *string
-	Description *string
-	Labels      *map[string]string
-	Archived    *bool
+	Name         *string
+	Provider     *string
+	Description  *string
+	Labels       *map[string]string
+	TemplateType *string
+	Archived     *bool
+}
+
+// TemplateExecution represents a template execution record.
+type TemplateExecution struct {
+	ID              uuid.UUID
+	TemplateID      uuid.UUID
+	TemplateType    string // 'job', 'config', 'compliance'
+	TargetType      string // 'tenant', 'node', 'global'
+	TargetID        *uuid.UUID
+	Parameters      map[string]any
+	Status          string // 'pending', 'running', 'completed', 'failed'
+	ExecutionResult json.RawMessage
+	ErrorMessage    *string
+	CreatedBy       *uuid.UUID
+	CreatedAt       time.Time
+	StartedAt       sql.NullTime
+	CompletedAt     sql.NullTime
+}
+
+// TemplateExecutionJob represents a job created by a template execution.
+type TemplateExecutionJob struct {
+	ID          uuid.UUID
+	ExecutionID uuid.UUID
+	JobID       uuid.UUID
+	CreatedAt   time.Time
+}
+
+// TemplateExecutionCompliance represents a compliance result from a template execution.
+type TemplateExecutionCompliance struct {
+	ID                 uuid.UUID
+	ExecutionID        uuid.UUID
+	ComplianceResultID uuid.UUID
+	CreatedAt          time.Time
+}
+
+// CreateTemplateExecutionParams defines input for creating a template execution.
+type CreateTemplateExecutionParams struct {
+	TemplateID   uuid.UUID
+	TemplateType string
+	TargetType   string
+	TargetID     *uuid.UUID
+	Parameters   map[string]any
+	CreatedBy    *uuid.UUID
+}
+
+// UpdateTemplateExecutionParams captures patchable fields on a template execution.
+type UpdateTemplateExecutionParams struct {
+	Status          *string
+	ExecutionResult *json.RawMessage
+	ErrorMessage    *string
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
 }
 
 // ListProvisioningTemplates returns templates matching the provided filter.
@@ -85,12 +140,16 @@ func (s *Store) ListProvisioningTemplates(ctx context.Context, filter Provisioni
 		args = append(args, strings.TrimSpace(filter.NamePrefix)+"%")
 		clauses = append(clauses, fmt.Sprintf("name ILIKE $%d", len(args)))
 	}
+	if strings.TrimSpace(filter.TemplateType) != "" {
+		args = append(args, strings.TrimSpace(filter.TemplateType))
+		clauses = append(clauses, fmt.Sprintf("template_type = $%d", len(args)))
+	}
 	if !filter.IncludeArchived {
 		clauses = append(clauses, "archived_at IS NULL")
 	}
 
 	query := fmt.Sprintf(`
-        SELECT id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+        SELECT id, name, provider, description, labels, template_type, created_at, updated_at, archived_at, promoted_version_id
         FROM provisioning_templates
         WHERE %s
         ORDER BY created_at DESC
@@ -133,6 +192,7 @@ func (s *Store) ListProvisioningTemplates(ctx context.Context, filter Provisioni
 			&tpl.Provider,
 			&tpl.Description,
 			&labelsRaw,
+			&tpl.TemplateType,
 			&tpl.CreatedAt,
 			&tpl.UpdatedAt,
 			&tpl.ArchivedAt,
@@ -184,9 +244,9 @@ func (s *Store) CreateProvisioningTemplate(ctx context.Context, tpl *Provisionin
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-        INSERT INTO provisioning_templates (id, name, provider, description, labels, created_at, updated_at, archived_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, tpl.ID, tpl.Name, strings.TrimSpace(tpl.Provider), tpl.Description, labelsRaw, tpl.CreatedAt, tpl.UpdatedAt, tpl.ArchivedAt)
+        INSERT INTO provisioning_templates (id, name, provider, description, labels, template_type, created_at, updated_at, archived_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, tpl.ID, tpl.Name, strings.TrimSpace(tpl.Provider), tpl.Description, labelsRaw, tpl.TemplateType, tpl.CreatedAt, tpl.UpdatedAt, tpl.ArchivedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert provisioning template: %w", err)
 	}
@@ -250,6 +310,16 @@ func (s *Store) UpdateProvisioningTemplate(ctx context.Context, id uuid.UUID, pa
 		idx++
 		updated = true
 	}
+	if params.TemplateType != nil {
+		templateType := strings.TrimSpace(*params.TemplateType)
+		if templateType == "" {
+			return nil, errors.New("template type cannot be empty")
+		}
+		setFragments = append(setFragments, fmt.Sprintf("template_type = $%d", idx))
+		args = append(args, templateType)
+		idx++
+		updated = true
+	}
 	if params.Archived != nil {
 		if *params.Archived {
 			setFragments = append(setFragments, fmt.Sprintf("archived_at = $%d", idx))
@@ -269,7 +339,7 @@ func (s *Store) UpdateProvisioningTemplate(ctx context.Context, id uuid.UUID, pa
         UPDATE provisioning_templates
         SET %s
         WHERE id = $%d
-        RETURNING id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+        RETURNING id, name, provider, description, labels, template_type, created_at, updated_at, archived_at, promoted_version_id
     `, strings.Join(setFragments, ", "), idx)
 	args = append(args, id)
 
@@ -282,6 +352,7 @@ func (s *Store) UpdateProvisioningTemplate(ctx context.Context, id uuid.UUID, pa
 		&tpl.Provider,
 		&tpl.Description,
 		&labelsRaw,
+		&tpl.TemplateType,
 		&tpl.CreatedAt,
 		&tpl.UpdatedAt,
 		&tpl.ArchivedAt,
@@ -316,7 +387,7 @@ func (s *Store) GetProvisioningTemplate(ctx context.Context, id uuid.UUID) (*Pro
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-        SELECT id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+        SELECT id, name, provider, description, labels, template_type, created_at, updated_at, archived_at, promoted_version_id
         FROM provisioning_templates
         WHERE id = $1
     `, id)
@@ -324,7 +395,7 @@ func (s *Store) GetProvisioningTemplate(ctx context.Context, id uuid.UUID) (*Pro
 	var tpl ProvisioningTemplate
 	var labelsRaw []byte
 	var promoted sql.NullString
-	if err := row.Scan(&tpl.ID, &tpl.Name, &tpl.Provider, &tpl.Description, &labelsRaw, &tpl.CreatedAt, &tpl.UpdatedAt, &tpl.ArchivedAt, &promoted); err != nil {
+	if err := row.Scan(&tpl.ID, &tpl.Name, &tpl.Provider, &tpl.Description, &labelsRaw, &tpl.TemplateType, &tpl.CreatedAt, &tpl.UpdatedAt, &tpl.ArchivedAt, &promoted); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -366,7 +437,7 @@ func (s *Store) CreateProvisioningTemplateVersion(ctx context.Context, params Cr
 	}()
 
 	// lock template to ensure consistent numbering
-	if err = ensureTemplateExistsForUpdate(ctx, tx, params.TemplateID); err != nil {
+	if err = ensureTemplateExistsForUpdate(ctx, tx, params.TemplateID, s.isSQLite); err != nil {
 		return nil, err
 	}
 
@@ -450,12 +521,19 @@ func (s *Store) PromoteProvisioningTemplateVersion(ctx context.Context, template
 	var metadata []byte
 	var createdBy sql.NullString
 	var promoted sql.NullTime
-	if err = tx.QueryRowContext(ctx, `
+
+	forUpdateClause := ""
+	if !s.isSQLite {
+		forUpdateClause = "FOR UPDATE"
+	}
+
+	row := tx.QueryRowContext(ctx, fmt.Sprintf(`
         SELECT id, template_id, version, checksum, body, metadata_schema, rollout_notes, created_by, created_at, promoted_at
         FROM provisioning_template_versions
         WHERE template_id = $1 AND version = $2
-        FOR UPDATE
-    `, templateID, versionNumber).Scan(
+        %s
+    `, forUpdateClause), templateID, versionNumber)
+	if err = row.Scan(
 		&version.ID,
 		&version.TemplateID,
 		&version.Version,
@@ -521,12 +599,17 @@ func (s *Store) PromoteProvisioningTemplateVersion(ctx context.Context, template
 	return &version, nil
 }
 
-func ensureTemplateExistsForUpdate(ctx context.Context, tx *sql.Tx, templateID uuid.UUID) error {
+func ensureTemplateExistsForUpdate(ctx context.Context, tx *sql.Tx, templateID uuid.UUID, isSQLite bool) error {
 	if templateID == uuid.Nil {
 		return errors.New("template id is required")
 	}
 
-	row := tx.QueryRowContext(ctx, `SELECT id FROM provisioning_templates WHERE id = $1 FOR UPDATE`, templateID)
+	forUpdateClause := ""
+	if !isSQLite {
+		forUpdateClause = "FOR UPDATE"
+	}
+
+	row := tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT id FROM provisioning_templates WHERE id = $1 %s`, forUpdateClause), templateID)
 	var tmp uuid.UUID
 	if err := row.Scan(&tmp); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -729,4 +812,292 @@ func sanitizeLabelMap(input map[string]string) map[string]string {
 		result[key] = strings.TrimSpace(v)
 	}
 	return result
+}
+
+// CreateTemplateExecution creates a new template execution record.
+func (s *Store) CreateTemplateExecution(ctx context.Context, params CreateTemplateExecutionParams) (*TemplateExecution, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if params.TemplateID == uuid.Nil {
+		return nil, errors.New("template id is required")
+	}
+
+	execution := &TemplateExecution{
+		ID:           uuid.New(),
+		TemplateID:   params.TemplateID,
+		TemplateType: strings.TrimSpace(params.TemplateType),
+		TargetType:   strings.TrimSpace(params.TargetType),
+		TargetID:     params.TargetID,
+		Parameters:   params.Parameters,
+		Status:       "pending",
+		CreatedBy:    params.CreatedBy,
+		CreatedAt:    s.clock(),
+	}
+
+	if execution.TemplateType == "" {
+		return nil, errors.New("template type is required")
+	}
+	if execution.TargetType == "" {
+		return nil, errors.New("target type is required")
+	}
+
+	parametersRaw, err := json.Marshal(execution.Parameters)
+	if err != nil {
+		return nil, fmt.Errorf("marshal parameters: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+        INSERT INTO template_executions (id, template_id, template_type, target_type, target_id, parameters, status, created_by, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, execution.ID, execution.TemplateID, execution.TemplateType, execution.TargetType,
+		nullableUUIDPtr(execution.TargetID), parametersRaw, execution.Status,
+		nullableUUIDPtr(execution.CreatedBy), execution.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("insert template execution: %w", err)
+	}
+
+	return execution, nil
+}
+
+// UpdateTemplateExecution updates a template execution record.
+func (s *Store) UpdateTemplateExecution(ctx context.Context, id uuid.UUID, params UpdateTemplateExecutionParams) (*TemplateExecution, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("execution id is required")
+	}
+
+	var updated bool
+	now := s.clock()
+	setFragments := []string{"updated_at = $1"}
+	args := []any{now}
+	idx := 2
+
+	if params.Status != nil {
+		setFragments = append(setFragments, fmt.Sprintf("status = $%d", idx))
+		args = append(args, *params.Status)
+		idx++
+		updated = true
+	}
+	if params.ExecutionResult != nil {
+		setFragments = append(setFragments, fmt.Sprintf("execution_result = $%d", idx))
+		args = append(args, nullJSON(*params.ExecutionResult))
+		idx++
+		updated = true
+	}
+	if params.ErrorMessage != nil {
+		setFragments = append(setFragments, fmt.Sprintf("error_message = $%d", idx))
+		args = append(args, *params.ErrorMessage)
+		idx++
+		updated = true
+	}
+	if params.StartedAt != nil {
+		setFragments = append(setFragments, fmt.Sprintf("started_at = $%d", idx))
+		args = append(args, *params.StartedAt)
+		idx++
+		updated = true
+	}
+	if params.CompletedAt != nil {
+		setFragments = append(setFragments, fmt.Sprintf("completed_at = $%d", idx))
+		args = append(args, *params.CompletedAt)
+		idx++
+		updated = true
+	}
+
+	if !updated {
+		return nil, errors.New("no fields to update")
+	}
+
+	query := fmt.Sprintf(`
+        UPDATE template_executions
+        SET %s
+        WHERE id = $%d
+        RETURNING id, template_id, template_type, target_type, target_id, parameters, status, execution_result, error_message, created_by, created_at, started_at, completed_at
+    `, strings.Join(setFragments, ", "), idx)
+	args = append(args, id)
+
+	var execution TemplateExecution
+	var parametersRaw []byte
+	var executionResultRaw []byte
+	var createdBy sql.NullString
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&execution.ID,
+		&execution.TemplateID,
+		&execution.TemplateType,
+		&execution.TargetType,
+		&execution.TargetID,
+		&parametersRaw,
+		&execution.Status,
+		&executionResultRaw,
+		&execution.ErrorMessage,
+		&createdBy,
+		&execution.CreatedAt,
+		&execution.StartedAt,
+		&execution.CompletedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update template execution: %w", err)
+	}
+
+	if err := json.Unmarshal(parametersRaw, &execution.Parameters); err != nil {
+		return nil, fmt.Errorf("unmarshal parameters: %w", err)
+	}
+	if len(executionResultRaw) > 0 {
+		execution.ExecutionResult = executionResultRaw
+	}
+	if createdBy.Valid {
+		if id, err := uuid.Parse(createdBy.String); err == nil {
+			execution.CreatedBy = &id
+		}
+	}
+
+	return &execution, nil
+}
+
+// GetTemplateExecution returns a template execution by ID.
+func (s *Store) GetTemplateExecution(ctx context.Context, id uuid.UUID) (*TemplateExecution, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("execution id is required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id, template_id, template_type, target_type, target_id, parameters, status, execution_result, error_message, created_by, created_at, started_at, completed_at
+        FROM template_executions
+        WHERE id = $1
+    `, id)
+
+	var execution TemplateExecution
+	var parametersRaw []byte
+	var executionResultRaw []byte
+	var createdBy sql.NullString
+	if err := row.Scan(
+		&execution.ID,
+		&execution.TemplateID,
+		&execution.TemplateType,
+		&execution.TargetType,
+		&execution.TargetID,
+		&parametersRaw,
+		&execution.Status,
+		&executionResultRaw,
+		&execution.ErrorMessage,
+		&createdBy,
+		&execution.CreatedAt,
+		&execution.StartedAt,
+		&execution.CompletedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get template execution: %w", err)
+	}
+
+	if err := json.Unmarshal(parametersRaw, &execution.Parameters); err != nil {
+		return nil, fmt.Errorf("unmarshal parameters: %w", err)
+	}
+	if len(executionResultRaw) > 0 {
+		execution.ExecutionResult = executionResultRaw
+	}
+	if createdBy.Valid {
+		if id, err := uuid.Parse(createdBy.String); err == nil {
+			execution.CreatedBy = &id
+		}
+	}
+
+	return &execution, nil
+}
+
+// ListTemplateExecutions returns template executions with optional filtering.
+func (s *Store) ListTemplateExecutions(ctx context.Context, templateID uuid.UUID, limit, offset int) ([]TemplateExecution, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	var total int
+	var err error
+	if templateID != uuid.Nil {
+		err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM template_executions WHERE template_id = $1`, templateID).Scan(&total)
+	} else {
+		err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM template_executions`).Scan(&total)
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("count template executions: %w", err)
+	}
+
+	query := `
+        SELECT id, template_id, template_type, target_type, target_id, parameters, status, execution_result, error_message, created_by, created_at, started_at, completed_at
+        FROM template_executions
+    `
+	args := []any{}
+	if templateID != uuid.Nil {
+		query += " WHERE template_id = $1"
+		args = append(args, templateID)
+	}
+
+	query += " ORDER BY created_at DESC"
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit)
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", len(args)+1)
+		args = append(args, offset)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query template executions: %w", err)
+	}
+	defer rows.Close()
+
+	var executions []TemplateExecution
+	for rows.Next() {
+		var execution TemplateExecution
+		var parametersRaw []byte
+		var executionResultRaw []byte
+		var createdBy sql.NullString
+		if err := rows.Scan(
+			&execution.ID,
+			&execution.TemplateID,
+			&execution.TemplateType,
+			&execution.TargetType,
+			&execution.TargetID,
+			&parametersRaw,
+			&execution.Status,
+			&executionResultRaw,
+			&execution.ErrorMessage,
+			&createdBy,
+			&execution.CreatedAt,
+			&execution.StartedAt,
+			&execution.CompletedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan template execution: %w", err)
+		}
+
+		if err := json.Unmarshal(parametersRaw, &execution.Parameters); err != nil {
+			return nil, 0, fmt.Errorf("unmarshal parameters: %w", err)
+		}
+		if len(executionResultRaw) > 0 {
+			execution.ExecutionResult = executionResultRaw
+		}
+		if createdBy.Valid {
+			if id, err := uuid.Parse(createdBy.String); err == nil {
+				execution.CreatedBy = &id
+			}
+		}
+
+		executions = append(executions, execution)
+	}
+
+	return executions, total, nil
 }

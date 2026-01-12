@@ -114,6 +114,16 @@ Control One delivers a unified control plane, background worker service, and nod
    make docker-down
    ```
 
+### One-Click Demo (clients)
+- **Prereqs**: Docker Desktop (or docker + docker compose), Bash, Node.js 20+. Ensure ports 8443/3000/9090/6379/5432 are free.
+- **Run**:
+  ```bash
+  bash scripts/demo/run_demo.sh          # starts API + Redis + Postgres + Prometheus + Grafana + UI dev server
+  bash scripts/demo/run_demo.sh --no-ui  # backend only if you demo API/Grafana
+  ```
+- **UI**: http://localhost:4173 (default). API: https://localhost:8443. Grafana: http://localhost:3000 (admin/admin).
+- **Stop**: `docker compose -f docker-compose.dev.yml down` (and if UI was started, kill the PID from `build/demo-ui.pid`).
+
 ### Background Jobs
 The worker manager defaults to an in-memory queue. Enable Asynq/Redis by configuring `worker.backend: asynq` and `worker.asynq.*` fields in `controlplane/config/controlplane.dev.yaml`. When Asynq is enabled, ensure a Redis instance is reachable at the configured address.
 

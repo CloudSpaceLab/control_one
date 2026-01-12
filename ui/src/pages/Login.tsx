@@ -3,17 +3,31 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { buildAuthorizationUrl } from '../lib/oidc';
 import { isOidcConfigured } from '../config/oidc';
 import { useAuth } from '../providers/AuthProvider';
+import { useTenants } from '../hooks/useTenants';
 
 interface RedirectState {
   from?: string;
 }
 
+interface LoginCredentials {
+  username: string;
+  password: string;
+}
+
+const DEFAULT_ADMIN_CREDENTIALS = {
+  username: 'admin',
+  password: 'admin123'
+};
+
 export function Login(): JSX.Element {
   const { signIn, loading, error, isAuthenticated } = useAuth();
-  const [token, setToken] = useState('');
+  const { pagination: tenantPagination, loading: tenantsLoading } = useTenants({ limit: 1, offset: 0 });
+  const [token, setToken] = useState('demo-admin-token');
+  const [credentials, setCredentials] = useState<LoginCredentials>({ username: '', password: '' });
   const [localError, setLocalError] = useState<string | null>(null);
   const [ssoError, setSsoError] = useState<string | null>(null);
   const [ssoLoading, setSsoLoading] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<'token' | 'credentials'>('credentials');
   const navigate = useNavigate();
   const location = useLocation();
   const returnTo = useMemo(() => {
@@ -22,12 +36,17 @@ export function Login(): JSX.Element {
   }, [location.state]);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      navigate('/', { replace: true });
+    if (isAuthenticated && !tenantsLoading) {
+      // If no tenants exist, redirect to setup wizard
+      if (tenantPagination.total === 0) {
+        navigate('/setup', { replace: true });
+      } else {
+        navigate(returnTo || '/', { replace: true });
+      }
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, returnTo, tenantPagination.total, tenantsLoading]);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleTokenSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     try {
@@ -37,6 +56,28 @@ export function Login(): JSX.Element {
       }
       setLocalError(null);
       await signIn(trimmed);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Unable to sign in');
+    }
+  };
+
+  const handleCredentialsSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    try {
+      if (!credentials.username.trim() || !credentials.password.trim()) {
+        throw new Error('Username and password are required');
+      }
+      
+      // Check against default admin credentials
+      if (credentials.username === DEFAULT_ADMIN_CREDENTIALS.username && 
+          credentials.password === DEFAULT_ADMIN_CREDENTIALS.password) {
+        setLocalError(null);
+        // Sign in with a mock admin token
+        await signIn('demo-admin-token');
+      } else {
+        throw new Error('Invalid credentials. Use admin/admin123 for default access.');
+      }
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Unable to sign in');
     }
@@ -61,40 +102,180 @@ export function Login(): JSX.Element {
   const oidcEnabled = isOidcConfigured();
 
   return (
-    <section className="login-card">
-      <h2>Sign in</h2>
-      <p>Authenticate with your organization-issued identity provider to access the control plane.</p>
-
-      {oidcEnabled ? (
-        <div className="login-card__section">
-          <button type="button" className="primary" onClick={handleSso} disabled={ssoLoading}>
-            {ssoLoading ? 'Redirecting…' : 'Continue with Single Sign-On'}
-          </button>
-          {ssoError ? <span className="form-error">{ssoError}</span> : null}
+    <div className="auth-container">
+      <div className="auth-card">
+        <div className="auth-header">
+          <div className="auth-brand">
+            <div className="auth-logo">
+              <span>C1</span>
+            </div>
+            <div>
+              <h1>Control One</h1>
+              <p>Enterprise Control Plane</p>
+            </div>
+          </div>
         </div>
-      ) : null}
 
-      <div className="login-card__section">
-        <h3>Developer token</h3>
-        <form onSubmit={handleSubmit}>
-          <label htmlFor="token">Bearer token</label>
-          <input
-            id="token"
-            name="token"
-            type="text"
-            placeholder="Paste JWT here"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            disabled={loading}
-            required
-          />
-          {localError ? <span className="form-error">{localError}</span> : null}
-          {error ? <span className="form-error">{error}</span> : null}
-          <button type="submit" disabled={loading}>
-            {loading ? 'Signing in…' : 'Continue'}
-          </button>
-        </form>
+        <div className="auth-content">
+          <div className="auth-welcome">
+            <h2>Welcome back</h2>
+            <p>Sign in to access your control plane dashboard</p>
+          </div>
+
+          {/* Login Method Selection */}
+          <div className="auth-methods">
+            <div className="method-group">
+              <label className="method-label">Authentication Method</label>
+              <div className="radio-group">
+                <label className="radio-item">
+                  <input
+                    type="radio"
+                    name="loginMethod"
+                    value="credentials"
+                    checked={loginMethod === 'credentials'}
+                    onChange={() => setLoginMethod('credentials')}
+                  />
+                  <span className="radio-text">
+                    <strong>Username & Password</strong>
+                    <small>Use your admin credentials</small>
+                  </span>
+                </label>
+                <label className="radio-item">
+                  <input
+                    type="radio"
+                    name="loginMethod"
+                    value="token"
+                    checked={loginMethod === 'token'}
+                    onChange={() => setLoginMethod('token')}
+                  />
+                  <span className="radio-text">
+                    <strong>Bearer Token</strong>
+                    <small>Use your API token</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* SSO Section */}
+          {oidcEnabled && (
+            <div className="auth-divider">
+              <span>OR</span>
+            </div>
+          )}
+          
+          {oidcEnabled && (
+            <div className="auth-sso">
+              <button type="button" className="sso-button" onClick={handleSso} disabled={ssoLoading}>
+                <div className="sso-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>
+                  </svg>
+                </div>
+                <span>{ssoLoading ? 'Connecting to SSO…' : 'Continue with SSO'}</span>
+              </button>
+              {ssoError ? <div className="auth-error">{ssoError}</div> : null}
+            </div>
+          )}
+
+          {/* Credentials Login */}
+          {loginMethod === 'credentials' && (
+            <div className="auth-form">
+              <form onSubmit={handleCredentialsSubmit}>
+                <div className="form-field">
+                  <label htmlFor="username">Username</label>
+                  <input
+                    id="username"
+                    name="username"
+                    type="text"
+                    placeholder="Enter your username"
+                    value={credentials.username}
+                    onChange={(event) => setCredentials(prev => ({ ...prev, username: event.target.value }))}
+                    disabled={loading}
+                    required
+                    autoComplete="username"
+                  />
+                </div>
+                
+                <div className="form-field">
+                  <label htmlFor="password">Password</label>
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    placeholder="Enter your password"
+                    value={credentials.password}
+                    onChange={(event) => setCredentials(prev => ({ ...prev, password: event.target.value }))}
+                    disabled={loading}
+                    required
+                    autoComplete="current-password"
+                  />
+                </div>
+                
+                {(localError || error) && (
+                  <div className="auth-error">
+                    {localError || error}
+                  </div>
+                )}
+                
+                <button type="submit" className="auth-button" disabled={loading}>
+                  {loading ? (
+                    <>
+                      <div className="spinner"></div>
+                      Signing in…
+                    </>
+                  ) : (
+                    'Sign In'
+                  )}
+                </button>
+              </form>
+              
+              <div className="auth-hint">
+                <small>Default credentials: admin / admin123</small>
+              </div>
+            </div>
+          )}
+
+          {/* Token Login */}
+          {loginMethod === 'token' && (
+            <div className="auth-form">
+              <form onSubmit={handleTokenSubmit}>
+                <div className="form-field">
+                  <label htmlFor="token">Bearer Token</label>
+                  <textarea
+                    id="token"
+                    name="token"
+                    placeholder="Paste your JWT token here"
+                    value={token}
+                    onChange={(event) => setToken(event.target.value)}
+                    disabled={loading}
+                    required
+                    rows={4}
+                    className="token-textarea"
+                  />
+                </div>
+                
+                {(localError || error) && (
+                  <div className="auth-error">
+                    {localError || error}
+                  </div>
+                )}
+                
+                <button type="submit" className="auth-button" disabled={loading}>
+                  {loading ? (
+                    <>
+                      <div className="spinner"></div>
+                      Authenticating…
+                    </>
+                  ) : (
+                    'Authenticate'
+                  )}
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
       </div>
-    </section>
+    </div>
   );
 }

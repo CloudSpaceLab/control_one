@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApiClient } from './useApiClient';
+import { useApiErrorHandler } from './useApiErrorHandler';
 export function useJobs(options = {}) {
     const api = useApiClient();
+    const handleError = useApiErrorHandler('Failed to load jobs');
     const [state, setState] = useState({
         data: [],
         pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
         loading: true,
         error: null,
     });
+    const [reloadToken, setReloadToken] = useState(0);
     const { tenantId, status, type, limit, offset, pollIntervalMs } = options;
     const params = useMemo(() => {
         const normalized = {};
@@ -45,7 +48,7 @@ export function useJobs(options = {}) {
                         data: [],
                         pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
                         loading: false,
-                        error: error.message,
+                        error: handleError(error, 'Unable to fetch jobs'),
                     });
                 }
             }
@@ -60,6 +63,9 @@ export function useJobs(options = {}) {
                 clearInterval(timer);
             }
         };
-    }, [api, params, pollIntervalMs]);
-    return state;
+    }, [api, params, pollIntervalMs, reloadToken, handleError]);
+    return {
+        ...state,
+        refresh: () => setReloadToken((token) => token + 1),
+    };
 }

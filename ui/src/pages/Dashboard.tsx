@@ -3,6 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useJobs } from '../hooks/useJobs';
+import { 
+  EnterpriseLayout, 
+  ExecutiveOverview, 
+  ManagementPanel, 
+  ActionZone,
+  ContentGrid 
+} from '../components/EnterpriseLayout';
+import './EnterpriseLayout.css';
 
 const JOB_POLL_INTERVAL = 0;
 
@@ -77,16 +85,30 @@ export function Dashboard(): JSX.Element {
   ];
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Overview</p>
-          <h2>Welcome back</h2>
-          <p className="subtitle">Monitor posture, trigger workflows, or drill into tenants from here.</p>
-        </div>
-      </header>
+    <EnterpriseLayout variant="dashboard">
+      {/* Setup Prompt */}
+      {tenantPagination.total === 0 && (
+        <ManagementPanel 
+          title="🚀 Get Started with Control One"
+          subtitle="Your control plane is ready! Let's set up your first tenant and configure your infrastructure."
+          position="primary"
+        >
+          <ActionZone alignment="center" variant="primary">
+            <button type="button" className="primary-button" onClick={() => navigate('/setup')}>
+              Launch Setup Wizard
+            </button>
+            <button type="button" className="ghost-button" onClick={() => navigate('/tenants')}>
+              Manual Setup
+            </button>
+          </ActionZone>
+        </ManagementPanel>
+      )}
 
-      <div className="stat-grid">
+      {/* Executive KPI Overview */}
+      <ExecutiveOverview 
+        title="📊 Executive Dashboard"
+        subtitle="Real-time system posture and performance metrics"
+      >
         {stats.map((stat) => (
           <article key={stat.label} className="stat-card">
             <p>{stat.label}</p>
@@ -98,68 +120,130 @@ export function Dashboard(): JSX.Element {
             <small>{stat.trend}</small>
           </article>
         ))}
-      </div>
+      </ExecutiveOverview>
 
-      <div className="dashboard-panels">
-        <article className="quick-actions">
-          <h3>Quick actions</h3>
-          <ul>
+      {/* Executive Dashboard Layout */}
+      <div className="executive-main">
+        {/* Quick Actions Panel */}
+        <ManagementPanel 
+          title="⚡ Quick Actions"
+          subtitle="Common tasks to get you started"
+          position="primary"
+        >
+          <ContentGrid columns={1} gap="md">
             {quickActions.map((action) => (
-              <li key={action.title}>
-                <div>
+              <div key={action.title} className="quick-action-item">
+                <div className="quick-action-content">
                   <strong>{action.title}</strong>
                   <p>{action.copy}</p>
                 </div>
-                <button type="button" className="primary-button" onClick={action.action}>
-                  Go
-                </button>
-              </li>
+                <ActionZone alignment="right" variant="secondary">
+                  <button type="button" className="primary-button" onClick={action.action}>
+                    Launch
+                  </button>
+                </ActionZone>
+              </div>
             ))}
-          </ul>
-        </article>
+          </ContentGrid>
+        </ManagementPanel>
 
-        <article className="recent-activity">
-          <h3>Recent jobs</h3>
+        {/* System Health Panel */}
+        <ManagementPanel 
+          title="🏥 System Health"
+          subtitle="Overall system status and performance"
+          position="secondary"
+        >
+          <ContentGrid columns={2} gap="md">
+            <div className="health-item">
+              <div className="health-indicator health-good"></div>
+              <div className="health-content">
+                <strong>Control Plane</strong>
+                <small>Operational</small>
+              </div>
+            </div>
+            <div className="health-item">
+              <div className="health-indicator health-good"></div>
+              <div className="health-content">
+                <strong>Database</strong>
+                <small>Connected</small>
+              </div>
+            </div>
+            <div className="health-item">
+              <div className="health-indicator health-warning"></div>
+              <div className="health-content">
+                <strong>Node Mesh</strong>
+                <small>{nodePagination.total > 0 ? 'Active' : 'No nodes'}</small>
+              </div>
+            </div>
+            <div className="health-item">
+              <div className="health-indicator health-good"></div>
+              <div className="health-content">
+                <strong>Job Queue</strong>
+                <small>{jobStatusSummary.running > 0 ? 'Processing' : 'Idle'}</small>
+              </div>
+            </div>
+          </ContentGrid>
+        </ManagementPanel>
+      </div>
+
+      {/* Sidebar Content */}
+      <div className="executive-sidebar">
+        {/* Recent Activity */}
+        <ManagementPanel 
+          title="📈 Recent Activity"
+          subtitle={`${recentJobs.length} recent jobs`}
+          position="tertiary"
+        >
           {jobsLoading ? (
             <p className="muted">Loading activity…</p>
           ) : recentJobs.length === 0 ? (
-            <p className="muted">No jobs have run yet.</p>
+            <div className="empty-state">
+              <p>No jobs have run yet.</p>
+            </div>
           ) : (
-            <ul>
+            <div className="activity-list">
               {recentJobs.map((job) => (
-                <li key={job.id}>
-                  <div>
+                <div key={job.id} className="activity-item">
+                  <div className="activity-content">
                     <strong>{job.type}</strong>
                     <small>{new Date(job.created_at).toLocaleString()}</small>
                   </div>
                   <span className={`status-pill status-${job.status.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>
                     {job.status}
                   </span>
-                </li>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
-        </article>
+        </ManagementPanel>
 
-        <article className="tenant-preview">
-          <h3>Tenants at a glance</h3>
+        {/* Tenants Overview */}
+        <ManagementPanel 
+          title="🏢 Tenants at a Glance"
+          subtitle={`${tenantPagination.total} total tenants`}
+          position="tertiary"
+        >
           {tenantsLoading ? (
             <p className="muted">Loading tenants…</p>
           ) : tenantSample.length === 0 ? (
-            <p className="muted">No tenants yet. Create one to get started.</p>
+            <div className="empty-state">
+              <p>No tenants yet. Create one to get started.</p>
+            </div>
           ) : (
-            <dl>
+            <div className="tenant-summary-list">
               {tenantSample.map((tenant) => (
-                <div key={tenant.id}>
-                  <dt>{tenant.name}</dt>
-                  <dd>{new Date(tenant.created_at).toLocaleDateString()}</dd>
+                <div key={tenant.id} className="tenant-summary-item">
+                  <div className="tenant-summary-content">
+                    <strong>{tenant.name}</strong>
+                    <small>{new Date(tenant.created_at).toLocaleDateString()}</small>
+                  </div>
                 </div>
               ))}
-            </dl>
+            </div>
           )}
-        </article>
+        </ManagementPanel>
       </div>
-    </section>
+    </EnterpriseLayout>
   );
 }
 

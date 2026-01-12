@@ -13,6 +13,7 @@ import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
+import { Setup } from './pages/Setup';
 import { useAuth } from './providers/AuthProvider';
 
 export function App(): JSX.Element {
@@ -27,6 +28,7 @@ export function App(): JSX.Element {
         element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace />}
       >
         <Route index element={<Dashboard />} />
+        <Route path="setup" element={<Setup />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="nodes" element={<Nodes />} />
         <Route path="jobs" element={<Jobs />} />

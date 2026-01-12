@@ -1,5 +1,5 @@
 http:
-  address: ":8443"
+  address: ":8080"
   read_timeout: 15s
   write_timeout: 15s
 
@@ -40,6 +40,12 @@ auth:
     username_claim: preferred_username
     groups_claim: groups
     cache_ttl: 1m
+    static_tokens:
+      "demo-admin-token":
+        subject: "demo-admin"
+        email: "admin@controlone.demo"
+        name: "Demo Admin"
+        roles: ["admin"]
   rbac:
     default_role: viewer
     role_mappings: {}

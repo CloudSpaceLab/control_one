@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -519,4 +520,181 @@ func bigIntRandom() *big.Int {
 		return big.NewInt(time.Now().UnixNano())
 	}
 	return n
+}
+
+// TemplateWizard extends the wizard with template management capabilities
+type TemplateWizard struct {
+	*Runner
+}
+
+func NewTemplateWizard(log *zap.Logger, cfg *config.Config, client *api.Client, nodeID string, publisher hooks.Publisher) *TemplateWizard {
+	return &TemplateWizard{
+		Runner: NewRunner(log, cfg, client, nodeID, publisher),
+	}
+}
+
+// ExecuteTemplate executes a template with the given parameters
+func (tw *TemplateWizard) ExecuteTemplate(ctx context.Context, templateID string, templateType, targetType string, targetID *string, parameters map[string]any) error {
+	if tw.client == nil {
+		return fmt.Errorf("api client unavailable")
+	}
+
+	// Create template execution request
+	executionReq := map[string]any{
+		"template_id":   templateID,
+		"template_type": templateType,
+		"target_type":   targetType,
+		"parameters":    parameters,
+		"dry_run":       false,
+	}
+
+	if targetID != nil {
+		executionReq["target_id"] = *targetID
+	}
+
+	// Marshal request body
+	body, err := json.Marshal(executionReq)
+	if err != nil {
+		return fmt.Errorf("marshal execution request: %w", err)
+	}
+
+	// Execute template via API
+	resp, err := tw.client.Do(ctx, "POST", fmt.Sprintf("/api/v1/templates/%s/execute", templateID), body)
+	if err != nil {
+		return fmt.Errorf("execute template: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("execute template failed with status %d", resp.StatusCode)
+	}
+
+	// Read response
+	var execution map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&execution); err != nil {
+		return fmt.Errorf("decode execution response: %w", err)
+	}
+
+	tw.log.Info("template executed successfully",
+		zap.String("template_id", templateID),
+		zap.String("template_type", templateType),
+		zap.String("target_type", targetType),
+		zap.String("execution_id", execution["id"].(string)),
+		zap.String("status", execution["status"].(string)))
+
+	// Publish event
+	tw.publishEvent("wizard.template.executed", map[string]any{
+		"template_id":   templateID,
+		"template_type": templateType,
+		"target_type":   targetType,
+		"execution_id":  execution["id"],
+		"node_id":       tw.resolvedNodeID(),
+	})
+
+	return nil
+}
+
+// ListTemplates lists available templates with optional filtering
+func (tw *TemplateWizard) ListTemplates(ctx context.Context, templateType string) ([]map[string]any, error) {
+	if tw.client == nil {
+		return nil, fmt.Errorf("api client unavailable")
+	}
+
+	// Build query parameters
+	path := "/api/v1/templates"
+	if templateType != "" {
+		path = fmt.Sprintf("/api/v1/templates?type=%s", templateType)
+	}
+
+	// Make request
+	resp, err := tw.client.Do(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list templates failed with status %d", resp.StatusCode)
+	}
+
+	// Read response
+	var response struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("decode templates response: %w", err)
+	}
+
+	return response.Data, nil
+}
+
+// CreateTenantFromTemplate creates a new tenant using a config template
+func (tw *TemplateWizard) CreateTenantFromTemplate(ctx context.Context, templateID string, tenantName string, parameters map[string]any) (string, error) {
+	if tw.client == nil {
+		return "", fmt.Errorf("api client unavailable")
+	}
+
+	// First create the tenant
+	tenantReq := map[string]any{
+		"name": tenantName,
+	}
+
+	body, err := json.Marshal(tenantReq)
+	if err != nil {
+		return "", fmt.Errorf("marshal tenant request: %w", err)
+	}
+
+	resp, err := tw.client.Do(ctx, "POST", "/api/v1/tenants", body)
+	if err != nil {
+		return "", fmt.Errorf("create tenant: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("create tenant failed with status %d", resp.StatusCode)
+	}
+
+	var tenant map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&tenant); err != nil {
+		return "", fmt.Errorf("decode tenant response: %w", err)
+	}
+
+	tenantID := tenant["id"].(string)
+
+	// Then execute the template on the new tenant
+	err = tw.ExecuteTemplate(ctx, templateID, "config", "tenant", &tenantID, parameters)
+	if err != nil {
+		// Clean up the tenant if template execution fails
+		_, _ = tw.client.Do(ctx, "DELETE", fmt.Sprintf("/api/v1/tenants/%s", tenantID), nil)
+		return "", fmt.Errorf("execute template for tenant: %w", err)
+	}
+
+	tw.log.Info("tenant created from template",
+		zap.String("tenant_id", tenantID),
+		zap.String("tenant_name", tenantName),
+		zap.String("template_id", templateID))
+
+	return tenantID, nil
+}
+
+// ProvisionNodeFromTemplate provisions a node using a job template
+func (tw *TemplateWizard) ProvisionNodeFromTemplate(ctx context.Context, templateID string, nodeName string, parameters map[string]any) error {
+	if tw.client == nil {
+		return fmt.Errorf("api client unavailable")
+	}
+
+	// Create a target for the node (this could be a placeholder or actual node registration)
+	targetID := nodeName // For now, use node name as target ID
+
+	// Execute the provisioning template
+	err := tw.ExecuteTemplate(ctx, templateID, "job", "node", &targetID, parameters)
+	if err != nil {
+		return fmt.Errorf("provision node from template: %w", err)
+	}
+
+	tw.log.Info("node provisioned from template",
+		zap.String("node_name", nodeName),
+		zap.String("template_id", templateID))
+
+	return nil
 }

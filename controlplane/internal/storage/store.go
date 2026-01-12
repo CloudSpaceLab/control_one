@@ -12,16 +12,18 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
+	_ "modernc.org/sqlite"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 )
 
 // Store wraps database connectivity and lifecycle operations.
 type Store struct {
-	log   *zap.Logger
-	db    *sql.DB
-	cfg   config.DatabaseConfig
-	clock func() time.Time
+	log      *zap.Logger
+	db       *sql.DB
+	cfg      config.DatabaseConfig
+	clock    func() time.Time
+	isSQLite bool
 }
 
 // GetNode returns a node by ID.
@@ -1151,7 +1153,17 @@ func New(log *zap.Logger, cfg config.DatabaseConfig, opts Options) (*Store, erro
 		return nil, fmt.Errorf("database url must be provided")
 	}
 
-	db, err := sql.Open("pgx", cfg.URL)
+	// Determine driver based on URL
+	var driverName string
+	var isSQLite bool
+	if strings.HasPrefix(cfg.URL, "file:") || strings.HasPrefix(cfg.URL, "sqlite:") {
+		driverName = "sqlite"
+		isSQLite = true
+	} else {
+		driverName = "pgx"
+	}
+
+	db, err := sql.Open(driverName, cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -1160,10 +1172,11 @@ func New(log *zap.Logger, cfg config.DatabaseConfig, opts Options) (*Store, erro
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
 	s := &Store{
-		log:   log,
-		db:    db,
-		cfg:   cfg,
-		clock: opts.Clock,
+		log:      log,
+		db:       db,
+		cfg:      cfg,
+		clock:    opts.Clock,
+		isSQLite: isSQLite,
 	}
 	if s.clock == nil {
 		s.clock = time.Now

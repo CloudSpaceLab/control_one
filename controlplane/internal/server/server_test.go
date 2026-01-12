@@ -2148,3 +2148,30 @@ func (f *fakeStore) ListSessionEvents(_ context.Context, recordingID uuid.UUID, 
 func (f *fakeStore) ListComplianceResultsFiltered(_ context.Context, filter storage.ComplianceResultFilter, limit, offset int) ([]storage.ComplianceResult, int, error) {
 	return nil, 0, nil
 }
+
+func (f *fakeStore) CreateTemplateExecution(_ context.Context, params storage.CreateTemplateExecutionParams) (*storage.TemplateExecution, error) {
+	execution := &storage.TemplateExecution{
+		ID:           uuid.New(),
+		TemplateID:   params.TemplateID,
+		TemplateType: params.TemplateType,
+		TargetType:   params.TargetType,
+		TargetID:     params.TargetID,
+		Parameters:   params.Parameters,
+		CreatedBy:    params.CreatedBy,
+		Status:       "pending",
+		CreatedAt:    time.Now(),
+	}
+	return execution, nil
+}
+
+func (f *fakeStore) GetTemplateExecution(_ context.Context, id uuid.UUID) (*storage.TemplateExecution, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListTemplateExecutions(_ context.Context, templateID uuid.UUID, limit, offset int) ([]storage.TemplateExecution, int, error) {
+	return []storage.TemplateExecution{}, 0, nil
+}
+
+func (f *fakeStore) UpdateTemplateExecution(_ context.Context, id uuid.UUID, params storage.UpdateTemplateExecutionParams) (*storage.TemplateExecution, error) {
+	return nil, nil
+}

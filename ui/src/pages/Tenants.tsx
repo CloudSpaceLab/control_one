@@ -3,6 +3,14 @@ import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { 
+  EnterpriseLayout, 
+  ExecutiveOverview, 
+  ManagementPanel, 
+  ActionZone,
+  ContentGrid 
+} from '../components/EnterpriseLayout';
+import './EnterpriseLayout.css';
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -14,12 +22,10 @@ function formatDate(value: string): string {
 
 export function Tenants(): JSX.Element {
   const api = useApiClient();
-  const [offset, setOffset] = useState(0);
   const [limit] = useState(20);
   const [nameFilter, setNameFilter] = useState('');
-  const { data, pagination, loading, error, reload } = useTenants({
+  const { data, pagination, loading, reload } = useTenants({
     limit,
-    offset,
     namePrefix: nameFilter.trim() || undefined,
   });
   const [tenantName, setTenantName] = useState('');
@@ -49,62 +55,47 @@ export function Tenants(): JSX.Element {
 
   const handleCreateTenant = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const name = tenantName.trim();
-    if (!name) {
+    const trimmedName = tenantName.trim();
+    if (!trimmedName) {
       showError('Tenant name is required');
       return;
     }
 
     setSubmitting(true);
     reset();
+
     try {
-      await api.createTenant({ name });
+      await api.createTenant({ name: trimmedName });
+      showSuccess(`Tenant "${trimmedName}" created successfully.`);
+      showToast(`Tenant "${trimmedName}" created successfully.`, 'success');
       setTenantName('');
-      setOffset(0);
       reload();
-      const successMessage = 'Tenant created successfully.';
-      showSuccess(successMessage);
-      showToast(successMessage, 'success');
     } catch (err) {
-      if (err instanceof Error) {
-        showError(err.message);
-        showToast(err.message, 'error');
-      } else {
-        const fallback = 'Failed to create tenant';
-        showError(fallback);
-        showToast(fallback, 'error');
-      }
+      const message = err instanceof Error ? err.message : 'Failed to create tenant.';
+      showError(message);
+      showToast(message, 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const openTenantDetails = (tenantId: string) => {
-    setSelectedTenantId((current) => (current === tenantId ? null : tenantId));
-    const tenant = rows.find((t) => t.id === tenantId);
-    setRenameValue(tenant?.name ?? '');
-  };
-
   const handleRenameTenant = async () => {
-    if (!selectedTenant) {
+    if (!selectedTenant || !renameValue.trim()) {
+      showError('Tenant name is required');
       return;
     }
-    const next = renameValue.trim();
-    if (!next) {
-      showToast('Tenant name cannot be empty.', 'error');
-      return;
-    }
-    if (next === selectedTenant.name) {
-      showToast('No changes detected.', 'info');
-      return;
-    }
+
     setRenaming(true);
     try {
-      await api.updateTenant(selectedTenant.id, { name: next });
-      showToast('Tenant renamed.', 'success');
+      await api.updateTenant(selectedTenant.id, { name: renameValue.trim() });
+      showSuccess(`Tenant renamed to "${renameValue.trim()}".`);
+      showToast('Tenant renamed successfully.', 'success');
+      setRenameValue('');
+      setSelectedTenantId(null);
       reload();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to rename tenant.';
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to rename tenant.';
+      showError(message);
       showToast(message, 'error');
     } finally {
       setRenaming(false);
@@ -112,23 +103,20 @@ export function Tenants(): JSX.Element {
   };
 
   const handleDeleteTenant = async () => {
-    if (!selectedTenant) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Delete tenant “${selectedTenant.name}”? Nodes and jobs referencing this tenant may become orphaned.`,
-    );
-    if (!confirmed) {
-      return;
-    }
+    if (!selectedTenant) return;
+    const confirmed = window.confirm(`Delete tenant "${selectedTenant.name}"? This action cannot be undone.`);
+    if (!confirmed) return;
+
     setDeleting(true);
     try {
       await api.deleteTenant(selectedTenant.id);
-      showToast('Tenant deleted.', 'success');
+      showSuccess(`Tenant "${selectedTenant.name}" deleted successfully.`);
+      showToast('Tenant deleted successfully.', 'success');
       setSelectedTenantId(null);
       reload();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete tenant.';
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete tenant.';
+      showError(message);
       showToast(message, 'error');
     } finally {
       setDeleting(false);
@@ -136,167 +124,189 @@ export function Tenants(): JSX.Element {
   };
 
   return (
-    <section className="tenants-page">
-      <div className="page-header">
-        <div>
-          <h2>Tenants</h2>
-          <p>Tenants represent isolation boundaries for infrastructure, policy, and compliance scope.</p>
-        </div>
-      </div>
-
-      <div className="stat-card-grid">
+    <EnterpriseLayout variant="management">
+      {/* Executive Overview */}
+      <ExecutiveOverview 
+        title="🏢 Tenant Management"
+        subtitle="Manage workspaces and environments for your organization"
+      >
         <article className="stat-card">
-          <span className="muted">Total tenants</span>
+          <span className="muted">Total Tenants</span>
           <strong>{summary.total}</strong>
+          <small className="muted">All environments</small>
         </article>
         <article className="stat-card">
-          <span className="muted">Most recent</span>
+          <span className="muted">Newest Tenant</span>
           <strong>{summary.newestName}</strong>
           <small className="muted">{summary.newestDate}</small>
         </article>
-      </div>
+        <article className="stat-card">
+          <span className="muted">Active Now</span>
+          <strong>{rows.length}</strong>
+          <small className="muted">Currently loaded</small>
+        </article>
+        <article className="stat-card">
+          <span className="muted">Status</span>
+          <strong>Healthy</strong>
+          <small className="muted">All systems operational</small>
+        </article>
+      </ExecutiveOverview>
 
-      <div className="tenants-layout">
-        <form className="panel tenants-form" onSubmit={handleCreateTenant}>
-          <h3>Create tenant</h3>
-          <label htmlFor="tenant-name">Name</label>
-          <input
-            id="tenant-name"
-            name="tenant-name"
-            type="text"
-            value={tenantName}
-            onChange={(event) => setTenantName(event.target.value)}
-            placeholder="e.g. Production Cluster"
-            disabled={submitting}
-            required
-          />
-          {formError ? <p className="form-error">{formError}</p> : null}
-          {formSuccess ? <p className="form-success">{formSuccess}</p> : null}
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Creating…' : 'Create tenant'}
-          </button>
-        </form>
-
-        <div className="panel tenants-list">
-          <div className="toolbar tenants-toolbar">
-            <label htmlFor="tenant-search">
-              Filter
-              <input
-                id="tenant-search"
-                type="search"
-                placeholder="Search by name"
-                value={nameFilter}
-                onChange={(event) => {
-                  setNameFilter(event.target.value);
-                  setOffset(0);
-                }}
-              />
-            </label>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => {
-                reload();
-              }}
-              disabled={loading}
-            >
-              {loading ? 'Refreshing…' : 'Refresh'}
-            </button>
-          </div>
-
-          {loading ? <p className="muted">Loading tenants&hellip;</p> : null}
-          {error ? <p className="form-error">Failed to load tenants: {error}</p> : null}
-          {!loading && !error && rows.length === 0 ? <p className="muted">No tenants match the current filters.</p> : null}
-
-          {!loading && !error && rows.length > 0 ? (
-            <>
-              <table className="tenants-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Tenant ID</th>
-                    <th>Created</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((tenant) => (
-                    <tr key={tenant.id} className={selectedTenantId === tenant.id ? 'active-row' : undefined}>
-                      <td>{tenant.name}</td>
-                      <td>{tenant.id}</td>
-                      <td>{formatDate(tenant.created_at)}</td>
-                      <td>
-                        <button type="button" className="ghost-button" onClick={() => openTenantDetails(tenant.id)}>
-                          {selectedTenantId === tenant.id ? 'Hide' : 'View'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="pagination">
-                <button
-                  type="button"
-                  disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
-                  onClick={() => setOffset(pagination.prevOffset ?? 0)}
-                >
-                  Previous
+      <div className="management-dashboard">
+        {/* Main Content Area */}
+        <div className="management-main">
+          {/* Create Tenant */}
+          <ManagementPanel 
+            title="Create New Tenant"
+            icon="➕"
+            subtitle="Add a new workspace or environment"
+            position="primary"
+          >
+            <form onSubmit={handleCreateTenant}>
+              <ContentGrid columns={1} gap="md">
+                <div className="form-field">
+                  <label htmlFor="tenant-name">Tenant Name</label>
+                  <input
+                    id="tenant-name"
+                    type="text"
+                    value={tenantName}
+                    onChange={(e) => setTenantName(e.target.value)}
+                    placeholder="e.g. Production Environment"
+                    disabled={submitting}
+                    required
+                  />
+                </div>
+              </ContentGrid>
+              {formError && <div className="form-error">{formError}</div>}
+              {formSuccess && <div className="form-success">{formSuccess}</div>}
+              <ActionZone alignment="right" variant="primary">
+                <button type="submit" className="primary-button" disabled={submitting}>
+                  {submitting ? 'Creating…' : 'Create Tenant'}
                 </button>
-                <span>
-                  Showing {rows.length} of {pagination.total} tenants
-                </span>
-                <button
-                  type="button"
-                  disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
-                  onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
-                >
-                  Next
-                </button>
+              </ActionZone>
+            </form>
+          </ManagementPanel>
+
+          {/* Tenant List */}
+          <ManagementPanel 
+            title="📋 Tenant Registry"
+            subtitle="Manage and monitor all tenant environments"
+            position="primary"
+          >
+            {loading ? (
+              <p className="muted">Loading tenants…</p>
+            ) : rows.length === 0 ? (
+              <div className="empty-state">
+                <p>No tenants found. Create your first tenant to get started.</p>
               </div>
-            </>
-          ) : null}
+            ) : (
+              <div className="tenant-list">
+                {rows.map((tenant) => (
+                  <div key={tenant.id} className="tenant-card">
+                    <header>
+                      <h3>{tenant.name}</h3>
+                      <ActionZone alignment="right" variant="secondary">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => {
+                            setSelectedTenantId(tenant.id);
+                            setRenameValue(tenant.name);
+                          }}
+                          disabled={renaming || deleting}
+                        >
+                          Manage
+                        </button>
+                      </ActionZone>
+                    </header>
+                    <dl>
+                      <dt>ID</dt>
+                      <dd>{tenant.id}</dd>
+                      <dt>Created</dt>
+                      <dd>{formatDate(tenant.created_at)}</dd>
+                    </dl>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ManagementPanel>
         </div>
 
-        {selectedTenant ? (
-          <aside className="panel tenant-detail">
-            <h3>Tenant details</h3>
-            <dl className="meta-grid">
-              <div>
-                <dt>Name</dt>
-                <dd>{selectedTenant.name}</dd>
+        {/* Sidebar */}
+        <div className="management-sidebar">
+          {/* Filters */}
+          <ManagementPanel 
+            title="Filters"
+            icon="🔍"
+            subtitle={`${rows.length} tenants shown`}
+            position="secondary"
+          >
+            <ContentGrid columns={1} gap="md">
+              <div className="form-field">
+                <label htmlFor="name-filter">Filter by name</label>
+                <input
+                  id="name-filter"
+                  type="text"
+                  value={nameFilter}
+                  onChange={(e) => setNameFilter(e.target.value)}
+                  placeholder="e.g. Production"
+                />
               </div>
-              <div>
-                <dt>Tenant ID</dt>
-                <dd className="mono">{selectedTenant.id}</dd>
+            </ContentGrid>
+          </ManagementPanel>
+
+          {/* Tenant Management */}
+          {selectedTenant && (
+            <ManagementPanel 
+              title={`Manage: ${selectedTenant.name}`}
+              icon="⚙️"
+              subtitle="Update tenant configuration"
+              position="secondary"
+            >
+              <div className="tenant-management">
+                <ContentGrid columns={1} gap="md">
+                  <div className="form-field">
+                    <label htmlFor="rename-tenant">Rename Tenant</label>
+                    <input
+                      id="rename-tenant"
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      placeholder="New tenant name"
+                      disabled={renaming}
+                    />
+                  </div>
+                </ContentGrid>
+                <ActionZone alignment="right" variant="primary">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={handleRenameTenant}
+                    disabled={renaming || !renameValue.trim()}
+                  >
+                    {renaming ? 'Renaming…' : 'Rename Tenant'}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={handleDeleteTenant}
+                    disabled={deleting || renaming}
+                  >
+                    {deleting ? 'Deleting…' : 'Delete Tenant'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => setSelectedTenantId(null)}
+                  >
+                    Close
+                  </button>
+                </ActionZone>
               </div>
-              <div>
-                <dt>Created</dt>
-                <dd>{formatDate(selectedTenant.created_at)}</dd>
-              </div>
-            </dl>
-            <div className="tenant-detail-form">
-              <label htmlFor="rename-tenant">Rename tenant</label>
-              <input
-                id="rename-tenant"
-                type="text"
-                value={renameValue}
-                onChange={(event) => setRenameValue(event.target.value)}
-              />
-              <div className="detail-actions">
-                <button type="button" className="ghost-button" onClick={() => setSelectedTenantId(null)}>
-                  Close
-                </button>
-                <button type="button" className="primary-button" onClick={handleRenameTenant} disabled={renaming}>
-                  {renaming ? 'Saving…' : 'Save changes'}
-                </button>
-                <button type="button" className="danger-button" onClick={handleDeleteTenant} disabled={deleting}>
-                  {deleting ? 'Deleting…' : 'Delete tenant'}
-                </button>
-              </div>
-            </div>
-          </aside>
-        ) : null}
+            </ManagementPanel>
+          )}
+        </div>
       </div>
-    </section>
+    </EnterpriseLayout>
   );
 }

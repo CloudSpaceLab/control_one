@@ -22,6 +22,7 @@ type templateResponse struct {
 	Provider          string                   `json:"provider"`
 	Description       *string                  `json:"description,omitempty"`
 	Labels            map[string]string        `json:"labels"`
+	TemplateType      string                   `json:"template_type"`
 	CreatedAt         string                   `json:"created_at"`
 	UpdatedAt         string                   `json:"updated_at"`
 	ArchivedAt        *string                  `json:"archived_at,omitempty"`
@@ -42,10 +43,11 @@ type templateVersionResponse struct {
 }
 
 type createTemplateRequest struct {
-	Name        string            `json:"name"`
-	Provider    string            `json:"provider"`
-	Description *string           `json:"description"`
-	Labels      map[string]string `json:"labels"`
+	Name         string            `json:"name"`
+	Provider     string            `json:"provider"`
+	Description  *string           `json:"description"`
+	Labels       map[string]string `json:"labels"`
+	TemplateType string            `json:"template_type"`
 }
 
 type createTemplateVersionRequest struct {
@@ -57,11 +59,38 @@ type createTemplateVersionRequest struct {
 }
 
 type updateTemplateRequest struct {
-	Name        *string            `json:"name"`
-	Provider    *string            `json:"provider"`
-	Description *string            `json:"description"`
-	Labels      *map[string]string `json:"labels"`
-	Archived    *bool              `json:"archived"`
+	Name         *string            `json:"name"`
+	Provider     *string            `json:"provider"`
+	Description  *string            `json:"description"`
+	Labels       *map[string]string `json:"labels"`
+	TemplateType *string            `json:"template_type"`
+	Archived     *bool              `json:"archived"`
+}
+
+type templateExecutionRequest struct {
+	TemplateID   string         `json:"template_id"`
+	TemplateType string         `json:"template_type"`
+	TargetType   string         `json:"target_type"` // 'tenant', 'node', 'global'
+	TargetID     *string        `json:"target_id,omitempty"`
+	Parameters   map[string]any `json:"parameters"`
+	DryRun       bool           `json:"dry_run"`
+}
+
+type templateExecutionResponse struct {
+	ID                string          `json:"id"`
+	TemplateID        string          `json:"template_id"`
+	TemplateType      string          `json:"template_type"`
+	TargetType        string          `json:"target_type"`
+	TargetID          *string         `json:"target_id,omitempty"`
+	Parameters        map[string]any  `json:"parameters"`
+	Status            string          `json:"status"` // 'pending', 'running', 'completed', 'failed'
+	Result            json.RawMessage `json:"result,omitempty"`
+	Error             *string         `json:"error,omitempty"`
+	CreatedAt         string          `json:"created_at"`
+	StartedAt         *string         `json:"started_at,omitempty"`
+	CompletedAt       *string         `json:"completed_at,omitempty"`
+	CreatedJobs       []string        `json:"created_jobs,omitempty"`
+	ComplianceResults []string        `json:"compliance_results,omitempty"`
 }
 
 func (s *Server) handleTemplatesCollection(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +136,18 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 		}
 		if segments[1] == "rollouts" {
 			s.handleTemplateRollouts(w, r, templateID)
+			return
+		}
+		if segments[1] == "execute" {
+			s.handleTemplateExecution(w, r, templateID)
+			return
+		}
+		if segments[1] == "archive" {
+			s.handleArchiveTemplate(w, r, templateID)
+			return
+		}
+		if segments[1] == "unarchive" {
+			s.handleUnarchiveTemplate(w, r, templateID)
 			return
 		}
 		http.NotFound(w, r)
@@ -243,6 +284,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	filter := storage.ProvisioningTemplateFilter{
 		Provider:        strings.TrimSpace(r.URL.Query().Get("provider")),
 		NamePrefix:      strings.TrimSpace(r.URL.Query().Get("name_prefix")),
+		TemplateType:    strings.TrimSpace(r.URL.Query().Get("type")),
 		IncludeArchived: parseBoolQuery(r.URL.Query().Get("include_archived")),
 	}
 
@@ -283,9 +325,10 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	template := &storage.ProvisioningTemplate{
-		Name:     req.Name,
-		Provider: strings.TrimSpace(req.Provider),
-		Labels:   sanitizeLabels(req.Labels),
+		Name:         req.Name,
+		Provider:     strings.TrimSpace(req.Provider),
+		TemplateType: strings.TrimSpace(req.TemplateType),
+		Labels:       sanitizeLabels(req.Labels),
 	}
 	if req.Description != nil {
 		desc := strings.TrimSpace(*req.Description)
@@ -372,6 +415,11 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, te
 		params.Labels = &sanitized
 		hasUpdate = true
 	}
+	if req.TemplateType != nil {
+		templateType := strings.TrimSpace(*req.TemplateType)
+		params.TemplateType = &templateType
+		hasUpdate = true
+	}
 	if req.Archived != nil {
 		params.Archived = req.Archived
 		hasUpdate = true
@@ -448,12 +496,13 @@ func (s *Server) handleCreateTemplateVersion(w http.ResponseWriter, r *http.Requ
 
 func newTemplateResponse(tpl storage.ProvisioningTemplate, promoted *templateVersionResponse) templateResponse {
 	resp := templateResponse{
-		ID:        tpl.ID.String(),
-		Name:      tpl.Name,
-		Provider:  tpl.Provider,
-		Labels:    tpl.Labels,
-		CreatedAt: formatTime(tpl.CreatedAt),
-		UpdatedAt: formatTime(tpl.UpdatedAt),
+		ID:           tpl.ID.String(),
+		Name:         tpl.Name,
+		Provider:     tpl.Provider,
+		TemplateType: tpl.TemplateType,
+		Labels:       tpl.Labels,
+		CreatedAt:    formatTime(tpl.CreatedAt),
+		UpdatedAt:    formatTime(tpl.UpdatedAt),
 	}
 	if resp.Labels == nil {
 		resp.Labels = map[string]string{}
@@ -539,4 +588,239 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *Server) handleTemplateExecution(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	switch r.Method {
+	case http.MethodPost:
+		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+			return
+		}
+		s.handleCreateTemplateExecution(w, r, templateID)
+	default:
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCreateTemplateExecution(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req templateExecutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if strings.TrimSpace(req.TemplateType) == "" {
+		http.Error(w, "template_type is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TargetType) == "" {
+		http.Error(w, "target_type is required", http.StatusBadRequest)
+		return
+	}
+	if !isValidTargetType(req.TargetType) {
+		http.Error(w, "target_type must be one of: tenant, node, global", http.StatusBadRequest)
+		return
+	}
+	if req.TargetID == nil && req.TargetType != "global" {
+		http.Error(w, "target_id is required for tenant and node targets", http.StatusBadRequest)
+		return
+	}
+
+	// Get user ID from principal
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
+		return
+	}
+	var createdBy *uuid.UUID
+	if principal != nil && strings.TrimSpace(principal.Subject) != "" {
+		if user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject); err == nil && user != nil {
+			createdBy = &user.ID
+		}
+	}
+
+	// Parse target ID if provided
+	var targetID *uuid.UUID
+	if req.TargetID != nil {
+		if id, err := uuid.Parse(*req.TargetID); err == nil {
+			targetID = &id
+		} else {
+			http.Error(w, "invalid target_id format", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Create execution
+	params := storage.CreateTemplateExecutionParams{
+		TemplateID:   templateID,
+		TemplateType: strings.TrimSpace(req.TemplateType),
+		TargetType:   strings.TrimSpace(req.TargetType),
+		TargetID:     targetID,
+		Parameters:   req.Parameters,
+		CreatedBy:    createdBy,
+	}
+
+	execution, err := s.store.CreateTemplateExecution(r.Context(), params)
+	if err != nil {
+		s.logger.Error("create template execution", zap.Error(err))
+		http.Error(w, fmt.Sprintf("create execution failed: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	s.logger.Info("template execution created",
+		zap.String("execution_id", execution.ID.String()),
+		zap.String("template_id", templateID.String()),
+		zap.String("template_type", execution.TemplateType),
+		zap.String("target_type", execution.TargetType))
+
+	resp := newTemplateExecutionResponse(execution)
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func newTemplateExecutionResponse(execution *storage.TemplateExecution) templateExecutionResponse {
+	resp := templateExecutionResponse{
+		ID:           execution.ID.String(),
+		TemplateID:   execution.TemplateID.String(),
+		TemplateType: execution.TemplateType,
+		TargetType:   execution.TargetType,
+		Parameters:   execution.Parameters,
+		Status:       execution.Status,
+		CreatedAt:    formatTime(execution.CreatedAt),
+	}
+
+	if execution.TargetID != nil {
+		id := execution.TargetID.String()
+		resp.TargetID = &id
+	}
+
+	if execution.StartedAt.Valid {
+		startedAt := formatNullTime(execution.StartedAt)
+		resp.StartedAt = startedAt
+	}
+
+	if execution.CompletedAt.Valid {
+		completedAt := formatNullTime(execution.CompletedAt)
+		resp.CompletedAt = completedAt
+	}
+
+	if execution.ErrorMessage != nil {
+		resp.Error = execution.ErrorMessage
+	}
+
+	if len(execution.ExecutionResult) > 0 {
+		resp.Result = execution.ExecutionResult
+	}
+
+	return resp
+}
+
+func isValidTargetType(targetType string) bool {
+	switch strings.TrimSpace(strings.ToLower(targetType)) {
+	case "tenant", "node", "global":
+		return true
+	default:
+		return false
+	}
+}
+
+// Helper function for nullable UUID pointers
+func nullableUUIDPtr(id *uuid.UUID) any {
+	if id == nil || *id == uuid.Nil {
+		return nil
+	}
+	return *id
+}
+
+func (s *Server) handleArchiveTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	switch r.Method {
+	case http.MethodPost:
+		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+			return
+		}
+		s.handleArchiveTemplateAction(w, r, templateID)
+	default:
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleUnarchiveTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	switch r.Method {
+	case http.MethodPost:
+		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+			return
+		}
+		s.handleUnarchiveTemplateAction(w, r, templateID)
+	default:
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleArchiveTemplateAction(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Archive the template by setting the archived flag
+	updated, err := s.store.UpdateProvisioningTemplate(r.Context(), templateID, storage.UpdateProvisioningTemplateParams{
+		Archived: func() *bool { b := true; return &b }(),
+	})
+	if err != nil {
+		s.logger.Error("archive template", zap.Error(err))
+		http.Error(w, fmt.Sprintf("archive template failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var promotedResp *templateVersionResponse
+	if updated.PromotedVersionID != nil {
+		if version, err := s.store.GetPromotedProvisioningTemplateVersion(r.Context(), updated.ID); err == nil && version != nil {
+			promotedResp = newTemplateVersionResponse(version)
+		}
+	}
+
+	resp := newTemplateResponse(*updated, promotedResp)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleUnarchiveTemplateAction(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Unarchive the template by setting the archived flag to false
+	updated, err := s.store.UpdateProvisioningTemplate(r.Context(), templateID, storage.UpdateProvisioningTemplateParams{
+		Archived: func() *bool { b := false; return &b }(),
+	})
+	if err != nil {
+		s.logger.Error("unarchive template", zap.Error(err))
+		http.Error(w, fmt.Sprintf("unarchive template failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var promotedResp *templateVersionResponse
+	if updated.PromotedVersionID != nil {
+		if version, err := s.store.GetPromotedProvisioningTemplateVersion(r.Context(), updated.ID); err == nil && version != nil {
+			promotedResp = newTemplateVersionResponse(version)
+		}
+	}
+
+	resp := newTemplateResponse(*updated, promotedResp)
+	writeJSON(w, http.StatusOK, resp)
 }

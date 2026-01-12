@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -26,6 +27,22 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
 )
+
+// corsMiddleware adds CORS headers to allow cross-origin requests
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 // Store defines persistence operations used by the server.
 type Store interface {
@@ -117,6 +134,11 @@ type Store interface {
 	UpdateSessionRecording(context.Context, uuid.UUID, storage.UpdateSessionRecordingParams) (*storage.SessionRecording, error)
 	CreateSessionEvent(context.Context, uuid.UUID, string, time.Time, map[string]any) (*storage.SessionEvent, error)
 	ListSessionEvents(context.Context, uuid.UUID, int, int) ([]storage.SessionEvent, int, error)
+	// Template execution methods
+	CreateTemplateExecution(context.Context, storage.CreateTemplateExecutionParams) (*storage.TemplateExecution, error)
+	GetTemplateExecution(context.Context, uuid.UUID) (*storage.TemplateExecution, error)
+	ListTemplateExecutions(context.Context, uuid.UUID, int, int) ([]storage.TemplateExecution, int, error)
+	UpdateTemplateExecution(context.Context, uuid.UUID, storage.UpdateTemplateExecutionParams) (*storage.TemplateExecution, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -1536,10 +1558,35 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	authMW := auth.NewMiddleware(logger, cfg.TLS.RequireClientTLS, cfg.Auth, identityStore)
 
+	// Create a custom handler that serves UI files without auth
+	uiDir := filepath.Join("ui", "dist")
+	var uiHandler http.Handler
+	if _, err := os.Stat(uiDir); err == nil {
+		uiHandler = http.FileServer(http.Dir(uiDir))
+		logger.Info("UI files available", zap.String("path", uiDir))
+	} else {
+		logger.Warn("UI build directory not found", zap.String("path", uiDir), zap.Error(err))
+		uiHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "UI not built", http.StatusServiceUnavailable)
+		})
+	}
+
+	// Custom handler that routes UI requests without auth and API requests with auth
+	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Serve UI files for non-API routes
+		if !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/healthz" && r.URL.Path != "/metrics" {
+			uiHandler.ServeHTTP(w, r)
+			return
+		}
+		// Route API requests through auth middleware
+		authMW.Wrap(mux).ServeHTTP(w, r)
+	})
+
 	httpServer := &http.Server{
 		Addr: cfg.HTTP.Address,
 		Handler: loggingMiddleware(logger,
-			requestIDMiddleware(authMW.Wrap(mux))),
+			corsMiddleware(
+				requestIDMiddleware(mainHandler))),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}

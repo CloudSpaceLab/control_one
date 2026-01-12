@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = 'http://localhost:8443';
+const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const HTTP_STATUS_UNAUTHORIZED = 401;
 
 export interface Tenant {
@@ -172,11 +172,38 @@ export interface Template {
   provider: string;
   description?: string;
   labels: Record<string, string>;
+  template_type?: string;
   created_at: string;
   updated_at: string;
   archived_at?: string;
   promoted_version_id?: string;
   promoted_version?: TemplateVersion;
+}
+
+export interface TemplateExecutionRequest {
+  template_id: string;
+  template_type: string;
+  target_type: string; // 'tenant', 'node', 'global'
+  target_id?: string;
+  parameters: Record<string, any>;
+  dry_run?: boolean;
+}
+
+export interface TemplateExecution {
+  id: string;
+  template_id: string;
+  template_type: string;
+  target_type: string;
+  target_id?: string;
+  parameters: Record<string, any>;
+  status: string; // 'pending', 'running', 'completed', 'failed'
+  result?: any;
+  error?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  created_jobs?: string[];
+  compliance_results?: string[];
 }
 
 export interface TemplateVersion {
@@ -204,6 +231,7 @@ export interface CreateTemplatePayload {
   provider: string;
   description?: string;
   labels?: Record<string, string>;
+  template_type?: string;
 }
 
 export interface UpdateTemplatePayload {
@@ -784,6 +812,38 @@ export class APIClient {
       `/api/v1/templates/${encoded}/versions/${versionNumber}/promote`,
       { method: 'POST' },
     );
+  }
+
+  async archiveTemplate(templateId: string): Promise<Template> {
+    const encoded = encodeURIComponent(templateId);
+    return this.request<Template>(`/api/v1/templates/${encoded}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  async unarchiveTemplate(templateId: string): Promise<Template> {
+    const encoded = encodeURIComponent(templateId);
+    return this.request<Template>(`/api/v1/templates/${encoded}/unarchive`, {
+      method: 'POST',
+    });
+  }
+
+  async executeTemplate(templateId: string, execution: TemplateExecutionRequest): Promise<TemplateExecution> {
+    const encoded = encodeURIComponent(templateId);
+    return this.request<TemplateExecution>(`/api/v1/templates/${encoded}/execute`, {
+      method: 'POST',
+      body: JSON.stringify(execution),
+    });
+  }
+
+  async getTemplateExecution(executionId: string): Promise<TemplateExecution> {
+    const encoded = encodeURIComponent(executionId);
+    return this.request<TemplateExecution>(`/api/v1/template-executions/${encoded}`);
+  }
+
+  async listTemplateExecutions(templateId?: string): Promise<TemplateExecution[]> {
+    const search = templateId ? `?template_id=${encodeURIComponent(templateId)}` : '';
+    return this.request<TemplateExecution[]>(`/api/v1/template-executions${search}`);
   }
 
   async listComplianceResults(

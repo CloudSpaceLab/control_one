@@ -102,6 +102,34 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	})
 }
 
+// isStaticAsset checks if the path is a static asset that should bypass authentication
+func (m *Middleware) isStaticAsset(path string) bool {
+	// Check for common static file extensions
+	staticExts := map[string]bool{
+		".js":    true,
+		".css":   true,
+		".png":   true,
+		".jpg":   true,
+		".jpeg":  true,
+		".gif":   true,
+		".svg":   true,
+		".ico":   true,
+		".woff":  true,
+		".woff2": true,
+		".ttf":   true,
+		".eot":   true,
+	}
+
+	// Extract extension from path
+	lastDot := strings.LastIndex(path, ".")
+	if lastDot == -1 {
+		return false
+	}
+
+	ext := strings.ToLower(path[lastDot:])
+	return staticExts[ext]
+}
+
 func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cert := r.TLS.PeerCertificates[0]

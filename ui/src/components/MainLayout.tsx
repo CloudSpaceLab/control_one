@@ -5,17 +5,26 @@ import { useTheme } from '../providers/ThemeProvider';
 import './MainLayout.css';
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/tenants', label: 'Tenants' },
-  { to: '/nodes', label: 'Nodes' },
-  { to: '/jobs', label: 'Jobs' },
-  { to: '/templates', label: 'Templates' },
-  { to: '/compliance', label: 'Compliance' },
-  { to: '/audit', label: 'Audit Log' },
-  { to: '/users', label: 'Users & Roles' },
-  { to: '/telemetry', label: 'Telemetry' },
-  { to: '/secrets', label: 'Secrets' },
-  { to: '/settings', label: 'Settings' },
+  { to: '/', label: 'Dashboard', icon: '📊', section: 'main' },
+  { to: '/setup', label: 'Setup Wizard', icon: '🚀', section: 'main' },
+  { to: '/tenants', label: 'Tenants', icon: '🏢', section: 'infrastructure' },
+  { to: '/nodes', label: 'Nodes', icon: '🖥️', section: 'infrastructure' },
+  { to: '/jobs', label: 'Jobs', icon: '⚙️', section: 'infrastructure' },
+  { to: '/templates', label: 'Templates', icon: '📋', section: 'infrastructure' },
+  { to: '/compliance', label: 'Compliance', icon: '✅', section: 'security' },
+  { to: '/audit', label: 'Audit Log', icon: '📝', section: 'security' },
+  { to: '/users', label: 'Users & Roles', icon: '👥', section: 'security' },
+  { to: '/telemetry', label: 'Telemetry', icon: '📈', section: 'monitoring' },
+  { to: '/secrets', label: 'Secrets', icon: '🔐', section: 'security' },
+  { to: '/settings', label: 'Settings', icon: '⚙️', section: 'admin' },
+];
+
+const NAV_SECTIONS = [
+  { id: 'main', title: 'Main' },
+  { id: 'infrastructure', title: 'Infrastructure' },
+  { id: 'security', title: 'Security' },
+  { id: 'monitoring', title: 'Monitoring' },
+  { id: 'admin', title: 'Admin' },
 ];
 
 export function MainLayout(): JSX.Element {
@@ -35,17 +44,25 @@ export function MainLayout(): JSX.Element {
           </div>
         </div>
         <nav>
-          <ul>
-            {NAV_ITEMS.map((item) => {
-              const isActive =
-                item.to === '/' ? location.pathname === item.to : location.pathname.startsWith(item.to);
-              return (
-                <li key={item.to} className={isActive ? 'active' : ''}>
-                  <Link to={item.to}>{item.label}</Link>
-                </li>
-              );
-            })}
-          </ul>
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.id} className="nav-section">
+              <div className="nav-section-title">{section.title}</div>
+              <ul>
+                {NAV_ITEMS.filter((item) => item.section === section.id).map((item) => {
+                  const isActive =
+                    item.to === '/' ? location.pathname === item.to : location.pathname.startsWith(item.to);
+                  return (
+                    <li key={item.to} className={isActive ? 'active' : ''}>
+                      <Link to={item.to}>
+                        <span className="nav-icon">{item.icon}</span>
+                        {item.label}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </nav>
         <footer>
           <p>Secure • Multi-tenant</p>

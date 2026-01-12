@@ -1,9 +1,11 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useState, useCallback } from 'react';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { NodeDiscovery } from '../components/NodeDiscovery';
+import { DemandForm } from '../components/DemandForm';
 import type { RegisterNodePayload, UpdateNodePayload } from '../lib/api';
 
 function formatDate(value?: string): string {
@@ -32,13 +34,6 @@ export function Nodes(): JSX.Element {
     offset,
   });
 
-  const [formTenantId, setFormTenantId] = useState('');
-  const [formTenantName, setFormTenantName] = useState('');
-  const [hostname, setHostname] = useState('');
-  const [os, setOs] = useState('');
-  const [arch, setArch] = useState('');
-  const [publicIp, setPublicIp] = useState('');
-  const [bootstrapToken, setBootstrapToken] = useState('');
   const {
     error: formError,
     success: formSuccess,
@@ -49,22 +44,33 @@ export function Nodes(): JSX.Element {
   const { showToast } = useToast();
   const [registering, setRegistering] = useState(false);
 
+  const [formTenantId, setFormTenantId] = useState('');
+  const [formTenantName, setFormTenantName] = useState('');
+  const [hostname, setHostname] = useState('');
+  const [os, setOs] = useState('');
+  const [arch, setArch] = useState('');
+  const [publicIp, setPublicIp] = useState('');
+  const [bootstrapToken, setBootstrapToken] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [detailHostname, setDetailHostname] = useState('');
-  const [detailOs, setDetailOs] = useState('');
-  const [detailArch, setDetailArch] = useState('');
-  const [detailPublicIp, setDetailPublicIp] = useState('');
+  const [editHostname, setEditHostname] = useState('');
+  const [editOs, setEditOs] = useState('');
+  const [editPublicIp, setEditPublicIp] = useState('');
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const tenantOptions = useMemo(() => tenants, [tenants]);
-  const tenantNames = useMemo(() => {
-    const entries = new Map<string, string>();
-    for (const tenant of tenants) {
-      entries.set(tenant.id, tenant.name);
+  const handleDiscoveredNodes = useCallback((discoveredNodes: any[]) => {
+    // Auto-fill form with first discovered node
+    if (discoveredNodes.length > 0) {
+      const node = discoveredNodes[0];
+      setHostname(node.ip);
+      setPublicIp(node.ip);
+      setOs(node.os || 'Unknown');
+      showToast(`Discovered ${discoveredNodes.length} node(s)`, 'success');
     }
-    return entries;
-  }, [tenants]);
+  }, [showToast]);
+
+  const tenantOptions = useMemo(() => tenants, [tenants]);
+  const tenantNames = useMemo(() => new Map(tenants.map((t) => [t.id, t.name])), [tenants]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -151,10 +157,9 @@ export function Nodes(): JSX.Element {
   const openNodeDetails = (nodeId: string) => {
     setSelectedNodeId((current) => (current === nodeId ? null : nodeId));
     const node = nodes.find((n) => n.id === nodeId);
-    setDetailHostname(node?.hostname ?? '');
-    setDetailOs(node?.os ?? '');
-    setDetailArch(node?.arch ?? '');
-    setDetailPublicIp(node?.public_ip ?? '');
+    setEditHostname(node?.hostname ?? '');
+    setEditOs(node?.os ?? '');
+    setEditPublicIp(node?.public_ip ?? '');
   };
 
   const handleUpdateNode = async () => {
@@ -162,10 +167,9 @@ export function Nodes(): JSX.Element {
       return;
     }
     const payload: UpdateNodePayload = {};
-    const trimmedHostname = detailHostname.trim();
-    const trimmedOs = detailOs.trim();
-    const trimmedArch = detailArch.trim();
-    const trimmedPublicIp = detailPublicIp.trim();
+    const trimmedHostname = editHostname.trim();
+    const trimmedOs = editOs.trim();
+    const trimmedPublicIp = editPublicIp.trim();
 
     if (trimmedHostname && trimmedHostname !== selectedNode.hostname) {
       payload.hostname = trimmedHostname;
@@ -173,14 +177,11 @@ export function Nodes(): JSX.Element {
     if (trimmedOs !== (selectedNode.os ?? '')) {
       payload.os = trimmedOs;
     }
-    if (trimmedArch !== (selectedNode.arch ?? '')) {
-      payload.arch = trimmedArch;
-    }
     if (trimmedPublicIp !== (selectedNode.public_ip ?? '')) {
       payload.public_ip = trimmedPublicIp;
     }
 
-    if (!payload.hostname && payload.os === undefined && payload.arch === undefined && payload.public_ip === undefined) {
+    if (!payload.hostname && payload.os === undefined && payload.public_ip === undefined) {
       showToast('No changes to save.', 'info');
       return;
     }
@@ -221,278 +222,258 @@ export function Nodes(): JSX.Element {
   };
 
   return (
-    <section className="nodes-page">
-      <div className="page-header">
-        <div>
-          <h2>Nodes</h2>
-          <p>Connected agents reporting into the control plane.</p>
+    <div className="focused-content">
+      {/* Overview Section */}
+      <div className="focused-section">
+        <div className="focused-section-header">
+          <h2 className="focused-section-title">🖥️ Node Management</h2>
+          <p className="focused-section-subtitle">Connected agents reporting into the control plane.</p>
+        </div>
+        <div className="focused-section-content">
+          <div className="stat-grid">
+            <article className="stat-card">
+              <span className="muted">Total nodes</span>
+              <strong>{summary.total}</strong>
+              <small className="muted">{selectedTenant ? `Filtered by tenant` : 'All tenants'}</small>
+            </article>
+            <article className="stat-card">
+              <span className="muted">Visible</span>
+              <strong>{summary.filtered}</strong>
+              <small className="muted">matching current filters</small>
+            </article>
+          </div>
         </div>
       </div>
 
-      <div className="stat-card-grid">
-        <article className="stat-card">
-          <span className="muted">Total nodes</span>
-          <strong>{summary.total}</strong>
-          <small className="muted">{selectedTenant ? `Filtered by tenant` : 'All tenants'}</small>
-        </article>
-        <article className="stat-card">
-          <span className="muted">Visible</span>
-          <strong>{summary.filtered}</strong>
-          <small className="muted">matching current filters</small>
-        </article>
-      </div>
+      {/* Filters Section */}
+      <DemandForm 
+        title="Filters" 
+        icon="🔍"
+        summary={`${summary.filtered} nodes shown`}
+      >
+        <div className="compact-form">
+          <div className="form-field">
+            <label>Filter by hostname</label>
+            <input
+              type="text"
+              placeholder="e.g. node-01"
+              value={hostnameFilter}
+              onChange={(event) => setHostnameFilter(event.target.value)}
+            />
+          </div>
+          <div className="form-field">
+            <label>Tenant</label>
+            <select
+              value={selectedTenant || ''}
+              onChange={(event) => setSelectedTenant(event.target.value || undefined)}
+            >
+              <option value="">All tenants</option>
+              {tenantOptions.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </DemandForm>
 
-      <div className="nodes-layout">
-        <form className="panel nodes-form" onSubmit={handleRegisterNode}>
-          <h3>Register node</h3>
-          <label htmlFor="register-tenant">Existing tenant</label>
-          <select
-            id="register-tenant"
-            value={formTenantId}
-            onChange={(event) => {
-              setFormTenantId(event.target.value);
-            }}
-            disabled={registering}
-          >
-            <option value="">— Select tenant —</option>
-            {tenantOptions.map((tenant) => (
-              <option key={tenant.id} value={tenant.id}>
-                {tenant.name}
-              </option>
-            ))}
-          </select>
-          <small className="muted">
-            Optionally provide a new tenant name below to auto-create a tenant during registration.
-          </small>
-          <label htmlFor="new-tenant-name">New tenant name</label>
-          <input
-            id="new-tenant-name"
-            type="text"
-            placeholder="e.g. Edge Cluster"
-            value={formTenantName}
-            onChange={(event) => setFormTenantName(event.target.value)}
-            disabled={registering}
-          />
-          <label htmlFor="hostname">Hostname</label>
-          <input
-            id="hostname"
-            type="text"
-            value={hostname}
-            onChange={(event) => setHostname(event.target.value)}
-            placeholder="node-01.example.com"
-            disabled={registering}
-            required
-          />
-          <label htmlFor="node-os">Operating system</label>
-          <input
-            id="node-os"
-            type="text"
-            value={os}
-            onChange={(event) => setOs(event.target.value)}
-            placeholder="Ubuntu 24.04"
-            disabled={registering}
-          />
-          <label htmlFor="node-arch">Architecture</label>
-          <input
-            id="node-arch"
-            type="text"
-            value={arch}
-            onChange={(event) => setArch(event.target.value)}
-            placeholder="x86_64"
-            disabled={registering}
-          />
-          <label htmlFor="node-ip">Public IP</label>
-          <input
-            id="node-ip"
-            type="text"
-            value={publicIp}
-            onChange={(event) => setPublicIp(event.target.value)}
-            placeholder="203.0.113.10"
-            disabled={registering}
-          />
-          <label htmlFor="bootstrap-token">Bootstrap token</label>
-          <input
-            id="bootstrap-token"
-            type="text"
-            value={bootstrapToken}
-            onChange={(event) => setBootstrapToken(event.target.value)}
-            placeholder="control-one-bootstrap-token"
-            disabled={registering}
-            required
-          />
-          {formError ? <p className="form-error">{formError}</p> : null}
-          {formSuccess ? <p className="form-success">{formSuccess}</p> : null}
-          <button type="submit" disabled={registering}>
-            {registering ? 'Registering…' : 'Register node'}
+      {/* Node Discovery */}
+      <DemandForm 
+        title="Smart Discovery" 
+        icon="🔍"
+        summary="Find and auto-register nodes"
+      >
+        <NodeDiscovery onNodesDiscovered={handleDiscoveredNodes} />
+      </DemandForm>
+
+      {/* Quick Register */}
+      <DemandForm 
+        title="Quick Register" 
+        icon="➕"
+        summary="Register a new node manually"
+      >
+        <form className="compact-form" onSubmit={handleRegisterNode}>
+          <div className="form-field">
+            <label htmlFor="hostname">Hostname</label>
+            <input
+              id="hostname"
+              type="text"
+              value={hostname}
+              onChange={(event) => setHostname(event.target.value)}
+              placeholder="node-01.example.com"
+              disabled={registering}
+              required
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="node-os">OS</label>
+            <input
+              id="node-os"
+              type="text"
+              value={os}
+              onChange={(event) => setOs(event.target.value)}
+              placeholder="Ubuntu 24.04"
+              disabled={registering}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="node-arch">Architecture</label>
+            <input
+              id="node-arch"
+              type="text"
+              value={arch}
+              onChange={(event) => setArch(event.target.value)}
+              placeholder="x86_64"
+              disabled={registering}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="new-tenant-name">New tenant (optional)</label>
+            <input
+              id="new-tenant-name"
+              type="text"
+              placeholder="e.g. Edge Cluster"
+              value={formTenantName}
+              onChange={(event) => setFormTenantName(event.target.value)}
+              disabled={registering}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="bootstrap-token">Bootstrap token</label>
+            <input
+              id="bootstrap-token"
+              type="text"
+              value={bootstrapToken}
+              onChange={(event) => setBootstrapToken(event.target.value)}
+              placeholder="Auto-generated if empty"
+              disabled={registering}
+            />
+          </div>
+          <button type="submit" className="primary-button" disabled={registering}>
+            {registering ? 'Registering…' : 'Register Node'}
           </button>
         </form>
+      </DemandForm>
 
-        <div className="panel nodes-list">
-          <div className="toolbar nodes-toolbar">
-            <label htmlFor="tenant-filter">
-              Tenant
-              <select
-                id="tenant-filter"
-                value={selectedTenant ?? ''}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setSelectedTenant(value === '' ? undefined : value);
-                  setOffset(0);
-                }}
-              >
-                <option value="">All tenants</option>
-                {tenantOptions.map((tenant) => (
-                  <option key={tenant.id} value={tenant.id}>
-                    {tenant.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label htmlFor="hostname-filter">
-              Hostname
-              <input
-                id="hostname-filter"
-                type="search"
-                placeholder="Search hostname"
-                value={hostnameFilter}
-                onChange={(event) => {
-                  setHostnameFilter(event.target.value);
-                  setOffset(0);
-                }}
-              />
-            </label>
-            <button type="button" className="ghost-button" onClick={reloadNodes} disabled={loading}>
-              {loading ? 'Refreshing…' : 'Refresh'}
-            </button>
-          </div>
-
-          {loading ? <p className="muted">Loading nodes&hellip;</p> : null}
-          {error ? <p className="form-error">Failed to load nodes: {error}</p> : null}
-          {!loading && !error && nodes.length === 0 ? <p className="muted">No nodes match the current filters.</p> : null}
-
-          {!loading && !error && nodes.length > 0 ? (
-            <>
-              <table className="nodes-table">
-                <thead>
-                  <tr>
-                    <th>Hostname</th>
-                    <th>Tenant</th>
-                    <th>OS</th>
-                    <th>Public IP</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {nodes.map((node) => (
-                    <tr key={node.id} className={selectedNodeId === node.id ? 'active-row' : undefined}>
-                      <td>{node.hostname}</td>
-                      <td>{tenantNames.get(node.tenant_id) ?? node.tenant_id}</td>
-                      <td>{node.os ?? '—'}</td>
-                      <td>{node.public_ip ?? '—'}</td>
-                      <td>
-                        <button type="button" className="ghost-button" onClick={() => openNodeDetails(node.id)}>
-                          {selectedNodeId === node.id ? 'Hide' : 'View'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="pagination">
-                <button
-                  type="button"
-                  disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
-                  onClick={() => setOffset(pagination.prevOffset ?? 0)}
-                >
-                  Previous
-                </button>
-                <span>
-                  Showing {nodes.length} of {pagination.total} nodes
-                </span>
-                <button
-                  type="button"
-                  disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
-                  onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          ) : null}
+      {/* Node List */}
+      <div className="focused-section">
+        <div className="focused-section-header">
+          <h2 className="focused-section-title">📋 Node Registry</h2>
+          <p className="focused-section-subtitle">Manage and monitor connected nodes</p>
         </div>
+        <div className="focused-section-content">
+          {nodes.length === 0 ? (
+            <div className="empty-state">
+              <p>No nodes match the current filters.</p>
+            </div>
+          ) : (
+            <div className="nodes-list">
+              {nodes.map((node) => (
+                <div key={node.id} className="node-card">
+                  <header>
+                    <h3>{node.hostname}</h3>
+                    <div className={`status-dot status-online`} />
+                  </header>
+                  <dl>
+                    <dt>Tenant</dt>
+                    <dd>{node.tenant_id}</dd>
+                    <dt>OS</dt>
+                    <dd>{node.os || '—'}</dd>
+                    <dt>Architecture</dt>
+                    <dd>{node.arch || '—'}</dd>
+                    <dt>Public IP</dt>
+                    <dd>{node.public_ip || '—'}</dd>
+                    <dt>Last seen</dt>
+                    <dd>{formatDate(node.updated_at)}</dd>
+                  </dl>
+                  <div className="node-card-actions">
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => setSelectedNodeId(node.id)}
+                      disabled={deleting}
+                    >
+                      {selectedNode?.id === node.id ? 'Close' : 'Manage'}
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={handleDeleteNode}
+                      disabled={deleting || selectedNode?.id !== node.id}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
-        {selectedNode ? (
-          <aside className="panel node-detail">
-            <h3>Node details</h3>
-            <dl className="meta-grid">
-              <div>
-                <dt>Hostname</dt>
-                <dd>{selectedNode.hostname}</dd>
-              </div>
-              <div>
-                <dt>Node ID</dt>
-                <dd className="mono">{selectedNode.id}</dd>
-              </div>
-              <div>
-                <dt>Tenant</dt>
-                <dd>{tenantNames.get(selectedNode.tenant_id) ?? selectedNode.tenant_id}</dd>
-              </div>
-              <div>
-                <dt>Created</dt>
-                <dd>{formatDate(selectedNode.created_at)}</dd>
-              </div>
-              <div>
-                <dt>Updated</dt>
-                <dd>{formatDate(selectedNode.updated_at)}</dd>
-              </div>
-            </dl>
+      {/* Node Management */}
+      {selectedNode && (
+        <DemandForm 
+          title={`Manage: ${selectedNode.hostname}`} 
+          icon="⚙️"
+          summary="Update node configuration"
+          defaultExpanded={true}
+        >
+          <div className="node-detail">
             <div className="node-detail-form">
-              <label htmlFor="detail-hostname">Hostname</label>
-              <input
-                id="detail-hostname"
-                type="text"
-                value={detailHostname}
-                onChange={(event) => setDetailHostname(event.target.value)}
-              />
-              <label htmlFor="detail-os">Operating system</label>
-              <input
-                id="detail-os"
-                type="text"
-                value={detailOs}
-                onChange={(event) => setDetailOs(event.target.value)}
-                placeholder="Ubuntu 24.04"
-              />
-              <label htmlFor="detail-arch">Architecture</label>
-              <input
-                id="detail-arch"
-                type="text"
-                value={detailArch}
-                onChange={(event) => setDetailArch(event.target.value)}
-                placeholder="x86_64"
-              />
-              <label htmlFor="detail-ip">Public IP</label>
-              <input
-                id="detail-ip"
-                type="text"
-                value={detailPublicIp}
-                onChange={(event) => setDetailPublicIp(event.target.value)}
-                placeholder="203.0.113.10"
-              />
+              <div className="form-field">
+                <label htmlFor="edit-hostname">Hostname</label>
+                <input
+                  id="edit-hostname"
+                  type="text"
+                  value={editHostname}
+                  onChange={(event) => setEditHostname(event.target.value)}
+                  disabled={updating}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="edit-os">Operating system</label>
+                <input
+                  id="edit-os"
+                  type="text"
+                  value={editOs}
+                  onChange={(event) => setEditOs(event.target.value)}
+                  disabled={updating}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="edit-public-ip">Public IP</label>
+                <input
+                  id="edit-public-ip"
+                  type="text"
+                  value={editPublicIp}
+                  onChange={(event) => setEditPublicIp(event.target.value)}
+                  disabled={updating}
+                />
+              </div>
               <div className="detail-actions">
-                <button type="button" className="ghost-button" onClick={() => setSelectedNodeId(null)}>
-                  Close
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleUpdateNode}
+                  disabled={updating}
+                >
+                  {updating ? 'Updating…' : 'Update Node'}
                 </button>
-                <button type="button" className="primary-button" onClick={handleUpdateNode} disabled={updating}>
-                  {updating ? 'Saving…' : 'Save changes'}
-                </button>
-                <button type="button" className="danger-button" onClick={handleDeleteNode} disabled={deleting}>
-                  {deleting ? 'Deleting…' : 'Delete node'}
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={handleDeleteNode}
+                  disabled={deleting}
+                >
+                  {deleting ? 'Deleting…' : 'Delete Node'}
                 </button>
               </div>
             </div>
-          </aside>
-        ) : null}
-      </div>
-    </section>
+          </div>
+        </DemandForm>
+      )}
+    </div>
   );
 }

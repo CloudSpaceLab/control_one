@@ -32,7 +32,6 @@ CREATE INDEX IF NOT EXISTS access_entitlements_node_id_idx ON access_entitlement
 CREATE INDEX IF NOT EXISTS access_entitlements_user_id_idx ON access_entitlements(user_id);
 CREATE INDEX IF NOT EXISTS access_entitlements_expires_at_idx ON access_entitlements(expires_at);
 CREATE INDEX IF NOT EXISTS access_entitlements_revoked_at_idx ON access_entitlements(revoked_at);
-CREATE INDEX IF NOT EXISTS access_entitlements_active_idx ON access_entitlements(tenant_id, node_id, user_id) WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW());
 
 CREATE INDEX IF NOT EXISTS access_syncs_tenant_id_idx ON access_syncs(tenant_id);
 CREATE INDEX IF NOT EXISTS access_syncs_node_id_idx ON access_syncs(node_id);

@@ -1,16 +1,35 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Template } from '../lib/api';
-import { useTemplates } from '../hooks/useTemplates';
 import { useTemplateVersions } from '../hooks/useTemplateVersions';
+import { useExtendedTemplates } from '../hooks/useExtendedTemplates';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { 
+  EnterpriseLayout, 
+  ExecutiveOverview, 
+  ManagementPanel, 
+  ActionZone,
+  ContentGrid 
+} from '../components/EnterpriseLayout';
+import { 
+  TemplateType, 
+  TemplateFilter,
+  summarizeTemplates,
+  filterTemplates,
+  getTemplateProviders,
+  getTemplateIcon,
+  getTemplateTypeLabel,
+  getTemplateStatus
+} from '../lib/extendedTemplateUtils';
+import './EnterpriseLayout.css';
+
+// Import the enum values for runtime use
+const JobType = 'job';
+const ConfigType = 'config';
+const ComplianceType = 'compliance';
+
 import {
-  DEFAULT_METADATA_SCHEMA,
-  DEFAULT_TEMPLATE_BODY,
-  parseJsonInput,
   parseTemplateLabels,
-  templateStatus,
 } from '../lib/templateUtils';
 
 function formatDate(value?: string): string {
@@ -31,535 +50,991 @@ export function Templates(): JSX.Element {
   const [offset, setOffset] = useState(0);
   const [providerFilter, setProviderFilter] = useState('');
   const [nameFilter, setNameFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState<TemplateType | 'all'>('all');
   const [includeArchived, setIncludeArchived] = useState(false);
-  const templateOptions = {
+  
+  // Use extended templates system
+  const { data: extendedTemplates, loading, error, reload } = useExtendedTemplates();
+  
+  // Filter templates
+  const filter: TemplateFilter = {
+    type: typeFilter,
     provider: providerFilter.trim() || undefined,
-    namePrefix: nameFilter.trim() || undefined,
-    includeArchived,
+    name_prefix: nameFilter.trim() || undefined,
+    include_archived: includeArchived,
     limit,
     offset,
   };
-  const { data: templates, pagination, loading, error, reload } = useTemplates(templateOptions);
+  
+  const filteredTemplates = filterTemplates(extendedTemplates, filter);
+  
+  // Calculate summary from filtered templates
+  const summary = useMemo(() => {
+    return summarizeTemplates(extendedTemplates);
+  }, [extendedTemplates]);
+  
+  // Get providers for filter dropdown
+  const availableProviders = useMemo(() => {
+    return getTemplateProviders(extendedTemplates);
+  }, [extendedTemplates]);
 
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (templates.length === 0) {
+    if (filteredTemplates.length === 0) {
       setSelectedTemplateId(null);
       return;
     }
-    if (!selectedTemplateId || !templates.some((tpl) => tpl.id === selectedTemplateId)) {
-      setSelectedTemplateId(templates[0].id);
+    if (!selectedTemplateId && filteredTemplates.length > 0) {
+      setSelectedTemplateId(filteredTemplates[0].id);
     }
-  }, [templates, selectedTemplateId]);
+  }, [filteredTemplates, selectedTemplateId]);
 
-  const selectedTemplate = useMemo<Template | null>(() => {
-    if (!selectedTemplateId) {
-      return null;
+  const selectedTemplate = useMemo(
+    () => extendedTemplates.find((t) => t.id === selectedTemplateId) ?? null,
+    [extendedTemplates, selectedTemplateId],
+  );
+
+  // Pagination for filtered templates
+  const pagination = useMemo(() => {
+    return {
+      total: extendedTemplates.length,
+      limit,
+      offset,
+      hasMore: offset + limit < extendedTemplates.length,
+    };
+  }, [extendedTemplates, limit, offset]);
+
+  // Template versions - properly typed
+  if (selectedTemplateId) {
+    useTemplateVersions({ templateId: selectedTemplateId });
+  }
+
+  // Form state
+  const [createName, setCreateName] = useState('');
+  const [createProvider, setCreateProvider] = useState('');
+  const [createDescription, setCreateDescription] = useState('');
+  const [createLabels, setCreateLabels] = useState('');
+  const [createType, setCreateType] = useState<string>(JobType);
+  
+  // Job template specific fields
+  const [createJobType, setCreateJobType] = useState('');
+  const [createTimeout, setCreateTimeout] = useState('');
+  const [createMaxRetries, setCreateMaxRetries] = useState('');
+  const [createRetryDelay, setCreateRetryDelay] = useState('');
+  const [createExecutionMode, setCreateExecutionMode] = useState<'sequential' | 'parallel'>('sequential');
+  const [createEnvironment, setCreateEnvironment] = useState('');
+  const [createRequirements, setCreateRequirements] = useState('');
+  
+  // Config template specific fields
+  const [createConfigType, setCreateConfigType] = useState<'tenant' | 'node' | 'global'>('node');
+  const [createDefaultValues, setCreateDefaultValues] = useState('');
+  
+  // Compliance template specific fields
+  const [createComplianceType, setCreateComplianceType] = useState<'scan' | 'remediation' | 'policy'>('scan');
+  const [createRuleSet, setCreateRuleSet] = useState('');
+  const [createSeverityLevels, setCreateSeverityLevels] = useState('');
+  const [createRemediationAvailable, setCreateRemediationAvailable] = useState(false);
+  const [createComplianceFramework, setCreateComplianceFramework] = useState('');
+  const [createSchedule, setCreateSchedule] = useState('');
+  const [createNotificationThreshold, setCreateNotificationThreshold] = useState('');
+  
+  // File upload states
+  const [playbookFile, setPlaybookFile] = useState<File | null>(null);
+  const [terraformFile, setTerraformFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const [updateName, setUpdateName] = useState(selectedTemplate?.name ?? '');
+  const [updateDescription, setUpdateDescription] = useState(selectedTemplate?.description ?? '');
+  const [updateLabels] = useState(
+    selectedTemplate?.labels ? JSON.stringify(selectedTemplate.labels) : ''
+  );
+
+  const { error: formError, success: formSuccess, showError, showSuccess, reset } = useFormFeedback();
+
+  const [isCreating, setIsCreating] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [isUnarchiving, setIsUnarchiving] = useState(false);
+
+  // File upload handlers
+  const handleFileUpload = async (file: File, type: 'playbook' | 'terraform') => {
+    setIsUploading(true);
+    setUploadProgress(0);
+    
+    try {
+      // Simulate file upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + 10;
+        });
+      }, 100);
+
+      // Simulate upload delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+      
+      if (type === 'playbook') {
+        setPlaybookFile(file);
+      } else {
+        setTerraformFile(file);
+      }
+      
+      showSuccess(`${type === 'playbook' ? 'Playbook' : 'Terraform file'} uploaded successfully.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to upload ${type}.`;
+      showError(message);
+    } finally {
+      setIsUploading(false);
+      setTimeout(() => setUploadProgress(0), 1000);
     }
-    return templates.find((tpl) => tpl.id === selectedTemplateId) ?? null;
-  }, [templates, selectedTemplateId]);
+  };
 
-  const [versionOffset, setVersionOffset] = useState(0);
-  const versionLimit = 10;
-  useEffect(() => {
-    setVersionOffset(0);
-  }, [selectedTemplate?.id]);
+  const handlePlaybookUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      if (file.name.endsWith('.yml') || file.name.endsWith('.yaml') || file.name.endsWith('.playbook')) {
+        handleFileUpload(file, 'playbook');
+      } else {
+        showError('Please upload a valid playbook file (.yml, .yaml, .playbook)');
+      }
+    }
+  };
 
-  const {
-    data: versions,
-    pagination: versionPagination,
-    loading: versionsLoading,
-    error: versionsError,
-    reload: reloadVersions,
-  } = useTemplateVersions({
-    templateId: selectedTemplate?.id,
-    limit: versionLimit,
-    offset: versionOffset,
-  });
-
-  const templateForm = useFormFeedback();
-  const versionForm = useFormFeedback();
-  const [creatingTemplate, setCreatingTemplate] = useState(false);
-  const [creatingVersion, setCreatingVersion] = useState(false);
-  const [updatingTemplate, setUpdatingTemplate] = useState(false);
-  const [templateName, setTemplateName] = useState('');
-  const [templateProvider, setTemplateProvider] = useState('');
-  const [templateDescription, setTemplateDescription] = useState('');
-  const [templateLabels, setTemplateLabels] = useState('{}');
-
-  const [versionBody, setVersionBody] = useState(DEFAULT_TEMPLATE_BODY);
-  const [versionChecksum, setVersionChecksum] = useState('');
-  const [versionMetadata, setVersionMetadata] = useState(DEFAULT_METADATA_SCHEMA);
-  const [versionNotes, setVersionNotes] = useState('');
+  const handleTerraformUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      if (file.name.endsWith('.tf') || file.name.endsWith('.tf.json')) {
+        handleFileUpload(file, 'terraform');
+      } else {
+        showError('Please upload a valid Terraform file (.tf, .tf.json)');
+      }
+    }
+  };
 
   const handleCreateTemplate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const name = templateName.trim();
-    const provider = templateProvider.trim();
-    if (!name) {
-      templateForm.showError('Template name is required');
+    const trimmedName = createName.trim();
+    const trimmedProvider = createProvider.trim();
+    const trimmedDescription = createDescription.trim();
+
+    if (!trimmedName) {
+      showError('Template name is required');
       return;
     }
-    if (!provider) {
-      templateForm.showError('Provider is required');
+    if (!trimmedProvider) {
+      showError('Provider is required');
       return;
     }
+
+    setIsCreating(true);
+    reset();
+
     try {
-      setCreatingTemplate(true);
-      templateForm.reset();
-      const labels = templateLabels.trim() ? parseTemplateLabels(templateLabels) : undefined;
-      await api.createTemplate({
-        name,
-        provider,
-        description: templateDescription.trim() || undefined,
+      const labels = createLabels.trim() ? parseTemplateLabels(createLabels) : undefined;
+      
+      // Build base payload
+      const basePayload = {
+        name: trimmedName,
+        provider: trimmedProvider,
+        description: trimmedDescription || undefined,
+        labels,
+      };
+      
+      // Add type-specific fields
+      let payload = basePayload;
+      
+      if (createType === JobType) {
+        payload = {
+          ...basePayload,
+          labels: {
+            ...(labels || {}),
+            template_type: 'job',
+            job_type: createJobType.trim() || 'provision',
+            execution_mode: createExecutionMode,
+            ...(createTimeout && { timeout_seconds: createTimeout }),
+            ...(createMaxRetries && { max_retries: createMaxRetries }),
+            ...(createRetryDelay && { retry_delay_seconds: createRetryDelay }),
+            ...(createEnvironment.trim() && { environment: createEnvironment }),
+            ...(createRequirements.trim() && { requirements: createRequirements }),
+            ...(playbookFile && { playbook_file: playbookFile.name }),
+          },
+        };
+      } else if (createType === ConfigType) {
+        payload = {
+          ...basePayload,
+          labels: {
+            ...(labels || {}),
+            template_type: 'config',
+            config_type: createConfigType,
+            ...(createDefaultValues.trim() && { default_values: createDefaultValues }),
+            ...(terraformFile && { terraform_file: terraformFile.name }),
+          },
+        };
+      } else if (createType === ComplianceType) {
+        payload = {
+          ...basePayload,
+          labels: {
+            ...(labels || {}),
+            template_type: 'compliance',
+            compliance_type: createComplianceType,
+            rule_set: createRuleSet.trim() || 'default',
+            ...(createSeverityLevels.trim() && { severity_levels: createSeverityLevels }),
+            remediation_available: createRemediationAvailable.toString(),
+            ...(createComplianceFramework.trim() && { compliance_framework: createComplianceFramework }),
+            ...(createSchedule.trim() && { schedule: createSchedule }),
+            ...(createNotificationThreshold.trim() && { notification_threshold: createNotificationThreshold }),
+          },
+        };
+      }
+
+      await api.createTemplate(payload);
+
+      showSuccess(`Template "${trimmedName}" created successfully.`);
+      showToast('Template created successfully.', 'success');
+      
+      // Reset all form fields
+      setCreateName('');
+      setCreateProvider('');
+      setCreateDescription('');
+      setCreateLabels('');
+      setCreateType(JobType);
+      setCreateJobType('');
+      setCreateTimeout('');
+      setCreateMaxRetries('');
+      setCreateRetryDelay('');
+      setCreateExecutionMode('sequential');
+      setCreateEnvironment('');
+      setCreateRequirements('');
+      setCreateConfigType('node');
+      setCreateDefaultValues('');
+      setCreateComplianceType('scan');
+      setCreateRuleSet('');
+      setCreateSeverityLevels('');
+      setCreateRemediationAvailable(false);
+      setCreateComplianceFramework('');
+      setCreateSchedule('');
+      setCreateNotificationThreshold('');
+      setPlaybookFile(null);
+      setTerraformFile(null);
+      
+      reload();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create template.';
+      showError(message);
+      showToast(message, 'error');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleUpdateTemplate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedTemplate) return;
+
+    const trimmedName = updateName.trim();
+    const trimmedDescription = updateDescription.trim();
+
+    if (!trimmedName) {
+      showError('Template name is required');
+      return;
+    }
+
+    setIsUpdating(true);
+    try {
+      const labels = parseTemplateLabels(updateLabels);
+
+      await api.updateTemplate(selectedTemplate.id, {
+        name: trimmedName,
+        description: trimmedDescription,
         labels,
       });
-      setTemplateName('');
-      setTemplateProvider('');
-      setTemplateDescription('');
-      setTemplateLabels('{}');
-      setOffset(0);
+
+      showSuccess('Template updated successfully.');
+      showToast('Template updated successfully.', 'success');
       reload();
-      templateForm.showSuccess('Template created successfully');
-      showToast('Template created', 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create template';
-      templateForm.showError(message);
+      const message = err instanceof Error ? err.message : 'Failed to update template.';
+      showError(message);
       showToast(message, 'error');
     } finally {
-      setCreatingTemplate(false);
+      setIsUpdating(false);
     }
   };
 
-  const handleCreateVersion = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!selectedTemplate) {
-      versionForm.showError('Select a template first');
-      return;
-    }
-    const body = versionBody.trim();
-    if (!body) {
-      versionForm.showError('Version body is required');
-      return;
-    }
+  const handleArchiveTemplate = async () => {
+    if (!selectedTemplate) return;
+
+    const confirmed = window.confirm(
+      `Archive template "${selectedTemplate.name}"? This will hide it from the template list.`
+    );
+    if (!confirmed) return;
+
+    setIsArchiving(true);
     try {
-      setCreatingVersion(true);
-      versionForm.reset();
-      const payload = {
-        body,
-        checksum: versionChecksum.trim() || undefined,
-        metadata_schema: parseJsonInput(versionMetadata),
-        rollout_notes: versionNotes.trim() || undefined,
-      };
-      await api.createTemplateVersion(selectedTemplate.id, payload);
-      reloadVersions();
+      await api.archiveTemplate(selectedTemplate.id);
+      showSuccess('Template archived successfully.');
+      showToast('Template archived successfully.', 'success');
       reload();
-      versionForm.showSuccess('Version created');
-      showToast('Template version created', 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create version';
-      versionForm.showError(message);
+      const message = err instanceof Error ? err.message : 'Failed to archive template.';
+      showError(message);
       showToast(message, 'error');
     } finally {
-      setCreatingVersion(false);
+      setIsArchiving(false);
     }
   };
 
-  const handlePromoteVersion = async (versionNumber: number) => {
-    if (!selectedTemplate) {
-      return;
-    }
+  const handleUnarchiveTemplate = async () => {
+    if (!selectedTemplate) return;
+
+    setIsUnarchiving(true);
     try {
-      await api.promoteTemplateVersion(selectedTemplate.id, versionNumber);
-      reloadVersions();
+      await api.unarchiveTemplate(selectedTemplate.id);
+      showSuccess('Template unarchived successfully.');
+      showToast('Template unarchived successfully.', 'success');
       reload();
-      showToast(`Version ${versionNumber} promoted`, 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to promote version';
-      showToast(message, 'error');
-    }
-  };
-
-  const summary = useMemo(() => {
-    const total = pagination.total;
-    const promoted = templates.filter((tpl) => tpl.promoted_version?.version).length;
-    const archived = templates.filter((tpl) => Boolean(tpl.archived_at)).length;
-    return { total, promoted, archived };
-  }, [pagination.total, templates]);
-
-  const handleToggleArchived = async () => {
-    if (!selectedTemplate) {
-      return;
-    }
-    setUpdatingTemplate(true);
-    const nextArchived = !selectedTemplate.archived_at;
-    try {
-      await api.updateTemplate(selectedTemplate.id, { archived: nextArchived });
-      showToast(nextArchived ? 'Template archived.' : 'Template restored.', nextArchived ? 'info' : 'success');
-      reload();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to update template.';
+      const message = err instanceof Error ? err.message : 'Failed to unarchive template.';
+      showError(message);
       showToast(message, 'error');
     } finally {
-      setUpdatingTemplate(false);
+      setIsUnarchiving(false);
     }
   };
 
   return (
-    <section className="templates-page">
-      <div className="page-header">
-        <div>
-          <h2>Provisioning templates</h2>
-          <p>
-            Manage reusable infrastructure plans, version their payloads, and promote stable revisions for the
-            provisioning engine.
-          </p>
-        </div>
-      </div>
-
-      <div className="stat-card-grid">
+    <EnterpriseLayout variant="management">
+      {/* Executive Overview */}
+      <ExecutiveOverview 
+        title="📋 Template Management"
+        subtitle="Manage job templates for provisioning and compliance workflows"
+      >
         <article className="stat-card">
-          <span className="muted">Total templates</span>
+          <span className="muted">Total Templates</span>
           <strong>{summary.total}</strong>
+          <small className="muted">All templates</small>
         </article>
         <article className="stat-card">
-          <span className="muted">Promoted</span>
-          <strong>{summary.promoted}</strong>
-          <small className="muted">stable rollouts</small>
+          <span className="muted">Active</span>
+          <strong>{summary.active}</strong>
+          <small className="muted">Available for use</small>
         </article>
         <article className="stat-card">
-          <span className="muted">Archived</span>
-          <strong>{summary.archived}</strong>
-          <small className="muted">hidden from provisioning</small>
+          <span className="muted">Providers</span>
+          <strong>{summary.providers}</strong>
+          <small className="muted">Integration types</small>
         </article>
-      </div>
+        <article className="stat-card">
+          <span className="muted">Compliance</span>
+          <strong>{(extendedTemplates.filter(t => t.type === 'compliance')).length}</strong>
+          <small className="muted">Security templates</small>
+        </article>
+      </ExecutiveOverview>
 
-      <form className="panel templates-form" onSubmit={handleCreateTemplate}>
-        <h3>Create template</h3>
-        <div className="grid two-col">
-          <label htmlFor="template-name">
-            Name
-            <input
-              id="template-name"
-              type="text"
-              value={templateName}
-              onChange={(event) => setTemplateName(event.target.value)}
-              placeholder="e.g. aws-foundation"
-              disabled={creatingTemplate}
-              required
-            />
-          </label>
-          <label htmlFor="template-provider">
-            Provider
-            <input
-              id="template-provider"
-              type="text"
-              value={templateProvider}
-              onChange={(event) => setTemplateProvider(event.target.value)}
-              placeholder="aws|azure|gcp|mock"
-              disabled={creatingTemplate}
-              required
-            />
-          </label>
-        </div>
-        <label htmlFor="template-description">
-          Description
-          <textarea
-            id="template-description"
-            rows={3}
-            value={templateDescription}
-            onChange={(event) => setTemplateDescription(event.target.value)}
-            placeholder="High-level purpose"
-            disabled={creatingTemplate}
-          />
-        </label>
-        <label htmlFor="template-labels">
-          Labels (JSON)
-          <textarea
-            id="template-labels"
-            rows={3}
-            value={templateLabels}
-            onChange={(event) => setTemplateLabels(event.target.value)}
-            disabled={creatingTemplate}
-          />
-        </label>
-        {templateForm.error ? <p className="form-error">{templateForm.error}</p> : null}
-        {templateForm.success ? <p className="form-success">{templateForm.success}</p> : null}
-        <button type="submit" disabled={creatingTemplate}>
-          {creatingTemplate ? 'Saving…' : 'Create template'}
-        </button>
-      </form>
+      <div className="management-dashboard">
+        {/* Error/Warning Banner */}
+        {error && (
+          <div className="form-error" style={{ marginBottom: '2rem', padding: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '1.2rem' }}>⚠️</span>
+              <strong>Backend Connection Error</strong>
+            </div>
+            <div style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+              {error}
+            </div>
+            <div style={{ fontSize: '0.8rem', marginTop: '0.5rem', opacity: '0.8' }}>
+              Template creation and management will be unavailable until the backend is running.
+            </div>
+          </div>
+        )}
+        
+        {/* Main Content Area */}
+        <div className="management-main">
+          {/* Create Template */}
+          <ManagementPanel 
+            title="Create New Template"
+            icon="➕"
+            subtitle={error ? "Backend unavailable - see error message above" : "Add a new template with extended type support"}
+            position="primary"
+          >
+            <form onSubmit={handleCreateTemplate}>
+              <div style={{ opacity: error ? 0.5 : 1, pointerEvents: error ? 'none' : 'auto' }}>
+              {/* Basic Information Section */}
+              <div className="form-section">
+                <h3 className="form-section-title">Basic Information</h3>
+                <ContentGrid columns={2} gap="md">
+                  <div className="form-field">
+                    <label htmlFor="template-type">Template Type</label>
+                    <select
+                      id="template-type"
+                      value={createType}
+                      onChange={(e) => setCreateType(e.target.value)}
+                      disabled={isCreating}
+                      required
+                    >
+                      <option value={JobType}>Job Template</option>
+                      <option value={ConfigType}>Configuration</option>
+                      <option value={ComplianceType}>Compliance</option>
+                    </select>
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="template-name">Template Name</label>
+                    <input
+                      id="template-name"
+                      type="text"
+                      value={createName}
+                      onChange={(e) => setCreateName(e.target.value)}
+                      placeholder="e.g. Ubuntu Provision"
+                      disabled={isCreating}
+                      required
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="template-provider">Provider</label>
+                    <input
+                      id="template-provider"
+                      type="text"
+                      value={createProvider}
+                      onChange={(e) => setCreateProvider(e.target.value)}
+                      placeholder="e.g. ansible, terraform"
+                      disabled={isCreating}
+                      required
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="template-description">Description</label>
+                    <input
+                      id="template-description"
+                      type="text"
+                      value={createDescription}
+                      onChange={(e) => setCreateDescription(e.target.value)}
+                      placeholder="Template description"
+                      disabled={isCreating}
+                    />
+                  </div>
+                </ContentGrid>
+              </div>
 
-      <div className="panel toolbar templates-toolbar">
-        <label htmlFor="name-filter">
-          Name prefix
-          <input
-            id="name-filter"
-            type="text"
-            value={nameFilter}
-            onChange={(event) => {
-              setNameFilter(event.target.value);
-              setOffset(0);
-            }}
-            placeholder="search by name"
-          />
-        </label>
-        <label htmlFor="provider-filter">
-          Provider
-          <input
-            id="provider-filter"
-            type="text"
-            value={providerFilter}
-            onChange={(event) => {
-              setProviderFilter(event.target.value);
-              setOffset(0);
-            }}
-            placeholder="aws"
-          />
-        </label>
-        <label htmlFor="include-archived" className="checkbox-inline">
-          <input
-            id="include-archived"
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(event) => {
-              setIncludeArchived(event.target.checked);
-              setOffset(0);
-            }}
-          />
-          Include archived
-        </label>
-      </div>
+              {/* Type-specific Configuration */}
+              {createType === JobType && (
+                <div className="form-section">
+                  <h3 className="form-section-title">Job Configuration</h3>
+                  <ContentGrid columns={2} gap="md">
+                    <div className="form-field">
+                      <label htmlFor="job-type">Job Type</label>
+                      <input
+                        id="job-type"
+                        type="text"
+                        value={createJobType}
+                        onChange={(e) => setCreateJobType(e.target.value)}
+                        placeholder="e.g. provision, configure, cleanup"
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="execution-mode">Execution Mode</label>
+                      <select
+                        id="execution-mode"
+                        value={createExecutionMode}
+                        onChange={(e) => setCreateExecutionMode(e.target.value as 'sequential' | 'parallel')}
+                        disabled={isCreating}
+                      >
+                        <option value="sequential">Sequential</option>
+                        <option value="parallel">Parallel</option>
+                      </select>
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="timeout">Timeout (seconds)</label>
+                      <input
+                        id="timeout"
+                        type="number"
+                        value={createTimeout}
+                        onChange={(e) => setCreateTimeout(e.target.value)}
+                        placeholder="3600"
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="max-retries">Max Retries</label>
+                      <input
+                        id="max-retries"
+                        type="number"
+                        value={createMaxRetries}
+                        onChange={(e) => setCreateMaxRetries(e.target.value)}
+                        placeholder="3"
+                        disabled={isCreating}
+                      />
+                    </div>
+                  </ContentGrid>
+                  <ContentGrid columns={1} gap="md">
+                    <div className="form-field">
+                      <label htmlFor="environment">Environment Variables (JSON)</label>
+                      <textarea
+                        id="environment"
+                        value={createEnvironment}
+                        onChange={(e) => setCreateEnvironment(e.target.value)}
+                        placeholder='{"NODE_ENV": "production", "API_URL": "https://api.example.com"}'
+                        disabled={isCreating}
+                        rows={3}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="requirements">Requirements</label>
+                      <textarea
+                        id="requirements"
+                        value={createRequirements}
+                        onChange={(e) => setCreateRequirements(e.target.value)}
+                        placeholder="List any special requirements or dependencies"
+                        disabled={isCreating}
+                        rows={2}
+                      />
+                    </div>
+                  </ContentGrid>
+                  
+                  {/* Playbook Upload */}
+                  <ContentGrid columns={1} gap="md">
+                    <div className="form-field">
+                      <label htmlFor="playbook-upload">Playbook File</label>
+                      <div className="file-upload-area">
+                        <input
+                          id="playbook-upload"
+                          type="file"
+                          accept=".yml,.yaml,.playbook"
+                          onChange={handlePlaybookUpload}
+                          disabled={isCreating || isUploading}
+                          className="file-input"
+                        />
+                        <div className="file-upload-label">
+                          <div className="file-upload-icon">📁</div>
+                          <div className="file-upload-text">
+                            <p>Click to upload or drag and drop</p>
+                            <small>YAML, YML, PLAYBOOK files (MAX. 10MB)</small>
+                          </div>
+                        </div>
+                        {playbookFile && (
+                          <div className="file-upload-success">
+                            <span className="file-name">{playbookFile.name}</span>
+                            <button
+                              type="button"
+                              className="ghost-button small"
+                              onClick={() => setPlaybookFile(null)}
+                              disabled={isCreating}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                        {isUploading && uploadProgress > 0 && (
+                          <div className="upload-progress">
+                            <div className="progress-bar" style={{ width: `${uploadProgress}%` }}></div>
+                            <span>{uploadProgress}%</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </ContentGrid>
+                </div>
+              )}
 
-      {loading ? <p className="muted">Loading templates…</p> : null}
-      {error ? <p className="form-error">Failed to load templates: {error}</p> : null}
-      {!loading && !error && templates.length === 0 ? (
-        <div className="empty-state">
-          <p className="muted">No templates found. Create one to get started.</p>
-        </div>
-      ) : null}
+              {createType === ConfigType && (
+                <>
+                  <ContentGrid columns={2} gap="md">
+                    <div className="form-field">
+                      <label htmlFor="config-type">Config Type</label>
+                      <select
+                        id="config-type"
+                        value={createConfigType}
+                        onChange={(e) => setCreateConfigType(e.target.value as 'tenant' | 'node' | 'global')}
+                        disabled={isCreating}
+                      >
+                        <option value="node">Node Configuration</option>
+                        <option value="tenant">Tenant Configuration</option>
+                        <option value="global">Global Configuration</option>
+                      </select>
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="default-values">Default Values (JSON)</label>
+                      <textarea
+                        id="default-values"
+                        value={createDefaultValues}
+                        onChange={(e) => setCreateDefaultValues(e.target.value)}
+                        placeholder='{"key": "value"}'
+                        disabled={isCreating}
+                        rows={3}
+                      />
+                    </div>
+                  </ContentGrid>
+                  
+                  {/* Terraform Upload */}
+                  <ContentGrid columns={1} gap="md">
+                    <div className="form-field">
+                      <label htmlFor="terraform-upload">Terraform Configuration</label>
+                      <div className="file-upload-area">
+                        <input
+                          id="terraform-upload"
+                          type="file"
+                          accept=".tf,.tf.json"
+                          onChange={handleTerraformUpload}
+                          disabled={isCreating || isUploading}
+                          className="file-input"
+                        />
+                        <div className="file-upload-label">
+                          <div className="file-upload-icon">🏗️</div>
+                          <div className="file-upload-text">
+                            <p>Click to upload or drag and drop</p>
+                            <small>Terraform (.tf, .tf.json) files (MAX. 10MB)</small>
+                          </div>
+                        </div>
+                        {terraformFile && (
+                          <div className="file-upload-success">
+                            <span className="file-name">{terraformFile.name}</span>
+                            <button
+                              type="button"
+                              className="ghost-button small"
+                              onClick={() => setTerraformFile(null)}
+                              disabled={isCreating}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                        {isUploading && uploadProgress > 0 && (
+                          <div className="upload-progress">
+                            <div className="progress-bar" style={{ width: `${uploadProgress}%` }}></div>
+                            <span>{uploadProgress}%</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </ContentGrid>
+                </>
+              )}
 
-      {!loading && templates.length > 0 ? (
-        <div className="templates-layout">
-          <div className="templates-list">
-            <table className="templates-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map((template) => (
-                  <tr key={template.id} className={template.id === selectedTemplateId ? 'active-row' : ''}>
-                    <td>{template.name}</td>
-                    <td>{template.provider || '—'}</td>
-                    <td>
-                      <span className="badge">{templateStatus(template)}</span>
-                    </td>
-                    <td>{formatDate(template.updated_at)}</td>
-                    <td>
-                      <button type="button" onClick={() => setSelectedTemplateId(template.id)}>
-                        View
+              {createType === ComplianceType && (
+                <>
+                  <ContentGrid columns={2} gap="md">
+                    <div className="form-field">
+                      <label htmlFor="compliance-type">Compliance Type</label>
+                      <select
+                        id="compliance-type"
+                        value={createComplianceType}
+                        onChange={(e) => setCreateComplianceType(e.target.value as 'scan' | 'remediation' | 'policy')}
+                        disabled={isCreating}
+                      >
+                        <option value="scan">Security Scan</option>
+                        <option value="remediation">Remediation</option>
+                        <option value="policy">Policy Enforcement</option>
+                      </select>
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="rule-set">Rule Set</label>
+                      <input
+                        id="rule-set"
+                        type="text"
+                        value={createRuleSet}
+                        onChange={(e) => setCreateRuleSet(e.target.value)}
+                        placeholder="e.g. CIS, NIST, custom"
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="compliance-framework">Compliance Framework</label>
+                      <input
+                        id="compliance-framework"
+                        type="text"
+                        value={createComplianceFramework}
+                        onChange={(e) => setCreateComplianceFramework(e.target.value)}
+                        placeholder="e.g. SOC2, HIPAA, GDPR, PCI-DSS"
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="severity-levels">Severity Levels</label>
+                      <input
+                        id="severity-levels"
+                        type="text"
+                        value={createSeverityLevels}
+                        onChange={(e) => setCreateSeverityLevels(e.target.value)}
+                        placeholder="e.g. low,medium,high,critical"
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="schedule">Schedule (Cron)</label>
+                      <input
+                        id="schedule"
+                        type="text"
+                        value={createSchedule}
+                        onChange={(e) => setCreateSchedule(e.target.value)}
+                        placeholder="e.g. 0 2 * * * (daily at 2 AM)"
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="notification-threshold">Notification Threshold</label>
+                      <select
+                        id="notification-threshold"
+                        value={createNotificationThreshold}
+                        onChange={(e) => setCreateNotificationThreshold(e.target.value)}
+                        disabled={isCreating}
+                      >
+                        <option value="">Select threshold</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                      </select>
+                    </div>
+                  </ContentGrid>
+                  
+                  <ContentGrid columns={1} gap="md">
+                    <div className="form-field checkbox-inline">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={createRemediationAvailable}
+                          onChange={(e) => setCreateRemediationAvailable(e.target.checked)}
+                          disabled={isCreating}
+                        />
+                        Remediation Available
+                        <small>Enable automatic remediation for failed compliance checks</small>
+                      </label>
+                    </div>
+                  </ContentGrid>
+                </>
+              )}
+
+              {formError && <div className="form-error">{formError}</div>}
+              {formSuccess && <div className="form-success">{formSuccess}</div>}
+              
+              <ActionZone alignment="right" variant="primary">
+                <button type="submit" className="primary-button" disabled={isCreating}>
+                  {isCreating ? 'Creating…' : 'Create Template'}
+                </button>
+              </ActionZone>
+            </div>
+            </form>
+          </ManagementPanel>
+
+          {/* Template List */}
+          <ManagementPanel 
+            title="📚 Template Library"
+            subtitle="Browse and manage all available job templates"
+            position="primary"
+          >
+            {loading ? (
+              <p className="muted">Loading templates…</p>
+            ) : filteredTemplates.length === 0 ? (
+              <div className="empty-state">
+                <p>No templates found. Create your first template to get started.</p>
+              </div>
+            ) : (
+              <div className="template-list">
+                {filteredTemplates.map((template) => (
+                  <div key={template.id} className="template-card">
+                    <header>
+                      <div className="template-header-info">
+                        <span className="template-icon">{getTemplateIcon(template)}</span>
+                        <h3>{template.name}</h3>
+                        <div className="template-badges">
+                          <span className="type-badge">{getTemplateTypeLabel(template.type)}</span>
+                          <span className={`status-pill status-${getTemplateStatus(template)}`}>
+                            {getTemplateStatus(template)}
+                          </span>
+                        </div>
+                      </div>
+                    </header>
+                    <dl>
+                      <dt>Provider</dt>
+                      <dd>{template.provider}</dd>
+                      <dt>Description</dt>
+                      <dd>{template.description || '—'}</dd>
+                      <dt>Created</dt>
+                      <dd>{formatDate(template.created_at)}</dd>
+                      <dt>Updated</dt>
+                      <dd>{formatDate(template.updated_at)}</dd>
+                    </dl>
+                    <ActionZone alignment="right" variant="secondary">
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setSelectedTemplateId(template.id)}
+                      >
+                        Manage
                       </button>
-                    </td>
-                  </tr>
+                    </ActionZone>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-            <div className="pagination">
+              </div>
+            )}
+          </ManagementPanel>
+        </div>
+
+        {/* Sidebar */}
+        <div className="management-sidebar">
+          {/* Filters */}
+          <ManagementPanel 
+            title="Filters"
+            icon="🔍"
+            subtitle={`${filteredTemplates.length} templates shown`}
+            position="secondary"
+          >
+            <ContentGrid columns={1} gap="md">
+              <div className="form-field">
+                <label htmlFor="type-filter">Type</label>
+                <select
+                  id="type-filter"
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value as TemplateType | 'all')}
+                >
+                  <option value="all">All Types</option>
+                  <option value="job">Job Templates</option>
+                  <option value="config">Configuration</option>
+                  <option value="compliance">Compliance</option>
+                </select>
+              </div>
+              <div className="form-field">
+                <label htmlFor="provider-filter">Provider</label>
+                <select
+                  id="provider-filter"
+                  value={providerFilter}
+                  onChange={(e) => setProviderFilter(e.target.value)}
+                >
+                  <option value="">All Providers</option>
+                  {availableProviders.map(provider => (
+                    <option key={provider} value={provider}>{provider}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-field">
+                <label htmlFor="name-filter">Name</label>
+                <input
+                  id="name-filter"
+                  type="text"
+                  value={nameFilter}
+                  onChange={(e) => setNameFilter(e.target.value)}
+                  placeholder="e.g. Ubuntu"
+                />
+              </div>
+              <div className="form-field checkbox-inline">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={includeArchived}
+                    onChange={(e) => setIncludeArchived(e.target.checked)}
+                  />
+                  Include archived templates
+                </label>
+              </div>
+            </ContentGrid>
+          </ManagementPanel>
+
+          {/* Template Management */}
+          {selectedTemplate && (
+            <ManagementPanel 
+              title="Template Management"
+              icon="🔧"
+              subtitle={`Provider: ${selectedTemplate.provider}`}
+              position="secondary"
+            >
+              <form onSubmit={handleUpdateTemplate}>
+                <ContentGrid columns={1} gap="md">
+                  <div className="form-field">
+                    <label htmlFor="update-name">Template Name</label>
+                    <input
+                      id="update-name"
+                      type="text"
+                      value={updateName || selectedTemplate.name}
+                      onChange={(e) => setUpdateName(e.target.value)}
+                      disabled={isUpdating}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="update-description">Description</label>
+                    <input
+                      id="update-description"
+                      type="text"
+                      value={updateDescription || selectedTemplate.description || ''}
+                      onChange={(e) => setUpdateDescription(e.target.value)}
+                      disabled={isUpdating}
+                    />
+                  </div>
+                </ContentGrid>
+                
+                <ActionZone alignment="right" variant="primary">
+                  <button type="submit" className="primary-button" disabled={isUpdating}>
+                    {isUpdating ? 'Updating…' : 'Update Template'}
+                  </button>
+                  {selectedTemplate?.archived_at ? (
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleUnarchiveTemplate}
+                      disabled={isUnarchiving}
+                    >
+                      {isUnarchiving ? 'Unarchiving…' : 'Unarchive'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={handleArchiveTemplate}
+                      disabled={isArchiving}
+                    >
+                      {isArchiving ? 'Archiving…' : 'Archive'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => setSelectedTemplateId(null)}
+                  >
+                    Close
+                  </button>
+                </ActionZone>
+              </form>
+            </ManagementPanel>
+          )}
+        </div>
+      </div>
+
+      {/* Pagination */}
+      {pagination.total > pagination.limit && (
+        <ManagementPanel 
+          title="Pagination"
+          position="tertiary"
+        >
+          <div className="pagination-controls">
+            <div className="pagination-info">
+              Showing {pagination.offset + 1}-{Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total} templates
+            </div>
+            <ActionZone alignment="center" variant="secondary">
               <button
-                type="button"
-                disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
-                onClick={() => setOffset(pagination.prevOffset ?? 0)}
+                className="ghost-button"
+                disabled={pagination.offset === 0}
+                onClick={() => setOffset(Math.max(0, pagination.offset - pagination.limit))}
               >
                 Previous
               </button>
-              <span>
-                Showing {templates.length} of {pagination.total} templates
-              </span>
               <button
-                type="button"
-                disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
-                onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
+                className="ghost-button"
+                disabled={!pagination.hasMore}
+                onClick={() => setOffset(pagination.offset + pagination.limit)}
               >
                 Next
               </button>
-            </div>
+            </ActionZone>
           </div>
-          <aside className="panel templates-detail">
-            {selectedTemplate ? (
-              <>
-                <header>
-                  <div>
-                    <p className="eyebrow">{selectedTemplate.provider.toUpperCase()}</p>
-                    <h3>{selectedTemplate.name}</h3>
-                  </div>
-                  <span className="badge">{templateStatus(selectedTemplate)}</span>
-                </header>
-                {selectedTemplate.description ? <p>{selectedTemplate.description}</p> : null}
-                <dl className="meta-grid">
-                  <div>
-                    <dt>Template ID</dt>
-                    <dd>{selectedTemplate.id}</dd>
-                  </div>
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{formatDate(selectedTemplate.created_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{formatDate(selectedTemplate.updated_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Archived</dt>
-                    <dd>{selectedTemplate.archived_at ? formatDate(selectedTemplate.archived_at) : '—'}</dd>
-                  </div>
-                </dl>
-                <section>
-                  <h4>Labels</h4>
-                  {selectedTemplate.labels && Object.keys(selectedTemplate.labels).length > 0 ? (
-                    <ul className="label-list">
-                      {Object.entries(selectedTemplate.labels).map(([key, value]) => (
-                        <li key={key}>
-                          <strong>{key}</strong>
-                          <span>{value}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="muted">No labels assigned.</p>
-                  )}
-                </section>
-                <section>
-                  <h4>Versions</h4>
-                  {versionsLoading ? <p className="muted">Loading versions…</p> : null}
-                  {versionsError ? <p className="form-error">{versionsError}</p> : null}
-                  {!versionsLoading && versions.length === 0 ? (
-                    <p className="muted">No versions published yet.</p>
-                  ) : null}
-                  {!versionsLoading && versions.length > 0 ? (
-                    <ul className="versions-list">
-                      {versions.map((version) => (
-                        <li key={version.id}>
-                          <div>
-                            <strong>v{version.version}</strong> • {formatDate(version.created_at)}
-                            {version.promoted_at ? (
-                              <span className="badge badge-success">Promoted</span>
-                            ) : null}
-                          </div>
-                          {version.rollout_notes ? <p>{version.rollout_notes}</p> : null}
-                          <div className="version-actions">
-                            <button type="button" onClick={() => handlePromoteVersion(version.version)}>
-                              Promote
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  <div className="pagination">
-                    <button
-                      type="button"
-                      disabled={
-                        versionPagination.prevOffset === null || versionPagination.prevOffset === undefined
-                      }
-                      onClick={() => setVersionOffset(versionPagination.prevOffset ?? 0)}
-                    >
-                      Previous
-                    </button>
-                    <span>
-                      Showing {versions.length} of {versionPagination.total} versions
-                    </span>
-                    <button
-                      type="button"
-                      disabled={
-                        versionPagination.nextOffset === null || versionPagination.nextOffset === undefined
-                      }
-                      onClick={() => setVersionOffset(versionPagination.nextOffset ?? versionOffset + versionLimit)}
-                    >
-                      Next
-                    </button>
-                  </div>
-                </section>
-                <section>
-                  <h4>Create version</h4>
-                  <form onSubmit={handleCreateVersion} className="version-form">
-                    <label htmlFor="version-body">
-                      Body (JSON/YAML)
-                      <textarea
-                        id="version-body"
-                        rows={6}
-                        value={versionBody}
-                        onChange={(event) => setVersionBody(event.target.value)}
-                        disabled={creatingVersion}
-                      />
-                    </label>
-                    <label htmlFor="version-checksum">
-                      Checksum
-                      <input
-                        id="version-checksum"
-                        type="text"
-                        value={versionChecksum}
-                        onChange={(event) => setVersionChecksum(event.target.value)}
-                        disabled={creatingVersion}
-                      />
-                    </label>
-                    <label htmlFor="version-metadata">
-                      Metadata schema (JSON)
-                      <textarea
-                        id="version-metadata"
-                        rows={4}
-                        value={versionMetadata}
-                        onChange={(event) => setVersionMetadata(event.target.value)}
-                        disabled={creatingVersion}
-                      />
-                    </label>
-                    <label htmlFor="version-notes">
-                      Rollout notes
-                      <textarea
-                        id="version-notes"
-                        rows={3}
-                        value={versionNotes}
-                        onChange={(event) => setVersionNotes(event.target.value)}
-                        disabled={creatingVersion}
-                      />
-                    </label>
-                    {versionForm.error ? <p className="form-error">{versionForm.error}</p> : null}
-                    {versionForm.success ? <p className="form-success">{versionForm.success}</p> : null}
-                    <button type="submit" disabled={creatingVersion}>
-                      {creatingVersion ? 'Publishing…' : 'Create version'}
-                    </button>
-                  </form>
-                </section>
-                <div className="detail-actions">
-                  <button type="button" className="ghost-button" onClick={reload} disabled={loading}>
-                    {loading ? 'Refreshing…' : 'Refresh list'}
-                  </button>
-                  <button
-                    type="button"
-                    className={selectedTemplate.archived_at ? 'primary-button' : 'danger-button'}
-                    onClick={handleToggleArchived}
-                    disabled={updatingTemplate}
-                  >
-                    {updatingTemplate
-                      ? 'Updating…'
-                      : selectedTemplate.archived_at
-                        ? 'Restore template'
-                        : 'Archive template'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="muted">Select a template to inspect versions and metadata.</p>
-            )}
-          </aside>
-        </div>
-      ) : null}
-    </section>
+        </ManagementPanel>
+      )}
+    </EnterpriseLayout>
   );
 }
