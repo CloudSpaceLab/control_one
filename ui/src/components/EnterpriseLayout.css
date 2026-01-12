@@ -556,6 +556,19 @@
     right: 1rem;
     left: 1rem;
   }
+  
+  /* Mobile form improvements */
+  .management-panel .form-field input,
+  .management-panel .form-field select,
+  .management-panel .form-field textarea {
+    padding: 0.75rem 0.875rem;
+    font-size: 0.9rem;
+  }
+  
+  .management-panel .form-field select {
+    padding-right: 2rem;
+    background-size: 1rem;
+  }
 }
 
 /* Enhanced Stat Card Integration */
@@ -567,6 +580,63 @@
 .management-panel .stat-card {
   margin: 0;
   min-height: 100px;
+}
+
+/* Visual Consistency Improvements */
+.management-panel {
+  /* Ensure consistent spacing */
+  margin: 0;
+}
+
+.management-panel > *:first-child {
+  margin-top: 0;
+}
+
+.management-panel > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Fix any potential layout issues */
+.management-panel .form-field {
+  position: relative;
+}
+
+.management-panel .form-field select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 0.5rem;
+}
+
+/* Ensure proper text rendering */
+.management-panel .form-field select,
+.management-panel .form-field input,
+.management-panel .form-field textarea {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Fix dropdown arrow positioning */
+.management-panel .form-field select::-ms-expand {
+  display: none;
+}
+
+/* Ensure proper focus states */
+.management-panel .form-field select:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+/* Content overflow fixes */
+.management-panel .management-panel__content {
+  overflow: visible;
+}
+
+/* Ensure proper button alignment */
+.management-panel .action-zone {
+  align-items: stretch;
+}
+
+.management-panel .action-zone button {
+  align-self: flex-end;
 }
 
 /* Professional Form Integration */
@@ -581,6 +651,126 @@
   margin-top: 2rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--border-color);
+}
+
+/* Enhanced Form Field Styling */
+.management-panel .form-field {
+  margin-bottom: 1.25rem;
+}
+
+.management-panel .form-field label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.management-panel .form-field input,
+.management-panel .form-field select,
+.management-panel .form-field textarea {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 0.875rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  min-height: 44px;
+}
+
+.management-panel .form-field select {
+  /* Ensure dropdown text doesn't get cut off */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  padding-right: 2.5rem; /* Space for dropdown arrow */
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+  background-position: right 0.75rem center;
+  background-repeat: no-repeat;
+  background-size: 1.25rem;
+}
+
+.management-panel .form-field select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.management-panel .form-field input:focus,
+.management-panel .form-field textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.management-panel .form-field input::placeholder,
+.management-panel .form-field textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+/* Form Section Styling */
+.management-panel .form-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.management-panel .form-section-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 1.5rem 0;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Error Message Styling */
+.management-panel .error-message {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  color: #f87171;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.management-panel .error-message::before {
+  content: '⚠️';
+  font-size: 1.1rem;
+}
+
+/* Backend Unavailable Message */
+.management-panel .backend-unavailable {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0.08) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  color: #fca5a5;
+  font-weight: 600;
+  text-align: center;
+  box-shadow: 
+    0 8px 16px rgba(239, 68, 68, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.management-panel .backend-unavailable strong {
+  color: #f87171;
+  display: block;
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
 }
 
 /* List and Table Integration */

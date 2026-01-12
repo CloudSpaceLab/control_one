@@ -12,7 +12,7 @@ import {
   ActionZone,
   ContentGrid 
 } from '../components/EnterpriseLayout';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 
 function formatDate(value?: string): string {
   if (!value) {

@@ -12,7 +12,7 @@ import {
   ActionZone,
   ContentGrid 
 } from '../components/EnterpriseLayout';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 
 const STATUS_FILTERS: JobStatus[] = ['queued', 'running', 'succeeded', 'failed', 'cancelled'];
 

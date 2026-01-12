@@ -10,7 +10,7 @@ import {
   ActionZone,
   ContentGrid 
 } from '../components/EnterpriseLayout';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 
 const JOB_POLL_INTERVAL = 0;
 

@@ -21,7 +21,7 @@ import {
   getTemplateTypeLabel,
   getTemplateStatus
 } from '../lib/extendedTemplateUtils';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 
 // Import the enum values for runtime use
 const JobType = 'job';

@@ -7,7 +7,7 @@ import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { EnterpriseLayout, ExecutiveOverview, ManagementPanel, ActionZone, ContentGrid } from '../components/EnterpriseLayout';
 import { summarizeTemplates, filterTemplates, getTemplateProviders, getTemplateIcon, getTemplateTypeLabel, getTemplateStatus } from '../lib/extendedTemplateUtils';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 // Import the enum values for runtime use
 const JobType = 'job';
 const ConfigType = 'config';

@@ -6,7 +6,7 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { EnterpriseLayout, ExecutiveOverview, ManagementPanel, ActionZone, ContentGrid } from '../components/EnterpriseLayout';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 function formatDate(value) {
     if (!value) {
         return '—';

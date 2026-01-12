@@ -6,7 +6,7 @@ import { useToast } from '../providers/ToastProvider';
 import { useWorkerStatus } from '../hooks/useWorkerStatus';
 import { useCancelJob } from '../hooks/useCancelJob';
 import { EnterpriseLayout, ExecutiveOverview, ManagementPanel, ActionZone, ContentGrid } from '../components/EnterpriseLayout';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 const STATUS_FILTERS = ['queued', 'running', 'succeeded', 'failed', 'cancelled'];
 function formatDate(value) {
     if (!value) {

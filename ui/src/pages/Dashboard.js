@@ -5,7 +5,7 @@ import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useJobs } from '../hooks/useJobs';
 import { EnterpriseLayout, ExecutiveOverview, ManagementPanel, ActionZone, ContentGrid } from '../components/EnterpriseLayout';
-import './EnterpriseLayout.css';
+import '../components/EnterpriseLayout.css';
 const JOB_POLL_INTERVAL = 0;
 export function Dashboard() {
     const navigate = useNavigate();
