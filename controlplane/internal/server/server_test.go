@@ -397,9 +397,10 @@ func TestTemplateEndpoints(t *testing.T) {
 	}
 
 	createPayload := map[string]any{
-		"name":        "web-template",
-		"provider":    "aws",
-		"description": "Sample template",
+		"name":          "web-template",
+		"provider":      "aws",
+		"description":   "Sample template",
+		"template_type": "job",
 		"labels": map[string]string{
 			"env": "dev",
 		},
@@ -1261,6 +1262,9 @@ func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.
 			continue
 		}
 		if filter.Provider != "" && !strings.EqualFold(filter.Provider, tpl.Provider) {
+			continue
+		}
+		if filter.TemplateType != "" && !strings.EqualFold(filter.TemplateType, tpl.TemplateType) {
 			continue
 		}
 		if filter.NamePrefix != "" && !strings.HasPrefix(strings.ToLower(tpl.Name), strings.ToLower(filter.NamePrefix)) {

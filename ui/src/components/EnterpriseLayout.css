@@ -269,7 +269,7 @@
   position: fixed;
   bottom: 2rem;
   right: 2rem;
-  z-index: 1000;
+  z-index: 9997;
   background: rgba(15, 23, 42, 0.95);
   padding: 1rem;
   border-radius: 1rem;

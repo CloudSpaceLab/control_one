@@ -99,7 +99,7 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  padding: 0.875rem 1.25rem;
   border-radius: 0.75rem;
   color: var(--text-tertiary);
   font-weight: 500;
@@ -109,6 +109,7 @@
   overflow: hidden;
   border: 1px solid transparent;
   text-decoration: none;
+  min-height: 44px;
 }
 
 .side-nav nav li a::before {
@@ -186,10 +187,14 @@
 
 .nav-backdrop {
   position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   inset: 0;
   background: rgba(2, 6, 23, 0.65);
   backdrop-filter: blur(6px);
-  z-index: 500;
+  z-index: 9998;
   display: none;
 }
 
@@ -250,12 +255,14 @@
   border: 1px solid var(--border-hover);
   color: var(--text-primary);
   border-radius: 0.75rem;
-  padding: 0.5rem 0.75rem;
+  padding: 0.75rem;
   font-size: 1rem;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .theme-toggle:hover {
@@ -268,10 +275,11 @@
   border: 1px solid var(--border-hover);
   color: var(--text-primary);
   border-radius: 0.75rem;
-  padding: 0.5rem 1rem;
+  padding: 0.75rem 1.25rem;
   font-weight: 600;
   font-size: 0.9rem;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  min-height: 44px;
 }
 
 .signout-button:hover {

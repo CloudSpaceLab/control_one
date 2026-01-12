@@ -254,6 +254,7 @@ export function Templates(): JSX.Element {
       if (createType === JobType) {
         payload = {
           ...basePayload,
+          template_type: 'job',
           labels: {
             ...(labels || {}),
             template_type: 'job',
@@ -266,10 +267,11 @@ export function Templates(): JSX.Element {
             ...(createRequirements.trim() && { requirements: createRequirements }),
             ...(playbookFile && { playbook_file: playbookFile.name }),
           },
-        };
+        } as any;
       } else if (createType === ConfigType) {
         payload = {
           ...basePayload,
+          template_type: 'config',
           labels: {
             ...(labels || {}),
             template_type: 'config',
@@ -277,10 +279,11 @@ export function Templates(): JSX.Element {
             ...(createDefaultValues.trim() && { default_values: createDefaultValues }),
             ...(terraformFile && { terraform_file: terraformFile.name }),
           },
-        };
+        } as any;
       } else if (createType === ComplianceType) {
         payload = {
           ...basePayload,
+          template_type: 'compliance',
           labels: {
             ...(labels || {}),
             template_type: 'compliance',
@@ -292,7 +295,7 @@ export function Templates(): JSX.Element {
             ...(createSchedule.trim() && { schedule: createSchedule }),
             ...(createNotificationThreshold.trim() && { notification_threshold: createNotificationThreshold }),
           },
-        };
+        } as any;
       }
 
       await api.createTemplate(payload);

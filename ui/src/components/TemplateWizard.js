@@ -5,6 +5,7 @@ import { useExtendedTemplates } from '../hooks/useExtendedTemplates';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useToast } from '../providers/ToastProvider';
+import './TemplateWizard.css';
 const WIZARD_STEPS = [
     {
         id: 'template-selection',

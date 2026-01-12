@@ -324,10 +324,22 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract template_type from labels if not provided at top level
+	templateType := strings.TrimSpace(req.TemplateType)
+	if templateType == "" && req.Labels != nil {
+		if tt, ok := req.Labels["template_type"]; ok {
+			templateType = strings.TrimSpace(tt)
+		}
+	}
+	if templateType == "" {
+		http.Error(w, "template_type is required", http.StatusBadRequest)
+		return
+	}
+
 	template := &storage.ProvisioningTemplate{
 		Name:         req.Name,
 		Provider:     strings.TrimSpace(req.Provider),
-		TemplateType: strings.TrimSpace(req.TemplateType),
+		TemplateType: templateType,
 		Labels:       sanitizeLabels(req.Labels),
 	}
 	if req.Description != nil {

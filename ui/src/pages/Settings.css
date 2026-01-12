@@ -236,7 +236,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 9999;
   padding: 2rem;
 }
 
@@ -250,6 +250,8 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  z-index: 10000;
+  position: relative;
 }
 
 .modal-header {
@@ -296,7 +298,7 @@
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 0.75rem;
+  gap: 1.25rem;
   padding: 1.5rem;
   border-top: 1px solid #e5e7eb;
 }
@@ -315,12 +317,16 @@
 
 .form-group input[type='text'],
 .form-group input[type='url'],
-.form-group input[type='number'] {
+.form-group input[type='number'],
+.form-group select,
+.form-group textarea {
   width: 100%;
-  padding: 0.5rem;
+  padding: 1rem 1.25rem;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   font-size: 0.875rem;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 
 .form-row {
@@ -379,13 +385,15 @@
 .btn-primary,
 .btn-secondary,
 .btn-danger {
-  padding: 0.5rem 1rem;
+  padding: 0.875rem 1.75rem;
   border-radius: 6px;
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.2s;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 
 .btn-primary {

@@ -27,8 +27,7 @@ export function useExtendedTemplates() {
     const fetchTemplates = async () => {
         try {
             setState(prev => ({ ...prev, loading: true, error: null }));
-            // For now, we'll simulate with existing templates
-            // In a real implementation, this would call the extended template API
+            // Try to fetch from API
             const response = await api.listTemplates({ includeArchived: true, limit: 100 });
             // Transform existing templates to extended templates
             const extendedTemplates = response.data.map(template => {
@@ -78,6 +77,7 @@ export function useExtendedTemplates() {
             });
         }
         catch (error) {
+            console.error('Failed to fetch templates:', error);
             setState({
                 data: [],
                 summary: {
@@ -94,7 +94,7 @@ export function useExtendedTemplates() {
                     popular: 0,
                 },
                 loading: false,
-                error: handleError(error, 'Unable to fetch templates'),
+                error: 'Backend unavailable - Please start Docker Desktop and run: docker compose -f docker-compose.dev.yml up -d',
             });
         }
     };
@@ -151,13 +151,15 @@ export function useExtendedTemplates() {
     };
     const createTemplate = async (template) => {
         try {
-            // For now, use the existing template creation API
-            const created = await api.createTemplate({
+            // Map the extended template to the API payload
+            const payload = {
                 name: template.name,
                 provider: template.provider,
                 description: template.description,
                 labels: template.labels,
-            });
+                template_type: template.type,
+            };
+            const created = await api.createTemplate(payload);
             // Transform back to extended template
             return {
                 ...created,

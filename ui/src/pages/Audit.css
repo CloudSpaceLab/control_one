@@ -401,13 +401,15 @@
 
 .btn-primary,
 .btn-secondary {
-  padding: 0.5rem 1rem;
+  padding: 0.875rem 1.75rem;
   border-radius: 6px;
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.2s;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 
 .btn-primary {

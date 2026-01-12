@@ -4,7 +4,7 @@
   background: var(--accent-primary);
   color: white;
   border: 1px solid var(--accent-primary);
-  padding: 0.875rem 1.5rem;
+  padding: 0.875rem 1.75rem;
   border-radius: 0.5rem;
   font-weight: 600;
   font-size: 0.95rem;
@@ -48,7 +48,7 @@
   background: var(--bg-secondary);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
-  padding: 0.875rem 1.5rem;
+  padding: 0.875rem 1.75rem;
   border-radius: 0.5rem;
   font-weight: 600;
   font-size: 0.95rem;
@@ -78,7 +78,7 @@
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid transparent;
-  padding: 0.875rem 1.5rem;
+  padding: 0.875rem 1.75rem;
   border-radius: 0.5rem;
   font-weight: 600;
   font-size: 0.95rem;
@@ -119,7 +119,7 @@
   background: var(--accent-error);
   color: white;
   border: 1px solid var(--accent-error);
-  padding: 0.875rem 1.5rem;
+  padding: 0.875rem 1.75rem;
   border-radius: 0.5rem;
   font-weight: 600;
   font-size: 0.95rem;
@@ -177,13 +177,14 @@
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
-  padding: 0.875rem 1rem;
+  padding: 1rem 1.25rem;
   border-radius: 0.5rem;
   font-size: 0.95rem;
   font-weight: 500;
   transition: all 0.2s ease-in-out;
   width: 100%;
   box-sizing: border-box;
+  min-height: 44px;
 }
 
 .form-field input:focus,
@@ -385,7 +386,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 9999;
   padding: 2rem;
 }
 
@@ -403,6 +404,8 @@
     0 12px 24px rgba(2, 6, 23, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(16px);
+  z-index: 10000;
+  position: relative;
 }
 
 .modal-header {
@@ -445,9 +448,10 @@
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 1rem;
+  gap: 1.25rem;
   padding-top: 1.5rem;
   border-top: 1px solid rgba(148, 163, 184, 0.15);
+  margin-top: auto;
 }
 
 .roles-selection {
@@ -472,7 +476,7 @@
   align-items: flex-start;
   gap: 0.75rem;
   cursor: pointer;
-  padding: 1rem;
+  padding: 1.25rem;
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.15);
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.3) 0%, rgba(15, 23, 42, 0.1) 100%);
