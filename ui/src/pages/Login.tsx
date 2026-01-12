@@ -119,53 +119,38 @@ export function Login(): JSX.Element {
         <div className="auth-content">
           <div className="auth-welcome">
             <h2>Welcome back</h2>
-            <p>Sign in to access your control plane dashboard</p>
+            <p>Sign in to access your control plane</p>
           </div>
 
-          {/* Login Method Selection */}
-          <div className="auth-methods">
-            <div className="method-group">
-              <label className="method-label">Authentication Method</label>
-              <div className="radio-group">
-                <label className="radio-item">
-                  <input
-                    type="radio"
-                    name="loginMethod"
-                    value="credentials"
-                    checked={loginMethod === 'credentials'}
-                    onChange={() => setLoginMethod('credentials')}
-                  />
-                  <span className="radio-text">
-                    <strong>Username & Password</strong>
-                    <small>Use your admin credentials</small>
-                  </span>
-                </label>
-                <label className="radio-item">
-                  <input
-                    type="radio"
-                    name="loginMethod"
-                    value="token"
-                    checked={loginMethod === 'token'}
-                    onChange={() => setLoginMethod('token')}
-                  />
-                  <span className="radio-text">
-                    <strong>Bearer Token</strong>
-                    <small>Use your API token</small>
-                  </span>
-                </label>
-              </div>
+          {/* Compact Login Method Toggle */}
+          <div className="auth-methods-compact">
+            <div className="toggle-group">
+              <button
+                type="button"
+                className={`toggle-button ${loginMethod === 'credentials' ? 'active' : ''}`}
+                onClick={() => setLoginMethod('credentials')}
+              >
+                Username & Password
+              </button>
+              <button
+                type="button"
+                className={`toggle-button ${loginMethod === 'token' ? 'active' : ''}`}
+                onClick={() => setLoginMethod('token')}
+              >
+                Bearer Token
+              </button>
             </div>
           </div>
 
           {/* SSO Section */}
           {oidcEnabled && (
-            <div className="auth-divider">
+            <div className="auth-divider-compact">
               <span>OR</span>
             </div>
           )}
           
           {oidcEnabled && (
-            <div className="auth-sso">
+            <div className="auth-sso-compact">
               <button type="button" className="sso-button" onClick={handleSso} disabled={ssoLoading}>
                 <div className="sso-icon">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -174,7 +159,7 @@ export function Login(): JSX.Element {
                 </div>
                 <span>{ssoLoading ? 'Connecting to SSO…' : 'Continue with SSO'}</span>
               </button>
-              {ssoError ? <div className="auth-error">{ssoError}</div> : null}
+              {ssoError ? <div className="auth-error-compact">{ssoError}</div> : null}
             </div>
           )}
 
@@ -213,7 +198,7 @@ export function Login(): JSX.Element {
                 </div>
                 
                 {(localError || error) && (
-                  <div className="auth-error">
+                  <div className="auth-error-compact">
                     {localError || error}
                   </div>
                 )}
@@ -256,7 +241,7 @@ export function Login(): JSX.Element {
                 </div>
                 
                 {(localError || error) && (
-                  <div className="auth-error">
+                  <div className="auth-error-compact">
                     {localError || error}
                   </div>
                 )}

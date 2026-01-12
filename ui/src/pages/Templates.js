@@ -63,6 +63,8 @@ export function Templates() {
         }
     }, [filteredTemplates, selectedTemplateId]);
     const selectedTemplate = useMemo(() => extendedTemplates.find((t) => t.id === selectedTemplateId) ?? null, [extendedTemplates, selectedTemplateId]);
+    // Template versions - properly typed (moved to top level to follow Rules of Hooks)
+    const templateVersions = useTemplateVersions({ templateId: selectedTemplateId || '' });
     // Pagination for filtered templates
     const pagination = useMemo(() => {
         return {
@@ -72,10 +74,6 @@ export function Templates() {
             hasMore: offset + limit < extendedTemplates.length,
         };
     }, [extendedTemplates, limit, offset]);
-    // Template versions - properly typed
-    if (selectedTemplateId) {
-        useTemplateVersions({ templateId: selectedTemplateId });
-    }
     // Form state
     const [createName, setCreateName] = useState('');
     const [createProvider, setCreateProvider] = useState('');

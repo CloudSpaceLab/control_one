@@ -95,6 +95,9 @@ export function Templates(): JSX.Element {
     [extendedTemplates, selectedTemplateId],
   );
 
+  // Template versions - properly typed (moved to top level to follow Rules of Hooks)
+  const templateVersions = useTemplateVersions({ templateId: selectedTemplateId || '' });
+
   // Pagination for filtered templates
   const pagination = useMemo(() => {
     return {
@@ -104,11 +107,6 @@ export function Templates(): JSX.Element {
       hasMore: offset + limit < extendedTemplates.length,
     };
   }, [extendedTemplates, limit, offset]);
-
-  // Template versions - properly typed
-  if (selectedTemplateId) {
-    useTemplateVersions({ templateId: selectedTemplateId });
-  }
 
   // Form state
   const [createName, setCreateName] = useState('');
