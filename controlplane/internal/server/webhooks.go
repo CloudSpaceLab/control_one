@@ -101,7 +101,7 @@ func (s *Server) handleWebhooksCollection(w http.ResponseWriter, r *http.Request
 		s.handleCreateWebhook(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -116,7 +116,7 @@ func (s *Server) handleWebhookSubroutes(w http.ResponseWriter, r *http.Request) 
 	segments := strings.Split(trimmed, "/")
 	webhookID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid webhook id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid webhook id")
 		return
 	}
 
@@ -140,13 +140,13 @@ func (s *Server) handleWebhookSubroutes(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -154,7 +154,7 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -169,7 +169,7 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	webhooks, total, err := s.store.ListWebhooks(r.Context(), tenantID, enabled, limit, offset)
 	if err != nil {
 		s.logger.Error("list webhooks", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -190,26 +190,26 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	var req createWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "name is required")
 		return
 	}
 	if req.URL == "" {
-		http.Error(w, "url is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "url is required")
 		return
 	}
 	if len(req.Events) == 0 {
-		http.Error(w, "events array cannot be empty", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "events array cannot be empty")
 		return
 	}
 
@@ -217,7 +217,7 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 	if req.TenantID != nil {
 		parsed, err := uuid.Parse(*req.TenantID)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -258,10 +258,10 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("create webhook", zap.Error(err))
 		if strings.Contains(err.Error(), "unique constraint") {
-			http.Error(w, "webhook with this name already exists", http.StatusConflict)
+			writeError(w, r, http.StatusConflict, "webhook with this name already exists")
 			return
 		}
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -289,20 +289,20 @@ func (s *Server) handleWebhookResource(w http.ResponseWriter, r *http.Request, i
 		s.handleDeleteWebhook(w, r, id)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPut, http.MethodDelete}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	webhook, err := s.store.GetWebhook(r.Context(), id)
 	if err != nil {
 		s.logger.Error("get webhook", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if webhook == nil {
@@ -316,13 +316,13 @@ func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uui
 
 func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	var req updateWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -342,7 +342,7 @@ func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id 
 	webhook, err := s.store.UpdateWebhook(r.Context(), id, params)
 	if err != nil {
 		s.logger.Error("update webhook", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if webhook == nil {
@@ -356,13 +356,13 @@ func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id 
 
 func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	if err := s.store.DeleteWebhook(r.Context(), id); err != nil {
 		s.logger.Error("delete webhook", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -376,19 +376,19 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	webhook, err := s.store.GetWebhook(r.Context(), id)
 	if err != nil {
 		s.logger.Error("get webhook", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if webhook == nil {
@@ -398,7 +398,7 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 
 	var req testWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -435,7 +435,7 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Request, webhookID uuid.UUID) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -444,13 +444,13 @@ func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -462,7 +462,7 @@ func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 	deliveries, total, err := s.store.ListWebhookDeliveries(r.Context(), webhookID, status, limit, offset)
 	if err != nil {
 		s.logger.Error("list webhook deliveries", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 

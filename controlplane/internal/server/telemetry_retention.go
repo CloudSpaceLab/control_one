@@ -53,19 +53,19 @@ func (s *Server) handleRetentionPoliciesCollection(w http.ResponseWriter, r *htt
 		s.handleCreateRetentionPolicy(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleListRetentionPolicies(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -73,7 +73,7 @@ func (s *Server) handleListRetentionPolicies(w http.ResponseWriter, r *http.Requ
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -82,7 +82,7 @@ func (s *Server) handleListRetentionPolicies(w http.ResponseWriter, r *http.Requ
 	policies, total, err := s.store.ListRetentionPolicies(r.Context(), tenantID, limit, offset)
 	if err != nil {
 		s.logger.Error("list retention policies", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -100,7 +100,7 @@ func (s *Server) handleListRetentionPolicies(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleCreateRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -110,21 +110,21 @@ func (s *Server) handleCreateRetentionPolicy(w http.ResponseWriter, r *http.Requ
 
 	var req createRetentionPolicyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if strings.TrimSpace(req.PolicyName) == "" {
-		http.Error(w, "policy_name is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "policy_name is required")
 		return
 	}
 	if req.RetentionDays <= 0 {
-		http.Error(w, "retention_days must be positive", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "retention_days must be positive")
 		return
 	}
 	dataType := strings.ToLower(strings.TrimSpace(req.DataType))
 	if dataType != "metrics" && dataType != "logs" && dataType != "both" {
-		http.Error(w, "data_type must be metrics, logs, or both", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "data_type must be metrics, logs, or both")
 		return
 	}
 
@@ -132,7 +132,7 @@ func (s *Server) handleCreateRetentionPolicy(w http.ResponseWriter, r *http.Requ
 	if req.TenantID != nil {
 		parsed, err := uuid.Parse(*req.TenantID)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = &parsed
@@ -153,7 +153,7 @@ func (s *Server) handleCreateRetentionPolicy(w http.ResponseWriter, r *http.Requ
 	created, err := s.store.CreateRetentionPolicy(r.Context(), params)
 	if err != nil {
 		s.logger.Error("create retention policy", zap.Error(err))
-		http.Error(w, fmt.Sprintf("create retention policy failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create retention policy failed: %v", err))
 		return
 	}
 
@@ -164,7 +164,7 @@ func (s *Server) handleCreateRetentionPolicy(w http.ResponseWriter, r *http.Requ
 func (s *Server) handleRetentionCleanup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -173,7 +173,7 @@ func (s *Server) handleRetentionCleanup(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -182,7 +182,7 @@ func (s *Server) handleRetentionCleanup(w http.ResponseWriter, r *http.Request) 
 		dataType = "both"
 	}
 	if dataType != "metrics" && dataType != "logs" && dataType != "both" {
-		http.Error(w, "data_type must be metrics, logs, or both", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "data_type must be metrics, logs, or both")
 		return
 	}
 
@@ -190,7 +190,7 @@ func (s *Server) handleRetentionCleanup(w http.ResponseWriter, r *http.Request) 
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -199,7 +199,7 @@ func (s *Server) handleRetentionCleanup(w http.ResponseWriter, r *http.Request) 
 	deletedRows, err := s.store.DeleteExpiredTelemetry(r.Context(), tenantID, dataType)
 	if err != nil {
 		s.logger.Error("delete expired telemetry", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 

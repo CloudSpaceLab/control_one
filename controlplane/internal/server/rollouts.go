@@ -54,7 +54,7 @@ func (s *Server) handleTemplateRollouts(w http.ResponseWriter, r *http.Request, 
 		s.handleCreateRollout(w, r, templateID)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -67,14 +67,14 @@ func (s *Server) handleRolloutResource(w http.ResponseWriter, r *http.Request, t
 		s.handleGetRollout(w, r, rolloutID)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleCancelRollout(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, rolloutID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -84,14 +84,14 @@ func (s *Server) handleCancelRollout(w http.ResponseWriter, r *http.Request, tem
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	rollout, err := s.store.GetRollout(r.Context(), rolloutID)
 	if err != nil {
 		s.logger.Error("get rollout for cancel", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if rollout == nil {
@@ -100,7 +100,7 @@ func (s *Server) handleCancelRollout(w http.ResponseWriter, r *http.Request, tem
 	}
 
 	if rollout.State == "completed" || rollout.State == "cancelled" {
-		http.Error(w, "rollout cannot be cancelled in its current state", http.StatusConflict)
+		writeError(w, r, http.StatusConflict, "rollout cannot be cancelled in its current state")
 		return
 	}
 
@@ -113,7 +113,7 @@ func (s *Server) handleCancelRollout(w http.ResponseWriter, r *http.Request, tem
 	updated, err := s.store.UpdateRollout(r.Context(), rolloutID, params)
 	if err != nil {
 		s.logger.Error("cancel rollout", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if updated == nil {
@@ -131,20 +131,20 @@ func (s *Server) handleCancelRollout(w http.ResponseWriter, r *http.Request, tem
 
 func (s *Server) handleListRollouts(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	rollouts, total, err := s.store.ListRollouts(r.Context(), templateID, limit, offset)
 	if err != nil {
 		s.logger.Error("list rollouts", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -162,7 +162,7 @@ func (s *Server) handleListRollouts(w http.ResponseWriter, r *http.Request, temp
 
 func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -173,18 +173,18 @@ func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, tem
 
 	var req createRolloutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	versionID, err := uuid.Parse(req.TemplateVersionID)
 	if err != nil {
-		http.Error(w, "invalid template_version_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid template_version_id")
 		return
 	}
 
 	if req.TargetPercent < 0 || req.TargetPercent > 100 {
-		http.Error(w, "target_percent must be between 0 and 100", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "target_percent must be between 0 and 100")
 		return
 	}
 
@@ -200,7 +200,7 @@ func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, tem
 	if req.ScheduledFor != nil {
 		ts, err := time.Parse(time.RFC3339, *req.ScheduledFor)
 		if err != nil {
-			http.Error(w, "invalid scheduled_for timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid scheduled_for timestamp (use RFC3339)")
 			return
 		}
 		scheduledFor = &ts
@@ -219,7 +219,7 @@ func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, tem
 
 	created, err := s.store.CreateRollout(r.Context(), params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("create rollout failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create rollout failed: %v", err))
 		return
 	}
 
@@ -235,14 +235,14 @@ func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, tem
 
 func (s *Server) handleGetRollout(w http.ResponseWriter, r *http.Request, rolloutID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	rollout, err := s.store.GetRollout(r.Context(), rolloutID)
 	if err != nil {
 		s.logger.Error("get rollout", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if rollout == nil {

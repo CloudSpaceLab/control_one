@@ -457,13 +457,13 @@ func (s *Server) handleJobsCollection(w http.ResponseWriter, r *http.Request) {
 		s.handleCreateJob(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "job store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "job store unavailable")
 		return
 	}
 
@@ -473,7 +473,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -481,7 +481,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -493,7 +493,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	if statusParam != "" {
 		candidate := storage.JobStatus(statusParam)
 		if !isValidJobStatus(candidate) {
-			http.Error(w, "invalid status", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid status")
 			return
 		}
 		status = candidate
@@ -502,7 +502,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, total, err := s.store.ListJobs(r.Context(), tenantID, jobType, status, limit, offset)
 	if err != nil {
 		s.logger.Error("list jobs", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -525,7 +525,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -535,13 +535,13 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 
 	jobIDParam := strings.TrimSpace(r.URL.Query().Get("job_id"))
 	if jobIDParam == "" {
-		http.Error(w, "job_id is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "job_id is required")
 		return
 	}
 
 	jobID, err := uuid.Parse(jobIDParam)
 	if err != nil {
-		http.Error(w, "invalid job_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid job_id")
 		return
 	}
 
@@ -552,7 +552,7 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -607,7 +607,7 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleJobSubroutes(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "job store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "job store unavailable")
 		return
 	}
 
@@ -626,7 +626,7 @@ func (s *Server) handleJobSubroutes(w http.ResponseWriter, r *http.Request) {
 
 	jobID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid job id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid job id")
 		return
 	}
 
@@ -646,7 +646,7 @@ func (s *Server) handleJobSubroutes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -656,7 +656,7 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 
 	job, events, results, err := s.loadJobWithDetails(r.Context(), jobID)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if job == nil {
@@ -670,7 +670,7 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -683,7 +683,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 	job, err := s.store.GetJob(ctx, jobID)
 	if err != nil {
 		s.logger.Error("get job for cancel", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if job == nil {
@@ -692,7 +692,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 	}
 
 	if !jobCancelable(job.Status) {
-		http.Error(w, "job cannot be cancelled in its current state", http.StatusConflict)
+		writeError(w, r, http.StatusConflict, "job cannot be cancelled in its current state")
 		return
 	}
 
@@ -705,7 +705,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 
 	if err := s.store.UpdateJobStatus(ctx, job.ID, storage.JobStatusCancelled, "job cancelled", fields); err != nil {
 		s.logger.Error("cancel job", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -715,7 +715,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 
 	updated, events, results, err := s.loadJobWithDetails(ctx, job.ID)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	writeJSON(w, http.StatusOK, jobResponseFromModel(updated, events, results))
@@ -757,7 +757,7 @@ func jobCancelable(status storage.JobStatus) bool {
 
 func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "job store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "job store unavailable")
 		return
 	}
 
@@ -770,29 +770,29 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	s.configureJobIntegrations()
 	definition, ok := jobDefinitionForType(req.Type)
 	if !ok {
-		http.Error(w, "unsupported job type", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "unsupported job type")
 		return
 	}
 	if _, ok := s.jobHandlers[req.Type]; !ok {
-		http.Error(w, "unsupported job type", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "unsupported job type")
 		return
 	}
 
 	payloadDetails, err := validateJobPayload(req.Type, req.Payload)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -803,29 +803,29 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		tenant, err := s.store.GetTenant(r.Context(), tenantID)
 		if err != nil {
 			s.logger.Error("get tenant", zap.Error(err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 			return
 		}
 		if tenant == nil {
-			http.Error(w, "tenant not found", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "tenant not found")
 			return
 		}
 	}
 
 	if definition.RequiresTenant {
 		if req.TenantID == nil {
-			http.Error(w, "tenant_id is required for this job type", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "tenant_id is required for this job type")
 			return
 		}
 		if tenantID == uuid.Nil {
-			http.Error(w, "tenant_id is invalid", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "tenant_id is invalid")
 			return
 		}
 	}
 
 	if v, ok := payloadDetails.(*provisionPayload); ok && v != nil {
 		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
-			http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "tenant mismatch between payload and request")
 			return
 		}
 		if err := s.ensureProvisioningPlan(r.Context(), v.PlanID); err != nil {
@@ -835,13 +835,13 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 				errors.Is(err, errPlanTemplateUnpromoted) {
 				status = http.StatusBadRequest
 			}
-			http.Error(w, err.Error(), status)
+			writeError(w, r, status, err.Error())
 			return
 		}
 	}
 	if v, ok := payloadDetails.(*compliancePayload); ok && v != nil {
 		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
-			http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "tenant mismatch between payload and request")
 			return
 		}
 	}
@@ -865,7 +865,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	created, err := s.store.CreateJob(ctx, job, initialEvent)
 	if err != nil {
 		s.logger.Error("create job", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	s.recordAudit(ctx, principal, created.TenantID, "job.created", "job", created.ID.String(), map[string]any{
@@ -887,7 +887,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 				"type":    created.Type,
 				"message": fmt.Sprintf("enqueue failed: %v", err),
 			})
-			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+			writeError(w, r, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
 	} else {

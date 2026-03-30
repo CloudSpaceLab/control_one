@@ -83,7 +83,7 @@ func (s *Server) handleEntitlementsCollection(w http.ResponseWriter, r *http.Req
 		s.handleCreateEntitlement(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -97,7 +97,7 @@ func (s *Server) handleEntitlementSubroutes(w http.ResponseWriter, r *http.Reque
 
 	entitlementID, err := uuid.Parse(trimmed)
 	if err != nil {
-		http.Error(w, "invalid entitlement id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid entitlement id")
 		return
 	}
 
@@ -106,13 +106,13 @@ func (s *Server) handleEntitlementSubroutes(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleListEntitlements(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -121,7 +121,7 @@ func (s *Server) handleListEntitlements(w http.ResponseWriter, r *http.Request) 
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = parsed
@@ -130,7 +130,7 @@ func (s *Server) handleListEntitlements(w http.ResponseWriter, r *http.Request) 
 	if userParam := strings.TrimSpace(r.URL.Query().Get("user_id")); userParam != "" {
 		parsed, err := uuid.Parse(userParam)
 		if err != nil {
-			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid user_id")
 			return
 		}
 		filter.UserID = parsed
@@ -139,7 +139,7 @@ func (s *Server) handleListEntitlements(w http.ResponseWriter, r *http.Request) 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
-			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid node_id")
 			return
 		}
 		filter.NodeID = parsed
@@ -157,7 +157,7 @@ func (s *Server) handleListEntitlements(w http.ResponseWriter, r *http.Request) 
 	entitlements, total, err := s.store.ListEntitlements(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list entitlements", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -175,7 +175,7 @@ func (s *Server) handleListEntitlements(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleCreateEntitlement(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -186,24 +186,24 @@ func (s *Server) handleCreateEntitlement(w http.ResponseWriter, r *http.Request)
 
 	var req createEntitlementRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	userID, err := uuid.Parse(req.UserID)
 	if err != nil {
-		http.Error(w, "invalid user_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid user_id")
 		return
 	}
 
 	nodeID, err := uuid.Parse(req.NodeID)
 	if err != nil {
-		http.Error(w, "invalid node_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid node_id")
 		return
 	}
 
 	if strings.TrimSpace(req.Role) == "" {
-		http.Error(w, "role is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "role is required")
 		return
 	}
 
@@ -211,7 +211,7 @@ func (s *Server) handleCreateEntitlement(w http.ResponseWriter, r *http.Request)
 	if req.TenantID != nil {
 		parsed, err := uuid.Parse(*req.TenantID)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -221,7 +221,7 @@ func (s *Server) handleCreateEntitlement(w http.ResponseWriter, r *http.Request)
 	if req.ExpiresAt != nil {
 		ts, err := time.Parse(time.RFC3339, *req.ExpiresAt)
 		if err != nil {
-			http.Error(w, "invalid expires_at timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid expires_at timestamp (use RFC3339)")
 			return
 		}
 		expiresAt = &ts
@@ -251,7 +251,7 @@ func (s *Server) handleCreateEntitlement(w http.ResponseWriter, r *http.Request)
 	created, err := s.store.CreateEntitlement(r.Context(), params)
 	if err != nil {
 		s.logger.Error("create entitlement", zap.Error(err))
-		http.Error(w, fmt.Sprintf("create entitlement failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create entitlement failed: %v", err))
 		return
 	}
 
@@ -284,20 +284,20 @@ func (s *Server) handleEntitlementResource(w http.ResponseWriter, r *http.Reques
 		s.handleDeleteEntitlement(w, r, entitlementID)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch, http.MethodDelete}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleGetEntitlement(w http.ResponseWriter, r *http.Request, entitlementID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	entitlement, err := s.store.GetEntitlement(r.Context(), entitlementID)
 	if err != nil {
 		s.logger.Error("get entitlement", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if entitlement == nil {
@@ -311,7 +311,7 @@ func (s *Server) handleGetEntitlement(w http.ResponseWriter, r *http.Request, en
 
 func (s *Server) handleUpdateEntitlement(w http.ResponseWriter, r *http.Request, entitlementID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -322,7 +322,7 @@ func (s *Server) handleUpdateEntitlement(w http.ResponseWriter, r *http.Request,
 
 	var req updateEntitlementRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -334,7 +334,7 @@ func (s *Server) handleUpdateEntitlement(w http.ResponseWriter, r *http.Request,
 	if req.ExpiresAt != nil {
 		ts, err := time.Parse(time.RFC3339, *req.ExpiresAt)
 		if err != nil {
-			http.Error(w, "invalid expires_at timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid expires_at timestamp (use RFC3339)")
 			return
 		}
 		params.ExpiresAt = &ts
@@ -343,7 +343,7 @@ func (s *Server) handleUpdateEntitlement(w http.ResponseWriter, r *http.Request,
 	updated, err := s.store.UpdateEntitlement(r.Context(), entitlementID, params)
 	if err != nil {
 		s.logger.Error("update entitlement", zap.Error(err))
-		http.Error(w, fmt.Sprintf("update entitlement failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("update entitlement failed: %v", err))
 		return
 	}
 	if updated == nil {
@@ -359,7 +359,7 @@ func (s *Server) handleUpdateEntitlement(w http.ResponseWriter, r *http.Request,
 
 func (s *Server) handleDeleteEntitlement(w http.ResponseWriter, r *http.Request, entitlementID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -370,7 +370,7 @@ func (s *Server) handleDeleteEntitlement(w http.ResponseWriter, r *http.Request,
 
 	if err := s.store.DeleteEntitlement(r.Context(), entitlementID); err != nil {
 		s.logger.Error("delete entitlement", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -382,7 +382,7 @@ func (s *Server) handleDeleteEntitlement(w http.ResponseWriter, r *http.Request,
 func (s *Server) handleAccessSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -393,7 +393,7 @@ func (s *Server) handleAccessSync(w http.ResponseWriter, r *http.Request) {
 		APIEndpoint  string `json:"api_endpoint,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 

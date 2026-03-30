@@ -122,19 +122,19 @@ type Store interface {
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
 	if s.worker == nil {
-		http.Error(w, "worker unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "worker unavailable")
 		return
 	}
 	provider, ok := s.worker.(workerStatusProvider)
 	if !ok {
-		http.Error(w, "worker status unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "worker status unavailable")
 		return
 	}
 	status := provider.Status()
@@ -147,7 +147,7 @@ func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles ...string) (*auth.Principal, bool) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		writeError(w, r, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
 		return nil, false
 	}
 
@@ -173,7 +173,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 		}
 	}
 
-	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+	writeError(w, r, http.StatusForbidden, http.StatusText(http.StatusForbidden))
 	return nil, false
 }
 
@@ -219,7 +219,7 @@ func defaultNodeIntervals() map[string]int64 {
 func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -227,12 +227,12 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -241,7 +241,7 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 		if s.cfg.Registration.DefaultTenantID != "" {
 			parsed, err := uuid.Parse(s.cfg.Registration.DefaultTenantID)
 			if err != nil {
-				http.Error(w, "invalid default tenant id", http.StatusInternalServerError)
+				writeError(w, r, http.StatusInternalServerError, "invalid default tenant id")
 				return
 			}
 			tenantID = parsed
@@ -250,7 +250,7 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 
 	if tenantID == uuid.Nil {
 		if strings.TrimSpace(req.TenantName) == "" {
-			http.Error(w, "tenant_id or tenant_name required", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "tenant_id or tenant_name required")
 			return
 		}
 		tenantID = uuid.New()
@@ -269,26 +269,26 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if !bootstrapAllowed {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		writeError(w, r, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
 		return
 	}
 
 	if s.store == nil {
-		http.Error(w, "registration store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "registration store unavailable")
 		return
 	}
 
 	tenant, err := s.store.EnsureTenant(r.Context(), tenantID, req.TenantName)
 	if err != nil {
 		s.logger.Error("ensure tenant", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
 	hostname := strings.TrimSpace(req.Hostname)
 	if existing, err := s.store.GetNodeByHostname(r.Context(), tenant.ID, hostname); err != nil {
 		s.logger.Error("lookup existing node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	} else if existing != nil {
 		s.logger.Info("node already registered",
@@ -317,7 +317,7 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 	created, err := s.store.CreateNode(r.Context(), node)
 	if err != nil {
 		s.logger.Error("register node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -474,13 +474,13 @@ func (s *Server) registerRoutes() {
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		writeError(w, r, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
 		return
 	}
 
@@ -520,7 +520,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUsersCollection(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "user store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "user store unavailable")
 		return
 	}
 
@@ -529,20 +529,20 @@ func (s *Server) handleUsersCollection(w http.ResponseWriter, r *http.Request) {
 		s.handleListUsers(w, r)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleUserSubroutes(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "user store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "user store unavailable")
 		return
 	}
 
 	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/users/")
 	userID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid user id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
@@ -553,7 +553,7 @@ func (s *Server) handleUserSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateUserRoles(w, r, userID)
 	default:
 		w.Header().Set("Allow", "GET, PATCH")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -564,14 +564,14 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	users, total, err := s.store.ListUsers(r.Context(), limit, offset)
 	if err != nil {
 		s.logger.Error("list users", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -580,7 +580,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		roles, roleErr := s.store.ListUserRoles(r.Context(), user.ID)
 		if roleErr != nil {
 			s.logger.Warn("list roles for user", zap.Error(roleErr), zap.String("user_id", user.ID.String()))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 			return
 		}
 		resp = append(resp, userResponseFromModel(user, roles))
@@ -605,7 +605,7 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request, userID uu
 	user, err := s.store.GetUser(r.Context(), userID)
 	if err != nil {
 		s.logger.Error("get user", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if user == nil {
@@ -616,7 +616,7 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request, userID uu
 	roles, err := s.store.ListUserRoles(r.Context(), user.ID)
 	if err != nil {
 		s.logger.Error("list user roles", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -636,25 +636,25 @@ func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, u
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := s.store.SetUserRoles(r.Context(), userID, req.Roles); err != nil {
 		s.logger.Error("set user roles", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
 	user, err := s.store.GetUser(r.Context(), userID)
 	if err != nil {
 		s.logger.Error("get user after update", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if user == nil {
@@ -665,7 +665,7 @@ func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, u
 	roles, err := s.store.ListUserRoles(r.Context(), userID)
 	if err != nil {
 		s.logger.Error("list user roles after update", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -681,13 +681,13 @@ func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, u
 
 func (s *Server) handleRolesCollection(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "role store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "role store unavailable")
 		return
 	}
 
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -698,7 +698,7 @@ func (s *Server) handleRolesCollection(w http.ResponseWriter, r *http.Request) {
 	roles, err := s.store.ListRoles(r.Context())
 	if err != nil {
 		s.logger.Error("list roles", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -809,13 +809,13 @@ func (s *Server) handleTenantsCollection(w http.ResponseWriter, r *http.Request)
 		s.handleCreateTenant(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "tenant store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "tenant store unavailable")
 		return
 	}
 
@@ -825,7 +825,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -834,7 +834,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 	tenants, total, err := s.store.ListTenants(r.Context(), namePrefix, limit, offset)
 	if err != nil {
 		s.logger.Error("list tenants", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -856,7 +856,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "tenant store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "tenant store unavailable")
 		return
 	}
 
@@ -869,12 +869,12 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -885,7 +885,7 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	created, err := s.store.CreateTenant(r.Context(), tenant)
 	if err != nil {
 		s.logger.Error("create tenant", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -901,14 +901,14 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "tenant store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "tenant store unavailable")
 		return
 	}
 
 	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/tenants/")
 	tenantID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid tenant id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid tenant id")
 		return
 	}
 
@@ -921,7 +921,7 @@ func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteTenant(w, r, tenantID)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, DELETE")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -933,7 +933,7 @@ func (s *Server) handleGetTenant(w http.ResponseWriter, r *http.Request, tenantI
 	tenant, err := s.store.GetTenant(r.Context(), tenantID)
 	if err != nil {
 		s.logger.Error("get tenant", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if tenant == nil {
@@ -957,12 +957,12 @@ func (s *Server) handleUpdateTenant(w http.ResponseWriter, r *http.Request, tena
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -970,7 +970,7 @@ func (s *Server) handleUpdateTenant(w http.ResponseWriter, r *http.Request, tena
 	updated, err := s.store.UpdateTenant(r.Context(), tenantID, name)
 	if err != nil {
 		s.logger.Error("update tenant", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if updated == nil {
@@ -999,7 +999,7 @@ func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request, tena
 			return
 		}
 		s.logger.Error("delete tenant", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -1054,13 +1054,13 @@ func (s *Server) handleNodesCollection(w http.ResponseWriter, r *http.Request) {
 		s.handleCreateNode(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "node store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "node store unavailable")
 		return
 	}
 
@@ -1070,7 +1070,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1078,7 +1078,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -1089,7 +1089,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, total, err := s.store.ListNodes(r.Context(), tenantID, hostnamePrefix, limit, offset)
 	if err != nil {
 		s.logger.Error("list nodes", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -1111,7 +1111,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "node store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "node store unavailable")
 		return
 	}
 
@@ -1124,28 +1124,28 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	tenantID, err := uuid.Parse(req.TenantID)
 	if err != nil {
-		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	tenant, err := s.store.GetTenant(r.Context(), tenantID)
 	if err != nil {
 		s.logger.Error("get tenant", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if tenant == nil {
-		http.Error(w, "tenant not found", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "tenant not found")
 		return
 	}
 
@@ -1160,7 +1160,7 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	created, err := s.store.CreateNode(r.Context(), node)
 	if err != nil {
 		s.logger.Error("create node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -1176,14 +1176,14 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "node store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "node store unavailable")
 		return
 	}
 
 	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/nodes/")
 	nodeID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid node id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid node id")
 		return
 	}
 
@@ -1196,7 +1196,7 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteNode(w, r, nodeID)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, DELETE")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -1208,7 +1208,7 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request, nodeID uu
 	node, err := s.store.GetNode(r.Context(), nodeID)
 	if err != nil {
 		s.logger.Error("get node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if node == nil {
@@ -1232,19 +1232,19 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	node, err := s.store.GetNode(r.Context(), nodeID)
 	if err != nil {
 		s.logger.Error("get node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if node == nil {
@@ -1255,7 +1255,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 	if req.Hostname != nil {
 		name := strings.TrimSpace(*req.Hostname)
 		if name == "" {
-			http.Error(w, "hostname cannot be empty", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "hostname cannot be empty")
 			return
 		}
 		node.Hostname = name
@@ -1273,7 +1273,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 	updated, err := s.store.UpdateNode(r.Context(), node)
 	if err != nil {
 		s.logger.Error("update node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if updated == nil {
@@ -1299,7 +1299,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, nodeID
 	node, err := s.store.GetNode(r.Context(), nodeID)
 	if err != nil {
 		s.logger.Error("get node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if node == nil {
@@ -1313,7 +1313,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, nodeID
 			return
 		}
 		s.logger.Error("delete node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -1538,8 +1538,9 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	httpServer := &http.Server{
 		Addr: cfg.HTTP.Address,
-		Handler: loggingMiddleware(logger,
-			requestIDMiddleware(authMW.Wrap(mux))),
+		Handler: recoveryMiddleware(logger,
+			loggingMiddleware(logger,
+				requestIDMiddleware(authMW.Wrap(mux)))),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
@@ -1570,6 +1571,24 @@ func (s *Server) Stop(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return s.http.Shutdown(shutdownCtx)
+}
+
+func recoveryMiddleware(logger *zap.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				reqID, _ := requestIDFromContext(r.Context())
+				logger.Error("panic recovered",
+					zap.Any("panic", rec),
+					zap.String("path", r.URL.Path),
+					zap.String("method", r.Method),
+					zap.String("request_id", reqID),
+				)
+				writeError(w, r, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func loggingMiddleware(logger *zap.Logger, next http.Handler) http.Handler {

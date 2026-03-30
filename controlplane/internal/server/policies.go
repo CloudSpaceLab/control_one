@@ -76,7 +76,7 @@ func (s *Server) handlePoliciesCollection(w http.ResponseWriter, r *http.Request
 		s.handleCreatePolicy(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -91,7 +91,7 @@ func (s *Server) handlePolicySubroutes(w http.ResponseWriter, r *http.Request) {
 
 	policyID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid policy id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid policy id")
 		return
 	}
 
@@ -108,7 +108,7 @@ func (s *Server) handlePolicySubroutes(w http.ResponseWriter, r *http.Request) {
 		if segments[1] == "versions" && segments[3] == "promote" {
 			versionNumber, verErr := strconv.Atoi(segments[2])
 			if verErr != nil || versionNumber <= 0 {
-				http.Error(w, "invalid version number", http.StatusBadRequest)
+				writeError(w, r, http.StatusBadRequest, "invalid version number")
 				return
 			}
 			s.handlePromotePolicyVersion(w, r, policyID, versionNumber)
@@ -139,7 +139,7 @@ func (s *Server) handlePolicyResource(w http.ResponseWriter, r *http.Request, po
 		s.handleDeletePolicy(w, r, policyID)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch, http.MethodDelete}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -150,20 +150,20 @@ func (s *Server) handlePolicyVersions(w http.ResponseWriter, r *http.Request, po
 			return
 		}
 		if s.store == nil {
-			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 			return
 		}
 
 		limit, offset, err := parseLimitOffset(r.URL.Query())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		versions, total, err := s.store.ListPolicyVersions(r.Context(), policyID, limit, offset)
 		if err != nil {
 			s.logger.Error("list policy versions", zap.Error(err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -185,7 +185,7 @@ func (s *Server) handlePolicyVersions(w http.ResponseWriter, r *http.Request, po
 		s.handleCreatePolicyVersion(w, r, policyID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -196,31 +196,31 @@ func (s *Server) handlePromotePolicyVersion(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if s.store == nil {
-			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 			return
 		}
 		version, err := s.store.PromotePolicyVersion(r.Context(), policyID, versionNumber)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("promote policy version: %v", err), http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, fmt.Sprintf("promote policy version: %v", err))
 			return
 		}
 		resp := newPolicyVersionResponse(version)
 		writeJSON(w, http.StatusOK, resp)
 	default:
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -233,7 +233,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = parsed
@@ -247,7 +247,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	policies, total, err := s.store.ListPolicies(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list policies", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -265,7 +265,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -276,17 +276,17 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	var req createPolicyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "name is required")
 		return
 	}
 	req.RuleType = strings.TrimSpace(req.RuleType)
 	if req.RuleType == "" {
-		http.Error(w, "rule_type is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "rule_type is required")
 		return
 	}
 
@@ -294,7 +294,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	if req.TenantID != nil {
 		parsed, err := uuid.Parse(*req.TenantID)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -311,7 +311,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	created, err := s.store.CreatePolicy(r.Context(), params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("create policy failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create policy failed: %v", err))
 		return
 	}
 
@@ -326,14 +326,14 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	policy, err := s.store.GetPolicy(r.Context(), policyID)
 	if err != nil {
 		s.logger.Error("get policy", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if policy == nil {
@@ -347,7 +347,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request, policyI
 
 func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -358,7 +358,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 
 	var req updatePolicyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -368,7 +368,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {
-			http.Error(w, "name cannot be empty", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "name cannot be empty")
 			return
 		}
 		req.Name = &name
@@ -384,7 +384,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 	if req.RuleType != nil {
 		ruleType := strings.TrimSpace(*req.RuleType)
 		if ruleType == "" {
-			http.Error(w, "rule_type cannot be empty", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "rule_type cannot be empty")
 			return
 		}
 		req.RuleType = &ruleType
@@ -406,13 +406,13 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 	}
 
 	if !hasUpdate {
-		http.Error(w, "no fields to update", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "no fields to update")
 		return
 	}
 
 	updated, err := s.store.UpdatePolicy(r.Context(), policyID, params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("update policy: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("update policy: %v", err))
 		return
 	}
 	if updated == nil {
@@ -430,7 +430,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 
 func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -442,7 +442,7 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, poli
 	policy, err := s.store.GetPolicy(r.Context(), policyID)
 	if err != nil {
 		s.logger.Error("get policy for delete", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if policy == nil {
@@ -452,7 +452,7 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, poli
 
 	if err := s.store.DeletePolicy(r.Context(), policyID); err != nil {
 		s.logger.Error("delete policy", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -464,18 +464,18 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, poli
 
 func (s *Server) handleCreatePolicyVersion(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	var req createPolicyVersionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 	req.RuleDefinition = strings.TrimSpace(req.RuleDefinition)
 	if req.RuleDefinition == "" {
-		http.Error(w, "rule_definition is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "rule_definition is required")
 		return
 	}
 
@@ -496,7 +496,7 @@ func (s *Server) handleCreatePolicyVersion(w http.ResponseWriter, r *http.Reques
 
 	version, err := s.store.CreatePolicyVersion(r.Context(), params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("create policy version failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create policy version failed: %v", err))
 		return
 	}
 
