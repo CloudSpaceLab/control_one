@@ -28,11 +28,11 @@ type auditLogResponse struct {
 func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 	if s.store == nil {
-		http.Error(w, "audit store unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "audit store unavailable")
 		return
 	}
 
@@ -42,7 +42,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -55,7 +55,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 	if tenantVal := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantVal != "" {
 		tenantID, parseErr := uuid.Parse(tenantVal)
 		if parseErr != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = tenantID
@@ -63,7 +63,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 	if sinceVal := strings.TrimSpace(r.URL.Query().Get("since")); sinceVal != "" {
 		ts, parseErr := time.Parse(time.RFC3339, sinceVal)
 		if parseErr != nil {
-			http.Error(w, "invalid since timestamp", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid since timestamp")
 			return
 		}
 		filter.Since = &ts
@@ -71,7 +71,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 	if untilVal := strings.TrimSpace(r.URL.Query().Get("until")); untilVal != "" {
 		ts, parseErr := time.Parse(time.RFC3339, untilVal)
 		if parseErr != nil {
-			http.Error(w, "invalid until timestamp", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid until timestamp")
 			return
 		}
 		filter.Until = &ts
@@ -80,7 +80,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 	entries, total, err := s.store.ListAuditLogs(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list audit logs", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 

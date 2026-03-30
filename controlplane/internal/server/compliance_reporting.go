@@ -42,7 +42,7 @@ type complianceSummaryResponse struct {
 func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -51,13 +51,13 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -66,7 +66,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	if jobParam := strings.TrimSpace(r.URL.Query().Get("job_id")); jobParam != "" {
 		parsed, err := uuid.Parse(jobParam)
 		if err != nil {
-			http.Error(w, "invalid job_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid job_id")
 			return
 		}
 		filter.JobID = parsed
@@ -75,7 +75,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = parsed
@@ -84,7 +84,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
-			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid node_id")
 			return
 		}
 		filter.NodeID = parsed
@@ -110,7 +110,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	if sinceParam := strings.TrimSpace(r.URL.Query().Get("since")); sinceParam != "" {
 		ts, err := time.Parse(time.RFC3339, sinceParam)
 		if err != nil {
-			http.Error(w, "invalid since timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid since timestamp (use RFC3339)")
 			return
 		}
 		filter.Since = &ts
@@ -119,7 +119,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	if untilParam := strings.TrimSpace(r.URL.Query().Get("until")); untilParam != "" {
 		ts, err := time.Parse(time.RFC3339, untilParam)
 		if err != nil {
-			http.Error(w, "invalid until timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid until timestamp (use RFC3339)")
 			return
 		}
 		filter.Until = &ts
@@ -128,7 +128,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 	results, total, err := s.store.ListComplianceResultsFiltered(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list compliance results", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -147,7 +147,7 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -156,7 +156,7 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -165,7 +165,7 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = parsed
@@ -174,7 +174,7 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
-			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid node_id")
 			return
 		}
 		filter.NodeID = parsed
@@ -183,7 +183,7 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	if sinceParam := strings.TrimSpace(r.URL.Query().Get("since")); sinceParam != "" {
 		ts, err := time.Parse(time.RFC3339, sinceParam)
 		if err != nil {
-			http.Error(w, "invalid since timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid since timestamp (use RFC3339)")
 			return
 		}
 		filter.Since = &ts
@@ -192,7 +192,7 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	if untilParam := strings.TrimSpace(r.URL.Query().Get("until")); untilParam != "" {
 		ts, err := time.Parse(time.RFC3339, untilParam)
 		if err != nil {
-			http.Error(w, "invalid until timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid until timestamp (use RFC3339)")
 			return
 		}
 		filter.Until = &ts
@@ -201,7 +201,7 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	agg, err := s.store.GetComplianceAggregation(r.Context(), filter)
 	if err != nil {
 		s.logger.Error("get compliance aggregation", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -282,7 +282,7 @@ type complianceTrendItem struct {
 func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -291,7 +291,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -300,7 +300,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = parsed
@@ -309,7 +309,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
-			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid node_id")
 			return
 		}
 		filter.NodeID = parsed
@@ -318,7 +318,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 	if sinceParam := strings.TrimSpace(r.URL.Query().Get("since")); sinceParam != "" {
 		ts, err := time.Parse(time.RFC3339, sinceParam)
 		if err != nil {
-			http.Error(w, "invalid since timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid since timestamp (use RFC3339)")
 			return
 		}
 		filter.Since = &ts
@@ -327,7 +327,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 	if untilParam := strings.TrimSpace(r.URL.Query().Get("until")); untilParam != "" {
 		ts, err := time.Parse(time.RFC3339, untilParam)
 		if err != nil {
-			http.Error(w, "invalid until timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid until timestamp (use RFC3339)")
 			return
 		}
 		filter.Until = &ts
@@ -344,7 +344,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 	trends, err := s.store.GetComplianceTrends(r.Context(), filter, intervalDays)
 	if err != nil {
 		s.logger.Error("get compliance trends", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -366,7 +366,7 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -375,7 +375,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -384,7 +384,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 		format = "json"
 	}
 	if format != "json" && format != "csv" {
-		http.Error(w, "format must be 'json' or 'csv'", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "format must be 'json' or 'csv'")
 		return
 	}
 
@@ -393,7 +393,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	if jobParam := strings.TrimSpace(r.URL.Query().Get("job_id")); jobParam != "" {
 		parsed, err := uuid.Parse(jobParam)
 		if err != nil {
-			http.Error(w, "invalid job_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid job_id")
 			return
 		}
 		filter.JobID = parsed
@@ -402,7 +402,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		filter.TenantID = parsed
@@ -411,7 +411,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
-			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid node_id")
 			return
 		}
 		filter.NodeID = parsed
@@ -437,7 +437,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	if sinceParam := strings.TrimSpace(r.URL.Query().Get("since")); sinceParam != "" {
 		ts, err := time.Parse(time.RFC3339, sinceParam)
 		if err != nil {
-			http.Error(w, "invalid since timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid since timestamp (use RFC3339)")
 			return
 		}
 		filter.Since = &ts
@@ -446,7 +446,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	if untilParam := strings.TrimSpace(r.URL.Query().Get("until")); untilParam != "" {
 		ts, err := time.Parse(time.RFC3339, untilParam)
 		if err != nil {
-			http.Error(w, "invalid until timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid until timestamp (use RFC3339)")
 			return
 		}
 		filter.Until = &ts
@@ -455,7 +455,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	results, _, err := s.store.ListComplianceResultsFiltered(r.Context(), filter, 0, 0)
 	if err != nil {
 		s.logger.Error("list compliance results for export", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -541,7 +541,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -550,14 +550,14 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/compliance/nodes/")
 	trimmed = strings.Trim(trimmed, "/")
 	if trimmed == "" {
-		http.Error(w, "node_id is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "node_id is required")
 		return
 	}
 
@@ -569,13 +569,13 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 
 	nodeID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid node_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid node_id")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -586,7 +586,7 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 	if sinceParam := strings.TrimSpace(r.URL.Query().Get("since")); sinceParam != "" {
 		ts, err := time.Parse(time.RFC3339, sinceParam)
 		if err != nil {
-			http.Error(w, "invalid since timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid since timestamp (use RFC3339)")
 			return
 		}
 		filter.Since = &ts
@@ -595,7 +595,7 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 	if untilParam := strings.TrimSpace(r.URL.Query().Get("until")); untilParam != "" {
 		ts, err := time.Parse(time.RFC3339, untilParam)
 		if err != nil {
-			http.Error(w, "invalid until timestamp (use RFC3339)", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid until timestamp (use RFC3339)")
 			return
 		}
 		filter.Until = &ts
@@ -617,7 +617,7 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 	results, total, err := s.store.ListComplianceResultsFiltered(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list node compliance history", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 

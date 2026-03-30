@@ -80,7 +80,7 @@ func (s *Server) handleSecretGroupsCollection(w http.ResponseWriter, r *http.Req
 		s.handleCreateSecretGroup(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -95,7 +95,7 @@ func (s *Server) handleSecretGroupSubroutes(w http.ResponseWriter, r *http.Reque
 	segments := strings.Split(trimmed, "/")
 	groupID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid group id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid group id")
 		return
 	}
 
@@ -119,13 +119,13 @@ func (s *Server) handleSecretGroupSubroutes(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -133,7 +133,7 @@ func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) 
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -142,7 +142,7 @@ func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) 
 	groups, total, err := s.store.ListSecretGroups(r.Context(), tenantID, limit, offset)
 	if err != nil {
 		s.logger.Error("list secret groups", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -160,7 +160,7 @@ func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -170,16 +170,16 @@ func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request)
 
 	var req createSecretGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if strings.TrimSpace(req.Name) == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "name is required")
 		return
 	}
 	if strings.TrimSpace(req.Backend) == "" {
-		http.Error(w, "backend is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "backend is required")
 		return
 	}
 
@@ -187,7 +187,7 @@ func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request)
 	if req.TenantID != nil {
 		parsed, err := uuid.Parse(*req.TenantID)
 		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -204,7 +204,7 @@ func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request)
 	created, err := s.store.CreateSecretGroup(r.Context(), params)
 	if err != nil {
 		s.logger.Error("create secret group", zap.Error(err))
-		http.Error(w, fmt.Sprintf("create secret group failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create secret group failed: %v", err))
 		return
 	}
 
@@ -221,20 +221,20 @@ func (s *Server) handleSecretGroupResource(w http.ResponseWriter, r *http.Reques
 		s.handleGetSecretGroup(w, r, groupID)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleGetSecretGroup(w http.ResponseWriter, r *http.Request, groupID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	group, err := s.store.GetSecretGroup(r.Context(), groupID)
 	if err != nil {
 		s.logger.Error("get secret group", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if group == nil {
@@ -249,7 +249,7 @@ func (s *Server) handleGetSecretGroup(w http.ResponseWriter, r *http.Request, gr
 func (s *Server) handleListSecretSyncs(w http.ResponseWriter, r *http.Request, groupID uuid.UUID) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -258,20 +258,20 @@ func (s *Server) handleListSecretSyncs(w http.ResponseWriter, r *http.Request, g
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	syncs, total, err := s.store.ListSecretSyncs(r.Context(), groupID, limit, offset)
 	if err != nil {
 		s.logger.Error("list secret syncs", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -290,7 +290,7 @@ func (s *Server) handleListSecretSyncs(w http.ResponseWriter, r *http.Request, g
 func (s *Server) handleSyncSecretGroup(w http.ResponseWriter, r *http.Request, groupID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -306,7 +306,7 @@ func (s *Server) handleSyncSecretGroup(w http.ResponseWriter, r *http.Request, g
 func (s *Server) handleSecretsSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 

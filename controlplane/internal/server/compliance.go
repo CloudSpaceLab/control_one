@@ -53,7 +53,7 @@ type complianceEvaluateResponse struct {
 func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -65,12 +65,12 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if err := req.validate(); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 

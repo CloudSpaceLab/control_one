@@ -78,7 +78,7 @@ func (s *Server) handleTemplatesCollection(w http.ResponseWriter, r *http.Reques
 		s.handleCreateTemplate(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -93,7 +93,7 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 
 	templateID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid template id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid template id")
 		return
 	}
 
@@ -114,7 +114,7 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 		if segments[1] == "versions" && segments[3] == "promote" {
 			versionNumber, verErr := strconv.Atoi(segments[2])
 			if verErr != nil || versionNumber <= 0 {
-				http.Error(w, "invalid version number", http.StatusBadRequest)
+				writeError(w, r, http.StatusBadRequest, "invalid version number")
 				return
 			}
 			s.handlePromoteTemplateVersion(w, r, templateID, versionNumber)
@@ -123,7 +123,7 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 		if segments[1] == "rollouts" {
 			rolloutID, err := uuid.Parse(segments[2])
 			if err != nil {
-				http.Error(w, "invalid rollout id", http.StatusBadRequest)
+				writeError(w, r, http.StatusBadRequest, "invalid rollout id")
 				return
 			}
 			if segments[3] == "cancel" {
@@ -153,7 +153,7 @@ func (s *Server) handleTemplateResource(w http.ResponseWriter, r *http.Request, 
 		s.handleUpdateTemplate(w, r, templateID)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -164,20 +164,20 @@ func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		if s.store == nil {
-			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 			return
 		}
 
 		limit, offset, err := parseLimitOffset(r.URL.Query())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		versions, total, err := s.store.ListProvisioningTemplateVersions(r.Context(), templateID, limit, offset)
 		if err != nil {
 			s.logger.Error("list template versions", zap.Error(err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -201,7 +201,7 @@ func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, 
 		s.handleCreateTemplateVersion(w, r, templateID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -212,31 +212,31 @@ func (s *Server) handlePromoteTemplateVersion(w http.ResponseWriter, r *http.Req
 			return
 		}
 		if s.store == nil {
-			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 			return
 		}
 		version, err := s.store.PromoteProvisioningTemplateVersion(r.Context(), templateID, versionNumber)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("promote template version: %v", err), http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, fmt.Sprintf("promote template version: %v", err))
 			return
 		}
 		resp := newTemplateVersionResponse(version)
 		writeJSON(w, http.StatusOK, resp)
 	default:
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -249,7 +249,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	templates, total, err := s.store.ListProvisioningTemplates(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list provisioning templates", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -267,18 +267,18 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	var req createTemplateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "name is required")
 		return
 	}
 
@@ -296,7 +296,7 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 
 	created, err := s.store.CreateProvisioningTemplate(r.Context(), template)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("create template failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create template failed: %v", err))
 		return
 	}
 
@@ -306,14 +306,14 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	template, err := s.store.GetProvisioningTemplate(r.Context(), templateID)
 	if err != nil {
 		s.logger.Error("get provisioning template", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if template == nil {
@@ -336,13 +336,13 @@ func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request, templ
 
 func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	var req updateTemplateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -378,13 +378,13 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, te
 	}
 
 	if !hasUpdate {
-		http.Error(w, "no fields to update", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "no fields to update")
 		return
 	}
 
 	updated, err := s.store.UpdateProvisioningTemplate(r.Context(), templateID, params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("update template: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("update template: %v", err))
 		return
 	}
 	if updated == nil {
@@ -405,18 +405,18 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, te
 
 func (s *Server) handleCreateTemplateVersion(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	var req createTemplateVersionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 	req.Body = strings.TrimSpace(req.Body)
 	if req.Body == "" {
-		http.Error(w, "body is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "body is required")
 		return
 	}
 
@@ -438,7 +438,7 @@ func (s *Server) handleCreateTemplateVersion(w http.ResponseWriter, r *http.Requ
 
 	version, err := s.store.CreateProvisioningTemplateVersion(r.Context(), params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("create template version failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create template version failed: %v", err))
 		return
 	}
 
@@ -539,4 +539,27 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// errorResponse is the structured JSON body returned for all error responses.
+type errorResponse struct {
+	Error     string `json:"error"`
+	Code      int    `json:"code"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+// writeError writes a structured JSON error response including the request ID
+// from context. It replaces plain-text http.Error calls for consistency.
+func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	var reqID string
+	if id, ok := requestIDFromContext(r.Context()); ok {
+		reqID = id
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(errorResponse{
+		Error:     msg,
+		Code:      status,
+		RequestID: reqID,
+	})
 }

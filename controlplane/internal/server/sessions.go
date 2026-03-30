@@ -63,7 +63,7 @@ func (s *Server) handleSessionsCollection(w http.ResponseWriter, r *http.Request
 		s.handleCreateSession(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -78,7 +78,7 @@ func (s *Server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 	segments := strings.Split(trimmed, "/")
 	sessionID, err := uuid.Parse(segments[0])
 	if err != nil {
-		http.Error(w, "invalid session id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid session id")
 		return
 	}
 
@@ -106,13 +106,13 @@ func (s *Server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -146,7 +146,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions, total, err := s.store.ListSessionRecordings(r.Context(), params, limit, offset)
 	if err != nil {
 		s.logger.Error("list session recordings", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -164,7 +164,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -175,18 +175,18 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	var req createSessionRecordingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if strings.TrimSpace(req.NodeID) == "" {
-		http.Error(w, "node_id is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "node_id is required")
 		return
 	}
 
 	nodeID, err := uuid.Parse(req.NodeID)
 	if err != nil {
-		http.Error(w, "invalid node_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid node_id")
 		return
 	}
 
@@ -219,7 +219,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	created, err := s.store.CreateSessionRecording(r.Context(), params)
 	if err != nil {
 		s.logger.Error("create session recording", zap.Error(err))
-		http.Error(w, fmt.Sprintf("create session recording failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create session recording failed: %v", err))
 		return
 	}
 
@@ -246,20 +246,20 @@ func (s *Server) handleSessionResource(w http.ResponseWriter, r *http.Request, s
 		s.handleUpdateSession(w, r, sessionID)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	session, err := s.store.GetSessionRecording(r.Context(), sessionID)
 	if err != nil {
 		s.logger.Error("get session recording", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if session == nil {
@@ -273,7 +273,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request, sessio
 
 func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -284,7 +284,7 @@ func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, ses
 
 	var req updateSessionRecordingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -305,7 +305,7 @@ func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, ses
 	updated, err := s.store.UpdateSessionRecording(r.Context(), sessionID, params)
 	if err != nil {
 		s.logger.Error("update session recording", zap.Error(err))
-		http.Error(w, fmt.Sprintf("update session recording failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("update session recording failed: %v", err))
 		return
 	}
 	if updated == nil {
@@ -322,7 +322,7 @@ func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, ses
 func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -331,7 +331,7 @@ func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -342,7 +342,7 @@ func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	if !session.ArtifactPath.Valid {
-		http.Error(w, "session artifact not available", http.StatusNotFound)
+		writeError(w, r, http.StatusNotFound, "session artifact not available")
 		return
 	}
 
@@ -354,7 +354,7 @@ func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, ses
 func (s *Server) handleSessionDownload(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -363,7 +363,7 @@ func (s *Server) handleSessionDownload(w http.ResponseWriter, r *http.Request, s
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -374,7 +374,7 @@ func (s *Server) handleSessionDownload(w http.ResponseWriter, r *http.Request, s
 	}
 
 	if !session.ArtifactPath.Valid {
-		http.Error(w, "session artifact not available", http.StatusNotFound)
+		writeError(w, r, http.StatusNotFound, "session artifact not available")
 		return
 	}
 
@@ -386,7 +386,7 @@ func (s *Server) handleSessionDownload(w http.ResponseWriter, r *http.Request, s
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -395,20 +395,20 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	events, total, err := s.store.ListSessionEvents(r.Context(), sessionID, limit, offset)
 	if err != nil {
 		s.logger.Error("list session events", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 

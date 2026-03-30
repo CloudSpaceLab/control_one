@@ -61,7 +61,7 @@ func (s *Server) handleRemediationScriptsCollection(w http.ResponseWriter, r *ht
 		s.handleCreateRemediationScript(w, r)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
@@ -77,7 +77,7 @@ func (s *Server) handleRemediationScriptSubroutes(w http.ResponseWriter, r *http
 	if len(segments) == 1 {
 		scriptID, err := uuid.Parse(segments[0])
 		if err != nil {
-			http.Error(w, "invalid script id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid script id")
 			return
 		}
 		s.handleRemediationScriptResource(w, r, scriptID)
@@ -87,7 +87,7 @@ func (s *Server) handleRemediationScriptSubroutes(w http.ResponseWriter, r *http
 	if len(segments) == 2 && segments[1] == "execute" {
 		scriptID, err := uuid.Parse(segments[0])
 		if err != nil {
-			http.Error(w, "invalid script id", http.StatusBadRequest)
+			writeError(w, r, http.StatusBadRequest, "invalid script id")
 			return
 		}
 		s.handleExecuteRemediationScript(w, r, scriptID)
@@ -99,13 +99,13 @@ func (s *Server) handleRemediationScriptSubroutes(w http.ResponseWriter, r *http
 
 func (s *Server) handleListRemediationScripts(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -115,7 +115,7 @@ func (s *Server) handleListRemediationScripts(w http.ResponseWriter, r *http.Req
 	scripts, total, err := s.store.ListRemediationScripts(r.Context(), ruleID, platform, limit, offset)
 	if err != nil {
 		s.logger.Error("list remediation scripts", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -133,7 +133,7 @@ func (s *Server) handleListRemediationScripts(w http.ResponseWriter, r *http.Req
 
 func (s *Server) handleCreateRemediationScript(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -144,20 +144,20 @@ func (s *Server) handleCreateRemediationScript(w http.ResponseWriter, r *http.Re
 
 	var req createRemediationScriptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	if strings.TrimSpace(req.RuleID) == "" {
-		http.Error(w, "rule_id is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "rule_id is required")
 		return
 	}
 	if strings.TrimSpace(req.ScriptType) == "" {
-		http.Error(w, "script_type is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "script_type is required")
 		return
 	}
 	if strings.TrimSpace(req.ScriptContent) == "" {
-		http.Error(w, "script_content is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "script_content is required")
 		return
 	}
 	if strings.TrimSpace(req.Platform) == "" {
@@ -188,7 +188,7 @@ func (s *Server) handleCreateRemediationScript(w http.ResponseWriter, r *http.Re
 	created, err := s.store.CreateRemediationScript(r.Context(), params)
 	if err != nil {
 		s.logger.Error("create remediation script", zap.Error(err))
-		http.Error(w, fmt.Sprintf("create remediation script failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("create remediation script failed: %v", err))
 		return
 	}
 
@@ -215,13 +215,13 @@ func (s *Server) handleRemediationScriptResource(w http.ResponseWriter, r *http.
 		s.handleUpdateRemediationScript(w, r, scriptID)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch}, ", "))
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 	}
 }
 
 func (s *Server) handleGetRemediationScript(w http.ResponseWriter, r *http.Request, scriptID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -247,7 +247,7 @@ func (s *Server) handleGetRemediationScript(w http.ResponseWriter, r *http.Reque
 
 	if err != nil {
 		s.logger.Error("get remediation script", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if script == nil {
@@ -261,7 +261,7 @@ func (s *Server) handleGetRemediationScript(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleUpdateRemediationScript(w http.ResponseWriter, r *http.Request, scriptID uuid.UUID) {
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
@@ -272,7 +272,7 @@ func (s *Server) handleUpdateRemediationScript(w http.ResponseWriter, r *http.Re
 
 	var req updateRemediationScriptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -285,7 +285,7 @@ func (s *Server) handleUpdateRemediationScript(w http.ResponseWriter, r *http.Re
 	updated, err := s.store.UpdateRemediationScript(r.Context(), scriptID, params)
 	if err != nil {
 		s.logger.Error("update remediation script", zap.Error(err))
-		http.Error(w, fmt.Sprintf("update remediation script failed: %v", err), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, fmt.Sprintf("update remediation script failed: %v", err))
 		return
 	}
 	if updated == nil {
@@ -341,7 +341,7 @@ type executeRemediationScriptResponse struct {
 func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.Request, scriptID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
 
@@ -351,36 +351,36 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	}
 
 	if s.store == nil {
-		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "storage unavailable")
 		return
 	}
 
 	if s.worker == nil {
-		http.Error(w, "worker queue unavailable", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "worker queue unavailable")
 		return
 	}
 
 	var req executeRemediationScriptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if strings.TrimSpace(req.NodeID) == "" {
-		http.Error(w, "node_id is required", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "node_id is required")
 		return
 	}
 
 	nodeID, err := uuid.Parse(req.NodeID)
 	if err != nil {
-		http.Error(w, "invalid node_id", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid node_id")
 		return
 	}
 
 	script, err := s.store.GetRemediationScriptByID(r.Context(), scriptID)
 	if err != nil {
 		s.logger.Error("get remediation script", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 	if script == nil {
@@ -389,7 +389,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	}
 
 	if !script.Enabled {
-		http.Error(w, "remediation script is disabled", http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "remediation script is disabled")
 		return
 	}
 
@@ -413,7 +413,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	payloadBytes, err := json.Marshal(jobPayload)
 	if err != nil {
 		s.logger.Error("marshal remediation job payload", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -426,7 +426,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	job, err = s.store.CreateJob(r.Context(), job, nil)
 	if err != nil {
 		s.logger.Error("create remediation job", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
@@ -439,7 +439,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	if err := s.worker.Enqueue(task); err != nil {
 		s.logger.Error("enqueue remediation job", zap.Error(err))
 		s.store.UpdateJobStatus(r.Context(), job.ID, storage.JobStatusFailed, "failed to enqueue job", nil)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
