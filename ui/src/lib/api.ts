@@ -448,6 +448,43 @@ export interface ListWebhooksParams {
   offset?: number;
 }
 
+export interface Alert {
+  id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  ruleName: string;
+  source: string;
+  message: string;
+  status: 'open' | 'acknowledged' | 'resolved';
+  tenantId: string;
+  nodeId?: string;
+  createdAt: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+}
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  description: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  condition: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface Incident {
+  id: string;
+  title: string;
+  description: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  status: 'open' | 'investigating' | 'resolved' | 'closed';
+  assignedTo?: string;
+  relatedAlerts: number;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+}
+
 interface ServerPaginationMeta {
   total: number;
   count: number;
