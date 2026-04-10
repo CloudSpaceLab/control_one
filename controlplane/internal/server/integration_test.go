@@ -174,8 +174,8 @@ func TestJobLifecycle(t *testing.T) {
 
 	// Create job
 	jobReq := map[string]interface{}{
-		"tenant_id": tenantID.String(),
-		"type":      "provision.apply",
+		"tenant_id":  tenantID.String(),
+		"type":       "provision.apply",
 		"parameters": map[string]interface{}{},
 	}
 	body, _ := json.Marshal(jobReq)
@@ -296,5 +296,3 @@ func setupTestStore(t *testing.T) *storage.Store {
 
 	return store
 }
-
-

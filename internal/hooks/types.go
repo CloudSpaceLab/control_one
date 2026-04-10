@@ -21,23 +21,23 @@ const (
 type HandlerType string
 
 const (
-	HandlerTypeWASM   HandlerType = "wasm"
-	HandlerTypeBash   HandlerType = "bash"
-	HandlerTypeLua    HandlerType = "lua"
+	HandlerTypeWASM    HandlerType = "wasm"
+	HandlerTypeBash    HandlerType = "bash"
+	HandlerTypeLua     HandlerType = "lua"
 	HandlerTypeWebhook HandlerType = "webhook"
 )
 
 // Event encapsulates a typed emission from producers such as agents, compliance, mesh, or telemetry.
 type Event struct {
-	ID            string                 `json:"id"`
-	EventID       string                 `json:"event_id"`
-	Source        string                 `json:"source"`
-	Subject       string                 `json:"subject"`
-	Timestamp     time.Time              `json:"timestamp"`
-	Payload       map[string]any         `json:"payload"`
-	SchemaVersion string                 `json:"schema_version"`
-	ReceivedAt    time.Time              `json:"received_at"`
-	Metadata      map[string]string      `json:"metadata,omitempty"`
+	ID            string            `json:"id"`
+	EventID       string            `json:"event_id"`
+	Source        string            `json:"source"`
+	Subject       string            `json:"subject"`
+	Timestamp     time.Time         `json:"timestamp"`
+	Payload       map[string]any    `json:"payload"`
+	SchemaVersion string            `json:"schema_version"`
+	ReceivedAt    time.Time         `json:"received_at"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
 // Clone returns a deep copy of the event to avoid mutation across subscribers.
@@ -133,23 +133,23 @@ const (
 
 // ScriptRun captures an execution attempt produced from an event/subscription match.
 type ScriptRun struct {
-	RunID          string           `json:"run_id"`
-	SubscriptionID string           `json:"subscription_id"`
-	EventID        string           `json:"event_id"`
-	TenantID       string           `json:"tenant_id"`
-	NodeID         string           `json:"node_id"`
-	Status         ScriptRunStatus  `json:"status"`
-	Mode           Mode             `json:"mode"`
-	Priority       int              `json:"priority"`
-	QueuedAt       time.Time        `json:"queued_at"`
-	StartedAt      time.Time        `json:"started_at"`
-	EndedAt        time.Time        `json:"ended_at"`
-	ExitCode       int              `json:"exit_code"`
-	Stdout         string           `json:"stdout"`
-	Stderr         string           `json:"stderr"`
-	Attempts       int              `json:"attempts"`
-	RunPolicy      RunPolicy        `json:"run_policy"`
-	Metadata       map[string]any   `json:"meta,omitempty"`
+	RunID          string          `json:"run_id"`
+	SubscriptionID string          `json:"subscription_id"`
+	EventID        string          `json:"event_id"`
+	TenantID       string          `json:"tenant_id"`
+	NodeID         string          `json:"node_id"`
+	Status         ScriptRunStatus `json:"status"`
+	Mode           Mode            `json:"mode"`
+	Priority       int             `json:"priority"`
+	QueuedAt       time.Time       `json:"queued_at"`
+	StartedAt      time.Time       `json:"started_at"`
+	EndedAt        time.Time       `json:"ended_at"`
+	ExitCode       int             `json:"exit_code"`
+	Stdout         string          `json:"stdout"`
+	Stderr         string          `json:"stderr"`
+	Attempts       int             `json:"attempts"`
+	RunPolicy      RunPolicy       `json:"run_policy"`
+	Metadata       map[string]any  `json:"meta,omitempty"`
 }
 
 // OverrideRequest models operator approval workflows for elevated capabilities.

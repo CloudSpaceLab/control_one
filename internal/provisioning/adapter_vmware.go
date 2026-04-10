@@ -60,4 +60,3 @@ func ensureVMwareMetadata(metadata map[string]string) {
 		}
 	}
 }
-

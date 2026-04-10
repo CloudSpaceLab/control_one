@@ -236,4 +236,3 @@ func TestProviderAdaptersPreserveExistingMetadata(t *testing.T) {
 		})
 	}
 }
-

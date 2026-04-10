@@ -39,17 +39,17 @@ type policyVersionResponse struct {
 }
 
 type createPolicyRequest struct {
-	TenantID    *string          `json:"tenant_id"`
-	Name        string           `json:"name"`
-	Description *string          `json:"description"`
-	RuleType    string          `json:"rule_type"`
-	Enabled     bool             `json:"enabled"`
+	TenantID    *string           `json:"tenant_id"`
+	Name        string            `json:"name"`
+	Description *string           `json:"description"`
+	RuleType    string            `json:"rule_type"`
+	Enabled     bool              `json:"enabled"`
 	Labels      map[string]string `json:"labels"`
 }
 
 type updatePolicyRequest struct {
-	Name        *string           `json:"name"`
-	Description *string           `json:"description"`
+	Name        *string            `json:"name"`
+	Description *string            `json:"description"`
 	RuleType    *string            `json:"rule_type"`
 	Enabled     *bool              `json:"enabled"`
 	Labels      *map[string]string `json:"labels"`
@@ -319,7 +319,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 
 	s.recordAudit(r.Context(), principal, created.TenantID, "policy.create", "policy", created.ID.String(), map[string]any{
-		"name":     created.Name,
+		"name":      created.Name,
 		"rule_type": created.RuleType,
 	})
 }
@@ -555,5 +555,3 @@ func newPolicyVersionResponse(v *storage.PolicyVersion) policyVersionResponse {
 	}
 	return resp
 }
-
-

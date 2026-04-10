@@ -198,7 +198,7 @@ func (a *OpenSCAPAdapter) runOpenSCAP(ctx context.Context, profile string, rule 
 
 // InSpecAdapter implements Chef InSpec scanner integration
 type InSpecAdapter struct {
-	log      *zap.Logger
+	log        *zap.Logger
 	inspecPath string
 }
 
@@ -567,21 +567,21 @@ func (a *TrivyAdapter) runTrivy(ctx context.Context, target string, rule policy.
 
 			if criticalCount == 0 && highCount == 0 {
 				return &Result{
-					Status: StatusCompliant,
+					Status:  StatusCompliant,
 					Details: outputStr,
 					Metadata: map[string]string{
 						"critical_vulns": "0",
-						"high_vulns":      "0",
+						"high_vulns":     "0",
 					},
 				}, nil
 			}
 
 			return &Result{
-				Status: StatusNonCompliant,
+				Status:  StatusNonCompliant,
 				Details: fmt.Sprintf("Found %d critical and %d high severity vulnerabilities", criticalCount, highCount),
 				Metadata: map[string]string{
 					"critical_vulns": fmt.Sprintf("%d", criticalCount),
-					"high_vulns":      fmt.Sprintf("%d", highCount),
+					"high_vulns":     fmt.Sprintf("%d", highCount),
 				},
 			}, nil
 		}
@@ -617,4 +617,3 @@ func (b *builtinAdapter) IsAvailable() bool {
 func (b *builtinAdapter) Scan(ctx context.Context, rules []policy.Rule) ([]Result, error) {
 	return b.scanner.Run(ctx, rules)
 }
-

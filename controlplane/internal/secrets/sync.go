@@ -14,9 +14,9 @@ import (
 
 // SyncService handles secret synchronization from Vault.
 type SyncService struct {
-	log     *zap.Logger
-	store   *storage.Store
-	vault   *vault.Client
+	log   *zap.Logger
+	store *storage.Store
+	vault *vault.Client
 }
 
 // NewSyncService creates a new secrets sync service.
@@ -91,4 +91,3 @@ func (s *SyncService) SyncGroup(ctx context.Context, groupID uuid.UUID) error {
 	s.log.Info("secret sync completed", zap.String("group_id", groupID.String()), zap.Int("secret_count", secretCount))
 	return nil
 }
-

@@ -17,7 +17,7 @@ type telemetryMetricResponse struct {
 	NodeID      *string           `json:"node_id,omitempty"`
 	MetricName  string            `json:"metric_name"`
 	MetricValue float64           `json:"metric_value"`
-	MetricUnit  *string            `json:"metric_unit,omitempty"`
+	MetricUnit  *string           `json:"metric_unit,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 	Timestamp   string            `json:"timestamp"`
 	CreatedAt   string            `json:"created_at"`
@@ -346,5 +346,3 @@ func newTelemetryLogResponse(l storage.TelemetryLog) telemetryLogResponse {
 	}
 	return resp
 }
-
-

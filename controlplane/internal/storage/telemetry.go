@@ -376,4 +376,3 @@ func (s *Store) CreateTelemetryLogs(ctx context.Context, logs []CreateTelemetryL
 	}
 	return nil
 }
-

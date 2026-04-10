@@ -93,7 +93,7 @@ func evaluateComplianceWithRealScanners(req complianceEvaluateRequest) []complia
 
 	for _, ruleSet := range req.RuleSets {
 		ruleID := fmt.Sprintf("%s-rule", strings.ToLower(ruleSet))
-		
+
 		passed := true
 		severity := "low"
 		details := fmt.Sprintf("Real scanner evaluation for %s on node %s", ruleSet, req.NodeID)

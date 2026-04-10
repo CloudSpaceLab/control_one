@@ -208,10 +208,10 @@ func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, tem
 
 	params := storage.CreateRolloutParams{
 		TemplateVersionID: versionID,
-		TargetPercent:    req.TargetPercent,
-		State:            state,
-		Metadata:         req.Metadata,
-		ScheduledFor:     scheduledFor,
+		TargetPercent:     req.TargetPercent,
+		State:             state,
+		Metadata:          req.Metadata,
+		ScheduledFor:      scheduledFor,
 	}
 	if params.Metadata == nil {
 		params.Metadata = make(map[string]any)
@@ -281,5 +281,3 @@ func newRolloutResponse(r storage.TemplateRollout) rolloutResponse {
 func stringPtr(s string) *string {
 	return &s
 }
-
-

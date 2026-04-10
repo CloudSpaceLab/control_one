@@ -23,9 +23,9 @@ type APIProvider struct {
 
 // Config configures the API provider.
 type Config struct {
-	Endpoint  string
-	APIKey    string
-	Timeout   time.Duration
+	Endpoint   string
+	APIKey     string
+	Timeout    time.Duration
 	SkipVerify bool
 }
 
@@ -183,5 +183,3 @@ type Group struct {
 	Name    string   `json:"name"`
 	Members []string `json:"members,omitempty"`
 }
-
-

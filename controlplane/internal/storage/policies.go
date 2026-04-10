@@ -52,10 +52,10 @@ type PolicyAssignment struct {
 
 // PolicyFilter captures filters for listing policies.
 type PolicyFilter struct {
-	TenantID      uuid.UUID
-	NamePrefix    string
-	RuleType      string
-	Enabled       *bool
+	TenantID        uuid.UUID
+	NamePrefix      string
+	RuleType        string
+	Enabled         *bool
 	IncludeArchived bool
 }
 
@@ -721,6 +721,3 @@ func (s *Store) PromotePolicyVersion(ctx context.Context, policyID uuid.UUID, ve
 
 	return &v, nil
 }
-
-
-

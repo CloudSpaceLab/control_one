@@ -52,12 +52,12 @@ func (i *SSHInterceptor) SetupPAMIntegration() error {
 		return nil
 	}
 
-	pamConfig := fmt.Sprintf(`
+	pamConfig := `
 # Control One Session Recording PAM Configuration
 # Add this to /etc/pam.d/sshd
 
 session optional pam_exec.so seteuid /usr/local/bin/control-one-ssh-record %u %h %s
-`)
+`
 
 	configPath := "/etc/pam.d/control-one-ssh"
 	if err := os.WriteFile(configPath, []byte(pamConfig), 0644); err != nil {
@@ -194,4 +194,3 @@ func (i *SSHInterceptor) CheckDependencies() error {
 
 	return nil
 }
-
