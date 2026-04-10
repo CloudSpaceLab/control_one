@@ -85,7 +85,10 @@ jobs:
       
       - name: Install dependencies
         run: go mod download
-      
+
+      - name: Create test database
+        run: PGPASSWORD=controlone psql -h localhost -U controlone -d controlone -c "CREATE DATABASE controlone_test;"
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
         env:
@@ -165,6 +168,7 @@ jobs:
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 
