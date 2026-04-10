@@ -143,7 +143,7 @@ func (s *Service) StopSession(ctx context.Context, sessionID string) error {
 		if err := session.Process.Process.Kill(); err != nil {
 			s.log.Warn("failed to kill recording process", zap.Error(err))
 		}
-		session.Process.Wait()
+		_ = session.Process.Wait()
 	}
 
 	duration := time.Since(session.StartedAt)
@@ -264,9 +264,10 @@ func (s *Service) notifyControlPlane(ctx context.Context, sessionID, sessionType
 		"metadata":     metadata,
 	}
 
-	if status == "started" {
+	switch status {
+	case "started":
 		payload["started_at"] = time.Now().UTC().Format(time.RFC3339)
-	} else if status == "stopped" {
+	case "stopped":
 		payload["ended_at"] = time.Now().UTC().Format(time.RFC3339)
 		if duration, ok := metadata["duration_seconds"].(int); ok {
 			payload["duration_seconds"] = duration
@@ -288,7 +289,7 @@ func (s *Service) notifyControlPlane(ctx context.Context, sessionID, sessionType
 	if err != nil {
 		return fmt.Errorf("notify control plane: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("control plane returned status %d", resp.StatusCode)
@@ -306,7 +307,7 @@ func (s *Service) uploadToOpenReplay(ctx context.Context, session *Session) erro
 	if err != nil {
 		return fmt.Errorf("open artifact: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// OpenReplay upload would go here
 	// This is a placeholder for the actual OpenReplay integration

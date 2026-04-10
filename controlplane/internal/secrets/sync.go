@@ -57,7 +57,7 @@ func (s *SyncService) SyncGroup(ctx context.Context, groupID uuid.UUID) error {
 	// List secrets at the path
 	secretKeys, err := s.vault.ListSecrets(ctx, vaultPath)
 	if err != nil {
-		s.store.UpdateSecretGroupSyncStatus(ctx, groupID, "failed", err)
+		_ = s.store.UpdateSecretGroupSyncStatus(ctx, groupID, "failed", err)
 		return fmt.Errorf("list vault secrets: %w", err)
 	}
 

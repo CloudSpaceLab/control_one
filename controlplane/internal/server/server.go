@@ -388,17 +388,6 @@ func firstQueryValue(values map[string][]string, key string) string {
 	return ""
 }
 
-func paginate[T any](items []T, offset, limit int) []T {
-	if offset >= len(items) {
-		return []T{}
-	}
-	end := offset + limit
-	if end > len(items) {
-		end = len(items)
-	}
-	return items[offset:end]
-}
-
 // TaskQueue defines minimal worker manager contract for enqueuing asynchronous tasks.
 type TaskQueue interface {
 	Enqueue(worker.Task) error

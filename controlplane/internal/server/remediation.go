@@ -438,7 +438,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	}
 	if err := s.worker.Enqueue(task); err != nil {
 		s.logger.Error("enqueue remediation job", zap.Error(err))
-		s.store.UpdateJobStatus(r.Context(), job.ID, storage.JobStatusFailed, "failed to enqueue job", nil)
+		_ = s.store.UpdateJobStatus(r.Context(), job.ID, storage.JobStatusFailed, "failed to enqueue job", nil)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -485,7 +485,7 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 
 		result, err := remediationEngine.Execute(ctx, remediationScript)
 		if err != nil {
-			s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("remediation execution failed: %v", err), map[string]any{
+			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("remediation execution failed: %v", err), map[string]any{
 				"error": err.Error(),
 			})
 			return err

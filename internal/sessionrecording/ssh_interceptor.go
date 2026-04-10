@@ -146,7 +146,7 @@ func (i *SSHInterceptor) RecordCommand(ctx context.Context, userID, command stri
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
-	output, err := cmd.CombinedOutput()
+	output, _ := cmd.CombinedOutput()
 
 	exitCode := 0
 	if cmd.ProcessState != nil {

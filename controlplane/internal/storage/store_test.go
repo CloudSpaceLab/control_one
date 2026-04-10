@@ -140,7 +140,7 @@ func setupPostgresStore(t *testing.T, ctx context.Context) *Store {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
 
-	pg, err := postgres.RunContainer(ctx,
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
 		postgres.WithInitScripts(
 			"../migrate/sql/0001_init.up.sql",
 			"../migrate/sql/0002_jobs.up.sql",

@@ -569,7 +569,7 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if job == nil {
-			fmt.Fprintf(w, "data: %s\n\n", `{"error":"job not found"}`)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", `{"error":"job not found"}`)
 			flusher.Flush()
 			return
 		}
@@ -582,7 +582,7 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fmt.Fprintf(w, "data: %s\n\n", string(jobJSON))
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(jobJSON))
 		flusher.Flush()
 	}
 

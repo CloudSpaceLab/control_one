@@ -151,7 +151,7 @@ func (s *Store) ListPolicies(ctx context.Context, filter PolicyFilter, limit, of
 	if err != nil {
 		return nil, 0, fmt.Errorf("query policies: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var policies []Policy
 	for rows.Next() {
@@ -452,7 +452,7 @@ func (s *Store) ListPolicyVersions(ctx context.Context, policyID uuid.UUID, limi
 	if err != nil {
 		return nil, 0, fmt.Errorf("query policy versions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var versions []PolicyVersion
 	for rows.Next() {
@@ -669,7 +669,7 @@ func (s *Store) PromotePolicyVersion(ctx context.Context, policyID uuid.UUID, ve
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, `
 		UPDATE policy_versions

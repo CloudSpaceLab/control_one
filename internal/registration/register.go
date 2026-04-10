@@ -74,7 +74,7 @@ func (r *Registrar) Register(ctx context.Context, req *RegisterRequest, stateFil
 	if err != nil {
 		return nil, fmt.Errorf("registration request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("registration failed: status %d", resp.StatusCode)

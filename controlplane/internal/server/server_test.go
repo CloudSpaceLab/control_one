@@ -1516,10 +1516,6 @@ func (f *fakeStore) ListNodes(_ context.Context, tenantID uuid.UUID, hostnamePre
 	if offset > len(filtered) {
 		return []storage.Node{}, total, nil
 	}
-	end := len(filtered)
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
-	}
 	if offset > 0 {
 		filtered = filtered[offset:]
 	}
@@ -1590,10 +1586,6 @@ func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset 
 	total := len(filtered)
 	if offset > len(filtered) {
 		return []storage.Tenant{}, total, nil
-	}
-	end := len(filtered)
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
 	}
 	if offset > 0 {
 		filtered = filtered[offset:]
@@ -1721,10 +1713,6 @@ func (f *fakeStore) ListUsers(_ context.Context, limit, offset int) ([]storage.U
 	total := len(f.userList)
 	if offset > total {
 		return []storage.User{}, total, nil
-	}
-	end := total
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
 	}
 	slice := f.userList
 	if offset > 0 {

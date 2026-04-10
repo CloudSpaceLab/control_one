@@ -120,7 +120,7 @@ func (s *Store) ListJobs(ctx context.Context, tenantID uuid.UUID, jobType string
 	if err != nil {
 		return nil, 0, fmt.Errorf("query jobs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var jobs []Job
 	for rows.Next() {
@@ -410,7 +410,7 @@ func (s *Store) ListJobEvents(ctx context.Context, jobID uuid.UUID) ([]JobEvent,
 	if err != nil {
 		return nil, fmt.Errorf("query job events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []JobEvent
 	for rows.Next() {
@@ -443,13 +443,6 @@ func nullString(val string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: val, Valid: true}
-}
-
-func nullTime(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return t
 }
 
 func nullStringPtr(ptr *string) sql.NullString {
@@ -632,7 +625,7 @@ func (s *Store) ListComplianceResultsFiltered(ctx context.Context, filter Compli
 	if err != nil {
 		return nil, 0, fmt.Errorf("query compliance results: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []ComplianceResult
 	for rows.Next() {
@@ -794,7 +787,7 @@ func (s *Store) ListTenants(ctx context.Context, prefix string, limit, offset in
 	if err != nil {
 		return nil, 0, fmt.Errorf("query tenants: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tenants []Tenant
 	for rows.Next() {
@@ -1037,7 +1030,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, filter AuditLogFilter, limit,
 	if err != nil {
 		return nil, 0, fmt.Errorf("query audit logs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var entries []AuditLog
 	for rows.Next() {
@@ -1325,7 +1318,7 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 	if err != nil {
 		return nil, 0, fmt.Errorf("query nodes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var nodes []Node
 	for rows.Next() {

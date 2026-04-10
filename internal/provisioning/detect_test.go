@@ -18,7 +18,7 @@ func TestDetectProviderPrefersAWSRegionEnv(t *testing.T) {
 }
 
 func TestDetectProviderFallsBackToDefaultRegion(t *testing.T) {
-	os.Unsetenv("AWS_REGION")
+	_ = os.Unsetenv("AWS_REGION")
 	t.Setenv("AWS_DEFAULT_REGION", "us-west-1")
 	provider, metadata := DetectProvider()
 	if provider != "aws" {

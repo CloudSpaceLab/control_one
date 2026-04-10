@@ -126,7 +126,7 @@ func (s *Store) ListEntitlements(ctx context.Context, filter EntitlementFilter, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("query entitlements: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var entitlements []AccessEntitlement
 	for rows.Next() {

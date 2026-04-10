@@ -183,7 +183,7 @@ func (s *Store) ListRemediationScripts(ctx context.Context, ruleID, platform str
 	if err != nil {
 		return nil, 0, fmt.Errorf("query remediation scripts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var scripts []RemediationScript
 	for rows.Next() {
