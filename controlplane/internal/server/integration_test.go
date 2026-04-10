@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/migrate"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/server"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
@@ -282,17 +284,22 @@ func TestMultiTenantIsolation(t *testing.T) {
 }
 
 func setupTestStore(t *testing.T) *storage.Store {
-	// This should use testcontainers or in-memory database
-	// For now, assuming test database is available
+	t.Helper()
 	logger := zap.NewNop()
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgresql://controlone:controlone@localhost:5432/controlone_test?sslmode=disable"
+	}
 	cfg := config.DatabaseConfig{
-		URL: "postgresql://controlone:controlone@localhost:5432/controlone_test?sslmode=disable",
+		URL:             dbURL,
+		ApplyMigrations: true,
 	}
 	store, err := storage.New(logger, cfg, storage.Options{})
 	require.NoError(t, err)
 
-	// Run migrations
-	// ...
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, migrate.Apply(ctx, store.DB()))
 
 	return store
 }

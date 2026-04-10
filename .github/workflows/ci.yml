@@ -86,8 +86,12 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
-      - name: Create test database
-        run: PGPASSWORD=controlone psql -h localhost -U controlone -d controlone -c "CREATE DATABASE controlone_test;"
+      - name: Create test database and apply migrations
+        run: |
+          PGPASSWORD=controlone psql -h localhost -U controlone -d controlone -c "CREATE DATABASE controlone_test;"
+          for f in controlplane/internal/migrate/sql/*.up.sql; do
+            PGPASSWORD=controlone psql -h localhost -U controlone -d controlone_test -f "$f"
+          done
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
