@@ -74,10 +74,10 @@ jobs:
         run: go test -v ./controlplane/internal/migrate -run TestMigrationsUpAndDown -count=1
 
       - name: Build agent
-        run: go build ./cmd/nodeagent
+        run: go build -o ${{ runner.temp }}/nodeagent ./cmd/nodeagent
 
       - name: Build control plane
-        run: go build ./controlplane/cmd/controlplane
+        run: go build -o ${{ runner.temp }}/controlplane ./controlplane/cmd/controlplane
 
       - name: Generate wizard bundle
         if: matrix.os == 'ubuntu-latest'

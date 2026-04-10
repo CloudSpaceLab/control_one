@@ -94,9 +94,9 @@ jobs:
           done
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -v -race -short -coverprofile=coverage.out -covermode=atomic ./...
         env:
-          DATABASE_URL: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
+          DATABASE_URL: postgresql://controlone:controlone@localhost:5432/controlone_test?sslmode=disable
           REDIS_URL: redis://localhost:6379
       
       - name: Upload coverage

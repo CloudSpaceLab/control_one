@@ -136,6 +136,10 @@ func TestComplianceResultsPersistence(t *testing.T) {
 func setupPostgresStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
