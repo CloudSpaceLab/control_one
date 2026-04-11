@@ -133,7 +133,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha
       
       - name: Build and push control plane
         uses: docker/build-push-action@v5
