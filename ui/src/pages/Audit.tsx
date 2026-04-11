@@ -335,7 +335,7 @@ export function Audit(): JSX.Element {
         <div className="timeline-section">
           <h2>Timeline View</h2>
           <div className="timeline">
-            {logs.map((log, idx) => (
+            {logs.map((log) => (
               <div key={log.id} className="timeline-item">
                 <div className="timeline-marker" style={{ backgroundColor: getActionColor(log.action) }} />
                 <div className="timeline-content">

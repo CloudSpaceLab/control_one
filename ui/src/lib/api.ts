@@ -414,7 +414,7 @@ export interface SecretSync {
   synced_at: string;
   sync_status: string;
   sync_error?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ListSecretGroupsParams {
@@ -519,7 +519,7 @@ async function safeErrorMessage(response: Response): Promise<string | undefined>
     if (data && typeof data.message === 'string') {
       return data.message;
     }
-  } catch (error) {
+  } catch {
     // ignore json parse errors
   }
   return response.statusText;

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useApiClient } from './useApiClient';
-import { SecretGroup, SecretSync, ListSecretGroupsParams, ListSecretSyncsParams, PaginatedResponse } from '../lib/api';
+import { SecretGroup, SecretSync, ListSecretGroupsParams, ListSecretSyncsParams } from '../lib/api';
 
 export function useSecretGroups(params: ListSecretGroupsParams = {}) {
   const api = useApiClient();
@@ -16,8 +16,8 @@ export function useSecretGroups(params: ListSecretGroupsParams = {}) {
       const response = await api.listSecretGroups(params);
       setData(response.data);
       setPagination(response.pagination);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load secret groups');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load secret groups');
     } finally {
       setLoading(false);
     }
@@ -49,8 +49,8 @@ export function useSecretSyncs(groupId: string | null, params: ListSecretSyncsPa
       const response = await api.listSecretSyncs(groupId, params);
       setData(response.data);
       setPagination(response.pagination);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load secret syncs');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load secret syncs');
     } finally {
       setLoading(false);
     }
