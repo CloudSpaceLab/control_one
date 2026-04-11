@@ -632,4 +632,3 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
-

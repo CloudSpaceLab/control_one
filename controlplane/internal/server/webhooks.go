@@ -20,71 +20,71 @@ import (
 )
 
 type webhookResponse struct {
-	ID              string            `json:"id"`
-	TenantID        *string           `json:"tenant_id,omitempty"`
-	Name            string            `json:"name"`
-	URL             string            `json:"url"`
-	Events          []string          `json:"events"`
-	Enabled         bool              `json:"enabled"`
-	VerifySSL       bool              `json:"verify_ssl"`
-	TimeoutSeconds  int               `json:"timeout_seconds"`
-	RetryCount      int               `json:"retry_count"`
-	Headers         map[string]any    `json:"headers,omitempty"`
-	Metadata        map[string]any    `json:"metadata,omitempty"`
-	LastTriggeredAt *string           `json:"last_triggered_at,omitempty"`
-	LastSuccessAt   *string           `json:"last_success_at,omitempty"`
-	LastFailureAt   *string           `json:"last_failure_at,omitempty"`
-	FailureCount    int               `json:"failure_count"`
-	CreatedAt       string            `json:"created_at"`
-	UpdatedAt       string            `json:"updated_at"`
-	CreatedBy       *string           `json:"created_by,omitempty"`
+	ID              string         `json:"id"`
+	TenantID        *string        `json:"tenant_id,omitempty"`
+	Name            string         `json:"name"`
+	URL             string         `json:"url"`
+	Events          []string       `json:"events"`
+	Enabled         bool           `json:"enabled"`
+	VerifySSL       bool           `json:"verify_ssl"`
+	TimeoutSeconds  int            `json:"timeout_seconds"`
+	RetryCount      int            `json:"retry_count"`
+	Headers         map[string]any `json:"headers,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+	LastTriggeredAt *string        `json:"last_triggered_at,omitempty"`
+	LastSuccessAt   *string        `json:"last_success_at,omitempty"`
+	LastFailureAt   *string        `json:"last_failure_at,omitempty"`
+	FailureCount    int            `json:"failure_count"`
+	CreatedAt       string         `json:"created_at"`
+	UpdatedAt       string         `json:"updated_at"`
+	CreatedBy       *string        `json:"created_by,omitempty"`
 }
 
 type createWebhookRequest struct {
-	TenantID       *string          `json:"tenant_id,omitempty"`
-	Name           string           `json:"name"`
-	URL            string           `json:"url"`
-	Events         []string         `json:"events"`
-	Secret         *string          `json:"secret,omitempty"`
-	Enabled        *bool            `json:"enabled,omitempty"`
-	VerifySSL      *bool            `json:"verify_ssl,omitempty"`
-	TimeoutSeconds *int             `json:"timeout_seconds,omitempty"`
-	RetryCount     *int             `json:"retry_count,omitempty"`
-	Headers        map[string]any   `json:"headers,omitempty"`
-	Metadata       map[string]any   `json:"metadata,omitempty"`
+	TenantID       *string        `json:"tenant_id,omitempty"`
+	Name           string         `json:"name"`
+	URL            string         `json:"url"`
+	Events         []string       `json:"events"`
+	Secret         *string        `json:"secret,omitempty"`
+	Enabled        *bool          `json:"enabled,omitempty"`
+	VerifySSL      *bool          `json:"verify_ssl,omitempty"`
+	TimeoutSeconds *int           `json:"timeout_seconds,omitempty"`
+	RetryCount     *int           `json:"retry_count,omitempty"`
+	Headers        map[string]any `json:"headers,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 type updateWebhookRequest struct {
-	Name           *string          `json:"name,omitempty"`
-	URL            *string          `json:"url,omitempty"`
-	Events         []string          `json:"events,omitempty"`
-	Secret         *string          `json:"secret,omitempty"`
-	Enabled        *bool            `json:"enabled,omitempty"`
-	VerifySSL      *bool            `json:"verify_ssl,omitempty"`
-	TimeoutSeconds *int             `json:"timeout_seconds,omitempty"`
-	RetryCount     *int             `json:"retry_count,omitempty"`
-	Headers        map[string]any   `json:"headers,omitempty"`
-	Metadata       map[string]any   `json:"metadata,omitempty"`
+	Name           *string        `json:"name,omitempty"`
+	URL            *string        `json:"url,omitempty"`
+	Events         []string       `json:"events,omitempty"`
+	Secret         *string        `json:"secret,omitempty"`
+	Enabled        *bool          `json:"enabled,omitempty"`
+	VerifySSL      *bool          `json:"verify_ssl,omitempty"`
+	TimeoutSeconds *int           `json:"timeout_seconds,omitempty"`
+	RetryCount     *int           `json:"retry_count,omitempty"`
+	Headers        map[string]any `json:"headers,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 type webhookDeliveryResponse struct {
-	ID            string            `json:"id"`
-	WebhookID     string            `json:"webhook_id"`
-	EventType     string            `json:"event_type"`
-	EventID       *string           `json:"event_id,omitempty"`
-	Status        string            `json:"status"`
-	HTTPStatusCode *int             `json:"http_status_code,omitempty"`
-	RequestBody   map[string]any    `json:"request_body,omitempty"`
-	ResponseBody  *string           `json:"response_body,omitempty"`
-	ErrorMessage  *string           `json:"error_message,omitempty"`
-	AttemptNumber int               `json:"attempt_number"`
-	DeliveredAt   *string           `json:"delivered_at,omitempty"`
-	CreatedAt     string            `json:"created_at"`
+	ID             string         `json:"id"`
+	WebhookID      string         `json:"webhook_id"`
+	EventType      string         `json:"event_type"`
+	EventID        *string        `json:"event_id,omitempty"`
+	Status         string         `json:"status"`
+	HTTPStatusCode *int           `json:"http_status_code,omitempty"`
+	RequestBody    map[string]any `json:"request_body,omitempty"`
+	ResponseBody   *string        `json:"response_body,omitempty"`
+	ErrorMessage   *string        `json:"error_message,omitempty"`
+	AttemptNumber  int            `json:"attempt_number"`
+	DeliveredAt    *string        `json:"delivered_at,omitempty"`
+	CreatedAt      string         `json:"created_at"`
 }
 
 type testWebhookRequest struct {
-	EventType string            `json:"event_type"`
-	Payload   map[string]any    `json:"payload,omitempty"`
+	EventType string         `json:"event_type"`
+	Payload   map[string]any `json:"payload,omitempty"`
 }
 
 func (s *Server) handleWebhooksCollection(w http.ResponseWriter, r *http.Request) {
@@ -180,10 +180,10 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"items": respItems,
-		"total": total,
-		"limit": limit,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"items":  respItems,
+		"total":  total,
+		"limit":  limit,
 		"offset": offset,
 	})
 }
@@ -267,7 +267,7 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(webhookToResponse(webhook))
+	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
 func (s *Server) handleWebhookResource(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -311,7 +311,7 @@ func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uui
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(webhookToResponse(webhook))
+	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
 func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -351,7 +351,7 @@ func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(webhookToResponse(webhook))
+	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
 func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -407,7 +407,7 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 	}
 	if req.Payload == nil {
 		req.Payload = map[string]any{
-			"message": "Test webhook delivery",
+			"message":   "Test webhook delivery",
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 		}
 	}
@@ -418,10 +418,10 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"success": success,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":          success,
 		"http_status_code": statusCode,
-		"response_body": responseBody,
+		"response_body":    responseBody,
 		"error": func() *string {
 			if err != nil {
 				msg := err.Error()
@@ -473,10 +473,10 @@ func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"items": respItems,
-		"total": total,
-		"limit": limit,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"items":  respItems,
+		"total":  total,
+		"limit":  limit,
 		"offset": offset,
 	})
 }
@@ -595,7 +595,7 @@ func (s *Server) deliverWebhook(webhook *storage.Webhook, eventType string, payl
 	if err != nil {
 		return false, 0, "", fmt.Errorf("deliver webhook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	responseBody, _ := io.ReadAll(resp.Body)
 	responseBodyStr := string(responseBody)
@@ -609,4 +609,3 @@ func computeHMAC(secret string, payload []byte) string {
 	mac.Write(payload)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
-

@@ -14,32 +14,32 @@ import (
 
 // TemplateRollout represents a rollout of a template version.
 type TemplateRollout struct {
-	ID               uuid.UUID
+	ID                uuid.UUID
 	TemplateVersionID uuid.UUID
-	TargetPercent    int
-	State            string
-	Metadata         map[string]any
-	ScheduledFor     sql.NullTime
-	CompletedAt      sql.NullTime
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	TargetPercent     int
+	State             string
+	Metadata          map[string]any
+	ScheduledFor      sql.NullTime
+	CompletedAt       sql.NullTime
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // CreateRolloutParams defines input for creating a rollout.
 type CreateRolloutParams struct {
 	TemplateVersionID uuid.UUID
-	TargetPercent    int
-	State            string
-	Metadata         map[string]any
-	ScheduledFor     *time.Time
+	TargetPercent     int
+	State             string
+	Metadata          map[string]any
+	ScheduledFor      *time.Time
 }
 
 // UpdateRolloutParams captures patchable fields on a rollout.
 type UpdateRolloutParams struct {
-	State        *string
+	State         *string
 	TargetPercent *int
-	Metadata     *map[string]any
-	CompletedAt  *time.Time
+	Metadata      *map[string]any
+	CompletedAt   *time.Time
 }
 
 // ListRollouts returns rollouts for a template.
@@ -88,7 +88,7 @@ func (s *Store) ListRollouts(ctx context.Context, templateID uuid.UUID, limit, o
 	if err != nil {
 		return nil, 0, fmt.Errorf("query rollouts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var rollouts []TemplateRollout
 	for rows.Next() {
@@ -327,6 +327,3 @@ func (s *Store) UpdateRollout(ctx context.Context, rolloutID uuid.UUID, params U
 
 	return &r, nil
 }
-
-
-

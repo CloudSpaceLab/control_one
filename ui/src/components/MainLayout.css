@@ -14,6 +14,7 @@
   display: flex;
   flex-direction: column;
   gap: 2rem;
+  overflow-y: auto;
 }
 
 .brand {
@@ -55,11 +56,13 @@
 
 .side-nav nav li a {
   display: block;
-  padding: 0.75rem 1rem;
+  padding: 0.65rem 1rem;
   border-radius: 0.85rem;
-  color: #c7d2fe;
-  font-weight: 600;
+  color: #e0e7ff;
+  font-weight: 500;
+  font-size: 0.9rem;
   transition: background 0.2s ease, color 0.2s ease;
+  text-decoration: none;
 }
 
 .side-nav nav li.active a,

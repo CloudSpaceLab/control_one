@@ -194,7 +194,7 @@ func (s *Store) ListUsers(ctx context.Context, limit, offset int) ([]User, int, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("query users: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var users []User
 	for rows.Next() {
@@ -324,7 +324,7 @@ func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, 
 	if err != nil {
 		return nil, fmt.Errorf("query user roles: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var roles []string
 	for rows.Next() {
@@ -404,7 +404,7 @@ func (s *Store) ListRoles(ctx context.Context) ([]Role, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query roles: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var roles []Role
 	for rows.Next() {

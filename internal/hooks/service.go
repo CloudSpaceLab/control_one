@@ -14,20 +14,20 @@ import (
 )
 
 var (
-	errHooksDisabled    = errors.New("hooks disabled")
-	errQueueSaturated   = errors.New("hooks queue saturated")
-	errUnknownMode      = errors.New("unknown subscription mode")
-	errUnknownHandler   = errors.New("unknown handler type")
-	errDuplicateSub     = errors.New("subscription already exists")
+	errHooksDisabled  = errors.New("hooks disabled")
+	errQueueSaturated = errors.New("hooks queue saturated")
+	errUnknownMode    = errors.New("unknown subscription mode")
+	errUnknownHandler = errors.New("unknown handler type")
+	errDuplicateSub   = errors.New("subscription already exists")
 )
 
 // Service coordinates event publications, subscription management, and job queueing.
 type Service struct {
-	log    *zap.Logger
-	cfg    config.HooksConfig
-	mu     sync.RWMutex
-	subs   map[string]*Subscription
-	queue  chan *ScriptRun
+	log   *zap.Logger
+	cfg   config.HooksConfig
+	mu    sync.RWMutex
+	subs  map[string]*Subscription
+	queue chan *ScriptRun
 }
 
 // NewService constructs a hook service using the provided configuration.
@@ -188,11 +188,11 @@ func convertBootstrap(raw config.HookSubscriptionConfig) (*Subscription, error) 
 	}
 
 	sub := &Subscription{
-		ID:        raw.ID,
-		TenantID:  "tenant-default",
-		EventID:   raw.EventID,
-		Filter:    raw.Filter,
-		Mode:      mode,
+		ID:       raw.ID,
+		TenantID: "tenant-default",
+		EventID:  raw.EventID,
+		Filter:   raw.Filter,
+		Mode:     mode,
 		Handler: Handler{
 			Type:     handlerType,
 			Language: raw.Handler.Language,

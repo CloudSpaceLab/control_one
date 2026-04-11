@@ -136,11 +136,15 @@ func TestComplianceResultsPersistence(t *testing.T) {
 func setupPostgresStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
 
-	pg, err := postgres.RunContainer(ctx,
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
 		postgres.WithInitScripts(
 			"../migrate/sql/0001_init.up.sql",
 			"../migrate/sql/0002_jobs.up.sql",

@@ -10,6 +10,9 @@ import { Audit } from './pages/Audit';
 import { Users } from './pages/Users';
 import { Telemetry } from './pages/Telemetry';
 import { Settings } from './pages/Settings';
+import { Alerts } from './pages/Alerts';
+import { Incidents } from './pages/Incidents';
+import { SecurityDashboard } from './pages/SecurityDashboard';
 import { Secrets } from './pages/Secrets';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
@@ -37,6 +40,9 @@ export function App(): JSX.Element {
         <Route path="telemetry" element={<Telemetry />} />
         <Route path="secrets" element={<Secrets />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="security" element={<SecurityDashboard />} />
+        <Route path="alerts" element={<Alerts />} />
+        <Route path="incidents" element={<Incidents />} />
       </Route>
       <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />
     </Routes>

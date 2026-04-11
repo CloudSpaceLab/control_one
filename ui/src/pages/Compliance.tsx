@@ -77,7 +77,7 @@ export function Compliance(): JSX.Element {
   const {
     data: trends,
     loading: trendsLoading,
-    error: trendsError,
+    error: _trendsError,
   } = useComplianceTrends({
     tenant_id: selectedTenant,
     node_id: selectedNode,

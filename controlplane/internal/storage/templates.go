@@ -120,7 +120,7 @@ func (s *Store) ListProvisioningTemplates(ctx context.Context, filter Provisioni
 	if err != nil {
 		return nil, 0, fmt.Errorf("query provisioning templates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var templates []ProvisioningTemplate
 	for rows.Next() {
@@ -574,7 +574,7 @@ func (s *Store) ListProvisioningTemplateVersions(ctx context.Context, templateID
 	if err != nil {
 		return nil, 0, fmt.Errorf("query template versions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var versions []ProvisioningTemplateVersion
 	for rows.Next() {

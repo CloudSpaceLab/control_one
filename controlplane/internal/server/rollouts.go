@@ -33,13 +33,6 @@ type createRolloutRequest struct {
 	ScheduledFor      *string        `json:"scheduled_for,omitempty"`
 }
 
-type updateRolloutRequest struct {
-	State         *string         `json:"state,omitempty"`
-	TargetPercent *int            `json:"target_percent,omitempty"`
-	Metadata      *map[string]any `json:"metadata,omitempty"`
-	CompletedAt   *string         `json:"completed_at,omitempty"`
-}
-
 func (s *Server) handleTemplateRollouts(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
@@ -208,10 +201,10 @@ func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, tem
 
 	params := storage.CreateRolloutParams{
 		TemplateVersionID: versionID,
-		TargetPercent:    req.TargetPercent,
-		State:            state,
-		Metadata:         req.Metadata,
-		ScheduledFor:     scheduledFor,
+		TargetPercent:     req.TargetPercent,
+		State:             state,
+		Metadata:          req.Metadata,
+		ScheduledFor:      scheduledFor,
 	}
 	if params.Metadata == nil {
 		params.Metadata = make(map[string]any)
@@ -281,5 +274,3 @@ func newRolloutResponse(r storage.TemplateRollout) rolloutResponse {
 func stringPtr(s string) *string {
 	return &s
 }
-
-

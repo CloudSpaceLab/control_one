@@ -235,4 +235,3 @@ func newRetentionPolicyResponse(policy storage.TelemetryRetentionPolicy) retenti
 	}
 	return resp
 }
-

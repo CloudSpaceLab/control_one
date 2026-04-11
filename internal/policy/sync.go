@@ -100,7 +100,7 @@ func (s *Syncer) fetch(ctx context.Context, nodeID string) (*PolicySet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch policies: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 500 {
 		return nil, retryableError{fmt.Errorf("policy fetch failed: status %d", resp.StatusCode)}
@@ -250,14 +250,6 @@ func hashPolicies(data []byte) uint64 {
 	return h.Sum64()
 }
 
-func (s *Syncer) cachePathExists() bool {
-	if s.metadataPath == "" {
-		return false
-	}
-	_, err := os.Stat(s.metadataPath)
-	return err == nil
-}
-
 type retryableError struct {
 	err error
 }
@@ -279,7 +271,10 @@ func isRetryable(err error) bool {
 		return true
 	}
 	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Temporary()
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
 }
 
 func loadEd25519PublicKey(path string) (ed25519.PublicKey, string, error) {

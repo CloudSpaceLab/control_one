@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1202,6 +1203,7 @@ func TestRBACAuthorization(t *testing.T) {
 }
 
 type fakeStore struct {
+	mu                  sync.Mutex
 	nodes               []storage.Node
 	tenants             []storage.Tenant
 	createdNode         *storage.Node
@@ -1310,13 +1312,19 @@ func (f *fakeStore) CreateAuditLog(_ context.Context, entry *storage.AuditLog) (
 		entry.ID = uuid.New()
 	}
 	entryCopy := *entry
+	f.mu.Lock()
 	f.auditLogs = append(f.auditLogs, entryCopy)
+	f.mu.Unlock()
 	return &entryCopy, nil
 }
 
 func (f *fakeStore) ListAuditLogs(_ context.Context, filter storage.AuditLogFilter, limit, offset int) ([]storage.AuditLog, int, error) {
+	f.mu.Lock()
+	logs := make([]storage.AuditLog, len(f.auditLogs))
+	copy(logs, f.auditLogs)
+	f.mu.Unlock()
 	var filtered []storage.AuditLog
-	for _, entry := range f.auditLogs {
+	for _, entry := range logs {
 		if filter.TenantID != uuid.Nil && entry.TenantID != filter.TenantID {
 			continue
 		}
@@ -1516,10 +1524,6 @@ func (f *fakeStore) ListNodes(_ context.Context, tenantID uuid.UUID, hostnamePre
 	if offset > len(filtered) {
 		return []storage.Node{}, total, nil
 	}
-	end := len(filtered)
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
-	}
 	if offset > 0 {
 		filtered = filtered[offset:]
 	}
@@ -1590,10 +1594,6 @@ func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset 
 	total := len(filtered)
 	if offset > len(filtered) {
 		return []storage.Tenant{}, total, nil
-	}
-	end := len(filtered)
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
 	}
 	if offset > 0 {
 		filtered = filtered[offset:]
@@ -1721,10 +1721,6 @@ func (f *fakeStore) ListUsers(_ context.Context, limit, offset int) ([]storage.U
 	total := len(f.userList)
 	if offset > total {
 		return []storage.User{}, total, nil
-	}
-	end := total
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
 	}
 	slice := f.userList
 	if offset > 0 {

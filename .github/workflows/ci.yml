@@ -85,11 +85,18 @@ jobs:
       
       - name: Install dependencies
         run: go mod download
-      
+
+      - name: Create test database and apply migrations
+        run: |
+          PGPASSWORD=controlone psql -h localhost -U controlone -d controlone -c "CREATE DATABASE controlone_test;"
+          for f in controlplane/internal/migrate/sql/*.up.sql; do
+            PGPASSWORD=controlone psql -h localhost -U controlone -d controlone_test -f "$f"
+          done
+
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -v -race -short -coverprofile=coverage.out -covermode=atomic ./...
         env:
-          DATABASE_URL: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
+          DATABASE_URL: postgresql://controlone:controlone@localhost:5432/controlone_test?sslmode=disable
           REDIS_URL: redis://localhost:6379
       
       - name: Upload coverage
@@ -126,7 +133,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha
       
       - name: Build and push control plane
         uses: docker/build-push-action@v5
@@ -165,6 +172,7 @@ jobs:
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 

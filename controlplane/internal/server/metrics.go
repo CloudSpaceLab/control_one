@@ -61,11 +61,6 @@ func initServerMetrics() {
 	})
 }
 
-func metricsRecordJobQueued(jobType string) {
-	initServerMetrics()
-	jobEnqueuedTotal.WithLabelValues(jobType).Inc()
-}
-
 func metricsTrackJob(jobType string) func(outcome string) {
 	initServerMetrics()
 	jobExecutionConcurrency.WithLabelValues(jobType).Inc()

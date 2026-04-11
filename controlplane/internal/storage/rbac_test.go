@@ -15,6 +15,9 @@ import (
 )
 
 func TestRBACAssignmentsWithPostgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	ctx := context.Background()
@@ -22,7 +25,7 @@ func TestRBACAssignmentsWithPostgres(t *testing.T) {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
 
-	pg, err := postgres.RunContainer(ctx,
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
 		postgres.WithInitScripts("../migrate/sql/0001_init.up.sql", "../migrate/sql/0003_auth.up.sql"),
 		postgres.WithDatabase("control_one"),
 		postgres.WithUsername("postgres"),

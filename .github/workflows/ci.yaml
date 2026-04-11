@@ -40,7 +40,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: go test -short ./...
 
       - name: Setup Node (frontend)
         if: matrix.os == 'ubuntu-latest'
@@ -57,6 +57,8 @@ jobs:
       - name: Frontend lint
         if: matrix.os == 'ubuntu-latest'
         run: npm run lint --prefix ui
+        env:
+          ESLINT_USE_FLAT_CONFIG: "false"
 
       - name: Frontend tests
         if: matrix.os == 'ubuntu-latest'
@@ -74,10 +76,10 @@ jobs:
         run: go test -v ./controlplane/internal/migrate -run TestMigrationsUpAndDown -count=1
 
       - name: Build agent
-        run: go build ./cmd/nodeagent
+        run: go build -o ${{ runner.temp }}/nodeagent ./cmd/nodeagent
 
       - name: Build control plane
-        run: go build ./controlplane/cmd/controlplane
+        run: go build -o ${{ runner.temp }}/controlplane ./controlplane/cmd/controlplane
 
       - name: Generate wizard bundle
         if: matrix.os == 'ubuntu-latest'

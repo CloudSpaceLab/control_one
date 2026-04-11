@@ -23,11 +23,11 @@ type ComplianceAggregation struct {
 
 // ComplianceTrend represents compliance trends over time.
 type ComplianceTrend struct {
-	Date       time.Time
-	Total      int
-	Passed     int
-	Failed     int
-	PassRate   float64
+	Date     time.Time
+	Total    int
+	Passed   int
+	Failed   int
+	PassRate float64
 }
 
 // GetComplianceAggregation returns aggregated compliance statistics.
@@ -138,7 +138,7 @@ func (s *Store) GetComplianceAggregation(ctx context.Context, filter ComplianceR
 	if err != nil {
 		return nil, fmt.Errorf("query compliance by rule: %w", err)
 	}
-	defer ruleRows.Close()
+	defer func() { _ = ruleRows.Close() }()
 
 	agg.ByRuleID = make(map[string]int)
 	for ruleRows.Next() {
@@ -160,10 +160,10 @@ func (s *Store) GetComplianceTrends(ctx context.Context, filter ComplianceResult
 	}
 	if intervalDays <= 0 {
 		intervalDays = 1
-	}
-	if intervalDays > 90 {
+	} else if intervalDays > 90 {
 		intervalDays = 90
 	}
+	_ = intervalDays // validated for future use in interval grouping
 
 	clauses := []string{"TRUE"}
 	args := []any{}
@@ -207,7 +207,7 @@ func (s *Store) GetComplianceTrends(ctx context.Context, filter ComplianceResult
 	if err != nil {
 		return nil, fmt.Errorf("query compliance trends: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var trends []ComplianceTrend
 	for rows.Next() {
@@ -228,6 +228,3 @@ func (s *Store) GetComplianceTrends(ctx context.Context, filter ComplianceResult
 
 	return trends, nil
 }
-
-
-

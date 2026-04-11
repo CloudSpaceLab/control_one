@@ -176,10 +176,10 @@ func (s *Server) handleCreateRemediationScript(w http.ResponseWriter, r *http.Re
 		Platform:      req.Platform,
 		ScriptType:    req.ScriptType,
 		ScriptContent: req.ScriptContent,
-		Version:        req.Version,
-		Enabled:        req.Enabled,
-		Metadata:       req.Metadata,
-		CreatedBy:      createdBy,
+		Version:       req.Version,
+		Enabled:       req.Enabled,
+		Metadata:      req.Metadata,
+		CreatedBy:     createdBy,
 	}
 	if params.Metadata == nil {
 		params.Metadata = make(map[string]any)
@@ -196,7 +196,7 @@ func (s *Server) handleCreateRemediationScript(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusCreated, resp)
 
 	s.recordAudit(r.Context(), principal, uuid.Nil, "remediation_script.created", "remediation_script", created.ID.String(), map[string]any{
-		"rule_id": req.RuleID,
+		"rule_id":  req.RuleID,
 		"platform": req.Platform,
 	})
 }
@@ -327,15 +327,15 @@ func newRemediationScriptResponse(script storage.RemediationScript) remediationS
 }
 
 type executeRemediationScriptRequest struct {
-	NodeID  string            `json:"node_id"`
-	RuleID  string            `json:"rule_id"`
-	Env     map[string]string `json:"env,omitempty"`
+	NodeID string            `json:"node_id"`
+	RuleID string            `json:"rule_id"`
+	Env    map[string]string `json:"env,omitempty"`
 }
 
 type executeRemediationScriptResponse struct {
-	JobID     string `json:"job_id"`
-	Status    string `json:"status"`
-	Message   string `json:"message"`
+	JobID   string `json:"job_id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.Request, scriptID uuid.UUID) {
@@ -399,11 +399,11 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	}
 
 	jobPayload := map[string]any{
-		"script_id": scriptID.String(),
-		"rule_id":   ruleID,
-		"node_id":   nodeID.String(),
-		"platform":  script.Platform,
-		"script_type": script.ScriptType,
+		"script_id":      scriptID.String(),
+		"rule_id":        ruleID,
+		"node_id":        nodeID.String(),
+		"platform":       script.Platform,
+		"script_type":    script.ScriptType,
 		"script_content": script.ScriptContent,
 	}
 	if len(req.Env) > 0 {
@@ -438,7 +438,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	}
 	if err := s.worker.Enqueue(task); err != nil {
 		s.logger.Error("enqueue remediation job", zap.Error(err))
-		s.store.UpdateJobStatus(r.Context(), job.ID, storage.JobStatusFailed, "failed to enqueue job", nil)
+		_ = s.store.UpdateJobStatus(r.Context(), job.ID, storage.JobStatusFailed, "failed to enqueue job", nil)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -485,7 +485,7 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 
 		result, err := remediationEngine.Execute(ctx, remediationScript)
 		if err != nil {
-			s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("remediation execution failed: %v", err), map[string]any{
+			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("remediation execution failed: %v", err), map[string]any{
 				"error": err.Error(),
 			})
 			return err
@@ -516,5 +516,3 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 		return nil
 	}
 }
-
-

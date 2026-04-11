@@ -337,7 +337,6 @@ func (s *Server) shouldUseRealScan(policies map[string]string) bool {
 	return false
 }
 
-
 func (s *Server) persistComplianceResults(ctx context.Context, job *storage.Job, payload *compliancePayload, results []compliance.Result) error {
 	if s.store == nil || job == nil || len(results) == 0 {
 		return nil
@@ -570,7 +569,7 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if job == nil {
-			fmt.Fprintf(w, "data: %s\n\n", `{"error":"job not found"}`)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", `{"error":"job not found"}`)
 			flusher.Flush()
 			return
 		}
@@ -583,7 +582,7 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fmt.Fprintf(w, "data: %s\n\n", string(jobJSON))
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(jobJSON))
 		flusher.Flush()
 	}
 

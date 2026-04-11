@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useTelemetryMetrics, useTelemetryLogs } from '../hooks/useTelemetry';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
-import { TelemetryMetric, TelemetryLog } from '../lib/api';
+
 import './Telemetry.css';
 
 function formatDate(value?: string): string {

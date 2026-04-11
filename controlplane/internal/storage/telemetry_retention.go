@@ -14,15 +14,15 @@ import (
 
 // TelemetryRetentionPolicy represents a retention policy for telemetry data.
 type TelemetryRetentionPolicy struct {
-	ID           uuid.UUID
-	TenantID     uuid.NullUUID
-	PolicyName   string
-	DataType     string
+	ID            uuid.UUID
+	TenantID      uuid.NullUUID
+	PolicyName    string
+	DataType      string
 	RetentionDays int
-	Enabled      bool
-	Metadata     map[string]any
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	Enabled       bool
+	Metadata      map[string]any
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // CreateRetentionPolicyParams defines input for creating a retention policy.
@@ -139,7 +139,7 @@ func (s *Store) ListRetentionPolicies(ctx context.Context, tenantID uuid.UUID, l
 	if err != nil {
 		return nil, 0, fmt.Errorf("query retention policies: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var policies []TelemetryRetentionPolicy
 	for rows.Next() {
@@ -303,5 +303,3 @@ func (s *Store) DeleteExpiredTelemetry(ctx context.Context, tenantID uuid.UUID, 
 
 	return rowsAffected, nil
 }
-
-

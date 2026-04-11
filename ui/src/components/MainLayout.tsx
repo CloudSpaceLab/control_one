@@ -16,6 +16,9 @@ const NAV_ITEMS = [
   { to: '/telemetry', label: 'Telemetry' },
   { to: '/secrets', label: 'Secrets' },
   { to: '/settings', label: 'Settings' },
+  { to: '/security', label: 'Security' },
+  { to: '/alerts', label: 'Alerts' },
+  { to: '/incidents', label: 'Incidents' },
 ];
 
 export function MainLayout(): JSX.Element {

@@ -14,39 +14,39 @@ import (
 )
 
 type sessionRecordingResponse struct {
-	ID              string                 `json:"id"`
-	NodeID          string                 `json:"node_id"`
-	UserID          *string                `json:"user_id,omitempty"`
-	SessionType     string                 `json:"session_type"`
-	StartedAt       string                 `json:"started_at"`
-	EndedAt         *string                `json:"ended_at,omitempty"`
-	DurationSeconds *int64                 `json:"duration_seconds,omitempty"`
-	Status          string                 `json:"status"`
-	Metadata        map[string]any         `json:"metadata,omitempty"`
-	ArtifactPath    *string                `json:"artifact_path,omitempty"`
-	ArtifactSizeBytes *int64               `json:"artifact_size_bytes,omitempty"`
-	Checksum        *string                `json:"checksum,omitempty"`
-	CreatedAt       string                 `json:"created_at"`
-	UpdatedAt       string                 `json:"updated_at"`
+	ID                string         `json:"id"`
+	NodeID            string         `json:"node_id"`
+	UserID            *string        `json:"user_id,omitempty"`
+	SessionType       string         `json:"session_type"`
+	StartedAt         string         `json:"started_at"`
+	EndedAt           *string        `json:"ended_at,omitempty"`
+	DurationSeconds   *int64         `json:"duration_seconds,omitempty"`
+	Status            string         `json:"status"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	ArtifactPath      *string        `json:"artifact_path,omitempty"`
+	ArtifactSizeBytes *int64         `json:"artifact_size_bytes,omitempty"`
+	Checksum          *string        `json:"checksum,omitempty"`
+	CreatedAt         string         `json:"created_at"`
+	UpdatedAt         string         `json:"updated_at"`
 }
 
 type createSessionRecordingRequest struct {
-	NodeID      string                 `json:"node_id"`
-	UserID      *string                `json:"user_id,omitempty"`
-	SessionType string                 `json:"session_type"`
-	StartedAt   *string                `json:"started_at,omitempty"`
-	Status      string                 `json:"status,omitempty"`
-	Metadata    map[string]any         `json:"metadata,omitempty"`
+	NodeID      string         `json:"node_id"`
+	UserID      *string        `json:"user_id,omitempty"`
+	SessionType string         `json:"session_type"`
+	StartedAt   *string        `json:"started_at,omitempty"`
+	Status      string         `json:"status,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
 type updateSessionRecordingRequest struct {
-	EndedAt         *string                `json:"ended_at,omitempty"`
-	DurationSeconds *int64                 `json:"duration_seconds,omitempty"`
-	Status          *string                `json:"status,omitempty"`
-	ArtifactPath    *string                `json:"artifact_path,omitempty"`
-	ArtifactSizeBytes *int64               `json:"artifact_size_bytes,omitempty"`
-	Checksum        *string                `json:"checksum,omitempty"`
-	Metadata        map[string]any         `json:"metadata,omitempty"`
+	EndedAt           *string        `json:"ended_at,omitempty"`
+	DurationSeconds   *int64         `json:"duration_seconds,omitempty"`
+	Status            *string        `json:"status,omitempty"`
+	ArtifactPath      *string        `json:"artifact_path,omitempty"`
+	ArtifactSizeBytes *int64         `json:"artifact_size_bytes,omitempty"`
+	Checksum          *string        `json:"checksum,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
 func (s *Server) handleSessionsCollection(w http.ResponseWriter, r *http.Request) {
@@ -413,12 +413,12 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	type eventResponse struct {
-		ID        string                 `json:"id"`
-		SessionID string                 `json:"session_id"`
-		EventType string                 `json:"event_type"`
-		Timestamp string                 `json:"timestamp"`
-		Data      map[string]any         `json:"data,omitempty"`
-		CreatedAt string                 `json:"created_at"`
+		ID        string         `json:"id"`
+		SessionID string         `json:"session_id"`
+		EventType string         `json:"event_type"`
+		Timestamp string         `json:"timestamp"`
+		Data      map[string]any `json:"data,omitempty"`
+		CreatedAt string         `json:"created_at"`
 	}
 
 	respItems := make([]eventResponse, 0, len(events))
@@ -477,4 +477,3 @@ func newSessionRecordingResponse(session storage.SessionRecording) sessionRecord
 
 	return resp
 }
-

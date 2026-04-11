@@ -70,4 +70,3 @@ func ensureLibvirtMetadata(metadata map[string]string) {
 		}
 	}
 }
-

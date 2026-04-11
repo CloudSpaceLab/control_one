@@ -16,18 +16,18 @@ import (
 
 // RemediationScript represents a remediation script for a compliance rule.
 type RemediationScript struct {
-	ID           uuid.UUID
-	RuleID       string
-	Platform     string
-	ScriptType   string
+	ID            uuid.UUID
+	RuleID        string
+	Platform      string
+	ScriptType    string
 	ScriptContent string
-	Checksum     sql.NullString
-	Version      int
-	Enabled      bool
-	Metadata     map[string]any
-	CreatedBy    *uuid.UUID
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	Checksum      sql.NullString
+	Version       int
+	Enabled       bool
+	Metadata      map[string]any
+	CreatedBy     *uuid.UUID
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // CreateRemediationScriptParams defines input for creating a remediation script.
@@ -183,7 +183,7 @@ func (s *Store) ListRemediationScripts(ctx context.Context, ruleID, platform str
 	if err != nil {
 		return nil, 0, fmt.Errorf("query remediation scripts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var scripts []RemediationScript
 	for rows.Next() {
@@ -438,5 +438,3 @@ func computeChecksum(content string) string {
 	hash := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(hash[:])
 }
-
-

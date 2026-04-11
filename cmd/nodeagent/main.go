@@ -73,6 +73,7 @@ func main() {
 	}
 	state, err := registrar.Register(ctx, req, cfg.StateFile)
 	if err != nil {
+		log.Fatal("node registration failed", zap.Error(err))
 	}
 	emitHook(ctx, hooksService, log, "agent.registration.success", state.NodeID, map[string]any{
 		"hostname": sysInfo.Hostname,
@@ -275,12 +276,12 @@ func main() {
 			for _, rule := range policies {
 				ruleMap[rule.ID] = rule.Check
 			}
-			
+
 			useRealScan := cfg.Scanner.UseRealScan && cfg.Scanner.Enabled
 			if useRealScan {
 				ruleMap["use_real_scan"] = "true"
 			}
-			
+
 			if compResults, err := complianceEngine.Evaluate(ctx, state.NodeID, ruleMap); err != nil {
 				log.Warn("compliance evaluation", zap.Error(err))
 				emitHook(ctx, hooksService, log, "compliance.evaluate.failed", state.NodeID, map[string]any{"error": err.Error()})

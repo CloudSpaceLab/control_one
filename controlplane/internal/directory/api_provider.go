@@ -23,9 +23,9 @@ type APIProvider struct {
 
 // Config configures the API provider.
 type Config struct {
-	Endpoint  string
-	APIKey    string
-	Timeout   time.Duration
+	Endpoint   string
+	APIKey     string
+	Timeout    time.Duration
 	SkipVerify bool
 }
 
@@ -77,7 +77,7 @@ func (p *APIProvider) GetUsers(ctx context.Context) ([]User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("api request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -109,7 +109,7 @@ func (p *APIProvider) GetGroups(ctx context.Context) ([]Group, error) {
 	if err != nil {
 		return nil, fmt.Errorf("api request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -141,7 +141,7 @@ func (p *APIProvider) GetUserGroups(ctx context.Context, userID string) ([]Group
 	if err != nil {
 		return nil, fmt.Errorf("api request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -183,5 +183,3 @@ type Group struct {
 	Name    string   `json:"name"`
 	Members []string `json:"members,omitempty"`
 }
-
-
