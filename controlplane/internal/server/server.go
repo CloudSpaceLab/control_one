@@ -117,6 +117,13 @@ type Store interface {
 	UpdateSessionRecording(context.Context, uuid.UUID, storage.UpdateSessionRecordingParams) (*storage.SessionRecording, error)
 	CreateSessionEvent(context.Context, uuid.UUID, string, time.Time, map[string]any) (*storage.SessionEvent, error)
 	ListSessionEvents(context.Context, uuid.UUID, int, int) ([]storage.SessionEvent, int, error)
+	CreateEnrollmentToken(context.Context, storage.CreateEnrollmentTokenParams) (*storage.EnrollmentToken, error)
+	GetEnrollmentTokenByHash(context.Context, string) (*storage.EnrollmentToken, error)
+	ListEnrollmentTokens(context.Context, uuid.UUID, int, int) ([]storage.EnrollmentToken, int, error)
+	RevokeEnrollmentToken(context.Context, uuid.UUID) error
+	IncrementEnrollmentCount(context.Context, uuid.UUID) error
+	CreateFleetEnrollmentResult(context.Context, *storage.FleetEnrollmentResult) error
+	ListFleetEnrollmentResults(context.Context, uuid.UUID) ([]storage.FleetEnrollmentResult, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -469,6 +476,13 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/sessions", s.handleSessionsCollection)
 	s.baseRouter.HandleFunc("/api/v1/sessions/", s.handleSessionSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/webhooks/", s.handleWebhookSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/enrollment-tokens", s.handleEnrollmentTokensCollection)
+	s.baseRouter.HandleFunc("/api/v1/enrollment-tokens/", s.handleEnrollmentTokenSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/enroll", s.handleEnroll)
+	s.baseRouter.HandleFunc("/api/v1/agent/install-script", s.handleAgentInstallScript)
+	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
+	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
+	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {

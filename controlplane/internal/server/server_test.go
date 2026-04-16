@@ -2148,3 +2148,31 @@ func (f *fakeStore) ListSessionEvents(_ context.Context, recordingID uuid.UUID, 
 func (f *fakeStore) ListComplianceResultsFiltered(_ context.Context, filter storage.ComplianceResultFilter, limit, offset int) ([]storage.ComplianceResult, int, error) {
 	return nil, 0, nil
 }
+
+func (f *fakeStore) CreateEnrollmentToken(_ context.Context, params storage.CreateEnrollmentTokenParams) (*storage.EnrollmentToken, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetEnrollmentTokenByHash(_ context.Context, hash string) (*storage.EnrollmentToken, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListEnrollmentTokens(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.EnrollmentToken, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) RevokeEnrollmentToken(_ context.Context, id uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeStore) IncrementEnrollmentCount(_ context.Context, id uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeStore) CreateFleetEnrollmentResult(_ context.Context, r *storage.FleetEnrollmentResult) error {
+	return nil
+}
+
+func (f *fakeStore) ListFleetEnrollmentResults(_ context.Context, jobID uuid.UUID) ([]storage.FleetEnrollmentResult, error) {
+	return nil, nil
+}
