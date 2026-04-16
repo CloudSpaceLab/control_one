@@ -82,7 +82,7 @@ func (m *Manager) Sync(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("access sync request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("access sync rejected: status %d", resp.StatusCode)
 	}

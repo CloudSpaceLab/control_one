@@ -88,7 +88,7 @@ func (c *SSHClient) RunCommand(client *ssh.Client, command string, timeout time.
 	if err != nil {
 		return "", "", -1, fmt.Errorf("create session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	session.Stdout = &stdoutBuf

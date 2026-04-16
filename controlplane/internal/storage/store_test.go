@@ -163,7 +163,7 @@ func setupPostgresStore(t *testing.T, ctx context.Context) *Store {
 		require.NoError(t, pg.Terminate(ctx))
 	})
 
-	connStr, err := pg.ConnectionString(ctx)
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
 	logger := zap.NewNop()

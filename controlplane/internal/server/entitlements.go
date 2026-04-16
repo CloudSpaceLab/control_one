@@ -45,13 +45,6 @@ type updateEntitlementRequest struct {
 	Metadata  *map[string]any `json:"metadata,omitempty"`
 }
 
-type accessSyncRequest struct {
-	Provider    string `json:"provider"`
-	DefaultRole string `json:"default_role,omitempty"`
-	NodeID      string `json:"node_id,omitempty"`
-	APIEndpoint string `json:"api_endpoint,omitempty"`
-}
-
 type accessSyncResponse struct {
 	SyncedAt time.Time   `json:"synced_at"`
 	Users    []userSync  `json:"users"`

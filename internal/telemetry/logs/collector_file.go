@@ -35,7 +35,7 @@ func (c *fileCollector) Run(ctx context.Context, out chan<- RawLog) error {
 	if err != nil {
 		return err
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	for _, p := range c.cfg.Paths {
 		if err := watcher.Add(filepath.Dir(p)); err != nil {
@@ -55,7 +55,7 @@ func (c *fileCollector) Run(ctx context.Context, out chan<- RawLog) error {
 			c.logger.Debug("open log file", zap.String("path", path), zap.Error(err))
 			return
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		if lastOffset > 0 {
 			if _, err := file.Seek(lastOffset, io.SeekStart); err != nil {

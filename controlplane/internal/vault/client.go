@@ -83,7 +83,7 @@ func (c *Client) ReadSecret(ctx context.Context, path string) (map[string]interf
 	if err != nil {
 		return nil, fmt.Errorf("vault request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
@@ -125,7 +125,7 @@ func (c *Client) ListSecrets(ctx context.Context, path string) ([]string, error)
 	if err != nil {
 		return nil, fmt.Errorf("vault request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return []string{}, nil
@@ -177,7 +177,7 @@ func (c *Client) WriteSecret(ctx context.Context, path string, data map[string]i
 	if err != nil {
 		return fmt.Errorf("vault request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
@@ -205,7 +205,7 @@ func (c *Client) GetSecretVersion(ctx context.Context, path string) (int, error)
 	if err != nil {
 		return 0, fmt.Errorf("vault request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return 0, nil
@@ -249,7 +249,7 @@ func (c *Client) Health(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("vault health check failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("vault is unhealthy: status %d", resp.StatusCode)

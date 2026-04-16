@@ -6,7 +6,7 @@ async function safeErrorMessage(response) {
             return data.message;
         }
     }
-    catch (error) {
+    catch {
         // ignore json parse errors
     }
     return response.statusText;

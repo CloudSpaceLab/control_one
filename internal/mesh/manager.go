@@ -140,7 +140,7 @@ func (m *Manager) SyncOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mesh peer sync request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("mesh peer sync failed: status %d", resp.StatusCode)
 	}
@@ -235,7 +235,7 @@ func (m *Manager) rotateIfNeeded(ctx context.Context) {
 		m.log.Warn("mesh rotation request failed", zap.Error(err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		m.log.Warn("mesh rotation rejected", zap.Int("status", resp.StatusCode))
 		return

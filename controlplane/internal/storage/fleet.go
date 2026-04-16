@@ -77,7 +77,7 @@ func (s *Store) ListFleetEnrollmentResults(ctx context.Context, jobID uuid.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("query fleet enrollment results: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []FleetEnrollmentResult
 	for rows.Next() {

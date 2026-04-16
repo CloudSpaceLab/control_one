@@ -92,10 +92,10 @@ func (m *Manager) startAsynq(ctx context.Context) error {
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(asynqTaskType, m.handleAsynqTask)
 	if err := server.Start(mux); err != nil {
-		m.asynqClient.Close()
+		_ = m.asynqClient.Close()
 		m.asynqClient = nil
 		m.asynqServer = nil
-		m.asynqInspector.Close()
+		_ = m.asynqInspector.Close()
 		m.asynqInspector = nil
 		metricsRecordBackendState(metricsBackendAsynq, false)
 		return fmt.Errorf("start asynq server: %w", err)

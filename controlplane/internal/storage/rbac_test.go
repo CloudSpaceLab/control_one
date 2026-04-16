@@ -37,7 +37,7 @@ func TestRBACAssignmentsWithPostgres(t *testing.T) {
 		require.NoError(t, pg.Terminate(ctx))
 	})
 
-	connStr, err := pg.ConnectionString(ctx)
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
 	store, err := New(zap.NewNop(), config.DatabaseConfig{URL: connStr}, Options{Clock: func() time.Time { return time.Unix(1700000000, 0) }})

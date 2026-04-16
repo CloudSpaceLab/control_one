@@ -139,7 +139,7 @@ func (s *Store) ListRetentionPolicies(ctx context.Context, tenantID uuid.UUID, l
 	if err != nil {
 		return nil, 0, fmt.Errorf("query retention policies: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var policies []TelemetryRetentionPolicy
 	for rows.Next() {

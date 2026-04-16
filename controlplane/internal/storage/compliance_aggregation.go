@@ -138,7 +138,7 @@ func (s *Store) GetComplianceAggregation(ctx context.Context, filter ComplianceR
 	if err != nil {
 		return nil, fmt.Errorf("query compliance by rule: %w", err)
 	}
-	defer ruleRows.Close()
+	defer func() { _ = ruleRows.Close() }()
 
 	agg.ByRuleID = make(map[string]int)
 	for ruleRows.Next() {
@@ -157,12 +157,6 @@ func (s *Store) GetComplianceAggregation(ctx context.Context, filter ComplianceR
 func (s *Store) GetComplianceTrends(ctx context.Context, filter ComplianceResultFilter, intervalDays int) ([]ComplianceTrend, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
-	}
-	if intervalDays <= 0 {
-		intervalDays = 1
-	}
-	if intervalDays > 90 {
-		intervalDays = 90
 	}
 
 	clauses := []string{"TRUE"}
@@ -207,7 +201,7 @@ func (s *Store) GetComplianceTrends(ctx context.Context, filter ComplianceResult
 	if err != nil {
 		return nil, fmt.Errorf("query compliance trends: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var trends []ComplianceTrend
 	for rows.Next() {

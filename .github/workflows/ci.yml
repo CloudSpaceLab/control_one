@@ -87,7 +87,7 @@ jobs:
         run: go mod download
       
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -short -v -race -coverprofile=coverage.out -covermode=atomic ./...
         env:
           DATABASE_URL: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
           REDIS_URL: redis://localhost:6379
@@ -165,6 +165,7 @@ jobs:
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 

@@ -190,7 +190,7 @@ func (s *Store) ListEnrollmentTokens(ctx context.Context, tenantID uuid.UUID, li
 	if err != nil {
 		return nil, 0, fmt.Errorf("query enrollment tokens: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tokens []EnrollmentToken
 	for rows.Next() {

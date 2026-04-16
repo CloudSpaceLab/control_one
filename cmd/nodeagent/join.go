@@ -69,14 +69,14 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 	if err != nil {
 		return fmt.Errorf("enroll request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		// Read error body
 		var errBody struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&errBody)
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
 		if errBody.Error != "" {
 			return fmt.Errorf("enrollment rejected: %s", errBody.Error)
 		}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"go.uber.org/zap"
 
@@ -16,7 +15,6 @@ type MultiScanner struct {
 	log      *zap.Logger
 	registry *ScannerRegistry
 	fallback Runner
-	mu       sync.RWMutex
 }
 
 // NewMultiScanner creates a new multi-scanner that routes to appropriate adapters

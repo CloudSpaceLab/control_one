@@ -241,7 +241,7 @@ func (s *Store) ListSessionRecordings(ctx context.Context, params ListSessionRec
 	if err != nil {
 		return nil, 0, fmt.Errorf("query session recordings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var recordings []SessionRecording
 	for rows.Next() {
@@ -424,7 +424,7 @@ func (s *Store) ListSessionEvents(ctx context.Context, sessionID uuid.UUID, limi
 	if err != nil {
 		return nil, 0, fmt.Errorf("query session events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []SessionEvent
 	for rows.Next() {

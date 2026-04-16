@@ -180,7 +180,7 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"items":  respItems,
 		"total":  total,
 		"limit":  limit,
@@ -267,7 +267,7 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(webhookToResponse(webhook))
+	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
 func (s *Server) handleWebhookResource(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -311,7 +311,7 @@ func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uui
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(webhookToResponse(webhook))
+	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
 func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -351,7 +351,7 @@ func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(webhookToResponse(webhook))
+	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
 func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -418,7 +418,7 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":          success,
 		"http_status_code": statusCode,
 		"response_body":    responseBody,
@@ -473,7 +473,7 @@ func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"items":  respItems,
 		"total":  total,
 		"limit":  limit,
@@ -595,7 +595,7 @@ func (s *Server) deliverWebhook(webhook *storage.Webhook, eventType string, payl
 	if err != nil {
 		return false, 0, "", fmt.Errorf("deliver webhook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	responseBody, _ := io.ReadAll(resp.Body)
 	responseBodyStr := string(responseBody)

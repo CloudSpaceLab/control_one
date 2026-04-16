@@ -47,13 +47,6 @@ type secretSyncResponse struct {
 	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
-type secretsSyncRequest struct {
-	Backend  string   `json:"backend"`
-	Groups   []string `json:"groups,omitempty"`
-	NodeID   string   `json:"node_id,omitempty"`
-	Endpoint string   `json:"endpoint,omitempty"`
-}
-
 type secretsSyncResponse struct {
 	SyncedAt time.Time        `json:"synced_at"`
 	Secrets  []secretResponse `json:"secrets"`

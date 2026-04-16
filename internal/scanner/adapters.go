@@ -557,9 +557,10 @@ func (a *TrivyAdapter) runTrivy(ctx context.Context, target string, rule policy.
 			highCount := 0
 			for _, result := range report.Results {
 				for _, vuln := range result.Vulnerabilities {
-					if vuln.Severity == "CRITICAL" {
+					switch vuln.Severity {
+					case "CRITICAL":
 						criticalCount++
-					} else if vuln.Severity == "HIGH" {
+					case "HIGH":
 						highCount++
 					}
 				}

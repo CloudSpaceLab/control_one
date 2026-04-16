@@ -99,7 +99,7 @@ func (s *Store) ListSecretGroups(ctx context.Context, tenantID uuid.UUID, limit,
 	if err != nil {
 		return nil, 0, fmt.Errorf("query secret groups: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var groups []SecretGroup
 	for rows.Next() {
@@ -284,7 +284,7 @@ func (s *Store) ListSecretSyncs(ctx context.Context, groupID uuid.UUID, limit, o
 	if err != nil {
 		return nil, 0, fmt.Errorf("query secret syncs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var syncs []SecretSync
 	for rows.Next() {

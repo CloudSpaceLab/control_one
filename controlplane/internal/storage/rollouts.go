@@ -88,7 +88,7 @@ func (s *Store) ListRollouts(ctx context.Context, templateID uuid.UUID, limit, o
 	if err != nil {
 		return nil, 0, fmt.Errorf("query rollouts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var rollouts []TemplateRollout
 	for rows.Next() {

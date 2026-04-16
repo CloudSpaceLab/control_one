@@ -97,6 +97,7 @@ func main() {
 	}
 	state, err := registrar.Register(ctx, req, cfg.StateFile)
 	if err != nil {
+		log.Fatal("registration failed", zap.Error(err))
 	}
 	emitHook(ctx, hooksService, log, "agent.registration.success", state.NodeID, map[string]any{
 		"hostname": sysInfo.Hostname,

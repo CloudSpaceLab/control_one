@@ -134,7 +134,7 @@ func (p *Provisioner) provisionOne(ctx context.Context, host string, port int, u
 		)
 		return result
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	installCmd := fmt.Sprintf(
 		"curl -fsSL '%s/api/v1/agent/install-script?token=%s' | bash",
