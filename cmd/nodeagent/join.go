@@ -73,7 +73,9 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		// Read error body
-		var errBody struct{ Error string `json:"error"` }
+		var errBody struct {
+			Error string `json:"error"`
+		}
 		json.NewDecoder(resp.Body).Decode(&errBody)
 		if errBody.Error != "" {
 			return fmt.Errorf("enrollment rejected: %s", errBody.Error)

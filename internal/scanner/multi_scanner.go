@@ -32,10 +32,10 @@ func NewMultiScanner(log *zap.Logger, fallback Runner) *MultiScanner {
 // Run executes scans using appropriate scanner adapters based on rule metadata
 func (m *MultiScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, error) {
 	results := make([]Result, 0, len(rules))
-	
+
 	for _, rule := range rules {
 		scannerName := m.determineScanner(rule)
-		
+
 		adapter, ok := m.registry.Get(scannerName)
 		if !ok || !adapter.IsAvailable() {
 			if m.fallback != nil {
@@ -56,11 +56,11 @@ func (m *MultiScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, 
 				results = append(results, fallbackResults[0])
 				continue
 			}
-			
+
 			results = append(results, Result{
-				RuleID:    rule.ID,
-				Status:    StatusError,
-				Details:   fmt.Sprintf("scanner %s not available and no fallback", scannerName),
+				RuleID:  rule.ID,
+				Status:  StatusError,
+				Details: fmt.Sprintf("scanner %s not available and no fallback", scannerName),
 			})
 			continue
 		}
@@ -71,7 +71,7 @@ func (m *MultiScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, 
 				zap.String("rule_id", rule.ID),
 				zap.String("scanner", scannerName),
 				zap.Error(err))
-			
+
 			if m.fallback != nil {
 				fallbackResults, fallbackErr := m.fallback.Run(ctx, []policy.Rule{rule})
 				if fallbackErr == nil && len(fallbackResults) > 0 {
@@ -79,11 +79,11 @@ func (m *MultiScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, 
 					continue
 				}
 			}
-			
+
 			results = append(results, Result{
-				RuleID:    rule.ID,
-				Status:    StatusError,
-				Details:   fmt.Sprintf("scanner %s failed: %v", scannerName, err),
+				RuleID:  rule.ID,
+				Status:  StatusError,
+				Details: fmt.Sprintf("scanner %s failed: %v", scannerName, err),
 			})
 			continue
 		}
@@ -99,7 +99,7 @@ func (m *MultiScanner) Run(ctx context.Context, rules []policy.Rule) ([]Result, 
 // determineScanner determines which scanner to use based on rule metadata
 func (m *MultiScanner) determineScanner(rule policy.Rule) string {
 	check := strings.ToLower(rule.Check)
-	
+
 	if strings.Contains(check, "openscap") || strings.Contains(check, "xccdf") || strings.Contains(check, "ds:") {
 		return "openscap"
 	}
@@ -112,7 +112,7 @@ func (m *MultiScanner) determineScanner(rule policy.Rule) string {
 	if strings.Contains(check, "trivy") || strings.HasPrefix(check, "fs:") || strings.HasPrefix(check, "image:") {
 		return "trivy"
 	}
-	
+
 	// Check rule ID or check content for scanner hints
 	if strings.Contains(rule.ID, "openscap") || strings.Contains(rule.ID, "inspec") || strings.Contains(rule.ID, "ansible") || strings.Contains(rule.ID, "trivy") {
 		if strings.Contains(rule.ID, "openscap") {
@@ -128,7 +128,7 @@ func (m *MultiScanner) determineScanner(rule policy.Rule) string {
 			return "trivy"
 		}
 	}
-	
+
 	return "builtin"
 }
 
@@ -146,4 +146,3 @@ func (m *MultiScanner) ListAvailableScanners() []string {
 func (m *MultiScanner) GetAdapter(name string) (ScannerAdapter, bool) {
 	return m.registry.Get(name)
 }
-

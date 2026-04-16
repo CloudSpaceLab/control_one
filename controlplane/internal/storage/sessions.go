@@ -14,20 +14,20 @@ import (
 
 // SessionRecording represents a recorded session
 type SessionRecording struct {
-	ID              uuid.UUID
-	NodeID          uuid.UUID
-	UserID          sql.NullString
-	SessionType     string
-	StartedAt       time.Time
-	EndedAt         sql.NullTime
-	DurationSeconds sql.NullInt64
-	Status          string
-	Metadata        map[string]any
-	ArtifactPath    sql.NullString
+	ID                uuid.UUID
+	NodeID            uuid.UUID
+	UserID            sql.NullString
+	SessionType       string
+	StartedAt         time.Time
+	EndedAt           sql.NullTime
+	DurationSeconds   sql.NullInt64
+	Status            string
+	Metadata          map[string]any
+	ArtifactPath      sql.NullString
 	ArtifactSizeBytes sql.NullInt64
-	Checksum        sql.NullString
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	Checksum          sql.NullString
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // SessionEvent represents an event within a session
@@ -52,13 +52,13 @@ type CreateSessionRecordingParams struct {
 
 // UpdateSessionRecordingParams captures updatable fields
 type UpdateSessionRecordingParams struct {
-	EndedAt         *time.Time
-	DurationSeconds *int64
-	Status          *string
-	ArtifactPath    *string
+	EndedAt           *time.Time
+	DurationSeconds   *int64
+	Status            *string
+	ArtifactPath      *string
 	ArtifactSizeBytes *int64
-	Checksum        *string
-	Metadata        map[string]any
+	Checksum          *string
+	Metadata          map[string]any
 }
 
 // ListSessionRecordingsParams defines filters for listing sessions
@@ -454,4 +454,3 @@ func (s *Store) ListSessionEvents(ctx context.Context, sessionID uuid.UUID, limi
 
 	return events, total, nil
 }
-

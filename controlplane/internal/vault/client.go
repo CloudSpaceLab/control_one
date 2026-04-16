@@ -60,8 +60,8 @@ func NewClient(log *zap.Logger, cfg Config) (*Client, error) {
 			Timeout:   timeout,
 			Transport: transport,
 		},
-		token:     strings.TrimSpace(cfg.Token),
-		log:       log,
+		token: strings.TrimSpace(cfg.Token),
+		log:   log,
 	}, nil
 }
 
@@ -257,5 +257,3 @@ func (c *Client) Health(ctx context.Context) error {
 
 	return nil
 }
-
-

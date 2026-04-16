@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"golang.org/x/crypto/ssh"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/ssh"
 )
 
 const defaultSSHTimeout = 30 * time.Second

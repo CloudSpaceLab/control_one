@@ -23,11 +23,11 @@ type ComplianceAggregation struct {
 
 // ComplianceTrend represents compliance trends over time.
 type ComplianceTrend struct {
-	Date       time.Time
-	Total      int
-	Passed     int
-	Failed     int
-	PassRate   float64
+	Date     time.Time
+	Total    int
+	Passed   int
+	Failed   int
+	PassRate float64
 }
 
 // GetComplianceAggregation returns aggregated compliance statistics.
@@ -228,6 +228,3 @@ func (s *Store) GetComplianceTrends(ctx context.Context, filter ComplianceResult
 
 	return trends, nil
 }
-
-
-

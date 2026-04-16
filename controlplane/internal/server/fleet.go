@@ -24,7 +24,7 @@ type fleetEnrollRequest struct {
 	Targets     []fleet.Target    `json:"targets"`
 	SSHUser     string            `json:"ssh_user"`
 	SSHKey      string            `json:"ssh_key"`      // base64-encoded PEM
-	SSHPassword string            `json:"ssh_password"`  // optional
+	SSHPassword string            `json:"ssh_password"` // optional
 	Token       string            `json:"token"`
 	Parallel    int               `json:"parallel"`
 	Labels      map[string]string `json:"labels"`
@@ -67,9 +67,9 @@ type fleetEnrollResponse struct {
 }
 
 type fleetEnrollStatusResponse struct {
-	JobID   string                       `json:"job_id"`
-	Status  string                       `json:"status"`
-	Results []fleetEnrollResultResponse  `json:"results"`
+	JobID   string                      `json:"job_id"`
+	Status  string                      `json:"status"`
+	Results []fleetEnrollResultResponse `json:"results"`
 }
 
 type fleetEnrollResultResponse struct {

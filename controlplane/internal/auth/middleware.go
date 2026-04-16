@@ -74,9 +74,9 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 		authCfg:          authCfg,
 		store:            store,
 		publicPaths: map[string]struct{}{
-			"/healthz":        {},
-			"/metrics":        {},
-			"/api/v1/enroll":  {},
+			"/healthz":         {},
+			"/metrics":         {},
+			"/api/v1/enroll":   {},
 			"/api/v1/register": {},
 		},
 	}

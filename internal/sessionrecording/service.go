@@ -19,12 +19,12 @@ import (
 
 // Service manages session recording using tlog, auditx, and optionally OpenReplay
 type Service struct {
-	log          *zap.Logger
-	client       *api.Client
-	nodeID       string
-	cfg          Config
+	log            *zap.Logger
+	client         *api.Client
+	nodeID         string
+	cfg            Config
 	activeSessions map[string]*Session
-	mu           sync.RWMutex
+	mu             sync.RWMutex
 }
 
 // Config holds session recording configuration
@@ -48,22 +48,22 @@ type Config struct {
 
 // Session represents an active recording session
 type Session struct {
-	ID          string
-	Type        string
-	UserID      string
-	StartedAt   time.Time
-	Process     *exec.Cmd
+	ID           string
+	Type         string
+	UserID       string
+	StartedAt    time.Time
+	Process      *exec.Cmd
 	ArtifactPath string
-	Metadata    map[string]any
+	Metadata     map[string]any
 }
 
 // NewService creates a new session recording service
 func NewService(log *zap.Logger, client *api.Client, nodeID string, cfg Config) *Service {
 	return &Service{
-		log:           log,
-		client:       client,
-		nodeID:       nodeID,
-		cfg:          cfg,
+		log:            log,
+		client:         client,
+		nodeID:         nodeID,
+		cfg:            cfg,
 		activeSessions: make(map[string]*Session),
 	}
 }
@@ -127,7 +127,6 @@ func (s *Service) StartSession(ctx context.Context, sessionType, userID string, 
 
 	return sessionID, nil
 }
-
 
 // StopSession stops recording a session
 func (s *Service) StopSession(ctx context.Context, sessionID string) error {
@@ -317,4 +316,3 @@ func (s *Service) uploadToOpenReplay(ctx context.Context, session *Session) erro
 
 	return nil
 }
-

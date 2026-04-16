@@ -337,4 +337,3 @@ func (s *Store) supportsCopy() bool {
 	// In practice, if this code compiles, we have pq available
 	return true
 }
-

@@ -38,18 +38,18 @@ type Webhook struct {
 
 // WebhookDelivery represents a webhook delivery attempt.
 type WebhookDelivery struct {
-	ID            uuid.UUID
-	WebhookID     uuid.UUID
-	EventType     string
-	EventID       sql.NullString
-	Status        string
+	ID             uuid.UUID
+	WebhookID      uuid.UUID
+	EventType      string
+	EventID        sql.NullString
+	Status         string
 	HTTPStatusCode sql.NullInt64
-	RequestBody   map[string]any
-	ResponseBody  sql.NullString
-	ErrorMessage  sql.NullString
-	AttemptNumber int
-	DeliveredAt   sql.NullTime
-	CreatedAt     time.Time
+	RequestBody    map[string]any
+	ResponseBody   sql.NullString
+	ErrorMessage   sql.NullString
+	AttemptNumber  int
+	DeliveredAt    sql.NullTime
+	CreatedAt      time.Time
 }
 
 // CreateWebhookParams defines input for creating a webhook.
@@ -598,4 +598,3 @@ func (s *Store) GetEnabledWebhooksForEvent(ctx context.Context, eventType string
 
 	return webhooks, nil
 }
-
