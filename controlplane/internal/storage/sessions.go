@@ -14,20 +14,20 @@ import (
 
 // SessionRecording represents a recorded session
 type SessionRecording struct {
-	ID              uuid.UUID
-	NodeID          uuid.UUID
-	UserID          sql.NullString
-	SessionType     string
-	StartedAt       time.Time
-	EndedAt         sql.NullTime
-	DurationSeconds sql.NullInt64
-	Status          string
-	Metadata        map[string]any
-	ArtifactPath    sql.NullString
+	ID                uuid.UUID
+	NodeID            uuid.UUID
+	UserID            sql.NullString
+	SessionType       string
+	StartedAt         time.Time
+	EndedAt           sql.NullTime
+	DurationSeconds   sql.NullInt64
+	Status            string
+	Metadata          map[string]any
+	ArtifactPath      sql.NullString
 	ArtifactSizeBytes sql.NullInt64
-	Checksum        sql.NullString
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	Checksum          sql.NullString
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // SessionEvent represents an event within a session
@@ -52,13 +52,13 @@ type CreateSessionRecordingParams struct {
 
 // UpdateSessionRecordingParams captures updatable fields
 type UpdateSessionRecordingParams struct {
-	EndedAt         *time.Time
-	DurationSeconds *int64
-	Status          *string
-	ArtifactPath    *string
+	EndedAt           *time.Time
+	DurationSeconds   *int64
+	Status            *string
+	ArtifactPath      *string
 	ArtifactSizeBytes *int64
-	Checksum        *string
-	Metadata        map[string]any
+	Checksum          *string
+	Metadata          map[string]any
 }
 
 // ListSessionRecordingsParams defines filters for listing sessions
@@ -241,7 +241,7 @@ func (s *Store) ListSessionRecordings(ctx context.Context, params ListSessionRec
 	if err != nil {
 		return nil, 0, fmt.Errorf("query session recordings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var recordings []SessionRecording
 	for rows.Next() {
@@ -424,7 +424,7 @@ func (s *Store) ListSessionEvents(ctx context.Context, sessionID uuid.UUID, limi
 	if err != nil {
 		return nil, 0, fmt.Errorf("query session events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []SessionEvent
 	for rows.Next() {
@@ -454,4 +454,3 @@ func (s *Store) ListSessionEvents(ctx context.Context, sessionID uuid.UUID, limi
 
 	return events, total, nil
 }
-

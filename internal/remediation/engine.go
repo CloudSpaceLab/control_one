@@ -15,21 +15,21 @@ import (
 
 // Script represents a remediation script to execute.
 type Script struct {
-	RuleID       string
-	Platform     string
-	ScriptType   string
+	RuleID        string
+	Platform      string
+	ScriptType    string
 	ScriptContent string
-	Checksum     string
+	Checksum      string
 }
 
 // Result captures the outcome of remediation execution.
 type Result struct {
-	RuleID      string
-	Success     bool
-	Output      string
-	Error       string
-	ExecutedAt  time.Time
-	Duration    time.Duration
+	RuleID     string
+	Success    bool
+	Output     string
+	Error      string
+	ExecutedAt time.Time
+	Duration   time.Duration
 }
 
 // Engine executes remediation scripts for compliance violations.
@@ -199,13 +199,12 @@ func (e *Engine) writeTempPlaybook(content string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	if _, err := tmpFile.WriteString(content); err != nil {
-		os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name())
 		return "", err
 	}
 
 	return tmpFile.Name(), nil
 }
-

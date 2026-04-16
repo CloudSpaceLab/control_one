@@ -143,7 +143,7 @@ func (s *Store) ListTelemetryMetrics(ctx context.Context, filter TelemetryMetric
 	if err != nil {
 		return nil, 0, fmt.Errorf("query telemetry metrics: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []TelemetryMetric
 	for rows.Next() {
@@ -240,7 +240,7 @@ func (s *Store) ListTelemetryLogs(ctx context.Context, filter TelemetryLogFilter
 	if err != nil {
 		return nil, 0, fmt.Errorf("query telemetry logs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var logs []TelemetryLog
 	for rows.Next() {
@@ -376,4 +376,3 @@ func (s *Store) CreateTelemetryLogs(ctx context.Context, logs []CreateTelemetryL
 	}
 	return nil
 }
-

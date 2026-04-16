@@ -7,7 +7,7 @@ import {
 import { useApiClient } from './useApiClient';
 import { useApiErrorHandler } from './useApiErrorHandler';
 
-export interface UseTemplatesOptions extends ListTemplatesParams {}
+export type UseTemplatesOptions = ListTemplatesParams;
 
 interface TemplatesState extends PaginatedResponse<Template> {
   loading: boolean;

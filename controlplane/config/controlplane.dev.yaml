@@ -15,7 +15,7 @@ observability:
   metrics_path: /metrics
 
 database:
-  url: postgresql://controlone:controlone@postgres:5432/controlone?sslmode=disable
+  url: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
   max_open_conns: 5
   max_idle_conns: 5
   conn_max_lifetime: 15m
@@ -27,7 +27,7 @@ worker:
   backend: asynq
   asynq:
     enabled: true
-    redis_address: "redis:6379"
+    redis_address: "localhost:6379"
     redis_db: 0
     redis_password: ""
 
@@ -40,6 +40,13 @@ auth:
     username_claim: preferred_username
     groups_claim: groups
     cache_ttl: 1m
+    static_tokens:
+      dev-admin-token:
+        subject: "dev-admin"
+        email: "admin@controlone.dev"
+        name: "Dev Admin"
+        roles: ["admin"]
+        groups: ["platform-admins"]
   rbac:
     default_role: viewer
     role_mappings: {}

@@ -202,7 +202,7 @@ func (s *Store) createTelemetryMetricsCopy(ctx context.Context, metrics []Create
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer txn.Rollback()
+	defer func() { _ = txn.Rollback() }()
 
 	stmt, err := txn.Prepare(pq.CopyIn("telemetry_metrics",
 		"id", "tenant_id", "node_id", "metric_name", "metric_value", "metric_unit", "labels", "timestamp", "created_at"))
@@ -219,7 +219,7 @@ func (s *Store) createTelemetryMetricsCopy(ctx context.Context, metrics []Create
 
 		labelsJSON, err := encodeStringMap(metric.Labels)
 		if err != nil {
-			stmt.Close()
+			_ = stmt.Close()
 			return fmt.Errorf("encode labels: %w", err)
 		}
 
@@ -235,13 +235,13 @@ func (s *Store) createTelemetryMetricsCopy(ctx context.Context, metrics []Create
 			now,
 		)
 		if err != nil {
-			stmt.Close()
+			_ = stmt.Close()
 			return fmt.Errorf("copy row: %w", err)
 		}
 	}
 
 	if _, err := stmt.Exec(); err != nil {
-		stmt.Close()
+		_ = stmt.Close()
 		return fmt.Errorf("finalize copy: %w", err)
 	}
 
@@ -266,7 +266,7 @@ func (s *Store) createTelemetryLogsCopy(ctx context.Context, logs []CreateTeleme
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer txn.Rollback()
+	defer func() { _ = txn.Rollback() }()
 
 	stmt, err := txn.Prepare(pq.CopyIn("telemetry_logs",
 		"id", "tenant_id", "node_id", "log_level", "log_message", "log_source", "log_program", "labels", "timestamp", "created_at"))
@@ -288,7 +288,7 @@ func (s *Store) createTelemetryLogsCopy(ctx context.Context, logs []CreateTeleme
 
 		labelsJSON, err := encodeStringMap(log.Labels)
 		if err != nil {
-			stmt.Close()
+			_ = stmt.Close()
 			return fmt.Errorf("encode labels: %w", err)
 		}
 
@@ -305,13 +305,13 @@ func (s *Store) createTelemetryLogsCopy(ctx context.Context, logs []CreateTeleme
 			now,
 		)
 		if err != nil {
-			stmt.Close()
+			_ = stmt.Close()
 			return fmt.Errorf("copy row: %w", err)
 		}
 	}
 
 	if _, err := stmt.Exec(); err != nil {
-		stmt.Close()
+		_ = stmt.Close()
 		return fmt.Errorf("finalize copy: %w", err)
 	}
 
@@ -337,4 +337,3 @@ func (s *Store) supportsCopy() bool {
 	// In practice, if this code compiles, we have pq available
 	return true
 }
-

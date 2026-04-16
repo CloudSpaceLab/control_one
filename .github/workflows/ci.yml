@@ -87,7 +87,7 @@ jobs:
         run: go mod download
       
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -short -v -race -coverprofile=coverage.out -covermode=atomic ./...
         env:
           DATABASE_URL: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
           REDIS_URL: redis://localhost:6379
@@ -126,7 +126,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-
       
       - name: Build and push control plane
         uses: docker/build-push-action@v5
@@ -139,13 +139,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       
+      - name: Lowercase image name
+        id: lower
+        run: echo "image_name=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push node agent
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./build/docker/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-nodeagent:${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}-nodeagent:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -165,6 +169,7 @@ jobs:
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 

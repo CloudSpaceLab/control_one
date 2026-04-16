@@ -14,9 +14,9 @@ import (
 
 // SyncService handles secret synchronization from Vault.
 type SyncService struct {
-	log     *zap.Logger
-	store   *storage.Store
-	vault   *vault.Client
+	log   *zap.Logger
+	store *storage.Store
+	vault *vault.Client
 }
 
 // NewSyncService creates a new secrets sync service.
@@ -57,7 +57,7 @@ func (s *SyncService) SyncGroup(ctx context.Context, groupID uuid.UUID) error {
 	// List secrets at the path
 	secretKeys, err := s.vault.ListSecrets(ctx, vaultPath)
 	if err != nil {
-		s.store.UpdateSecretGroupSyncStatus(ctx, groupID, "failed", err)
+		_ = s.store.UpdateSecretGroupSyncStatus(ctx, groupID, "failed", err)
 		return fmt.Errorf("list vault secrets: %w", err)
 	}
 
@@ -91,4 +91,3 @@ func (s *SyncService) SyncGroup(ctx context.Context, groupID uuid.UUID) error {
 	s.log.Info("secret sync completed", zap.String("group_id", groupID.String()), zap.Int("secret_count", secretCount))
 	return nil
 }
-

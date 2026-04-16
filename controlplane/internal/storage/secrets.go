@@ -14,17 +14,17 @@ import (
 
 // SecretGroup represents a secret group configuration.
 type SecretGroup struct {
-	ID                 uuid.UUID
-	TenantID           uuid.UUID
-	Name               string
-	Backend            string
-	Endpoint           sql.NullString
+	ID                  uuid.UUID
+	TenantID            uuid.UUID
+	Name                string
+	Backend             string
+	Endpoint            sql.NullString
 	SyncIntervalSeconds sql.NullInt64
-	LastSyncAt         sql.NullTime
-	SyncStatus         string
-	SyncError          sql.NullString
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	LastSyncAt          sql.NullTime
+	SyncStatus          string
+	SyncError           sql.NullString
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // SecretSync tracks individual secret synchronization.
@@ -42,16 +42,16 @@ type SecretSync struct {
 
 // CreateSecretGroupParams defines input for creating a secret group.
 type CreateSecretGroupParams struct {
-	TenantID           uuid.UUID
-	Name               string
-	Backend            string
-	Endpoint           *string
-	SyncIntervalSeconds  *int
+	TenantID            uuid.UUID
+	Name                string
+	Backend             string
+	Endpoint            *string
+	SyncIntervalSeconds *int
 }
 
 // UpdateSecretGroupParams captures patchable fields on a secret group.
 type UpdateSecretGroupParams struct {
-	Endpoint          *string
+	Endpoint            *string
 	SyncIntervalSeconds *int
 }
 
@@ -99,7 +99,7 @@ func (s *Store) ListSecretGroups(ctx context.Context, tenantID uuid.UUID, limit,
 	if err != nil {
 		return nil, 0, fmt.Errorf("query secret groups: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var groups []SecretGroup
 	for rows.Next() {
@@ -284,7 +284,7 @@ func (s *Store) ListSecretSyncs(ctx context.Context, groupID uuid.UUID, limit, o
 	if err != nil {
 		return nil, 0, fmt.Errorf("query secret syncs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var syncs []SecretSync
 	for rows.Next() {
@@ -319,4 +319,3 @@ func (s *Store) ListSecretSyncs(ctx context.Context, groupID uuid.UUID, limit, o
 
 	return syncs, total, nil
 }
-

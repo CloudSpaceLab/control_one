@@ -14,56 +14,49 @@ import (
 )
 
 type secretGroupResponse struct {
-	ID                 string  `json:"id"`
-	TenantID           *string `json:"tenant_id,omitempty"`
-	Name               string  `json:"name"`
-	Backend            string  `json:"backend"`
-	Endpoint           *string `json:"endpoint,omitempty"`
+	ID                  string  `json:"id"`
+	TenantID            *string `json:"tenant_id,omitempty"`
+	Name                string  `json:"name"`
+	Backend             string  `json:"backend"`
+	Endpoint            *string `json:"endpoint,omitempty"`
 	SyncIntervalSeconds *int64  `json:"sync_interval_seconds,omitempty"`
-	LastSyncAt         *string `json:"last_sync_at,omitempty"`
-	SyncStatus         string  `json:"sync_status"`
-	SyncError          *string `json:"sync_error,omitempty"`
-	CreatedAt          string  `json:"created_at"`
-	UpdatedAt          string  `json:"updated_at"`
+	LastSyncAt          *string `json:"last_sync_at,omitempty"`
+	SyncStatus          string  `json:"sync_status"`
+	SyncError           *string `json:"sync_error,omitempty"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
 }
 
 type createSecretGroupRequest struct {
-	TenantID           *string `json:"tenant_id,omitempty"`
-	Name               string  `json:"name"`
-	Backend            string  `json:"backend"`
-	Endpoint           *string `json:"endpoint,omitempty"`
-	SyncIntervalSeconds *int   `json:"sync_interval_seconds,omitempty"`
+	TenantID            *string `json:"tenant_id,omitempty"`
+	Name                string  `json:"name"`
+	Backend             string  `json:"backend"`
+	Endpoint            *string `json:"endpoint,omitempty"`
+	SyncIntervalSeconds *int    `json:"sync_interval_seconds,omitempty"`
 }
 
 type secretSyncResponse struct {
-	ID            string  `json:"id"`
-	SecretGroupID string  `json:"secret_group_id"`
-	NodeID        *string `json:"node_id,omitempty"`
-	SecretPath    string  `json:"secret_path"`
-	SecretVersion *string `json:"secret_version,omitempty"`
-	SyncedAt      string  `json:"synced_at"`
-	SyncStatus    string  `json:"sync_status"`
-	SyncError     *string `json:"sync_error,omitempty"`
+	ID            string         `json:"id"`
+	SecretGroupID string         `json:"secret_group_id"`
+	NodeID        *string        `json:"node_id,omitempty"`
+	SecretPath    string         `json:"secret_path"`
+	SecretVersion *string        `json:"secret_version,omitempty"`
+	SyncedAt      string         `json:"synced_at"`
+	SyncStatus    string         `json:"sync_status"`
+	SyncError     *string        `json:"sync_error,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
-}
-
-type secretsSyncRequest struct {
-	Backend  string   `json:"backend"`
-	Groups   []string `json:"groups,omitempty"`
-	NodeID   string   `json:"node_id,omitempty"`
-	Endpoint string   `json:"endpoint,omitempty"`
 }
 
 type secretsSyncResponse struct {
 	SyncedAt time.Time        `json:"synced_at"`
-	Secrets  []secretResponse  `json:"secrets"`
+	Secrets  []secretResponse `json:"secrets"`
 }
 
 type secretResponse struct {
 	Name      string            `json:"name"`
 	Value     string            `json:"value"`
 	Labels    map[string]string `json:"labels,omitempty"`
-	UpdatedAt string           `json:"updated_at"`
+	UpdatedAt string            `json:"updated_at"`
 }
 
 func (s *Server) handleSecretGroupsCollection(w http.ResponseWriter, r *http.Request) {
@@ -194,10 +187,10 @@ func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request)
 	}
 
 	params := storage.CreateSecretGroupParams{
-		TenantID:           tenantID,
-		Name:               req.Name,
-		Backend:            req.Backend,
-		Endpoint:           req.Endpoint,
+		TenantID:            tenantID,
+		Name:                req.Name,
+		Backend:             req.Backend,
+		Endpoint:            req.Endpoint,
 		SyncIntervalSeconds: req.SyncIntervalSeconds,
 	}
 
@@ -378,4 +371,3 @@ func newSecretSyncResponse(sync storage.SecretSync) secretSyncResponse {
 	}
 	return resp
 }
-

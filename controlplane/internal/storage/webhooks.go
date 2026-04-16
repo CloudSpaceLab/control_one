@@ -38,18 +38,18 @@ type Webhook struct {
 
 // WebhookDelivery represents a webhook delivery attempt.
 type WebhookDelivery struct {
-	ID            uuid.UUID
-	WebhookID     uuid.UUID
-	EventType     string
-	EventID       sql.NullString
-	Status        string
+	ID             uuid.UUID
+	WebhookID      uuid.UUID
+	EventType      string
+	EventID        sql.NullString
+	Status         string
 	HTTPStatusCode sql.NullInt64
-	RequestBody   map[string]any
-	ResponseBody  sql.NullString
-	ErrorMessage  sql.NullString
-	AttemptNumber int
-	DeliveredAt   sql.NullTime
-	CreatedAt     time.Time
+	RequestBody    map[string]any
+	ResponseBody   sql.NullString
+	ErrorMessage   sql.NullString
+	AttemptNumber  int
+	DeliveredAt    sql.NullTime
+	CreatedAt      time.Time
 }
 
 // CreateWebhookParams defines input for creating a webhook.
@@ -133,7 +133,7 @@ func (s *Store) ListWebhooks(ctx context.Context, tenantID uuid.UUID, enabled *b
 	if err != nil {
 		return nil, 0, fmt.Errorf("query webhooks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var webhooks []Webhook
 	for rows.Next() {
@@ -326,7 +326,7 @@ func (s *Store) UpdateWebhook(ctx context.Context, id uuid.UUID, params UpdateWe
 	}
 	if params.Secret != nil {
 		if *params.Secret == "" {
-			updates = append(updates, fmt.Sprintf("secret = NULL"))
+			updates = append(updates, "secret = NULL")
 		} else {
 			updates = append(updates, fmt.Sprintf("secret = $%d", argIdx))
 			args = append(args, *params.Secret)
@@ -363,7 +363,6 @@ func (s *Store) UpdateWebhook(ctx context.Context, id uuid.UUID, params UpdateWe
 		metadataJSON, _ := json.Marshal(params.Metadata)
 		updates = append(updates, fmt.Sprintf("metadata = $%d", argIdx))
 		args = append(args, metadataJSON)
-		argIdx++
 	}
 
 	if len(updates) == 1 {
@@ -431,16 +430,15 @@ func (s *Store) RecordWebhookDelivery(ctx context.Context, delivery WebhookDeliv
 	args := []any{now}
 	argIdx := 2
 
-	if delivery.Status == "success" {
+	switch delivery.Status {
+	case "success":
 		updateFields = append(updateFields, fmt.Sprintf("last_success_at = $%d", argIdx))
 		args = append(args, now)
-		argIdx++
-		updateFields = append(updateFields, fmt.Sprintf("failure_count = 0"))
-	} else if delivery.Status == "failed" {
+		updateFields = append(updateFields, "failure_count = 0")
+	case "failed":
 		updateFields = append(updateFields, fmt.Sprintf("last_failure_at = $%d", argIdx))
 		args = append(args, now)
-		argIdx++
-		updateFields = append(updateFields, fmt.Sprintf("failure_count = failure_count + 1"))
+		updateFields = append(updateFields, "failure_count = failure_count + 1")
 	}
 
 	args = append(args, delivery.WebhookID)
@@ -474,7 +472,6 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID uuid.UUID, 
 	if status != nil {
 		clauses = append(clauses, fmt.Sprintf("status = $%d", argIdx))
 		args = append(args, *status)
-		argIdx++
 	}
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM webhook_deliveries WHERE %s`, strings.Join(clauses, " AND "))
@@ -504,7 +501,7 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID uuid.UUID, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("query webhook deliveries: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var deliveries []WebhookDelivery
 	for rows.Next() {
@@ -555,7 +552,7 @@ func (s *Store) GetEnabledWebhooksForEvent(ctx context.Context, eventType string
 	if err != nil {
 		return nil, fmt.Errorf("query webhooks for event: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var webhooks []Webhook
 	for rows.Next() {
@@ -598,4 +595,3 @@ func (s *Store) GetEnabledWebhooksForEvent(ctx context.Context, eventType string
 
 	return webhooks, nil
 }
-

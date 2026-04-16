@@ -18,6 +18,8 @@ type Config struct {
 	Jobs          JobsConfig          `mapstructure:"jobs"`
 	Auth          AuthConfig          `mapstructure:"auth"`
 	Registration  RegistrationConfig  `mapstructure:"registration"`
+	Enrollment    EnrollmentConfig    `mapstructure:"enrollment"`
+	Agent         AgentConfig         `mapstructure:"agent"`
 }
 
 // HTTPConfig defines HTTP server settings.
@@ -135,6 +137,17 @@ type ClientTLSConfig struct {
 	CertFile   string `mapstructure:"cert_file"`
 	KeyFile    string `mapstructure:"key_file"`
 	CACertFile string `mapstructure:"ca_cert_file"`
+}
+
+// EnrollmentConfig captures CA settings for single-command node enrollment.
+type EnrollmentConfig struct {
+	CAKeyFile  string `mapstructure:"ca_key_file"`
+	CACertFile string `mapstructure:"ca_cert_file"`
+}
+
+// AgentConfig captures agent binary distribution settings.
+type AgentConfig struct {
+	BinaryDir string `mapstructure:"binary_dir"`
 }
 
 // RegistrationConfig controls node bootstrap handshake behavior.

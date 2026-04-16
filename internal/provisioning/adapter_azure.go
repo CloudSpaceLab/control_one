@@ -60,4 +60,3 @@ func ensureAzureMetadata(metadata map[string]string) {
 		}
 	}
 }
-

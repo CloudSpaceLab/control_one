@@ -150,8 +150,8 @@ export function Settings(): JSX.Element {
       setIsCreatingWebhook(false);
       setEditingWebhook(null);
       reloadWebhooks();
-    } catch (error: any) {
-      const message = error?.message || 'Failed to save webhook';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to save webhook';
       showError(message);
       showToast(message, 'error');
     } finally {
@@ -168,8 +168,8 @@ export function Settings(): JSX.Element {
       await api.deleteWebhook(webhookId);
       showToast('Webhook deleted successfully', 'success');
       reloadWebhooks();
-    } catch (error: any) {
-      const message = error?.message || 'Failed to delete webhook';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to delete webhook';
       showToast(message, 'error');
     }
   };
@@ -185,8 +185,8 @@ export function Settings(): JSX.Element {
       } else {
         showToast(`Webhook test failed: ${result.error || 'Unknown error'}`, 'error');
       }
-    } catch (error: any) {
-      showToast(error?.message || 'Failed to test webhook', 'error');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Failed to test webhook', 'error');
     }
   };
 

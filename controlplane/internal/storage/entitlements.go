@@ -14,31 +14,31 @@ import (
 
 // AccessEntitlement represents a user's access entitlement to a node.
 type AccessEntitlement struct {
-	ID          uuid.UUID
-	TenantID    uuid.UUID
-	UserID      uuid.UUID
-	NodeID      uuid.UUID
-	GroupName   sql.NullString
-	Role        string
-	GrantedBy   uuid.NullUUID
-	GrantedAt   time.Time
-	ExpiresAt   sql.NullTime
-	RevokedAt   sql.NullTime
-	Metadata    map[string]any
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID        uuid.UUID
+	TenantID  uuid.UUID
+	UserID    uuid.UUID
+	NodeID    uuid.UUID
+	GroupName sql.NullString
+	Role      string
+	GrantedBy uuid.NullUUID
+	GrantedAt time.Time
+	ExpiresAt sql.NullTime
+	RevokedAt sql.NullTime
+	Metadata  map[string]any
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // AccessSyncHistory tracks access synchronization history.
 type AccessSyncHistory struct {
-	ID          uuid.UUID
-	Provider    string
-	SyncedAt    time.Time
-	Status      string
-	UserCount   int
-	GroupCount  int
-	Error       sql.NullString
-	Metadata    map[string]any
+	ID         uuid.UUID
+	Provider   string
+	SyncedAt   time.Time
+	Status     string
+	UserCount  int
+	GroupCount int
+	Error      sql.NullString
+	Metadata   map[string]any
 }
 
 // CreateEntitlementParams defines input for creating an entitlement.
@@ -126,7 +126,7 @@ func (s *Store) ListEntitlements(ctx context.Context, filter EntitlementFilter, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("query entitlements: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var entitlements []AccessEntitlement
 	for rows.Next() {
@@ -501,4 +501,3 @@ func (s *Store) RecordAccessSync(ctx context.Context, tenantID, nodeID uuid.UUID
 
 	return err
 }
-

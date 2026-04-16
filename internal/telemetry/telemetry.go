@@ -341,7 +341,7 @@ func (s *Service) postJSON(ctx context.Context, path string, payload any) error 
 	if err != nil {
 		return fmt.Errorf("post telemetry: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telemetry request failed: status %d", resp.StatusCode)

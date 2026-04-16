@@ -14,19 +14,19 @@ import (
 )
 
 type entitlementResponse struct {
-	ID          string         `json:"id"`
-	TenantID    *string        `json:"tenant_id,omitempty"`
-	UserID      string         `json:"user_id"`
-	NodeID      string         `json:"node_id"`
-	GroupName   *string        `json:"group_name,omitempty"`
-	Role        string         `json:"role"`
-	GrantedBy   *string        `json:"granted_by,omitempty"`
-	GrantedAt   string         `json:"granted_at"`
-	ExpiresAt   *string        `json:"expires_at,omitempty"`
-	RevokedAt   *string        `json:"revoked_at,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	CreatedAt   string         `json:"created_at"`
-	UpdatedAt   string         `json:"updated_at"`
+	ID        string         `json:"id"`
+	TenantID  *string        `json:"tenant_id,omitempty"`
+	UserID    string         `json:"user_id"`
+	NodeID    string         `json:"node_id"`
+	GroupName *string        `json:"group_name,omitempty"`
+	Role      string         `json:"role"`
+	GrantedBy *string        `json:"granted_by,omitempty"`
+	GrantedAt string         `json:"granted_at"`
+	ExpiresAt *string        `json:"expires_at,omitempty"`
+	RevokedAt *string        `json:"revoked_at,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
 }
 
 type createEntitlementRequest struct {
@@ -40,22 +40,15 @@ type createEntitlementRequest struct {
 }
 
 type updateEntitlementRequest struct {
-	Role      *string        `json:"role,omitempty"`
-	ExpiresAt *string        `json:"expires_at,omitempty"`
+	Role      *string         `json:"role,omitempty"`
+	ExpiresAt *string         `json:"expires_at,omitempty"`
 	Metadata  *map[string]any `json:"metadata,omitempty"`
 }
 
-type accessSyncRequest struct {
-	Provider     string `json:"provider"`
-	DefaultRole  string `json:"default_role,omitempty"`
-	NodeID       string `json:"node_id,omitempty"`
-	APIEndpoint  string `json:"api_endpoint,omitempty"`
-}
-
 type accessSyncResponse struct {
-	SyncedAt time.Time     `json:"synced_at"`
-	Users    []userSync    `json:"users"`
-	Groups   []groupSync   `json:"groups"`
+	SyncedAt time.Time   `json:"synced_at"`
+	Users    []userSync  `json:"users"`
+	Groups   []groupSync `json:"groups"`
 }
 
 type userSync struct {
@@ -327,8 +320,8 @@ func (s *Server) handleUpdateEntitlement(w http.ResponseWriter, r *http.Request,
 	}
 
 	params := storage.UpdateEntitlementParams{
-		Role:      req.Role,
-		Metadata:  req.Metadata,
+		Role:     req.Role,
+		Metadata: req.Metadata,
 	}
 
 	if req.ExpiresAt != nil {
@@ -387,10 +380,10 @@ func (s *Server) handleAccessSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Provider     string `json:"provider"`
-		DefaultRole  string `json:"default_role"`
-		NodeID       string `json:"node_id"`
-		APIEndpoint  string `json:"api_endpoint,omitempty"`
+		Provider    string `json:"provider"`
+		DefaultRole string `json:"default_role"`
+		NodeID      string `json:"node_id"`
+		APIEndpoint string `json:"api_endpoint,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -475,4 +468,3 @@ func newEntitlementResponse(ent storage.AccessEntitlement) entitlementResponse {
 	}
 	return resp
 }
-

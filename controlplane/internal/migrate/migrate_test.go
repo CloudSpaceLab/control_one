@@ -17,6 +17,9 @@ import (
 )
 
 func TestMigrationsUpAndDown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	ctx := context.Background()
@@ -24,11 +27,15 @@ func TestMigrationsUpAndDown(t *testing.T) {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
 
-	pgContainer, err := tcpostgres.RunContainer(ctx,
+	pgContainer, err := tcpostgres.Run(ctx, "docker.io/postgres:16-alpine",
 		tcpostgres.WithDatabase("control_one"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
-		tc.WithWaitStrategy(wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+		tc.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {

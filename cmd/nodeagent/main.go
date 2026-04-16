@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -33,7 +35,29 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "", "path to node agent config file")
+	joinURL := flag.String("join", "", "Control plane URL to enroll with")
+	joinToken := flag.String("token", "", "Enrollment token")
+	nodeName := flag.String("name", "", "Override node hostname")
+	configDirFlag := flag.String("config-dir", "/etc/control-one", "Config directory")
+	dataDirFlag := flag.String("data-dir", "/var/lib/control-one/nodeagent", "Data directory")
+	installServiceFlag := flag.Bool("install-service", false, "Install systemd service")
+	startAfterJoin := flag.Bool("start", false, "Start agent after join")
 	flag.Parse()
+
+	if *joinURL != "" {
+		if *joinToken == "" {
+			fmt.Fprintln(os.Stderr, "error: --token is required with --join")
+			os.Exit(1)
+		}
+		if err := runJoin(*joinURL, *joinToken, *nodeName, *configDirFlag, *dataDirFlag, *installServiceFlag, *startAfterJoin); err != nil {
+			fmt.Fprintf(os.Stderr, "join failed: %v\n", err)
+			os.Exit(1)
+		}
+		if !*startAfterJoin {
+			return
+		}
+		*cfgPath = filepath.Join(*configDirFlag, "nodeagent.yaml")
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -73,6 +97,7 @@ func main() {
 	}
 	state, err := registrar.Register(ctx, req, cfg.StateFile)
 	if err != nil {
+		log.Fatal("registration failed", zap.Error(err))
 	}
 	emitHook(ctx, hooksService, log, "agent.registration.success", state.NodeID, map[string]any{
 		"hostname": sysInfo.Hostname,
@@ -275,12 +300,12 @@ func main() {
 			for _, rule := range policies {
 				ruleMap[rule.ID] = rule.Check
 			}
-			
+
 			useRealScan := cfg.Scanner.UseRealScan && cfg.Scanner.Enabled
 			if useRealScan {
 				ruleMap["use_real_scan"] = "true"
 			}
-			
+
 			if compResults, err := complianceEngine.Evaluate(ctx, state.NodeID, ruleMap); err != nil {
 				log.Warn("compliance evaluation", zap.Error(err))
 				emitHook(ctx, hooksService, log, "compliance.evaluate.failed", state.NodeID, map[string]any{"error": err.Error()})

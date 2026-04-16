@@ -15,6 +15,9 @@ import (
 )
 
 func TestRBACAssignmentsWithPostgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	ctx := context.Background()
@@ -22,19 +25,23 @@ func TestRBACAssignmentsWithPostgres(t *testing.T) {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
 
-	pg, err := postgres.RunContainer(ctx,
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
 		postgres.WithInitScripts("../migrate/sql/0001_init.up.sql", "../migrate/sql/0003_auth.up.sql"),
 		postgres.WithDatabase("control_one"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, pg.Terminate(ctx))
 	})
 
-	connStr, err := pg.ConnectionString(ctx)
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
 	store, err := New(zap.NewNop(), config.DatabaseConfig{URL: connStr}, Options{Clock: func() time.Time { return time.Unix(1700000000, 0) }})

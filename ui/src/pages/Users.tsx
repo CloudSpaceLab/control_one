@@ -98,8 +98,8 @@ export function Users(): JSX.Element {
       setSelectedRoles([]);
       reloadUsers();
       reloadRoles();
-    } catch (error: any) {
-      const message = error?.message || 'Failed to update user roles';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to update user roles';
       showError(message);
       showToast(message, 'error');
     } finally {
@@ -154,8 +154,8 @@ export function Users(): JSX.Element {
       setBulkAssignRoles([]);
       reloadUsers();
       reloadRoles();
-    } catch (error: any) {
-      const message = error?.message || 'Failed to assign roles';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to assign roles';
       showError(message);
       showToast(message, 'error');
     } finally {

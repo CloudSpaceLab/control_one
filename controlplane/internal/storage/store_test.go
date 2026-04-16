@@ -136,11 +136,15 @@ func TestComplianceResultsPersistence(t *testing.T) {
 func setupPostgresStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
 		t.Skipf("skipping: docker daemon unavailable: %v", err)
 	}
 
-	pg, err := postgres.RunContainer(ctx,
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
 		postgres.WithInitScripts(
 			"../migrate/sql/0001_init.up.sql",
 			"../migrate/sql/0002_jobs.up.sql",
@@ -152,14 +156,18 @@ func setupPostgresStore(t *testing.T, ctx context.Context) *Store {
 		postgres.WithDatabase("control_one"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, pg.Terminate(ctx))
 	})
 
-	connStr, err := pg.ConnectionString(ctx)
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
 	logger := zap.NewNop()

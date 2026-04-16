@@ -4,7 +4,7 @@ import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
-import { SecretGroup, CreateSecretGroupPayload } from '../lib/api';
+import { CreateSecretGroupPayload } from '../lib/api';
 import './Secrets.css';
 
 function formatDate(value?: string): string {
@@ -22,12 +22,12 @@ export function Secrets(): JSX.Element {
   const api = useApiClient();
   const [limit] = useState(50);
   const [offset, setOffset] = useState(0);
-  const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
+  const [selectedTenant] = useState<string | undefined>(undefined);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const { data: tenants } = useTenants();
+  useTenants();
   const {
     data: groups,
     loading: groupsLoading,
@@ -105,8 +105,8 @@ export function Secrets(): JSX.Element {
       showSuccess('Secret group created successfully');
       setIsCreating(false);
       reloadGroups();
-    } catch (error: any) {
-      const message = error?.message || 'Failed to create secret group';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to create secret group';
       showError(message);
       showToast(message, 'error');
     } finally {
@@ -126,8 +126,8 @@ export function Secrets(): JSX.Element {
       if (selectedGroupId === groupId) {
         setSelectedGroupId(null);
       }
-    } catch (error: any) {
-      const message = error?.message || 'Failed to delete secret group';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to delete secret group';
       showToast(message, 'error');
     }
   };
@@ -141,8 +141,8 @@ export function Secrets(): JSX.Element {
       if (selectedGroupId === groupId) {
         reloadSyncs();
       }
-    } catch (error: any) {
-      const message = error?.message || 'Failed to sync secrets';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to sync secrets';
       showToast(message, 'error');
     } finally {
       setIsSyncing(false);

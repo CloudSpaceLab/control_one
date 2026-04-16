@@ -65,7 +65,7 @@ func NewClient(log *zap.Logger, cfg Config) (*Client, error) {
 			InsecureSkipVerify: cfg.SkipVerify,
 		})
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, fmt.Errorf("start tls: %w", err)
 		}
 	}
@@ -78,7 +78,7 @@ func NewClient(log *zap.Logger, cfg Config) (*Client, error) {
 
 	if cfg.BindDN != "" {
 		if err := client.Bind(cfg.BindDN, cfg.BindPassword); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, fmt.Errorf("bind to ldap: %w", err)
 		}
 	}
@@ -94,7 +94,7 @@ func (c *Client) Bind(dn, password string) error {
 // Close closes the LDAP connection.
 func (c *Client) Close() {
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 }
 

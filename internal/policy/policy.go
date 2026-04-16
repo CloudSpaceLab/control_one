@@ -21,11 +21,11 @@ type PolicySet struct {
 
 // CacheMetadata captures persisted verification context for the cached bundle.
 type CacheMetadata struct {
-	NodeID      string    `json:"node_id"`
-	Signature   string    `json:"signature"`
-	Version     string    `json:"version,omitempty"`
-	VerifiedAt  time.Time `json:"verified_at"`
-	Policies    int       `json:"policies"`
-	PublicKey   string    `json:"public_key"`
-	Hash        uint64    `json:"hash,omitempty"`
+	NodeID     string    `json:"node_id"`
+	Signature  string    `json:"signature"`
+	Version    string    `json:"version,omitempty"`
+	VerifiedAt time.Time `json:"verified_at"`
+	Policies   int       `json:"policies"`
+	PublicKey  string    `json:"public_key"`
+	Hash       uint64    `json:"hash,omitempty"`
 }
