@@ -124,6 +124,10 @@ type Store interface {
 	IncrementEnrollmentCount(context.Context, uuid.UUID) error
 	CreateFleetEnrollmentResult(context.Context, *storage.FleetEnrollmentResult) error
 	ListFleetEnrollmentResults(context.Context, uuid.UUID) ([]storage.FleetEnrollmentResult, error)
+	CreatePolicyAssignment(context.Context, storage.CreatePolicyAssignmentParams) (*storage.PolicyAssignment, error)
+	ListPolicyAssignments(context.Context, uuid.UUID, int, int) ([]storage.PolicyAssignment, int, error)
+	DeletePolicyAssignment(context.Context, uuid.UUID) error
+	GetEffectivePolicies(context.Context, uuid.UUID, uuid.UUID) ([]storage.PolicyWithVersion, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {

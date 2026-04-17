@@ -300,10 +300,8 @@ func (s *Server) evaluateCompliance(ctx context.Context, payload *compliancePayl
 		if req.Policies == nil {
 			req.Policies = map[string]string{}
 		}
-		if req.UseRealScan {
-			return evaluateComplianceWithRealScanners(req), nil
-		}
-		return synthesizeComplianceResults(req), nil
+		// Use policy-based evaluation (falls back to synthetic internally)
+		return s.evaluateComplianceReal(ctx, req)
 	}
 
 	if s.complianceEngine == nil {

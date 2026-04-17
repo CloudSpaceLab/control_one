@@ -2173,3 +2173,26 @@ func (f *fakeStore) CreateFleetEnrollmentResult(_ context.Context, r *storage.Fl
 func (f *fakeStore) ListFleetEnrollmentResults(_ context.Context, jobID uuid.UUID) ([]storage.FleetEnrollmentResult, error) {
 	return nil, nil
 }
+
+func (f *fakeStore) CreatePolicyAssignment(_ context.Context, params storage.CreatePolicyAssignmentParams) (*storage.PolicyAssignment, error) {
+	return &storage.PolicyAssignment{
+		ID:         uuid.New(),
+		PolicyID:   params.PolicyID,
+		TenantID:   params.TenantID,
+		NodeID:     params.NodeID,
+		AssignedAt: time.Now(),
+		AssignedBy: params.AssignedBy,
+	}, nil
+}
+
+func (f *fakeStore) ListPolicyAssignments(_ context.Context, policyID uuid.UUID, limit, offset int) ([]storage.PolicyAssignment, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) DeletePolicyAssignment(_ context.Context, id uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeStore) GetEffectivePolicies(_ context.Context, tenantID, nodeID uuid.UUID) ([]storage.PolicyWithVersion, error) {
+	return nil, nil
+}

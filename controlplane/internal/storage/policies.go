@@ -79,6 +79,23 @@ type UpdatePolicyParams struct {
 	Archived    *bool
 }
 
+// CreatePolicyAssignmentParams defines input for assigning a policy.
+type CreatePolicyAssignmentParams struct {
+	PolicyID   uuid.UUID
+	TenantID   uuid.UUID
+	NodeID     uuid.UUID // uuid.Nil = tenant-wide
+	AssignedBy *uuid.UUID
+	ExpiresAt  *time.Time
+}
+
+// PolicyWithVersion is a policy joined with its promoted version.
+type PolicyWithVersion struct {
+	Policy
+	Version        int
+	RuleDefinition string
+	VersionID      uuid.UUID
+}
+
 // CreatePolicyVersionParams defines input for creating a policy version.
 type CreatePolicyVersionParams struct {
 	PolicyID       uuid.UUID
@@ -720,4 +737,160 @@ func (s *Store) PromotePolicyVersion(ctx context.Context, policyID uuid.UUID, ve
 	}
 
 	return &v, nil
+}
+
+// CreatePolicyAssignment assigns a policy to a tenant or node.
+func (s *Store) CreatePolicyAssignment(ctx context.Context, params CreatePolicyAssignmentParams) (*PolicyAssignment, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if params.PolicyID == uuid.Nil {
+		return nil, errors.New("policy_id is required")
+	}
+	if params.TenantID == uuid.Nil {
+		return nil, errors.New("tenant_id is required")
+	}
+
+	id := uuid.New()
+	now := s.clock()
+
+	var expiresAt sql.NullTime
+	if params.ExpiresAt != nil {
+		expiresAt = sql.NullTime{Time: *params.ExpiresAt, Valid: true}
+	}
+
+	var nodeID *uuid.UUID
+	if params.NodeID != uuid.Nil {
+		nodeID = &params.NodeID
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		INSERT INTO policy_assignments (id, policy_id, tenant_id, node_id, assigned_at, assigned_by, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, policy_id, tenant_id, COALESCE(node_id, '00000000-0000-0000-0000-000000000000'), assigned_at, assigned_by, expires_at
+	`, id, params.PolicyID, params.TenantID, nodeID, now, params.AssignedBy, expiresAt)
+
+	var a PolicyAssignment
+	if err := row.Scan(&a.ID, &a.PolicyID, &a.TenantID, &a.NodeID, &a.AssignedAt, &a.AssignedBy, &a.ExpiresAt); err != nil {
+		return nil, fmt.Errorf("create policy assignment: %w", err)
+	}
+	return &a, nil
+}
+
+// ListPolicyAssignments returns assignments for a policy.
+func (s *Store) ListPolicyAssignments(ctx context.Context, policyID uuid.UUID, limit, offset int) ([]PolicyAssignment, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if policyID == uuid.Nil {
+		return nil, 0, errors.New("policy_id is required")
+	}
+
+	countRow := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM policy_assignments WHERE policy_id = $1`, policyID)
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count policy assignments: %w", err)
+	}
+
+	query := `
+		SELECT id, policy_id, tenant_id, COALESCE(node_id, '00000000-0000-0000-0000-000000000000'), assigned_at, assigned_by, expires_at
+		FROM policy_assignments
+		WHERE policy_id = $1
+		ORDER BY assigned_at DESC
+	`
+	args := []any{policyID}
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list policy assignments: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var assignments []PolicyAssignment
+	for rows.Next() {
+		var a PolicyAssignment
+		if err := rows.Scan(&a.ID, &a.PolicyID, &a.TenantID, &a.NodeID, &a.AssignedAt, &a.AssignedBy, &a.ExpiresAt); err != nil {
+			return nil, 0, fmt.Errorf("scan policy assignment: %w", err)
+		}
+		assignments = append(assignments, a)
+	}
+	return assignments, total, nil
+}
+
+// DeletePolicyAssignment removes an assignment by ID.
+func (s *Store) DeletePolicyAssignment(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return errors.New("assignment id is required")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM policy_assignments WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete policy assignment: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete policy assignment rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// GetEffectivePolicies returns all active policies with promoted rule definitions
+// that apply to a specific node (including tenant-wide assignments).
+func (s *Store) GetEffectivePolicies(ctx context.Context, tenantID, nodeID uuid.UUID) ([]PolicyWithVersion, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (p.id)
+			p.id, p.tenant_id, p.name, p.description, p.rule_type, p.enabled, p.labels,
+			p.created_at, p.updated_at, p.archived_at,
+			pv.version, pv.rule_definition, pv.id AS version_id
+		FROM policies p
+		INNER JOIN policy_versions pv ON pv.policy_id = p.id AND pv.promoted_at IS NOT NULL
+		INNER JOIN policy_assignments pa ON pa.policy_id = p.id
+		WHERE p.enabled = true
+			AND p.archived_at IS NULL
+			AND pa.tenant_id = $1
+			AND (pa.node_id IS NULL OR pa.node_id = $2)
+			AND (pa.expires_at IS NULL OR pa.expires_at > NOW())
+		ORDER BY p.id, pv.promoted_at DESC
+	`, tenantID, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("get effective policies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []PolicyWithVersion
+	for rows.Next() {
+		var pw PolicyWithVersion
+		var labelsRaw []byte
+		if err := rows.Scan(
+			&pw.ID, &pw.TenantID, &pw.Name, &pw.Description, &pw.RuleType, &pw.Enabled, &labelsRaw,
+			&pw.CreatedAt, &pw.UpdatedAt, &pw.ArchivedAt,
+			&pw.Version, &pw.RuleDefinition, &pw.VersionID,
+		); err != nil {
+			return nil, fmt.Errorf("scan effective policy: %w", err)
+		}
+		labels, err := decodeStringMap(labelsRaw)
+		if err != nil {
+			return nil, err
+		}
+		pw.Labels = labels
+		result = append(result, pw)
+	}
+	return result, nil
 }
