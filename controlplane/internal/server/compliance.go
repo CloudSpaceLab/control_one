@@ -332,3 +332,85 @@ func synthesizeComplianceResults(req complianceEvaluateRequest) []compliance.Res
 
 	return results
 }
+
+type batchScanRequest struct {
+	TenantID *string  `json:"tenant_id"`
+	NodeIDs  []string `json:"node_ids"`
+}
+
+type batchScanResponse struct {
+	JobIDs []string `json:"job_ids"`
+	Count  int      `json:"count"`
+}
+
+func (s *Server) handleComplianceBatchScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req batchScanRequest
+	if r.ContentLength > 0 {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	var tenantID uuid.UUID
+	if req.TenantID != nil {
+		parsed, err := uuid.Parse(*req.TenantID)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		tenantID = parsed
+	}
+
+	var nodeIDs []uuid.UUID
+	for _, nidStr := range req.NodeIDs {
+		nid, err := uuid.Parse(nidStr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid node_id %q", nidStr), http.StatusBadRequest)
+			return
+		}
+		nodeIDs = append(nodeIDs, nid)
+	}
+
+	if s.complianceScheduler == nil {
+		s.complianceScheduler = NewComplianceScheduler(s)
+	}
+
+	jobIDs, err := s.complianceScheduler.createScanJobs(r.Context(), tenantID, nodeIDs)
+	if err != nil {
+		s.logger.Error("batch compliance scan", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	resp := batchScanResponse{Count: len(jobIDs)}
+	for _, id := range jobIDs {
+		resp.JobIDs = append(resp.JobIDs, id.String())
+	}
+	if resp.JobIDs == nil {
+		resp.JobIDs = []string{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Warn("encode batch scan response", zap.Error(err))
+	}
+}

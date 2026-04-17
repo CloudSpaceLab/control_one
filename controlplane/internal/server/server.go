@@ -413,16 +413,17 @@ type workerStatusProvider interface {
 
 // Server wraps the HTTP server lifecycle for the control plane API.
 type Server struct {
-	logger             *zap.Logger
-	cfg                *config.Config
-	http               *http.Server
-	store              Store
-	worker             TaskQueue
-	authMW             *auth.Middleware
-	baseRouter         *http.ServeMux
-	jobHandlers        map[string]jobHandler
-	provisioningEngine *provisioning.Engine
-	complianceEngine   *compliance.Engine
+	logger              *zap.Logger
+	cfg                 *config.Config
+	http                *http.Server
+	store               Store
+	worker              TaskQueue
+	authMW              *auth.Middleware
+	baseRouter          *http.ServeMux
+	jobHandlers         map[string]jobHandler
+	provisioningEngine  *provisioning.Engine
+	complianceEngine    *compliance.Engine
+	complianceScheduler *ComplianceScheduler
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -479,6 +480,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
+	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -1557,6 +1559,20 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux}
 	s.configureJobIntegrations()
 	s.registerRoutes()
+
+	if cfg.Jobs.Compliance.ScheduleEnabled {
+		sched := NewComplianceScheduler(s)
+		cronExpr := cfg.Jobs.Compliance.ScheduleCron
+		if cronExpr == "" {
+			cronExpr = "0 */6 * * *"
+		}
+		if err := sched.Start(cronExpr); err != nil {
+			logger.Error("start compliance scheduler", zap.Error(err))
+		} else {
+			s.complianceScheduler = sched
+		}
+	}
+
 	return s
 }
 
@@ -1575,8 +1591,11 @@ func (s *Server) Start() error {
 	return s.http.ListenAndServeTLS(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
 }
 
-// Stop gracefully shuts down the HTTP server.
+// Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.complianceScheduler != nil {
+		s.complianceScheduler.Stop()
+	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return s.http.Shutdown(shutdownCtx)
