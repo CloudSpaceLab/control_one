@@ -535,6 +535,67 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID uuid.UUID, 
 	return deliveries, total, nil
 }
 
+// ListWebhooksByEvent returns all enabled webhooks for a tenant that subscribe to a specific event type.
+func (s *Store) ListWebhooksByEvent(ctx context.Context, tenantID uuid.UUID, eventType string) ([]Webhook, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, name, url, events, secret, enabled, verify_ssl, timeout_seconds, retry_count,
+		       headers, metadata, last_triggered_at, last_success_at, last_failure_at, failure_count,
+		       created_at, updated_at, created_by
+		FROM webhooks
+		WHERE enabled = true AND tenant_id = $1 AND $2 = ANY(events)
+		ORDER BY created_at
+	`, tenantID, eventType)
+	if err != nil {
+		return nil, fmt.Errorf("query webhooks for event: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var webhooks []Webhook
+	for rows.Next() {
+		var w Webhook
+		var events pq.StringArray
+		var headersJSON, metadataJSON []byte
+
+		err := rows.Scan(
+			&w.ID, &w.TenantID, &w.Name, &w.URL, &events, &w.Secret, &w.Enabled, &w.VerifySSL,
+			&w.TimeoutSeconds, &w.RetryCount, &headersJSON, &metadataJSON,
+			&w.LastTriggeredAt, &w.LastSuccessAt, &w.LastFailureAt, &w.FailureCount,
+			&w.CreatedAt, &w.UpdatedAt, &w.CreatedBy,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan webhook: %w", err)
+		}
+
+		w.Events = []string(events)
+		if len(headersJSON) > 0 {
+			if err := json.Unmarshal(headersJSON, &w.Headers); err != nil {
+				return nil, fmt.Errorf("unmarshal headers: %w", err)
+			}
+		} else {
+			w.Headers = make(map[string]any)
+		}
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &w.Metadata); err != nil {
+				return nil, fmt.Errorf("unmarshal metadata: %w", err)
+			}
+		} else {
+			w.Metadata = make(map[string]any)
+		}
+
+		webhooks = append(webhooks, w)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate webhooks: %w", err)
+	}
+
+	return webhooks, nil
+}
+
 // GetEnabledWebhooksForEvent returns all enabled webhooks that subscribe to a specific event type.
 func (s *Store) GetEnabledWebhooksForEvent(ctx context.Context, eventType string) ([]Webhook, error) {
 	if s.db == nil {

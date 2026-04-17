@@ -1118,19 +1118,20 @@ type JobEvent struct {
 
 // ComplianceResult captures rule-level evaluation outcomes for compliance jobs.
 type ComplianceResult struct {
-	ID          uuid.UUID
-	JobID       uuid.UUID
-	TenantID    uuid.UUID
-	NodeID      uuid.UUID
-	ScanID      *string
-	RuleID      string
-	Passed      bool
-	Severity    *string
-	Details     *string
-	Remediation *string
-	Metadata    map[string]any
-	CheckedAt   *time.Time
-	CreatedAt   time.Time
+	ID               uuid.UUID
+	JobID            uuid.UUID
+	TenantID         uuid.UUID
+	NodeID           uuid.UUID
+	ScanID           *string
+	RuleID           string
+	Passed           bool
+	Severity         *string
+	Details          *string
+	Remediation      *string
+	Metadata         map[string]any
+	CheckedAt        *time.Time
+	CreatedAt        time.Time
+	RemediationJobID *uuid.UUID
 }
 
 // Options allows injection of testing helpers.

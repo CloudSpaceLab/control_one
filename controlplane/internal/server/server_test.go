@@ -2046,6 +2046,18 @@ func (f *fakeStore) ListWebhooks(_ context.Context, tenantID uuid.UUID, active *
 	return nil, 0, nil
 }
 
+func (f *fakeStore) ListWebhooksByEvent(_ context.Context, tenantID uuid.UUID, eventType string) ([]storage.Webhook, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetEnabledWebhooksForEvent(_ context.Context, eventType string) ([]storage.Webhook, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) RecordWebhookDelivery(_ context.Context, delivery storage.WebhookDelivery) error {
+	return nil
+}
+
 func (f *fakeStore) CreateWebhook(_ context.Context, params storage.CreateWebhookParams) (*storage.Webhook, error) {
 	return nil, errors.New("not implemented")
 }

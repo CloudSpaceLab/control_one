@@ -92,11 +92,14 @@ type Store interface {
 	CreateRemediationScript(context.Context, storage.CreateRemediationScriptParams) (*storage.RemediationScript, error)
 	UpdateRemediationScript(context.Context, uuid.UUID, storage.UpdateRemediationScriptParams) (*storage.RemediationScript, error)
 	ListWebhooks(context.Context, uuid.UUID, *bool, int, int) ([]storage.Webhook, int, error)
+	ListWebhooksByEvent(context.Context, uuid.UUID, string) ([]storage.Webhook, error)
+	GetEnabledWebhooksForEvent(context.Context, string) ([]storage.Webhook, error)
 	CreateWebhook(context.Context, storage.CreateWebhookParams) (*storage.Webhook, error)
 	GetWebhook(context.Context, uuid.UUID) (*storage.Webhook, error)
 	UpdateWebhook(context.Context, uuid.UUID, storage.UpdateWebhookParams) (*storage.Webhook, error)
 	DeleteWebhook(context.Context, uuid.UUID) error
 	ListWebhookDeliveries(context.Context, uuid.UUID, *string, int, int) ([]storage.WebhookDelivery, int, error)
+	RecordWebhookDelivery(context.Context, storage.WebhookDelivery) error
 	GetRetentionPolicy(context.Context, uuid.UUID, string) (*storage.TelemetryRetentionPolicy, error)
 	ListRetentionPolicies(context.Context, uuid.UUID, int, int) ([]storage.TelemetryRetentionPolicy, int, error)
 	CreateRetentionPolicy(context.Context, storage.CreateRetentionPolicyParams) (*storage.TelemetryRetentionPolicy, error)
