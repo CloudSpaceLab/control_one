@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -56,25 +55,10 @@ func TestEmitComplianceEvents_NoFailures(t *testing.T) {
 
 	tenantID := uuid.New()
 	nodeID := uuid.New()
-	webhookID := uuid.New()
 
 	store := &webhookEventStore{
 		webhooks: []storage.Webhook{
-			{
-				ID:             webhookID,
-				TenantID:       uuid.NullUUID{UUID: tenantID, Valid: true},
-				Name:           "test-hook",
-				URL:            "http://localhost:9999/hook", // unreachable, but we still test delivery attempt recording
-				Events:         []string{EventComplianceCompleted},
-				Enabled:        true,
-				VerifySSL:      false,
-				TimeoutSeconds: 2,
-				RetryCount:     0,
-				Headers:        map[string]any{},
-				Metadata:       map[string]any{},
-				CreatedAt:      time.Now(),
-				UpdatedAt:      time.Now(),
-			},
+			makeTestWebhook(tenantID, []string{EventComplianceCompleted}),
 		},
 	}
 
@@ -106,25 +90,10 @@ func TestEmitComplianceEvents_WithHighFailure(t *testing.T) {
 
 	tenantID := uuid.New()
 	nodeID := uuid.New()
-	webhookID := uuid.New()
 
 	store := &webhookEventStore{
 		webhooks: []storage.Webhook{
-			{
-				ID:             webhookID,
-				TenantID:       uuid.NullUUID{UUID: tenantID, Valid: true},
-				Name:           "all-events-hook",
-				URL:            "http://localhost:9999/hook",
-				Events:         []string{EventComplianceCompleted, EventComplianceFailure, EventComplianceHighFail, EventComplianceCritical},
-				Enabled:        true,
-				VerifySSL:      false,
-				TimeoutSeconds: 2,
-				RetryCount:     0,
-				Headers:        map[string]any{},
-				Metadata:       map[string]any{},
-				CreatedAt:      time.Now(),
-				UpdatedAt:      time.Now(),
-			},
+			makeTestWebhook(tenantID, []string{EventComplianceCompleted, EventComplianceFailure, EventComplianceHighFail, EventComplianceCritical}),
 		},
 	}
 
@@ -167,25 +136,10 @@ func TestEmitComplianceEvents_CriticalSeverity(t *testing.T) {
 
 	tenantID := uuid.New()
 	nodeID := uuid.New()
-	webhookID := uuid.New()
 
 	store := &webhookEventStore{
 		webhooks: []storage.Webhook{
-			{
-				ID:             webhookID,
-				TenantID:       uuid.NullUUID{UUID: tenantID, Valid: true},
-				Name:           "critical-hook",
-				URL:            "http://localhost:9999/hook",
-				Events:         []string{EventComplianceCritical},
-				Enabled:        true,
-				VerifySSL:      false,
-				TimeoutSeconds: 2,
-				RetryCount:     0,
-				Headers:        map[string]any{},
-				Metadata:       map[string]any{},
-				CreatedAt:      time.Now(),
-				UpdatedAt:      time.Now(),
-			},
+			makeTestWebhook(tenantID, []string{EventComplianceCritical}),
 		},
 	}
 
@@ -241,23 +195,10 @@ func TestEmitComplianceEvents_DisabledWebhookSkipped(t *testing.T) {
 
 	tenantID := uuid.New()
 
+	wh := makeTestWebhook(tenantID, []string{EventComplianceCompleted})
+	wh.Enabled = false // disabled
 	store := &webhookEventStore{
-		webhooks: []storage.Webhook{
-			{
-				ID:             uuid.New(),
-				TenantID:       uuid.NullUUID{UUID: tenantID, Valid: true},
-				Name:           "disabled-hook",
-				URL:            "http://localhost:9999/hook",
-				Events:         []string{EventComplianceCompleted},
-				Enabled:        false, // disabled
-				VerifySSL:      false,
-				TimeoutSeconds: 2,
-				Headers:        map[string]any{},
-				Metadata:       map[string]any{},
-				CreatedAt:      time.Now(),
-				UpdatedAt:      time.Now(),
-			},
-		},
+		webhooks: []storage.Webhook{wh},
 	}
 
 	srv := New(zap.NewNop(), &config.Config{
@@ -305,16 +246,12 @@ func TestSeverityRankOrdering(t *testing.T) {
 // Ensure webhookEventStore satisfies the Store interface (compile-time check).
 var _ Store = (*webhookEventStore)(nil)
 
-// webhookEventStore needs to implement all the extra Store methods that fakeStore doesn't cover
-// for the new interface methods. The embedded fakeStore handles most; we override the webhook ones above.
-// We also need to provide the method that returns NullUUID tenant for the webhook.
 func makeTestWebhook(tenantID uuid.UUID, events []string) storage.Webhook {
 	return storage.Webhook{
 		ID:             uuid.New(),
 		TenantID:       uuid.NullUUID{UUID: tenantID, Valid: true},
 		Name:           "test-webhook",
 		URL:            "http://localhost:9999/hook",
-		Secret:         sql.NullString{},
 		Events:         events,
 		Enabled:        true,
 		VerifySSL:      false,
