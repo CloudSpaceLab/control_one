@@ -232,6 +232,14 @@ func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluat
 		if err := s.store.CreateComplianceResults(ctx, stored); err != nil {
 			s.logger.Warn("persist compliance results from evaluate", zap.Error(err))
 		}
+
+		// Emit webhook events and trigger auto-remediation for failures.
+		s.emitComplianceEvents(ctx, tenantID, nodeID, results, "")
+		for _, r := range results {
+			if !r.Passed {
+				s.triggerAutoRemediation(ctx, tenantID, nodeID, r, req.AutoApply)
+			}
+		}
 	}
 
 	return results, nil
