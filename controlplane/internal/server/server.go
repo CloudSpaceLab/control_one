@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,9 +37,11 @@ type Store interface {
 	DeleteTenant(context.Context, uuid.UUID) error
 	EnsureTenant(context.Context, uuid.UUID, string) (*storage.Tenant, error)
 	GetNodeByHostname(context.Context, uuid.UUID, string) (*storage.Node, error)
+	GetNodeByMachineID(context.Context, uuid.UUID, string) (*storage.Node, error)
 	CreateNode(context.Context, *storage.Node) (*storage.Node, error)
 	UpdateNode(context.Context, *storage.Node) (*storage.Node, error)
 	DeleteNode(context.Context, uuid.UUID) error
+	RetireNode(context.Context, uuid.UUID) error
 	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
 	GetUserByExternalID(context.Context, string) (*storage.User, error)
@@ -131,6 +134,12 @@ type Store interface {
 	ListPolicyAssignments(context.Context, uuid.UUID, int, int) ([]storage.PolicyAssignment, int, error)
 	DeletePolicyAssignment(context.Context, uuid.UUID) error
 	GetEffectivePolicies(context.Context, uuid.UUID, uuid.UUID) ([]storage.PolicyWithVersion, error)
+	GetLatestComplianceResultForRule(context.Context, uuid.UUID, string) (*storage.ComplianceResult, error)
+	UpdateComplianceResultVerification(context.Context, uuid.UUID, bool, *uuid.UUID) error
+	UpdateComplianceResultRollback(context.Context, uuid.UUID, uuid.UUID) error
+	AcquireRemediationLease(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Duration) (*storage.RemediationLease, error)
+	ReleaseRemediationLease(context.Context, uuid.UUID) error
+	CountTenantLeases(context.Context, uuid.UUID) (int, error)
 	CreateCluster(context.Context, storage.CreateClusterParams) (*storage.Cluster, error)
 	ListClusters(context.Context, uuid.UUID, int, int) ([]storage.Cluster, int, error)
 	GetClusterByID(context.Context, uuid.UUID) (*storage.Cluster, error)
@@ -439,6 +448,8 @@ type Server struct {
 	provisioningEngine  *provisioning.Engine
 	complianceEngine    *compliance.Engine
 	complianceScheduler *ComplianceScheduler
+	agentSigningOnce    sync.Once
+	agentSigning        *agentSigningMaterial
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -493,6 +504,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/enroll", s.handleEnroll)
 	s.baseRouter.HandleFunc("/api/v1/agent/install-script", s.handleAgentInstallScript)
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
+	s.baseRouter.HandleFunc("/api/v1/agent/binary/manifest", s.handleAgentBinaryManifest)
+	s.baseRouter.HandleFunc("/api/v1/agent/public-key", s.handleAgentPublicKey)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
 	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
@@ -1209,10 +1222,27 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/nodes/")
-	nodeID, err := uuid.Parse(idStr)
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/")
+	trimmed = strings.Trim(trimmed, "/")
+	segments := strings.Split(trimmed, "/")
+	if len(segments) == 0 || segments[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	nodeID, err := uuid.Parse(segments[0])
 	if err != nil {
 		http.Error(w, "invalid node id", http.StatusBadRequest)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "retire" {
+		s.handleRetireNode(w, r, nodeID)
+		return
+	}
+
+	if len(segments) != 1 {
+		http.NotFound(w, r)
 		return
 	}
 

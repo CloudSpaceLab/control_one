@@ -38,6 +38,17 @@ func GatherSystemInfo() SystemInfo {
 	}
 }
 
+// ReadMachineID returns a stable, OS-derived identifier for the current host.
+// It is used by the enrollment flow to detect re-runs of the installer on the
+// same machine and avoid creating duplicate node rows. The exact source is OS
+// specific — see sysinfo_linux.go, sysinfo_darwin.go, sysinfo_windows.go.
+//
+// An empty string with no error is acceptable and means "unknown"; callers
+// should fall back to hostname-based identification in that case.
+func ReadMachineID() (string, error) {
+	return readMachineID()
+}
+
 // CollectHostMetrics gathers lightweight host metrics for telemetry.
 func CollectHostMetrics() map[string]any {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

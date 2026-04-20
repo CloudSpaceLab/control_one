@@ -20,6 +20,20 @@ type Config struct {
 	Registration  RegistrationConfig  `mapstructure:"registration"`
 	Enrollment    EnrollmentConfig    `mapstructure:"enrollment"`
 	Agent         AgentConfig         `mapstructure:"agent"`
+	Remediation   RemediationConfig   `mapstructure:"remediation"`
+}
+
+// RemediationConfig controls runtime caps on auto-remediation.
+type RemediationConfig struct {
+	// MaxConcurrentPerTenant caps how many remediation leases a tenant can hold
+	// at once. A new remediation that would push the tenant past this ceiling
+	// is deferred (its trigger call returns nil and the compliance result is
+	// left unremediated until the next scan).
+	MaxConcurrentPerTenant int `mapstructure:"max_concurrent_per_tenant"`
+	// LeaseTTL is how long a per-node remediation lease stays valid. Expired
+	// leases are swept by the storage layer on the next acquire attempt so a
+	// stuck job never wedges a node forever.
+	LeaseTTL time.Duration `mapstructure:"lease_ttl"`
 }
 
 // HTTPConfig defines HTTP server settings.
@@ -149,7 +163,9 @@ type EnrollmentConfig struct {
 
 // AgentConfig captures agent binary distribution settings.
 type AgentConfig struct {
-	BinaryDir string `mapstructure:"binary_dir"`
+	BinaryDir            string `mapstructure:"binary_dir"`
+	SigningKeyPath       string `mapstructure:"signing_key_path"`
+	SigningPublicKeyPath string `mapstructure:"signing_public_key_path"`
 }
 
 // RegistrationConfig controls node bootstrap handshake behavior.
@@ -214,6 +230,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("jobs.compliance.schedule_enabled", false)
 	v.SetDefault("jobs.compliance.schedule_cron", "0 */6 * * *")
 
+	v.SetDefault("remediation.max_concurrent_per_tenant", 10)
+	v.SetDefault("remediation.lease_ttl", 10*time.Minute)
+
 	v.SetDefault("registration.bootstrap_tokens", []string{})
 
 	v.SetDefault("auth.oidc.enabled", false)
@@ -244,6 +263,12 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.Database.ConnMaxLifetime == 0 {
 		cfg.Database.ConnMaxLifetime = 15 * time.Minute
+	}
+	if cfg.Remediation.MaxConcurrentPerTenant <= 0 {
+		cfg.Remediation.MaxConcurrentPerTenant = 10
+	}
+	if cfg.Remediation.LeaseTTL <= 0 {
+		cfg.Remediation.LeaseTTL = 10 * time.Minute
 	}
 }
 

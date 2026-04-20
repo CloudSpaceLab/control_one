@@ -16,37 +16,41 @@ import (
 
 // RemediationScript represents a remediation script for a compliance rule.
 type RemediationScript struct {
-	ID            uuid.UUID
-	RuleID        string
-	Platform      string
-	ScriptType    string
-	ScriptContent string
-	Checksum      sql.NullString
-	Version       int
-	Enabled       bool
-	Metadata      map[string]any
-	CreatedBy     *uuid.UUID
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               uuid.UUID
+	RuleID           string
+	Platform         string
+	ScriptType       string
+	ScriptContent    string
+	Checksum         sql.NullString
+	RollbackContent  sql.NullString
+	RollbackChecksum sql.NullString
+	Version          int
+	Enabled          bool
+	Metadata         map[string]any
+	CreatedBy        *uuid.UUID
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // CreateRemediationScriptParams defines input for creating a remediation script.
 type CreateRemediationScriptParams struct {
-	RuleID        string
-	Platform      string
-	ScriptType    string
-	ScriptContent string
-	Version       *int
-	Enabled       *bool
-	Metadata      map[string]any
-	CreatedBy     *uuid.UUID
+	RuleID          string
+	Platform        string
+	ScriptType      string
+	ScriptContent   string
+	RollbackContent *string
+	Version         *int
+	Enabled         *bool
+	Metadata        map[string]any
+	CreatedBy       *uuid.UUID
 }
 
 // UpdateRemediationScriptParams captures patchable fields on a remediation script.
 type UpdateRemediationScriptParams struct {
-	ScriptContent *string
-	Enabled       *bool
-	Metadata      *map[string]any
+	ScriptContent   *string
+	RollbackContent *string
+	Enabled         *bool
+	Metadata        *map[string]any
 }
 
 // GetRemediationScriptByID returns a remediation script by its ID.
@@ -59,7 +63,8 @@ func (s *Store) GetRemediationScriptByID(ctx context.Context, scriptID uuid.UUID
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, rule_id, platform, script_type, script_content, checksum, version,
+		SELECT id, rule_id, platform, script_type, script_content, checksum,
+		       rollback_content, rollback_checksum, version,
 		       enabled, metadata, created_by, created_at, updated_at
 		FROM remediation_scripts
 		WHERE id = $1
@@ -81,7 +86,8 @@ func (s *Store) GetRemediationScript(ctx context.Context, ruleID, platform strin
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, rule_id, platform, script_type, script_content, checksum, version,
+		SELECT id, rule_id, platform, script_type, script_content, checksum,
+		       rollback_content, rollback_checksum, version,
 		       enabled, metadata, created_by, created_at, updated_at
 		FROM remediation_scripts
 		WHERE rule_id = $1 AND platform IN ($2, 'all') AND enabled = true
@@ -90,7 +96,7 @@ func (s *Store) GetRemediationScript(ctx context.Context, ruleID, platform strin
 	`, ruleID, platform)
 
 	var script RemediationScript
-	var checksum sql.NullString
+	var checksum, rollbackContent, rollbackChecksum sql.NullString
 	var metadataRaw []byte
 	var createdBy sql.NullString
 
@@ -101,6 +107,8 @@ func (s *Store) GetRemediationScript(ctx context.Context, ruleID, platform strin
 		&script.ScriptType,
 		&script.ScriptContent,
 		&checksum,
+		&rollbackContent,
+		&rollbackChecksum,
 		&script.Version,
 		&script.Enabled,
 		&metadataRaw,
@@ -116,6 +124,12 @@ func (s *Store) GetRemediationScript(ctx context.Context, ruleID, platform strin
 
 	if checksum.Valid {
 		script.Checksum = checksum
+	}
+	if rollbackContent.Valid {
+		script.RollbackContent = rollbackContent
+	}
+	if rollbackChecksum.Valid {
+		script.RollbackChecksum = rollbackChecksum
 	}
 	if len(metadataRaw) > 0 {
 		if err := json.Unmarshal(metadataRaw, &script.Metadata); err != nil {
@@ -163,7 +177,8 @@ func (s *Store) ListRemediationScripts(ctx context.Context, ruleID, platform str
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, rule_id, platform, script_type, script_content, checksum, version,
+		SELECT id, rule_id, platform, script_type, script_content, checksum,
+		       rollback_content, rollback_checksum, version,
 		       enabled, metadata, created_by, created_at, updated_at
 		FROM remediation_scripts
 		WHERE %s
@@ -188,7 +203,7 @@ func (s *Store) ListRemediationScripts(ctx context.Context, ruleID, platform str
 	var scripts []RemediationScript
 	for rows.Next() {
 		var script RemediationScript
-		var checksum sql.NullString
+		var checksum, rollbackContent, rollbackChecksum sql.NullString
 		var metadataRaw []byte
 		var createdBy sql.NullString
 
@@ -199,6 +214,8 @@ func (s *Store) ListRemediationScripts(ctx context.Context, ruleID, platform str
 			&script.ScriptType,
 			&script.ScriptContent,
 			&checksum,
+			&rollbackContent,
+			&rollbackChecksum,
 			&script.Version,
 			&script.Enabled,
 			&metadataRaw,
@@ -211,6 +228,12 @@ func (s *Store) ListRemediationScripts(ctx context.Context, ruleID, platform str
 
 		if checksum.Valid {
 			script.Checksum = checksum
+		}
+		if rollbackContent.Valid {
+			script.RollbackContent = rollbackContent
+		}
+		if rollbackChecksum.Valid {
+			script.RollbackChecksum = rollbackChecksum
 		}
 		if len(metadataRaw) > 0 {
 			if err := json.Unmarshal(metadataRaw, &script.Metadata); err != nil {
@@ -265,6 +288,13 @@ func (s *Store) CreateRemediationScript(ctx context.Context, params CreateRemedi
 		return nil, fmt.Errorf("encode metadata: %w", err)
 	}
 
+	var rollbackContentArg, rollbackChecksumArg any
+	if params.RollbackContent != nil && strings.TrimSpace(*params.RollbackContent) != "" {
+		content := *params.RollbackContent
+		rollbackContentArg = content
+		rollbackChecksumArg = computeChecksum(content)
+	}
+
 	id := uuid.New()
 	now := s.clock()
 	createdBy := sql.NullString{}
@@ -274,17 +304,20 @@ func (s *Store) CreateRemediationScript(ctx context.Context, params CreateRemedi
 
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO remediation_scripts (
-			id, rule_id, platform, script_type, script_content, checksum, version,
+			id, rule_id, platform, script_type, script_content, checksum,
+			rollback_content, rollback_checksum, version,
 			enabled, metadata, created_by, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id, rule_id, platform, script_type, script_content, checksum, version,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		RETURNING id, rule_id, platform, script_type, script_content, checksum,
+		          rollback_content, rollback_checksum, version,
 		          enabled, metadata, created_by, created_at, updated_at
-	`, id, params.RuleID, params.Platform, params.ScriptType, params.ScriptContent, checksum, version,
+	`, id, params.RuleID, params.Platform, params.ScriptType, params.ScriptContent, checksum,
+		rollbackContentArg, rollbackChecksumArg, version,
 		enabled, metadataJSON, createdBy, now, now)
 
 	var script RemediationScript
-	var checksumNull sql.NullString
+	var checksumNull, rollbackContentNull, rollbackChecksumNull sql.NullString
 	var metadataRaw []byte
 	var createdByNull sql.NullString
 
@@ -295,6 +328,8 @@ func (s *Store) CreateRemediationScript(ctx context.Context, params CreateRemedi
 		&script.ScriptType,
 		&script.ScriptContent,
 		&checksumNull,
+		&rollbackContentNull,
+		&rollbackChecksumNull,
 		&script.Version,
 		&script.Enabled,
 		&metadataRaw,
@@ -307,6 +342,12 @@ func (s *Store) CreateRemediationScript(ctx context.Context, params CreateRemedi
 
 	if checksumNull.Valid {
 		script.Checksum = checksumNull
+	}
+	if rollbackContentNull.Valid {
+		script.RollbackContent = rollbackContentNull
+	}
+	if rollbackChecksumNull.Valid {
+		script.RollbackChecksum = rollbackChecksumNull
 	}
 	if len(metadataRaw) > 0 {
 		if err := json.Unmarshal(metadataRaw, &script.Metadata); err != nil {
@@ -348,6 +389,17 @@ func (s *Store) UpdateRemediationScript(ctx context.Context, scriptID uuid.UUID,
 		updates = append(updates, fmt.Sprintf("script_content = $%d", argPos), fmt.Sprintf("checksum = $%d", argPos+1))
 		argPos += 2
 	}
+	if params.RollbackContent != nil {
+		content := strings.TrimSpace(*params.RollbackContent)
+		if content == "" {
+			// Explicit empty string clears the rollback script.
+			args = append(args, nil, nil)
+		} else {
+			args = append(args, content, computeChecksum(content))
+		}
+		updates = append(updates, fmt.Sprintf("rollback_content = $%d", argPos), fmt.Sprintf("rollback_checksum = $%d", argPos+1))
+		argPos += 2
+	}
 	if params.Enabled != nil {
 		args = append(args, *params.Enabled)
 		updates = append(updates, fmt.Sprintf("enabled = $%d", argPos))
@@ -365,7 +417,8 @@ func (s *Store) UpdateRemediationScript(ctx context.Context, scriptID uuid.UUID,
 
 	if len(updates) == 0 {
 		row := s.db.QueryRowContext(ctx, `
-			SELECT id, rule_id, platform, script_type, script_content, checksum, version,
+			SELECT id, rule_id, platform, script_type, script_content, checksum,
+			       rollback_content, rollback_checksum, version,
 			       enabled, metadata, created_by, created_at, updated_at
 			FROM remediation_scripts
 			WHERE id = $1
@@ -380,7 +433,8 @@ func (s *Store) UpdateRemediationScript(ctx context.Context, scriptID uuid.UUID,
 		UPDATE remediation_scripts
 		SET %s
 		WHERE id = $1
-		RETURNING id, rule_id, platform, script_type, script_content, checksum, version,
+		RETURNING id, rule_id, platform, script_type, script_content, checksum,
+		          rollback_content, rollback_checksum, version,
 		          enabled, metadata, created_by, created_at, updated_at
 	`, strings.Join(updates, ", "))
 
@@ -390,7 +444,7 @@ func (s *Store) UpdateRemediationScript(ctx context.Context, scriptID uuid.UUID,
 
 func scanRemediationScript(row *sql.Row) (*RemediationScript, error) {
 	var script RemediationScript
-	var checksum sql.NullString
+	var checksum, rollbackContent, rollbackChecksum sql.NullString
 	var metadataRaw []byte
 	var createdBy sql.NullString
 
@@ -401,6 +455,8 @@ func scanRemediationScript(row *sql.Row) (*RemediationScript, error) {
 		&script.ScriptType,
 		&script.ScriptContent,
 		&checksum,
+		&rollbackContent,
+		&rollbackChecksum,
 		&script.Version,
 		&script.Enabled,
 		&metadataRaw,
@@ -416,6 +472,12 @@ func scanRemediationScript(row *sql.Row) (*RemediationScript, error) {
 
 	if checksum.Valid {
 		script.Checksum = checksum
+	}
+	if rollbackContent.Valid {
+		script.RollbackContent = rollbackContent
+	}
+	if rollbackChecksum.Valid {
+		script.RollbackChecksum = rollbackChecksum
 	}
 	if len(metadataRaw) > 0 {
 		if err := json.Unmarshal(metadataRaw, &script.Metadata); err != nil {

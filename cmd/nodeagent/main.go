@@ -1,13 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +41,26 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch. We keep flag-style invocation for backwards compatibility
+	// (`--join`, `--install-service`, etc.) but also accept simple subcommands like
+	// `controlone-agent uninstall` and `controlone-agent verify-binary ...`.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "uninstall":
+			if err := runUninstall(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "verify-binary":
+			if err := runVerifyBinary(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "verify-binary failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	cfgPath := flag.String("config", "", "path to node agent config file")
 	joinURL := flag.String("join", "", "Control plane URL to enroll with")
 	joinToken := flag.String("token", "", "Enrollment token")
@@ -375,6 +402,188 @@ func main() {
 	<-sigCh
 	log.Info("shutdown signal received")
 	sched.Stop(ctx)
+}
+
+// uninstallServiceHook is wired by build-tagged service_*.go files (owned by
+// Worktree A) to tear down the platform-specific service manager registration.
+// It is a package-level function variable so Worktree A can override it in
+// init() without Worktree B needing to modify service_*.go.
+//
+// The default implementation emits a notice so the CLI still succeeds on
+// platforms where the service teardown hasn't shipped yet.
+var uninstallServiceHook = func() error {
+	fmt.Println("  Service: no OS-level uninstaller registered; skipping service teardown")
+	return nil
+}
+
+// runUninstall implements the `controlone-agent uninstall` subcommand used by
+// the uninstall one-liner. It:
+//
+//  1. Calls the platform-specific uninstallServiceHook (set by Worktree A).
+//  2. Optionally POSTs /api/v1/nodes/:id/retire using the cached client cert
+//     so the control plane marks the node retired + eventually revokes the cert.
+//  3. Removes the local config + data directories.
+func runUninstall(args []string) error {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	configDir := fs.String("config-dir", defaultConfigDir(), "Config directory to remove")
+	dataDir := fs.String("data-dir", defaultDataDir(), "Data directory to remove")
+	apiURL := fs.String("api-url", "", "Control plane URL (overrides config if set)")
+	nodeID := fs.String("node-id", "", "Node ID to retire server-side (overrides state file)")
+	skipRetire := fs.Bool("skip-retire", false, "Skip POSTing the retire request")
+	keepConfig := fs.Bool("keep-config", false, "Do not remove the config directory")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	fmt.Println("  Running Control One agent uninstall...")
+
+	if err := uninstallServiceHook(); err != nil {
+		fmt.Fprintf(os.Stderr, "  [warn] service teardown: %v\n", err)
+	}
+
+	if !*skipRetire {
+		if err := retireNodeIfPossible(*configDir, *dataDir, *apiURL, *nodeID); err != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] retire request: %v\n", err)
+		}
+	}
+
+	// Best-effort removal of well-known local directories.
+	targets := []string{*dataDir}
+	if !*keepConfig {
+		targets = append(targets, *configDir)
+	}
+
+	for _, target := range targets {
+		if strings.TrimSpace(target) == "" {
+			continue
+		}
+		if err := os.RemoveAll(target); err != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] remove %s: %v\n", target, err)
+		} else {
+			fmt.Printf("  Removed %s\n", target)
+		}
+	}
+
+	fmt.Println("  Control One agent uninstall complete.")
+	return nil
+}
+
+// retireNodeIfPossible loads the node_id + certs from local state and POSTs
+// /api/v1/nodes/:id/retire. Any error is reported but does not fail the CLI
+// — local cleanup always proceeds.
+func retireNodeIfPossible(configDir, dataDir, apiURLOverride, nodeIDOverride string) error {
+	nodeID := strings.TrimSpace(nodeIDOverride)
+	apiURL := strings.TrimSpace(apiURLOverride)
+
+	// Try to load node_id from state.json if not overridden.
+	if nodeID == "" {
+		statePath := filepath.Join(dataDir, "state.json")
+		stateBytes, err := os.ReadFile(statePath) // #nosec G304 — admin-supplied dir
+		if err == nil {
+			var state struct {
+				NodeID string `json:"node_id"`
+			}
+			if jErr := json.Unmarshal(stateBytes, &state); jErr == nil {
+				nodeID = strings.TrimSpace(state.NodeID)
+			}
+		}
+	}
+
+	// Try to load api_url from nodeagent.yaml if not overridden.
+	if apiURL == "" {
+		configPath := filepath.Join(configDir, "nodeagent.yaml")
+		if data, err := os.ReadFile(configPath); err == nil { // #nosec G304 — admin-supplied dir
+			for _, line := range strings.Split(string(data), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if !strings.HasPrefix(trimmed, "api_url:") {
+					continue
+				}
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "api_url:"))
+				value = strings.Trim(value, `"'`)
+				apiURL = value
+				break
+			}
+		}
+	}
+
+	if nodeID == "" || apiURL == "" {
+		return errors.New("missing node_id or api_url; skipping server-side retire")
+	}
+
+	certDir := filepath.Join(dataDir, "certs")
+	client, err := buildMTLSClient(
+		filepath.Join(certDir, "client.crt"),
+		filepath.Join(certDir, "client.key"),
+		filepath.Join(certDir, "ca.crt"),
+	)
+	if err != nil {
+		return fmt.Errorf("build mTLS client: %w", err)
+	}
+
+	endpoint := strings.TrimRight(apiURL, "/") + "/api/v1/nodes/" + nodeID + "/retire"
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(nil))
+	if err != nil {
+		return fmt.Errorf("build retire request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("post retire: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("retire endpoint returned HTTP %d", resp.StatusCode)
+	}
+	fmt.Printf("  Control plane notified (node %s retired).\n", nodeID)
+	return nil
+}
+
+func buildMTLSClient(certFile, keyFile, caCertFile string) (*http.Client, error) {
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+
+	pool := x509.NewCertPool()
+	if data, err := os.ReadFile(caCertFile); err == nil { // #nosec G304 — admin-supplied path
+		pool.AppendCertsFromPEM(data)
+	}
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{pair},
+			RootCAs:      pool,
+		},
+	}
+	return &http.Client{Transport: tr, Timeout: 10 * time.Second}, nil
+}
+
+func defaultConfigDir() string {
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(os.Getenv("ProgramData"), "ControlOne")
+	case "darwin":
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, "Library", "Application Support", "ControlOne")
+		}
+	}
+	return "/etc/control-one"
+}
+
+func defaultDataDir() string {
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(os.Getenv("ProgramData"), "ControlOne", "nodeagent")
+	case "darwin":
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, "Library", "Application Support", "ControlOne", "nodeagent")
+		}
+	}
+	return "/var/lib/control-one/nodeagent"
 }
 
 func emitHook(parent context.Context, publisher hooks.Publisher, log *zap.Logger, eventID, subject string, payload map[string]any) {
