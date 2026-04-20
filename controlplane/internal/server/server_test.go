@@ -1203,36 +1203,50 @@ func TestRBACAuthorization(t *testing.T) {
 }
 
 type fakeStore struct {
-	mu                  sync.Mutex
-	nodes               []storage.Node
-	tenants             []storage.Tenant
-	createdNode         *storage.Node
-	createdTenant       *storage.Tenant
-	jobs                map[uuid.UUID]*storage.Job
-	events              map[uuid.UUID][]storage.JobEvent
-	complianceResults   map[uuid.UUID][]storage.ComplianceResult
-	users               map[string]*storage.User
-	usersByID           map[uuid.UUID]*storage.User
-	userList            []storage.User
-	userRoles           map[uuid.UUID][]string
-	rolesCatalog        []storage.Role
-	lastUserID          uuid.UUID
-	overrideRoles       map[uuid.UUID][]string
-	skipUserPersistence bool
-	templates           []storage.ProvisioningTemplate
-	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
-	auditLogs           []storage.AuditLog
-	clusters            map[uuid.UUID]*storage.Cluster
-	clusterMembers      map[uuid.UUID][]storage.ClusterMember
-	clusterRollouts     map[uuid.UUID][]storage.ClusterRollout
-	leases              map[uuid.UUID]storage.RemediationLease
-	enrollmentTokens    map[string]storage.EnrollmentToken // keyed by token hash
-	nodeCertHistory     map[uuid.UUID][]storage.NodeCertHistory
+	mu                   sync.Mutex
+	nodes                []storage.Node
+	tenants              []storage.Tenant
+	createdNode          *storage.Node
+	createdTenant        *storage.Tenant
+	jobs                 map[uuid.UUID]*storage.Job
+	events               map[uuid.UUID][]storage.JobEvent
+	complianceResults    map[uuid.UUID][]storage.ComplianceResult
+	users                map[string]*storage.User
+	usersByID            map[uuid.UUID]*storage.User
+	userList             []storage.User
+	userRoles            map[uuid.UUID][]string
+	rolesCatalog         []storage.Role
+	lastUserID           uuid.UUID
+	overrideRoles        map[uuid.UUID][]string
+	skipUserPersistence  bool
+	templates            []storage.ProvisioningTemplate
+	templateVersions     map[uuid.UUID][]storage.ProvisioningTemplateVersion
+	auditLogs            []storage.AuditLog
+	clusters             map[uuid.UUID]*storage.Cluster
+	clusterMembers       map[uuid.UUID][]storage.ClusterMember
+	clusterRollouts      map[uuid.UUID][]storage.ClusterRollout
+	clusterRolloutWaves  map[uuid.UUID][]storage.ClusterRolloutWave // keyed by rollout id
+	clusterLBRegs        []storage.ClusterLBRegistration
+	// nodeLabels mirrors the nodes.labels JSONB column introduced by
+	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
+	// assert label propagation without depending on A's merge. Keyed by node id.
+	nodeLabels           map[uuid.UUID]map[string]any
+	leases               map[uuid.UUID]storage.RemediationLease
+	enrollmentTokens     map[string]storage.EnrollmentToken // keyed by token hash
+	remediationConfigs   map[uuid.UUID]storage.TenantRemediationConfig
+	remediationApprovals map[uuid.UUID]storage.RemediationApproval
+	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
+	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
+	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
 }
 
 type stubQueue struct{}
 
 func (s *stubQueue) Enqueue(worker.Task) error {
+	return nil
+}
+
+func (s *stubQueue) EnqueueAt(worker.Task, time.Time) error {
 	return nil
 }
 
@@ -2186,7 +2200,57 @@ func (f *fakeStore) ListSessionEvents(_ context.Context, recordingID uuid.UUID, 
 }
 
 func (f *fakeStore) ListComplianceResultsFiltered(_ context.Context, filter storage.ComplianceResultFilter, limit, offset int) ([]storage.ComplianceResult, int, error) {
-	return nil, 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var results []storage.ComplianceResult
+	for _, byJob := range f.complianceResults {
+		for _, r := range byJob {
+			if filter.JobID != uuid.Nil && r.JobID != filter.JobID {
+				continue
+			}
+			if filter.TenantID != uuid.Nil && r.TenantID != filter.TenantID {
+				continue
+			}
+			if filter.NodeID != uuid.Nil && r.NodeID != filter.NodeID {
+				continue
+			}
+			if strings.TrimSpace(filter.RuleID) != "" && !strings.EqualFold(r.RuleID, filter.RuleID) {
+				continue
+			}
+			if strings.TrimSpace(filter.ScanID) != "" {
+				if r.ScanID == nil || !strings.EqualFold(*r.ScanID, filter.ScanID) {
+					continue
+				}
+			}
+			if filter.Passed != nil && r.Passed != *filter.Passed {
+				continue
+			}
+			if strings.TrimSpace(filter.Severity) != "" {
+				if r.Severity == nil || !strings.EqualFold(*r.Severity, filter.Severity) {
+					continue
+				}
+			}
+			if filter.Since != nil && r.CheckedAt != nil && r.CheckedAt.Before(*filter.Since) {
+				continue
+			}
+			if filter.Until != nil && r.CheckedAt != nil && r.CheckedAt.After(*filter.Until) {
+				continue
+			}
+			results = append(results, r)
+		}
+	}
+	total := len(results)
+	if offset > total {
+		return []storage.ComplianceResult{}, total, nil
+	}
+	if offset > 0 {
+		results = results[offset:]
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, total, nil
 }
 
 func (f *fakeStore) CreateEnrollmentToken(_ context.Context, params storage.CreateEnrollmentTokenParams) (*storage.EnrollmentToken, error) {
@@ -2539,10 +2603,113 @@ func (f *fakeStore) RemoveClusterMember(_ context.Context, clusterID, nodeID uui
 	for i, m := range members {
 		if m.NodeID == nodeID {
 			f.clusterMembers[clusterID] = append(members[:i], members[i+1:]...)
+			// Strip any `cluster.`-prefixed labels from the node — matches
+			// the real storage layer's transactional behavior.
+			if existing := f.nodeLabels[nodeID]; existing != nil {
+				stripped := make(map[string]any, len(existing))
+				for k, v := range existing {
+					if !strings.HasPrefix(k, "cluster.") {
+						stripped[k] = v
+					}
+				}
+				f.nodeLabels[nodeID] = stripped
+			}
 			return nil
 		}
 	}
 	return sql.ErrNoRows
+}
+
+func (f *fakeStore) CreateClusterLBRegistration(_ context.Context, params storage.CreateClusterLBRegistrationParams) (*storage.ClusterLBRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Upsert semantics — match the real storage path.
+	for i := range f.clusterLBRegs {
+		reg := &f.clusterLBRegs[i]
+		if reg.ClusterID == params.ClusterID && reg.NodeID == params.NodeID && reg.LBIdentifier == params.LBIdentifier {
+			reg.Provider = params.Provider
+			reg.RegisteredAt = time.Now()
+			reg.DeregisteredAt = nil
+			copy := *reg
+			return &copy, nil
+		}
+	}
+	reg := storage.ClusterLBRegistration{
+		ClusterID:    params.ClusterID,
+		NodeID:       params.NodeID,
+		Provider:     params.Provider,
+		LBIdentifier: params.LBIdentifier,
+		RegisteredAt: time.Now(),
+	}
+	f.clusterLBRegs = append(f.clusterLBRegs, reg)
+	copy := reg
+	return &copy, nil
+}
+
+func (f *fakeStore) MarkClusterLBRegistrationDeregistered(_ context.Context, clusterID, nodeID uuid.UUID, lbIdentifier string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.clusterLBRegs {
+		reg := &f.clusterLBRegs[i]
+		if reg.ClusterID == clusterID && reg.NodeID == nodeID && reg.LBIdentifier == lbIdentifier {
+			now := time.Now()
+			reg.DeregisteredAt = &now
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) ListClusterLBRegistrationsForNode(_ context.Context, nodeID uuid.UUID) ([]storage.ClusterLBRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []storage.ClusterLBRegistration
+	for _, reg := range f.clusterLBRegs {
+		if reg.NodeID == nodeID {
+			out = append(out, reg)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListClusterLBRegistrationsForCluster(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterLBRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []storage.ClusterLBRegistration
+	for _, reg := range f.clusterLBRegs {
+		if reg.ClusterID == clusterID {
+			out = append(out, reg)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) PropagateClusterLabelsToNode(_ context.Context, clusterID, nodeID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cluster, ok := f.clusters[clusterID]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	if f.nodeLabels == nil {
+		f.nodeLabels = map[uuid.UUID]map[string]any{}
+	}
+	existing := f.nodeLabels[nodeID]
+	// Keep non-cluster keys, overwrite cluster.* with fresh values.
+	merged := map[string]any{}
+	for k, v := range existing {
+		if !strings.HasPrefix(k, "cluster.") {
+			merged[k] = v
+		}
+	}
+	for k, v := range cluster.Labels {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		merged["cluster."+k] = v
+	}
+	f.nodeLabels[nodeID] = merged
+	return nil
 }
 
 func (f *fakeStore) ListClusterMembers(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterMember, error) {
@@ -2671,12 +2838,305 @@ func (f *fakeStore) DeleteClusterRollout(_ context.Context, id uuid.UUID) error 
 		for i, r := range rollouts {
 			if r.ID == id {
 				f.clusterRollouts[clusterID] = append(rollouts[:i], rollouts[i+1:]...)
+				delete(f.clusterRolloutWaves, id)
 				return nil
 			}
 		}
 	}
 	return sql.ErrNoRows
 }
+
+func (f *fakeStore) GetTenantRemediationConfig(_ context.Context, tenantID uuid.UUID) (*storage.TenantRemediationConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if cfg, ok := f.remediationConfigs[tenantID]; ok {
+		copy := cfg
+		if copy.ChangeWindows == nil {
+			copy.ChangeWindows = []storage.ChangeWindow{}
+		}
+		return &copy, nil
+	}
+	defaults := storage.DefaultTenantRemediationConfig(tenantID)
+	return &defaults, nil
+}
+
+func (f *fakeStore) UpsertTenantRemediationConfig(_ context.Context, cfg storage.TenantRemediationConfig) (*storage.TenantRemediationConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.remediationConfigs == nil {
+		f.remediationConfigs = map[uuid.UUID]storage.TenantRemediationConfig{}
+	}
+	if cfg.ChangeWindows == nil {
+		cfg.ChangeWindows = []storage.ChangeWindow{}
+	}
+	cfg.UpdatedAt = time.Now().UTC()
+	f.remediationConfigs[cfg.TenantID] = cfg
+	copy := cfg
+	return &copy, nil
+}
+
+func (f *fakeStore) CreateRemediationApproval(_ context.Context, params storage.CreateRemediationApprovalParams) (*storage.RemediationApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.remediationApprovals == nil {
+		f.remediationApprovals = map[uuid.UUID]storage.RemediationApproval{}
+	}
+	id := uuid.New()
+	a := storage.RemediationApproval{
+		ID:          id,
+		TenantID:    params.TenantID,
+		NodeID:      params.NodeID,
+		RuleID:      params.RuleID,
+		ScriptID:    params.ScriptID,
+		Severity:    params.Severity,
+		TaskPayload: append([]byte(nil), params.TaskPayload...),
+		Status:      storage.ApprovalStatusPending,
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   params.ExpiresAt.UTC(),
+	}
+	f.remediationApprovals[id] = a
+	copy := a
+	return &copy, nil
+}
+
+func (f *fakeStore) GetRemediationApproval(_ context.Context, id uuid.UUID) (*storage.RemediationApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a, ok := f.remediationApprovals[id]; ok {
+		copy := a
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListRemediationApprovals(_ context.Context, filter storage.ListRemediationApprovalsFilter, limit, offset int) ([]storage.RemediationApproval, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []storage.RemediationApproval
+	for _, a := range f.remediationApprovals {
+		if filter.TenantID != uuid.Nil && a.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && a.NodeID != filter.NodeID {
+			continue
+		}
+		if string(filter.Status) != "" && a.Status != filter.Status {
+			continue
+		}
+		all = append(all, a)
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	total := len(all)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return all[offset:end], total, nil
+}
+
+func (f *fakeStore) ResolveRemediationApproval(_ context.Context, id uuid.UUID, status storage.ApprovalStatus, approverID uuid.UUID) (*storage.RemediationApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.remediationApprovals[id]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	if a.Status != storage.ApprovalStatusPending {
+		return nil, sql.ErrNoRows
+	}
+	a.Status = status
+	now := time.Now().UTC()
+	a.ApprovedAt = &now
+	if approverID != uuid.Nil {
+		approver := approverID
+		a.ApprovedBy = &approver
+	}
+	f.remediationApprovals[id] = a
+	copy := a
+	return &copy, nil
+}
+
+func (f *fakeStore) ExpireRemediationApprovals(_ context.Context, now time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	n := 0
+	for id, a := range f.remediationApprovals {
+		if a.Status == storage.ApprovalStatusPending && !a.ExpiresAt.IsZero() && a.ExpiresAt.Before(now) {
+			a.Status = storage.ApprovalStatusExpired
+			f.remediationApprovals[id] = a
+			n++
+		}
+	}
+	return n, nil
+}
+
+func fakeBreakerKey(tenantID uuid.UUID, ruleID string) string {
+	return tenantID.String() + "|" + strings.TrimSpace(ruleID)
+}
+
+func (f *fakeStore) GetCircuitBreakerState(_ context.Context, tenantID uuid.UUID, ruleID string) (*storage.RemediationCircuitBreakerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.circuitBreakers[fakeBreakerKey(tenantID, ruleID)]; ok {
+		copy := s
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) TripCircuitBreaker(_ context.Context, tenantID uuid.UUID, ruleID, reason string) (*storage.RemediationCircuitBreakerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.circuitBreakers == nil {
+		f.circuitBreakers = map[string]storage.RemediationCircuitBreakerState{}
+	}
+	state := storage.RemediationCircuitBreakerState{
+		TenantID:      tenantID,
+		RuleID:        strings.TrimSpace(ruleID),
+		TrippedAt:     time.Now().UTC(),
+		TrippedReason: reason,
+	}
+	f.circuitBreakers[fakeBreakerKey(tenantID, ruleID)] = state
+	copy := state
+	return &copy, nil
+}
+
+func (f *fakeStore) AckCircuitBreaker(_ context.Context, tenantID uuid.UUID, ruleID string, ackerID uuid.UUID) (*storage.RemediationCircuitBreakerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := fakeBreakerKey(tenantID, ruleID)
+	state, ok := f.circuitBreakers[key]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	now := time.Now().UTC()
+	state.AckedAt = &now
+	if ackerID != uuid.Nil {
+		acker := ackerID
+		state.AckedBy = &acker
+	}
+	f.circuitBreakers[key] = state
+	copy := state
+	return &copy, nil
+}
+
+func (f *fakeStore) RemediationFailRate(_ context.Context, tenantID uuid.UUID, ruleID string, window time.Duration) (*storage.RemediationFailRate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if rate, ok := f.remediationFailRates[fakeBreakerKey(tenantID, ruleID)]; ok {
+		copy := rate
+		return &copy, nil
+	}
+	return &storage.RemediationFailRate{}, nil
+}
+
+// ── Sprint 2 Worktree D additions ────────────────────────────────────────────
+
+func (f *fakeStore) CreateClusterRolloutWave(_ context.Context, params storage.CreateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clusterRolloutWaves == nil {
+		f.clusterRolloutWaves = map[uuid.UUID][]storage.ClusterRolloutWave{}
+	}
+	for _, existing := range f.clusterRolloutWaves[params.RolloutID] {
+		if existing.WaveNumber == params.WaveNumber {
+			return nil, errors.New("wave already exists")
+		}
+	}
+	state := params.State
+	if strings.TrimSpace(state) == "" {
+		state = storage.ClusterRolloutWaveStateRunning
+	}
+	members := make([]uuid.UUID, len(params.MemberIDs))
+	copy(members, params.MemberIDs)
+	started := params.StartedAt
+	if started.IsZero() {
+		started = time.Now()
+	}
+	wave := storage.ClusterRolloutWave{
+		ID:         uuid.New(),
+		RolloutID:  params.RolloutID,
+		WaveNumber: params.WaveNumber,
+		MemberIDs:  members,
+		State:      state,
+		StartedAt:  started,
+		GateResult: params.GateResult,
+	}
+	f.clusterRolloutWaves[params.RolloutID] = append(f.clusterRolloutWaves[params.RolloutID], wave)
+	copyWave := wave
+	return &copyWave, nil
+}
+
+func (f *fakeStore) GetClusterRolloutWave(_ context.Context, id uuid.UUID) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, waves := range f.clusterRolloutWaves {
+		for _, w := range waves {
+			if w.ID == id {
+				copyWave := w
+				return &copyWave, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) GetClusterRolloutWaveByNumber(_ context.Context, rolloutID uuid.UUID, waveNumber int) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, w := range f.clusterRolloutWaves[rolloutID] {
+		if w.WaveNumber == waveNumber {
+			copyWave := w
+			return &copyWave, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListClusterRolloutWaves(_ context.Context, rolloutID uuid.UUID) ([]storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	waves := make([]storage.ClusterRolloutWave, len(f.clusterRolloutWaves[rolloutID]))
+	copy(waves, f.clusterRolloutWaves[rolloutID])
+	sort.SliceStable(waves, func(i, j int) bool {
+		return waves[i].WaveNumber < waves[j].WaveNumber
+	})
+	return waves, nil
+}
+
+func (f *fakeStore) UpdateClusterRolloutWave(_ context.Context, id uuid.UUID, params storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for rolloutID, waves := range f.clusterRolloutWaves {
+		for i := range waves {
+			if waves[i].ID != id {
+				continue
+			}
+			if params.State != nil {
+				waves[i].State = *params.State
+			}
+			if params.GateResult != nil {
+				waves[i].GateResult = *params.GateResult
+			}
+			if params.CompletedAt != nil {
+				completed := *params.CompletedAt
+				waves[i].CompletedAt = &completed
+			}
+			f.clusterRolloutWaves[rolloutID] = waves
+			copyWave := waves[i]
+			return &copyWave, nil
+		}
+	}
+	return nil, nil
+}
+
+// ── Sprint 2 Worktree B additions ────────────────────────────────────────────
 
 func (f *fakeStore) RotateNodeCertificate(_ context.Context, nodeID uuid.UUID, serial string) (*storage.NodeCertHistory, error) {
 	f.mu.Lock()
@@ -2749,4 +3209,86 @@ func (f *fakeStore) LatestNodeCertHistory(_ context.Context, nodeID uuid.UUID) (
 		}
 	}
 	return nil, nil
+}
+
+// ── Sprint 2 Worktree A additions ────────────────────────────────────────────
+
+func (f *fakeStore) SetNodeState(_ context.Context, id uuid.UUID, state string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].State = state
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) TouchNodeHeartbeat(_ context.Context, id uuid.UUID) (*storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			t := now
+			f.nodes[i].LastSeenAt = &t
+			f.nodes[i].UpdatedAt = now
+			copy := f.nodes[i]
+			return &copy, nil
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (f *fakeStore) MarkNodeFirstScan(_ context.Context, id uuid.UUID) (*storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			if f.nodes[i].FirstScanAt == nil {
+				t := now
+				f.nodes[i].FirstScanAt = &t
+			}
+			f.nodes[i].UpdatedAt = now
+			copy := f.nodes[i]
+			return &copy, nil
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (f *fakeStore) UpdateNodeLabels(_ context.Context, id uuid.UUID, labels map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			if labels == nil {
+				labels = map[string]any{}
+			}
+			f.nodes[i].Labels = labels
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) ListEnrollmentPendingNodesOlderThan(_ context.Context, cutoff time.Time) ([]storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []storage.Node
+	for _, node := range f.nodes {
+		if node.State != storage.NodeStateEnrollmentPending {
+			continue
+		}
+		if !node.CreatedAt.Before(cutoff) {
+			continue
+		}
+		copy := node
+		out = append(out, copy)
+	}
+	return out, nil
 }

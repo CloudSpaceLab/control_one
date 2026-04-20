@@ -19,6 +19,26 @@ func (l *libvirtAdapter) RunBaselines(ctx context.Context, nodeID string, opts O
 	return l.httpAdapter.RunBaselines(ctx, nodeID, opts)
 }
 
+// Destroy for libvirt delegates to the provisioning backend which destroys +
+// undefines the domain via go-libvirt. In local-dev this is usually the
+// simulated path.
+func (l *libvirtAdapter) Destroy(ctx context.Context, nodeID string) error {
+	return l.httpAdapter.Destroy(ctx, nodeID)
+}
+
+// RegisterLB for libvirt is a no-op at the adapter level — libvirt deployments
+// don't have a native cluster load balancer. We forward so the backend can
+// still record the intent (e.g. HAProxy updates) if configured; missing
+// backend endpoints degrade to log-WARN.
+func (l *libvirtAdapter) RegisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error {
+	return l.httpAdapter.RegisterLB(ctx, nodeID, clusterMeta)
+}
+
+// DeregisterLB for libvirt mirrors RegisterLB — forward + degrade.
+func (l *libvirtAdapter) DeregisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error {
+	return l.httpAdapter.DeregisterLB(ctx, nodeID, clusterMeta)
+}
+
 func ensureLibvirtMetadata(metadata map[string]string) {
 	if metadata == nil {
 		return
