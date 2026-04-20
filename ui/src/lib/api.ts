@@ -15,6 +15,12 @@ export interface CreateTenantPayload {
   name: string;
 }
 
+export type NodeState =
+  | 'enrollment_pending'
+  | 'active'
+  | 'enrollment_failed'
+  | 'retired';
+
 export interface NodeSummary {
   id: string;
   tenant_id: string;
@@ -22,8 +28,53 @@ export interface NodeSummary {
   os?: string;
   arch?: string;
   public_ip?: string;
+  state: NodeState | string;
+  last_seen_at?: string;
+  first_scan_at?: string;
+  labels?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+export interface FleetEnrollTarget {
+  host: string;
+  port?: number;
+  user?: string;
+}
+
+export interface FleetEnrollRequest {
+  targets: FleetEnrollTarget[];
+  ssh_user?: string;
+  // base64-encoded PEM
+  ssh_key?: string;
+  ssh_password?: string;
+  token: string;
+  parallel?: number;
+  labels?: Record<string, string>;
+}
+
+export interface FleetEnrollResponse {
+  job_id: string;
+  status: string;
+  message: string;
+}
+
+export interface FleetEnrollResult {
+  id: string;
+  host: string;
+  port: number;
+  success: boolean;
+  node_id?: string;
+  error_message?: string;
+  ssh_output?: string;
+  duration_ms?: number;
+  created_at: string;
+}
+
+export interface FleetEnrollStatus {
+  job_id: string;
+  status: string;
+  results: FleetEnrollResult[];
 }
 
 export interface RegisterNodePayload {
@@ -1003,6 +1054,20 @@ export class APIClient {
     return this.request<void>(`/api/v1/secrets/groups/${encoded}/sync`, {
       method: 'POST',
     });
+  }
+
+  // ── Fleet enrollment (Sprint 2 Pillar 1.7) ────────────────────────────
+
+  async startFleetEnroll(payload: FleetEnrollRequest): Promise<FleetEnrollResponse> {
+    return this.request<FleetEnrollResponse>('/api/v1/fleet/enroll', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getFleetEnrollStatus(jobId: string): Promise<FleetEnrollStatus> {
+    const encoded = encodeURIComponent(jobId);
+    return this.request<FleetEnrollStatus>(`/api/v1/fleet/enroll/${encoded}`);
   }
 
   async listSecretSyncs(groupId: string, params: ListSecretSyncsParams = {}): Promise<PaginatedResponse<SecretSync>> {
