@@ -58,6 +58,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "rotate-cert":
+			if err := runRotateCert(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "rotate-cert failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 

@@ -155,6 +155,9 @@ type Store interface {
 	ListClusterRollouts(context.Context, uuid.UUID, int, int) ([]storage.ClusterRollout, int, error)
 	UpdateClusterRollout(context.Context, uuid.UUID, storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error)
 	DeleteClusterRollout(context.Context, uuid.UUID) error
+	RotateNodeCertificate(context.Context, uuid.UUID, string) (*storage.NodeCertHistory, error)
+	GetNodeCertHistory(context.Context, uuid.UUID) ([]storage.NodeCertHistory, error)
+	LatestNodeCertHistory(context.Context, uuid.UUID) (*storage.NodeCertHistory, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +509,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/agent/binary/manifest", s.handleAgentBinaryManifest)
 	s.baseRouter.HandleFunc("/api/v1/agent/public-key", s.handleAgentPublicKey)
+	s.baseRouter.HandleFunc("/api/v1/agent/bundle", s.handleAgentBundle)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
 	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
@@ -1238,6 +1242,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 
 	if len(segments) == 2 && segments[1] == "retire" {
 		s.handleRetireNode(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "rotate-cert" {
+		s.handleRotateCert(w, r, nodeID)
 		return
 	}
 

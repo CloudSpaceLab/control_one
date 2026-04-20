@@ -171,3 +171,71 @@ func TestRetireNodeSetsState(t *testing.T) {
 	err = store.RetireNode(ctx, uuid.New())
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
+
+func TestRotateNodeCertificateChainsHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := setupPostgresStoreWithMigrations(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "tn-cert"})
+	require.NoError(t, err)
+
+	node, err := store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "rotate-host"})
+	require.NoError(t, err)
+
+	// First rotation: no prior history, so only one row ends up in the table.
+	first, err := store.RotateNodeCertificate(ctx, node.ID, "serial-1")
+	require.NoError(t, err)
+	require.Equal(t, "serial-1", first.Serial)
+	require.Equal(t, node.ID, first.NodeID)
+
+	history, err := store.GetNodeCertHistory(ctx, node.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	require.False(t, history[0].ReplacedBy.Valid, "first rotation must not carry a replaced_by")
+	require.False(t, history[0].RevokedAt.Valid, "first rotation must not be revoked")
+
+	// Second rotation chains the first row: replaced_by set, revoked_at populated.
+	second, err := store.RotateNodeCertificate(ctx, node.ID, "serial-2")
+	require.NoError(t, err)
+	require.NotEqual(t, first.ID, second.ID)
+
+	history, err = store.GetNodeCertHistory(ctx, node.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+	// Earliest row should now point forward.
+	require.True(t, history[0].ReplacedBy.Valid)
+	require.Equal(t, second.ID, history[0].ReplacedBy.UUID)
+	require.True(t, history[0].RevokedAt.Valid)
+	// Latest row is unreplaced.
+	require.False(t, history[1].ReplacedBy.Valid)
+	require.False(t, history[1].RevokedAt.Valid)
+
+	latest, err := store.LatestNodeCertHistory(ctx, node.ID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, second.ID, latest.ID)
+}
+
+func TestRotateNodeCertificateRejectsUnknownNode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := setupPostgresStoreWithMigrations(t, ctx)
+
+	_, err := store.RotateNodeCertificate(ctx, uuid.New(), "serial-x")
+	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestRotateNodeCertificateRequiresSerial(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := setupPostgresStoreWithMigrations(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "tn-cert-empty"})
+	require.NoError(t, err)
+	node, err := store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "empty-serial"})
+	require.NoError(t, err)
+
+	_, err = store.RotateNodeCertificate(ctx, node.ID, "   ")
+	require.Error(t, err)
+}

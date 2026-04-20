@@ -1052,16 +1052,30 @@ const (
 
 // Node represents a managed node record.
 type Node struct {
-	ID        uuid.UUID
-	TenantID  uuid.UUID
-	Hostname  string
-	OS        sql.NullString
-	Arch      sql.NullString
-	PublicIP  sql.NullString
-	MachineID sql.NullString
-	State     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	Hostname      string
+	OS            sql.NullString
+	Arch          sql.NullString
+	PublicIP      sql.NullString
+	MachineID     sql.NullString
+	State         string
+	CertSerial    sql.NullString
+	CertRotatedAt sql.NullTime
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// NodeCertHistory tracks the lineage of client certificates issued to a node.
+// Each rotation inserts a new row; the superseded row is updated with
+// `replaced_by` pointing at the new row's id so the chain is audit-traceable.
+type NodeCertHistory struct {
+	ID         uuid.UUID
+	NodeID     uuid.UUID
+	Serial     string
+	IssuedAt   time.Time
+	RevokedAt  sql.NullTime
+	ReplacedBy uuid.NullUUID
 }
 
 // Tenant represents a tenant record.
