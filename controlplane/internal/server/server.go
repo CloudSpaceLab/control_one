@@ -145,6 +145,17 @@ type Store interface {
 	AcquireRemediationLease(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Duration) (*storage.RemediationLease, error)
 	ReleaseRemediationLease(context.Context, uuid.UUID) error
 	CountTenantLeases(context.Context, uuid.UUID) (int, error)
+	GetTenantRemediationConfig(context.Context, uuid.UUID) (*storage.TenantRemediationConfig, error)
+	UpsertTenantRemediationConfig(context.Context, storage.TenantRemediationConfig) (*storage.TenantRemediationConfig, error)
+	CreateRemediationApproval(context.Context, storage.CreateRemediationApprovalParams) (*storage.RemediationApproval, error)
+	GetRemediationApproval(context.Context, uuid.UUID) (*storage.RemediationApproval, error)
+	ListRemediationApprovals(context.Context, storage.ListRemediationApprovalsFilter, int, int) ([]storage.RemediationApproval, int, error)
+	ResolveRemediationApproval(context.Context, uuid.UUID, storage.ApprovalStatus, uuid.UUID) (*storage.RemediationApproval, error)
+	ExpireRemediationApprovals(context.Context, time.Time) (int, error)
+	GetCircuitBreakerState(context.Context, uuid.UUID, string) (*storage.RemediationCircuitBreakerState, error)
+	TripCircuitBreaker(context.Context, uuid.UUID, string, string) (*storage.RemediationCircuitBreakerState, error)
+	AckCircuitBreaker(context.Context, uuid.UUID, string, uuid.UUID) (*storage.RemediationCircuitBreakerState, error)
+	RemediationFailRate(context.Context, uuid.UUID, string, time.Duration) (*storage.RemediationFailRate, error)
 	CreateCluster(context.Context, storage.CreateClusterParams) (*storage.Cluster, error)
 	ListClusters(context.Context, uuid.UUID, int, int) ([]storage.Cluster, int, error)
 	GetClusterByID(context.Context, uuid.UUID) (*storage.Cluster, error)
@@ -434,6 +445,9 @@ func firstQueryValue(values map[string][]string, key string) string {
 // TaskQueue defines minimal worker manager contract for enqueuing asynchronous tasks.
 type TaskQueue interface {
 	Enqueue(worker.Task) error
+	// EnqueueAt schedules a task to run no earlier than the given time. A zero
+	// time must behave exactly like Enqueue.
+	EnqueueAt(worker.Task, time.Time) error
 }
 
 type workerStatusProvider interface {
@@ -499,6 +513,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/trends", s.handleComplianceTrends)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts", s.handleRemediationScriptsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts/", s.handleRemediationScriptSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)
+	s.baseRouter.HandleFunc("/api/v1/remediation/approvals/", s.handleRemediationApprovalSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/remediation/circuit-breaker/", s.handleRemediationCircuitBreakerSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/policies", s.handleRetentionPoliciesCollection)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/cleanup", s.handleRetentionCleanup)
 	s.baseRouter.HandleFunc("/api/v1/secrets/groups", s.handleSecretGroupsCollection)

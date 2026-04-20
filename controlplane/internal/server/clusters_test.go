@@ -33,6 +33,10 @@ func (c *capturingQueue) Enqueue(task worker.Task) error {
 	return nil
 }
 
+func (c *capturingQueue) EnqueueAt(task worker.Task, _ time.Time) error {
+	return c.Enqueue(task)
+}
+
 func (c *capturingQueue) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

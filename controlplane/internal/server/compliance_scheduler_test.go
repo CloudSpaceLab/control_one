@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -23,6 +24,10 @@ type spyQueue struct {
 func (q *spyQueue) Enqueue(t worker.Task) error {
 	q.tasks = append(q.tasks, t)
 	return nil
+}
+
+func (q *spyQueue) EnqueueAt(t worker.Task, _ time.Time) error {
+	return q.Enqueue(t)
 }
 
 func TestComplianceSchedulerCreateScanJobs(t *testing.T) {

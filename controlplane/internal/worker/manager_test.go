@@ -224,6 +224,92 @@ func TestManagerProcessesTaskAsynq(t *testing.T) {
 	}
 }
 
+func TestManagerEnqueueAtDefersMemory(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	cfg := config.WorkerConfig{Concurrency: 1, QueueSize: 2, Backend: "memory"}
+
+	mgr := New(logger, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		if err := mgr.Stop(stopCtx); err != nil {
+			t.Fatalf("stop manager: %v", err)
+		}
+	}()
+
+	ran := make(chan time.Time, 1)
+	delay := 150 * time.Millisecond
+	processAt := time.Now().Add(delay)
+
+	task := Task{
+		Name: "deferred",
+		Job: func(context.Context) error {
+			ran <- time.Now()
+			return nil
+		},
+	}
+
+	if err := mgr.EnqueueAt(task, processAt); err != nil {
+		t.Fatalf("enqueueAt: %v", err)
+	}
+
+	select {
+	case completed := <-ran:
+		if completed.Before(processAt) {
+			t.Fatalf("task ran before processAt: completed=%s processAt=%s", completed, processAt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred task never ran")
+	}
+}
+
+func TestManagerEnqueueAtImmediateWhenZero(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	cfg := config.WorkerConfig{Concurrency: 1, QueueSize: 1, Backend: "memory"}
+
+	mgr := New(logger, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		if err := mgr.Stop(stopCtx); err != nil {
+			t.Fatalf("stop manager: %v", err)
+		}
+	}()
+
+	done := make(chan struct{})
+	task := Task{
+		Name: "immediate",
+		Job: func(context.Context) error {
+			close(done)
+			return nil
+		},
+	}
+
+	if err := mgr.EnqueueAt(task, time.Time{}); err != nil {
+		t.Fatalf("enqueueAt: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("zero-time task never ran")
+	}
+}
+
 func TestManagerStartAsynqMissingRedis(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	mgr := New(logger, config.WorkerConfig{Backend: "asynq", Asynq: config.AsynqConfig{Enabled: true}})
