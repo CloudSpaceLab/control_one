@@ -1225,6 +1225,7 @@ type fakeStore struct {
 	clusters            map[uuid.UUID]*storage.Cluster
 	clusterMembers      map[uuid.UUID][]storage.ClusterMember
 	clusterRollouts     map[uuid.UUID][]storage.ClusterRollout
+	clusterRolloutWaves map[uuid.UUID][]storage.ClusterRolloutWave // keyed by rollout id
 	leases              map[uuid.UUID]storage.RemediationLease
 	enrollmentTokens    map[string]storage.EnrollmentToken // keyed by token hash
 }
@@ -2185,7 +2186,57 @@ func (f *fakeStore) ListSessionEvents(_ context.Context, recordingID uuid.UUID, 
 }
 
 func (f *fakeStore) ListComplianceResultsFiltered(_ context.Context, filter storage.ComplianceResultFilter, limit, offset int) ([]storage.ComplianceResult, int, error) {
-	return nil, 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var results []storage.ComplianceResult
+	for _, byJob := range f.complianceResults {
+		for _, r := range byJob {
+			if filter.JobID != uuid.Nil && r.JobID != filter.JobID {
+				continue
+			}
+			if filter.TenantID != uuid.Nil && r.TenantID != filter.TenantID {
+				continue
+			}
+			if filter.NodeID != uuid.Nil && r.NodeID != filter.NodeID {
+				continue
+			}
+			if strings.TrimSpace(filter.RuleID) != "" && !strings.EqualFold(r.RuleID, filter.RuleID) {
+				continue
+			}
+			if strings.TrimSpace(filter.ScanID) != "" {
+				if r.ScanID == nil || !strings.EqualFold(*r.ScanID, filter.ScanID) {
+					continue
+				}
+			}
+			if filter.Passed != nil && r.Passed != *filter.Passed {
+				continue
+			}
+			if strings.TrimSpace(filter.Severity) != "" {
+				if r.Severity == nil || !strings.EqualFold(*r.Severity, filter.Severity) {
+					continue
+				}
+			}
+			if filter.Since != nil && r.CheckedAt != nil && r.CheckedAt.Before(*filter.Since) {
+				continue
+			}
+			if filter.Until != nil && r.CheckedAt != nil && r.CheckedAt.After(*filter.Until) {
+				continue
+			}
+			results = append(results, r)
+		}
+	}
+	total := len(results)
+	if offset > total {
+		return []storage.ComplianceResult{}, total, nil
+	}
+	if offset > 0 {
+		results = results[offset:]
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, total, nil
 }
 
 func (f *fakeStore) CreateEnrollmentToken(_ context.Context, params storage.CreateEnrollmentTokenParams) (*storage.EnrollmentToken, error) {
@@ -2670,9 +2721,108 @@ func (f *fakeStore) DeleteClusterRollout(_ context.Context, id uuid.UUID) error 
 		for i, r := range rollouts {
 			if r.ID == id {
 				f.clusterRollouts[clusterID] = append(rollouts[:i], rollouts[i+1:]...)
+				delete(f.clusterRolloutWaves, id)
 				return nil
 			}
 		}
 	}
 	return sql.ErrNoRows
+}
+
+func (f *fakeStore) CreateClusterRolloutWave(_ context.Context, params storage.CreateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clusterRolloutWaves == nil {
+		f.clusterRolloutWaves = map[uuid.UUID][]storage.ClusterRolloutWave{}
+	}
+	for _, existing := range f.clusterRolloutWaves[params.RolloutID] {
+		if existing.WaveNumber == params.WaveNumber {
+			return nil, errors.New("wave already exists")
+		}
+	}
+	state := params.State
+	if strings.TrimSpace(state) == "" {
+		state = storage.ClusterRolloutWaveStateRunning
+	}
+	members := make([]uuid.UUID, len(params.MemberIDs))
+	copy(members, params.MemberIDs)
+	started := params.StartedAt
+	if started.IsZero() {
+		started = time.Now()
+	}
+	wave := storage.ClusterRolloutWave{
+		ID:         uuid.New(),
+		RolloutID:  params.RolloutID,
+		WaveNumber: params.WaveNumber,
+		MemberIDs:  members,
+		State:      state,
+		StartedAt:  started,
+		GateResult: params.GateResult,
+	}
+	f.clusterRolloutWaves[params.RolloutID] = append(f.clusterRolloutWaves[params.RolloutID], wave)
+	copyWave := wave
+	return &copyWave, nil
+}
+
+func (f *fakeStore) GetClusterRolloutWave(_ context.Context, id uuid.UUID) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, waves := range f.clusterRolloutWaves {
+		for _, w := range waves {
+			if w.ID == id {
+				copyWave := w
+				return &copyWave, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) GetClusterRolloutWaveByNumber(_ context.Context, rolloutID uuid.UUID, waveNumber int) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, w := range f.clusterRolloutWaves[rolloutID] {
+		if w.WaveNumber == waveNumber {
+			copyWave := w
+			return &copyWave, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListClusterRolloutWaves(_ context.Context, rolloutID uuid.UUID) ([]storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	waves := make([]storage.ClusterRolloutWave, len(f.clusterRolloutWaves[rolloutID]))
+	copy(waves, f.clusterRolloutWaves[rolloutID])
+	sort.SliceStable(waves, func(i, j int) bool {
+		return waves[i].WaveNumber < waves[j].WaveNumber
+	})
+	return waves, nil
+}
+
+func (f *fakeStore) UpdateClusterRolloutWave(_ context.Context, id uuid.UUID, params storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for rolloutID, waves := range f.clusterRolloutWaves {
+		for i := range waves {
+			if waves[i].ID != id {
+				continue
+			}
+			if params.State != nil {
+				waves[i].State = *params.State
+			}
+			if params.GateResult != nil {
+				waves[i].GateResult = *params.GateResult
+			}
+			if params.CompletedAt != nil {
+				completed := *params.CompletedAt
+				waves[i].CompletedAt = &completed
+			}
+			f.clusterRolloutWaves[rolloutID] = waves
+			copyWave := waves[i]
+			return &copyWave, nil
+		}
+	}
+	return nil, nil
 }

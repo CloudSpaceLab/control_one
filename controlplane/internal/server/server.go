@@ -155,6 +155,11 @@ type Store interface {
 	ListClusterRollouts(context.Context, uuid.UUID, int, int) ([]storage.ClusterRollout, int, error)
 	UpdateClusterRollout(context.Context, uuid.UUID, storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error)
 	DeleteClusterRollout(context.Context, uuid.UUID) error
+	CreateClusterRolloutWave(context.Context, storage.CreateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
+	GetClusterRolloutWave(context.Context, uuid.UUID) (*storage.ClusterRolloutWave, error)
+	GetClusterRolloutWaveByNumber(context.Context, uuid.UUID, int) (*storage.ClusterRolloutWave, error)
+	ListClusterRolloutWaves(context.Context, uuid.UUID) ([]storage.ClusterRolloutWave, error)
+	UpdateClusterRolloutWave(context.Context, uuid.UUID, storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
