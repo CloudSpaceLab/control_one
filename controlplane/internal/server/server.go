@@ -92,11 +92,14 @@ type Store interface {
 	CreateRemediationScript(context.Context, storage.CreateRemediationScriptParams) (*storage.RemediationScript, error)
 	UpdateRemediationScript(context.Context, uuid.UUID, storage.UpdateRemediationScriptParams) (*storage.RemediationScript, error)
 	ListWebhooks(context.Context, uuid.UUID, *bool, int, int) ([]storage.Webhook, int, error)
+	ListWebhooksByEvent(context.Context, uuid.UUID, string) ([]storage.Webhook, error)
+	GetEnabledWebhooksForEvent(context.Context, string) ([]storage.Webhook, error)
 	CreateWebhook(context.Context, storage.CreateWebhookParams) (*storage.Webhook, error)
 	GetWebhook(context.Context, uuid.UUID) (*storage.Webhook, error)
 	UpdateWebhook(context.Context, uuid.UUID, storage.UpdateWebhookParams) (*storage.Webhook, error)
 	DeleteWebhook(context.Context, uuid.UUID) error
 	ListWebhookDeliveries(context.Context, uuid.UUID, *string, int, int) ([]storage.WebhookDelivery, int, error)
+	RecordWebhookDelivery(context.Context, storage.WebhookDelivery) error
 	GetRetentionPolicy(context.Context, uuid.UUID, string) (*storage.TelemetryRetentionPolicy, error)
 	ListRetentionPolicies(context.Context, uuid.UUID, int, int) ([]storage.TelemetryRetentionPolicy, int, error)
 	CreateRetentionPolicy(context.Context, storage.CreateRetentionPolicyParams) (*storage.TelemetryRetentionPolicy, error)
@@ -124,6 +127,10 @@ type Store interface {
 	IncrementEnrollmentCount(context.Context, uuid.UUID) error
 	CreateFleetEnrollmentResult(context.Context, *storage.FleetEnrollmentResult) error
 	ListFleetEnrollmentResults(context.Context, uuid.UUID) ([]storage.FleetEnrollmentResult, error)
+	CreatePolicyAssignment(context.Context, storage.CreatePolicyAssignmentParams) (*storage.PolicyAssignment, error)
+	ListPolicyAssignments(context.Context, uuid.UUID, int, int) ([]storage.PolicyAssignment, int, error)
+	DeletePolicyAssignment(context.Context, uuid.UUID) error
+	GetEffectivePolicies(context.Context, uuid.UUID, uuid.UUID) ([]storage.PolicyWithVersion, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -406,16 +413,17 @@ type workerStatusProvider interface {
 
 // Server wraps the HTTP server lifecycle for the control plane API.
 type Server struct {
-	logger             *zap.Logger
-	cfg                *config.Config
-	http               *http.Server
-	store              Store
-	worker             TaskQueue
-	authMW             *auth.Middleware
-	baseRouter         *http.ServeMux
-	jobHandlers        map[string]jobHandler
-	provisioningEngine *provisioning.Engine
-	complianceEngine   *compliance.Engine
+	logger              *zap.Logger
+	cfg                 *config.Config
+	http                *http.Server
+	store               Store
+	worker              TaskQueue
+	authMW              *auth.Middleware
+	baseRouter          *http.ServeMux
+	jobHandlers         map[string]jobHandler
+	provisioningEngine  *provisioning.Engine
+	complianceEngine    *compliance.Engine
+	complianceScheduler *ComplianceScheduler
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -472,6 +480,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
+	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -1550,6 +1559,20 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux}
 	s.configureJobIntegrations()
 	s.registerRoutes()
+
+	if cfg.Jobs.Compliance.ScheduleEnabled {
+		sched := NewComplianceScheduler(s)
+		cronExpr := cfg.Jobs.Compliance.ScheduleCron
+		if cronExpr == "" {
+			cronExpr = "0 */6 * * *"
+		}
+		if err := sched.Start(cronExpr); err != nil {
+			logger.Error("start compliance scheduler", zap.Error(err))
+		} else {
+			s.complianceScheduler = sched
+		}
+	}
+
 	return s
 }
 
@@ -1568,8 +1591,11 @@ func (s *Server) Start() error {
 	return s.http.ListenAndServeTLS(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
 }
 
-// Stop gracefully shuts down the HTTP server.
+// Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.complianceScheduler != nil {
+		s.complianceScheduler.Stop()
+	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return s.http.Shutdown(shutdownCtx)

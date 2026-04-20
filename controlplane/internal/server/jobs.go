@@ -248,6 +248,19 @@ func (s *Server) handleComplianceScan(ctx context.Context, job *storage.Job) err
 		return s.handleComplianceFailure(ctx, job, payload, err)
 	}
 
+	// Emit webhook events and trigger auto-remediation for failures.
+	nodeID, err := uuid.Parse(payload.NodeID)
+	if err != nil {
+		s.logger.Warn("parse node_id for compliance events", zap.Error(err), zap.String("node_id", payload.NodeID))
+	} else {
+		s.emitComplianceEvents(ctx, job.TenantID, nodeID, results, payload.ScanID)
+		for _, r := range results {
+			if !r.Passed {
+				s.triggerAutoRemediation(ctx, job.TenantID, nodeID, r, s.cfg.Jobs.Compliance.AutoApply)
+			}
+		}
+	}
+
 	s.logger.Info("compliance job completed",
 		zap.String("job_id", job.ID.String()),
 		zap.String("node_id", payload.NodeID),
@@ -300,10 +313,8 @@ func (s *Server) evaluateCompliance(ctx context.Context, payload *compliancePayl
 		if req.Policies == nil {
 			req.Policies = map[string]string{}
 		}
-		if req.UseRealScan {
-			return evaluateComplianceWithRealScanners(req), nil
-		}
-		return synthesizeComplianceResults(req), nil
+		// Use policy-based evaluation (falls back to synthetic internally)
+		return s.evaluateComplianceReal(ctx, req)
 	}
 
 	if s.complianceEngine == nil {

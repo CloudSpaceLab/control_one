@@ -123,13 +123,15 @@ type ProvisioningJobConfig struct {
 
 // ComplianceJobConfig defines outbound settings for compliance jobs.
 type ComplianceJobConfig struct {
-	APIBaseURL     string          `mapstructure:"api_base_url"`
-	Token          string          `mapstructure:"token"`
-	Region         string          `mapstructure:"region"`
-	RuleSets       []string        `mapstructure:"rule_sets"`
-	Certifications []string        `mapstructure:"certifications"`
-	AutoApply      bool            `mapstructure:"auto_apply"`
-	TLS            ClientTLSConfig `mapstructure:"tls"`
+	APIBaseURL      string          `mapstructure:"api_base_url"`
+	Token           string          `mapstructure:"token"`
+	Region          string          `mapstructure:"region"`
+	RuleSets        []string        `mapstructure:"rule_sets"`
+	Certifications  []string        `mapstructure:"certifications"`
+	AutoApply       bool            `mapstructure:"auto_apply"`
+	ScheduleEnabled bool            `mapstructure:"schedule_enabled"`
+	ScheduleCron    string          `mapstructure:"schedule_cron"`
+	TLS             ClientTLSConfig `mapstructure:"tls"`
 }
 
 // ClientTLSConfig captures TLS options for outbound clients.
@@ -209,6 +211,8 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("jobs.provisioning.auto_remediation", true)
 	v.SetDefault("jobs.compliance.auto_apply", true)
+	v.SetDefault("jobs.compliance.schedule_enabled", false)
+	v.SetDefault("jobs.compliance.schedule_cron", "0 */6 * * *")
 
 	v.SetDefault("registration.bootstrap_tokens", []string{})
 

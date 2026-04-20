@@ -44,6 +44,8 @@ jobs:
     rule_sets: []
     certifications: []
     auto_apply: true
+    schedule_enabled: false       # Enable periodic compliance scans
+    schedule_cron: "0 */6 * * *"  # Cron expression (default: every 6 hours)
     tls:
       cert_file: ""
       key_file: ""

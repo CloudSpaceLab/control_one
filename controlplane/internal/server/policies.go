@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -99,8 +100,22 @@ func (s *Server) handlePolicySubroutes(w http.ResponseWriter, r *http.Request) {
 	case 1:
 		s.handlePolicyResource(w, r, policyID)
 	case 2:
-		if segments[1] == "versions" {
+		switch segments[1] {
+		case "versions":
 			s.handlePolicyVersions(w, r, policyID)
+		case "assignments":
+			s.handlePolicyAssignmentsCollection(w, r, policyID)
+		default:
+			http.NotFound(w, r)
+		}
+	case 3:
+		if segments[1] == "assignments" {
+			assignmentID, aidErr := uuid.Parse(segments[2])
+			if aidErr != nil {
+				http.Error(w, "invalid assignment id", http.StatusBadRequest)
+				return
+			}
+			s.handleDeletePolicyAssignment(w, r, assignmentID)
 			return
 		}
 		http.NotFound(w, r)
@@ -527,6 +542,176 @@ func newPolicyResponse(p storage.Policy) policyResponse {
 	}
 	if p.ArchivedAt.Valid {
 		resp.ArchivedAt = formatNullTime(p.ArchivedAt)
+	}
+	return resp
+}
+
+// --- Policy Assignment Handlers ---
+
+type createPolicyAssignmentRequest struct {
+	TenantID  string  `json:"tenant_id"`
+	NodeID    *string `json:"node_id"`
+	ExpiresAt *string `json:"expires_at"`
+}
+
+type policyAssignmentResponse struct {
+	ID         string  `json:"id"`
+	PolicyID   string  `json:"policy_id"`
+	TenantID   string  `json:"tenant_id"`
+	NodeID     *string `json:"node_id,omitempty"`
+	AssignedAt string  `json:"assigned_at"`
+	AssignedBy *string `json:"assigned_by,omitempty"`
+	ExpiresAt  *string `json:"expires_at,omitempty"`
+}
+
+func (s *Server) handlePolicyAssignmentsCollection(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
+	switch r.Method {
+	case http.MethodGet:
+		if _, ok := s.authorize(w, r, roleViewer); !ok {
+			return
+		}
+		s.handleListPolicyAssignments(w, r, policyID)
+	case http.MethodPost:
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
+			return
+		}
+		s.handleCreatePolicyAssignment(w, r, policyID, principal)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCreatePolicyAssignment(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req createPolicyAssignmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	tenantID, err := uuid.Parse(req.TenantID)
+	if err != nil || tenantID == uuid.Nil {
+		http.Error(w, "valid tenant_id is required", http.StatusBadRequest)
+		return
+	}
+
+	params := storage.CreatePolicyAssignmentParams{
+		PolicyID: policyID,
+		TenantID: tenantID,
+	}
+
+	if req.NodeID != nil {
+		nodeID, err := uuid.Parse(*req.NodeID)
+		if err != nil {
+			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		params.NodeID = nodeID
+	}
+
+	if req.ExpiresAt != nil {
+		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
+		if err != nil {
+			http.Error(w, "expires_at must be RFC3339", http.StatusBadRequest)
+			return
+		}
+		params.ExpiresAt = &t
+	}
+
+	if principal != nil && strings.TrimSpace(principal.Subject) != "" {
+		if user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject); err == nil && user != nil {
+			params.AssignedBy = &user.ID
+		}
+	}
+
+	assignment, err := s.store.CreatePolicyAssignment(r.Context(), params)
+	if err != nil {
+		s.logger.Error("create policy assignment", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, newPolicyAssignmentResponse(assignment))
+}
+
+func (s *Server) handleListPolicyAssignments(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	assignments, total, err := s.store.ListPolicyAssignments(r.Context(), policyID, limit, offset)
+	if err != nil {
+		s.logger.Error("list policy assignments", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]policyAssignmentResponse, 0, len(assignments))
+	for _, a := range assignments {
+		items = append(items, newPolicyAssignmentResponse(&a))
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": total,
+	})
+}
+
+func (s *Server) handleDeletePolicyAssignment(w http.ResponseWriter, r *http.Request, assignmentID uuid.UUID) {
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodDelete)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.store.DeletePolicyAssignment(r.Context(), assignmentID); err != nil {
+		s.logger.Error("delete policy assignment", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func newPolicyAssignmentResponse(a *storage.PolicyAssignment) policyAssignmentResponse {
+	resp := policyAssignmentResponse{
+		ID:         a.ID.String(),
+		PolicyID:   a.PolicyID.String(),
+		TenantID:   a.TenantID.String(),
+		AssignedAt: formatTime(a.AssignedAt),
+	}
+	if a.NodeID != uuid.Nil {
+		nid := a.NodeID.String()
+		resp.NodeID = &nid
+	}
+	if a.AssignedBy != nil {
+		aid := a.AssignedBy.String()
+		resp.AssignedBy = &aid
+	}
+	if a.ExpiresAt.Valid {
+		resp.ExpiresAt = formatNullTime(a.ExpiresAt)
 	}
 	return resp
 }

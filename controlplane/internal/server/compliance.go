@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	cpCompliance "github.com/CloudSpaceLab/control_one/controlplane/internal/compliance"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 )
 
@@ -74,17 +77,172 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var results []compliance.Result
-	if req.UseRealScan {
-		results = evaluateComplianceWithRealScanners(req)
-	} else {
-		results = synthesizeComplianceResults(req)
+	results, err := s.evaluateComplianceReal(r.Context(), req)
+	if err != nil {
+		s.logger.Error("compliance evaluation", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(complianceEvaluateResponse{Results: results}); err != nil {
 		s.logger.Warn("encode compliance evaluate response", zap.Error(err))
 	}
+}
+
+// evaluateComplianceReal performs policy-based evaluation if policies are assigned,
+// falling back to synthetic results otherwise.
+func (s *Server) evaluateComplianceReal(ctx context.Context, req complianceEvaluateRequest) ([]compliance.Result, error) {
+	nodeID, _ := uuid.Parse(req.NodeID)
+
+	// Try policy-based evaluation if store is available
+	if s.store != nil {
+		node, err := s.store.GetNode(ctx, nodeID)
+		if err != nil {
+			s.logger.Warn("get node for compliance eval", zap.Error(err))
+		}
+
+		var tenantID uuid.UUID
+		if node != nil {
+			tenantID = node.TenantID
+		}
+
+		if tenantID != uuid.Nil {
+			policies, err := s.store.GetEffectivePolicies(ctx, tenantID, nodeID)
+			if err != nil {
+				s.logger.Warn("get effective policies", zap.Error(err))
+			}
+
+			if len(policies) > 0 {
+				return s.evaluateWithPolicies(ctx, req, policies, node)
+			}
+		}
+	}
+
+	// Fallback to synthetic
+	if req.UseRealScan {
+		return evaluateComplianceWithRealScanners(req), nil
+	}
+	return synthesizeComplianceResults(req), nil
+}
+
+func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluateRequest, policies []storage.PolicyWithVersion, node *storage.Node) ([]compliance.Result, error) {
+	evaluator := cpCompliance.NewJSONDSLEvaluator()
+
+	nodeMeta := map[string]any{}
+	if node != nil {
+		nodeMeta["id"] = node.ID.String()
+		nodeMeta["hostname"] = node.Hostname
+		if node.OS.Valid {
+			nodeMeta["os"] = node.OS.String
+		}
+		if node.Arch.Valid {
+			nodeMeta["arch"] = node.Arch.String
+		}
+		if node.PublicIP.Valid {
+			nodeMeta["public_ip"] = node.PublicIP.String
+		}
+	}
+
+	// Pass request policies as facts for backward compat
+	facts := map[string]any{}
+	for k, v := range req.Policies {
+		facts[k] = v
+	}
+
+	input := cpCompliance.EvalInput{
+		NodeID:   uuid.MustParse(req.NodeID),
+		NodeMeta: nodeMeta,
+		Facts:    facts,
+	}
+	if node != nil {
+		input.TenantID = node.TenantID
+	}
+
+	var results []compliance.Result
+	for _, p := range policies {
+		ruleDef := cpCompliance.RuleDefinition{
+			ID:         p.ID.String(),
+			RuleType:   p.RuleType,
+			Definition: p.RuleDefinition,
+			Severity:   "medium",
+			Framework:  "",
+		}
+
+		evalResult, err := evaluator.Evaluate(ctx, ruleDef, input)
+		if err != nil {
+			s.logger.Warn("evaluate policy",
+				zap.Error(err),
+				zap.String("policy_id", p.ID.String()),
+				zap.String("policy_name", p.Name),
+			)
+			results = append(results, compliance.Result{
+				RuleID:    p.ID.String(),
+				Passed:    false,
+				Severity:  "high",
+				Details:   fmt.Sprintf("evaluation error for policy %s: %v", p.Name, err),
+				CheckedAt: time.Now().UTC(),
+			})
+			continue
+		}
+
+		results = append(results, compliance.Result{
+			RuleID:      p.ID.String(),
+			Passed:      evalResult.Passed,
+			Severity:    evalResult.Severity,
+			Details:     evalResult.Details,
+			CheckedAt:   evalResult.CheckedAt,
+			Remediation: evalResult.Remediation,
+		})
+	}
+
+	// Persist results if we have a job context (called from evaluate endpoint, not job handler)
+	if s.store != nil && len(results) > 0 {
+		stored := make([]storage.ComplianceResult, 0, len(results))
+		nodeID, _ := uuid.Parse(req.NodeID)
+		var tenantID uuid.UUID
+		if node != nil {
+			tenantID = node.TenantID
+		}
+		for _, r := range results {
+			record := storage.ComplianceResult{
+				TenantID: tenantID,
+				NodeID:   nodeID,
+				RuleID:   r.RuleID,
+				Passed:   r.Passed,
+			}
+			if r.Severity != "" {
+				sev := r.Severity
+				record.Severity = &sev
+			}
+			if r.Details != "" {
+				det := r.Details
+				record.Details = &det
+			}
+			if r.Remediation != "" {
+				rem := r.Remediation
+				record.Remediation = &rem
+			}
+			if !r.CheckedAt.IsZero() {
+				t := r.CheckedAt
+				record.CheckedAt = &t
+			}
+			stored = append(stored, record)
+		}
+		if err := s.store.CreateComplianceResults(ctx, stored); err != nil {
+			s.logger.Warn("persist compliance results from evaluate", zap.Error(err))
+		}
+
+		// Emit webhook events and trigger auto-remediation for failures.
+		s.emitComplianceEvents(ctx, tenantID, nodeID, results, "")
+		for _, r := range results {
+			if !r.Passed {
+				s.triggerAutoRemediation(ctx, tenantID, nodeID, r, req.AutoApply)
+			}
+		}
+	}
+
+	return results, nil
 }
 
 func evaluateComplianceWithRealScanners(req complianceEvaluateRequest) []compliance.Result {
@@ -181,4 +339,86 @@ func synthesizeComplianceResults(req complianceEvaluateRequest) []compliance.Res
 	}
 
 	return results
+}
+
+type batchScanRequest struct {
+	TenantID *string  `json:"tenant_id"`
+	NodeIDs  []string `json:"node_ids"`
+}
+
+type batchScanResponse struct {
+	JobIDs []string `json:"job_ids"`
+	Count  int      `json:"count"`
+}
+
+func (s *Server) handleComplianceBatchScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req batchScanRequest
+	if r.ContentLength > 0 {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	var tenantID uuid.UUID
+	if req.TenantID != nil {
+		parsed, err := uuid.Parse(*req.TenantID)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		tenantID = parsed
+	}
+
+	var nodeIDs []uuid.UUID
+	for _, nidStr := range req.NodeIDs {
+		nid, err := uuid.Parse(nidStr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid node_id %q", nidStr), http.StatusBadRequest)
+			return
+		}
+		nodeIDs = append(nodeIDs, nid)
+	}
+
+	if s.complianceScheduler == nil {
+		s.complianceScheduler = NewComplianceScheduler(s)
+	}
+
+	jobIDs, err := s.complianceScheduler.createScanJobs(r.Context(), tenantID, nodeIDs)
+	if err != nil {
+		s.logger.Error("batch compliance scan", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	resp := batchScanResponse{Count: len(jobIDs)}
+	for _, id := range jobIDs {
+		resp.JobIDs = append(resp.JobIDs, id.String())
+	}
+	if resp.JobIDs == nil {
+		resp.JobIDs = []string{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Warn("encode batch scan response", zap.Error(err))
+	}
 }
