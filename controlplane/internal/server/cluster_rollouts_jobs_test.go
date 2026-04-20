@@ -163,6 +163,8 @@ func TestRolloutAdvanceHeartbeatHaltsOnMissingHeartbeat(t *testing.T) {
 	f := newRolloutJobFixture(t, 2)
 
 	// No heartbeats => every node is "never heartbeated" => gate fails.
+	// timeout=0 so time.Since(StartedAt) >= timeout fires deterministically
+	// regardless of wall-clock resolution (Windows ~15.6ms would flake on 1ns).
 	accepted := startRolloutJobTest(t, f, map[string]any{
 		"template_version_id": uuid.NewString(),
 		"wave_size":           2,
@@ -171,7 +173,7 @@ func TestRolloutAdvanceHeartbeatHaltsOnMissingHeartbeat(t *testing.T) {
 			"grace":       "5m",
 			"start_delay": 0,
 			"interval":    0,
-			"timeout":     "1ns",
+			"timeout":     "0",
 		},
 	})
 
