@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/CloudSpaceLab/control_one/internal/util"
@@ -184,12 +182,15 @@ wizard:
 	fmt.Printf("  Certs:    %s\n", certDir)
 	fmt.Println("")
 
-	// 8. Install systemd service if requested
+	// 8. Install OS-managed service if requested. Platform dispatch is
+	//    handled by the build-tagged service_*.go files — see service_linux.go
+	//    for systemd, service_darwin.go for launchd, service_windows.go for
+	//    the Windows Service Control Manager.
 	if installService {
-		if err := installSystemdService(configPath); err != nil {
+		if err := installServiceFn(configPath); err != nil {
 			return fmt.Errorf("install service: %w", err)
 		}
-		fmt.Println("  Service:  controlone-agent.service (enabled + started)")
+		fmt.Println("  Service:  controlone-agent (enabled + started)")
 	} else if !startAgent {
 		fmt.Printf("  Run: controlone-agent --config %s\n", configPath)
 	}
@@ -205,45 +206,8 @@ func getInterval(intervals map[string]int64, key string, defaultVal int64) int64
 	return defaultVal
 }
 
-func installSystemdService(configPath string) error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("systemd service install only supported on Linux")
-	}
-
-	// Find the agent binary path
-	binaryPath, err := os.Executable()
-	if err != nil {
-		binaryPath = "/usr/local/bin/controlone-agent"
-	}
-
-	unit := fmt.Sprintf(`[Unit]
-Description=Control One Node Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%s --config %s
-Restart=on-failure
-RestartSec=10
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-`, binaryPath, configPath)
-
-	servicePath := "/etc/systemd/system/controlone-agent.service"
-	if err := os.WriteFile(servicePath, []byte(unit), 0644); err != nil {
-		return fmt.Errorf("write service file: %w", err)
-	}
-
-	// Reload and enable
-	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-		return fmt.Errorf("systemctl daemon-reload: %w", err)
-	}
-	if err := exec.Command("systemctl", "enable", "--now", "controlone-agent").Run(); err != nil {
-		return fmt.Errorf("systemctl enable: %w", err)
-	}
-
-	return nil
-}
+// installServiceFn indirects through a package variable so tests can swap in
+// a stub without touching the OS service manager. The real implementation is
+// provided per-platform in service_{linux,darwin,windows}.go (with a fallback
+// in service.go).
+var installServiceFn = installService
