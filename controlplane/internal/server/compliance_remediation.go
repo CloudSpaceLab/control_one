@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,23 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 )
+
+// Remediation safety event names. These are emitted as webhooks when the
+// dispatch-path safety gates halt or defer a remediation.
+const (
+	EventRemediationManualOnlySkipped    = "remediation.manual_only_skipped"
+	EventRemediationChangeWindowDeferred = "remediation.change_window_deferred"
+	EventRemediationCircuitBreakerTrip   = "remediation.circuit_breaker_tripped"
+	EventRemediationCircuitBreakerAcked  = "remediation.circuit_breaker_acked"
+	EventRemediationApprovalRequested    = "remediation.approval_requested"
+	EventRemediationApprovalApproved     = "remediation.approval_approved"
+	EventRemediationApprovalDenied       = "remediation.approval_denied"
+	EventRemediationApprovalExpired      = "remediation.approval_expired"
+)
+
+// approvalTTL is how long a pending approval stays actionable before the
+// reaper flips it to expired.
+const approvalTTL = 24 * time.Hour
 
 // JobTypeComplianceVerify re-evaluates a single rule after a remediation has
 // completed so the server can mark the compliance_result verified or kick off
@@ -26,6 +45,15 @@ const JobTypeRemediationRollback = "remediation.rollback"
 
 // triggerAutoRemediation creates a remediation job for a failed compliance result
 // if auto-remediation is enabled and a matching script exists for the rule.
+// Four safety gates run immediately before the worker enqueue:
+//  1. Opt-out label: `nodes.labels["remediation"] == "manual-only"` short-circuits.
+//  2. Change window: outside the tenant's configured windows the job is deferred
+//     to the next window (critical severity can override when configured).
+//  3. Circuit breaker: unacked trips short-circuit; fail-rate threshold breaches
+//     trip a fresh breaker and short-circuit.
+//  4. Approval gate: severities at or above min_approval_severity create a
+//     pending approval row and emit a webhook instead of enqueueing.
+//
 // Returns the job ID if a job was created, nil otherwise.
 func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uuid.UUID, result compliance.Result, autoRemediate bool) *uuid.UUID {
 	if !autoRemediate {
@@ -70,18 +98,260 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 		return nil
 	}
 
+	// ---------------------------------------------------------------------
+	// Gate 1: opt-out label. Reads from node.Labels which is populated by
+	// migration 0028 (Worktree A). If A has not merged yet Labels is nil and
+	// this gate is effectively a no-op.
+	// relies on nodes.labels JSONB column from migration 0028 (Worktree A)
+	// ---------------------------------------------------------------------
+	if nodeID != uuid.Nil {
+		node, err := s.store.GetNode(ctx, nodeID)
+		if err != nil {
+			s.logger.Warn("load node for safety gates",
+				zap.String("node_id", nodeID.String()),
+				zap.Error(err),
+			)
+		} else if node != nil && node.Labels != nil {
+			if val, ok := node.Labels["remediation"]; ok {
+				if str, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(str), "manual-only") {
+					s.logger.Info("auto-remediation skipped: node labelled manual-only",
+						zap.String("node_id", nodeID.String()),
+						zap.String("rule_id", result.RuleID),
+					)
+					s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationManualOnlySkipped, map[string]any{
+						"tenant_id": tenantID.String(),
+						"node_id":   nodeID.String(),
+						"rule_id":   result.RuleID,
+						"severity":  result.Severity,
+						"reason":    "node labelled remediation=manual-only",
+					})
+					return nil
+				}
+			}
+		}
+	}
+
+	// Load tenant safety config (synthesises defaults when tenant has no row).
+	cfg, err := s.store.GetTenantRemediationConfig(ctx, tenantID)
+	if err != nil {
+		s.logger.Warn("load tenant remediation config (using defaults)",
+			zap.String("tenant_id", tenantID.String()),
+			zap.Error(err),
+		)
+		defaults := storage.DefaultTenantRemediationConfig(tenantID)
+		cfg = &defaults
+	}
+	if cfg == nil {
+		defaults := storage.DefaultTenantRemediationConfig(tenantID)
+		cfg = &defaults
+	}
+
+	// ---------------------------------------------------------------------
+	// Gate 2: change window. Outside the configured windows the job is
+	// deferred to the next opening unless critical_override + severity=critical
+	// lets it run immediately.
+	// ---------------------------------------------------------------------
+	now := time.Now().UTC()
+	enqueueAt := now
+	severity := strings.ToLower(strings.TrimSpace(result.Severity))
+	if !storage.IsInsideChangeWindow(cfg.ChangeWindows, now) {
+		if cfg.CriticalOverride && severity == "critical" {
+			s.logger.Info("auto-remediation: critical severity overrides change window",
+				zap.String("tenant_id", tenantID.String()),
+				zap.String("rule_id", result.RuleID),
+			)
+		} else {
+			next := storage.NextChangeWindowStart(cfg.ChangeWindows, now)
+			if !next.IsZero() && next.After(now) {
+				enqueueAt = next
+				s.logger.Info("auto-remediation deferred to next change window",
+					zap.String("tenant_id", tenantID.String()),
+					zap.String("rule_id", result.RuleID),
+					zap.Time("process_at", enqueueAt),
+				)
+				s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationChangeWindowDeferred, map[string]any{
+					"tenant_id":  tenantID.String(),
+					"node_id":    nodeID.String(),
+					"rule_id":    result.RuleID,
+					"severity":   severity,
+					"process_at": enqueueAt.Format(time.RFC3339),
+				})
+			}
+		}
+	}
+
+	// ---------------------------------------------------------------------
+	// Gate 3: circuit breaker. Either an unacked trip or a fail-rate breach
+	// short-circuits. A fresh breach trips the breaker so subsequent triggers
+	// short-circuit without re-computing the fail rate.
+	// ---------------------------------------------------------------------
+	if breaker, err := s.store.GetCircuitBreakerState(ctx, tenantID, result.RuleID); err != nil {
+		s.logger.Warn("load circuit breaker state",
+			zap.String("tenant_id", tenantID.String()),
+			zap.String("rule_id", result.RuleID),
+			zap.Error(err),
+		)
+	} else if breaker != nil && breaker.AckedAt == nil {
+		s.logger.Info("auto-remediation short-circuited: breaker tripped",
+			zap.String("tenant_id", tenantID.String()),
+			zap.String("rule_id", result.RuleID),
+			zap.Time("tripped_at", breaker.TrippedAt),
+		)
+		s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationCircuitBreakerTrip, map[string]any{
+			"tenant_id":     tenantID.String(),
+			"rule_id":       result.RuleID,
+			"reason":        breaker.TrippedReason,
+			"short_circuit": true,
+		})
+		return nil
+	}
+
+	if cfg.CircuitBreakerWindowMin > 0 && cfg.CircuitBreakerMinSamples > 0 {
+		window := time.Duration(cfg.CircuitBreakerWindowMin) * time.Minute
+		rate, err := s.store.RemediationFailRate(ctx, tenantID, result.RuleID, window)
+		if err != nil {
+			s.logger.Warn("compute remediation fail rate",
+				zap.String("tenant_id", tenantID.String()),
+				zap.String("rule_id", result.RuleID),
+				zap.Error(err),
+			)
+		} else if rate != nil &&
+			rate.Samples >= cfg.CircuitBreakerMinSamples &&
+			rate.Pct >= cfg.CircuitBreakerFailPct {
+
+			reason := fmt.Sprintf("fail rate %d%% over last %dm (samples=%d, failed=%d, threshold=%d%%)",
+				rate.Pct, cfg.CircuitBreakerWindowMin, rate.Samples, rate.Failed, cfg.CircuitBreakerFailPct)
+			if _, tripErr := s.store.TripCircuitBreaker(ctx, tenantID, result.RuleID, reason); tripErr != nil {
+				s.logger.Error("trip circuit breaker",
+					zap.String("tenant_id", tenantID.String()),
+					zap.String("rule_id", result.RuleID),
+					zap.Error(tripErr),
+				)
+			}
+			s.logger.Warn("auto-remediation tripped circuit breaker",
+				zap.String("tenant_id", tenantID.String()),
+				zap.String("rule_id", result.RuleID),
+				zap.Int("fail_pct", rate.Pct),
+				zap.Int("samples", rate.Samples),
+			)
+			s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationCircuitBreakerTrip, map[string]any{
+				"tenant_id": tenantID.String(),
+				"rule_id":   result.RuleID,
+				"reason":    reason,
+				"fail_pct":  rate.Pct,
+				"samples":   rate.Samples,
+				"failed":    rate.Failed,
+			})
+			return nil
+		}
+	}
+
+	// ---------------------------------------------------------------------
+	// Gate 4: approval gate. At or above the configured min severity the job
+	// is held in remediation_approvals until an operator approves it; the
+	// approval endpoint re-dispatches via dispatchRemediationTask below.
+	// ---------------------------------------------------------------------
+	if storage.SeverityAtLeast(severity, cfg.MinApprovalSeverity) {
+		taskPayload := map[string]any{
+			"script_id":      script.ID.String(),
+			"rule_id":        result.RuleID,
+			"tenant_id":      tenantID.String(),
+			"node_id":        nodeID.String(),
+			"severity":       severity,
+			"platform":       script.Platform,
+			"script_type":    script.ScriptType,
+			"script_content": script.ScriptContent,
+			"auto_triggered": true,
+		}
+		payloadBytes, err := json.Marshal(taskPayload)
+		if err != nil {
+			s.logger.Error("marshal approval task payload",
+				zap.String("rule_id", result.RuleID),
+				zap.Error(err),
+			)
+			return nil
+		}
+		approval, err := s.store.CreateRemediationApproval(ctx, storage.CreateRemediationApprovalParams{
+			TenantID:    tenantID,
+			NodeID:      nodeID,
+			RuleID:      result.RuleID,
+			ScriptID:    script.ID,
+			Severity:    severity,
+			TaskPayload: payloadBytes,
+			ExpiresAt:   now.Add(approvalTTL),
+		})
+		if err != nil {
+			s.logger.Error("create remediation approval",
+				zap.String("rule_id", result.RuleID),
+				zap.Error(err),
+			)
+			return nil
+		}
+		s.logger.Info("auto-remediation awaiting approval",
+			zap.String("approval_id", approval.ID.String()),
+			zap.String("tenant_id", tenantID.String()),
+			zap.String("rule_id", result.RuleID),
+			zap.String("severity", severity),
+		)
+		s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationApprovalRequested, map[string]any{
+			"approval_id": approval.ID.String(),
+			"tenant_id":   tenantID.String(),
+			"node_id":     nodeID.String(),
+			"rule_id":     result.RuleID,
+			"severity":    severity,
+			"expires_at":  approval.ExpiresAt.Format(time.RFC3339),
+		})
+		return nil
+	}
+
+	// All four gates passed — fall through to the Sprint 1 lease + tenant cap
+	// path and enqueue (possibly deferred via enqueueAt).
+	return s.dispatchRemediationTask(ctx, dispatchRemediationTaskParams{
+		TenantID:  tenantID,
+		NodeID:    nodeID,
+		RuleID:    result.RuleID,
+		Script:    script,
+		EnqueueAt: enqueueAt,
+	})
+}
+
+// dispatchRemediationTaskParams bundles the inputs to dispatchRemediationTask.
+// The struct keeps the argument list honest when the approval-approve API
+// re-dispatches after a manual override.
+type dispatchRemediationTaskParams struct {
+	TenantID  uuid.UUID
+	NodeID    uuid.UUID
+	RuleID    string
+	Script    *storage.RemediationScript
+	EnqueueAt time.Time
+}
+
+// dispatchRemediationTask performs the Sprint 1 lease + tenant cap checks,
+// creates the storage.Job row, and enqueues the worker task. It runs AFTER the
+// four safety gates in triggerAutoRemediation; callers that bypass the gates
+// (the approval-approve handler) invoke this directly.
+func (s *Server) dispatchRemediationTask(ctx context.Context, p dispatchRemediationTaskParams) *uuid.UUID {
+	if s.store == nil || s.worker == nil {
+		s.logger.Warn("dispatch remediation skipped: store or worker unavailable")
+		return nil
+	}
+	if p.Script == nil {
+		s.logger.Error("dispatch remediation called with nil script")
+		return nil
+	}
+
 	// Per-tenant concurrency cap. Check before we cut a job row so we don't
 	// persist orphan jobs whenever the cap is hit.
-	if cap := s.remediationTenantCap(); cap > 0 && tenantID != uuid.Nil {
-		inflight, err := s.store.CountTenantLeases(ctx, tenantID)
+	if cap := s.remediationTenantCap(); cap > 0 && p.TenantID != uuid.Nil {
+		inflight, err := s.store.CountTenantLeases(ctx, p.TenantID)
 		if err != nil {
 			s.logger.Warn("count tenant remediation leases",
-				zap.String("tenant_id", tenantID.String()),
+				zap.String("tenant_id", p.TenantID.String()),
 				zap.Error(err),
 			)
 		} else if inflight >= cap {
 			s.logger.Info("auto-remediation deferred: tenant cap reached",
-				zap.String("tenant_id", tenantID.String()),
+				zap.String("tenant_id", p.TenantID.String()),
 				zap.Int("in_flight", inflight),
 				zap.Int("cap", cap),
 			)
@@ -89,21 +359,20 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 		}
 	}
 
-	// Build job payload following the pattern in handleExecuteRemediationScript.
 	jobPayload := map[string]any{
-		"script_id":      script.ID.String(),
-		"rule_id":        result.RuleID,
-		"node_id":        nodeID.String(),
-		"platform":       script.Platform,
-		"script_type":    script.ScriptType,
-		"script_content": script.ScriptContent,
+		"script_id":      p.Script.ID.String(),
+		"rule_id":        p.RuleID,
+		"node_id":        p.NodeID.String(),
+		"platform":       p.Script.Platform,
+		"script_type":    p.Script.ScriptType,
+		"script_content": p.Script.ScriptContent,
 		"auto_triggered": true,
 	}
 
 	payloadBytes, err := json.Marshal(jobPayload)
 	if err != nil {
 		s.logger.Error("marshal auto-remediation job payload",
-			zap.String("rule_id", result.RuleID),
+			zap.String("rule_id", p.RuleID),
 			zap.Error(err),
 		)
 		return nil
@@ -111,14 +380,14 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 
 	job := &storage.Job{
 		Type:     "remediation.execute",
-		TenantID: tenantID,
+		TenantID: p.TenantID,
 		Payload:  payloadBytes,
 		Status:   storage.JobStatusQueued,
 	}
 	job, err = s.store.CreateJob(ctx, job, nil)
 	if err != nil {
 		s.logger.Error("create auto-remediation job",
-			zap.String("rule_id", result.RuleID),
+			zap.String("rule_id", p.RuleID),
 			zap.Error(err),
 		)
 		return nil
@@ -126,16 +395,16 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 
 	// Acquire the per-node lease. If another remediation is already in flight
 	// on this node we skip rather than stampede it.
-	if nodeID != uuid.Nil && tenantID != uuid.Nil {
-		if _, err := s.store.AcquireRemediationLease(ctx, tenantID, nodeID, job.ID, s.remediationLeaseTTL()); err != nil {
+	if p.NodeID != uuid.Nil && p.TenantID != uuid.Nil {
+		if _, err := s.store.AcquireRemediationLease(ctx, p.TenantID, p.NodeID, job.ID, s.remediationLeaseTTL()); err != nil {
 			if errors.Is(err, storage.ErrLeaseHeld) {
 				s.logger.Info("auto-remediation skipped: lease already held",
-					zap.String("node_id", nodeID.String()),
-					zap.String("rule_id", result.RuleID),
+					zap.String("node_id", p.NodeID.String()),
+					zap.String("rule_id", p.RuleID),
 				)
 			} else {
 				s.logger.Error("acquire remediation lease",
-					zap.String("node_id", nodeID.String()),
+					zap.String("node_id", p.NodeID.String()),
 					zap.Error(err),
 				)
 			}
@@ -144,7 +413,7 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 		}
 	}
 
-	chained := s.chainRemediationExecution(job.ID, script.ID, nodeID, result.RuleID, script, true)
+	chained := s.chainRemediationExecution(job.ID, p.Script.ID, p.NodeID, p.RuleID, p.Script, true)
 
 	task := worker.Task{
 		Name:         fmt.Sprintf("auto-remediation-%s", job.ID),
@@ -152,27 +421,105 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 		MaxAttempts:  3,
 		RetryBackoff: s.cfg.Worker.RetryBackoff,
 	}
-	if err := s.worker.Enqueue(task); err != nil {
+
+	enqueueErr := s.worker.EnqueueAt(task, p.EnqueueAt)
+	if enqueueErr != nil {
 		s.logger.Error("enqueue auto-remediation job",
 			zap.String("job_id", job.ID.String()),
-			zap.String("rule_id", result.RuleID),
-			zap.Error(err),
+			zap.String("rule_id", p.RuleID),
+			zap.Error(enqueueErr),
 		)
 		_ = s.store.UpdateJobStatus(ctx, job.ID, storage.JobStatusFailed, "failed to enqueue auto-remediation job", nil)
-		if nodeID != uuid.Nil {
-			_ = s.store.ReleaseRemediationLease(ctx, nodeID)
+		if p.NodeID != uuid.Nil {
+			_ = s.store.ReleaseRemediationLease(ctx, p.NodeID)
 		}
 		return nil
 	}
 
 	s.logger.Info("auto-remediation triggered",
 		zap.String("job_id", job.ID.String()),
-		zap.String("rule_id", result.RuleID),
-		zap.String("node_id", nodeID.String()),
-		zap.String("script_id", script.ID.String()),
+		zap.String("rule_id", p.RuleID),
+		zap.String("node_id", p.NodeID.String()),
+		zap.String("script_id", p.Script.ID.String()),
+		zap.Time("process_at", p.EnqueueAt),
 	)
 
 	return &job.ID
+}
+
+// emitRemediationSafetyEvent fires a webhook event for tenant-scoped
+// subscribers. Deliveries run in a detached goroutine so the dispatch path is
+// never blocked on slow downstreams. The function is intentionally best-effort:
+// storage errors are logged and swallowed.
+func (s *Server) emitRemediationSafetyEvent(ctx context.Context, tenantID uuid.UUID, eventType string, payload map[string]any) {
+	if s.store == nil {
+		return
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if _, exists := payload["event_type"]; !exists {
+		payload["event_type"] = eventType
+	}
+	if _, exists := payload["timestamp"]; !exists {
+		payload["timestamp"] = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	// Run delivery in a detached goroutine with a fresh context so slow
+	// webhook endpoints never wedge the compliance request path.
+	go func(tenantID uuid.UUID, eventType string, payload map[string]any) {
+		deliverCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		webhooks, err := s.store.ListWebhooksByEvent(deliverCtx, tenantID, eventType)
+		if err != nil {
+			s.logger.Warn("list webhooks for remediation event",
+				zap.String("event_type", eventType),
+				zap.Error(err),
+			)
+			return
+		}
+		for _, wh := range webhooks {
+			func(wh storage.Webhook) {
+				success, statusCode, responseBody, err := s.deliverWebhook(&wh, eventType, payload)
+				deliveryStatus := "success"
+				if !success {
+					deliveryStatus = "failed"
+				}
+				delivery := storage.WebhookDelivery{
+					ID:            uuid.New(),
+					WebhookID:     wh.ID,
+					EventType:     eventType,
+					Status:        deliveryStatus,
+					AttemptNumber: 1,
+					RequestBody:   payload,
+					CreatedAt:     time.Now().UTC(),
+				}
+				if statusCode > 0 {
+					delivery.HTTPStatusCode = sql.NullInt64{Int64: int64(statusCode), Valid: true}
+				}
+				if responseBody != "" {
+					delivery.ResponseBody = sql.NullString{String: responseBody, Valid: true}
+				}
+				if err != nil {
+					delivery.ErrorMessage = sql.NullString{String: err.Error(), Valid: true}
+					s.logger.Warn("remediation webhook delivery failed",
+						zap.String("webhook_id", wh.ID.String()),
+						zap.String("event_type", eventType),
+						zap.Error(err),
+					)
+				}
+				delivery.DeliveredAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+				if recErr := s.store.RecordWebhookDelivery(deliverCtx, delivery); recErr != nil {
+					s.logger.Warn("record remediation webhook delivery",
+						zap.String("webhook_id", wh.ID.String()),
+						zap.Error(recErr),
+					)
+				}
+			}(wh)
+		}
+	}(tenantID, eventType, payload)
+	_ = ctx
 }
 
 // chainRemediationExecution wraps buildRemediationJobExecution with the

@@ -233,6 +233,10 @@ func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluat
 			s.logger.Warn("persist compliance results from evaluate", zap.Error(err))
 		}
 
+		// First-scan hook — if this is the node's first compliance result,
+		// stamp first_scan_at and potentially flip the enrollment gate.
+		s.handleFirstScanHook(ctx, nodeID)
+
 		// Emit webhook events and trigger auto-remediation for failures.
 		s.emitComplianceEvents(ctx, tenantID, nodeID, results, "")
 		for _, r := range results {
@@ -243,6 +247,22 @@ func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluat
 	}
 
 	return results, nil
+}
+
+// handleFirstScanHook is called from every code path that persists compliance
+// results. It idempotently stamps nodes.first_scan_at and — if the node already
+// has a heartbeat — flips it from enrollment_pending to active. Safe to call
+// repeatedly; MarkNodeFirstScan uses COALESCE so only the first call mutates.
+func (s *Server) handleFirstScanHook(ctx context.Context, nodeID uuid.UUID) {
+	if s.store == nil || nodeID == uuid.Nil {
+		return
+	}
+	node, err := s.store.MarkNodeFirstScan(ctx, nodeID)
+	if err != nil {
+		s.logger.Warn("mark first scan", zap.String("node_id", nodeID.String()), zap.Error(err))
+		return
+	}
+	s.maybeActivatePendingNode(ctx, node)
 }
 
 func evaluateComplianceWithRealScanners(req complianceEvaluateRequest) []compliance.Result {
