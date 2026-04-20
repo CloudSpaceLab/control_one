@@ -19,6 +19,23 @@ func (a *azureAdapter) RunBaselines(ctx context.Context, nodeID string, opts Opt
 	return a.httpAdapter.RunBaselines(ctx, nodeID, opts)
 }
 
+// Destroy for Azure delegates to the provisioning backend which issues
+// VirtualMachines.Delete + NIC/disk cleanup via armcompute/armnetwork SDKs.
+func (a *azureAdapter) Destroy(ctx context.Context, nodeID string) error {
+	return a.httpAdapter.Destroy(ctx, nodeID)
+}
+
+// RegisterLB for Azure maps to LoadBalancerBackendAddressPoolsClient Add when
+// clusterMeta["lb_backend_pool_id"] is set.
+func (a *azureAdapter) RegisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error {
+	return a.httpAdapter.RegisterLB(ctx, nodeID, clusterMeta)
+}
+
+// DeregisterLB for Azure maps to LoadBalancerBackendAddressPoolsClient Remove.
+func (a *azureAdapter) DeregisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error {
+	return a.httpAdapter.DeregisterLB(ctx, nodeID, clusterMeta)
+}
+
 func ensureAzureMetadata(metadata map[string]string) {
 	if metadata == nil {
 		return

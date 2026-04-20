@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,12 +23,9 @@ const (
 	JobTypeClusterTeardown  = "cluster.teardown"
 )
 
-// Sprint 1 intentionally defers shrink + teardown cloud-destroy. Exposed as
-// constants so handlers and tests share the exact contract string.
-const (
-	clusterShrinkDeferredMessage   = "shrink deferred to Sprint 2"
-	clusterTeardownDeferredMessage = "teardown deferred to Sprint 2"
-)
+// Sprint 1 left shrink + teardown as 501 stubs. Sprint 2 Worktree E unblocks
+// both: handlers now return 202 + job_id and the worker drains
+// (DeregisterLB → Destroy → RemoveClusterMember → DeleteCluster).
 
 // ─── Request / Response types ───────────────────────────────────────
 
@@ -158,6 +156,13 @@ func (s *Server) handleClusterSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid cluster id", http.StatusBadRequest)
 		return
 	}
+
+	// /rollouts subtree delegates to the cluster-rollouts API handler.
+	if len(segments) >= 2 && segments[1] == "rollouts" {
+		s.handleClusterRolloutsRoute(w, r, clusterID, segments[2:])
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return
@@ -383,25 +388,22 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request, clus
 		}
 		delta := newSize - cluster.DesiredSize
 
-		if delta < 0 {
-			// Shrink is deliberately deferred in Sprint 1.
-			http.Error(w, clusterShrinkDeferredMessage, http.StatusNotImplemented)
-			return
-		}
-
-		// Apply role_plan + labels + strategy updates first (if included) so the scale
-		// job works against the updated shape.
+		// Apply role_plan + labels + strategy updates first (if included) so
+		// the scale job works against the updated shape. Shrink + expand both
+		// go through the same update block — only the direction differs.
 		updateParams := storage.UpdateClusterParams{DesiredSize: &newSize}
 		if req.RolePlan != nil {
 			rp := rolePlanToMap(*req.RolePlan)
 			updateParams.RolePlan = &rp
 		}
+		labelsChanged := false
 		if req.Labels != nil {
 			labels := *req.Labels
 			if labels == nil {
 				labels = map[string]any{}
 			}
 			updateParams.Labels = &labels
+			labelsChanged = true
 		}
 		if req.FailureDomainStrategy != nil {
 			strategy := strings.TrimSpace(*req.FailureDomainStrategy)
@@ -422,10 +424,19 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request, clus
 			return
 		}
 
+		if labelsChanged {
+			s.propagateClusterLabelsToMembers(r.Context(), updated.ID)
+		}
+
 		if delta == 0 {
 			// Nothing to scale. Return the updated cluster with no job.
 			writeJSON(w, http.StatusOK, newClusterResponse(*updated, nil, nil))
 			return
+		}
+
+		direction := "expand"
+		if delta < 0 {
+			direction = "shrink"
 		}
 
 		jobID, enqueueErr := s.enqueueClusterScale(r, updated, delta)
@@ -438,7 +449,7 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request, clus
 		s.recordAudit(r.Context(), principal, updated.TenantID, "cluster.scale", "cluster", updated.ID.String(), map[string]any{
 			"desired_size": updated.DesiredSize,
 			"delta":        delta,
-			"direction":    "expand",
+			"direction":    direction,
 			"job_id":       jobID.String(),
 		})
 
@@ -492,12 +503,37 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request, clus
 		return
 	}
 
+	if req.Labels != nil {
+		s.propagateClusterLabelsToMembers(r.Context(), updated.ID)
+	}
+
 	s.recordAudit(r.Context(), principal, updated.TenantID, "cluster.updated", "cluster", updated.ID.String(), map[string]any{
 		"labels_updated":    req.Labels != nil,
 		"role_plan_updated": req.RolePlan != nil,
 	})
 
 	writeJSON(w, http.StatusOK, newClusterResponse(*updated, nil, nil))
+}
+
+// propagateClusterLabelsToMembers loops each current member of the cluster and
+// refreshes the `cluster.`-prefixed projection on the node. Invoked from
+// handleUpdateCluster whenever labels changed. Failures are logged but do not
+// fail the PATCH — the cluster update itself is already persisted.
+func (s *Server) propagateClusterLabelsToMembers(ctx context.Context, clusterID uuid.UUID) {
+	members, err := s.store.ListClusterMembers(ctx, clusterID)
+	if err != nil {
+		s.logger.Warn("list cluster members for label propagation", zap.Error(err))
+		return
+	}
+	for _, m := range members {
+		if pErr := s.store.PropagateClusterLabelsToNode(ctx, clusterID, m.NodeID); pErr != nil {
+			s.logger.Warn("propagate cluster labels to node failed",
+				zap.String("cluster_id", clusterID.String()),
+				zap.String("node_id", m.NodeID.String()),
+				zap.Error(pErr),
+			)
+		}
+	}
 }
 
 func (s *Server) handleDeleteCluster(w http.ResponseWriter, r *http.Request, clusterID uuid.UUID, principal *auth.Principal) {
@@ -512,13 +548,27 @@ func (s *Server) handleDeleteCluster(w http.ResponseWriter, r *http.Request, clu
 		return
 	}
 
-	// Sprint 1 contract: cloud-resource teardown is deferred. Respond 501 with an
-	// explicit message and audit the attempt so operators see it in the log.
-	s.recordAudit(r.Context(), principal, cluster.TenantID, "cluster.teardown_rejected", "cluster", cluster.ID.String(), map[string]any{
-		"reason": clusterTeardownDeferredMessage,
+	// Sprint 2 Worktree E unblocks teardown: enqueue cluster.teardown which
+	// drains members (DeregisterLB → Destroy → RemoveClusterMember) in
+	// reverse-position order and finally deletes the cluster row.
+	jobID, enqueueErr := s.enqueueClusterTeardown(r, cluster)
+	if enqueueErr != nil {
+		s.logger.Error("enqueue cluster teardown", zap.Error(enqueueErr))
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+
+	s.recordAudit(r.Context(), principal, cluster.TenantID, "cluster.teardown", "cluster", cluster.ID.String(), map[string]any{
+		"job_id": jobID.String(),
 	})
 
-	http.Error(w, clusterTeardownDeferredMessage, http.StatusNotImplemented)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(clusterAcceptedResponse{
+		ClusterID: cluster.ID.String(),
+		JobID:     jobID.String(),
+		State:     "terminating",
+	})
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -707,14 +757,19 @@ func (s *Server) enqueueClusterProvision(r *http.Request, cluster *storage.Clust
 	return created.ID, nil
 }
 
-// enqueueClusterScale creates a cluster.scale job + task pair (expand only in Sprint 1).
+// enqueueClusterScale creates a cluster.scale job + task pair (both expand and
+// shrink share this path — the shrink direction is unblocked in Sprint 2 E).
 func (s *Server) enqueueClusterScale(r *http.Request, cluster *storage.Cluster, delta int) (uuid.UUID, error) {
+	direction := "expand"
+	if delta < 0 {
+		direction = "shrink"
+	}
 	payload := clusterScalePayload{
 		ClusterID:   cluster.ID.String(),
 		TenantID:    cluster.TenantID.String(),
 		DesiredSize: cluster.DesiredSize,
 		Delta:       delta,
-		Direction:   "expand",
+		Direction:   direction,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -729,7 +784,7 @@ func (s *Server) enqueueClusterScale(r *http.Request, cluster *storage.Cluster, 
 	}
 	event := &storage.JobEvent{
 		Status:  storage.JobStatusQueued,
-		Message: fmt.Sprintf("cluster.scale queued (delta=%d)", delta),
+		Message: fmt.Sprintf("cluster.scale queued (delta=%d, direction=%s)", delta, direction),
 	}
 
 	ctx := r.Context()
@@ -750,6 +805,52 @@ func (s *Server) enqueueClusterScale(r *http.Request, cluster *storage.Cluster, 
 	if err := s.worker.Enqueue(task); err != nil {
 		_ = s.store.UpdateJobStatus(ctx, created.ID, storage.JobStatusFailed, fmt.Sprintf("enqueue failed: %v", err), nil)
 		return uuid.Nil, fmt.Errorf("enqueue cluster.scale task: %w", err)
+	}
+	return created.ID, nil
+}
+
+// enqueueClusterTeardown creates a cluster.teardown job + task pair. Invoked
+// from handleDeleteCluster — the worker drains every member and finally
+// deletes the cluster row.
+func (s *Server) enqueueClusterTeardown(r *http.Request, cluster *storage.Cluster) (uuid.UUID, error) {
+	payload := clusterProvisionPayload{
+		ClusterID: cluster.ID.String(),
+		TenantID:  cluster.TenantID.String(),
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("marshal cluster.teardown payload: %w", err)
+	}
+
+	job := &storage.Job{
+		TenantID: cluster.TenantID,
+		Type:     JobTypeClusterTeardown,
+		Status:   storage.JobStatusQueued,
+		Payload:  payloadBytes,
+	}
+	event := &storage.JobEvent{
+		Status:  storage.JobStatusQueued,
+		Message: "cluster.teardown queued",
+	}
+
+	ctx := r.Context()
+	created, err := s.store.CreateJob(ctx, job, event)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create cluster.teardown job: %w", err)
+	}
+
+	if s.worker == nil {
+		return uuid.Nil, errors.New("worker unavailable")
+	}
+	task := worker.Task{
+		Name:         fmt.Sprintf("cluster-teardown-%s", created.ID),
+		Job:          s.buildClusterTeardownJob(created.ID, cluster.ID, cluster.TenantID),
+		MaxAttempts:  1,
+		RetryBackoff: s.cfg.Worker.RetryBackoff,
+	}
+	if err := s.worker.Enqueue(task); err != nil {
+		_ = s.store.UpdateJobStatus(ctx, created.ID, storage.JobStatusFailed, fmt.Sprintf("enqueue failed: %v", err), nil)
+		return uuid.Nil, fmt.Errorf("enqueue cluster.teardown task: %w", err)
 	}
 	return created.ID, nil
 }

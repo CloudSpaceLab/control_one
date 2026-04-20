@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Dashboard' },
   { to: '/tenants', label: 'Tenants' },
   { to: '/nodes', label: 'Nodes' },
+  { to: '/fleet-enroll', label: 'Fleet Enroll' },
   { to: '/jobs', label: 'Jobs' },
   { to: '/templates', label: 'Templates' },
   { to: '/compliance', label: 'Compliance' },
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/users', label: 'Users & Roles' },
   { to: '/telemetry', label: 'Telemetry' },
   { to: '/secrets', label: 'Secrets' },
+  { to: '/offline-bundle', label: 'Offline Bundle' },
   { to: '/settings', label: 'Settings' },
 ];
 

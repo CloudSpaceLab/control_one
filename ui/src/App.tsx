@@ -11,6 +11,8 @@ import { Users } from './pages/Users';
 import { Telemetry } from './pages/Telemetry';
 import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
+import { FleetEnroll } from './pages/FleetEnroll';
+import { OfflineBundle } from './pages/OfflineBundle';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
@@ -29,6 +31,7 @@ export function App(): JSX.Element {
         <Route index element={<Dashboard />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="nodes" element={<Nodes />} />
+        <Route path="fleet-enroll" element={<FleetEnroll />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />
         <Route path="compliance" element={<Compliance />} />
@@ -36,6 +39,7 @@ export function App(): JSX.Element {
         <Route path="users" element={<Users />} />
         <Route path="telemetry" element={<Telemetry />} />
         <Route path="secrets" element={<Secrets />} />
+        <Route path="offline-bundle" element={<OfflineBundle />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />

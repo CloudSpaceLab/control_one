@@ -15,6 +15,12 @@ export interface CreateTenantPayload {
   name: string;
 }
 
+export type NodeState =
+  | 'enrollment_pending'
+  | 'active'
+  | 'enrollment_failed'
+  | 'retired';
+
 export interface NodeSummary {
   id: string;
   tenant_id: string;
@@ -22,8 +28,53 @@ export interface NodeSummary {
   os?: string;
   arch?: string;
   public_ip?: string;
+  state: NodeState | string;
+  last_seen_at?: string;
+  first_scan_at?: string;
+  labels?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+export interface FleetEnrollTarget {
+  host: string;
+  port?: number;
+  user?: string;
+}
+
+export interface FleetEnrollRequest {
+  targets: FleetEnrollTarget[];
+  ssh_user?: string;
+  // base64-encoded PEM
+  ssh_key?: string;
+  ssh_password?: string;
+  token: string;
+  parallel?: number;
+  labels?: Record<string, string>;
+}
+
+export interface FleetEnrollResponse {
+  job_id: string;
+  status: string;
+  message: string;
+}
+
+export interface FleetEnrollResult {
+  id: string;
+  host: string;
+  port: number;
+  success: boolean;
+  node_id?: string;
+  error_message?: string;
+  ssh_output?: string;
+  duration_ms?: number;
+  created_at: string;
+}
+
+export interface FleetEnrollStatus {
+  job_id: string;
+  status: string;
+  results: FleetEnrollResult[];
 }
 
 export interface RegisterNodePayload {
@@ -415,6 +466,33 @@ export interface SecretSync {
   sync_status: string;
   sync_error?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface EnrollmentToken {
+  id: string;
+  tenant_id: string;
+  name: string;
+  token?: string;
+  max_nodes: number;
+  nodes_enrolled: number;
+  labels?: Record<string, string>;
+  capabilities?: string[];
+  expires_at: string;
+  revoked_at?: string | null;
+  created_by?: string | null;
+  created_at: string;
+}
+
+export interface ListEnrollmentTokensParams {
+  tenant_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface BundleDownloadOptions {
+  os: string;
+  arch: string;
+  token: string;
 }
 
 export interface ListSecretGroupsParams {
@@ -1005,6 +1083,20 @@ export class APIClient {
     });
   }
 
+  // ── Fleet enrollment (Sprint 2 Pillar 1.7) ────────────────────────────
+
+  async startFleetEnroll(payload: FleetEnrollRequest): Promise<FleetEnrollResponse> {
+    return this.request<FleetEnrollResponse>('/api/v1/fleet/enroll', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getFleetEnrollStatus(jobId: string): Promise<FleetEnrollStatus> {
+    const encoded = encodeURIComponent(jobId);
+    return this.request<FleetEnrollStatus>(`/api/v1/fleet/enroll/${encoded}`);
+  }
+
   async listSecretSyncs(groupId: string, params: ListSecretSyncsParams = {}): Promise<PaginatedResponse<SecretSync>> {
     const search = new URLSearchParams();
     if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
@@ -1018,6 +1110,34 @@ export class APIClient {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
+  }
+
+  async listEnrollmentTokens(
+    params: ListEnrollmentTokensParams = {},
+  ): Promise<PaginatedResponse<EnrollmentToken>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<EnrollmentToken>>(
+      `/api/v1/enrollment-tokens${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  // buildBundleDownloadUrl returns the fully qualified GET URL for the air-gapped
+  // bundle endpoint. The wizard points `window.location` at this URL so the
+  // browser handles the tarball download directly.
+  buildBundleDownloadUrl(options: BundleDownloadOptions): string {
+    const search = new URLSearchParams();
+    search.set('os', options.os);
+    search.set('arch', options.arch);
+    search.set('token', options.token);
+    return `${this.baseUrl}/api/v1/agent/bundle?${search.toString()}`;
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

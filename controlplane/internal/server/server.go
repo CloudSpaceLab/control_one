@@ -44,6 +44,11 @@ type Store interface {
 	RetireNode(context.Context, uuid.UUID) error
 	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
+	SetNodeState(context.Context, uuid.UUID, string) error
+	TouchNodeHeartbeat(context.Context, uuid.UUID) (*storage.Node, error)
+	MarkNodeFirstScan(context.Context, uuid.UUID) (*storage.Node, error)
+	UpdateNodeLabels(context.Context, uuid.UUID, map[string]any) error
+	ListEnrollmentPendingNodesOlderThan(context.Context, time.Time) ([]storage.Node, error)
 	GetUserByExternalID(context.Context, string) (*storage.User, error)
 	GetUser(context.Context, uuid.UUID) (*storage.User, error)
 	ListUsers(context.Context, int, int) ([]storage.User, int, error)
@@ -140,6 +145,17 @@ type Store interface {
 	AcquireRemediationLease(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Duration) (*storage.RemediationLease, error)
 	ReleaseRemediationLease(context.Context, uuid.UUID) error
 	CountTenantLeases(context.Context, uuid.UUID) (int, error)
+	GetTenantRemediationConfig(context.Context, uuid.UUID) (*storage.TenantRemediationConfig, error)
+	UpsertTenantRemediationConfig(context.Context, storage.TenantRemediationConfig) (*storage.TenantRemediationConfig, error)
+	CreateRemediationApproval(context.Context, storage.CreateRemediationApprovalParams) (*storage.RemediationApproval, error)
+	GetRemediationApproval(context.Context, uuid.UUID) (*storage.RemediationApproval, error)
+	ListRemediationApprovals(context.Context, storage.ListRemediationApprovalsFilter, int, int) ([]storage.RemediationApproval, int, error)
+	ResolveRemediationApproval(context.Context, uuid.UUID, storage.ApprovalStatus, uuid.UUID) (*storage.RemediationApproval, error)
+	ExpireRemediationApprovals(context.Context, time.Time) (int, error)
+	GetCircuitBreakerState(context.Context, uuid.UUID, string) (*storage.RemediationCircuitBreakerState, error)
+	TripCircuitBreaker(context.Context, uuid.UUID, string, string) (*storage.RemediationCircuitBreakerState, error)
+	AckCircuitBreaker(context.Context, uuid.UUID, string, uuid.UUID) (*storage.RemediationCircuitBreakerState, error)
+	RemediationFailRate(context.Context, uuid.UUID, string, time.Duration) (*storage.RemediationFailRate, error)
 	CreateCluster(context.Context, storage.CreateClusterParams) (*storage.Cluster, error)
 	ListClusters(context.Context, uuid.UUID, int, int) ([]storage.Cluster, int, error)
 	GetClusterByID(context.Context, uuid.UUID) (*storage.Cluster, error)
@@ -155,6 +171,22 @@ type Store interface {
 	ListClusterRollouts(context.Context, uuid.UUID, int, int) ([]storage.ClusterRollout, int, error)
 	UpdateClusterRollout(context.Context, uuid.UUID, storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error)
 	DeleteClusterRollout(context.Context, uuid.UUID) error
+	// Node cert rotation + history (Worktree B).
+	RotateNodeCertificate(context.Context, uuid.UUID, string) (*storage.NodeCertHistory, error)
+	GetNodeCertHistory(context.Context, uuid.UUID) ([]storage.NodeCertHistory, error)
+	LatestNodeCertHistory(context.Context, uuid.UUID) (*storage.NodeCertHistory, error)
+	// Cluster LB registration + label propagation (Worktree E).
+	CreateClusterLBRegistration(context.Context, storage.CreateClusterLBRegistrationParams) (*storage.ClusterLBRegistration, error)
+	MarkClusterLBRegistrationDeregistered(context.Context, uuid.UUID, uuid.UUID, string) error
+	ListClusterLBRegistrationsForNode(context.Context, uuid.UUID) ([]storage.ClusterLBRegistration, error)
+	ListClusterLBRegistrationsForCluster(context.Context, uuid.UUID) ([]storage.ClusterLBRegistration, error)
+	PropagateClusterLabelsToNode(context.Context, uuid.UUID, uuid.UUID) error
+	// Cluster rollout waves (Worktree D).
+	CreateClusterRolloutWave(context.Context, storage.CreateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
+	GetClusterRolloutWave(context.Context, uuid.UUID) (*storage.ClusterRolloutWave, error)
+	GetClusterRolloutWaveByNumber(context.Context, uuid.UUID, int) (*storage.ClusterRolloutWave, error)
+	ListClusterRolloutWaves(context.Context, uuid.UUID) ([]storage.ClusterRolloutWave, error)
+	UpdateClusterRolloutWave(context.Context, uuid.UUID, storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -429,6 +461,9 @@ func firstQueryValue(values map[string][]string, key string) string {
 // TaskQueue defines minimal worker manager contract for enqueuing asynchronous tasks.
 type TaskQueue interface {
 	Enqueue(worker.Task) error
+	// EnqueueAt schedules a task to run no earlier than the given time. A zero
+	// time must behave exactly like Enqueue.
+	EnqueueAt(worker.Task, time.Time) error
 }
 
 type workerStatusProvider interface {
@@ -450,6 +485,17 @@ type Server struct {
 	complianceScheduler *ComplianceScheduler
 	agentSigningOnce    sync.Once
 	agentSigning        *agentSigningMaterial
+
+	// enrollmentReaper drives the background loop that flips nodes stuck in
+	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
+	enrollmentReaper enrollmentReaperState
+	// clockOverride is optional — tests override it to deterministically
+	// drive the reaper without real wall-clock delays.
+	clockOverride func() time.Time
+	// auditAsync controls whether recordAudit dispatches the store write on a
+	// goroutine. Production defaults to true; tests flip it to false per-server
+	// to keep audit writes deterministic without touching a shared global.
+	auditAsync bool
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -487,6 +533,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/trends", s.handleComplianceTrends)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts", s.handleRemediationScriptsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts/", s.handleRemediationScriptSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)
+	s.baseRouter.HandleFunc("/api/v1/remediation/approvals/", s.handleRemediationApprovalSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/remediation/circuit-breaker/", s.handleRemediationCircuitBreakerSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/policies", s.handleRetentionPoliciesCollection)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/cleanup", s.handleRetentionCleanup)
 	s.baseRouter.HandleFunc("/api/v1/secrets/groups", s.handleSecretGroupsCollection)
@@ -506,6 +555,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/agent/binary/manifest", s.handleAgentBinaryManifest)
 	s.baseRouter.HandleFunc("/api/v1/agent/public-key", s.handleAgentPublicKey)
+	s.baseRouter.HandleFunc("/api/v1/agent/bundle", s.handleAgentBundle)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
 	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
@@ -1241,6 +1291,16 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && segments[1] == "rotate-cert" {
+		s.handleRotateCert(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "heartbeat" {
+		s.handleNodeHeartbeat(w, r, nodeID)
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return
@@ -1401,27 +1461,45 @@ func (r createNodeRequest) validate() error {
 }
 
 type nodeResponse struct {
-	ID        string  `json:"id"`
-	TenantID  string  `json:"tenant_id"`
-	Hostname  string  `json:"hostname"`
-	OS        *string `json:"os,omitempty"`
-	Arch      *string `json:"arch,omitempty"`
-	PublicIP  *string `json:"public_ip,omitempty"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID          string         `json:"id"`
+	TenantID    string         `json:"tenant_id"`
+	Hostname    string         `json:"hostname"`
+	OS          *string        `json:"os,omitempty"`
+	Arch        *string        `json:"arch,omitempty"`
+	PublicIP    *string        `json:"public_ip,omitempty"`
+	State       string         `json:"state"`
+	LastSeenAt  *string        `json:"last_seen_at,omitempty"`
+	FirstScanAt *string        `json:"first_scan_at,omitempty"`
+	Labels      map[string]any `json:"labels"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
 }
 
 func nodeResponseFromModel(n storage.Node) nodeResponse {
-	return nodeResponse{
+	resp := nodeResponse{
 		ID:        n.ID.String(),
 		TenantID:  n.TenantID.String(),
 		Hostname:  n.Hostname,
 		OS:        nullStringPtr(n.OS),
 		Arch:      nullStringPtr(n.Arch),
 		PublicIP:  nullStringPtr(n.PublicIP),
+		State:     n.State,
+		Labels:    n.Labels,
 		CreatedAt: n.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: n.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+	if resp.Labels == nil {
+		resp.Labels = map[string]any{}
+	}
+	if n.LastSeenAt != nil {
+		ts := n.LastSeenAt.UTC().Format(time.RFC3339)
+		resp.LastSeenAt = &ts
+	}
+	if n.FirstScanAt != nil {
+		ts := n.FirstScanAt.UTC().Format(time.RFC3339)
+		resp.FirstScanAt = &ts
+	}
+	return resp
 }
 
 type updateNodeRequest struct {
@@ -1603,7 +1681,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
 
-	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux}
+	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true}
 	s.configureJobIntegrations()
 	s.registerRoutes()
 
@@ -1625,6 +1703,8 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 // Start begins serving HTTP requests.
 func (s *Server) Start() error {
+	s.startEnrollmentReaper()
+
 	if !s.cfg.TLS.Enabled {
 		return s.http.ListenAndServe()
 	}
@@ -1643,6 +1723,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.complianceScheduler != nil {
 		s.complianceScheduler.Stop()
 	}
+	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return s.http.Shutdown(shutdownCtx)

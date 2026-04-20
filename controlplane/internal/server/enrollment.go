@@ -410,7 +410,11 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create node
+	// Create node. New enrollments land in 'enrollment_pending' and only
+	// flip to 'active' once a heartbeat AND the first compliance scan both
+	// arrive (see heartbeat.go + MarkNodeFirstScan hook in compliance.go).
+	// The reaper job `enrollment.pending_timeout` flips stragglers to
+	// 'enrollment_failed' after 10m.
 	node := &storage.Node{
 		ID:        uuid.New(),
 		TenantID:  tenant.ID,
@@ -419,6 +423,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		Arch:      toNullString(&req.Arch),
 		PublicIP:  toNullString(&req.PublicIP),
 		MachineID: toNullString(&machineID),
+		State:     storage.NodeStateEnrollmentPending,
 	}
 
 	created, err := s.store.CreateNode(r.Context(), node)
@@ -427,6 +432,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+
+	// The enrollment reaper (started in Server.Start) will flip this node to
+	// enrollment_failed if heartbeat + first scan don't both land in time.
 
 	// Increment enrollment count
 	if err := s.store.IncrementEnrollmentCount(r.Context(), token.ID); err != nil {
