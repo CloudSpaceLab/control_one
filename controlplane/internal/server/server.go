@@ -492,6 +492,10 @@ type Server struct {
 	// clockOverride is optional — tests override it to deterministically
 	// drive the reaper without real wall-clock delays.
 	clockOverride func() time.Time
+	// auditAsync controls whether recordAudit dispatches the store write on a
+	// goroutine. Production defaults to true; tests flip it to false per-server
+	// to keep audit writes deterministic without touching a shared global.
+	auditAsync bool
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -1677,7 +1681,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
 
-	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux}
+	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true}
 	s.configureJobIntegrations()
 	s.registerRoutes()
 
@@ -1699,6 +1703,8 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 // Start begins serving HTTP requests.
 func (s *Server) Start() error {
+	s.startEnrollmentReaper()
+
 	if !s.cfg.TLS.Enabled {
 		return s.http.ListenAndServe()
 	}
@@ -1717,6 +1723,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.complianceScheduler != nil {
 		s.complianceScheduler.Stop()
 	}
+	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return s.http.Shutdown(shutdownCtx)

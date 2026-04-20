@@ -433,9 +433,8 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Schedule the reaper for this node so it flips to enrollment_failed
-	// if a heartbeat + first scan don't both land within the timeout.
-	s.scheduleEnrollmentPendingTimeout(r.Context(), created.ID, tenant.ID)
+	// The enrollment reaper (started in Server.Start) will flip this node to
+	// enrollment_failed if heartbeat + first scan don't both land in time.
 
 	// Increment enrollment count
 	if err := s.store.IncrementEnrollmentCount(r.Context(), token.ID); err != nil {

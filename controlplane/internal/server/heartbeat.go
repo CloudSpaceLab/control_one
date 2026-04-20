@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -199,10 +198,11 @@ func (s *Server) emitEnrollmentWebhook(ctx context.Context, tenantID uuid.UUID, 
 
 // --- reaper -----------------------------------------------------------------
 
-// enrollmentReaperOnce ensures the reaper loop only starts once per Server
-// instance even if multiple enrollments race to schedule it.
+// enrollmentReaperState owns the channel used to stop the reaper goroutine.
+// The reaper is started by Server.Start() and torn down by Server.Stop(), so
+// request-path code never spawns background work — that used to race with
+// test mutations of the in-memory fake store.
 type enrollmentReaperState struct {
-	once   sync.Once
 	stopCh chan struct{}
 }
 
@@ -215,28 +215,24 @@ func (s *Server) reaperNow() time.Time {
 	return time.Now().UTC()
 }
 
-// scheduleEnrollmentPendingTimeout is invoked from the enrollment handler
-// immediately after a new node row lands in enrollment_pending. It starts a
-// lightweight background loop (once per server) that periodically reaps any
-// stale pending rows — including this one if a heartbeat + first scan don't
-// both land in time.
-//
-// We intentionally avoid coupling to the asynq worker here: the reaper is
-// trivial (one SELECT + N UPDATEs per tick), so an in-process ticker keeps the
-// implementation small and works uniformly in unit tests.
-func (s *Server) scheduleEnrollmentPendingTimeout(_ context.Context, nodeID uuid.UUID, tenantID uuid.UUID) {
-	s.logger.Debug("scheduled enrollment pending reaper",
-		zap.String("node_id", nodeID.String()),
-		zap.String("tenant_id", tenantID.String()),
-	)
-	s.enrollmentReaper.once.Do(func() {
-		s.enrollmentReaper.stopCh = make(chan struct{})
-		go s.runEnrollmentPendingReaper(s.enrollmentReaper.stopCh)
-	})
+// startEnrollmentReaper spins up the background loop that flips stale
+// enrollment_pending rows to enrollment_failed. Called once from Server.Start.
+// Safe to call again after stopEnrollmentReaper — a fresh stopCh is allocated.
+func (s *Server) startEnrollmentReaper() {
+	if s.enrollmentReaper.stopCh != nil {
+		select {
+		case <-s.enrollmentReaper.stopCh:
+			// previous stopCh was closed; fall through to reallocate
+		default:
+			return // already running
+		}
+	}
+	s.enrollmentReaper.stopCh = make(chan struct{})
+	go s.runEnrollmentPendingReaper(s.enrollmentReaper.stopCh)
 }
 
-// stopEnrollmentReaper halts the reaper goroutine. Tests call this to prevent
-// background timers from leaking across runs.
+// stopEnrollmentReaper halts the reaper goroutine. Safe to call when the
+// reaper was never started (no-op in that case).
 func (s *Server) stopEnrollmentReaper() {
 	if s.enrollmentReaper.stopCh == nil {
 		return

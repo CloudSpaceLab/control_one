@@ -121,8 +121,6 @@ func newAuditResponse(entry storage.AuditLog) auditLogResponse {
 	return resp
 }
 
-var auditAsync = true
-
 func (s *Server) recordAudit(ctx context.Context, principal *auth.Principal, tenantID uuid.UUID, action, resourceType, resourceID string, metadata map[string]any) {
 	if s.store == nil {
 		return
@@ -164,7 +162,7 @@ func (s *Server) recordAudit(ctx context.Context, principal *auth.Principal, ten
 		}
 	}
 
-	if auditAsync {
+	if s.auditAsync {
 		go record()
 	} else {
 		record()

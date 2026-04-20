@@ -123,9 +123,7 @@ func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
 	}
 	store.jobs = map[uuid.UUID]*storage.Job{jobID: job}
 
-	auditAsyncPrev := auditAsync
-	auditAsync = false
-	defer func() { auditAsync = auditAsyncPrev }()
+	srv.auditAsync = false
 
 	if handler, ok := srv.jobHandlers[JobTypeComplianceScan]; ok {
 		if err := handler(context.Background(), job); err != nil {
@@ -973,10 +971,6 @@ func TestRBACAuthorization(t *testing.T) {
 	})
 
 	t.Run("buildJobExecution persists success state", func(t *testing.T) {
-		origAsync := auditAsync
-		auditAsync = false
-		defer func() { auditAsync = origAsync }()
-
 		logger := zap.NewNop()
 		cfg := &config.Config{
 			HTTP:   config.HTTPConfig{Address: ":0"},
@@ -986,6 +980,7 @@ func TestRBACAuthorization(t *testing.T) {
 		}
 		successStore := &fakeStore{}
 		srv := New(logger, cfg, successStore, &stubQueue{})
+		srv.auditAsync = false
 
 		const jobType = "test.job.success"
 		srv.jobHandlers = map[string]jobHandler{
@@ -1053,10 +1048,6 @@ func TestRBACAuthorization(t *testing.T) {
 	})
 
 	t.Run("buildJobExecution persists retries and failures", func(t *testing.T) {
-		origAsync := auditAsync
-		auditAsync = false
-		defer func() { auditAsync = origAsync }()
-
 		logger := zap.NewNop()
 		cfg := &config.Config{
 			HTTP:   config.HTTPConfig{Address: ":0"},
@@ -1066,6 +1057,7 @@ func TestRBACAuthorization(t *testing.T) {
 		}
 		retryStore := &fakeStore{}
 		srv := New(logger, cfg, retryStore, &stubQueue{})
+		srv.auditAsync = false
 
 		const jobType = "test.job.retry"
 		handlerErr := errors.New("boom")
