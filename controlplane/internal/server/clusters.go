@@ -156,6 +156,13 @@ func (s *Server) handleClusterSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid cluster id", http.StatusBadRequest)
 		return
 	}
+
+	// /rollouts subtree delegates to the cluster-rollouts API handler.
+	if len(segments) >= 2 && segments[1] == "rollouts" {
+		s.handleClusterRolloutsRoute(w, r, clusterID, segments[2:])
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return

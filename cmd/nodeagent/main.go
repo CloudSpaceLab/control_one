@@ -396,6 +396,13 @@ func main() {
 		log.Fatal("schedule heartbeat", zap.Error(err))
 	}
 
+	// Control-plane heartbeat — POSTs to /api/v1/nodes/:id/heartbeat so the
+	// server can bump last_seen_at and, combined with the first compliance
+	// scan, transition the node out of enrollment_pending. Sprint 2 Pillar
+	// 1.7/1.8. Distinct from the telemetry heartbeat above: that one writes
+	// to the telemetry table; this one drives the node state machine.
+	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat)
+
 	sched.Start()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

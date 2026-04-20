@@ -35,14 +35,24 @@ func (r *remediationTestStore) GetRemediationScript(_ context.Context, ruleID, p
 
 // trackingQueue records enqueued tasks for test inspection.
 type trackingQueue struct {
-	mu    sync.Mutex
-	tasks []worker.Task
+	mu         sync.Mutex
+	tasks      []worker.Task
+	processAts []time.Time // processAt per enqueued task; zero when immediate.
 }
 
 func (q *trackingQueue) Enqueue(task worker.Task) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.tasks = append(q.tasks, task)
+	q.processAts = append(q.processAts, time.Time{})
+	return nil
+}
+
+func (q *trackingQueue) EnqueueAt(task worker.Task, processAt time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.tasks = append(q.tasks, task)
+	q.processAts = append(q.processAts, processAt)
 	return nil
 }
 
@@ -170,10 +180,12 @@ func TestTriggerAutoRemediation_CreatesJob(t *testing.T) {
 
 	tenantID := uuid.New()
 	nodeID := uuid.New()
+	// Severity=medium keeps the result below the default high approval gate
+	// so the dispatch path should reach the worker directly.
 	result := compliance.Result{
 		RuleID:    "rule-vuln-1",
 		Passed:    false,
-		Severity:  "critical",
+		Severity:  "medium",
 		Details:   "vulnerable package detected",
 		CheckedAt: time.Now(),
 	}
@@ -375,10 +387,12 @@ func TestTriggerAutoRemediation_AcquiresLeaseOnCreate(t *testing.T) {
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 
+	// Medium severity stays below the default high approval gate so the
+	// dispatch path acquires a lease as part of the worker enqueue.
 	result := compliance.Result{
 		RuleID:   ruleID,
 		Passed:   false,
-		Severity: "high",
+		Severity: "medium",
 	}
 
 	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
@@ -586,3 +600,468 @@ func TestVerifyResultsPassed_MissingRuleTreatedAsPassed(t *testing.T) {
 
 // Keep sync unused import silent in case we remove tests later.
 var _ = sync.Mutex{}
+
+// ---------------------------------------------------------------------------
+// Sprint 2 safety-gate tests.
+// ---------------------------------------------------------------------------
+
+// TestTriggerAutoRemediation_OptOutLabelSkips verifies the first gate:
+// nodes labelled `remediation=manual-only` must not enqueue.
+func TestTriggerAutoRemediation_OptOutLabelSkips(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-manual-only"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{
+		ID:       nodeID,
+		TenantID: tenantID,
+		Hostname: "n-manual",
+		Labels: map[string]any{
+			"remediation": "manual-only",
+		},
+	})
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "medium"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID != nil {
+		t.Fatalf("expected nil jobID when node is manual-only, got %s", jobID)
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.tasks) != 0 {
+		t.Fatalf("expected 0 enqueued tasks, got %d", len(queue.tasks))
+	}
+}
+
+// TestTriggerAutoRemediation_ChangeWindowDeferred verifies gate 2: outside the
+// tenant's change windows a non-critical result is deferred to the next open.
+func TestTriggerAutoRemediation_ChangeWindowDeferred(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-change-window"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+
+	tenantID := uuid.New()
+	// Change window only at hour 0-6 UTC every day. Any wall-clock time outside
+	// that range triggers deferral. Running locally this will be outside that
+	// range for most of the day; if the test runs in [0,6) UTC the deferral
+	// won't happen, so we compute the expected behaviour at runtime.
+	now := time.Now().UTC()
+	storeCfg := storage.TenantRemediationConfig{
+		TenantID:                 tenantID,
+		MinApprovalSeverity:      "high",
+		ChangeWindows:            []storage.ChangeWindow{{StartHour: 0, EndHour: 6}},
+		CriticalOverride:         true,
+		CircuitBreakerWindowMin:  15,
+		CircuitBreakerFailPct:    30,
+		CircuitBreakerMinSamples: 5,
+	}
+	if _, err := store.UpsertTenantRemediationConfig(context.Background(), storeCfg); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{ID: nodeID, TenantID: tenantID, Hostname: "n"})
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "medium"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID == nil {
+		t.Fatalf("expected jobID (deferred but still enqueued)")
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.tasks) != 1 {
+		t.Fatalf("expected 1 enqueued task, got %d", len(queue.tasks))
+	}
+	processAt := queue.processAts[0]
+	insideWindow := storage.IsInsideChangeWindow(storeCfg.ChangeWindows, now)
+	if insideWindow {
+		// Currently inside the window — dispatcher should enqueue immediately.
+		if !processAt.IsZero() {
+			t.Fatalf("expected immediate enqueue inside window, got processAt=%s", processAt)
+		}
+	} else {
+		if processAt.IsZero() || !processAt.After(now) {
+			t.Fatalf("expected processAt in future when deferred, got %s (now=%s)", processAt, now)
+		}
+	}
+}
+
+// TestIsInsideChangeWindowAndNextOpen directly exercises the change-window
+// helpers so the critical-override logic is unit-covered without having to
+// juggle approval and breaker gates at the dispatch level.
+func TestIsInsideChangeWindowAndNextOpen(t *testing.T) {
+	t.Parallel()
+
+	// Windows open daily between 0:00 and 6:00 UTC.
+	windows := []storage.ChangeWindow{{StartHour: 0, EndHour: 6}}
+
+	inside := time.Date(2026, 4, 20, 2, 0, 0, 0, time.UTC)
+	outside := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+
+	if !storage.IsInsideChangeWindow(windows, inside) {
+		t.Fatalf("expected 02:00 UTC to be inside [0,6) window")
+	}
+	if storage.IsInsideChangeWindow(windows, outside) {
+		t.Fatalf("expected 10:00 UTC to be outside [0,6) window")
+	}
+
+	nextOpen := storage.NextChangeWindowStart(windows, outside)
+	if !nextOpen.After(outside) {
+		t.Fatalf("expected next open after outside time; got %s", nextOpen)
+	}
+	if nextOpen.Hour() != 0 || nextOpen.Minute() != 0 {
+		t.Fatalf("expected next open at 00:00, got %s", nextOpen)
+	}
+}
+
+// TestSeverityAtLeastAndCriticalOverride proves the tiered severity ranking
+// and verifies that critical_override only kicks in for severity=="critical".
+func TestSeverityAtLeastAndCriticalOverride(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		actual, min string
+		want        bool
+	}{
+		{"low", "low", true},
+		{"low", "medium", false},
+		{"medium", "high", false},
+		{"high", "high", true},
+		{"high", "critical", false},
+		{"critical", "critical", true},
+		{"critical", "high", true},
+		{"", "high", false},
+		{"banana", "medium", false},
+	}
+	for _, c := range cases {
+		if got := storage.SeverityAtLeast(c.actual, c.min); got != c.want {
+			t.Errorf("SeverityAtLeast(%q,%q) = %v; want %v", c.actual, c.min, got, c.want)
+		}
+	}
+}
+
+// TestTriggerAutoRemediation_CircuitBreakerTripped verifies gate 3: an unacked
+// breaker short-circuits the dispatch path.
+func TestTriggerAutoRemediation_CircuitBreakerTripped(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-breaker"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{ID: nodeID, TenantID: tenantID, Hostname: "n"})
+
+	if _, err := store.TripCircuitBreaker(context.Background(), tenantID, ruleID, "seeded"); err != nil {
+		t.Fatalf("trip breaker: %v", err)
+	}
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "medium"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID != nil {
+		t.Fatalf("expected nil jobID when breaker tripped, got %s", jobID)
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.tasks) != 0 {
+		t.Fatalf("expected 0 enqueued tasks, got %d", len(queue.tasks))
+	}
+}
+
+// TestTriggerAutoRemediation_CircuitBreakerAckedAllows verifies that an acked
+// breaker does NOT short-circuit.
+func TestTriggerAutoRemediation_CircuitBreakerAckedAllows(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-breaker-acked"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{ID: nodeID, TenantID: tenantID, Hostname: "n"})
+
+	if _, err := store.TripCircuitBreaker(context.Background(), tenantID, ruleID, "seeded"); err != nil {
+		t.Fatalf("trip breaker: %v", err)
+	}
+	if _, err := store.AckCircuitBreaker(context.Background(), tenantID, ruleID, uuid.New()); err != nil {
+		t.Fatalf("ack breaker: %v", err)
+	}
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "medium"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID == nil {
+		t.Fatalf("expected jobID after breaker acked, got nil")
+	}
+}
+
+// TestTriggerAutoRemediation_CircuitBreakerFailRateTrips verifies that a
+// seeded fail-rate above threshold trips the breaker fresh.
+func TestTriggerAutoRemediation_CircuitBreakerFailRateTrips(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-fail-rate"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{ID: nodeID, TenantID: tenantID, Hostname: "n"})
+
+	store.remediationFailRates = map[string]storage.RemediationFailRate{
+		fakeBreakerKey(tenantID, ruleID): {
+			Samples: 10,
+			Failed:  5,
+			Pct:     50,
+		},
+	}
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "medium"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID != nil {
+		t.Fatalf("expected nil jobID when fail rate exceeds threshold, got %s", jobID)
+	}
+
+	// Breaker row must now exist with acked_at=NULL.
+	state, err := store.GetCircuitBreakerState(context.Background(), tenantID, ruleID)
+	if err != nil {
+		t.Fatalf("GetCircuitBreakerState: %v", err)
+	}
+	if state == nil {
+		t.Fatalf("expected breaker row to be tripped")
+	}
+	if state.AckedAt != nil {
+		t.Fatalf("expected breaker unacked, got acked_at=%v", state.AckedAt)
+	}
+}
+
+// TestTriggerAutoRemediation_ApprovalGate verifies gate 4: severity at/above
+// threshold creates a pending approval row and does NOT enqueue.
+func TestTriggerAutoRemediation_ApprovalGate(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-approval"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{ID: nodeID, TenantID: tenantID, Hostname: "n"})
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	// Critical >= high default, so approval gate should fire.
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "critical"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID != nil {
+		t.Fatalf("expected nil jobID when approval required, got %s", jobID)
+	}
+
+	approvals, _, err := store.ListRemediationApprovals(context.Background(), storage.ListRemediationApprovalsFilter{
+		TenantID: tenantID,
+		Status:   storage.ApprovalStatusPending,
+	}, 0, 0)
+	if err != nil {
+		t.Fatalf("list approvals: %v", err)
+	}
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+	if approvals[0].RuleID != ruleID {
+		t.Fatalf("expected rule_id %s, got %s", ruleID, approvals[0].RuleID)
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.tasks) != 0 {
+		t.Fatalf("expected 0 enqueued tasks while awaiting approval, got %d", len(queue.tasks))
+	}
+}
+
+// TestDispatchRemediationTask_RedispatchAfterApproval verifies the approval
+// handler can re-dispatch via the helper, bypassing the severity gate.
+func TestDispatchRemediationTask_RedispatchAfterApproval(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-approval-dispatch"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	jobID := srv.dispatchRemediationTask(context.Background(), dispatchRemediationTaskParams{
+		TenantID:  tenantID,
+		NodeID:    nodeID,
+		RuleID:    ruleID,
+		Script:    script,
+		EnqueueAt: time.Time{}, // immediate
+	})
+	if jobID == nil {
+		t.Fatalf("expected dispatch to enqueue after approval")
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.tasks) != 1 {
+		t.Fatalf("expected 1 enqueued task, got %d", len(queue.tasks))
+	}
+}
+
+// TestReapExpiredRemediationApprovals verifies the reaper flips expired rows.
+func TestReapExpiredRemediationApprovals(t *testing.T) {
+	t.Parallel()
+
+	store := &remediationTestStore{scripts: map[string]*storage.RemediationScript{}}
+	store.jobs = make(map[uuid.UUID]*storage.Job)
+	store.events = make(map[uuid.UUID][]storage.JobEvent)
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	scriptID := uuid.New()
+
+	// Seed one expired and one fresh pending approval.
+	ctx := context.Background()
+	expired, err := store.CreateRemediationApproval(ctx, storage.CreateRemediationApprovalParams{
+		TenantID:    tenantID,
+		NodeID:      nodeID,
+		RuleID:      "rule-expired",
+		ScriptID:    scriptID,
+		Severity:    "high",
+		TaskPayload: []byte(`{}`),
+		ExpiresAt:   time.Now().Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("seed expired approval: %v", err)
+	}
+	fresh, err := store.CreateRemediationApproval(ctx, storage.CreateRemediationApprovalParams{
+		TenantID:    tenantID,
+		NodeID:      nodeID,
+		RuleID:      "rule-fresh",
+		ScriptID:    scriptID,
+		Severity:    "high",
+		TaskPayload: []byte(`{}`),
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("seed fresh approval: %v", err)
+	}
+
+	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}}, store, &trackingQueue{})
+	n, err := srv.reapExpiredRemediationApprovals(ctx)
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 approval expired, got %d", n)
+	}
+
+	got, err := store.GetRemediationApproval(ctx, expired.ID)
+	if err != nil {
+		t.Fatalf("get expired: %v", err)
+	}
+	if got.Status != storage.ApprovalStatusExpired {
+		t.Fatalf("expected expired status, got %s", got.Status)
+	}
+
+	got, err = store.GetRemediationApproval(ctx, fresh.ID)
+	if err != nil {
+		t.Fatalf("get fresh: %v", err)
+	}
+	if got.Status != storage.ApprovalStatusPending {
+		t.Fatalf("expected fresh still pending, got %s", got.Status)
+	}
+}
