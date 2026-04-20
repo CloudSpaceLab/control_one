@@ -34,19 +34,58 @@ func (s *Store) GetNode(ctx context.Context, id uuid.UUID) (*Node, error) {
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
+		       last_seen_at, first_scan_at, labels,
+		       created_at, updated_at
 		FROM nodes
 		WHERE id = $1
 	`, id)
 
-	var node Node
-	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.MachineID, &node.State, &node.CreatedAt, &node.UpdatedAt); err != nil {
+	return scanNodeRow(row)
+}
+
+// scanNodeRow decodes a nodes row containing the full Sprint 2 column set.
+// It's used by every single-row lookup (GetNode, GetNodeByHostname,
+// GetNodeByMachineID, touch/update return clauses) so the column ordering
+// only has to change in one place.
+func scanNodeRow(row interface {
+	Scan(dest ...any) error
+}) (*Node, error) {
+	var (
+		node        Node
+		lastSeen    sql.NullTime
+		firstScan   sql.NullTime
+		labelsBytes []byte
+	)
+	if err := row.Scan(
+		&node.ID, &node.TenantID, &node.Hostname,
+		&node.OS, &node.Arch, &node.PublicIP, &node.MachineID, &node.State,
+		&lastSeen, &firstScan, &labelsBytes,
+		&node.CreatedAt, &node.UpdatedAt,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("get node: %w", err)
+		return nil, fmt.Errorf("scan node: %w", err)
 	}
-
+	if lastSeen.Valid {
+		t := lastSeen.Time
+		node.LastSeenAt = &t
+	}
+	if firstScan.Valid {
+		t := firstScan.Time
+		node.FirstScanAt = &t
+	}
+	if len(labelsBytes) > 0 {
+		var labels map[string]any
+		if err := json.Unmarshal(labelsBytes, &labels); err != nil {
+			return nil, fmt.Errorf("unmarshal node labels: %w", err)
+		}
+		node.Labels = labels
+	}
+	if node.Labels == nil {
+		node.Labels = map[string]any{}
+	}
 	return &node, nil
 }
 
@@ -1044,29 +1083,34 @@ func (s *Store) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// NodeState enumerates lifecycle states for a managed node.
+// NodeState enumerates lifecycle states for a managed node. Sprint 2's 0028
+// migration expanded this enum from the Sprint 1 {active, retired} pair to
+// include the enrollment-gated intermediate states. Every value here must also
+// appear in the nodes_state_check constraint (see 0028_node_lifecycle.up.sql).
 const (
-	NodeStateActive  = "active"
-	NodeStateRetired = "retired"
+	NodeStateEnrollmentPending = "enrollment_pending"
+	NodeStateActive            = "active"
+	NodeStateEnrollmentFailed  = "enrollment_failed"
+	NodeStateRetired           = "retired"
 )
 
-// Node represents a managed node record.
+// Node represents a managed node record. LastSeenAt / FirstScanAt / Labels
+// come from migration 0028; pre-0028 rows back-fill LastSeenAt=nil,
+// FirstScanAt=nil, Labels=empty map.
 type Node struct {
-	ID        uuid.UUID
-	TenantID  uuid.UUID
-	Hostname  string
-	OS        sql.NullString
-	Arch      sql.NullString
-	PublicIP  sql.NullString
-	MachineID sql.NullString
-	State     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	// Labels is populated from the nodes.labels JSONB column added by Worktree
-	// A's 0028 migration. When that migration has not yet run (tests, or branches
-	// where A has not merged), Labels stays nil and every read must guard with
-	// `node.Labels != nil` before indexing.
-	Labels map[string]any
+	ID          uuid.UUID
+	TenantID    uuid.UUID
+	Hostname    string
+	OS          sql.NullString
+	Arch        sql.NullString
+	PublicIP    sql.NullString
+	MachineID   sql.NullString
+	State       string
+	LastSeenAt  *time.Time
+	FirstScanAt *time.Time
+	Labels      map[string]any
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Tenant represents a tenant record.
@@ -1395,24 +1439,21 @@ func (s *Store) GetNodeByHostname(ctx context.Context, tenantID uuid.UUID, hostn
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
+		       last_seen_at, first_scan_at, labels,
+		       created_at, updated_at
 		FROM nodes
 		WHERE tenant_id = $1 AND hostname = $2
 		LIMIT 1
 	`, tenantID, hostname)
 
-	var node Node
-	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.MachineID, &node.State, &node.CreatedAt, &node.UpdatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get node by hostname: %w", err)
-	}
-
-	return &node, nil
+	return scanNodeRow(row)
 }
 
-// CreateNode inserts a node record.
+// CreateNode inserts a node record. Starting in Sprint 2 new rows land in
+// state 'enrollment_pending' unless the caller explicitly sets State — the
+// node only flips to 'active' once a heartbeat AND a first compliance scan
+// both arrive (see TouchNodeHeartbeat / MarkNodeFirstScan).
 func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
@@ -1431,12 +1472,23 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 	node.CreatedAt = now
 	node.UpdatedAt = now
 	if strings.TrimSpace(node.State) == "" {
-		node.State = NodeStateActive
+		node.State = NodeStateEnrollmentPending
+	}
+
+	labelsBytes := []byte("{}")
+	if len(node.Labels) > 0 {
+		marshalled, err := json.Marshal(node.Labels)
+		if err != nil {
+			return nil, fmt.Errorf("marshal node labels: %w", err)
+		}
+		labelsBytes = marshalled
 	}
 
 	query := `
-        INSERT INTO nodes (id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO nodes (id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
+                           last_seen_at, first_scan_at, labels,
+                           created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     `
 
 	_, err := s.db.ExecContext(
@@ -1450,6 +1502,9 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 		node.PublicIP,
 		node.MachineID,
 		node.State,
+		nullableTime(node.LastSeenAt),
+		nullableTime(node.FirstScanAt),
+		labelsBytes,
 		node.CreatedAt,
 		node.UpdatedAt,
 	)
@@ -1457,7 +1512,20 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 		return nil, fmt.Errorf("insert node: %w", err)
 	}
 
+	if node.Labels == nil {
+		node.Labels = map[string]any{}
+	}
 	return node, nil
+}
+
+// nullableTime converts a *time.Time into an any that pgx will bind as NULL
+// when the pointer is nil. Sprint 2 adds two nullable timestamp columns on
+// nodes so this helper is needed for CreateNode's bind list.
+func nullableTime(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return *t
 }
 
 // ListNodes returns nodes filtered by tenant and hostname prefix with pagination.
@@ -1488,7 +1556,9 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
+		       last_seen_at, first_scan_at, labels,
+		       created_at, updated_at
 		FROM nodes
 		WHERE %s
 		ORDER BY created_at DESC
@@ -1529,9 +1599,37 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 
 	var nodes []Node
 	for rows.Next() {
-		var n Node
-		if err := rows.Scan(&n.ID, &n.TenantID, &n.Hostname, &n.OS, &n.Arch, &n.PublicIP, &n.MachineID, &n.State, &n.CreatedAt, &n.UpdatedAt); err != nil {
+		var (
+			n           Node
+			lastSeen    sql.NullTime
+			firstScan   sql.NullTime
+			labelsBytes []byte
+		)
+		if err := rows.Scan(
+			&n.ID, &n.TenantID, &n.Hostname,
+			&n.OS, &n.Arch, &n.PublicIP, &n.MachineID, &n.State,
+			&lastSeen, &firstScan, &labelsBytes,
+			&n.CreatedAt, &n.UpdatedAt,
+		); err != nil {
 			return nil, 0, fmt.Errorf("scan node: %w", err)
+		}
+		if lastSeen.Valid {
+			t := lastSeen.Time
+			n.LastSeenAt = &t
+		}
+		if firstScan.Valid {
+			t := firstScan.Time
+			n.FirstScanAt = &t
+		}
+		if len(labelsBytes) > 0 {
+			var labels map[string]any
+			if err := json.Unmarshal(labelsBytes, &labels); err != nil {
+				return nil, 0, fmt.Errorf("unmarshal node labels: %w", err)
+			}
+			n.Labels = labels
+		}
+		if n.Labels == nil {
+			n.Labels = map[string]any{}
 		}
 		nodes = append(nodes, n)
 	}
@@ -1565,7 +1663,9 @@ func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
 		    machine_id = $6,
 		    updated_at = $7
 		WHERE id = $1
-		RETURNING id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
+		RETURNING id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
+		          last_seen_at, first_scan_at, labels,
+		          created_at, updated_at
 	`
 
 	row := s.db.QueryRowContext(ctx, query,
@@ -1578,15 +1678,7 @@ func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
 		node.UpdatedAt,
 	)
 
-	var updated Node
-	if err := row.Scan(&updated.ID, &updated.TenantID, &updated.Hostname, &updated.OS, &updated.Arch, &updated.PublicIP, &updated.MachineID, &updated.State, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("update node: %w", err)
-	}
-
-	return &updated, nil
+	return scanNodeRow(row)
 }
 
 // DeleteNode removes a node by ID.
