@@ -698,6 +698,191 @@ func (s *Store) ListComplianceResultsFiltered(ctx context.Context, filter Compli
 	return results, total, nil
 }
 
+// GetLatestComplianceResultForRule returns the most recent compliance_result row
+// for the (nodeID, ruleID) pair. It is the handle used by verify/rollback to
+// locate the failing result that kicked off the remediation chain. Returns nil
+// when no result exists yet. Unlike ListComplianceResultsFiltered it selects
+// the full verification/rollback column set — callers must have migration 0020
+// applied.
+func (s *Store) GetLatestComplianceResultForRule(ctx context.Context, nodeID uuid.UUID, ruleID string) (*ComplianceResult, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if nodeID == uuid.Nil {
+		return nil, errors.New("node id is required")
+	}
+	ruleID = strings.TrimSpace(ruleID)
+	if ruleID == "" {
+		return nil, errors.New("rule id is required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, job_id, tenant_id, node_id, scan_id, rule_id, passed,
+		       severity, details, remediation, metadata, checked_at, created_at,
+		       remediation_job_id, verified, verification_job_id, rollback_job_id
+		FROM compliance_results
+		WHERE node_id = $1 AND rule_id = $2
+		ORDER BY checked_at DESC NULLS LAST, created_at DESC
+		LIMIT 1
+	`, nodeID, ruleID)
+
+	var (
+		result            ComplianceResult
+		tenantID          sql.NullString
+		nodeIDStr         sql.NullString
+		scanID            sql.NullString
+		severity          sql.NullString
+		details           sql.NullString
+		remediation       sql.NullString
+		metadataRaw       []byte
+		checkedAt         sql.NullTime
+		remediationJobID  sql.NullString
+		verified          bool
+		verificationJobID sql.NullString
+		rollbackJobID     sql.NullString
+	)
+
+	if err := row.Scan(
+		&result.ID,
+		&result.JobID,
+		&tenantID,
+		&nodeIDStr,
+		&scanID,
+		&result.RuleID,
+		&result.Passed,
+		&severity,
+		&details,
+		&remediation,
+		&metadataRaw,
+		&checkedAt,
+		&result.CreatedAt,
+		&remediationJobID,
+		&verified,
+		&verificationJobID,
+		&rollbackJobID,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest compliance result: %w", err)
+	}
+
+	if tenantID.Valid {
+		result.TenantID, _ = uuid.Parse(tenantID.String)
+	}
+	if nodeIDStr.Valid {
+		result.NodeID, _ = uuid.Parse(nodeIDStr.String)
+	}
+	if scanID.Valid {
+		val := scanID.String
+		result.ScanID = &val
+	}
+	if severity.Valid {
+		val := severity.String
+		result.Severity = &val
+	}
+	if details.Valid {
+		val := details.String
+		result.Details = &val
+	}
+	if remediation.Valid {
+		val := remediation.String
+		result.Remediation = &val
+	}
+	if len(metadataRaw) > 0 {
+		var meta map[string]any
+		if err := json.Unmarshal(metadataRaw, &meta); err != nil {
+			return nil, fmt.Errorf("unmarshal compliance metadata: %w", err)
+		}
+		result.Metadata = meta
+	}
+	if checkedAt.Valid {
+		t := checkedAt.Time
+		result.CheckedAt = &t
+	}
+	if remediationJobID.Valid {
+		if id, err := uuid.Parse(remediationJobID.String); err == nil {
+			result.RemediationJobID = &id
+		}
+	}
+	result.Verified = verified
+	if verificationJobID.Valid {
+		if id, err := uuid.Parse(verificationJobID.String); err == nil {
+			result.VerificationJobID = &id
+		}
+	}
+	if rollbackJobID.Valid {
+		if id, err := uuid.Parse(rollbackJobID.String); err == nil {
+			result.RollbackJobID = &id
+		}
+	}
+
+	return &result, nil
+}
+
+// UpdateComplianceResultVerification flips the verified flag and attaches the
+// verification_job_id for a given compliance_result row.
+func (s *Store) UpdateComplianceResultVerification(ctx context.Context, resultID uuid.UUID, verified bool, verificationJobID *uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if resultID == uuid.Nil {
+		return errors.New("result id is required")
+	}
+
+	var jobArg any
+	if verificationJobID != nil && *verificationJobID != uuid.Nil {
+		jobArg = *verificationJobID
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE compliance_results
+		SET verified = $2, verification_job_id = $3
+		WHERE id = $1
+	`, resultID, verified, jobArg)
+	if err != nil {
+		return fmt.Errorf("update compliance result verification: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update compliance result rows affected: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateComplianceResultRollback attaches the rollback_job_id to a compliance_result.
+func (s *Store) UpdateComplianceResultRollback(ctx context.Context, resultID uuid.UUID, rollbackJobID uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if resultID == uuid.Nil {
+		return errors.New("result id is required")
+	}
+	if rollbackJobID == uuid.Nil {
+		return errors.New("rollback job id is required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE compliance_results
+		SET rollback_job_id = $2
+		WHERE id = $1
+	`, resultID, rollbackJobID)
+	if err != nil {
+		return fmt.Errorf("update compliance result rollback: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update compliance result rows affected: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // CreateTenant inserts a tenant record.
 func (s *Store) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
 	if s.db == nil {
@@ -1118,20 +1303,23 @@ type JobEvent struct {
 
 // ComplianceResult captures rule-level evaluation outcomes for compliance jobs.
 type ComplianceResult struct {
-	ID               uuid.UUID
-	JobID            uuid.UUID
-	TenantID         uuid.UUID
-	NodeID           uuid.UUID
-	ScanID           *string
-	RuleID           string
-	Passed           bool
-	Severity         *string
-	Details          *string
-	Remediation      *string
-	Metadata         map[string]any
-	CheckedAt        *time.Time
-	CreatedAt        time.Time
-	RemediationJobID *uuid.UUID
+	ID                uuid.UUID
+	JobID             uuid.UUID
+	TenantID          uuid.UUID
+	NodeID            uuid.UUID
+	ScanID            *string
+	RuleID            string
+	Passed            bool
+	Severity          *string
+	Details           *string
+	Remediation       *string
+	Metadata          map[string]any
+	CheckedAt         *time.Time
+	CreatedAt         time.Time
+	RemediationJobID  *uuid.UUID
+	Verified          bool
+	VerificationJobID *uuid.UUID
+	RollbackJobID     *uuid.UUID
 }
 
 // Options allows injection of testing helpers.

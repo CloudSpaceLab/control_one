@@ -131,6 +131,12 @@ type Store interface {
 	ListPolicyAssignments(context.Context, uuid.UUID, int, int) ([]storage.PolicyAssignment, int, error)
 	DeletePolicyAssignment(context.Context, uuid.UUID) error
 	GetEffectivePolicies(context.Context, uuid.UUID, uuid.UUID) ([]storage.PolicyWithVersion, error)
+	GetLatestComplianceResultForRule(context.Context, uuid.UUID, string) (*storage.ComplianceResult, error)
+	UpdateComplianceResultVerification(context.Context, uuid.UUID, bool, *uuid.UUID) error
+	UpdateComplianceResultRollback(context.Context, uuid.UUID, uuid.UUID) error
+	AcquireRemediationLease(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Duration) (*storage.RemediationLease, error)
+	ReleaseRemediationLease(context.Context, uuid.UUID) error
+	CountTenantLeases(context.Context, uuid.UUID) (int, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {

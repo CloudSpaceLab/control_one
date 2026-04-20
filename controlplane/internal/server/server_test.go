@@ -1222,6 +1222,7 @@ type fakeStore struct {
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	auditLogs           []storage.AuditLog
+	leases              map[uuid.UUID]storage.RemediationLease
 }
 
 type stubQueue struct{}
@@ -2207,4 +2208,104 @@ func (f *fakeStore) DeletePolicyAssignment(_ context.Context, id uuid.UUID) erro
 
 func (f *fakeStore) GetEffectivePolicies(_ context.Context, tenantID, nodeID uuid.UUID) ([]storage.PolicyWithVersion, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) GetLatestComplianceResultForRule(_ context.Context, nodeID uuid.UUID, ruleID string) (*storage.ComplianceResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var latest *storage.ComplianceResult
+	for _, batch := range f.complianceResults {
+		for i := range batch {
+			r := &batch[i]
+			if r.NodeID == nodeID && r.RuleID == ruleID {
+				if latest == nil || r.CreatedAt.After(latest.CreatedAt) {
+					copy := *r
+					latest = &copy
+				}
+			}
+		}
+	}
+	return latest, nil
+}
+
+func (f *fakeStore) UpdateComplianceResultVerification(_ context.Context, resultID uuid.UUID, verified bool, verificationJobID *uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for jobID, batch := range f.complianceResults {
+		for i := range batch {
+			if batch[i].ID == resultID {
+				batch[i].Verified = verified
+				if verificationJobID != nil {
+					jid := *verificationJobID
+					batch[i].VerificationJobID = &jid
+				} else {
+					batch[i].VerificationJobID = nil
+				}
+				f.complianceResults[jobID] = batch
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeStore) UpdateComplianceResultRollback(_ context.Context, resultID, rollbackJobID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for jobID, batch := range f.complianceResults {
+		for i := range batch {
+			if batch[i].ID == resultID {
+				jid := rollbackJobID
+				batch[i].RollbackJobID = &jid
+				f.complianceResults[jobID] = batch
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeStore) AcquireRemediationLease(_ context.Context, tenantID, nodeID, jobID uuid.UUID, ttl time.Duration) (*storage.RemediationLease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.leases == nil {
+		f.leases = make(map[uuid.UUID]storage.RemediationLease)
+	}
+	now := time.Now().UTC()
+	if existing, ok := f.leases[nodeID]; ok {
+		if existing.ExpiresAt.After(now) {
+			return nil, storage.ErrLeaseHeld
+		}
+		// Expired — sweep and fall through to re-acquire.
+		delete(f.leases, nodeID)
+	}
+	lease := storage.RemediationLease{
+		NodeID:     nodeID,
+		TenantID:   tenantID,
+		JobID:      jobID,
+		AcquiredAt: now,
+		ExpiresAt:  now.Add(ttl),
+	}
+	f.leases[nodeID] = lease
+	return &lease, nil
+}
+
+func (f *fakeStore) ReleaseRemediationLease(_ context.Context, nodeID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.leases, nodeID)
+	return nil
+}
+
+func (f *fakeStore) CountTenantLeases(_ context.Context, tenantID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	count := 0
+	for _, lease := range f.leases {
+		if lease.TenantID == tenantID && lease.ExpiresAt.After(now) {
+			count++
+		}
+	}
+	return count, nil
 }
