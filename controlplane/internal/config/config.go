@@ -149,7 +149,9 @@ type EnrollmentConfig struct {
 
 // AgentConfig captures agent binary distribution settings.
 type AgentConfig struct {
-	BinaryDir string `mapstructure:"binary_dir"`
+	BinaryDir            string `mapstructure:"binary_dir"`
+	SigningKeyPath       string `mapstructure:"signing_key_path"`
+	SigningPublicKeyPath string `mapstructure:"signing_public_key_path"`
 }
 
 // RegistrationConfig controls node bootstrap handshake behavior.

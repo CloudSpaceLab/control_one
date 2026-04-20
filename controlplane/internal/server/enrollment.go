@@ -51,6 +51,7 @@ type enrollRequest struct {
 	Arch        string `json:"arch"`
 	PublicIP    string `json:"public_ip"`
 	Fingerprint string `json:"fingerprint"`
+	MachineID   string `json:"machine_id"`
 }
 
 type enrollResponse struct {
@@ -339,18 +340,54 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostname := strings.TrimSpace(req.Hostname)
+	machineID := strings.TrimSpace(req.MachineID)
 
-	// Check hostname dedup
-	if existing, err := s.store.GetNodeByHostname(r.Context(), tenant.ID, hostname); err != nil {
-		s.logger.Error("lookup existing node for enrollment", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	} else if existing != nil {
+	// Prefer machine_id dedup (stable across hostname changes / reimages).
+	// Fall back to hostname for legacy agents that don't send machine_id.
+	var existing *storage.Node
+	if machineID != "" {
+		found, lookupErr := s.store.GetNodeByMachineID(r.Context(), tenant.ID, machineID)
+		if lookupErr != nil {
+			s.logger.Error("lookup existing node by machine id", zap.Error(lookupErr))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		existing = found
+	}
+	if existing == nil {
+		found, lookupErr := s.store.GetNodeByHostname(r.Context(), tenant.ID, hostname)
+		if lookupErr != nil {
+			s.logger.Error("lookup existing node for enrollment", zap.Error(lookupErr))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		existing = found
+	}
+
+	if existing != nil {
 		s.logger.Info("node already enrolled",
 			zap.String("tenant_id", tenant.ID.String()),
 			zap.String("node_id", existing.ID.String()),
 			zap.String("hostname", hostname),
 		)
+
+		// Re-enrollment: if we matched by machine_id but hostname changed
+		// (common after reimage), update the hostname + backfill machine_id.
+		needsUpdate := false
+		if hostname != "" && existing.Hostname != hostname {
+			existing.Hostname = hostname
+			needsUpdate = true
+		}
+		if machineID != "" && (!existing.MachineID.Valid || existing.MachineID.String != machineID) {
+			existing.MachineID = toNullString(&machineID)
+			needsUpdate = true
+		}
+		if needsUpdate {
+			if _, updErr := s.store.UpdateNode(r.Context(), existing); updErr != nil {
+				s.logger.Warn("update node on re-enrollment", zap.Error(updErr))
+			}
+		}
+
 		// Generate certs for re-enrollment
 		certPEM, keyPEM, caCertPEM, certErr := s.generateClientCertificate(hostname, existing.ID.String())
 		if certErr != nil {
@@ -375,12 +412,13 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 	// Create node
 	node := &storage.Node{
-		ID:       uuid.New(),
-		TenantID: tenant.ID,
-		Hostname: hostname,
-		OS:       toNullString(&req.OS),
-		Arch:     toNullString(&req.Arch),
-		PublicIP: toNullString(&req.PublicIP),
+		ID:        uuid.New(),
+		TenantID:  tenant.ID,
+		Hostname:  hostname,
+		OS:        toNullString(&req.OS),
+		Arch:      toNullString(&req.Arch),
+		PublicIP:  toNullString(&req.PublicIP),
+		MachineID: toNullString(&machineID),
 	}
 
 	created, err := s.store.CreateNode(r.Context(), node)
@@ -420,6 +458,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	// Audit log with system actor since there is no authenticated principal
 	s.recordAudit(r.Context(), s.systemActor(), tenant.ID, "node.enrolled", "node", created.ID.String(), map[string]any{
 		"hostname":    hostname,
+		"machine_id":  machineID,
 		"token_id":    token.ID.String(),
 		"token_name":  token.Name,
 		"fingerprint": req.Fingerprint,

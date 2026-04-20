@@ -21,6 +21,7 @@ type enrollRequest struct {
 	Arch        string `json:"arch"`
 	PublicIP    string `json:"public_ip"`
 	Fingerprint string `json:"fingerprint"`
+	MachineID   string `json:"machine_id,omitempty"`
 }
 
 type enrollResponse struct {
@@ -51,6 +52,7 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 	}
 
 	// 2. POST to /api/v1/enroll
+	machineID, _ := util.ReadMachineID()
 	reqBody := enrollRequest{
 		Token:       token,
 		Hostname:    hostname,
@@ -58,6 +60,7 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 		Arch:        sysInfo.Arch,
 		PublicIP:    sysInfo.PublicIP,
 		Fingerprint: sysInfo.Fingerprint,
+		MachineID:   machineID,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

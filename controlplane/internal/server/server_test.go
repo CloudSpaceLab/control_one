@@ -1222,6 +1222,7 @@ type fakeStore struct {
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	auditLogs           []storage.AuditLog
+	enrollmentTokens    map[string]storage.EnrollmentToken // keyed by token hash
 }
 
 type stubQueue struct{}
@@ -1254,6 +1255,31 @@ func (f *fakeStore) GetNodeByHostname(_ context.Context, tenantID uuid.UUID, hos
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeStore) GetNodeByMachineID(_ context.Context, tenantID uuid.UUID, machineID string) (*storage.Node, error) {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return nil, nil
+	}
+	for _, node := range f.nodes {
+		if node.TenantID == tenantID && node.MachineID.Valid && node.MachineID.String == machineID {
+			copy := node
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) RetireNode(_ context.Context, id uuid.UUID) error {
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].State = storage.NodeStateRetired
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.ProvisioningTemplateFilter, limit, offset int) ([]storage.ProvisioningTemplate, int, error) {
@@ -2163,7 +2189,15 @@ func (f *fakeStore) CreateEnrollmentToken(_ context.Context, params storage.Crea
 }
 
 func (f *fakeStore) GetEnrollmentTokenByHash(_ context.Context, hash string) (*storage.EnrollmentToken, error) {
-	return nil, nil
+	if f.enrollmentTokens == nil {
+		return nil, nil
+	}
+	tok, ok := f.enrollmentTokens[hash]
+	if !ok {
+		return nil, nil
+	}
+	copy := tok
+	return &copy, nil
 }
 
 func (f *fakeStore) ListEnrollmentTokens(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.EnrollmentToken, int, error) {
