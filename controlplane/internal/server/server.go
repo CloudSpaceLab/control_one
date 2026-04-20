@@ -134,6 +134,21 @@ type Store interface {
 	ListPolicyAssignments(context.Context, uuid.UUID, int, int) ([]storage.PolicyAssignment, int, error)
 	DeletePolicyAssignment(context.Context, uuid.UUID) error
 	GetEffectivePolicies(context.Context, uuid.UUID, uuid.UUID) ([]storage.PolicyWithVersion, error)
+	CreateCluster(context.Context, storage.CreateClusterParams) (*storage.Cluster, error)
+	ListClusters(context.Context, uuid.UUID, int, int) ([]storage.Cluster, int, error)
+	GetClusterByID(context.Context, uuid.UUID) (*storage.Cluster, error)
+	GetClusterByName(context.Context, uuid.UUID, string) (*storage.Cluster, error)
+	UpdateCluster(context.Context, uuid.UUID, storage.UpdateClusterParams) (*storage.Cluster, error)
+	DeleteCluster(context.Context, uuid.UUID) error
+	CountClustersByTenant(context.Context, uuid.UUID) (int, error)
+	AddClusterMember(context.Context, uuid.UUID, uuid.UUID, string, int) (*storage.ClusterMember, error)
+	RemoveClusterMember(context.Context, uuid.UUID, uuid.UUID) error
+	ListClusterMembers(context.Context, uuid.UUID) ([]storage.ClusterMember, error)
+	CreateClusterRollout(context.Context, storage.CreateClusterRolloutParams) (*storage.ClusterRollout, error)
+	GetClusterRolloutByID(context.Context, uuid.UUID) (*storage.ClusterRollout, error)
+	ListClusterRollouts(context.Context, uuid.UUID, int, int) ([]storage.ClusterRollout, int, error)
+	UpdateClusterRollout(context.Context, uuid.UUID, storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error)
+	DeleteClusterRollout(context.Context, uuid.UUID) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
