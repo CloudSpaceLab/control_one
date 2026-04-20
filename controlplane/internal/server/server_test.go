@@ -1223,6 +1223,7 @@ type fakeStore struct {
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	auditLogs           []storage.AuditLog
 	leases              map[uuid.UUID]storage.RemediationLease
+	enrollmentTokens    map[string]storage.EnrollmentToken // keyed by token hash
 }
 
 type stubQueue struct{}
@@ -1255,6 +1256,31 @@ func (f *fakeStore) GetNodeByHostname(_ context.Context, tenantID uuid.UUID, hos
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeStore) GetNodeByMachineID(_ context.Context, tenantID uuid.UUID, machineID string) (*storage.Node, error) {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return nil, nil
+	}
+	for _, node := range f.nodes {
+		if node.TenantID == tenantID && node.MachineID.Valid && node.MachineID.String == machineID {
+			copy := node
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) RetireNode(_ context.Context, id uuid.UUID) error {
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].State = storage.NodeStateRetired
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.ProvisioningTemplateFilter, limit, offset int) ([]storage.ProvisioningTemplate, int, error) {
@@ -2164,7 +2190,15 @@ func (f *fakeStore) CreateEnrollmentToken(_ context.Context, params storage.Crea
 }
 
 func (f *fakeStore) GetEnrollmentTokenByHash(_ context.Context, hash string) (*storage.EnrollmentToken, error) {
-	return nil, nil
+	if f.enrollmentTokens == nil {
+		return nil, nil
+	}
+	tok, ok := f.enrollmentTokens[hash]
+	if !ok {
+		return nil, nil
+	}
+	copy := tok
+	return &copy, nil
 }
 
 func (f *fakeStore) ListEnrollmentTokens(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.EnrollmentToken, int, error) {
@@ -2308,4 +2342,64 @@ func (f *fakeStore) CountTenantLeases(_ context.Context, tenantID uuid.UUID) (in
 		}
 	}
 	return count, nil
+}
+
+func (f *fakeStore) CreateCluster(_ context.Context, params storage.CreateClusterParams) (*storage.Cluster, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) ListClusters(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.Cluster, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) GetClusterByID(_ context.Context, id uuid.UUID) (*storage.Cluster, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetClusterByName(_ context.Context, tenantID uuid.UUID, name string) (*storage.Cluster, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) UpdateCluster(_ context.Context, id uuid.UUID, params storage.UpdateClusterParams) (*storage.Cluster, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) DeleteCluster(_ context.Context, id uuid.UUID) error {
+	return errors.New("not implemented")
+}
+
+func (f *fakeStore) CountClustersByTenant(_ context.Context, tenantID uuid.UUID) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeStore) AddClusterMember(_ context.Context, clusterID, nodeID uuid.UUID, role string, position int) (*storage.ClusterMember, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) RemoveClusterMember(_ context.Context, clusterID, nodeID uuid.UUID) error {
+	return errors.New("not implemented")
+}
+
+func (f *fakeStore) ListClusterMembers(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterMember, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) CreateClusterRollout(_ context.Context, params storage.CreateClusterRolloutParams) (*storage.ClusterRollout, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) GetClusterRolloutByID(_ context.Context, id uuid.UUID) (*storage.ClusterRollout, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListClusterRollouts(_ context.Context, clusterID uuid.UUID, limit, offset int) ([]storage.ClusterRollout, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) UpdateClusterRollout(_ context.Context, id uuid.UUID, params storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) DeleteClusterRollout(_ context.Context, id uuid.UUID) error {
+	return errors.New("not implemented")
 }

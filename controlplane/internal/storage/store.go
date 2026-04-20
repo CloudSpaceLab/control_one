@@ -34,13 +34,13 @@ func (s *Store) GetNode(ctx context.Context, id uuid.UUID) (*Node, error) {
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
 		FROM nodes
 		WHERE id = $1
 	`, id)
 
 	var node Node
-	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.CreatedAt, &node.UpdatedAt); err != nil {
+	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.MachineID, &node.State, &node.CreatedAt, &node.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1044,6 +1044,12 @@ func (s *Store) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// NodeState enumerates lifecycle states for a managed node.
+const (
+	NodeStateActive  = "active"
+	NodeStateRetired = "retired"
+)
+
 // Node represents a managed node record.
 type Node struct {
 	ID        uuid.UUID
@@ -1052,6 +1058,8 @@ type Node struct {
 	OS        sql.NullString
 	Arch      sql.NullString
 	PublicIP  sql.NullString
+	MachineID sql.NullString
+	State     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -1382,14 +1390,14 @@ func (s *Store) GetNodeByHostname(ctx context.Context, tenantID uuid.UUID, hostn
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
 		FROM nodes
 		WHERE tenant_id = $1 AND hostname = $2
 		LIMIT 1
 	`, tenantID, hostname)
 
 	var node Node
-	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.CreatedAt, &node.UpdatedAt); err != nil {
+	if err := row.Scan(&node.ID, &node.TenantID, &node.Hostname, &node.OS, &node.Arch, &node.PublicIP, &node.MachineID, &node.State, &node.CreatedAt, &node.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1417,10 +1425,13 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 	now := s.clock()
 	node.CreatedAt = now
 	node.UpdatedAt = now
+	if strings.TrimSpace(node.State) == "" {
+		node.State = NodeStateActive
+	}
 
 	query := `
-        INSERT INTO nodes (id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO nodes (id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     `
 
 	_, err := s.db.ExecContext(
@@ -1432,6 +1443,8 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 		node.OS,
 		node.Arch,
 		node.PublicIP,
+		node.MachineID,
+		node.State,
 		node.CreatedAt,
 		node.UpdatedAt,
 	)
@@ -1470,7 +1483,7 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
 		FROM nodes
 		WHERE %s
 		ORDER BY created_at DESC
@@ -1512,7 +1525,7 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 	var nodes []Node
 	for rows.Next() {
 		var n Node
-		if err := rows.Scan(&n.ID, &n.TenantID, &n.Hostname, &n.OS, &n.Arch, &n.PublicIP, &n.CreatedAt, &n.UpdatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.TenantID, &n.Hostname, &n.OS, &n.Arch, &n.PublicIP, &n.MachineID, &n.State, &n.CreatedAt, &n.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan node: %w", err)
 		}
 		nodes = append(nodes, n)
@@ -1544,9 +1557,10 @@ func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
 		    os = $3,
 		    arch = $4,
 		    public_ip = $5,
-		    updated_at = $6
+		    machine_id = $6,
+		    updated_at = $7
 		WHERE id = $1
-		RETURNING id, tenant_id, hostname, os, arch, public_ip, created_at, updated_at
+		RETURNING id, tenant_id, hostname, os, arch, public_ip, machine_id, state, created_at, updated_at
 	`
 
 	row := s.db.QueryRowContext(ctx, query,
@@ -1555,11 +1569,12 @@ func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
 		node.OS,
 		node.Arch,
 		node.PublicIP,
+		node.MachineID,
 		node.UpdatedAt,
 	)
 
 	var updated Node
-	if err := row.Scan(&updated.ID, &updated.TenantID, &updated.Hostname, &updated.OS, &updated.Arch, &updated.PublicIP, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
+	if err := row.Scan(&updated.ID, &updated.TenantID, &updated.Hostname, &updated.OS, &updated.Arch, &updated.PublicIP, &updated.MachineID, &updated.State, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
