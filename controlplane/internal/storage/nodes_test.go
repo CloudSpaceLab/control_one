@@ -173,6 +173,7 @@ func TestRetireNodeSetsState(t *testing.T) {
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+
 // TestCreateNodeDefaultsToEnrollmentPending locks in the Sprint 2 state
 // default. Pre-0028 this was 'active'; new rows now wait for the heartbeat
 // + first-scan gate before activating.
@@ -230,14 +231,12 @@ func TestTouchNodeHeartbeatBumpsLastSeen(t *testing.T) {
 	require.NotNil(t, refreshed.LastSeenAt)
 	require.WithinDuration(t, time.Now(), *refreshed.LastSeenAt, 5*time.Second)
 
-	// Second call bumps again — last_seen_at should move forward.
 	first := *refreshed.LastSeenAt
 	time.Sleep(5 * time.Millisecond)
 	refreshed2, err := store.TouchNodeHeartbeat(ctx, node.ID)
 	require.NoError(t, err)
 	require.True(t, refreshed2.LastSeenAt.After(first) || refreshed2.LastSeenAt.Equal(first))
 
-	// Unknown id returns ErrNoRows.
 	_, err = store.TouchNodeHeartbeat(ctx, uuid.New())
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
@@ -295,11 +294,9 @@ func TestSetNodeStateTransition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, NodeStateEnrollmentFailed, refreshed.State)
 
-	// Unknown state must be rejected by the CHECK constraint.
 	err = store.SetNodeState(ctx, node.ID, "banana")
 	require.Error(t, err)
 
-	// Unknown id returns ErrNoRows.
 	err = store.SetNodeState(ctx, uuid.New(), NodeStateActive)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
@@ -327,13 +324,11 @@ func TestUpdateNodeLabelsRoundtrip(t *testing.T) {
 	require.Equal(t, "manual-only", refreshed.Labels["remediation"])
 	require.Equal(t, "prod", refreshed.Labels["env"])
 
-	// Overwriting with nil/empty should produce an empty map, never NULL.
 	require.NoError(t, store.UpdateNodeLabels(ctx, node.ID, nil))
 	refreshed, err = store.GetNode(ctx, node.ID)
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{}, refreshed.Labels)
 
-	// Unknown id returns ErrNoRows.
 	err = store.UpdateNodeLabels(ctx, uuid.New(), map[string]any{"k": "v"})
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
@@ -348,22 +343,16 @@ func TestListEnrollmentPendingNodesOlderThan(t *testing.T) {
 	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "tn-reaper"})
 	require.NoError(t, err)
 
-	// A pending node created "long ago".
 	oldNode, err := store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "old-pending"})
 	require.NoError(t, err)
 
-	// An active node — must not show up.
 	activeNode, err := store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "active-host"})
 	require.NoError(t, err)
 	require.NoError(t, store.SetNodeState(ctx, activeNode.ID, NodeStateActive))
 
-	// A pending node created in the future (relative to cutoff) — must not
-	// show up either.
 	_, err = store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "fresh-pending"})
 	require.NoError(t, err)
 
-	// Roll the old pending node's created_at back in time so it's older
-	// than the cutoff.
 	_, err = store.DB().ExecContext(ctx, `UPDATE nodes SET created_at = $2 WHERE id = $1`,
 		oldNode.ID, time.Now().Add(-20*time.Minute))
 	require.NoError(t, err)
@@ -372,4 +361,71 @@ func TestListEnrollmentPendingNodesOlderThan(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	require.Equal(t, oldNode.ID, pending[0].ID)
+}
+
+// TestRotateNodeCertificateChainsHistory — Worktree B cert rotation: first
+// rotation inserts a history row, second rotation chains the first via
+// replaced_by.
+func TestRotateNodeCertificateChainsHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := setupPostgresStoreWithMigrations(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "tn-cert"})
+	require.NoError(t, err)
+
+	node, err := store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "rotate-host"})
+	require.NoError(t, err)
+
+	first, err := store.RotateNodeCertificate(ctx, node.ID, "serial-1")
+	require.NoError(t, err)
+	require.Equal(t, "serial-1", first.Serial)
+	require.Equal(t, node.ID, first.NodeID)
+
+	history, err := store.GetNodeCertHistory(ctx, node.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	require.False(t, history[0].ReplacedBy.Valid, "first rotation must not carry a replaced_by")
+	require.False(t, history[0].RevokedAt.Valid, "first rotation must not be revoked")
+
+	second, err := store.RotateNodeCertificate(ctx, node.ID, "serial-2")
+	require.NoError(t, err)
+	require.NotEqual(t, first.ID, second.ID)
+
+	history, err = store.GetNodeCertHistory(ctx, node.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+	require.True(t, history[0].ReplacedBy.Valid)
+	require.Equal(t, second.ID, history[0].ReplacedBy.UUID)
+	require.True(t, history[0].RevokedAt.Valid)
+	require.False(t, history[1].ReplacedBy.Valid)
+	require.False(t, history[1].RevokedAt.Valid)
+
+	latest, err := store.LatestNodeCertHistory(ctx, node.ID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, second.ID, latest.ID)
+}
+
+func TestRotateNodeCertificateRejectsUnknownNode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := setupPostgresStoreWithMigrations(t, ctx)
+
+	_, err := store.RotateNodeCertificate(ctx, uuid.New(), "serial-x")
+	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestRotateNodeCertificateRequiresSerial(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := setupPostgresStoreWithMigrations(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "tn-cert-empty"})
+	require.NoError(t, err)
+	node, err := store.CreateNode(ctx, &Node{TenantID: tenant.ID, Hostname: "empty-serial"})
+	require.NoError(t, err)
+
+	_, err = store.RotateNodeCertificate(ctx, node.ID, "   ")
+	require.Error(t, err)
 }

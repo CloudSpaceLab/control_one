@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/users', label: 'Users & Roles' },
   { to: '/telemetry', label: 'Telemetry' },
   { to: '/secrets', label: 'Secrets' },
+  { to: '/offline-bundle', label: 'Offline Bundle' },
   { to: '/settings', label: 'Settings' },
 ];
 

@@ -1237,6 +1237,7 @@ type fakeStore struct {
 	remediationApprovals map[uuid.UUID]storage.RemediationApproval
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
+	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
 }
 
 type stubQueue struct{}
@@ -3130,6 +3131,81 @@ func (f *fakeStore) UpdateClusterRolloutWave(_ context.Context, id uuid.UUID, pa
 			f.clusterRolloutWaves[rolloutID] = waves
 			copyWave := waves[i]
 			return &copyWave, nil
+		}
+	}
+	return nil, nil
+}
+
+// ── Sprint 2 Worktree B additions ────────────────────────────────────────────
+
+func (f *fakeStore) RotateNodeCertificate(_ context.Context, nodeID uuid.UUID, serial string) (*storage.NodeCertHistory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	serial = strings.TrimSpace(serial)
+	if serial == "" {
+		return nil, errors.New("serial is required")
+	}
+
+	found := false
+	now := time.Now().UTC()
+	for i := range f.nodes {
+		if f.nodes[i].ID == nodeID {
+			found = true
+			f.nodes[i].CertSerial = sql.NullString{String: serial, Valid: true}
+			f.nodes[i].CertRotatedAt = sql.NullTime{Time: now, Valid: true}
+			f.nodes[i].UpdatedAt = now
+			break
+		}
+	}
+	if !found {
+		return nil, sql.ErrNoRows
+	}
+
+	newEntry := storage.NodeCertHistory{
+		ID:       uuid.New(),
+		NodeID:   nodeID,
+		Serial:   serial,
+		IssuedAt: now,
+	}
+	if f.nodeCertHistory == nil {
+		f.nodeCertHistory = make(map[uuid.UUID][]storage.NodeCertHistory)
+	}
+	existing := f.nodeCertHistory[nodeID]
+	// Chain: any prior unreplaced entry becomes replaced_by newEntry, revoked now.
+	for i := range existing {
+		if !existing[i].ReplacedBy.Valid {
+			existing[i].ReplacedBy = uuid.NullUUID{UUID: newEntry.ID, Valid: true}
+			existing[i].RevokedAt = sql.NullTime{Time: newEntry.IssuedAt, Valid: true}
+		}
+	}
+	f.nodeCertHistory[nodeID] = append(existing, newEntry)
+	return &newEntry, nil
+}
+
+func (f *fakeStore) GetNodeCertHistory(_ context.Context, nodeID uuid.UUID) ([]storage.NodeCertHistory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nodeCertHistory == nil {
+		return nil, nil
+	}
+	entries := f.nodeCertHistory[nodeID]
+	out := make([]storage.NodeCertHistory, len(entries))
+	copy(out, entries)
+	return out, nil
+}
+
+func (f *fakeStore) LatestNodeCertHistory(_ context.Context, nodeID uuid.UUID) (*storage.NodeCertHistory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nodeCertHistory == nil {
+		return nil, nil
+	}
+	entries := f.nodeCertHistory[nodeID]
+	for i := len(entries) - 1; i >= 0; i-- {
+		if !entries[i].ReplacedBy.Valid {
+			entry := entries[i]
+			return &entry, nil
 		}
 	}
 	return nil, nil

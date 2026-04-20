@@ -12,6 +12,7 @@ import { Telemetry } from './pages/Telemetry';
 import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
 import { FleetEnroll } from './pages/FleetEnroll';
+import { OfflineBundle } from './pages/OfflineBundle';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
@@ -38,6 +39,7 @@ export function App(): JSX.Element {
         <Route path="users" element={<Users />} />
         <Route path="telemetry" element={<Telemetry />} />
         <Route path="secrets" element={<Secrets />} />
+        <Route path="offline-bundle" element={<OfflineBundle />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />
