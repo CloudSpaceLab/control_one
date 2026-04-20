@@ -33,6 +33,14 @@ type BaselineResult struct {
 	Notes string
 }
 
+// NewAdapter is the exported constructor callers (e.g., the clusters API) use
+// to obtain a provisioning.Adapter for a given provider. It's a thin wrapper
+// around the package-private newAdapter and exists so server code can build an
+// adapter without going through the heavier Engine.
+func NewAdapter(provider string, log *zap.Logger, client Client) Adapter {
+	return newAdapter(provider, log, client)
+}
+
 func newAdapter(provider string, log *zap.Logger, client Client) Adapter {
 	normalized := strings.ToLower(strings.TrimSpace(provider))
 	switch normalized {

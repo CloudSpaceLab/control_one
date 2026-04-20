@@ -496,6 +496,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
 	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
+	s.baseRouter.HandleFunc("/api/v1/clusters", s.handleClusters)
+	s.baseRouter.HandleFunc("/api/v1/clusters/", s.handleClusterSubroutes)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {

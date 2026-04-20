@@ -1222,6 +1222,9 @@ type fakeStore struct {
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	auditLogs           []storage.AuditLog
+	clusters            map[uuid.UUID]*storage.Cluster
+	clusterMembers      map[uuid.UUID][]storage.ClusterMember
+	clusterRollouts     map[uuid.UUID][]storage.ClusterRollout
 }
 
 type stubQueue struct{}
@@ -2210,61 +2213,331 @@ func (f *fakeStore) GetEffectivePolicies(_ context.Context, tenantID, nodeID uui
 }
 
 func (f *fakeStore) CreateCluster(_ context.Context, params storage.CreateClusterParams) (*storage.Cluster, error) {
-	return nil, errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clusters == nil {
+		f.clusters = map[uuid.UUID]*storage.Cluster{}
+	}
+	// Enforce unique (tenant_id, name).
+	for _, c := range f.clusters {
+		if c.TenantID == params.TenantID && c.Name == params.Name {
+			return nil, errors.New("cluster with that name already exists for tenant")
+		}
+	}
+	now := time.Now()
+	state := params.State
+	if strings.TrimSpace(state) == "" {
+		state = "pending"
+	}
+	strategy := params.FailureDomainStrategy
+	if strings.TrimSpace(strategy) == "" {
+		strategy = "spread"
+	}
+	rolePlan := params.RolePlan
+	if rolePlan == nil {
+		rolePlan = map[string]any{}
+	}
+	labels := params.Labels
+	if labels == nil {
+		labels = map[string]any{}
+	}
+	cluster := &storage.Cluster{
+		ID:                    uuid.New(),
+		TenantID:              params.TenantID,
+		Name:                  params.Name,
+		Provider:              params.Provider,
+		DesiredSize:           params.DesiredSize,
+		RolePlan:              rolePlan,
+		Labels:                labels,
+		FailureDomainStrategy: strategy,
+		State:                 state,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if params.TemplateID != nil && *params.TemplateID != uuid.Nil {
+		cluster.TemplateID = uuid.NullUUID{UUID: *params.TemplateID, Valid: true}
+	}
+	f.clusters[cluster.ID] = cluster
+	copy := *cluster
+	return &copy, nil
 }
 
 func (f *fakeStore) ListClusters(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.Cluster, int, error) {
-	return nil, 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var filtered []storage.Cluster
+	for _, c := range f.clusters {
+		if tenantID != uuid.Nil && c.TenantID != tenantID {
+			continue
+		}
+		filtered = append(filtered, *c)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
+	total := len(filtered)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return filtered[offset:end], total, nil
 }
 
 func (f *fakeStore) GetClusterByID(_ context.Context, id uuid.UUID) (*storage.Cluster, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.clusters[id]; ok {
+		copy := *c
+		return &copy, nil
+	}
 	return nil, nil
 }
 
 func (f *fakeStore) GetClusterByName(_ context.Context, tenantID uuid.UUID, name string) (*storage.Cluster, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.clusters {
+		if c.TenantID == tenantID && c.Name == name {
+			copy := *c
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 
 func (f *fakeStore) UpdateCluster(_ context.Context, id uuid.UUID, params storage.UpdateClusterParams) (*storage.Cluster, error) {
-	return nil, errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cluster, ok := f.clusters[id]
+	if !ok {
+		return nil, nil
+	}
+	if params.Name != nil {
+		cluster.Name = *params.Name
+	}
+	if params.Provider != nil {
+		cluster.Provider = *params.Provider
+	}
+	if params.DesiredSize != nil {
+		cluster.DesiredSize = *params.DesiredSize
+	}
+	if params.RolePlan != nil {
+		cluster.RolePlan = *params.RolePlan
+	}
+	if params.Labels != nil {
+		cluster.Labels = *params.Labels
+	}
+	if params.FailureDomainStrategy != nil {
+		cluster.FailureDomainStrategy = *params.FailureDomainStrategy
+	}
+	if params.State != nil {
+		cluster.State = *params.State
+	}
+	if params.ClearTemplateID {
+		cluster.TemplateID = uuid.NullUUID{}
+	} else if params.TemplateID != nil && *params.TemplateID != uuid.Nil {
+		cluster.TemplateID = uuid.NullUUID{UUID: *params.TemplateID, Valid: true}
+	}
+	cluster.UpdatedAt = time.Now()
+	copy := *cluster
+	return &copy, nil
 }
 
 func (f *fakeStore) DeleteCluster(_ context.Context, id uuid.UUID) error {
-	return errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.clusters[id]; !ok {
+		return sql.ErrNoRows
+	}
+	delete(f.clusters, id)
+	delete(f.clusterMembers, id)
+	delete(f.clusterRollouts, id)
+	return nil
 }
 
 func (f *fakeStore) CountClustersByTenant(_ context.Context, tenantID uuid.UUID) (int, error) {
-	return 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, c := range f.clusters {
+		if c.TenantID == tenantID {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (f *fakeStore) AddClusterMember(_ context.Context, clusterID, nodeID uuid.UUID, role string, position int) (*storage.ClusterMember, error) {
-	return nil, errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clusterMembers == nil {
+		f.clusterMembers = map[uuid.UUID][]storage.ClusterMember{}
+	}
+	for _, m := range f.clusterMembers[clusterID] {
+		if m.Role == role && m.Position == position {
+			return nil, errors.New("cluster member (role, position) already exists")
+		}
+	}
+	member := storage.ClusterMember{
+		ClusterID: clusterID,
+		NodeID:    nodeID,
+		Role:      role,
+		Position:  position,
+		JoinedAt:  time.Now(),
+	}
+	f.clusterMembers[clusterID] = append(f.clusterMembers[clusterID], member)
+	copy := member
+	return &copy, nil
 }
 
 func (f *fakeStore) RemoveClusterMember(_ context.Context, clusterID, nodeID uuid.UUID) error {
-	return errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	members, ok := f.clusterMembers[clusterID]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	for i, m := range members {
+		if m.NodeID == nodeID {
+			f.clusterMembers[clusterID] = append(members[:i], members[i+1:]...)
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) ListClusterMembers(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterMember, error) {
-	return nil, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	members := f.clusterMembers[clusterID]
+	out := make([]storage.ClusterMember, len(members))
+	copy(out, members)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Role != out[j].Role {
+			return out[i].Role < out[j].Role
+		}
+		return out[i].Position < out[j].Position
+	})
+	return out, nil
 }
 
 func (f *fakeStore) CreateClusterRollout(_ context.Context, params storage.CreateClusterRolloutParams) (*storage.ClusterRollout, error) {
-	return nil, errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clusterRollouts == nil {
+		f.clusterRollouts = map[uuid.UUID][]storage.ClusterRollout{}
+	}
+	waveSize := params.WaveSize
+	if waveSize == 0 {
+		waveSize = 1
+	}
+	strategy := params.WaveStrategy
+	if strings.TrimSpace(strategy) == "" {
+		strategy = "rolling"
+	}
+	state := params.State
+	if strings.TrimSpace(state) == "" {
+		state = "pending"
+	}
+	healthGate := params.HealthGate
+	if healthGate == nil {
+		healthGate = map[string]any{}
+	}
+	rollout := storage.ClusterRollout{
+		ID:                uuid.New(),
+		ClusterID:         params.ClusterID,
+		TemplateVersionID: params.TemplateVersionID,
+		WaveSize:          waveSize,
+		WaveStrategy:      strategy,
+		HealthGate:        healthGate,
+		State:             state,
+		CurrentWave:       params.CurrentWave,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}
+	f.clusterRollouts[params.ClusterID] = append(f.clusterRollouts[params.ClusterID], rollout)
+	copy := rollout
+	return &copy, nil
 }
 
 func (f *fakeStore) GetClusterRolloutByID(_ context.Context, id uuid.UUID) (*storage.ClusterRollout, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, rollouts := range f.clusterRollouts {
+		for _, r := range rollouts {
+			if r.ID == id {
+				copy := r
+				return &copy, nil
+			}
+		}
+	}
 	return nil, nil
 }
 
 func (f *fakeStore) ListClusterRollouts(_ context.Context, clusterID uuid.UUID, limit, offset int) ([]storage.ClusterRollout, int, error) {
-	return nil, 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rollouts := make([]storage.ClusterRollout, len(f.clusterRollouts[clusterID]))
+	copy(rollouts, f.clusterRollouts[clusterID])
+	sort.SliceStable(rollouts, func(i, j int) bool {
+		return rollouts[i].CreatedAt.After(rollouts[j].CreatedAt)
+	})
+	total := len(rollouts)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return rollouts[offset:end], total, nil
 }
 
 func (f *fakeStore) UpdateClusterRollout(_ context.Context, id uuid.UUID, params storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error) {
-	return nil, errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for clusterID, rollouts := range f.clusterRollouts {
+		for i := range rollouts {
+			if rollouts[i].ID != id {
+				continue
+			}
+			if params.WaveSize != nil {
+				rollouts[i].WaveSize = *params.WaveSize
+			}
+			if params.WaveStrategy != nil {
+				rollouts[i].WaveStrategy = *params.WaveStrategy
+			}
+			if params.HealthGate != nil {
+				rollouts[i].HealthGate = *params.HealthGate
+			}
+			if params.State != nil {
+				rollouts[i].State = *params.State
+			}
+			if params.CurrentWave != nil {
+				rollouts[i].CurrentWave = *params.CurrentWave
+			}
+			rollouts[i].UpdatedAt = time.Now()
+			f.clusterRollouts[clusterID] = rollouts
+			copy := rollouts[i]
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeStore) DeleteClusterRollout(_ context.Context, id uuid.UUID) error {
-	return errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for clusterID, rollouts := range f.clusterRollouts {
+		for i, r := range rollouts {
+			if r.ID == id {
+				f.clusterRollouts[clusterID] = append(rollouts[:i], rollouts[i+1:]...)
+				return nil
+			}
+		}
+	}
+	return sql.ErrNoRows
 }
