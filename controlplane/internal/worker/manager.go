@@ -154,7 +154,7 @@ func (m *Manager) stopAsynq(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) enqueueAsynq(task Task) error {
+func (m *Manager) enqueueAsynq(task Task, processAt time.Time) error {
 	if m.asynqClient == nil {
 		return errors.New("asynq client not initialized")
 	}
@@ -171,6 +171,9 @@ func (m *Manager) enqueueAsynq(task Task) error {
 	var opts []asynq.Option
 	if maxAttempts > 0 {
 		opts = append(opts, asynq.MaxRetry(maxAttempts-1))
+	}
+	if !processAt.IsZero() {
+		opts = append(opts, asynq.ProcessAt(processAt))
 	}
 	if _, err := m.asynqClient.Enqueue(asynqTask, opts...); err != nil {
 		m.tasks.Delete(task.Name)
@@ -366,8 +369,25 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// Enqueue schedules a task for asynchronous execution.
+// Enqueue schedules a task for asynchronous execution as soon as a worker is
+// available. Kept for back-compat; callers that want a deferred start time
+// should use EnqueueAt.
 func (m *Manager) Enqueue(task Task) error {
+	return m.enqueue(task, time.Time{})
+}
+
+// EnqueueAt schedules a task to run no earlier than `processAt`. For the
+// in-memory backend the task is pushed onto the queue immediately but its
+// handler sleeps until processAt (capped at the manager's stop signal). For
+// the asynq backend the call wraps asynq.Client.Enqueue with asynq.ProcessAt(t)
+// so the task sits in the scheduled set server-side.
+//
+// A zero `processAt` is treated as "run immediately" — equivalent to Enqueue.
+func (m *Manager) EnqueueAt(task Task, processAt time.Time) error {
+	return m.enqueue(task, processAt)
+}
+
+func (m *Manager) enqueue(task Task, processAt time.Time) error {
 	if task.Job == nil {
 		return errors.New("task job cannot be nil")
 	}
@@ -388,7 +408,7 @@ func (m *Manager) Enqueue(task Task) error {
 	}
 
 	if useAsynq {
-		if err := m.enqueueAsynq(task); err != nil {
+		if err := m.enqueueAsynq(task, processAt); err != nil {
 			metricsRecordEnqueueResult(backendLabel, metricsStatusFailure)
 			return err
 		}
@@ -396,11 +416,34 @@ func (m *Manager) Enqueue(task Task) error {
 		return nil
 	}
 
+	// Memory backend: wrap the job so the worker waits until processAt before
+	// invoking it. A zero processAt leaves the inner job untouched.
+	queueTask := task
+	if !processAt.IsZero() {
+		inner := task.Job
+		mgrCtx := m.ctx
+		queueTask.Job = func(ctx context.Context) error {
+			delay := time.Until(processAt)
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-mgrCtx.Done():
+					return errStopped
+				case <-timer.C:
+				}
+			}
+			return inner(ctx)
+		}
+	}
+
 	select {
 	case <-m.ctx.Done():
 		metricsRecordEnqueueResult(backendLabel, metricsStatusError)
 		return errStopped
-	case queue <- task:
+	case queue <- queueTask:
 		metricsRecordEnqueueResult(backendLabel, metricsStatusSuccess)
 		m.recordQueueDepth(backendLabel, len(queue))
 		return nil

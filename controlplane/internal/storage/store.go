@@ -1062,6 +1062,11 @@ type Node struct {
 	State     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// Labels is populated from the nodes.labels JSONB column added by Worktree
+	// A's 0028 migration. When that migration has not yet run (tests, or branches
+	// where A has not merged), Labels stays nil and every read must guard with
+	// `node.Labels != nil` before indexing.
+	Labels map[string]any
 }
 
 // Tenant represents a tenant record.
