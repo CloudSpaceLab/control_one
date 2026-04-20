@@ -171,6 +171,13 @@ type Store interface {
 	ListClusterRollouts(context.Context, uuid.UUID, int, int) ([]storage.ClusterRollout, int, error)
 	UpdateClusterRollout(context.Context, uuid.UUID, storage.UpdateClusterRolloutParams) (*storage.ClusterRollout, error)
 	DeleteClusterRollout(context.Context, uuid.UUID) error
+	// Cluster LB registration + label propagation (Worktree E).
+	CreateClusterLBRegistration(context.Context, storage.CreateClusterLBRegistrationParams) (*storage.ClusterLBRegistration, error)
+	MarkClusterLBRegistrationDeregistered(context.Context, uuid.UUID, uuid.UUID, string) error
+	ListClusterLBRegistrationsForNode(context.Context, uuid.UUID) ([]storage.ClusterLBRegistration, error)
+	ListClusterLBRegistrationsForCluster(context.Context, uuid.UUID) ([]storage.ClusterLBRegistration, error)
+	PropagateClusterLabelsToNode(context.Context, uuid.UUID, uuid.UUID) error
+	// Cluster rollout waves (Worktree D).
 	CreateClusterRolloutWave(context.Context, storage.CreateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
 	GetClusterRolloutWave(context.Context, uuid.UUID) (*storage.ClusterRolloutWave, error)
 	GetClusterRolloutWaveByNumber(context.Context, uuid.UUID, int) (*storage.ClusterRolloutWave, error)

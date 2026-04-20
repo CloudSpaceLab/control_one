@@ -19,6 +19,23 @@ func (v *vmwareAdapter) RunBaselines(ctx context.Context, nodeID string, opts Op
 	return v.httpAdapter.RunBaselines(ctx, nodeID, opts)
 }
 
+// Destroy for VMware delegates to the provisioning backend which power-offs +
+// destroys the VM via govmomi.
+func (v *vmwareAdapter) Destroy(ctx context.Context, nodeID string) error {
+	return v.httpAdapter.Destroy(ctx, nodeID)
+}
+
+// RegisterLB for VMware adds the node to an NSX load-balancer pool when
+// clusterMeta["lb_pool"] is set.
+func (v *vmwareAdapter) RegisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error {
+	return v.httpAdapter.RegisterLB(ctx, nodeID, clusterMeta)
+}
+
+// DeregisterLB for VMware removes the node from the NSX pool.
+func (v *vmwareAdapter) DeregisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error {
+	return v.httpAdapter.DeregisterLB(ctx, nodeID, clusterMeta)
+}
+
 func ensureVMwareMetadata(metadata map[string]string) {
 	if metadata == nil {
 		return

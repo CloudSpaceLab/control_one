@@ -1226,6 +1226,11 @@ type fakeStore struct {
 	clusterMembers       map[uuid.UUID][]storage.ClusterMember
 	clusterRollouts      map[uuid.UUID][]storage.ClusterRollout
 	clusterRolloutWaves  map[uuid.UUID][]storage.ClusterRolloutWave // keyed by rollout id
+	clusterLBRegs        []storage.ClusterLBRegistration
+	// nodeLabels mirrors the nodes.labels JSONB column introduced by
+	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
+	// assert label propagation without depending on A's merge. Keyed by node id.
+	nodeLabels           map[uuid.UUID]map[string]any
 	leases               map[uuid.UUID]storage.RemediationLease
 	enrollmentTokens     map[string]storage.EnrollmentToken // keyed by token hash
 	remediationConfigs   map[uuid.UUID]storage.TenantRemediationConfig
@@ -2597,10 +2602,113 @@ func (f *fakeStore) RemoveClusterMember(_ context.Context, clusterID, nodeID uui
 	for i, m := range members {
 		if m.NodeID == nodeID {
 			f.clusterMembers[clusterID] = append(members[:i], members[i+1:]...)
+			// Strip any `cluster.`-prefixed labels from the node — matches
+			// the real storage layer's transactional behavior.
+			if existing := f.nodeLabels[nodeID]; existing != nil {
+				stripped := make(map[string]any, len(existing))
+				for k, v := range existing {
+					if !strings.HasPrefix(k, "cluster.") {
+						stripped[k] = v
+					}
+				}
+				f.nodeLabels[nodeID] = stripped
+			}
 			return nil
 		}
 	}
 	return sql.ErrNoRows
+}
+
+func (f *fakeStore) CreateClusterLBRegistration(_ context.Context, params storage.CreateClusterLBRegistrationParams) (*storage.ClusterLBRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Upsert semantics — match the real storage path.
+	for i := range f.clusterLBRegs {
+		reg := &f.clusterLBRegs[i]
+		if reg.ClusterID == params.ClusterID && reg.NodeID == params.NodeID && reg.LBIdentifier == params.LBIdentifier {
+			reg.Provider = params.Provider
+			reg.RegisteredAt = time.Now()
+			reg.DeregisteredAt = nil
+			copy := *reg
+			return &copy, nil
+		}
+	}
+	reg := storage.ClusterLBRegistration{
+		ClusterID:    params.ClusterID,
+		NodeID:       params.NodeID,
+		Provider:     params.Provider,
+		LBIdentifier: params.LBIdentifier,
+		RegisteredAt: time.Now(),
+	}
+	f.clusterLBRegs = append(f.clusterLBRegs, reg)
+	copy := reg
+	return &copy, nil
+}
+
+func (f *fakeStore) MarkClusterLBRegistrationDeregistered(_ context.Context, clusterID, nodeID uuid.UUID, lbIdentifier string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.clusterLBRegs {
+		reg := &f.clusterLBRegs[i]
+		if reg.ClusterID == clusterID && reg.NodeID == nodeID && reg.LBIdentifier == lbIdentifier {
+			now := time.Now()
+			reg.DeregisteredAt = &now
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) ListClusterLBRegistrationsForNode(_ context.Context, nodeID uuid.UUID) ([]storage.ClusterLBRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []storage.ClusterLBRegistration
+	for _, reg := range f.clusterLBRegs {
+		if reg.NodeID == nodeID {
+			out = append(out, reg)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListClusterLBRegistrationsForCluster(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterLBRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []storage.ClusterLBRegistration
+	for _, reg := range f.clusterLBRegs {
+		if reg.ClusterID == clusterID {
+			out = append(out, reg)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) PropagateClusterLabelsToNode(_ context.Context, clusterID, nodeID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cluster, ok := f.clusters[clusterID]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	if f.nodeLabels == nil {
+		f.nodeLabels = map[uuid.UUID]map[string]any{}
+	}
+	existing := f.nodeLabels[nodeID]
+	// Keep non-cluster keys, overwrite cluster.* with fresh values.
+	merged := map[string]any{}
+	for k, v := range existing {
+		if !strings.HasPrefix(k, "cluster.") {
+			merged[k] = v
+		}
+	}
+	for k, v := range cluster.Labels {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		merged["cluster."+k] = v
+	}
+	f.nodeLabels[nodeID] = merged
+	return nil
 }
 
 func (f *fakeStore) ListClusterMembers(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterMember, error) {

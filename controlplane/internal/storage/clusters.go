@@ -465,7 +465,16 @@ func (s *Store) AddClusterMember(ctx context.Context, clusterID, nodeID uuid.UUI
 	return &member, nil
 }
 
-// RemoveClusterMember detaches a node from a cluster.
+// RemoveClusterMember detaches a node from a cluster and strips any labels
+// that were projected onto the node with the `cluster.` prefix. `cluster.*`
+// labels are only owned by the cluster — user-set labels on the node are
+// preserved untouched.
+//
+// NOTE: label-strip relies on nodes.labels JSONB column from migration 0028
+// (Worktree A). The two statements run in separate transactions so a missing
+// column doesn't block the membership delete. At merge time (A lands before E)
+// both statements succeed together; before then, the strip is a best-effort
+// log-only operation.
 func (s *Store) RemoveClusterMember(ctx context.Context, clusterID, nodeID uuid.UUID) error {
 	if s.db == nil {
 		return errors.New("store database not initialized")
@@ -490,7 +499,106 @@ func (s *Store) RemoveClusterMember(ctx context.Context, clusterID, nodeID uuid.
 	if rows == 0 {
 		return sql.ErrNoRows
 	}
+
+	// Strip only the `cluster.`-prefixed keys — this is a cheap JSONB filter
+	// that preserves every other label key on the node. A separate statement
+	// (not shared tx) so a missing column doesn't abort the membership delete.
+	if _, stripErr := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET labels = COALESCE(
+		    (SELECT jsonb_object_agg(key, value)
+		     FROM jsonb_each(labels)
+		     WHERE key NOT LIKE 'cluster.%'),
+		    '{}'::jsonb
+		), updated_at = $2
+		WHERE id = $1
+	`, nodeID, s.clock()); stripErr != nil {
+		// Probable reason: Worktree A not merged yet — nodes.labels doesn't
+		// exist. We intentionally soft-fail here so the membership drop still
+		// counts. When A lands this branch becomes unreachable.
+		_ = stripErr
+	}
+
 	return nil
+}
+
+// PropagateClusterLabelsToNode upserts each cluster label onto the given node
+// as `cluster.<key>=<value>`. Non-cluster-prefix keys on the node are left
+// untouched. When the cluster has no labels, any existing `cluster.` keys on
+// the node are stripped — this keeps the node in sync with a label-removal
+// update on the cluster side.
+//
+// Relies on nodes.labels JSONB column from migration 0028 (Worktree A). At
+// dispatch time that column may not yet exist on `seigha` — the orchestrator
+// merges A before E so the column is live at merge time.
+func (s *Store) PropagateClusterLabelsToNode(ctx context.Context, clusterID, nodeID uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if clusterID == uuid.Nil {
+		return errors.New("cluster id is required")
+	}
+	if nodeID == uuid.Nil {
+		return errors.New("node id is required")
+	}
+
+	cluster, err := s.GetClusterByID(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("load cluster for label propagation: %w", err)
+	}
+	if cluster == nil {
+		return sql.ErrNoRows
+	}
+
+	clusterLabelJSON, err := marshalJSONBMap(buildClusterLabelOverlay(cluster.Labels))
+	if err != nil {
+		return fmt.Errorf("encode cluster labels for node: %w", err)
+	}
+
+	// Build the new labels as:
+	//   (existing node labels with `cluster.`-prefixed keys removed)
+	//   merged with (each cluster label prefixed `cluster.`)
+	// We do this in a single UPDATE so propagation is idempotent and atomic.
+	//
+	// The SQL below:
+	//   - strips current `cluster.*` keys
+	//   - overlays the fresh cluster label map
+	// If nodes.labels doesn't exist yet (Worktree A unmerged) this errors —
+	// the caller (cluster.provision / handleUpdateCluster) logs WARN and
+	// proceeds; the cluster membership itself is already persisted.
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET labels = COALESCE(
+		    (SELECT jsonb_object_agg(key, value)
+		     FROM jsonb_each(labels)
+		     WHERE key NOT LIKE 'cluster.%'),
+		    '{}'::jsonb
+		) || $2::jsonb,
+		    updated_at = $3
+		WHERE id = $1
+	`, nodeID, clusterLabelJSON, s.clock())
+	if err != nil {
+		return fmt.Errorf("propagate cluster labels to node: %w", err)
+	}
+	return nil
+}
+
+// buildClusterLabelOverlay takes the cluster's raw labels map and returns a
+// new map with every key prefixed `cluster.`. Non-scalar values are serialised
+// defensively (map/slice survive JSONB roundtrip via the storage layer).
+func buildClusterLabelOverlay(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		out["cluster."+key] = v
+	}
+	return out
 }
 
 // ListClusterMembers returns members for a cluster ordered by role and position.

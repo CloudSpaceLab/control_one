@@ -15,14 +15,6 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
 )
 
-// errClusterShrinkDeferred surfaces the Sprint 1 contract to any caller that
-// invokes the shrink code path directly (e.g., from a worker that got a stale
-// payload). The HTTP handler returns 501 well before this is reached, but
-// keeping the error here documents the deferral at the job layer too.
-// Teardown deferral is handled exclusively at the HTTP layer since there is
-// no cluster.teardown job wired up in Sprint 1.
-var errClusterShrinkDeferred = errors.New(clusterShrinkDeferredMessage)
-
 // buildClusterProvisionJob returns a worker.Task-compatible function that
 // provisions every node in the cluster's role_plan and attaches them as
 // cluster members. The function is idempotent: already-populated (role,
@@ -36,19 +28,35 @@ func (s *Server) buildClusterProvisionJob(jobID, clusterID, tenantID uuid.UUID) 
 	}
 }
 
-// buildClusterScaleJob returns a worker.Task function that adds `delta` new
-// nodes to the cluster, preferring the most-underfilled role. Sprint 1 only
-// supports expand; delta must be > 0. Negative deltas (shrink) are rejected at
-// the HTTP layer with 501.
+// buildClusterScaleJob returns a worker.Task function. Positive `delta`
+// dispatches the expand path (fills under-filled role slots). Negative `delta`
+// dispatches the shrink path (drains members in reverse-position order:
+// DeregisterLB → Destroy → RemoveClusterMember). Worktree E unblocks the
+// Sprint 1 501 stub — handlers no longer reject shrink at the HTTP layer.
 func (s *Server) buildClusterScaleJob(jobID, clusterID, tenantID uuid.UUID, delta int) func(context.Context) error {
 	return func(ctx context.Context) error {
-		if delta <= 0 {
-			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errClusterShrinkDeferred.Error(), map[string]any{
+		if delta == 0 {
+			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "cluster.scale no-op (delta=0)", map[string]any{
 				"finished_at": time.Now(),
 			})
-			return errClusterShrinkDeferred
+			return nil
+		}
+		if delta < 0 {
+			return s.shrinkClusterMembers(ctx, jobID, clusterID, tenantID, -delta)
 		}
 		return s.provisionClusterMembers(ctx, jobID, clusterID, tenantID, delta)
+	}
+}
+
+// buildClusterTeardownJob returns a worker.Task function that drains every
+// cluster member (reverse-position) through DeregisterLB → Destroy →
+// RemoveClusterMember and finally calls DeleteCluster. Any per-node failure
+// is logged but does not abort the rest of the drain — a half-destroyed
+// cluster is worse than a fully-destroyed one that complains about 1 stuck
+// node.
+func (s *Server) buildClusterTeardownJob(jobID, clusterID, tenantID uuid.UUID) func(context.Context) error {
+	return func(ctx context.Context) error {
+		return s.teardownCluster(ctx, jobID, clusterID, tenantID)
 	}
 }
 
@@ -183,6 +191,41 @@ func (s *Server) provisionClusterMembers(ctx context.Context, jobID, clusterID, 
 			failures++
 			continue
 		}
+
+		// Post-member-add hooks: register with LB (if one is configured on
+		// the cluster), record the registration row, then propagate cluster
+		// labels to the node. Failures here are logged but do NOT fail the
+		// slot — a node without LB registration is still a valid member and
+		// operators can reconcile later.
+		clusterMeta := buildClusterMeta(cluster)
+		lbIdentifier := extractLBIdentifier(clusterMeta)
+		if lbIdentifier != "" {
+			if lbErr := adapter.RegisterLB(ctx, nodeID.String(), clusterMeta); lbErr != nil {
+				s.logger.Warn("cluster lb register failed",
+					zap.String("cluster_id", cluster.ID.String()),
+					zap.String("node_id", nodeID.String()),
+					zap.Error(lbErr),
+				)
+			} else if _, regErr := s.store.CreateClusterLBRegistration(ctx, storage.CreateClusterLBRegistrationParams{
+				ClusterID:    cluster.ID,
+				NodeID:       nodeID,
+				Provider:     cluster.Provider,
+				LBIdentifier: lbIdentifier,
+			}); regErr != nil {
+				s.logger.Warn("persist cluster lb registration failed",
+					zap.String("cluster_id", cluster.ID.String()),
+					zap.String("node_id", nodeID.String()),
+					zap.Error(regErr),
+				)
+			}
+		}
+		if propErr := s.store.PropagateClusterLabelsToNode(ctx, cluster.ID, nodeID); propErr != nil {
+			s.logger.Warn("propagate cluster labels to node failed",
+				zap.String("cluster_id", cluster.ID.String()),
+				zap.String("node_id", nodeID.String()),
+				zap.Error(propErr),
+			)
+		}
 		successes++
 		roleFill[sl.role]++
 	}
@@ -289,4 +332,225 @@ func clusterLabelsAsStringMap(labels map[string]any) map[string]string {
 		}
 	}
 	return out
+}
+
+// shrinkClusterMembers drains `drainCount` members from the cluster in
+// reverse-position order: DeregisterLB → Destroy → RemoveClusterMember. The
+// LB registration row is flipped to deregistered_at in the same pass. Per-
+// member failures are logged but don't abort the drain.
+func (s *Server) shrinkClusterMembers(ctx context.Context, jobID, clusterID, tenantID uuid.UUID, drainCount int) error {
+	_ = tenantID // reserved for tenant-scoped audit enrichment
+	_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, fmt.Sprintf("draining %d members", drainCount), map[string]any{
+		"started_at": time.Now(),
+	})
+
+	cluster, err := s.store.GetClusterByID(ctx, clusterID)
+	if err != nil {
+		return s.failClusterJob(ctx, jobID, fmt.Errorf("load cluster for shrink: %w", err))
+	}
+	if cluster == nil {
+		return s.failClusterJob(ctx, jobID, fmt.Errorf("cluster %s not found", clusterID))
+	}
+
+	members, err := s.store.ListClusterMembers(ctx, clusterID)
+	if err != nil {
+		return s.failClusterJob(ctx, jobID, fmt.Errorf("list cluster members: %w", err))
+	}
+
+	drainOrder := drainOrderReverse(members)
+	if drainCount > len(drainOrder) {
+		drainCount = len(drainOrder)
+	}
+	drainOrder = drainOrder[:drainCount]
+
+	adapter := provisioning.NewAdapter(cluster.Provider, s.logger.Named("cluster-shrink"), nil)
+	clusterMeta := buildClusterMeta(cluster)
+	lbIdentifier := extractLBIdentifier(clusterMeta)
+
+	var drained, failures int
+	for _, m := range drainOrder {
+		s.drainSingleMember(ctx, adapter, cluster, m, clusterMeta, lbIdentifier, &drained, &failures)
+	}
+
+	message := fmt.Sprintf("cluster.scale shrink completed: %d drained, %d failed", drained, failures)
+	status := storage.JobStatusSucceeded
+	if failures > 0 && drained == 0 {
+		status = storage.JobStatusFailed
+	}
+	_ = s.store.UpdateJobStatus(ctx, jobID, status, message, map[string]any{
+		"finished_at": time.Now(),
+	})
+	return nil
+}
+
+// teardownCluster is the cluster.teardown handler. It walks every member in
+// reverse-position order, drains them, then deletes the cluster row. Cluster
+// state is flipped to "terminating" at start and "deleted" on completion.
+func (s *Server) teardownCluster(ctx context.Context, jobID, clusterID, tenantID uuid.UUID) error {
+	_ = tenantID // reserved for tenant-scoped audit enrichment
+	_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, "cluster teardown starting", map[string]any{
+		"started_at": time.Now(),
+	})
+
+	cluster, err := s.store.GetClusterByID(ctx, clusterID)
+	if err != nil {
+		return s.failClusterJob(ctx, jobID, fmt.Errorf("load cluster for teardown: %w", err))
+	}
+	if cluster == nil {
+		return s.failClusterJob(ctx, jobID, fmt.Errorf("cluster %s not found", clusterID))
+	}
+
+	terminating := "terminating"
+	if _, updErr := s.store.UpdateCluster(ctx, cluster.ID, storage.UpdateClusterParams{State: &terminating}); updErr != nil {
+		s.logger.Warn("flip cluster state to terminating", zap.Error(updErr))
+	}
+
+	members, err := s.store.ListClusterMembers(ctx, clusterID)
+	if err != nil {
+		return s.failClusterJob(ctx, jobID, fmt.Errorf("list cluster members: %w", err))
+	}
+
+	adapter := provisioning.NewAdapter(cluster.Provider, s.logger.Named("cluster-teardown"), nil)
+	clusterMeta := buildClusterMeta(cluster)
+	lbIdentifier := extractLBIdentifier(clusterMeta)
+
+	drainOrder := drainOrderReverse(members)
+	var drained, failures int
+	for _, m := range drainOrder {
+		s.drainSingleMember(ctx, adapter, cluster, m, clusterMeta, lbIdentifier, &drained, &failures)
+	}
+
+	if deleteErr := s.store.DeleteCluster(ctx, cluster.ID); deleteErr != nil {
+		s.logger.Error("delete cluster after teardown", zap.Error(deleteErr), zap.String("cluster_id", cluster.ID.String()))
+		_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("teardown drained %d/%d but cluster delete failed: %v", drained, len(drainOrder), deleteErr), map[string]any{
+			"finished_at": time.Now(),
+		})
+		return deleteErr
+	}
+
+	status := storage.JobStatusSucceeded
+	if failures > 0 && drained == 0 {
+		status = storage.JobStatusFailed
+	}
+	_ = s.store.UpdateJobStatus(ctx, jobID, status, fmt.Sprintf("cluster teardown completed: %d drained, %d failed", drained, failures), map[string]any{
+		"finished_at": time.Now(),
+	})
+	return nil
+}
+
+// drainSingleMember is the shared drain body for shrink + teardown. We
+// deliberately keep the order DeregisterLB → Destroy → RemoveClusterMember:
+//   - LB out first so no new traffic lands
+//   - then the cloud resource
+//   - then the membership row (which strips cluster.* labels from the node)
+//
+// Failures at any step are logged and counted but don't short-circuit — a
+// half-drained cluster should still progress toward fully-drained.
+func (s *Server) drainSingleMember(
+	ctx context.Context,
+	adapter provisioning.Adapter,
+	cluster *storage.Cluster,
+	m storage.ClusterMember,
+	clusterMeta map[string]any,
+	lbIdentifier string,
+	drained *int,
+	failures *int,
+) {
+	if lbIdentifier != "" {
+		if derr := adapter.DeregisterLB(ctx, m.NodeID.String(), clusterMeta); derr != nil {
+			s.logger.Warn("deregister lb failed during drain",
+				zap.String("cluster_id", cluster.ID.String()),
+				zap.String("node_id", m.NodeID.String()),
+				zap.Error(derr),
+			)
+		}
+		if mErr := s.store.MarkClusterLBRegistrationDeregistered(ctx, cluster.ID, m.NodeID, lbIdentifier); mErr != nil {
+			s.logger.Debug("no lb registration row to mark",
+				zap.String("cluster_id", cluster.ID.String()),
+				zap.String("node_id", m.NodeID.String()),
+				zap.Error(mErr),
+			)
+		}
+	}
+
+	if destErr := adapter.Destroy(ctx, m.NodeID.String()); destErr != nil {
+		s.logger.Warn("destroy member failed during drain",
+			zap.String("cluster_id", cluster.ID.String()),
+			zap.String("node_id", m.NodeID.String()),
+			zap.Error(destErr),
+		)
+		*failures++
+		// still try to remove the membership row below so the cluster
+		// member count stays accurate
+	}
+
+	if remErr := s.store.RemoveClusterMember(ctx, cluster.ID, m.NodeID); remErr != nil {
+		s.logger.Warn("remove cluster member failed during drain",
+			zap.String("cluster_id", cluster.ID.String()),
+			zap.String("node_id", m.NodeID.String()),
+			zap.Error(remErr),
+		)
+		*failures++
+		return
+	}
+
+	*drained++
+}
+
+// drainOrderReverse returns members sorted so highest-position slots drain
+// first. We prefer reverse-position because operators typically provision in
+// position order (cp-0, cp-1, cp-2…) and expect teardown/shrink to unwind in
+// the reverse order — last-in-first-out semantics.
+func drainOrderReverse(members []storage.ClusterMember) []storage.ClusterMember {
+	out := make([]storage.ClusterMember, len(members))
+	copy(out, members)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Role != out[j].Role {
+			// Worker roles drain before control-plane roles by default — the
+			// lexicographic order happens to give us worker < control-plane
+			// (both 'w' > 'c' means control-plane drains first alphabetically)
+			// so we explicitly pull `worker` first when both present.
+			if out[i].Role == "worker" {
+				return true
+			}
+			if out[j].Role == "worker" {
+				return false
+			}
+			return out[i].Role > out[j].Role
+		}
+		return out[i].Position > out[j].Position
+	})
+	return out
+}
+
+// buildClusterMeta projects the cluster's labels into an untyped map suitable
+// for the adapter metadata channel. Cluster-LB-specific keys (lb_target_group_arn,
+// lb_backend_pool_id, lb_pool) are surfaced at the top level so adapters can
+// find them with a single lookup.
+func buildClusterMeta(cluster *storage.Cluster) map[string]any {
+	if cluster == nil {
+		return map[string]any{}
+	}
+	meta := make(map[string]any, len(cluster.Labels)+4)
+	meta["cluster_id"] = cluster.ID.String()
+	meta["tenant_id"] = cluster.TenantID.String()
+	meta["provider"] = cluster.Provider
+	for k, v := range cluster.Labels {
+		meta[k] = v
+	}
+	return meta
+}
+
+// extractLBIdentifier pulls the first recognised LB identifier from cluster
+// metadata. Returns "" if no LB is configured — callers short-circuit LB
+// register/deregister when this is empty.
+func extractLBIdentifier(meta map[string]any) string {
+	for _, key := range []string{"lb_target_group_arn", "lb_backend_pool_id", "lb_pool"} {
+		if raw, ok := meta[key]; ok {
+			if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
 }

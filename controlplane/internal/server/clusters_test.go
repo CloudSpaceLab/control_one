@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -435,36 +434,68 @@ func TestClustersScaleExpandEnqueuesScaleJob(t *testing.T) {
 	}
 }
 
-func TestClustersScaleShrinkReturns501(t *testing.T) {
+// TestClustersScaleShrinkEnqueuesShrinkJob verifies Sprint 2 E unblocks the
+// Sprint 1 501 stub — shrink now returns 202 + job_id, direction=shrink.
+func TestClustersScaleShrinkEnqueuesShrinkJob(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
 
 	clusterID := uuid.New()
 	env.store.clusters = map[uuid.UUID]*storage.Cluster{
 		clusterID: {
 			ID: clusterID, TenantID: env.tenantID, Name: "shrink-me", Provider: "mock",
-			DesiredSize: 5, RolePlan: map[string]any{}, Labels: map[string]any{},
-			FailureDomainStrategy: "spread", State: "running",
+			DesiredSize: 5,
+			RolePlan: map[string]any{
+				"roles": []any{map[string]any{"name": "worker", "count": 5}},
+			},
+			Labels: map[string]any{}, FailureDomainStrategy: "spread", State: "running",
 			CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		},
+	}
+	// Seed 5 existing members so shrink has something to drain.
+	env.store.clusterMembers = map[uuid.UUID][]storage.ClusterMember{clusterID: {}}
+	for pos := 0; pos < 5; pos++ {
+		env.store.clusterMembers[clusterID] = append(env.store.clusterMembers[clusterID], storage.ClusterMember{
+			ClusterID: clusterID, NodeID: uuid.New(), Role: "worker", Position: pos, JoinedAt: time.Now(),
+		})
 	}
 
 	rec := env.call(http.MethodPatch, "/api/v1/clusters/"+clusterID.String(),
 		"cluster-admin", map[string]any{"desired_size": 2}, "admin")
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501 for shrink, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for shrink, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), clusterShrinkDeferredMessage) {
-		t.Fatalf("expected shrink-deferred message, got %q", rec.Body.String())
+	var resp clusterAcceptedResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if env.queue.count() != 0 {
-		t.Fatalf("expected no tasks enqueued on shrink, got %d", env.queue.count())
+	if resp.JobID == "" {
+		t.Fatalf("expected job id in shrink response")
+	}
+	if env.queue.count() != 1 {
+		t.Fatalf("expected 1 scale task enqueued, got %d", env.queue.count())
+	}
+	job, _ := env.store.GetJob(context.Background(), uuid.MustParse(resp.JobID))
+	if job == nil || job.Type != JobTypeClusterScale {
+		t.Fatalf("expected cluster.scale job, got %+v", job)
+	}
+	var payload clusterScalePayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatalf("decode scale payload: %v", err)
+	}
+	if payload.Direction != "shrink" {
+		t.Fatalf("expected direction 'shrink', got %q", payload.Direction)
+	}
+	if payload.Delta != -3 {
+		t.Fatalf("expected delta -3, got %d", payload.Delta)
 	}
 
-	// Cluster should not have been modified.
-	cluster, _ := env.store.GetClusterByID(context.Background(), clusterID)
-	if cluster == nil || cluster.DesiredSize != 5 {
-		t.Fatalf("expected desired_size unchanged at 5, got %+v", cluster)
+	// Run the task synchronously and verify 3 members were drained.
+	env.runLastTask()
+
+	members, _ := env.store.ListClusterMembers(context.Background(), clusterID)
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members after shrink, got %d", len(members))
 	}
 }
 
@@ -498,7 +529,10 @@ func TestClustersPatchLabelsOnly(t *testing.T) {
 	}
 }
 
-func TestClustersDeleteReturns501(t *testing.T) {
+// TestClustersDeleteEnqueuesTeardownJob verifies Sprint 2 E unblocks the
+// Sprint 1 501 stub — DELETE returns 202 + job_id, cluster flips to
+// terminating, then the worker drains + deletes.
+func TestClustersDeleteEnqueuesTeardownJob(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
 
 	clusterID := uuid.New()
@@ -510,23 +544,48 @@ func TestClustersDeleteReturns501(t *testing.T) {
 			CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		},
 	}
+	env.store.clusterMembers = map[uuid.UUID][]storage.ClusterMember{clusterID: {
+		{ClusterID: clusterID, NodeID: uuid.New(), Role: "worker", Position: 0, JoinedAt: time.Now()},
+		{ClusterID: clusterID, NodeID: uuid.New(), Role: "worker", Position: 1, JoinedAt: time.Now()},
+		{ClusterID: clusterID, NodeID: uuid.New(), Role: "worker", Position: 2, JoinedAt: time.Now()},
+	}}
 
 	rec := env.call(http.MethodDelete, "/api/v1/clusters/"+clusterID.String(),
 		"cluster-admin", nil, "admin")
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501 for delete, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for teardown, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), clusterTeardownDeferredMessage) {
-		t.Fatalf("expected teardown-deferred message, got %q", rec.Body.String())
+	var resp clusterAcceptedResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if env.queue.count() != 0 {
-		t.Fatalf("delete should not enqueue, got %d", env.queue.count())
+	if resp.State != "terminating" {
+		t.Fatalf("expected state 'terminating', got %q", resp.State)
 	}
-	// Cluster must still exist (no destructive action taken).
+	if env.queue.count() != 1 {
+		t.Fatalf("delete should enqueue 1 teardown task, got %d", env.queue.count())
+	}
+	job, _ := env.store.GetJob(context.Background(), uuid.MustParse(resp.JobID))
+	if job == nil || job.Type != JobTypeClusterTeardown {
+		t.Fatalf("expected cluster.teardown job, got %+v", job)
+	}
+
+	// Cluster still exists until the worker runs.
 	cluster, _ := env.store.GetClusterByID(context.Background(), clusterID)
 	if cluster == nil {
-		t.Fatalf("cluster was unexpectedly deleted")
+		t.Fatalf("cluster should still exist before worker runs")
+	}
+
+	// Run the teardown synchronously and verify cluster is gone + members drained.
+	env.runLastTask()
+	cluster, _ = env.store.GetClusterByID(context.Background(), clusterID)
+	if cluster != nil {
+		t.Fatalf("cluster should have been deleted after teardown, got %+v", cluster)
+	}
+	members, _ := env.store.ListClusterMembers(context.Background(), clusterID)
+	if len(members) != 0 {
+		t.Fatalf("expected all members drained after teardown, got %d", len(members))
 	}
 }
 
