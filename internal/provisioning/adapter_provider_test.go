@@ -7,7 +7,10 @@ import (
 )
 
 type providerTestStubAdapter struct {
-	metadata map[string]string
+	metadata       map[string]string
+	destroyCalls   []string
+	lbRegisterCall map[string]any
+	lbDeregCall    map[string]any
 }
 
 func (s *providerTestStubAdapter) Apply(ctx context.Context, nodeID string, opts Options, metadata map[string]string) (*ApplyResult, error) {
@@ -17,6 +20,21 @@ func (s *providerTestStubAdapter) Apply(ctx context.Context, nodeID string, opts
 
 func (s *providerTestStubAdapter) RunBaselines(ctx context.Context, nodeID string, opts Options) (*BaselineResult, error) {
 	return &BaselineResult{Notes: "stub"}, nil
+}
+
+func (s *providerTestStubAdapter) Destroy(_ context.Context, nodeID string) error {
+	s.destroyCalls = append(s.destroyCalls, nodeID)
+	return nil
+}
+
+func (s *providerTestStubAdapter) RegisterLB(_ context.Context, _ string, clusterMeta map[string]any) error {
+	s.lbRegisterCall = clusterMeta
+	return nil
+}
+
+func (s *providerTestStubAdapter) DeregisterLB(_ context.Context, _ string, clusterMeta map[string]any) error {
+	s.lbDeregCall = clusterMeta
+	return nil
 }
 
 func TestAzureAdapterEnsuresMetadata(t *testing.T) {

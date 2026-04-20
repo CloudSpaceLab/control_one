@@ -24,6 +24,18 @@ func (s *stubAdapter) RunBaselines(_ context.Context, _ string, _ Options) (*Bas
 	return &BaselineResult{Notes: "stub"}, nil
 }
 
+func (s *stubAdapter) Destroy(_ context.Context, _ string) error {
+	return nil
+}
+
+func (s *stubAdapter) RegisterLB(_ context.Context, _ string, _ map[string]any) error {
+	return nil
+}
+
+func (s *stubAdapter) DeregisterLB(_ context.Context, _ string, _ map[string]any) error {
+	return nil
+}
+
 func TestEngineApplyTemplateMergesMetadata(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	engine := NewEngine(log, nil, Options{Template: "demo", Provider: "mock"})
