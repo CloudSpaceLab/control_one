@@ -173,7 +173,6 @@ func TestRetireNodeSetsState(t *testing.T) {
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
-
 // TestCreateNodeDefaultsToEnrollmentPending locks in the Sprint 2 state
 // default. Pre-0028 this was 'active'; new rows now wait for the heartbeat
 // + first-scan gate before activating.

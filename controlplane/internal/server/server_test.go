@@ -1203,30 +1203,30 @@ func TestRBACAuthorization(t *testing.T) {
 }
 
 type fakeStore struct {
-	mu                   sync.Mutex
-	nodes                []storage.Node
-	tenants              []storage.Tenant
-	createdNode          *storage.Node
-	createdTenant        *storage.Tenant
-	jobs                 map[uuid.UUID]*storage.Job
-	events               map[uuid.UUID][]storage.JobEvent
-	complianceResults    map[uuid.UUID][]storage.ComplianceResult
-	users                map[string]*storage.User
-	usersByID            map[uuid.UUID]*storage.User
-	userList             []storage.User
-	userRoles            map[uuid.UUID][]string
-	rolesCatalog         []storage.Role
-	lastUserID           uuid.UUID
-	overrideRoles        map[uuid.UUID][]string
-	skipUserPersistence  bool
-	templates            []storage.ProvisioningTemplate
-	templateVersions     map[uuid.UUID][]storage.ProvisioningTemplateVersion
-	auditLogs            []storage.AuditLog
-	clusters             map[uuid.UUID]*storage.Cluster
-	clusterMembers       map[uuid.UUID][]storage.ClusterMember
-	clusterRollouts      map[uuid.UUID][]storage.ClusterRollout
-	clusterRolloutWaves  map[uuid.UUID][]storage.ClusterRolloutWave // keyed by rollout id
-	clusterLBRegs        []storage.ClusterLBRegistration
+	mu                  sync.Mutex
+	nodes               []storage.Node
+	tenants             []storage.Tenant
+	createdNode         *storage.Node
+	createdTenant       *storage.Tenant
+	jobs                map[uuid.UUID]*storage.Job
+	events              map[uuid.UUID][]storage.JobEvent
+	complianceResults   map[uuid.UUID][]storage.ComplianceResult
+	users               map[string]*storage.User
+	usersByID           map[uuid.UUID]*storage.User
+	userList            []storage.User
+	userRoles           map[uuid.UUID][]string
+	rolesCatalog        []storage.Role
+	lastUserID          uuid.UUID
+	overrideRoles       map[uuid.UUID][]string
+	skipUserPersistence bool
+	templates           []storage.ProvisioningTemplate
+	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
+	auditLogs           []storage.AuditLog
+	clusters            map[uuid.UUID]*storage.Cluster
+	clusterMembers      map[uuid.UUID][]storage.ClusterMember
+	clusterRollouts     map[uuid.UUID][]storage.ClusterRollout
+	clusterRolloutWaves map[uuid.UUID][]storage.ClusterRolloutWave // keyed by rollout id
+	clusterLBRegs       []storage.ClusterLBRegistration
 	// nodeLabels mirrors the nodes.labels JSONB column introduced by
 	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
 	// assert label propagation without depending on A's merge. Keyed by node id.
