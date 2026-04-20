@@ -253,6 +253,9 @@ func (s *Server) handleComplianceScan(ctx context.Context, job *storage.Job) err
 	if err != nil {
 		s.logger.Warn("parse node_id for compliance events", zap.Error(err), zap.String("node_id", payload.NodeID))
 	} else {
+		// First-scan hook — idempotently stamp nodes.first_scan_at and
+		// potentially flip the enrollment gate.
+		s.handleFirstScanHook(ctx, nodeID)
 		s.emitComplianceEvents(ctx, job.TenantID, nodeID, results, payload.ScanID)
 		for _, r := range results {
 			if !r.Passed {

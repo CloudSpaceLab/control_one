@@ -2676,3 +2676,85 @@ func (f *fakeStore) DeleteClusterRollout(_ context.Context, id uuid.UUID) error 
 	}
 	return sql.ErrNoRows
 }
+
+// ── Sprint 2 Worktree A additions ────────────────────────────────────────────
+
+func (f *fakeStore) SetNodeState(_ context.Context, id uuid.UUID, state string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].State = state
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) TouchNodeHeartbeat(_ context.Context, id uuid.UUID) (*storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			t := now
+			f.nodes[i].LastSeenAt = &t
+			f.nodes[i].UpdatedAt = now
+			copy := f.nodes[i]
+			return &copy, nil
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (f *fakeStore) MarkNodeFirstScan(_ context.Context, id uuid.UUID) (*storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			if f.nodes[i].FirstScanAt == nil {
+				t := now
+				f.nodes[i].FirstScanAt = &t
+			}
+			f.nodes[i].UpdatedAt = now
+			copy := f.nodes[i]
+			return &copy, nil
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (f *fakeStore) UpdateNodeLabels(_ context.Context, id uuid.UUID, labels map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			if labels == nil {
+				labels = map[string]any{}
+			}
+			f.nodes[i].Labels = labels
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) ListEnrollmentPendingNodesOlderThan(_ context.Context, cutoff time.Time) ([]storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []storage.Node
+	for _, node := range f.nodes {
+		if node.State != storage.NodeStateEnrollmentPending {
+			continue
+		}
+		if !node.CreatedAt.Before(cutoff) {
+			continue
+		}
+		copy := node
+		out = append(out, copy)
+	}
+	return out, nil
+}

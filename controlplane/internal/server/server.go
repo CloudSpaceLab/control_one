@@ -44,6 +44,11 @@ type Store interface {
 	RetireNode(context.Context, uuid.UUID) error
 	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
+	SetNodeState(context.Context, uuid.UUID, string) error
+	TouchNodeHeartbeat(context.Context, uuid.UUID) (*storage.Node, error)
+	MarkNodeFirstScan(context.Context, uuid.UUID) (*storage.Node, error)
+	UpdateNodeLabels(context.Context, uuid.UUID, map[string]any) error
+	ListEnrollmentPendingNodesOlderThan(context.Context, time.Time) ([]storage.Node, error)
 	GetUserByExternalID(context.Context, string) (*storage.User, error)
 	GetUser(context.Context, uuid.UUID) (*storage.User, error)
 	ListUsers(context.Context, int, int) ([]storage.User, int, error)
@@ -450,6 +455,13 @@ type Server struct {
 	complianceScheduler *ComplianceScheduler
 	agentSigningOnce    sync.Once
 	agentSigning        *agentSigningMaterial
+
+	// enrollmentReaper drives the background loop that flips nodes stuck in
+	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
+	enrollmentReaper enrollmentReaperState
+	// clockOverride is optional — tests override it to deterministically
+	// drive the reaper without real wall-clock delays.
+	clockOverride func() time.Time
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -1241,6 +1253,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && segments[1] == "heartbeat" {
+		s.handleNodeHeartbeat(w, r, nodeID)
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return
@@ -1401,27 +1418,45 @@ func (r createNodeRequest) validate() error {
 }
 
 type nodeResponse struct {
-	ID        string  `json:"id"`
-	TenantID  string  `json:"tenant_id"`
-	Hostname  string  `json:"hostname"`
-	OS        *string `json:"os,omitempty"`
-	Arch      *string `json:"arch,omitempty"`
-	PublicIP  *string `json:"public_ip,omitempty"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID          string         `json:"id"`
+	TenantID    string         `json:"tenant_id"`
+	Hostname    string         `json:"hostname"`
+	OS          *string        `json:"os,omitempty"`
+	Arch        *string        `json:"arch,omitempty"`
+	PublicIP    *string        `json:"public_ip,omitempty"`
+	State       string         `json:"state"`
+	LastSeenAt  *string        `json:"last_seen_at,omitempty"`
+	FirstScanAt *string        `json:"first_scan_at,omitempty"`
+	Labels      map[string]any `json:"labels"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
 }
 
 func nodeResponseFromModel(n storage.Node) nodeResponse {
-	return nodeResponse{
+	resp := nodeResponse{
 		ID:        n.ID.String(),
 		TenantID:  n.TenantID.String(),
 		Hostname:  n.Hostname,
 		OS:        nullStringPtr(n.OS),
 		Arch:      nullStringPtr(n.Arch),
 		PublicIP:  nullStringPtr(n.PublicIP),
+		State:     n.State,
+		Labels:    n.Labels,
 		CreatedAt: n.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: n.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+	if resp.Labels == nil {
+		resp.Labels = map[string]any{}
+	}
+	if n.LastSeenAt != nil {
+		ts := n.LastSeenAt.UTC().Format(time.RFC3339)
+		resp.LastSeenAt = &ts
+	}
+	if n.FirstScanAt != nil {
+		ts := n.FirstScanAt.UTC().Format(time.RFC3339)
+		resp.FirstScanAt = &ts
+	}
+	return resp
 }
 
 type updateNodeRequest struct {

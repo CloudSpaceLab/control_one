@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Dashboard' },
   { to: '/tenants', label: 'Tenants' },
   { to: '/nodes', label: 'Nodes' },
+  { to: '/fleet-enroll', label: 'Fleet Enroll' },
   { to: '/jobs', label: 'Jobs' },
   { to: '/templates', label: 'Templates' },
   { to: '/compliance', label: 'Compliance' },

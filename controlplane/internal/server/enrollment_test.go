@@ -273,3 +273,62 @@ func TestRetireNodeNotFound(t *testing.T) {
 
 // Ensure sql.ErrNoRows is the zero-value surface for the retire path.
 var _ = sql.ErrNoRows
+
+// TestEnrollLandsNewNodesInEnrollmentPending locks in the Sprint 2 change:
+// brand-new nodes start in enrollment_pending instead of active. The
+// heartbeat + first-scan gate is what moves them to active.
+func TestEnrollLandsNewNodesInEnrollmentPending(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, _ := setupEnrollmentServer(t)
+	t.Cleanup(func() { srv.stopEnrollmentReaper() })
+
+	rec := enroll(t, srv, map[string]any{
+		"token":      rawToken,
+		"hostname":   "pending-host",
+		"machine_id": "pending-machine",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+
+	store := srv.store.(*fakeStore)
+	if len(store.nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(store.nodes))
+	}
+	if store.nodes[0].State != storage.NodeStateEnrollmentPending {
+		t.Fatalf("state = %q, want enrollment_pending", store.nodes[0].State)
+	}
+}
+
+// TestEnrollReaperFlipsStalePending exercises the full loop at the server
+// level: enrollment creates a pending row, the reaper sees it's stale (we
+// backdate its created_at), and flips it to enrollment_failed.
+func TestEnrollReaperFlipsStalePending(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, _ := setupEnrollmentServer(t)
+	t.Cleanup(func() { srv.stopEnrollmentReaper() })
+
+	rec := enroll(t, srv, map[string]any{
+		"token":    rawToken,
+		"hostname": "about-to-expire",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+
+	store := srv.store.(*fakeStore)
+	store.mu.Lock()
+	// Backdate created_at so the row is older than the 10m timeout.
+	store.nodes[0].CreatedAt = time.Now().Add(-20 * time.Minute)
+	store.mu.Unlock()
+
+	srv.reapPendingEnrollments()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.nodes[0].State != storage.NodeStateEnrollmentFailed {
+		t.Fatalf("state = %q, want enrollment_failed", store.nodes[0].State)
+	}
+}

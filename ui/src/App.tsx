@@ -11,6 +11,7 @@ import { Users } from './pages/Users';
 import { Telemetry } from './pages/Telemetry';
 import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
+import { FleetEnroll } from './pages/FleetEnroll';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
@@ -29,6 +30,7 @@ export function App(): JSX.Element {
         <Route index element={<Dashboard />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="nodes" element={<Nodes />} />
+        <Route path="fleet-enroll" element={<FleetEnroll />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />
         <Route path="compliance" element={<Compliance />} />
