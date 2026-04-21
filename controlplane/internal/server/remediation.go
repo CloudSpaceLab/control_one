@@ -17,18 +17,20 @@ import (
 )
 
 type remediationScriptResponse struct {
-	ID            string         `json:"id"`
-	RuleID        string         `json:"rule_id"`
-	Platform      string         `json:"platform"`
-	ScriptType    string         `json:"script_type"`
-	ScriptContent string         `json:"script_content"`
-	Checksum      *string        `json:"checksum,omitempty"`
-	Version       int            `json:"version"`
-	Enabled       bool           `json:"enabled"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
-	CreatedBy     *string        `json:"created_by,omitempty"`
-	CreatedAt     string         `json:"created_at"`
-	UpdatedAt     string         `json:"updated_at"`
+	ID                 string         `json:"id"`
+	RuleID             string         `json:"rule_id"`
+	Platform           string         `json:"platform"`
+	ScriptType         string         `json:"script_type"`
+	ScriptContent      string         `json:"script_content"`
+	Checksum           *string        `json:"checksum,omitempty"`
+	Signature          *string        `json:"signature,omitempty"`
+	SignatureAlgorithm *string        `json:"signature_algorithm,omitempty"`
+	Version            int            `json:"version"`
+	Enabled            bool           `json:"enabled"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
+	CreatedBy          *string        `json:"created_by,omitempty"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
 }
 
 type createRemediationScriptRequest struct {
@@ -180,6 +182,7 @@ func (s *Server) handleCreateRemediationScript(w http.ResponseWriter, r *http.Re
 		Enabled:       req.Enabled,
 		Metadata:      req.Metadata,
 		CreatedBy:     createdBy,
+		Signer:        s.remediationScriptSigner(),
 	}
 	if params.Metadata == nil {
 		params.Metadata = make(map[string]any)
@@ -280,6 +283,7 @@ func (s *Server) handleUpdateRemediationScript(w http.ResponseWriter, r *http.Re
 		ScriptContent: req.ScriptContent,
 		Enabled:       req.Enabled,
 		Metadata:      req.Metadata,
+		Signer:        s.remediationScriptSigner(),
 	}
 
 	updated, err := s.store.UpdateRemediationScript(r.Context(), scriptID, params)
@@ -315,6 +319,14 @@ func newRemediationScriptResponse(script storage.RemediationScript) remediationS
 	if script.Checksum.Valid {
 		checksum := script.Checksum.String
 		resp.Checksum = &checksum
+	}
+	if script.Signature.Valid {
+		sig := script.Signature.String
+		resp.Signature = &sig
+	}
+	if script.SignatureAlgorithm.Valid {
+		alg := script.SignatureAlgorithm.String
+		resp.SignatureAlgorithm = &alg
 	}
 	if script.CreatedBy != nil {
 		createdBy := script.CreatedBy.String()
@@ -472,22 +484,46 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 			return fmt.Errorf("update job status: %w", err)
 		}
 
+		// Build the engine with the CP CA verify key so every exec verifies
+		// the script signature before spawning a process. When the CA key is
+		// unavailable (dev mode) VerifyKey is nil and verification is skipped.
 		remediationEngine := remediation.NewEngine(s.logger, remediation.Options{
-			Timeout: 5 * time.Minute,
+			Timeout:   5 * time.Minute,
+			VerifyKey: s.remediationVerifyKey(),
 		})
 
+		signature := ""
+		if script.Signature.Valid {
+			signature = script.Signature.String
+		}
+		signatureAlg := ""
+		if script.SignatureAlgorithm.Valid {
+			signatureAlg = script.SignatureAlgorithm.String
+		}
+
 		remediationScript := remediation.Script{
-			RuleID:        ruleID,
-			Platform:      script.Platform,
-			ScriptType:    script.ScriptType,
-			ScriptContent: script.ScriptContent,
+			RuleID:             ruleID,
+			Platform:           script.Platform,
+			Version:            script.Version,
+			ScriptType:         script.ScriptType,
+			ScriptContent:      script.ScriptContent,
+			Signature:          signature,
+			SignatureAlgorithm: signatureAlg,
 		}
 
 		result, err := remediationEngine.Execute(ctx, remediationScript)
 		if err != nil {
-			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("remediation execution failed: %v", err), map[string]any{
+			// Distinguish "verification refused the exec" from "exec errored"
+			// so the UI/API layer can show a clearer failure reason.
+			failFields := map[string]any{
 				"error": err.Error(),
-			})
+			}
+			msg := fmt.Sprintf("remediation execution failed: %v", err)
+			if result != nil && result.VerificationFailed {
+				failFields["verification_failed"] = true
+				msg = fmt.Sprintf("remediation refused: %s", remediation.VerificationFailedReason)
+			}
+			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, msg, failFields)
 			return err
 		}
 
@@ -495,15 +531,24 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 		message := "remediation script executed successfully"
 		if !result.Success {
 			status = storage.JobStatusFailed
-			message = fmt.Sprintf("remediation script failed: %s", result.Error)
+			if result.VerificationFailed {
+				message = fmt.Sprintf("remediation refused: %s", remediation.VerificationFailedReason)
+			} else {
+				message = fmt.Sprintf("remediation script failed: %s", result.Error)
+			}
 		}
 
-		if err := s.store.UpdateJobStatus(ctx, jobID, status, message, map[string]any{
+		statusFields := map[string]any{
 			"output":      result.Output,
 			"error":       result.Error,
 			"executed_at": result.ExecutedAt,
 			"duration":    result.Duration.String(),
-		}); err != nil {
+		}
+		if result.VerificationFailed {
+			statusFields["verification_failed"] = true
+		}
+
+		if err := s.store.UpdateJobStatus(ctx, jobID, status, message, statusFields); err != nil {
 			return fmt.Errorf("update job status: %w", err)
 		}
 

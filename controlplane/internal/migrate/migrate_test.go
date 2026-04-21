@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"os"
 	"testing"
 	"time"
 
@@ -16,6 +17,59 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// createThrowawayDatabase carves out a unique database inside an externally
+// provided postgres cluster and drops it after the test. Used when the
+// CONTROL_ONE_TEST_DB_URL env var is set; see storage.setupPostgresStoreFull
+// for the sibling helper.
+func createThrowawayDatabase(t *testing.T, ctx context.Context, baseDSN string) string {
+	t.Helper()
+
+	admin, err := sql.Open("postgres", baseDSN)
+	require.NoError(t, err)
+	defer func() { _ = admin.Close() }()
+
+	dbName := "co_mig_" + randomDBSuffix()
+	_, err = admin.ExecContext(ctx, `CREATE DATABASE `+dbName)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		drop, err := sql.Open("postgres", baseDSN)
+		if err == nil {
+			_, _ = drop.Exec(`DROP DATABASE IF EXISTS ` + dbName + ` WITH (FORCE)`)
+			_ = drop.Close()
+		}
+	})
+
+	// Rewrite the DSN's path component with the new database name.
+	qIdx := -1
+	for i := 0; i < len(baseDSN); i++ {
+		if baseDSN[i] == '?' {
+			qIdx = i
+			break
+		}
+	}
+	head := baseDSN
+	query := ""
+	if qIdx >= 0 {
+		head = baseDSN[:qIdx]
+		query = baseDSN[qIdx:]
+	}
+	slashIdx := -1
+	for i := len(head) - 1; i >= 0; i-- {
+		if head[i] == '/' {
+			slashIdx = i
+			break
+		}
+	}
+	require.Greater(t, slashIdx, 0, "DSN must contain /dbname")
+	return head[:slashIdx+1] + dbName + query
+}
+
+func randomDBSuffix() string {
+	// time-derived suffix; unique enough for a single go-test invocation and
+	// avoids pulling in uuid to keep this file's import list minimal.
+	return time.Now().UTC().Format("20060102150405") + "_" + time.Now().UTC().Format("000000000")
+}
+
 func TestMigrationsUpAndDown(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -23,27 +77,36 @@ func TestMigrationsUpAndDown(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	if _, _, err := tc.DockerImageAuth(ctx, "postgres:latest"); err != nil {
-		t.Skipf("skipping: docker daemon unavailable: %v", err)
+
+	var uri string
+
+	if envDSN := os.Getenv("CONTROL_ONE_TEST_DB_URL"); envDSN != "" {
+		// Local dev bypass: use a dedicated throwaway database when docker
+		// credential helpers break the testcontainers image-auth check.
+		uri = createThrowawayDatabase(t, ctx, envDSN)
+	} else {
+		if _, _, err := tc.DockerImageAuth(ctx, "postgres:latest"); err != nil {
+			t.Skipf("skipping: docker daemon unavailable: %v", err)
+		}
+
+		pgContainer, err := tcpostgres.Run(ctx, "docker.io/postgres:16-alpine",
+			tcpostgres.WithDatabase("control_one"),
+			tcpostgres.WithUsername("postgres"),
+			tcpostgres.WithPassword("postgres"),
+			tc.WithWaitStrategy(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).
+					WithStartupTimeout(60*time.Second),
+			),
+		)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = pgContainer.Terminate(ctx)
+		})
+
+		uri, err = pgContainer.ConnectionString(ctx, "sslmode=disable")
+		require.NoError(t, err)
 	}
-
-	pgContainer, err := tcpostgres.Run(ctx, "docker.io/postgres:16-alpine",
-		tcpostgres.WithDatabase("control_one"),
-		tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"),
-		tc.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
-		),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = pgContainer.Terminate(ctx)
-	})
-
-	uri, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
 
 	db, err := sql.Open("postgres", uri)
 	require.NoError(t, err)

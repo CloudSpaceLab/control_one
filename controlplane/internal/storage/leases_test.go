@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -24,11 +25,22 @@ import (
 // migrations (not just 0001-0006), and returns a Store. Needed for anything
 // that touches remediation_scripts, remediation_leases, or
 // compliance_results.verified.
+//
+// When the CONTROL_ONE_TEST_DB_URL env var is set, the function bypasses
+// testcontainers entirely and runs migrations against that DSN. This lets
+// developers iterate locally against a long-lived postgres container when
+// docker credential helpers are misconfigured (which otherwise makes
+// testcontainers' DockerImageAuth skip the whole suite). Each invocation
+// wipes the public schema so tests stay isolated.
 func setupPostgresStoreFull(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
+	}
+
+	if dsn := os.Getenv("CONTROL_ONE_TEST_DB_URL"); dsn != "" {
+		return setupPostgresStoreFromDSN(t, ctx, dsn)
 	}
 
 	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
@@ -68,6 +80,75 @@ func setupPostgresStoreFull(t *testing.T, ctx context.Context) *Store {
 		_ = store.Close()
 	})
 	return store
+}
+
+// setupPostgresStoreFromDSN migrates an externally-provided postgres instance
+// so local dev runs the real SQL without needing testcontainers to cooperate
+// with docker-credential-desktop. Each invocation carves out its own
+// randomly-named database so t.Parallel tests don't stomp on each other.
+func setupPostgresStoreFromDSN(t *testing.T, ctx context.Context, baseDSN string) *Store {
+	t.Helper()
+
+	admin, err := sql.Open("pgx", baseDSN)
+	require.NoError(t, err)
+	defer func() { _ = admin.Close() }()
+
+	dbName := "co_test_" + uuid.NewString()[:8]
+	_, err = admin.ExecContext(ctx, `CREATE DATABASE `+dbName)
+	require.NoError(t, err)
+
+	testDSN := rebuildDSNForDatabase(t, baseDSN, dbName)
+
+	db, err := sql.Open("pgx", testDSN)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+		dropDB, err := sql.Open("pgx", baseDSN)
+		if err == nil {
+			_, _ = dropDB.Exec(`DROP DATABASE IF EXISTS ` + dbName + ` WITH (FORCE)`)
+			_ = dropDB.Close()
+		}
+	})
+
+	applyCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	require.NoError(t, migrate.Apply(applyCtx, db))
+
+	logger := zap.NewNop()
+	store, err := New(logger, config.DatabaseConfig{URL: testDSN}, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+// rebuildDSNForDatabase rewrites the database name in a postgres URL. Kept
+// dependency-free so it doesn't drag in yet another parser.
+func rebuildDSNForDatabase(t *testing.T, baseDSN, database string) string {
+	t.Helper()
+	// Split query params off the DSN, replace the path portion, then glue
+	// them back.
+	qIdx := -1
+	for i := 0; i < len(baseDSN); i++ {
+		if baseDSN[i] == '?' {
+			qIdx = i
+			break
+		}
+	}
+	head := baseDSN
+	query := ""
+	if qIdx >= 0 {
+		head = baseDSN[:qIdx]
+		query = baseDSN[qIdx:]
+	}
+	slashIdx := -1
+	for i := len(head) - 1; i >= 0; i-- {
+		if head[i] == '/' {
+			slashIdx = i
+			break
+		}
+	}
+	require.Greater(t, slashIdx, 0, "DSN must contain /dbname")
+	return head[:slashIdx+1] + database + query
 }
 
 // seedLeasePrereqs inserts a tenant, node, and job so foreign keys on

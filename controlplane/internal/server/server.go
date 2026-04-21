@@ -496,6 +496,12 @@ type Server struct {
 	complianceScheduler *ComplianceScheduler
 	agentSigningOnce    sync.Once
 	agentSigning        *agentSigningMaterial
+	// Remediation script signing (Sprint 3, Pillar 2.6). CP signs scripts
+	// with the enrollment CA key on write; the remediation engine verifies
+	// against the CA public key before spawning the command. Loaded lazily
+	// so dev/test configs without a CA key keep working.
+	remediationSigningOnce sync.Once
+	remediationSigning     *remediationSigning
 
 	// enrollmentReaper drives the background loop that flips nodes stuck in
 	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
@@ -1698,6 +1704,14 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true}
 	s.configureJobIntegrations()
 	s.registerRoutes()
+
+	// Sign any pre-Sprint-3 remediation_scripts rows now that the CA key is
+	// loaded. Runs synchronously during New so an observer immediately sees
+	// signatures on old rows; the work is bounded (one short UPDATE per
+	// unsigned row) and production configs typically have <100 rows.
+	backfillCtx, backfillCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	s.backfillRemediationSignatures(backfillCtx)
+	backfillCancel()
 
 	if cfg.Jobs.Compliance.ScheduleEnabled {
 		sched := NewComplianceScheduler(s)
