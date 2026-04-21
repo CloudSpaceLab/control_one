@@ -187,6 +187,17 @@ type Store interface {
 	GetClusterRolloutWaveByNumber(context.Context, uuid.UUID, int) (*storage.ClusterRolloutWave, error)
 	ListClusterRolloutWaves(context.Context, uuid.UUID) ([]storage.ClusterRolloutWave, error)
 	UpdateClusterRolloutWave(context.Context, uuid.UUID, storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
+	// Cluster-scoped secrets (Sprint 3 Worktree 5, Pillar 3.9).
+	UpsertClusterSecret(context.Context, storage.UpsertClusterSecretParams) (*storage.ClusterSecret, error)
+	GetClusterSecret(context.Context, uuid.UUID, string) (*storage.ClusterSecret, error)
+	GetClusterSecretDecrypted(context.Context, uuid.UUID, string) (*storage.ClusterSecret, error)
+	ListClusterSecrets(context.Context, uuid.UUID) ([]storage.ClusterSecret, error)
+	ListClusterSecretsDecrypted(context.Context, uuid.UUID) ([]storage.ClusterSecret, error)
+	DeleteClusterSecret(context.Context, uuid.UUID, string) error
+	RecordClusterSecretPush(context.Context, storage.ClusterSecretPushRecord) error
+	ListClusterSecretNodeState(context.Context, uuid.UUID) ([]storage.ClusterSecretNodeState, error)
+	ListClusterSecretNodeStateForNode(context.Context, uuid.UUID) ([]storage.ClusterSecretNodeState, error)
+	DeleteClusterSecretNodeStateForKey(context.Context, uuid.UUID, string) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
