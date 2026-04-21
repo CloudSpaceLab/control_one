@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/jobs', label: 'Jobs' },
   { to: '/templates', label: 'Templates' },
   { to: '/compliance', label: 'Compliance' },
+  { to: '/remediation', label: 'Remediation' },
   { to: '/audit', label: 'Audit Log' },
   { to: '/users', label: 'Users & Roles' },
   { to: '/telemetry', label: 'Telemetry' },

@@ -94,10 +94,10 @@ func TestMemberHealthyMatrix(t *testing.T) {
 	}
 }
 
-// seedClusterWithMembers creates a cluster and N member nodes in the fake
+// seedHealthCluster creates a cluster and N member nodes in the fake
 // store. All nodes are created with State=active. Tests can then flip
 // individual state or inject heartbeat timestamps via setTestNodeLastSeen.
-func seedClusterWithMembers(t *testing.T, env *clustersTestEnv, name string, size int) (uuid.UUID, []uuid.UUID) {
+func seedHealthCluster(t *testing.T, env *clustersTestEnv, name string, size int) (uuid.UUID, []uuid.UUID) {
 	t.Helper()
 	clusterID := uuid.New()
 	if env.store.clusters == nil {
@@ -134,7 +134,7 @@ func seedClusterWithMembers(t *testing.T, env *clustersTestEnv, name string, siz
 
 func TestClusterHealthAllHealthy(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "prod", 5)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "prod", 5)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -174,7 +174,7 @@ func TestClusterHealthAllHealthy(t *testing.T) {
 
 func TestClusterHealthDegradedOneDown(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "prod", 5)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "prod", 5)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -206,7 +206,7 @@ func TestClusterHealthDegradedOneDown(t *testing.T) {
 
 func TestClusterHealthUnhealthyBelowQuorum(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "prod", 5)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "prod", 5)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -265,7 +265,7 @@ func TestClusterHealthNotFound(t *testing.T) {
 
 func TestClusterHealthComplianceFailingMarksMemberUnhealthy(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "prod", 3)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "prod", 3)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -306,7 +306,7 @@ func TestClusterHealthComplianceFailingMarksMemberUnhealthy(t *testing.T) {
 // aggregate health so the UI can badge each row without N+1 calls.
 func TestClusterListAttachesHealthSummary(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "prod", 3)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "prod", 3)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -351,7 +351,7 @@ func TestClusterListAttachesHealthSummary(t *testing.T) {
 // a top-level health summary alongside members + latest_rollout.
 func TestClusterGetIncludesHealthSummary(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "prod", 3)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "prod", 3)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -380,7 +380,7 @@ func TestClusterGetIncludesHealthSummary(t *testing.T) {
 // cluster through the full state matrix by dropping heartbeats one at a time.
 func TestClusterHealthTransitionsHealthyDegradedUnhealthy(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "fleet", 5)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "fleet", 5)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()
@@ -432,7 +432,7 @@ func TestClusterHealthTransitionsHealthyDegradedUnhealthy(t *testing.T) {
 // handler — useful when debugging derivation rules.
 func TestComputeClusterHealthDirect(t *testing.T) {
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
-	clusterID, nodeIDs := seedClusterWithMembers(t, env, "direct", 3)
+	clusterID, nodeIDs := seedHealthCluster(t, env, "direct", 3)
 
 	defer clearTestNodeLastSeen()
 	now := time.Now().UTC()

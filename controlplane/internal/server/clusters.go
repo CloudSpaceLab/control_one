@@ -178,6 +178,12 @@ func (s *Server) handleClusterSubroutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// /secrets subtree delegates to the cluster-secrets API handler.
+	if len(segments) >= 2 && segments[1] == "secrets" {
+		s.handleClusterSecretsRoute(w, r, clusterID, segments[2:])
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return

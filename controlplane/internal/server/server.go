@@ -187,6 +187,17 @@ type Store interface {
 	GetClusterRolloutWaveByNumber(context.Context, uuid.UUID, int) (*storage.ClusterRolloutWave, error)
 	ListClusterRolloutWaves(context.Context, uuid.UUID) ([]storage.ClusterRolloutWave, error)
 	UpdateClusterRolloutWave(context.Context, uuid.UUID, storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
+	// Cluster-scoped secrets (Sprint 3 Worktree 5, Pillar 3.9).
+	UpsertClusterSecret(context.Context, storage.UpsertClusterSecretParams) (*storage.ClusterSecret, error)
+	GetClusterSecret(context.Context, uuid.UUID, string) (*storage.ClusterSecret, error)
+	GetClusterSecretDecrypted(context.Context, uuid.UUID, string) (*storage.ClusterSecret, error)
+	ListClusterSecrets(context.Context, uuid.UUID) ([]storage.ClusterSecret, error)
+	ListClusterSecretsDecrypted(context.Context, uuid.UUID) ([]storage.ClusterSecret, error)
+	DeleteClusterSecret(context.Context, uuid.UUID, string) error
+	RecordClusterSecretPush(context.Context, storage.ClusterSecretPushRecord) error
+	ListClusterSecretNodeState(context.Context, uuid.UUID) ([]storage.ClusterSecretNodeState, error)
+	ListClusterSecretNodeStateForNode(context.Context, uuid.UUID) ([]storage.ClusterSecretNodeState, error)
+	DeleteClusterSecretNodeStateForKey(context.Context, uuid.UUID, string) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -485,6 +496,12 @@ type Server struct {
 	complianceScheduler *ComplianceScheduler
 	agentSigningOnce    sync.Once
 	agentSigning        *agentSigningMaterial
+	// Remediation script signing (Sprint 3, Pillar 2.6). CP signs scripts
+	// with the enrollment CA key on write; the remediation engine verifies
+	// against the CA public key before spawning the command. Loaded lazily
+	// so dev/test configs without a CA key keep working.
+	remediationSigningOnce sync.Once
+	remediationSigning     *remediationSigning
 
 	// enrollmentReaper drives the background loop that flips nodes stuck in
 	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
@@ -536,6 +553,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals/", s.handleRemediationApprovalSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/remediation/circuit-breaker/", s.handleRemediationCircuitBreakerSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/remediation/stats", s.handleRemediationStats)
+	s.baseRouter.HandleFunc("/api/v1/remediation/failures", s.handleRemediationFailures)
+	s.baseRouter.HandleFunc("/api/v1/remediation/verification-stats", s.handleRemediationVerificationStats)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/policies", s.handleRetentionPoliciesCollection)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/cleanup", s.handleRetentionCleanup)
 	s.baseRouter.HandleFunc("/api/v1/secrets/groups", s.handleSecretGroupsCollection)
@@ -1684,6 +1704,14 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true}
 	s.configureJobIntegrations()
 	s.registerRoutes()
+
+	// Sign any pre-Sprint-3 remediation_scripts rows now that the CA key is
+	// loaded. Runs synchronously during New so an observer immediately sees
+	// signatures on old rows; the work is bounded (one short UPDATE per
+	// unsigned row) and production configs typically have <100 rows.
+	backfillCtx, backfillCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	s.backfillRemediationSignatures(backfillCtx)
+	backfillCancel()
 
 	if cfg.Jobs.Compliance.ScheduleEnabled {
 		sched := NewComplianceScheduler(s)
