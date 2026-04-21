@@ -1,0 +1,436 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "rule_id": "cis.linux.5.2.7",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/01-ssh-disable-root-login.sh",
+      "rollback_file": "linux/01-ssh-disable-root-login.rollback.sh",
+      "metadata": {
+        "description": "Disable SSH root login (PermitRootLogin no)",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "high",
+        "timeout_seconds": 120,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["ssh", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.5.2.10",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/02-ssh-key-only-auth.sh",
+      "rollback_file": "linux/02-ssh-key-only-auth.rollback.sh",
+      "metadata": {
+        "description": "Enforce SSH key-only authentication",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "high",
+        "timeout_seconds": 120,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["ssh", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.5.2.16",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/03-ssh-idle-timeout.sh",
+      "rollback_file": "linux/03-ssh-idle-timeout.rollback.sh",
+      "metadata": {
+        "description": "SSH idle timeout (ClientAliveInterval 300)",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "medium",
+        "timeout_seconds": 60,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["ssh", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.5.4.1",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/04-password-quality.sh",
+      "rollback_file": "linux/04-password-quality.rollback.sh",
+      "metadata": {
+        "description": "Password quality policy: min length 14 + 4-class complexity",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "medium",
+        "timeout_seconds": 60,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["password", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.5.5.1",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/05-password-aging.sh",
+      "rollback_file": "linux/05-password-aging.rollback.sh",
+      "metadata": {
+        "description": "Password aging: max 90 days, min 7 days, warn 14 days",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "medium",
+        "timeout_seconds": 180,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["password", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.4.1.1.1",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/06-auditd-enable.sh",
+      "rollback_file": "linux/06-auditd-enable.rollback.sh",
+      "metadata": {
+        "description": "Install and enable auditd with baseline identity/time rules",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC7.2"],
+        "severity": "high",
+        "timeout_seconds": 300,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["audit", "logging"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.3.5.1",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/07-ufw-default-deny.sh",
+      "rollback_file": "linux/07-ufw-default-deny.rollback.sh",
+      "metadata": {
+        "description": "Enable UFW with default-deny inbound, permit SSH",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.6"],
+        "severity": "high",
+        "timeout_seconds": 180,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["firewall", "network"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.host.fail2ban-sshd",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/08-fail2ban-sshd.sh",
+      "rollback_file": "linux/08-fail2ban-sshd.rollback.sh",
+      "metadata": {
+        "description": "Install fail2ban with an sshd jail (5 attempts / 10m => 1h ban)",
+        "frameworks": ["SOC2-CC6.6", "SOC2-CC7.2"],
+        "severity": "medium",
+        "timeout_seconds": 240,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["fail2ban", "intrusion-prevention"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.2.3",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/09-remove-legacy-services.sh",
+      "rollback_file": "linux/09-remove-legacy-services.rollback.sh",
+      "metadata": {
+        "description": "Purge telnet/rsh/talk/ypbind/tftp packages",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.6"],
+        "severity": "high",
+        "timeout_seconds": 180,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "rollback_dangerous": true,
+        "tags": ["packages", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.1.1.1",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/10-disable-unused-modules.sh",
+      "rollback_file": "linux/10-disable-unused-modules.rollback.sh",
+      "metadata": {
+        "description": "Blacklist unused filesystem kernel modules (cramfs, freevxfs, jffs2, hfs, hfsplus, udf, squashfs)",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.6"],
+        "severity": "medium",
+        "timeout_seconds": 180,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["kernel", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.1.1.2",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/11-tmp-partition-audit.sh",
+      "rollback_file": "linux/11-tmp-partition-audit.rollback.sh",
+      "metadata": {
+        "description": "Audit /tmp for separate partition + noexec,nosuid,nodev (report only)",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.8"],
+        "severity": "medium",
+        "timeout_seconds": 60,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": true,
+        "tags": ["filesystem", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.5.1.2",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/12-cron-permissions.sh",
+      "rollback_file": "linux/12-cron-permissions.rollback.sh",
+      "metadata": {
+        "description": "Harden cron file/directory permissions",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "low",
+        "timeout_seconds": 60,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["cron", "filesystem"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.6.1.10",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/13-world-writable-scan.sh",
+      "rollback_file": "linux/13-world-writable-scan.rollback.sh",
+      "metadata": {
+        "description": "Scan filesystem for world-writable files (report only)",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.1"],
+        "severity": "medium",
+        "timeout_seconds": 600,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": true,
+        "tags": ["filesystem", "audit"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.2.2.1.1",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/14-ntp-chrony.sh",
+      "rollback_file": "linux/14-ntp-chrony.rollback.sh",
+      "metadata": {
+        "description": "Ensure chrony or systemd-timesyncd is enabled and running",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC7.2"],
+        "severity": "medium",
+        "timeout_seconds": 180,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["time", "logging"]
+      }
+    },
+    {
+      "rule_id": "cis.linux.3.1.2",
+      "platform": "linux",
+      "script_type": "shell",
+      "content_file": "linux/15-disable-ipv6-forwarding.sh",
+      "rollback_file": "linux/15-disable-ipv6-forwarding.rollback.sh",
+      "metadata": {
+        "description": "Disable IP(v4 + v6) forwarding via sysctl drop-in",
+        "frameworks": ["CIS-1.1.0", "SOC2-CC6.6"],
+        "severity": "medium",
+        "timeout_seconds": 30,
+        "requires_sudo": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["network", "sysctl"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.18.3.2",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/16-disable-smbv1.ps1",
+      "rollback_file": "windows/16-disable-smbv1.rollback.ps1",
+      "metadata": {
+        "description": "Disable SMBv1 server, client, and driver",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.6"],
+        "severity": "critical",
+        "timeout_seconds": 300,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "rollback_dangerous": true,
+        "tags": ["smb", "network", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.18.9.47",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/17-defender-realtime.ps1",
+      "rollback_file": "windows/17-defender-realtime.rollback.ps1",
+      "metadata": {
+        "description": "Enable Defender real-time + behavior + IOAV protection, MAPS advanced",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.8"],
+        "severity": "high",
+        "timeout_seconds": 300,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "rollback_dangerous": true,
+        "tags": ["defender", "endpoint"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.9.1.1",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/18-firewall-all-profiles.ps1",
+      "rollback_file": "windows/18-firewall-all-profiles.rollback.ps1",
+      "metadata": {
+        "description": "Enable Windows Firewall on Domain, Private, and Public profiles",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.6"],
+        "severity": "high",
+        "timeout_seconds": 120,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "rollback_dangerous": true,
+        "tags": ["firewall", "network"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.1.2",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/19-account-lockout.ps1",
+      "rollback_file": "windows/19-account-lockout.rollback.ps1",
+      "metadata": {
+        "description": "Account lockout threshold 5, duration 15min, reset window 15min",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.1"],
+        "severity": "medium",
+        "timeout_seconds": 60,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["accounts", "lockout"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.17.5",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/20-audit-policy-logon.ps1",
+      "rollback_file": "windows/20-audit-policy-logon.rollback.ps1",
+      "metadata": {
+        "description": "Logon/Logoff audit policy: Success + Failure",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC7.2"],
+        "severity": "high",
+        "timeout_seconds": 60,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["audit", "logging"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.18.3.7",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/21-lsa-protection.ps1",
+      "rollback_file": "windows/21-lsa-protection.rollback.ps1",
+      "metadata": {
+        "description": "Enable LSA Protection (RunAsPPL) — reboot required",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.8"],
+        "severity": "high",
+        "timeout_seconds": 60,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "requires_reboot": true,
+        "tags": ["lsa", "credentials"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.2.3.1.3",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/22-disable-guest.ps1",
+      "rollback_file": "windows/22-disable-guest.rollback.ps1",
+      "metadata": {
+        "description": "Disable built-in Guest account",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.1"],
+        "severity": "high",
+        "timeout_seconds": 30,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "rollback_dangerous": true,
+        "tags": ["accounts", "hardening"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.1.1",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/23-password-policy.ps1",
+      "rollback_file": "windows/23-password-policy.rollback.ps1",
+      "metadata": {
+        "description": "Password policy: min length 14, complexity, max age 90, history 24",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.1"],
+        "severity": "high",
+        "timeout_seconds": 120,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["password", "policy"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.18.9.8",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/24-disable-autorun.ps1",
+      "rollback_file": "windows/24-disable-autorun.rollback.ps1",
+      "metadata": {
+        "description": "Disable AutoRun/AutoPlay on all drive types",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.8"],
+        "severity": "medium",
+        "timeout_seconds": 60,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["autorun", "removable"]
+      }
+    },
+    {
+      "rule_id": "cis.windows.19.1.3",
+      "platform": "windows",
+      "script_type": "powershell",
+      "content_file": "windows/25-screen-lock-idle.ps1",
+      "rollback_file": "windows/25-screen-lock-idle.rollback.ps1",
+      "metadata": {
+        "description": "Screen lock after 15min idle with password required",
+        "frameworks": ["CIS-Windows-2.0.0", "SOC2-CC6.1"],
+        "severity": "medium",
+        "timeout_seconds": 60,
+        "requires_admin": true,
+        "idempotent": true,
+        "report_only": false,
+        "tags": ["screen-lock", "workstation"]
+      }
+    }
+  ]
+}

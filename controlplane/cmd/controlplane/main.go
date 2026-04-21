@@ -16,6 +16,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/server"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
+	"github.com/CloudSpaceLab/control_one/internal/remediation"
 )
 
 func main() {
@@ -57,6 +58,22 @@ func main() {
 		}
 		cancel()
 		logger.Info("database migrations complete")
+
+		// Seed the remediation starter pack after migrations so the
+		// remediation_scripts table is populated on first boot. The seeder
+		// uses ON CONFLICT DO NOTHING, so repeat runs are no-ops.
+		seedCtx, seedCancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		seedStats, err := remediation.NewSeeder(store.DB()).Seed(seedCtx)
+		seedCancel()
+		if err != nil {
+			logger.Warn("remediation seed failed", zap.Error(err))
+		} else {
+			logger.Info("remediation seed complete",
+				zap.Int("total", seedStats.Total),
+				zap.Int("inserted", seedStats.Inserted),
+				zap.Int("skipped", seedStats.Skipped),
+			)
+		}
 	}
 
 	workerMgr := worker.New(logger, cfg.Worker)
