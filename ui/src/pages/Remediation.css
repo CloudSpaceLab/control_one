@@ -1,0 +1,136 @@
+/* Remediation dashboard styles. Extends the Compliance palette so the two
+ * pages feel like siblings — intentionally pulls in Compliance.css first and
+ * only adds what's unique to remediation (rate bars, verification cards,
+ * approval row actions). */
+
+.remediation-page .remediation-overview {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.remediation-stats-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.remediation-section {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  margin-bottom: 2rem;
+}
+
+.remediation-section .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.remediation-section h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* ── Success-rate bar in the per-rule table ─────────────────────────── */
+
+.rate-bar {
+  position: relative;
+  width: 180px;
+  max-width: 100%;
+  height: 20px;
+  background: #f3f4f6;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+
+.rate-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  transition: width 0.25s ease-out;
+}
+
+.rate-bar-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.rate-high .rate-bar-fill { background: #10b981; }
+.rate-medium .rate-bar-fill { background: #f59e0b; }
+.rate-low .rate-bar-fill { background: #ef4444; }
+.rate-neutral .rate-bar-fill { background: #9ca3af; }
+
+/* ── Verification cards ─────────────────────────────────────────────── */
+
+.verification-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.verification-card {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid #9ca3af;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+
+.verification-label {
+  font-size: 0.875rem;
+  color: #4b5563;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.verification-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+/* ── Inline approval actions on the queue table ─────────────────────── */
+
+.approval-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.approval-actions .btn-primary,
+.approval-actions .btn-secondary {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.filter-group input[type='text'] {
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: white;
+}
+
+@media (max-width: 900px) {
+  .remediation-page .remediation-overview {
+    grid-template-columns: 1fr;
+  }
+  .remediation-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .rate-bar {
+    width: 100%;
+  }
+}

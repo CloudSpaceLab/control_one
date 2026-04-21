@@ -6,6 +6,7 @@ import { Templates } from './pages/Templates';
 import { Nodes } from './pages/Nodes';
 import { Tenants } from './pages/Tenants';
 import { Compliance } from './pages/Compliance';
+import { Remediation } from './pages/Remediation';
 import { Audit } from './pages/Audit';
 import { Users } from './pages/Users';
 import { Telemetry } from './pages/Telemetry';
@@ -35,6 +36,7 @@ export function App(): JSX.Element {
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />
         <Route path="compliance" element={<Compliance />} />
+        <Route path="remediation" element={<Remediation />} />
         <Route path="audit" element={<Audit />} />
         <Route path="users" element={<Users />} />
         <Route path="telemetry" element={<Telemetry />} />

@@ -309,6 +309,94 @@ export interface ComplianceTrend {
   total: number;
 }
 
+// ── Remediation dashboard (Pillar 2.8) ──────────────────────────────────
+
+export interface RemediationRuleStat {
+  rule_id: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  running: number;
+  queued: number;
+  cancelled: number;
+  success_rate: number;
+  last_run_at?: string;
+}
+
+export interface RemediationStatTotals {
+  total: number;
+  succeeded: number;
+  failed: number;
+  running: number;
+  queued: number;
+  cancelled: number;
+  success_rate: number;
+}
+
+export interface RemediationStats {
+  window_start: string;
+  window_end: string;
+  totals: RemediationStatTotals;
+  per_rule: RemediationRuleStat[];
+}
+
+export interface RemediationFailurePoint {
+  date: string;
+  failed: number;
+  total: number;
+}
+
+export interface RemediationFailures {
+  window_start: string;
+  window_end: string;
+  points: RemediationFailurePoint[];
+}
+
+export interface RemediationVerificationStats {
+  window_start: string;
+  window_end: string;
+  verified: number;
+  not_verified: number;
+  rolled_back: number;
+  pending_verify: number;
+  total_attempted: number;
+}
+
+export interface RemediationStatsParams {
+  window?: string;
+  tenant_id?: string;
+  node_id?: string;
+}
+
+export interface RemediationFailuresParams extends RemediationStatsParams {
+  rule_id?: string;
+}
+
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired';
+
+export interface RemediationApproval {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  rule_id: string;
+  script_id: string;
+  severity: string;
+  status: ApprovalStatus | string;
+  approved_by?: string;
+  approved_at?: string;
+  created_at: string;
+  expires_at: string;
+  task_payload?: Record<string, unknown>;
+}
+
+export interface ListRemediationApprovalsParams {
+  status?: string;
+  tenant_id?: string;
+  node_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ListComplianceResultsParams {
   tenant_id?: string;
   node_id?: string;
@@ -895,6 +983,69 @@ export class APIClient {
     if (params.node_id) search.set('node_id', params.node_id);
     const suffix = search.toString() ? `?${search.toString()}` : '';
     return this.request<ComplianceSummary>(`/api/v1/compliance/summary${suffix}`);
+  }
+
+  async getRemediationStats(params: RemediationStatsParams = {}): Promise<RemediationStats> {
+    const search = new URLSearchParams();
+    if (params.window) search.set('window', params.window);
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<RemediationStats>(`/api/v1/remediation/stats${suffix}`);
+  }
+
+  async getRemediationFailures(params: RemediationFailuresParams = {}): Promise<RemediationFailures> {
+    const search = new URLSearchParams();
+    if (params.window) search.set('window', params.window);
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    if (params.rule_id) search.set('rule_id', params.rule_id);
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<RemediationFailures>(`/api/v1/remediation/failures${suffix}`);
+  }
+
+  async getRemediationVerificationStats(
+    params: RemediationStatsParams = {},
+  ): Promise<RemediationVerificationStats> {
+    const search = new URLSearchParams();
+    if (params.window) search.set('window', params.window);
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<RemediationVerificationStats>(`/api/v1/remediation/verification-stats${suffix}`);
+  }
+
+  async listRemediationApprovals(
+    params: ListRemediationApprovalsParams = {},
+  ): Promise<PaginatedResponse<RemediationApproval>> {
+    const search = new URLSearchParams();
+    if (params.status) search.set('status', params.status);
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.node_id) search.set('node_id', params.node_id);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const response = await this.request<RawPaginatedResponse<RemediationApproval>>(
+      `/api/v1/remediation/approvals${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async approveRemediationApproval(id: string): Promise<RemediationApproval> {
+    const encoded = encodeURIComponent(id);
+    return this.request<RemediationApproval>(`/api/v1/remediation/approvals/${encoded}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async denyRemediationApproval(id: string): Promise<RemediationApproval> {
+    const encoded = encodeURIComponent(id);
+    return this.request<RemediationApproval>(`/api/v1/remediation/approvals/${encoded}/deny`, {
+      method: 'POST',
+    });
   }
 
   async getComplianceTrends(params: ComplianceTrendsParams = {}): Promise<ComplianceTrend[]> {
