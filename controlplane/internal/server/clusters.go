@@ -91,6 +91,7 @@ type clusterResponse struct {
 	UpdatedAt             string                  `json:"updated_at"`
 	Members               []clusterMemberResponse `json:"members,omitempty"`
 	LatestRollout         *clusterRolloutResponse `json:"latest_rollout,omitempty"`
+	Health                *clusterHealthSummary   `json:"health,omitempty"`
 }
 
 type clusterAcceptedResponse struct {
@@ -163,6 +164,20 @@ func (s *Server) handleClusterSubroutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// /health subtree — read-only aggregate view (gap 3.8).
+	if len(segments) == 2 && segments[1] == "health" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		if _, ok := s.authorize(w, r, roleViewer); !ok {
+			return
+		}
+		s.handleClusterHealth(w, r, clusterID)
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return
@@ -218,7 +233,13 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 
 	respItems := make([]clusterResponse, 0, len(clusters))
 	for i := range clusters {
-		respItems = append(respItems, newClusterResponse(clusters[i], nil, nil))
+		item := newClusterResponse(clusters[i], nil, nil)
+		// Attach an aggregate health summary so the list view can render a
+		// badge per row without N+1 calls. The full per-member breakdown is
+		// only loaded on the detail / /health endpoints.
+		summary := newClusterHealthSummary(s.computeClusterHealth(r.Context(), &clusters[i]))
+		item.Health = &summary
+		respItems = append(respItems, item)
 	}
 
 	resp := paginatedResponse[clusterResponse]{
@@ -254,7 +275,13 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request, cluste
 		latest = &rollout
 	}
 
-	writeJSON(w, http.StatusOK, newClusterResponse(*cluster, members, latest))
+	resp := newClusterResponse(*cluster, members, latest)
+	// Attach an aggregate health summary so the detail panel can render a badge
+	// without a second API round-trip. Callers who need per-member heartbeat age
+	// hit /api/v1/clusters/:id/health separately.
+	summary := newClusterHealthSummary(s.computeClusterHealth(r.Context(), cluster))
+	resp.Health = &summary
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {

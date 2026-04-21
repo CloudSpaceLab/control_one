@@ -13,6 +13,8 @@ import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
 import { FleetEnroll } from './pages/FleetEnroll';
 import { OfflineBundle } from './pages/OfflineBundle';
+import { Clusters } from './pages/Clusters';
+import { ClusterDetail } from './pages/ClusterDetail';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
@@ -31,6 +33,8 @@ export function App(): JSX.Element {
         <Route index element={<Dashboard />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="nodes" element={<Nodes />} />
+        <Route path="clusters" element={<Clusters />} />
+        <Route path="clusters/:clusterId" element={<ClusterDetail />} />
         <Route path="fleet-enroll" element={<FleetEnroll />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />

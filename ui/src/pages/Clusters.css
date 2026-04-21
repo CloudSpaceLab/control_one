@@ -1,0 +1,298 @@
+.clusters-page,
+.cluster-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.clusters-page .page-header,
+.cluster-detail-page .page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.clusters-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.clusters-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.clusters-toolbar select {
+  min-width: 200px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(15, 23, 42, 0.75);
+  color: #e2e8f0;
+}
+
+.clusters-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.clusters-table th,
+.clusters-table td {
+  padding: 0.75rem 0.65rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.15);
+  font-size: 0.9rem;
+  vertical-align: middle;
+}
+
+.clusters-table th {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.cluster-link {
+  color: #93c5fd;
+  text-decoration: none;
+}
+
+.cluster-link:hover {
+  text-decoration: underline;
+}
+
+.cluster-health-subtext {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+}
+
+.cluster-rollout-inline {
+  font-size: 0.8rem;
+  color: #cbd5f5;
+}
+
+/* State badges — colours mirror the rollout status-pill family elsewhere in
+   the app so operators don't have to learn a new palette. */
+.cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: rgba(148, 163, 184, 0.25);
+  color: #cbd5f5;
+}
+
+.cluster-badge--healthy {
+  background: rgba(34, 197, 94, 0.22);
+  color: #86efac;
+}
+
+.cluster-badge--degraded {
+  background: rgba(234, 179, 8, 0.22);
+  color: #fde68a;
+}
+
+.cluster-badge--unhealthy {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+}
+
+.cluster-badge--empty {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5f5;
+}
+
+.cluster-badge--running,
+.cluster-badge--pending {
+  background: rgba(59, 130, 246, 0.2);
+  color: #bfdbfe;
+}
+
+.cluster-badge--completed {
+  background: rgba(34, 197, 94, 0.22);
+  color: #86efac;
+}
+
+.cluster-badge--halted,
+.cluster-badge--aborted {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+}
+
+/* Topology: group members by role into rows of circles. */
+.cluster-topology {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.topology-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.topology-role-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #94a3b8;
+}
+
+.topology-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.topology-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  font-size: 0.72rem;
+  padding: 0.35rem;
+  text-align: center;
+  box-shadow: 0 8px 18px rgba(2, 6, 23, 0.45);
+}
+
+.topology-node--healthy {
+  border-color: rgba(34, 197, 94, 0.6);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(15, 23, 42, 0.75));
+}
+
+.topology-node--degraded {
+  border-color: rgba(234, 179, 8, 0.6);
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.18), rgba(15, 23, 42, 0.75));
+}
+
+.topology-node--unhealthy {
+  border-color: rgba(239, 68, 68, 0.6);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.18), rgba(15, 23, 42, 0.75));
+}
+
+.topology-node-ordinal {
+  display: inline-block;
+  font-size: 0.68rem;
+  color: #94a3b8;
+  margin-bottom: 0.15rem;
+}
+
+.topology-node-hostname {
+  font-size: 0.72rem;
+  font-weight: 600;
+  word-break: break-all;
+  line-height: 1.05;
+}
+
+/* Scale slider */
+.cluster-scale-panel {
+  gap: 0.5rem;
+}
+
+.cluster-scale-slider {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.cluster-scale-slider input[type='range'] {
+  flex: 1;
+}
+
+.cluster-scale-slider input[type='number'] {
+  width: 80px;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(15, 23, 42, 0.75);
+  color: #e2e8f0;
+}
+
+/* Rollout progress bar */
+.cluster-rollout-panel {
+  gap: 0.75rem;
+}
+
+.cluster-rollout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cluster-rollout-progress {
+  width: 100%;
+  height: 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border-radius: 999px;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  overflow: hidden;
+}
+
+.cluster-rollout-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.85), rgba(34, 197, 94, 0.85));
+  transition: width 0.3s ease;
+}
+
+.cluster-waves-table {
+  margin-top: 0.5rem;
+}
+
+/* Drain confirm modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-panel {
+  background: rgba(15, 23, 42, 0.95);
+  border-radius: 1rem;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  padding: 1.5rem;
+  max-width: 480px;
+  width: 90%;
+  color: #e2e8f0;
+  box-shadow: 0 30px 60px rgba(2, 6, 23, 0.75);
+}
+
+.modal-panel h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.modal-panel .detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, 'Consolas', 'Menlo', monospace;
+}

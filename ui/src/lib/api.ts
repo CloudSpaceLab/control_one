@@ -554,6 +554,113 @@ export interface PaginatedResponse<T> {
   pagination: PaginationMeta;
 }
 
+// Cluster domain — Sprint 3 wt-cluster-health consumes Sprint 1 + Sprint 2 APIs.
+export type ClusterHealthState = 'healthy' | 'degraded' | 'unhealthy' | 'empty' | string;
+
+export interface ClusterHealthSummary {
+  state: ClusterHealthState;
+  healthy_count: number;
+  total_count: number;
+  quorum: number;
+  quorum_met: boolean;
+}
+
+export interface ClusterMember {
+  node_id: string;
+  role: string;
+  position: number;
+  joined_at: string;
+}
+
+export interface ClusterRollout {
+  id: string;
+  template_version_id: string;
+  wave_size: number;
+  wave_strategy: string;
+  health_gate: Record<string, unknown>;
+  state: string;
+  current_wave: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClusterRolloutWave {
+  id: string;
+  wave_number: number;
+  member_ids: string[];
+  state: string;
+  started_at: string;
+  completed_at?: string;
+  gate_result?: Record<string, unknown>;
+}
+
+export interface ClusterRolloutDetail extends ClusterRollout {
+  cluster_id: string;
+  waves: ClusterRolloutWave[];
+}
+
+export interface Cluster {
+  id: string;
+  tenant_id: string;
+  name: string;
+  provider: string;
+  desired_size: number;
+  role_plan: Record<string, unknown>;
+  labels: Record<string, unknown>;
+  failure_domain_strategy: string;
+  state: string;
+  template_id?: string;
+  created_at: string;
+  updated_at: string;
+  members?: ClusterMember[];
+  latest_rollout?: ClusterRollout;
+  health?: ClusterHealthSummary;
+}
+
+export interface ClusterMemberHealth {
+  node_id: string;
+  hostname: string;
+  role: string;
+  position: number;
+  state: string;
+  last_seen_at?: string;
+  heartbeat_age_seconds?: number;
+  healthy: boolean;
+  compliance_healthy?: boolean;
+  reason?: string;
+}
+
+export interface ClusterHealth {
+  cluster_id: string;
+  state: ClusterHealthState;
+  healthy_count: number;
+  total_count: number;
+  desired_size: number;
+  quorum: number;
+  quorum_met: boolean;
+  computed_at: string;
+  members: ClusterMemberHealth[];
+}
+
+export interface ListClustersParams {
+  tenantId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface UpdateClusterPayload {
+  desired_size?: number;
+  role_plan?: { roles: Array<{ name: string; count: number; template_version_id?: string }> };
+  labels?: Record<string, unknown>;
+  failure_domain_strategy?: string;
+}
+
+export interface ClusterAcceptedResponse {
+  cluster_id: string;
+  job_id: string;
+  state: string;
+}
+
 async function safeErrorMessage(response: Response): Promise<string | undefined> {
   try {
     const data = await response.json();
@@ -743,6 +850,80 @@ export class APIClient {
   async deleteNode(nodeId: string): Promise<void> {
     const encoded = encodeURIComponent(nodeId);
     await this.request<void>(`/api/v1/nodes/${encoded}`, { method: 'DELETE' });
+  }
+
+  async listClusters(params: ListClustersParams = {}): Promise<PaginatedResponse<Cluster>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) {
+      search.set('tenant_id', params.tenantId);
+    }
+    if (typeof params.limit === 'number') {
+      search.set('limit', params.limit.toString());
+    }
+    if (typeof params.offset === 'number') {
+      search.set('offset', params.offset.toString());
+    }
+    const query = search.toString();
+    const suffix = query ? `?${query}` : '';
+    const response = await this.request<RawPaginatedResponse<Cluster>>(`/api/v1/clusters${suffix}`);
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getCluster(clusterId: string): Promise<Cluster> {
+    const encoded = encodeURIComponent(clusterId);
+    return this.request<Cluster>(`/api/v1/clusters/${encoded}`);
+  }
+
+  async getClusterHealth(clusterId: string): Promise<ClusterHealth> {
+    const encoded = encodeURIComponent(clusterId);
+    return this.request<ClusterHealth>(`/api/v1/clusters/${encoded}/health`);
+  }
+
+  async updateCluster(
+    clusterId: string,
+    payload: UpdateClusterPayload,
+  ): Promise<Cluster | ClusterAcceptedResponse> {
+    const encoded = encodeURIComponent(clusterId);
+    return this.request<Cluster | ClusterAcceptedResponse>(`/api/v1/clusters/${encoded}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteCluster(clusterId: string): Promise<ClusterAcceptedResponse> {
+    const encoded = encodeURIComponent(clusterId);
+    return this.request<ClusterAcceptedResponse>(`/api/v1/clusters/${encoded}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getClusterRollout(clusterId: string, rolloutId: string): Promise<ClusterRolloutDetail> {
+    const encClust = encodeURIComponent(clusterId);
+    const encRol = encodeURIComponent(rolloutId);
+    return this.request<ClusterRolloutDetail>(`/api/v1/clusters/${encClust}/rollouts/${encRol}`);
+  }
+
+  async abortClusterRollout(clusterId: string, rolloutId: string): Promise<void> {
+    const encClust = encodeURIComponent(clusterId);
+    const encRol = encodeURIComponent(rolloutId);
+    await this.request<void>(`/api/v1/clusters/${encClust}/rollouts/${encRol}/abort`, {
+      method: 'POST',
+    });
+  }
+
+  async resumeClusterRollout(
+    clusterId: string,
+    rolloutId: string,
+  ): Promise<ClusterAcceptedResponse> {
+    const encClust = encodeURIComponent(clusterId);
+    const encRol = encodeURIComponent(rolloutId);
+    return this.request<ClusterAcceptedResponse>(
+      `/api/v1/clusters/${encClust}/rollouts/${encRol}/resume`,
+      { method: 'POST' },
+    );
   }
 
   async listUsers(params: ListUsersParams = {}): Promise<PaginatedResponse<User>> {
