@@ -22,6 +22,11 @@ type Store struct {
 	db    *sql.DB
 	cfg   config.DatabaseConfig
 	clock func() time.Time
+	// clusterSecretKeyOverride, if set, is used in place of the
+	// CONTROL_ONE_SECRETS_KEY env var / dev fallback when encrypting or
+	// decrypting cluster_secrets values. Tests inject a deterministic key
+	// here so fixture assertions are stable.
+	clusterSecretKeyOverride []byte
 }
 
 // GetNode returns a node by ID.

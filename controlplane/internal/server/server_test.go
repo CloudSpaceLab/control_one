@@ -1230,6 +1230,9 @@ type fakeStore struct {
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+	// Sprint 3 Worktree 5 — cluster-scoped secrets
+	clusterSecrets         map[string]*storage.ClusterSecret          // keyed by cluster_id|key
+	clusterSecretNodeState map[string]*storage.ClusterSecretNodeState // keyed by cluster_id|node_id|key
 }
 
 type stubQueue struct{}
@@ -3283,4 +3286,203 @@ func (f *fakeStore) ListEnrollmentPendingNodesOlderThan(_ context.Context, cutof
 		out = append(out, copy)
 	}
 	return out, nil
+}
+
+// ── Sprint 3 Worktree 5 additions: cluster-scoped secrets ───────────────────
+
+// clusterSecretKey composes (cluster_id, key) for the fakeStore map.
+func clusterSecretMapKey(clusterID uuid.UUID, key string) string {
+	return clusterID.String() + "|" + strings.TrimSpace(key)
+}
+
+func (f *fakeStore) ensureClusterSecretStorage() {
+	if f.clusterSecrets == nil {
+		f.clusterSecrets = map[string]*storage.ClusterSecret{}
+	}
+	if f.clusterSecretNodeState == nil {
+		f.clusterSecretNodeState = map[string]*storage.ClusterSecretNodeState{}
+	}
+}
+
+func (f *fakeStore) UpsertClusterSecret(_ context.Context, params storage.UpsertClusterSecretParams) (*storage.ClusterSecret, error) {
+	if params.ClusterID == uuid.Nil {
+		return nil, errors.New("cluster id is required")
+	}
+	key := strings.TrimSpace(params.Key)
+	if key == "" {
+		return nil, errors.New("key is required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	mapKey := clusterSecretMapKey(params.ClusterID, key)
+	now := time.Now().UTC()
+	if existing, ok := f.clusterSecrets[mapKey]; ok {
+		existing.Version++
+		existing.ValueEncrypted = []byte("enc:" + params.Value)
+		existing.UpdatedAt = now
+		copy := *existing
+		copy.Value = params.Value
+		return &copy, nil
+	}
+	rec := &storage.ClusterSecret{
+		ID:             uuid.New(),
+		ClusterID:      params.ClusterID,
+		Key:            key,
+		ValueEncrypted: []byte("enc:" + params.Value),
+		Version:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	f.clusterSecrets[mapKey] = rec
+	copy := *rec
+	copy.Value = params.Value
+	return &copy, nil
+}
+
+func (f *fakeStore) GetClusterSecret(_ context.Context, clusterID uuid.UUID, key string) (*storage.ClusterSecret, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	if rec, ok := f.clusterSecrets[clusterSecretMapKey(clusterID, key)]; ok {
+		copy := *rec
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) GetClusterSecretDecrypted(_ context.Context, clusterID uuid.UUID, key string) (*storage.ClusterSecret, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	if rec, ok := f.clusterSecrets[clusterSecretMapKey(clusterID, key)]; ok {
+		copy := *rec
+		copy.Value = strings.TrimPrefix(string(rec.ValueEncrypted), "enc:")
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListClusterSecrets(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterSecret, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	var out []storage.ClusterSecret
+	for _, rec := range f.clusterSecrets {
+		if rec.ClusterID == clusterID {
+			out = append(out, *rec)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
+func (f *fakeStore) ListClusterSecretsDecrypted(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterSecret, error) {
+	secrets, err := f.ListClusterSecrets(context.Background(), clusterID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range secrets {
+		secrets[i].Value = strings.TrimPrefix(string(secrets[i].ValueEncrypted), "enc:")
+	}
+	return secrets, nil
+}
+
+func (f *fakeStore) DeleteClusterSecret(_ context.Context, clusterID uuid.UUID, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	mapKey := clusterSecretMapKey(clusterID, key)
+	if _, ok := f.clusterSecrets[mapKey]; !ok {
+		return sql.ErrNoRows
+	}
+	delete(f.clusterSecrets, mapKey)
+	return nil
+}
+
+func clusterSecretNodeStateMapKey(clusterID, nodeID uuid.UUID, key string) string {
+	return clusterID.String() + "|" + nodeID.String() + "|" + strings.TrimSpace(key)
+}
+
+func (f *fakeStore) RecordClusterSecretPush(_ context.Context, params storage.ClusterSecretPushRecord) error {
+	if params.ClusterID == uuid.Nil {
+		return errors.New("cluster id is required")
+	}
+	if params.NodeID == uuid.Nil {
+		return errors.New("node id is required")
+	}
+	key := strings.TrimSpace(params.Key)
+	if key == "" {
+		return errors.New("key is required")
+	}
+	action := strings.TrimSpace(params.Action)
+	if action == "" {
+		action = "upsert"
+	}
+	syncStatus := strings.TrimSpace(params.SyncStatus)
+	if syncStatus == "" {
+		syncStatus = "pending"
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	f.clusterSecretNodeState[clusterSecretNodeStateMapKey(params.ClusterID, params.NodeID, key)] = &storage.ClusterSecretNodeState{
+		ClusterID:  params.ClusterID,
+		NodeID:     params.NodeID,
+		Key:        key,
+		Action:     action,
+		SyncStatus: syncStatus,
+		PushedAt:   time.Now().UTC(),
+	}
+	return nil
+}
+
+func (f *fakeStore) ListClusterSecretNodeState(_ context.Context, clusterID uuid.UUID) ([]storage.ClusterSecretNodeState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	var out []storage.ClusterSecretNodeState
+	for _, rec := range f.clusterSecretNodeState {
+		if rec.ClusterID == clusterID {
+			out = append(out, *rec)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].NodeID != out[j].NodeID {
+			return out[i].NodeID.String() < out[j].NodeID.String()
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
+}
+
+func (f *fakeStore) ListClusterSecretNodeStateForNode(_ context.Context, nodeID uuid.UUID) ([]storage.ClusterSecretNodeState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	var out []storage.ClusterSecretNodeState
+	for _, rec := range f.clusterSecretNodeState {
+		if rec.NodeID == nodeID {
+			out = append(out, *rec)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ClusterID != out[j].ClusterID {
+			return out[i].ClusterID.String() < out[j].ClusterID.String()
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
+}
+
+func (f *fakeStore) DeleteClusterSecretNodeStateForKey(_ context.Context, clusterID uuid.UUID, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureClusterSecretStorage()
+	for k, rec := range f.clusterSecretNodeState {
+		if rec.ClusterID == clusterID && rec.Key == key {
+			delete(f.clusterSecretNodeState, k)
+		}
+	}
+	return nil
 }

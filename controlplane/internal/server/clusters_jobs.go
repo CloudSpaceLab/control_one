@@ -226,6 +226,20 @@ func (s *Server) provisionClusterMembers(ctx context.Context, jobID, clusterID, 
 				zap.Error(propErr),
 			)
 		}
+		// Cluster-member-join hook: push every cluster_secrets row onto
+		// the freshly joined node so the agent's next /secrets/sync poll
+		// picks them up. Failures here are logged but don't fail the
+		// slot — the membership row itself is already persisted, and
+		// operators can rerun a secret PUT to reconcile.
+		pushed, failed := s.PushClusterSecretsToNewMember(ctx, cluster.ID, nodeID)
+		if failed > 0 {
+			s.logger.Warn("cluster secret join push had failures",
+				zap.String("cluster_id", cluster.ID.String()),
+				zap.String("node_id", nodeID.String()),
+				zap.Int("pushed", pushed),
+				zap.Int("failed", failed),
+			)
+		}
 		successes++
 		roleFill[sl.role]++
 	}
