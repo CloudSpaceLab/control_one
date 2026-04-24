@@ -21,6 +21,13 @@ type Config struct {
 	Enrollment    EnrollmentConfig    `mapstructure:"enrollment"`
 	Agent         AgentConfig         `mapstructure:"agent"`
 	Remediation   RemediationConfig   `mapstructure:"remediation"`
+	Secrets       SecretsConfig       `mapstructure:"secrets"`
+}
+
+// SecretsConfig controls at-rest encryption of sensitive rows (e.g. provider
+// credentials). `EncryptionKey` must be 32 bytes raw or 64 hex chars.
+type SecretsConfig struct {
+	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
 // RemediationConfig controls runtime caps on auto-remediation.

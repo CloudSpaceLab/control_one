@@ -33,6 +33,7 @@ type RegisterRequest struct {
 // RegisterResponse captures relevant fields from control plane registration reply.
 type RegisterResponse struct {
 	NodeID    string            `json:"node_id"`
+	TenantID  string            `json:"tenant_id"`
 	ClientCRT string            `json:"client_cert"`
 	ClientKey string            `json:"client_key"`
 	CACert    string            `json:"ca_cert"`
@@ -44,6 +45,7 @@ type RegisterResponse struct {
 // State persisted locally to avoid duplicate registration.
 type State struct {
 	NodeID        string            `json:"node_id"`
+	TenantID      string            `json:"tenant_id"`
 	RegisteredAt  time.Time         `json:"registered_at"`
 	PolicySet     []string          `json:"policy_set"`
 	Intervals     map[string]int64  `json:"intervals"`
@@ -89,6 +91,7 @@ func (r *Registrar) Register(ctx context.Context, req *RegisterRequest, stateFil
 
 	state := &State{
 		NodeID:       regResp.NodeID,
+		TenantID:     regResp.TenantID,
 		RegisteredAt: time.Now().UTC(),
 		PolicySet:    regResp.PolicySet,
 		Intervals:    regResp.Intervals,

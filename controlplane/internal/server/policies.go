@@ -12,8 +12,35 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
+
+// emitPolicyUpdated publishes a policy.updated event so subscribed agents
+// (and the UI) can refresh without waiting for the pull cron.
+func (s *Server) emitPolicyUpdated(tenantID, policyID uuid.UUID, action, name string, version int) {
+	s.emitPolicyUpdatedTargeted(tenantID, policyID, action, nil)
+	_ = name
+	_ = version
+}
+
+// emitPolicyUpdatedTargeted narrows fan-out to a specific node for assignments
+// that target one node; nil means tenant-wide.
+func (s *Server) emitPolicyUpdatedTargeted(tenantID, policyID uuid.UUID, action string, nodeID *uuid.UUID) {
+	if s == nil || s.eventBus == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"policy_id": policyID.String(),
+		"action":    action,
+	})
+	s.eventBus.Publish(eventbus.Event{
+		Topic:    eventbus.TopicPolicyUpdated,
+		TenantID: tenantID,
+		NodeID:   nodeID,
+		Payload:  payload,
+	})
+}
 
 type policyResponse struct {
 	ID          string            `json:"id"`
@@ -46,6 +73,43 @@ type createPolicyRequest struct {
 	RuleType    string            `json:"rule_type"`
 	Enabled     bool              `json:"enabled"`
 	Labels      map[string]string `json:"labels"`
+}
+
+type effectivePolicyResponse struct {
+	ID             string            `json:"id"`
+	TenantID       string            `json:"tenant_id"`
+	Name           string            `json:"name"`
+	Description    *string           `json:"description,omitempty"`
+	RuleType       string            `json:"rule_type"`
+	Enabled        bool              `json:"enabled"`
+	Labels         map[string]string `json:"labels"`
+	Version        int               `json:"version"`
+	VersionID      string            `json:"version_id"`
+	RuleDefinition string            `json:"rule_definition"`
+	UpdatedAt      string            `json:"updated_at"`
+}
+
+func newEffectivePolicyResponse(p storage.PolicyWithVersion) effectivePolicyResponse {
+	out := effectivePolicyResponse{
+		ID:             p.ID.String(),
+		TenantID:       p.TenantID.String(),
+		Name:           p.Name,
+		RuleType:       p.RuleType,
+		Enabled:        p.Enabled,
+		Labels:         p.Labels,
+		Version:        p.Version,
+		VersionID:      p.VersionID.String(),
+		RuleDefinition: p.RuleDefinition,
+		UpdatedAt:      formatTime(p.UpdatedAt),
+	}
+	if out.Labels == nil {
+		out.Labels = map[string]string{}
+	}
+	if p.Description.Valid {
+		desc := p.Description.String
+		out.Description = &desc
+	}
+	return out
 }
 
 type updatePolicyRequest struct {
@@ -221,6 +285,9 @@ func (s *Server) handlePromotePolicyVersion(w http.ResponseWriter, r *http.Reque
 		}
 		resp := newPolicyVersionResponse(version)
 		writeJSON(w, http.StatusOK, resp)
+		if policy, err := s.store.GetPolicy(r.Context(), policyID); err == nil && policy != nil {
+			s.emitPolicyUpdated(policy.TenantID, policyID, "promote", policy.Name, versionNumber)
+		}
 	default:
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -257,6 +324,34 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if enabledParam := strings.TrimSpace(r.URL.Query().Get("enabled")); enabledParam != "" {
 		enabled := parseBoolQuery(enabledParam)
 		filter.Enabled = &enabled
+	}
+
+	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
+		if filter.TenantID == uuid.Nil {
+			http.Error(w, "tenant_id is required when node_id is provided", http.StatusBadRequest)
+			return
+		}
+		nodeID, err := uuid.Parse(nodeParam)
+		if err != nil {
+			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		effective, err := s.store.GetEffectivePolicies(r.Context(), filter.TenantID, nodeID)
+		if err != nil {
+			s.logger.Error("list effective policies", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		respItems := make([]effectivePolicyResponse, 0, len(effective))
+		for _, p := range effective {
+			respItems = append(respItems, newEffectivePolicyResponse(p))
+		}
+		resp := paginatedResponse[effectivePolicyResponse]{
+			Data:       respItems,
+			Pagination: newPaginationMeta(len(respItems), len(respItems), 0, len(respItems)),
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
 	}
 
 	policies, total, err := s.store.ListPolicies(r.Context(), filter, limit, offset)
@@ -337,6 +432,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		"name":      created.Name,
 		"rule_type": created.RuleType,
 	})
+	s.emitPolicyUpdated(created.TenantID, created.ID, "create", created.Name, 0)
 }
 
 func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
@@ -441,6 +537,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 	s.recordAudit(r.Context(), principal, updated.TenantID, "policy.update", "policy", policyID.String(), map[string]any{
 		"name": updated.Name,
 	})
+	s.emitPolicyUpdated(updated.TenantID, updated.ID, "update", updated.Name, 0)
 }
 
 func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
@@ -475,6 +572,7 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, poli
 	s.recordAudit(r.Context(), principal, policy.TenantID, "policy.delete", "policy", policyID.String(), map[string]any{
 		"name": policy.Name,
 	})
+	s.emitPolicyUpdated(policy.TenantID, policy.ID, "delete", policy.Name, 0)
 }
 
 func (s *Server) handleCreatePolicyVersion(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
@@ -638,6 +736,13 @@ func (s *Server) handleCreatePolicyAssignment(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusCreated, newPolicyAssignmentResponse(assignment))
+
+	var nodeFilter *uuid.UUID
+	if assignment.NodeID != uuid.Nil {
+		n := assignment.NodeID
+		nodeFilter = &n
+	}
+	s.emitPolicyUpdatedTargeted(assignment.TenantID, policyID, "assign", nodeFilter)
 }
 
 func (s *Server) handleListPolicyAssignments(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {

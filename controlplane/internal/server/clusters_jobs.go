@@ -138,6 +138,44 @@ func (s *Server) provisionClusterMembers(ctx context.Context, jobID, clusterID, 
 		opts.Template = cluster.TemplateID.UUID.String()
 	}
 
+	// When a hypervisor host is attached, load it (and its credential, if any)
+	// once up-front so every slot can share the same metadata prefix. Credentials
+	// are decrypted in-memory and flattened into the adapter metadata map under
+	// the `_cred_*` namespace so adapters can pick what they need without having
+	// to know the full credential shape.
+	hostMetadata := map[string]string{}
+	if cluster.HypervisorHostID.Valid {
+		host, hostErr := s.store.GetHypervisorHost(ctx, cluster.HypervisorHostID.UUID)
+		if hostErr != nil {
+			s.logger.Warn("load hypervisor host for provisioning", zap.Error(hostErr))
+		} else if host != nil {
+			hostMetadata["_endpoint_url"] = host.EndpointURL
+			hostMetadata["_hypervisor_host_id"] = host.ID.String()
+			if host.Datacenter.Valid {
+				hostMetadata["_hypervisor_host_dc"] = host.Datacenter.String
+				if _, exists := hostMetadata["datacenter"]; !exists {
+					hostMetadata["datacenter"] = host.Datacenter.String
+				}
+			}
+			if host.CredentialID.Valid {
+				cred, credErr := s.store.GetProviderCredential(ctx, host.CredentialID.UUID)
+				if credErr != nil {
+					s.logger.Warn("load provider credential", zap.Error(credErr))
+				} else if cred != nil {
+					if rawCfg, openErr := s.openProviderCredential(cred); openErr != nil {
+						s.logger.Warn("decrypt provider credential", zap.Error(openErr))
+					} else {
+						for k, v := range rawCfg {
+							if str, ok := v.(string); ok {
+								hostMetadata["_cred_"+k] = str
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	var successes, failures int
 	for _, sl := range slots {
 		// Fabricate a node id for bookkeeping. Upstream adapters that actually
@@ -150,6 +188,9 @@ func (s *Server) provisionClusterMembers(ctx context.Context, jobID, clusterID, 
 			"tenant_id":  cluster.TenantID.String(),
 			"role":       sl.role,
 			"position":   fmt.Sprintf("%d", sl.position),
+		}
+		for k, v := range hostMetadata {
+			metadata[k] = v
 		}
 		for k, v := range clusterLabelsAsStringMap(cluster.Labels) {
 			// Don't clobber cluster-core metadata.

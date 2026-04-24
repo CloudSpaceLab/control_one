@@ -36,6 +36,17 @@ type Adapter interface {
 	DeregisterLB(ctx context.Context, nodeID string, clusterMeta map[string]any) error
 }
 
+// Verifier is the optional interface an adapter may implement to prove a
+// hypervisor host's endpoint + credentials are live. Providers that cannot
+// answer without a real backend simply omit this interface and callers skip
+// the probe.
+type Verifier interface {
+	// VerifyReachable opens a short-lived session against the provider endpoint
+	// described by metadata (keys prefixed with _endpoint_url, _cred_* carry
+	// credentials) and returns nil on success.
+	VerifyReachable(ctx context.Context, provider string, metadata map[string]string) error
+}
+
 // ApplyResult describes the outcome of a provisioning apply call.
 type ApplyResult struct {
 	OperationID string
@@ -335,22 +346,8 @@ type awsAdapter struct {
 	httpAdapter Adapter
 }
 
-func (a *awsAdapter) Apply(ctx context.Context, nodeID string, opts Options, metadata map[string]string) (*ApplyResult, error) {
-	ensureAWSMetadata(metadata)
-	return a.httpAdapter.Apply(ctx, nodeID, opts, metadata)
-}
-
 func (a *awsAdapter) RunBaselines(ctx context.Context, nodeID string, opts Options) (*BaselineResult, error) {
 	return a.httpAdapter.RunBaselines(ctx, nodeID, opts)
-}
-
-// Destroy for AWS delegates to the provisioning backend which maps nodeID to
-// an EC2 instance id and issues TerminateInstances via aws-sdk-go-v2/service/ec2.
-// SDK wiring is intentionally left to the provisioning service so adapters here
-// stay thin and test-friendly. If the backend is missing, the underlying http
-// adapter logs WARN + returns nil.
-func (a *awsAdapter) Destroy(ctx context.Context, nodeID string) error {
-	return a.httpAdapter.Destroy(ctx, nodeID)
 }
 
 // RegisterLB for AWS maps to ElasticLoadBalancingV2 RegisterTargets against the

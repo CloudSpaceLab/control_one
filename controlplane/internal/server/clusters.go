@@ -44,6 +44,7 @@ type createClusterRequest struct {
 	Name                  string          `json:"name"`
 	Provider              string          `json:"provider"`
 	TemplateID            *string         `json:"template_id,omitempty"`
+	HypervisorHostID      *string         `json:"hypervisor_host_id,omitempty"`
 	DesiredSize           *int            `json:"desired_size,omitempty"`
 	RolePlan              clusterRolePlan `json:"role_plan"`
 	Labels                map[string]any  `json:"labels,omitempty"`
@@ -87,6 +88,7 @@ type clusterResponse struct {
 	FailureDomainStrategy string                  `json:"failure_domain_strategy"`
 	State                 string                  `json:"state"`
 	TemplateID            *string                 `json:"template_id,omitempty"`
+	HypervisorHostID      *string                 `json:"hypervisor_host_id,omitempty"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
 	Members               []clusterMemberResponse `json:"members,omitempty"`
@@ -329,6 +331,28 @@ func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request, pri
 			http.Error(w, "invalid template_id", http.StatusBadRequest)
 			return
 		}
+	}
+	if req.HypervisorHostID != nil && strings.TrimSpace(*req.HypervisorHostID) != "" {
+		hid, hErr := uuid.Parse(strings.TrimSpace(*req.HypervisorHostID))
+		if hErr != nil {
+			http.Error(w, "invalid hypervisor_host_id", http.StatusBadRequest)
+			return
+		}
+		host, hostErr := s.store.GetHypervisorHost(r.Context(), hid)
+		if hostErr != nil {
+			s.logger.Error("lookup hypervisor host", zap.Error(hostErr))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if host == nil || host.TenantID != tenantID {
+			http.Error(w, "hypervisor_host_id not found for tenant", http.StatusBadRequest)
+			return
+		}
+		if host.Provider != params.Provider {
+			http.Error(w, "hypervisor host provider does not match cluster provider", http.StatusBadRequest)
+			return
+		}
+		params.HypervisorHostID = &hid
 	}
 
 	cluster, err := s.store.CreateCluster(r.Context(), params)
@@ -681,6 +705,10 @@ func newClusterResponse(cluster storage.Cluster, members []storage.ClusterMember
 	if cluster.TemplateID.Valid {
 		id := cluster.TemplateID.UUID.String()
 		resp.TemplateID = &id
+	}
+	if cluster.HypervisorHostID.Valid {
+		id := cluster.HypervisorHostID.UUID.String()
+		resp.HypervisorHostID = &id
 	}
 	if len(members) > 0 {
 		resp.Members = make([]clusterMemberResponse, 0, len(members))

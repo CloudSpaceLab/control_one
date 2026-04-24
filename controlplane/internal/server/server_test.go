@@ -3284,3 +3284,39 @@ func (f *fakeStore) ListEnrollmentPendingNodesOlderThan(_ context.Context, cutof
 	}
 	return out, nil
 }
+
+// ── Phase 1 Worktree (provider credentials + hypervisor hosts) ─────────────
+
+func (f *fakeStore) CreateProviderCredential(_ context.Context, _ storage.CreateProviderCredentialParams) (*storage.ProviderCredential, error) {
+	return nil, errors.New("provider credentials not implemented in fakeStore")
+}
+func (f *fakeStore) UpdateProviderCredential(_ context.Context, _ uuid.UUID, _ storage.UpdateProviderCredentialParams) (*storage.ProviderCredential, error) {
+	return nil, errors.New("provider credentials not implemented in fakeStore")
+}
+func (f *fakeStore) GetProviderCredential(_ context.Context, _ uuid.UUID) (*storage.ProviderCredential, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListProviderCredentials(_ context.Context, _ uuid.UUID, _ string, _, _ int) ([]storage.ProviderCredential, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) DeleteProviderCredential(_ context.Context, _ uuid.UUID) error {
+	return sql.ErrNoRows
+}
+func (f *fakeStore) CreateHypervisorHost(_ context.Context, _ storage.CreateHypervisorHostParams) (*storage.HypervisorHost, error) {
+	return nil, errors.New("hypervisor hosts not implemented in fakeStore")
+}
+func (f *fakeStore) GetHypervisorHost(_ context.Context, _ uuid.UUID) (*storage.HypervisorHost, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListHypervisorHosts(_ context.Context, _ uuid.UUID, _ string, _, _ int) ([]storage.HypervisorHost, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) UpdateHypervisorHost(_ context.Context, _ uuid.UUID, _ storage.UpdateHypervisorHostParams) (*storage.HypervisorHost, error) {
+	return nil, errors.New("hypervisor hosts not implemented in fakeStore")
+}
+func (f *fakeStore) RecordHypervisorHostHealth(_ context.Context, _ uuid.UUID, _, _ string) (*storage.HypervisorHost, error) {
+	return nil, errors.New("hypervisor hosts not implemented in fakeStore")
+}
+func (f *fakeStore) DeleteHypervisorHost(_ context.Context, _ uuid.UUID) error {
+	return sql.ErrNoRows
+}

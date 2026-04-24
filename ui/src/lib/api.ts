@@ -1,6 +1,62 @@
 const DEFAULT_API_BASE_URL = 'http://localhost:8443';
 const HTTP_STATUS_UNAUTHORIZED = 401;
 
+export type HypervisorProvider = 'aws' | 'azure' | 'vmware' | 'libvirt';
+
+export interface ProviderCredential {
+  id: string;
+  tenant_id: string;
+  provider: HypervisorProvider;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  rotated_at?: string;
+}
+
+export interface CreateProviderCredentialPayload {
+  tenant_id: string;
+  provider: HypervisorProvider;
+  name: string;
+  config: Record<string, unknown>;
+}
+
+export interface HypervisorHost {
+  id: string;
+  tenant_id: string;
+  provider: HypervisorProvider;
+  name: string;
+  endpoint_url: string;
+  credential_id?: string;
+  datacenter?: string;
+  labels: Record<string, unknown>;
+  health_status: string;
+  health_message?: string;
+  last_verified_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateHypervisorHostPayload {
+  tenant_id: string;
+  provider: HypervisorProvider;
+  name: string;
+  endpoint_url: string;
+  credential_id?: string;
+  datacenter?: string;
+  labels?: Record<string, unknown>;
+}
+
+export interface HypervisorHostVerifyResponse {
+  host: HypervisorHost;
+  status: string;
+  message?: string;
+}
+
+export interface PaginatedItems<T> {
+  items: T[];
+  pagination: ServerPaginationMeta;
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -1127,6 +1183,65 @@ export class APIClient {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
+  }
+
+  async listProviderCredentials(params: { tenantId?: string; provider?: string; limit?: number; offset?: number } = {}): Promise<PaginatedItems<ProviderCredential>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.provider) search.set('provider', params.provider);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<PaginatedItems<ProviderCredential>>(`/api/v1/provider-credentials${suffix}`);
+  }
+
+  async createProviderCredential(payload: CreateProviderCredentialPayload): Promise<ProviderCredential> {
+    return this.request<ProviderCredential>(`/api/v1/provider-credentials`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async rotateProviderCredential(id: string, config: Record<string, unknown>): Promise<ProviderCredential> {
+    const encoded = encodeURIComponent(id);
+    return this.request<ProviderCredential>(`/api/v1/provider-credentials/${encoded}/rotate`, {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  async deleteProviderCredential(id: string): Promise<void> {
+    const encoded = encodeURIComponent(id);
+    await this.request<void>(`/api/v1/provider-credentials/${encoded}`, { method: 'DELETE' });
+  }
+
+  async listHypervisorHosts(params: { tenantId?: string; provider?: string; limit?: number; offset?: number } = {}): Promise<PaginatedItems<HypervisorHost>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.provider) search.set('provider', params.provider);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<PaginatedItems<HypervisorHost>>(`/api/v1/hypervisor-hosts${suffix}`);
+  }
+
+  async createHypervisorHost(payload: CreateHypervisorHostPayload): Promise<HypervisorHost> {
+    return this.request<HypervisorHost>(`/api/v1/hypervisor-hosts`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteHypervisorHost(id: string): Promise<void> {
+    const encoded = encodeURIComponent(id);
+    await this.request<void>(`/api/v1/hypervisor-hosts/${encoded}`, { method: 'DELETE' });
+  }
+
+  async verifyHypervisorHost(id: string): Promise<HypervisorHostVerifyResponse> {
+    const encoded = encodeURIComponent(id);
+    return this.request<HypervisorHostVerifyResponse>(`/api/v1/hypervisor-hosts/${encoded}/verify`, {
+      method: 'POST',
+    });
   }
 
   // buildBundleDownloadUrl returns the fully qualified GET URL for the air-gapped

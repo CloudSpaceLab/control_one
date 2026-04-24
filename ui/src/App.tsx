@@ -12,6 +12,7 @@ import { Telemetry } from './pages/Telemetry';
 import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
 import { FleetEnroll } from './pages/FleetEnroll';
+import { Hypervisors } from './pages/Hypervisors';
 import { OfflineBundle } from './pages/OfflineBundle';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
@@ -32,6 +33,7 @@ export function App(): JSX.Element {
         <Route path="tenants" element={<Tenants />} />
         <Route path="nodes" element={<Nodes />} />
         <Route path="fleet-enroll" element={<FleetEnroll />} />
+        <Route path="hypervisors" element={<Hypervisors />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />
         <Route path="compliance" element={<Compliance />} />

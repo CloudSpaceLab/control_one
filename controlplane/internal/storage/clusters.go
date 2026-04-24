@@ -24,6 +24,7 @@ type Cluster struct {
 	FailureDomainStrategy string
 	State                 string
 	TemplateID            uuid.NullUUID
+	HypervisorHostID      uuid.NullUUID
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
@@ -62,19 +63,22 @@ type CreateClusterParams struct {
 	FailureDomainStrategy string
 	State                 string
 	TemplateID            *uuid.UUID
+	HypervisorHostID      *uuid.UUID
 }
 
 // UpdateClusterParams captures patchable fields on a cluster.
 type UpdateClusterParams struct {
-	Name                  *string
-	Provider              *string
-	DesiredSize           *int
-	RolePlan              *map[string]any
-	Labels                *map[string]any
-	FailureDomainStrategy *string
-	State                 *string
-	TemplateID            *uuid.UUID
-	ClearTemplateID       bool
+	Name                   *string
+	Provider               *string
+	DesiredSize            *int
+	RolePlan               *map[string]any
+	Labels                 *map[string]any
+	FailureDomainStrategy  *string
+	State                  *string
+	TemplateID             *uuid.UUID
+	ClearTemplateID        bool
+	HypervisorHostID       *uuid.UUID
+	ClearHypervisorHostID  bool
 }
 
 // CreateClusterRolloutParams defines input for creating a cluster rollout.
@@ -142,17 +146,21 @@ func (s *Store) CreateCluster(ctx context.Context, params CreateClusterParams) (
 	if params.TemplateID != nil && *params.TemplateID != uuid.Nil {
 		templateID = *params.TemplateID
 	}
+	var hypervisorHostID any
+	if params.HypervisorHostID != nil && *params.HypervisorHostID != uuid.Nil {
+		hypervisorHostID = *params.HypervisorHostID
+	}
 
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO clusters (
 			id, tenant_id, name, provider, desired_size, role_plan, labels,
-			failure_domain_strategy, state, template_id, created_at, updated_at
+			failure_domain_strategy, state, template_id, hypervisor_host_id, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
 		RETURNING id, tenant_id, name, provider, desired_size, role_plan, labels,
-		          failure_domain_strategy, state, template_id, created_at, updated_at
+		          failure_domain_strategy, state, template_id, hypervisor_host_id, created_at, updated_at
 	`, id, params.TenantID, name, provider, params.DesiredSize, rolePlan, labels,
-		strategy, state, templateID, now, now)
+		strategy, state, templateID, hypervisorHostID, now)
 
 	return scanCluster(row)
 }
@@ -168,7 +176,7 @@ func (s *Store) GetClusterByID(ctx context.Context, id uuid.UUID) (*Cluster, err
 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, name, provider, desired_size, role_plan, labels,
-		       failure_domain_strategy, state, template_id, created_at, updated_at
+		       failure_domain_strategy, state, template_id, hypervisor_host_id, created_at, updated_at
 		FROM clusters
 		WHERE id = $1
 	`, id)
@@ -198,7 +206,7 @@ func (s *Store) GetClusterByName(ctx context.Context, tenantID uuid.UUID, name s
 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, name, provider, desired_size, role_plan, labels,
-		       failure_domain_strategy, state, template_id, created_at, updated_at
+		       failure_domain_strategy, state, template_id, hypervisor_host_id, created_at, updated_at
 		FROM clusters
 		WHERE tenant_id = $1 AND name = $2
 	`, tenantID, name)
@@ -241,7 +249,7 @@ func (s *Store) ListClusters(ctx context.Context, tenantID uuid.UUID, limit, off
 
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, provider, desired_size, role_plan, labels,
-		       failure_domain_strategy, state, template_id, created_at, updated_at
+		       failure_domain_strategy, state, template_id, hypervisor_host_id, created_at, updated_at
 		FROM clusters
 		WHERE %s
 		ORDER BY created_at DESC
@@ -363,6 +371,17 @@ func (s *Store) UpdateCluster(ctx context.Context, id uuid.UUID, params UpdateCl
 			idx++
 		}
 	}
+	if params.ClearHypervisorHostID {
+		setFragments = append(setFragments, "hypervisor_host_id = NULL")
+	} else if params.HypervisorHostID != nil {
+		if *params.HypervisorHostID == uuid.Nil {
+			setFragments = append(setFragments, "hypervisor_host_id = NULL")
+		} else {
+			setFragments = append(setFragments, fmt.Sprintf("hypervisor_host_id = $%d", idx))
+			args = append(args, *params.HypervisorHostID)
+			idx++
+		}
+	}
 
 	if len(setFragments) == 0 {
 		return s.GetClusterByID(ctx, id)
@@ -378,7 +397,7 @@ func (s *Store) UpdateCluster(ctx context.Context, id uuid.UUID, params UpdateCl
 		SET %s
 		WHERE id = $%d
 		RETURNING id, tenant_id, name, provider, desired_size, role_plan, labels,
-		          failure_domain_strategy, state, template_id, created_at, updated_at
+		          failure_domain_strategy, state, template_id, hypervisor_host_id, created_at, updated_at
 	`, strings.Join(setFragments, ", "), idx)
 	args = append(args, id)
 
@@ -881,7 +900,7 @@ func (s *Store) DeleteClusterRollout(ctx context.Context, id uuid.UUID) error {
 func scanCluster(scanner rowScanner) (*Cluster, error) {
 	var cluster Cluster
 	var rolePlanRaw, labelsRaw []byte
-	var templateID sql.NullString
+	var templateID, hypervisorHostID sql.NullString
 	if err := scanner.Scan(
 		&cluster.ID,
 		&cluster.TenantID,
@@ -893,10 +912,16 @@ func scanCluster(scanner rowScanner) (*Cluster, error) {
 		&cluster.FailureDomainStrategy,
 		&cluster.State,
 		&templateID,
+		&hypervisorHostID,
 		&cluster.CreatedAt,
 		&cluster.UpdatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if hypervisorHostID.Valid {
+		if parsed, perr := uuid.Parse(hypervisorHostID.String); perr == nil {
+			cluster.HypervisorHostID = uuid.NullUUID{UUID: parsed, Valid: true}
+		}
 	}
 
 	rolePlan, err := decodeJSONBMap(rolePlanRaw)

@@ -46,16 +46,23 @@ CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-{{.CPURL}}}"
 TOKEN="${TOKEN:-{{.Token}}}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 NO_SERVICE="${NO_SERVICE:-false}"
+# Base64-encoded PEM of a custom root CA to trust. When present the installer
+# writes it to /usr/local/share/ca-certificates/controlone.crt (or the distro
+# equivalent) and passes --cacert to curl so fetching the binary + manifest
+# still works under an internal PKI.
+CA_CERT_B64="${CA_CERT_B64:-{{.CACert}}}"
+CA_CERT_FILE=""
 
 # ─── Parse arguments ────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --token)      TOKEN="$2"; shift 2 ;;
-        --url)        CONTROL_PLANE_URL="$2"; shift 2 ;;
+        --token)       TOKEN="$2"; shift 2 ;;
+        --url)         CONTROL_PLANE_URL="$2"; shift 2 ;;
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
-        --no-service) NO_SERVICE="true"; shift ;;
+        --ca-cert)     CA_CERT_B64="$2"; shift 2 ;;
+        --no-service)  NO_SERVICE="true"; shift ;;
         -h|--help)
-            echo "Usage: $0 [--token TOKEN] [--url URL] [--install-dir DIR] [--no-service]"
+            echo "Usage: $0 [--token TOKEN] [--url URL] [--install-dir DIR] [--ca-cert B64] [--no-service]"
             exit 0 ;;
         *) fatal "Unknown argument: $1" ;;
     esac
@@ -66,7 +73,7 @@ done
 
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL%/}"
 
-# ─── Detect platform ────────────────────────────────────────────────
+# ─── Detect platform + distro ──────────────────────────────────────
 detect_os() {
     local os; os="$(uname -s | tr '[:upper:]' '[:lower:]')"
     case "$os" in
@@ -85,11 +92,89 @@ detect_arch() {
     esac
 }
 
+# detect_distro echoes a normalized distro family when /etc/os-release is
+# available: debian|rhel|suse|alpine|arch. macOS + unknown Linux fall through
+# to "generic". The value is only used for cert trust + init-system hints.
+detect_distro() {
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "generic"
+        return
+    fi
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        local id="${ID:-}"
+        local like="${ID_LIKE:-}"
+        case "$id $like" in
+            *ubuntu*|*debian*)             echo "debian"; return ;;
+            *rhel*|*centos*|*rocky*|*almalinux*|*fedora*|*ol*) echo "rhel"; return ;;
+            *opensuse*|*suse*|*sles*)      echo "suse"; return ;;
+            *alpine*)                      echo "alpine"; return ;;
+            *arch*)                        echo "arch"; return ;;
+        esac
+    fi
+    echo "generic"
+}
+
+# detect_init echoes the active init system: systemd|openrc|sysv|unknown.
+detect_init() {
+    if [[ -d /run/systemd/system ]] || command -v systemctl >/dev/null 2>&1; then
+        echo "systemd"; return
+    fi
+    if [[ -x /sbin/openrc-run ]] || [[ -d /etc/init.d && -x /sbin/rc-service ]]; then
+        echo "openrc"; return
+    fi
+    if [[ -d /etc/init.d ]]; then
+        echo "sysv"; return
+    fi
+    echo "unknown"
+}
+
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-info "Platform: ${OS}/${ARCH}"
+DISTRO="$(detect_distro)"
+INIT_SYSTEM="$(detect_init)"
+info "Platform: ${OS}/${ARCH} (distro=${DISTRO}, init=${INIT_SYSTEM})"
 
 command -v curl >/dev/null 2>&1 || fatal "curl is required."
+
+# ─── Install custom root CA if supplied ────────────────────────────
+install_custom_ca() {
+    [[ -z "$CA_CERT_B64" ]] && return
+    local decoded="${TMP_DIR}/controlone-ca.pem"
+    if ! printf '%s' "$CA_CERT_B64" | base64 -d > "$decoded" 2>/dev/null; then
+        fatal "Failed to decode --ca-cert (expect base64-encoded PEM)."
+    fi
+    CA_CERT_FILE="$decoded"
+    case "$OS" in
+        linux)
+            case "$DISTRO" in
+                debian)
+                    $SUDO cp "$decoded" /usr/local/share/ca-certificates/controlone.crt || true
+                    $SUDO update-ca-certificates >/dev/null 2>&1 || warn "update-ca-certificates failed; curl will still use --cacert."
+                    ;;
+                rhel|suse)
+                    $SUDO cp "$decoded" /etc/pki/ca-trust/source/anchors/controlone.crt 2>/dev/null \
+                        || $SUDO cp "$decoded" /etc/ca-certificates/trust-source/anchors/controlone.crt 2>/dev/null \
+                        || true
+                    $SUDO update-ca-trust extract >/dev/null 2>&1 || true
+                    ;;
+                alpine)
+                    $SUDO cp "$decoded" /usr/local/share/ca-certificates/controlone.crt 2>/dev/null || true
+                    $SUDO update-ca-certificates >/dev/null 2>&1 || true
+                    ;;
+                *)
+                    warn "Unknown distro for CA install; curl will still use --cacert."
+                    ;;
+            esac
+            ;;
+        darwin)
+            $SUDO security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$decoded" >/dev/null 2>&1 \
+                || warn "security add-trusted-cert failed; curl will still use --cacert."
+            ;;
+    esac
+    ok "Custom root CA installed."
+}
 
 SUDO=""
 if [[ "$EUID" -ne 0 ]]; then
@@ -100,20 +185,27 @@ TMP_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
+install_custom_ca
+
+CURL_OPTS=(-fsSL)
+if [[ -n "$CA_CERT_FILE" ]]; then
+    CURL_OPTS+=(--cacert "$CA_CERT_FILE")
+fi
+
 BINARY_URL="${CONTROL_PLANE_URL}/api/v1/agent/binary?os=${OS}&arch=${ARCH}"
 MANIFEST_URL="${CONTROL_PLANE_URL}/api/v1/agent/binary/manifest?os=${OS}&arch=${ARCH}"
 BINARY_PATH="${TMP_DIR}/controlone-agent"
 MANIFEST_PATH="${TMP_DIR}/manifest.json"
 
 info "Fetching binary manifest..."
-HTTP_CODE=$(curl -fsSL -w "%%{http_code}" -o "$MANIFEST_PATH" "$MANIFEST_URL" 2>/dev/null || true)
+HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%%{http_code}" -o "$MANIFEST_PATH" "$MANIFEST_URL" 2>/dev/null || true)
 if [[ "${HTTP_CODE}" != "200" ]] || [[ ! -s "$MANIFEST_PATH" ]]; then
     warn "Manifest unavailable (HTTP ${HTTP_CODE:-???}); proceeding without integrity check."
     MANIFEST_PATH=""
 fi
 
 info "Downloading agent binary..."
-HTTP_CODE=$(curl -fsSL -w "%%{http_code}" -o "$BINARY_PATH" "$BINARY_URL" 2>/dev/null) || true
+HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%%{http_code}" -o "$BINARY_PATH" "$BINARY_URL" 2>/dev/null) || true
 
 [[ ! -f "$BINARY_PATH" ]] || [[ ! -s "$BINARY_PATH" ]] && fatal "Download failed (HTTP ${HTTP_CODE:-???})."
 [[ "${HTTP_CODE}" != "200" ]] && fatal "Unexpected HTTP ${HTTP_CODE}."
@@ -147,7 +239,9 @@ $SUDO install -m 0755 "$BINARY_PATH" "${INSTALL_DIR}/controlone-agent"
 ok "Installed to ${INSTALL_DIR}/controlone-agent."
 
 ENROLL_ARGS=("--join" "$CONTROL_PLANE_URL" "--token" "$TOKEN")
+[[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE")
 [[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service")
+[[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" ]] && ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM")
 
 info "Enrolling agent..."
 $SUDO "${INSTALL_DIR}/controlone-agent" "${ENROLL_ARGS[@]}" || fatal "Enrollment failed."
@@ -300,8 +394,28 @@ var (
 )
 
 type installScriptData struct {
-	CPURL string
-	Token string
+	CPURL  string
+	Token  string
+	CACert string // base64-encoded PEM of a custom root CA to trust; empty for system trust store
+}
+
+// sanitizeBase64 strips whitespace and rejects values that are not valid
+// base64 so template expansion cannot smuggle arbitrary shell metadata through
+// the `ca_cert` query parameter.
+func sanitizeBase64(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	// Allow both standard and URL-safe alphabets + optional padding.
+	if _, err := base64.StdEncoding.DecodeString(trimmed); err != nil {
+		if _, err := base64.RawStdEncoding.DecodeString(trimmed); err != nil {
+			if _, err := base64.URLEncoding.DecodeString(trimmed); err != nil {
+				return ""
+			}
+		}
+	}
+	return trimmed
 }
 
 // binaryManifest is the JSON payload returned by /api/v1/agent/binary/manifest.
@@ -445,8 +559,9 @@ func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request
 	cpURL := s.deriveControlPlaneURL(r)
 
 	data := installScriptData{
-		CPURL: cpURL,
-		Token: token,
+		CPURL:  cpURL,
+		Token:  token,
+		CACert: sanitizeBase64(r.URL.Query().Get("ca_cert")),
 	}
 
 	var (

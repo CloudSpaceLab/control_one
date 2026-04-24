@@ -25,6 +25,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/events"
 	"github.com/CloudSpaceLab/control_one/internal/hooks"
 	"github.com/CloudSpaceLab/control_one/internal/logger"
 	"github.com/CloudSpaceLab/control_one/internal/mesh"
@@ -312,6 +313,31 @@ func main() {
 			emitHook(ctx, hooksService, log, "policy.sync.completed", state.NodeID, map[string]any{"count": len(pset.Policies)})
 		}); err != nil {
 			log.Fatal("schedule policy sync", zap.Error(err))
+		}
+	}
+
+	// Realtime subscriber: when the control plane emits policy.updated for this
+	// tenant/node, refetch immediately instead of waiting for the polling cron.
+	if state.TenantID != "" {
+		sub, err := events.New(client, log, events.Options{
+			TenantID: state.TenantID,
+			NodeID:   state.NodeID,
+			Topics:   []string{"policy.updated", "rule.triggered"},
+			Handler: func(hctx context.Context, ev events.Event) {
+				switch ev.Topic {
+				case "policy.updated":
+					if pset, err := policySyncer.FetchAndPersist(hctx, state.NodeID); err != nil {
+						log.Warn("realtime policy refresh failed", zap.Error(err))
+					} else {
+						log.Info("realtime policy refresh", zap.Int("policies", len(pset.Policies)))
+					}
+				}
+			},
+		})
+		if err != nil {
+			log.Warn("event subscriber init", zap.Error(err))
+		} else {
+			go sub.Run(ctx)
 		}
 	}
 

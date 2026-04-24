@@ -78,3 +78,20 @@ func (c *Client) Do(ctx context.Context, method, path string, body []byte) (*htt
 
 	return c.http.Do(req)
 }
+
+// Stream opens a long-running GET request (e.g. SSE) against the control plane
+// using the same mTLS + auth configuration. The caller owns the response body
+// and must close it when finished. The request has no client-side timeout —
+// flow is controlled via ctx cancellation.
+func (c *Client) Stream(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	streamClient := &http.Client{Transport: c.http.Transport}
+	return streamClient.Do(req)
+}

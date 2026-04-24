@@ -22,6 +22,8 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
@@ -187,6 +189,38 @@ type Store interface {
 	GetClusterRolloutWaveByNumber(context.Context, uuid.UUID, int) (*storage.ClusterRolloutWave, error)
 	ListClusterRolloutWaves(context.Context, uuid.UUID) ([]storage.ClusterRolloutWave, error)
 	UpdateClusterRolloutWave(context.Context, uuid.UUID, storage.UpdateClusterRolloutWaveParams) (*storage.ClusterRolloutWave, error)
+	// Provider credentials + hypervisor hosts (multi-host provisioning).
+	CreateProviderCredential(context.Context, storage.CreateProviderCredentialParams) (*storage.ProviderCredential, error)
+	UpdateProviderCredential(context.Context, uuid.UUID, storage.UpdateProviderCredentialParams) (*storage.ProviderCredential, error)
+	GetProviderCredential(context.Context, uuid.UUID) (*storage.ProviderCredential, error)
+	ListProviderCredentials(context.Context, uuid.UUID, string, int, int) ([]storage.ProviderCredential, int, error)
+	DeleteProviderCredential(context.Context, uuid.UUID) error
+	CreateHypervisorHost(context.Context, storage.CreateHypervisorHostParams) (*storage.HypervisorHost, error)
+	GetHypervisorHost(context.Context, uuid.UUID) (*storage.HypervisorHost, error)
+	ListHypervisorHosts(context.Context, uuid.UUID, string, int, int) ([]storage.HypervisorHost, int, error)
+	UpdateHypervisorHost(context.Context, uuid.UUID, storage.UpdateHypervisorHostParams) (*storage.HypervisorHost, error)
+	RecordHypervisorHostHealth(context.Context, uuid.UUID, string, string) (*storage.HypervisorHost, error)
+	DeleteHypervisorHost(context.Context, uuid.UUID) error
+	// Port + log monitoring rules.
+	CreatePortRule(context.Context, storage.CreatePortRuleParams) (*storage.PortMonitoringRule, error)
+	GetPortRule(context.Context, uuid.UUID) (*storage.PortMonitoringRule, error)
+	ListPortRules(context.Context, storage.PortRuleFilter, int, int) ([]storage.PortMonitoringRule, int, error)
+	UpdatePortRule(context.Context, uuid.UUID, storage.UpdatePortRuleParams) (*storage.PortMonitoringRule, error)
+	DeletePortRule(context.Context, uuid.UUID) error
+	CreateLogRule(context.Context, storage.CreateLogRuleParams) (*storage.LogMonitoringRule, error)
+	GetLogRule(context.Context, uuid.UUID) (*storage.LogMonitoringRule, error)
+	ListLogRules(context.Context, storage.LogRuleFilter, int, int) ([]storage.LogMonitoringRule, int, error)
+	UpdateLogRule(context.Context, uuid.UUID, storage.UpdateLogRuleParams) (*storage.LogMonitoringRule, error)
+	DeleteLogRule(context.Context, uuid.UUID) error
+	// Dashboard events.
+	CreateSecurityEvent(context.Context, storage.CreateSecurityEventParams) (*storage.SecurityEvent, error)
+	ListSecurityEvents(context.Context, storage.SecurityEventFilter, int, int) ([]storage.SecurityEvent, int, error)
+	CountSecurityEvents(context.Context, storage.SecurityEventFilter) (storage.SecurityEventCounts, error)
+	CreateHealthIncident(context.Context, storage.CreateHealthIncidentParams) (*storage.HealthIncident, error)
+	ResolveHealthIncident(context.Context, uuid.UUID) error
+	CountOpenHealthIncidents(context.Context, uuid.UUID) (storage.SecurityEventCounts, error)
+	CreateRuleTrigger(context.Context, storage.CreateRuleTriggerParams) (*storage.RuleTrigger, error)
+	CountRuleTriggersSince(context.Context, uuid.UUID, time.Time) (map[string]int, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +530,21 @@ type Server struct {
 	// goroutine. Production defaults to true; tests flip it to false per-server
 	// to keep audit writes deterministic without touching a shared global.
 	auditAsync bool
+	// sealer encrypts provider credentials at rest. nil means secrets
+	// encryption is not configured — mutating endpoints must refuse to write.
+	sealer *secretbox.Sealer
+	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
+	// to SSE subscribers and internal correlators. nil means events are a no-op.
+	eventBus *eventbus.Bus
+}
+
+// publishEvent fan-outs a realtime event to SSE subscribers. Safe to call
+// when the bus is not configured (no-op).
+func (s *Server) publishEvent(ev eventbus.Event) {
+	if s == nil || s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(ev)
 }
 
 // Handler exposes the HTTP handler for testing.
@@ -561,6 +610,19 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
 	s.baseRouter.HandleFunc("/api/v1/clusters", s.handleClusters)
 	s.baseRouter.HandleFunc("/api/v1/clusters/", s.handleClusterSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/provider-credentials", s.handleProviderCredentialsCollection)
+	s.baseRouter.HandleFunc("/api/v1/provider-credentials/", s.handleProviderCredentialSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/hypervisor-hosts", s.handleHypervisorHostsCollection)
+	s.baseRouter.HandleFunc("/api/v1/hypervisor-hosts/", s.handleHypervisorHostSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/events/stream", s.handleEventsStream)
+	s.baseRouter.HandleFunc("/api/v1/rules/port", s.handlePortRulesCollection)
+	s.baseRouter.HandleFunc("/api/v1/rules/port/", s.handlePortRuleSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/rules/log", s.handleLogRulesCollection)
+	s.baseRouter.HandleFunc("/api/v1/rules/log/", s.handleLogRuleSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/security-events", s.handleSecurityEventsCollection)
+	s.baseRouter.HandleFunc("/api/v1/health-incidents", s.handleHealthIncidentsCollection)
+	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
+	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -1681,7 +1743,12 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
 
-	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true}
+	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true, eventBus: eventbus.New(64)}
+	if sealer, err := secretbox.NewSealerFromConfig(cfg.Secrets.EncryptionKey); err != nil {
+		logger.Warn("init secrets sealer", zap.Error(err))
+	} else {
+		s.sealer = sealer
+	}
 	s.configureJobIntegrations()
 	s.registerRoutes()
 
