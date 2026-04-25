@@ -1,0 +1,98 @@
+.session-replay {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: var(--surface, #0f0f12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1rem;
+  height: min(80vh, 720px);
+}
+.session-replay__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.session-replay__controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.session-replay__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+}
+.session-replay__terminal {
+  height: 100%;
+  background: #0a0a0d;
+  border-radius: 8px;
+  padding: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 320px;
+}
+.session-replay__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  padding: 0.5rem;
+  min-height: 0;
+}
+.session-replay__search {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text, #f0f0f5);
+  font-size: 0.85rem;
+}
+.session-replay__commands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+}
+.session-replay__commands li button {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text, #f0f0f5);
+  text-align: left;
+  padding: 0.5rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.session-replay__commands li button:hover {
+  background: rgba(120, 130, 255, 0.12);
+}
+.session-replay__commands code {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+.session-replay__commands small {
+  color: var(--text-muted, #b9b9c2);
+  font-size: 0.7rem;
+}
+
+@media (max-width: 900px) {
+  .session-replay__body {
+    grid-template-columns: 1fr;
+  }
+}

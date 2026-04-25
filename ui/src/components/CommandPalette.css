@@ -1,0 +1,85 @@
+.co-palette__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 1100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+}
+.co-palette {
+  width: min(640px, calc(100vw - 2rem));
+  background: var(--surface, #0f0f12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.co-palette__input {
+  width: 100%;
+  padding: 0.95rem 1rem;
+  background: transparent;
+  color: var(--text, #f0f0f5);
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.95rem;
+  outline: none;
+}
+.co-palette__list {
+  max-height: 56vh;
+  overflow: auto;
+  padding: 0.25rem 0;
+}
+.co-palette__group-label {
+  padding: 0.55rem 1rem 0.2rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #b9b9c2);
+  text-transform: uppercase;
+}
+.co-palette__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: var(--text, #f0f0f5);
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.co-palette__item--active,
+.co-palette__item:hover {
+  background: rgba(120, 130, 255, 0.12);
+}
+.co-palette__item small {
+  color: var(--text-muted, #b9b9c2);
+  font-size: 0.75rem;
+  margin-left: 1rem;
+}
+.co-palette__empty {
+  padding: 1rem;
+  color: var(--text-muted, #b9b9c2);
+  text-align: center;
+}
+.co-palette__footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.55rem 1rem;
+  font-size: 0.72rem;
+  color: var(--text-muted, #b9b9c2);
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.co-palette__footer kbd {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.7rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}

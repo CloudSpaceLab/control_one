@@ -1,0 +1,50 @@
+.co-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  line-height: 1;
+}
+.co-badge--sm {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+}
+.co-badge--md {
+  padding: 3px 10px;
+  font-size: 0.78rem;
+}
+
+.co-badge--neutral {
+  background: rgba(120, 120, 130, 0.18);
+  color: var(--text-muted, #b9b9c2);
+  border-color: rgba(120, 120, 130, 0.3);
+}
+.co-badge--info {
+  background: rgba(56, 132, 255, 0.16);
+  color: #6aa3ff;
+  border-color: rgba(56, 132, 255, 0.3);
+}
+.co-badge--success {
+  background: rgba(48, 184, 100, 0.16);
+  color: #58cf85;
+  border-color: rgba(48, 184, 100, 0.32);
+}
+.co-badge--warning {
+  background: rgba(245, 158, 11, 0.16);
+  color: #f7b955;
+  border-color: rgba(245, 158, 11, 0.32);
+}
+.co-badge--error {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f57878;
+  border-color: rgba(239, 68, 68, 0.32);
+}
+.co-badge--critical {
+  background: linear-gradient(180deg, rgba(255, 70, 70, 0.22), rgba(180, 30, 30, 0.22));
+  color: #ff7878;
+  border-color: rgba(255, 70, 70, 0.45);
+}

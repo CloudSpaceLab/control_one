@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Security — Control One</title>
+<link rel="icon" type="image/svg+xml" href="/img/favicon.svg" />
+<link rel="stylesheet" href="/css/landing.css" />
+</head>
+<body>
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a class="brand" href="/"><span class="brand__mark">◎</span><span class="brand__name">Control One</span></a>
+    <a class="btn btn--ghost" href="/">Home</a>
+  </div>
+</header>
+<main class="container" style="padding: 3rem 1.5rem; max-width: 760px;">
+  <p class="eyebrow">Security posture</p>
+  <h1>How we secure Control One</h1>
+  <p class="muted">Last updated: 2026-04-25</p>
+  <h2>Encryption</h2>
+  <p>TLS 1.3 in transit. AES-256-GCM at rest for credentials, API keys, and SSH CA private keys. Operators never see plaintext after first save.</p>
+  <h2>Authentication</h2>
+  <p>OIDC for human users; mTLS for nodes. WebAuthn (FIDO2) and TOTP for step-up MFA on the highest-risk actions. Bastion access uses short-lived SSH certificates issued per session.</p>
+  <h2>Audit + observability</h2>
+  <p>Append-only audit log mapped to SOC 2 Common Criteria and ISO 27001 Annex A controls. OpenTelemetry traces. Tamper-evident session recordings.</p>
+  <h2>Vulnerability handling</h2>
+  <p>Report vulnerabilities to <a href="mailto:security@cloudspacetechs.com">security@cloudspacetechs.com</a>. We acknowledge within 24 hours and aim for fix or mitigation within 7 days for critical findings.</p>
+  <h2>Compliance posture</h2>
+  <p>The platform is mapped to SOC 2 Type II, ISO 27001:2022, CIS Benchmarks, and PCI DSS. Customer evidence packs export from the operator console.</p>
+  <h2>Coordinated disclosure</h2>
+  <p>We credit reporters in our security advisories with their consent. No bug bounty programme yet — direct rewards considered case by case.</p>
+</main>
+<footer class="site-footer">
+  <div class="container site-footer__base">
+    <p>© <span id="year"></span> CloudSpaceTechs.</p>
+    <p><a href="/legal/privacy.html">Privacy</a> · <a href="/legal/terms.html">Terms</a></p>
+  </div>
+</footer>
+<script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>
