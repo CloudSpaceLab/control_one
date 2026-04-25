@@ -1,6 +1,25 @@
-// Landing page interactions: mobile nav toggle, footer year, demo form submit, currency detection.
+// Landing page interactions: mobile nav toggle, footer year, demo form submit, currency detection, cursor spotlight.
 (function () {
   'use strict';
+
+  // --- cursor spotlight -------------------------------------------------
+  var spotlight = document.getElementById('cursor-spotlight');
+  if (spotlight) {
+    var updateSpotlight = function (e) {
+      var x = e.clientX;
+      var y = e.clientY;
+      spotlight.style.setProperty('--cursor-x', x + 'px');
+      spotlight.style.setProperty('--cursor-y', y + 'px');
+    };
+
+    // Activate and update on mouse move
+    document.addEventListener('mousemove', function (e) {
+      if (!spotlight.classList.contains('active')) {
+        spotlight.classList.add('active');
+      }
+      updateSpotlight(e);
+    });
+  }
 
   // --- mobile nav -------------------------------------------------------
   var toggle = document.querySelector('.nav-toggle');
@@ -29,7 +48,12 @@
   // --- currency detection based on IP geolocation -----------------------
   function detectCurrency() {
     var priceElements = document.querySelectorAll('.price[data-currency]');
-    if (priceElements.length === 0) return;
+    if (priceElements.length === 0) {
+      console.log('No price elements found with data-currency attribute');
+      return;
+    }
+
+    console.log('Found', priceElements.length, 'price elements');
 
     // Currency rates relative to USD
     var rates = {
@@ -50,15 +74,19 @@
     };
 
     // Try to get country from geolocation API
+    console.log('Fetching IP geolocation...');
     fetch('https://ipapi.co/json/')
       .then(function (resp) {
+        console.log('IP API response status:', resp.status);
         if (!resp.ok) throw new Error('status ' + resp.status);
         return resp.json();
       })
       .then(function (data) {
+        console.log('IP data:', data);
         var countryCode = data.country_code;
         var currency = countryToCurrency[countryCode] || 'USD';
         var currencyData = rates[currency];
+        console.log('Country:', countryCode, 'Currency:', currency);
 
         priceElements.forEach(function (el) {
           var tier = el.getAttribute('data-currency');
@@ -75,11 +103,13 @@
             : currencyData.symbol + localPrice.toFixed(0);
 
           el.innerHTML = '<strong>' + priceText + '</strong><span> / host / month</span>';
+          console.log('Updated price for', tier, 'to', priceText);
         });
       })
-      .catch(function () {
+      .catch(function (err) {
         // Fallback to USD on error
-        console.log('Currency detection failed, using USD');
+        console.error('Currency detection failed:', err);
+        console.log('Using USD as fallback');
       });
   }
 

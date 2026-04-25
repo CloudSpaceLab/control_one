@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="/css/landing.css" />
 </head>
 <body>
+<div class="cursor-spotlight" id="cursor-spotlight"></div>
 
 <header class="site-header" id="top">
   <div class="container site-header__inner">
@@ -26,6 +27,7 @@
     <nav class="site-nav" aria-label="Primary">
       <a href="#platform">Platform</a>
       <a href="#capabilities">Capabilities</a>
+      <a href="#how-it-works">How it works</a>
       <a href="#security">Security</a>
       <a href="#pricing">Pricing</a>
       <a href="#contact">Contact</a>
@@ -41,6 +43,7 @@
   <div class="mobile-nav" id="mobile-nav" hidden>
     <a href="#platform">Platform</a>
     <a href="#capabilities">Capabilities</a>
+    <a href="#how-it-works">How it works</a>
     <a href="#security">Security</a>
     <a href="#pricing">Pricing</a>
     <a href="#contact">Contact</a>
@@ -51,44 +54,52 @@
 
 <main>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ HERO -->
 <section class="hero">
   <div class="container hero__inner">
-    <p class="eyebrow">Intelligent Infrastructure Security</p>
-    <h1>Carefully designed robots. Living in your servers.</h1>
-    <p class="hero__lede">
-      Control One deploys intelligent, autonomous agents across your entire fleet. They see everything, control everything, and prove everything. Like having a team of expert engineers on every host, 24/7.
-    </p>
-    <div class="hero__cta">
-      <a class="btn btn--primary btn--lg" href="#contact">Deploy your robots</a>
-      <a class="btn btn--ghost btn--lg" href="#platform">See how they work</a>
+    <div>
+      <p class="eyebrow">Intelligent Infrastructure Security</p>
+      <h1>Own your fleet.</h1>
+      <p class="hero__lede">
+        Deploy C1 Capsules on every host in every datacenter — full visibility, autonomous control, and continuous proof. One dashboard. Zero blind spots.
+      </p>
+      <div class="hero__cta">
+        <a class="btn btn--primary btn--lg" href="#contact">Deploy your C1 Capsules</a>
+        <a class="btn btn--ghost btn--lg" href="#platform">See how they work</a>
+      </div>
     </div>
-  </div>
-  <div class="hero__art" aria-hidden="true">
-    <div class="hero__panel">
-      <div class="hero__panel-row">
-        <span class="dot dot--green"></span>
-        <span>Robots active · 247</span>
-        <span class="muted">all healthy</span>
-      </div>
-      <div class="hero__panel-row">
-        <span class="dot dot--amber"></span>
-        <span>14 threats blocked</span>
-        <span class="muted">last hour</span>
-      </div>
-      <div class="hero__panel-row">
-        <span class="dot dot--blue"></span>
-        <span>8 compliance violations fixed</span>
-        <span class="muted">auto-remediated</span>
-      </div>
-      <div class="hero__panel-row">
-        <span class="dot dot--green"></span>
-        <span>Posture · 98% compliant</span>
-        <span class="muted">real-time</span>
+    <div class="hero__art" aria-hidden="true">
+      <div class="hero__panel">
+        <div class="hero__panel-header">
+          <span class="dot dot--green"></span>
+          <span>control-one · live telemetry</span>
+        </div>
+        <div class="hero__panel-row">
+          <span class="dot dot--green"></span>
+          <span>C1 Capsules active · 247</span>
+          <span class="muted small">all healthy</span>
+        </div>
+        <div class="hero__panel-row">
+          <span class="dot dot--amber"></span>
+          <span>14 threats blocked</span>
+          <span class="muted small">last hour</span>
+        </div>
+        <div class="hero__panel-row">
+          <span class="dot dot--blue"></span>
+          <span>8 violations fixed</span>
+          <span class="muted small">auto-remediated</span>
+        </div>
+        <div class="hero__panel-row">
+          <span class="dot dot--cyan"></span>
+          <span>Posture · 98% compliant</span>
+          <span class="muted small">real-time</span>
+        </div>
       </div>
     </div>
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ LOGOS -->
 <section class="logos">
   <div class="container">
     <p class="logos__lede">Built on standards your team already uses</p>
@@ -98,257 +109,443 @@
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ PROBLEM -->
 <section class="problem" id="platform">
   <div class="container">
     <p class="eyebrow">The Problem</p>
-    <h2>Your servers are running blind. Your team is overwhelmed.</h2>
+    <h2>Seven tools. No single source of truth.</h2>
     <p class="section-lede">
-      You have thousands of servers across hybrid infrastructure. You can't see what's happening on them. You can't control them. You can't prove they're secure. Your team is drowning in alerts, spreadsheets, and manual evidence collection.
+      The average security team runs seven disconnected tools. Your SIEM sees logs it can't act on. Your PAM grants access it can't audit. Your compliance scanner runs quarterly. None of them talk to each other — and you pay for all of them.
     </p>
-    <div class="three-col">
-      <article class="card">
-        <h3>Zero visibility</h3>
-        <p>
-          Shadow IT, unapproved instances, and forgotten accounts create blind spots. You can't secure what you can't see. Your robots can.
-        </p>
-      </article>
-      <article class="card">
-        <h3>Manual chaos</h3>
-        <p>
-          SOC 2 audits cost $10K-$100K+ and take months. Manual evidence collection, spreadsheet chaos, and last-minute scrambles. Robots automate this.
-        </p>
-      </article>
-      <article class="card">
-        <h3>Standing privilege</h3>
-        <p>
-          Shared credentials, forgotten sudoers, and permanent privileges. One compromised key gives attackers the keys to your kingdom. Robots eliminate this.
-        </p>
-      </article>
-    </div>
-    <p class="section-lede" style="margin-top: 2rem;">
-      Deploy intelligent robots. Get complete control.
-    </p>
-  </div>
-</section>
-
-<section class="capabilities" id="solution">
-  <div class="container">
-    <p class="eyebrow">The Solution</p>
-    <h2>Intelligent robots. Autonomous control.</h2>
-    <p class="section-lede">
-      Deploy one robot per server. They see everything, control everything, and prove everything. Like having a team of expert engineers on every host, 24/7.
-    </p>
-    <div class="three-col">
-      <article class="card">
-        <h3>See</h3>
-        <p>
-          Every robot monitors its host in real-time. Posture, threats, access, compliance. One dashboard shows everything. Zero blind spots.
-        </p>
-      </article>
-      <article class="card">
-        <h3>Control</h3>
-        <p>
-          Robots execute your policies autonomously. JIT access, auto-remediation, threat blocking. Define rules once, robots execute everywhere.
-        </p>
-      </article>
-      <article class="card">
-        <h3>Prove</h3>
-        <p>
-          Every robot generates tamper-evident audit trails. SOC 2/ISO evidence in one click. No more spreadsheets, no more scrambles.
-        </p>
-      </article>
-    </div>
-  </div>
-</section>
-
-<section class="capabilities" id="capabilities">
-  <div class="container">
-    <p class="eyebrow">Capabilities</p>
-    <h2>What your robots can do</h2>
-
-    <div class="capability">
-      <div class="capability__copy">
-        <p class="eyebrow">Industry-first</p>
-        <h3>IP Intelligence &amp; Time-Window Analysis</h3>
-        <p>
-          Robots analyze every connection across time windows. They score suspicious IPs, track activities, ports accessed, and bytes transferred. No other SIEM offers this level of robot-driven analysis.
-        </p>
-        <ul class="check-list">
-          <li>Time-windowed IP analysis (e.g., "Show me all IPs from country X between 2am-7am")</li>
-          <li>Suspicious scoring per IP per time window with visual heatmaps</li>
-          <li>Activities performed, ports accessed, bytes transferred — full context</li>
-          <li>Policy enforcement: "If IP in country X, 2am-7am, block >1GB transfers"</li>
-          <li>Country/time-based IP rate limits</li>
-        </ul>
-      </div>
-      <div class="capability__visual">
-        <div class="mock-window" aria-hidden="true">
-          <div class="mock-window__bar"><span></span><span></span><span></span></div>
-          <div class="mock-window__body">
-            <p><strong>Robot Analysis Dashboard</strong></p>
-            <p><span class="muted">Time window:</span> 2am-7am UTC</p>
-            <p><span class="muted">Country:</span> Russia (RU)</p>
-            <p><span class="badge badge--amber">suspicious</span> 192.0.2.45 · score: 87/100</p>
-            <p class="small muted">Ports: 22, 443, 3306 | Bytes: 2.4GB | Activities: 14</p>
-            <p><span class="badge badge--green">clean</span> 203.0.113.12 · score: 12/100</p>
-            <p class="small muted">Ports: 22 | Bytes: 12MB | Activities: 2</p>
+    <div class="chaos-compare">
+      <div class="chaos-before">
+        <p class="chaos-label">Before Control One</p>
+        <div class="tool-grid">
+          <div class="tool-chip">
+            <span class="tool-name">SIEM</span>
+            <span class="tool-pain">sees logs, can't remediate</span>
+          </div>
+          <div class="tool-chip">
+            <span class="tool-name">PAM tool</span>
+            <span class="tool-pain">no posture context</span>
+          </div>
+          <div class="tool-chip">
+            <span class="tool-name">Compliance scanner</span>
+            <span class="tool-pain">quarterly, not continuous</span>
+          </div>
+          <div class="tool-chip">
+            <span class="tool-name">EDR</span>
+            <span class="tool-pain">alerts with zero auto-fix</span>
+          </div>
+          <div class="tool-chip">
+            <span class="tool-name">Threat intel</span>
+            <span class="tool-pain">feeds never reach firewalls</span>
+          </div>
+          <div class="tool-chip">
+            <span class="tool-name">Audit logger</span>
+            <span class="tool-pain">a fourth separate dashboard</span>
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="capability capability--reverse">
-      <div class="capability__copy">
-        <h3>Compliance &amp; posture</h3>
-        <p>
-          Robots enforce compliance continuously. Pre-built CIS, SOC 2, and ISO 27001 packs. From 6 months to 6 weeks. SOC 2 in weeks, not quarters.
-        </p>
-        <ul class="check-list">
-          <li>Robots author rules in DSL, port-monitoring, log-monitoring, or visual blocks</li>
-          <li>What-if simulator replays a draft against 30 days of history</li>
-          <li>Behavioural baselines surface drift before it becomes a finding</li>
-          <li>Compliance rules trigger robot-based blocks</li>
-        </ul>
+      <div class="chaos-versus">
+        <span class="chaos-versus__text">vs</span>
       </div>
-      <div class="capability__visual">
-        <pre class="code-card">
-<span class="cm">// robot rule: only listening ports we approved</span>
-<span class="kw">allow</span> port <span class="num">22</span>/tcp <span class="op">where</span> labels.role == <span class="str">"bastion"</span>
-<span class="kw">deny</span>  port <span class="num">3306</span>/tcp <span class="op">on</span> public_ip
-<span class="kw">alert</span> severity=<span class="str">high</span> <span class="op">if</span> log <span class="op">~</span> /failed login/ &gt; <span class="num">5</span>/min</pre>
-      </div>
-    </div>
-
-    <div class="capability">
-      <div class="capability__copy">
-        <h3>Privileged access (PAM)</h3>
-        <p>
-          Robots eliminate standing root forever. Every privileged session is requested, time-bound, recorded, and scrubbable. JIT access only from approved IP ranges.
-        </p>
-        <ul class="check-list">
-          <li>Robots handle just-in-time access requests with approval workflow</li>
-          <li>Bastion SSH proxy with mTLS tunnel to the node-side robot</li>
-          <li>Session replay with command timeline and full transcript</li>
-          <li>IP-based access policies: JIT access only from approved IP ranges</li>
-          <li>Step-up MFA via TOTP and WebAuthn for the highest-risk actions</li>
-        </ul>
-      </div>
-      <div class="capability__visual">
-        <div class="mock-window" aria-hidden="true">
-          <div class="mock-window__bar"><span></span><span></span><span></span></div>
-          <div class="mock-window__body">
-            <p><span class="muted">15:02</span> alice connected to <strong>db-prod-01</strong></p>
-            <p><span class="muted">15:02</span> <code>sudo systemctl status postgres</code></p>
-            <p><span class="muted">15:03</span> <code>psql -c "select count(*) from users"</code></p>
-            <p class="muted">⏵ replay · search · export transcript</p>
-          </div>
+      <div class="chaos-after">
+        <p class="chaos-label">With Control One</p>
+        <div class="capsule-unified">
+          <span class="capsule-unified__icon">◎</span>
+          <strong class="capsule-unified__name">One C1 Capsule</strong>
+          <p class="capsule-unified__sub">Per server. Every capability, unified.</p>
+          <ul class="capsule-replaces">
+            <li>Full SIEM + auto-remediation</li>
+            <li>PAM with session replay</li>
+            <li>Continuous compliance engine</li>
+            <li>Threat intel → firewall, automatically</li>
+            <li>Tamper-evident audit trail</li>
+          </ul>
         </div>
       </div>
     </div>
-
-    <div class="capability capability--reverse">
-      <div class="capability__copy">
-        <h3>Threat intelligence + auto-block</h3>
-        <p>
-          Robots block attacks before they reach you. Pull from Spamhaus, FireHOL, Tor exit lists, AbuseIPDB, AlienVault OTX, or your own honeypot dump. Auto-block 10,000+ indicators in seconds.
-        </p>
-        <ul class="check-list">
-          <li>ufw, firewalld, nftables, iptables, Windows netsh, fail2ban — auto-detected per host</li>
-          <li>Per-feed score floors and refresh intervals</li>
-          <li>Audit log of every block / suppress / rate-limit decision</li>
-          <li>Integration: IP reputation feeds + custom time-windowed analysis</li>
-        </ul>
-      </div>
-      <div class="capability__visual">
-        <ul class="threat-list">
-          <li><span class="badge badge--green">healthy</span> Spamhaus DROP — 1,084 indicators</li>
-          <li><span class="badge badge--green">healthy</span> FireHOL Level 1 — 8,902 indicators</li>
-          <li><span class="badge badge--amber">warning</span> AbuseIPDB — auth refused</li>
-          <li><span class="badge badge--green">healthy</span> Custom: SOC honeypot — 412 indicators</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="capability">
-      <div class="capability__copy">
-        <h3>Infrastructure provisioning</h3>
-        <p>
-          Robots spin up any host, anywhere. One template. KVM, VMware, AWS, Azure. Fleet enrol existing hosts via SSH in bulk, watching each one walk the gate.
-        </p>
-        <ul class="check-list">
-          <li>Multi-host hypervisor adapters with stored credentials per datacenter</li>
-          <li>Cloud-init for KVM, customisation specs for VMware, UserData for AWS / Azure</li>
-          <li>Air-gapped offline bundle for hosts that must not see the public internet</li>
-        </ul>
-      </div>
-      <div class="capability__visual">
-        <pre class="code-card">
-$ controlone fleet enrol \
-  --tenant prod \
-  --token $ENROL \
-  --targets hosts.txt
-
-<span class="cm">→ 24 robots deployed</span>
-<span class="cm">→ 22 healthy · 2 awaiting first scan</span></pre>
-      </div>
-    </div>
-
-    <div class="capability">
-      <div class="capability__copy">
-        <h3>Observability built for scale</h3>
-        <p>
-          Apache Doris is the analytic backbone. Millions of events per day, exact unique counts via
-          BITMAP, partitioned daily for fast retention. Export to Loki or Elasticsearch when you want a
-          single pane across teams. OpenTelemetry traces every request end-to-end.
-        </p>
-        <ul class="check-list">
-          <li>Inverted index over log messages — sub-second free-text search</li>
-          <li>Cold archival to any S3-compatible bucket on TTL</li>
-          <li>Grafana dashboards for posture, queue depth, and remediation success</li>
-        </ul>
-      </div>
-      <div class="capability__visual">
-        <div class="metric-grid" aria-hidden="true">
-          <div><div class="metric-value">247</div><div class="metric-label">robots active</div></div>
-          <div><div class="metric-value">98%</div><div class="metric-label">compliant</div></div>
-          <div><div class="metric-value">2.1s</div><div class="metric-label">policy rollout</div></div>
-          <div><div class="metric-value">99.97%</div><div class="metric-label">SLA</div></div>
-        </div>
-      </div>
-    </div>
-
   </div>
 </section>
 
-<section class="how-it-works">
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ REVEAL -->
+<section class="reveal" id="solution">
+  <div class="container">
+    <p class="eyebrow">The Platform</p>
+    <h2>One C1 Capsule per host. Total command.</h2>
+    <p class="section-lede">
+      Every server gets a dedicated C1 Capsule — an intelligent agent that sees, controls, and proves everything on that host. One dashboard. Real-time. No manual toil.
+    </p>
+
+    <!-- Infrastructure overview: datacenter + cluster view -->
+    <div class="dash-panel" style="margin-top:3rem" aria-hidden="true">
+      <div class="dash-topbar">
+        <div class="dash-topbar__dots"><span></span><span></span><span></span></div>
+        <span class="dash-topbar__title">Control One · Infrastructure Overview</span>
+        <span class="dash-topbar__badge">● live</span>
+      </div>
+
+      <!-- Global fleet metrics -->
+      <div class="dash-metrics" style="grid-template-columns:repeat(5,1fr)">
+        <div class="dash-metric">
+          <div class="dash-metric__value" style="font-size:1.1rem">3</div>
+          <div class="dash-metric__label">Datacenters</div>
+        </div>
+        <div class="dash-metric">
+          <div class="dash-metric__value" style="font-size:1.1rem">12</div>
+          <div class="dash-metric__label">Clusters</div>
+        </div>
+        <div class="dash-metric">
+          <div class="dash-metric__value dash-metric__value--blue">247</div>
+          <div class="dash-metric__label">C1 Capsules</div>
+        </div>
+        <div class="dash-metric">
+          <div class="dash-metric__value dash-metric__value--green">98%</div>
+          <div class="dash-metric__label">Compliant</div>
+        </div>
+        <div class="dash-metric">
+          <div class="dash-metric__value dash-metric__value--amber">3</div>
+          <div class="dash-metric__label">Open Findings</div>
+        </div>
+      </div>
+
+      <!-- Datacenter rows -->
+      <div class="dash-table-header" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
+        <span>Datacenter</span><span>Clusters</span><span>Hosts</span><span>Posture</span><span>C1 Capsules</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
+        <span class="dash-host">🌍 EU-WEST-1 · London</span>
+        <span style="color:#94a3b8;font-size:0.8rem">5</span>
+        <span style="color:#94a3b8;font-size:0.8rem">94</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:97%"></div></div><span class="dash-pct">97%</span></span>
+        <span class="capsule-status"><span class="dot dot--green"></span>94 active</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
+        <span class="dash-host">🌎 US-EAST-1 · Virginia</span>
+        <span style="color:#94a3b8;font-size:0.8rem">5</span>
+        <span style="color:#94a3b8;font-size:0.8rem">112</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:99%"></div></div><span class="dash-pct">99%</span></span>
+        <span class="capsule-status"><span class="dot dot--green"></span>112 active</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
+        <span class="dash-host">🌏 AP-SOUTH-1 · Singapore</span>
+        <span style="color:#94a3b8;font-size:0.8rem">2</span>
+        <span style="color:#94a3b8;font-size:0.8rem">41</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill posture-bar__fill--warn" style="width:91%"></div></div><span class="dash-pct" style="color:#fbbf24">91%</span></span>
+        <span class="capsule-status"><span class="dot dot--amber"></span>3 findings</span>
+      </div>
+
+      <!-- Cluster detail sub-table -->
+      <div style="padding:0.5rem 1.1rem 0.3rem;background:rgba(15,23,42,0.4);border-top:1px solid rgba(99,102,241,0.1)">
+        <span style="font-size:0.67rem;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;color:#475569;font-family:var(--font-display)">Cluster detail &nbsp;·&nbsp; </span>
+        <span style="font-size:0.67rem;color:#818cf8;font-family:var(--font-mono)">EU-WEST-1</span>
+      </div>
+      <div class="dash-table-header" style="grid-template-columns:2fr 0.9fr 2.2fr 1.5fr;background:rgba(15,23,42,0.2)">
+        <span>Cluster</span><span>Hosts</span><span>Posture</span><span>C1 Capsules</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.9fr 2.2fr 1.5fr">
+        <span class="dash-host" style="font-size:0.77rem">k8s-prod-cluster</span>
+        <span style="color:#64748b;font-size:0.78rem">32</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:98%"></div></div><span class="dash-pct">98%</span></span>
+        <span class="capsule-status"><span class="dot dot--green"></span>all live</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.9fr 2.2fr 1.5fr">
+        <span class="dash-host" style="font-size:0.77rem">db-prod-primary</span>
+        <span style="color:#64748b;font-size:0.78rem">12</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:97%"></div></div><span class="dash-pct">97%</span></span>
+        <span class="capsule-status"><span class="dot dot--green"></span>all live</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.9fr 2.2fr 1.5fr">
+        <span class="dash-host" style="font-size:0.77rem">monitoring-stack</span>
+        <span style="color:#64748b;font-size:0.78rem">8</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:100%"></div></div><span class="dash-pct">100%</span></span>
+        <span class="capsule-status"><span class="dot dot--green"></span>all live</span>
+      </div>
+      <div class="dash-row" style="grid-template-columns:2fr 0.9fr 2.2fr 1.5fr">
+        <span class="dash-host" style="font-size:0.77rem">bastion-nodes</span>
+        <span style="color:#64748b;font-size:0.78rem">4</span>
+        <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:100%"></div></div><span class="dash-pct">100%</span></span>
+        <span class="capsule-status"><span class="dot dot--green"></span>all live</span>
+      </div>
+
+      <div class="dash-footer">
+        <span class="dash-footer__note">3 datacenters · 12 clusters · last sync 1s ago · policy v4.12</span>
+        <button class="dash-export-btn">Export fleet report →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ PILLAR 1: SEE EVERYTHING -->
+<section class="pillar pillar--alt" id="capabilities">
+  <div class="container pillar__inner">
+    <div class="pillar__copy">
+      <div class="industry-first-badge">◈ Industry-first</div>
+      <p class="eyebrow">Full Visibility</p>
+      <h2>See every connection. Score every risk.</h2>
+      <p>
+        C1 Capsules give you IP intelligence no SIEM matches — time-windowed analysis that scores every inbound connection by country, port pattern, bytes transferred, and behaviour across any time window you define.
+      </p>
+      <ul class="check-list">
+        <li>Time-windowed IP analysis — "Show IPs from RU connecting 2am–7am"</li>
+        <li>Suspicious scoring per IP per window with visual heatmaps</li>
+        <li>Activities performed, ports accessed, bytes transferred — full context</li>
+        <li>Policy: "If IP from country X, 2am–7am, block &gt;1 GB transfers"</li>
+        <li>Country-based and time-based rate limiting</li>
+      </ul>
+    </div>
+    <div class="pillar__visual">
+      <!-- IP Intelligence dashboard simulation -->
+      <div class="dash-panel" aria-hidden="true">
+        <div class="dash-topbar">
+          <div class="dash-topbar__dots"><span></span><span></span><span></span></div>
+          <span class="dash-topbar__title">C1 Capsule · IP Intelligence</span>
+          <span class="dash-topbar__meta">window: 02:00–07:00 UTC</span>
+        </div>
+        <div class="dash-metrics" style="grid-template-columns:repeat(3,1fr)">
+          <div class="dash-metric">
+            <div class="dash-metric__value dash-metric__value--amber">23</div>
+            <div class="dash-metric__label">IPs Detected</div>
+          </div>
+          <div class="dash-metric">
+            <div class="dash-metric__value dash-metric__value--amber">3</div>
+            <div class="dash-metric__label">High Risk</div>
+          </div>
+          <div class="dash-metric">
+            <div class="dash-metric__value dash-metric__value--green">2</div>
+            <div class="dash-metric__label">Auto-blocked</div>
+          </div>
+        </div>
+        <div class="dash-table-header" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
+          <span>IP Address</span><span>Country</span><span>Score</span><span>Traffic</span><span>Status</span>
+        </div>
+        <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
+          <span class="dash-host" style="font-size:0.75rem">192.0.2.45</span>
+          <span class="dash-country">🇷🇺 RU</span>
+          <span class="dash-score dash-score--high">87 <span class="dash-score__trend">▲</span></span>
+          <span><span class="dash-bytes">2.4 GB · 14 act</span></span>
+          <span class="dash-action dash-action--block">BLOCKED</span>
+        </div>
+        <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
+          <span class="dash-host" style="font-size:0.75rem">10.0.2.199</span>
+          <span class="dash-country">🇨🇳 CN</span>
+          <span class="dash-score dash-score--high">71 <span class="dash-score__trend">▲</span></span>
+          <span><span class="dash-bytes">890 MB · 7 act</span></span>
+          <span class="dash-action dash-action--rate">RATE LIM</span>
+        </div>
+        <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
+          <span class="dash-host" style="font-size:0.75rem">198.51.100.3</span>
+          <span class="dash-country">🇰🇵 KP</span>
+          <span class="dash-score dash-score--med">64</span>
+          <span><span class="dash-bytes">234 MB · 3 act</span></span>
+          <span class="dash-action dash-action--flag">FLAGGED</span>
+        </div>
+        <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
+          <span class="dash-host" style="font-size:0.75rem">203.0.113.12</span>
+          <span class="dash-country">🇺🇸 US</span>
+          <span class="dash-score dash-score--low">12</span>
+          <span><span class="dash-bytes">12 MB · 2 act</span></span>
+          <span class="dash-action dash-action--allow">ALLOWED</span>
+        </div>
+        <div class="dash-footer">
+          <span class="dash-footer__note">Active policy: BLOCK &gt;1 GB from [RU, CN, KP] 02:00–07:00</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ PILLAR 2: CONTROL EVERYTHING -->
+<section class="pillar" id="control">
+  <div class="container pillar__inner pillar__inner--reverse">
+    <div class="pillar__visual">
+      <!-- Session replay simulation -->
+      <div class="session-terminal" aria-hidden="true">
+        <div class="session-header">
+          <div class="session-header__dots"><span></span><span></span><span></span></div>
+          <span class="session-header__title">Session Replay · db-prod-01 · alice@corp.com</span>
+          <span class="session-header__badge">JIT · approved</span>
+        </div>
+        <div class="session-body">
+          <div class="session-line">
+            <span class="session-t">15:02:11</span>
+            <span class="session-cmd--system">SSH connection established via bastion · mTLS</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:02:14</span>
+            <span class="session-cmd--prompt">$ sudo -s</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:02:17</span>
+            <span class="session-cmd--prompt"># systemctl status postgresql</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:02:18</span>
+            <span class="session-cmd--output">● postgresql.service - PostgreSQL RDBMS</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:02:18</span>
+            <span class="session-cmd--output">     Active: active (running) since Mon 2026-04-25</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:02:45</span>
+            <span class="session-cmd--prompt"># psql -c "select count(*) from users"</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:02:47</span>
+            <span class="session-cmd--output"> count: 142893</span>
+          </div>
+          <div class="session-line">
+            <span class="session-t">15:06:43</span>
+            <span class="session-cmd--system">Session ended · 4m 32s · 12 commands recorded</span>
+          </div>
+        </div>
+        <div class="session-footer">
+          <span class="session-ctrl">▶ Play</span>
+          <span class="session-ctrl">⏩ 2×</span>
+          <span class="session-ctrl">Search</span>
+          <span class="session-ctrl">Export transcript</span>
+        </div>
+      </div>
+      <!-- Rule builder -->
+      <div class="rule-card" style="margin-top:0.75rem">
+<span class="rule-cm">// C1 Capsule rule: auto-remediate on policy breach</span>
+<span class="rule-kw">allow</span> port <span class="rule-num">22</span>/tcp <span class="rule-op">where</span> labels.role == <span class="rule-str">"bastion"</span>
+<span class="rule-kw">deny</span>  port <span class="rule-num">3306</span>/tcp <span class="rule-op">on</span> public_ip
+<span class="rule-kw">alert</span> severity=<span class="rule-str">high</span> <span class="rule-op">if</span> log <span class="rule-op">~</span> /failed login/ &gt; <span class="rule-num">5</span>/min
+<span class="rule-kw">remediate</span> action=<span class="rule-str">block_ip</span> <span class="rule-op">ttl=</span><span class="rule-num">1h</span></div>
+    </div>
+    <div class="pillar__copy">
+      <p class="eyebrow">Total Control</p>
+      <h2>Autonomous enforcement. Zero standing access.</h2>
+      <p>
+        C1 Capsules execute your policies without waiting for a human. JIT access requests flow through approval, every privileged session is recorded end-to-end, and threat intel feeds go straight to the firewall in seconds.
+      </p>
+      <ul class="check-list">
+        <li>Just-in-time PAM — no standing root, ever</li>
+        <li>Bastion SSH proxy with mTLS tunnel direct to the capsule</li>
+        <li>Session replay — full transcript, searchable, exportable</li>
+        <li>Auto-remediation + circuit breakers on policy breach</li>
+        <li>Threat intel → ufw / firewalld / nftables / netsh, automatically</li>
+        <li>Step-up MFA (TOTP + WebAuthn) for highest-risk actions</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ PILLAR 3: PROVE EVERYTHING -->
+<section class="pillar pillar--alt" id="prove">
+  <div class="container pillar__inner">
+    <div class="pillar__copy">
+      <p class="eyebrow">Audit-Ready</p>
+      <h2>SOC 2 in weeks. Evidence generated continuously.</h2>
+      <p>
+        Every C1 Capsule generates tamper-evident audit trails mapped to SOC 2 CC controls and ISO 27001. One click produces your evidence pack. No more spreadsheets, no more last-minute scrambles, no more $100K consultant fees.
+      </p>
+      <ul class="check-list">
+        <li>Continuous compliance — not a quarterly snapshot</li>
+        <li>Pre-built CIS, SOC 2, and ISO 27001 control packs</li>
+        <li>What-if simulator replays a draft rule against 30 days of history</li>
+        <li>Behavioural baselines surface drift before it becomes a finding</li>
+        <li>One-click evidence export — hand auditors exactly what they need</li>
+      </ul>
+    </div>
+    <div class="pillar__visual">
+      <!-- Compliance dashboard simulation -->
+      <div class="dash-panel" aria-hidden="true">
+        <div class="dash-topbar">
+          <div class="dash-topbar__dots"><span></span><span></span><span></span></div>
+          <span class="dash-topbar__title">Compliance · SOC 2 Type II</span>
+          <span class="dash-topbar__meta">next audit in 12d</span>
+        </div>
+        <div class="dash-metrics" style="grid-template-columns:repeat(3,1fr)">
+          <div class="dash-metric">
+            <div class="dash-metric__value dash-metric__value--green">96%</div>
+            <div class="dash-metric__label">Overall Score</div>
+          </div>
+          <div class="dash-metric">
+            <div class="dash-metric__value">47<span style="font-size:1rem;color:#475569">/49</span></div>
+            <div class="dash-metric__label">Controls Passing</div>
+          </div>
+          <div class="dash-metric">
+            <div class="dash-metric__value dash-metric__value--amber">2</div>
+            <div class="dash-metric__label">Open Gaps</div>
+          </div>
+        </div>
+        <div class="dash-table-header" style="grid-template-columns:0.8fr 2fr 1.4fr 0.9fr">
+          <span>Control</span><span>Description</span><span>Score</span><span>Status</span>
+        </div>
+        <div class="compliance-row" style="grid-template-columns:0.8fr 2fr 1.4fr 0.9fr">
+          <span class="compliance-ctrl">CC6.1</span>
+          <span class="compliance-name">Logical access controls</span>
+          <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:98%"></div></div><span class="dash-pct">98%</span></span>
+          <span class="compliance-gap compliance-gap--ok">✓ 2 gaps</span>
+        </div>
+        <div class="compliance-row" style="grid-template-columns:0.8fr 2fr 1.4fr 0.9fr">
+          <span class="compliance-ctrl">CC6.2</span>
+          <span class="compliance-name">New user provisioning</span>
+          <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:100%"></div></div><span class="dash-pct">100%</span></span>
+          <span class="compliance-gap compliance-gap--ok">✓ 0 gaps</span>
+        </div>
+        <div class="compliance-row" style="grid-template-columns:0.8fr 2fr 1.4fr 0.9fr">
+          <span class="compliance-ctrl">CC7.1</span>
+          <span class="compliance-name">System monitoring</span>
+          <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill posture-bar__fill--warn" style="width:89%"></div></div><span class="dash-pct" style="color:#fbbf24">89%</span></span>
+          <span class="compliance-gap compliance-gap--warn">⚠ 4 gaps</span>
+        </div>
+        <div class="compliance-row" style="grid-template-columns:0.8fr 2fr 1.4fr 0.9fr">
+          <span class="compliance-ctrl">CC7.2</span>
+          <span class="compliance-name">Vulnerability management</span>
+          <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:96%"></div></div><span class="dash-pct">96%</span></span>
+          <span class="compliance-gap compliance-gap--ok">✓ 1 gap</span>
+        </div>
+        <div class="compliance-row" style="grid-template-columns:0.8fr 2fr 1.4fr 0.9fr">
+          <span class="compliance-ctrl">CC8.1</span>
+          <span class="compliance-name">Change management</span>
+          <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:100%"></div></div><span class="dash-pct">100%</span></span>
+          <span class="compliance-gap compliance-gap--ok">✓ 0 gaps</span>
+        </div>
+        <div class="dash-footer">
+          <span class="dash-footer__note">Mapped to SOC 2 CC + ISO 27001 A controls</span>
+          <button class="dash-export-btn">Export evidence pack →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ HOW IT WORKS -->
+<section class="how-it-works" id="how-it-works">
   <div class="container">
     <p class="eyebrow">How it works</p>
-    <h2>One installer. Every host.</h2>
+    <h2>From zero to full fleet control in 30 minutes.</h2>
     <ol class="steps">
       <li>
         <span class="step__num">1</span>
         <h3>Bootstrap the control plane</h3>
-        <p>Deploy via Docker, Kubernetes, or the offline bundle. Bring your own Postgres + Redis or use the embedded ones.</p>
+        <p>Deploy via Docker, Kubernetes, or the offline bundle. Bring your own Postgres + Redis or use the embedded stack. On-prem, cloud, air-gapped — your choice.</p>
       </li>
       <li>
         <span class="step__num">2</span>
-        <h3>Enrol your hosts</h3>
-        <p>One-line installer for Ubuntu, Debian, RHEL, Rocky, Alma, Fedora, SUSE, Alpine, and Windows. Or bulk-enrol over SSH.</p>
+        <h3>Enrol hosts — C1 Capsules deploy</h3>
+        <p>One-line installer for Ubuntu, Debian, RHEL, Rocky, Alma, Alpine, and Windows. Bulk-enrol over SSH. Provision new hosts via KVM, VMware, AWS, or Azure — each one gets a dedicated C1 Capsule on first boot.</p>
       </li>
       <li>
         <span class="step__num">3</span>
         <h3>Set posture, ship rules</h3>
-        <p>Pick a policy pack or author your own. Promote, simulate, roll out — every node sees the change in seconds via SSE.</p>
+        <p>Pick a policy pack or author your own rules. Promote, simulate, roll out — every C1 Capsule sees the change in seconds via SSE. Rollout circuit breakers halt bad deploys automatically.</p>
       </li>
       <li>
         <span class="step__num">4</span>
         <h3>Prove it to auditors</h3>
-        <p>Schedule CSV reports, hand over session recordings, point at the audit trail. Done in an afternoon.</p>
+        <p>Schedule CSV reports, hand over session recordings, point at the audit trail. Export your SOC 2 evidence pack in one click. Done in an afternoon, not three months.</p>
       </li>
     </ol>
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ SECURITY -->
 <section class="security" id="security">
   <div class="container">
     <p class="eyebrow">Security &amp; trust</p>
@@ -372,7 +569,7 @@ $ controlone fleet enrol \
       </article>
       <article class="trust-card">
         <h3>WireGuard mesh</h3>
-        <p>Optional encrypted overlay between control plane and nodes. Bastion never traverses the public internet.</p>
+        <p>Optional encrypted overlay between control plane and C1 Capsules. Bastion never traverses the public internet.</p>
       </article>
       <article class="trust-card">
         <h3>Open formats</h3>
@@ -390,36 +587,35 @@ $ controlone fleet enrol \
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ AUDIENCE -->
 <section class="audience">
   <div class="container">
     <p class="eyebrow">Who it's for</p>
-    <h2>Different teams, same control plane</h2>
+    <h2>Different teams, one control plane</h2>
     <div class="three-col">
       <article class="audience-card">
         <h3>For the CISO</h3>
         <p>
-          One number on the board: how compliant are we, right now? Evidence packs that hand auditors what
-          they want without engineering time. SOC 2 in weeks, not quarters.
+          One number on the board: how compliant are we, right now? Evidence packs that hand auditors what they want without engineering time. SOC 2 in weeks, not quarters.
         </p>
       </article>
       <article class="audience-card">
         <h3>For the SRE / DevOps lead</h3>
         <p>
-          A single tool that knows about every host, every cluster, every rule. Visual rule builder for
-          newcomers; YAML and API for automation pipelines. Open standards, no vendor lock-in.
+          A single tool that knows about every host, every cluster, every rule. Visual rule builder for newcomers; YAML and API for automation pipelines. Open standards, no vendor lock-in.
         </p>
       </article>
       <article class="audience-card">
         <h3>For the sysadmin</h3>
         <p>
-          Bulk enrol existing fleets over SSH. Distro-aware installer that respects your init system.
-          Every host firewall — ufw, firewalld, iptables, Windows — speaks one API.
+          Bulk-enrol existing fleets over SSH. Distro-aware installer that respects your init system. Every host firewall — ufw, firewalld, iptables, Windows — speaks one API.
         </p>
       </article>
     </div>
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ PRICING -->
 <section class="pricing" id="pricing">
   <div class="container">
     <p class="eyebrow">Pricing</p>
@@ -430,7 +626,7 @@ $ controlone fleet enrol \
       <article class="price-card">
         <header>
           <h3>Enterprise</h3>
-          <p class="muted">For regulated estates</p>
+          <p>For regulated estates</p>
         </header>
         <p class="price" data-currency="enterprise"><strong>$250</strong><span> / host / month</span></p>
         <ul>
@@ -446,14 +642,15 @@ $ controlone fleet enrol \
       </article>
 
       <article class="price-card price-card--featured">
+        <div class="price-badge">Most Popular</div>
         <header>
           <h3>Business</h3>
-          <p class="muted">Most popular</p>
+          <p>For growing security teams</p>
         </header>
         <p class="price" data-currency="business"><strong>$12</strong><span> / host / month</span></p>
         <ul>
           <li>Unlimited hosts</li>
-          <li>Privileged access (PAM) with replay</li>
+          <li>Full PAM with session replay</li>
           <li>Auto-remediation + circuit breakers</li>
           <li>Multi-tenant + RBAC</li>
           <li>SOC 2 evidence pack</li>
@@ -465,7 +662,7 @@ $ controlone fleet enrol \
       <article class="price-card">
         <header>
           <h3>Starter</h3>
-          <p class="muted">For teams &lt; 50 hosts</p>
+          <p>For teams under 20 hosts</p>
         </header>
         <p class="price" data-currency="starter"><strong>$0</strong><span> · self-hosted</span></p>
         <ul>
@@ -475,59 +672,61 @@ $ controlone fleet enrol \
           <li>Single tenant</li>
           <li>Email support</li>
         </ul>
-        <a class="btn btn--ghost" href="#contact">Get started</a>
+        <a class="btn btn--ghost" href="#contact">Get started free</a>
       </article>
 
     </div>
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ FAQ -->
 <section class="faq">
   <div class="container">
     <p class="eyebrow">FAQ</p>
     <h2>Questions we get asked a lot</h2>
     <details>
       <summary>How does this compare to CrowdStrike, Palo Alto, or Okta?</summary>
-      <p>Control One deploys intelligent robots across your entire fleet. Unlike point solutions, our robots give you complete visibility, autonomous control, and tamper-evident proof in one dashboard with unique IP intelligence capabilities.</p>
+      <p>Control One deploys C1 Capsules — dedicated intelligent agents per host. Unlike point solutions, each capsule gives you complete visibility, autonomous control, and tamper-evident proof in one dashboard. Our time-windowed IP intelligence is a differentiator no other SIEM currently matches.</p>
     </details>
     <details>
       <summary>What's the implementation timeline?</summary>
-      <p>Most teams deploy robots in under 30 minutes. Bootstrap the control plane, enrol your first hosts, and start seeing robot data immediately. Full fleet enrolment depends on your infrastructure size.</p>
+      <p>Most teams deploy their first C1 Capsules in under 30 minutes. Bootstrap the control plane, enrol your first hosts, and start seeing live capsule data immediately. Full fleet enrolment depends on your infrastructure size.</p>
     </details>
     <details>
       <summary>Do I need to replace my existing SIEM?</summary>
-      <p>No. Control One robots can work alongside your existing SIEM. The Apache Doris backbone handles millions of events per day, and you can forward events to Splunk, Loki, or Elastic if needed.</p>
+      <p>No. C1 Capsules work alongside your existing SIEM. The Apache Doris backbone handles millions of events per day, and you can forward events to Splunk, Loki, or Elastic when you need a unified pane across teams.</p>
     </details>
     <details>
       <summary>How do you handle air-gapped environments?</summary>
-      <p>One tarball, no outbound calls. The offline bundle ships every robot binary, migration, and threat-feed mirror you need. The included docker-compose runs Postgres, Redis, the control plane, and the operator console with no internet egress.</p>
+      <p>One tarball, no outbound calls. The offline bundle ships every capsule binary, migration, and threat-feed mirror you need. The included docker-compose runs Postgres, Redis, the control plane, and the operator console with zero internet egress.</p>
     </details>
     <details>
       <summary>What's your security posture?</summary>
-      <p>Zero standing privilege, AES-256-GCM encryption at rest, step-up MFA for high-risk actions, tamper-evident audit logs, and WireGuard mesh for encrypted robot communication. We practice what we preach.</p>
+      <p>Zero standing privilege, AES-256-GCM encryption at rest, step-up MFA for high-risk actions, tamper-evident audit logs, and WireGuard mesh for encrypted capsule communication. We practice what we preach.</p>
     </details>
     <details>
       <summary>Can I try before I buy?</summary>
-      <p>Yes. The Starter tier is free for up to 50 hosts. Book a demo and we'll spin up a sandbox with your data to show you exactly how our robots solve your biggest headaches.</p>
+      <p>Yes. The Starter tier is free for up to 50 hosts. Book a demo and we'll spin up a sandbox with your data to show you exactly how C1 Capsules solve your biggest headaches.</p>
     </details>
     <details>
       <summary>What happens if I exceed my host count?</summary>
-      <p>On the Business tier, you have unlimited hosts. On the Starter tier, you can upgrade at any time. We'll notify you before you hit limits.</p>
+      <p>On the Business tier, you have unlimited hosts. On the Starter tier, you can upgrade at any time. We'll notify you before you hit limits — no surprise overages.</p>
     </details>
     <details>
-      <summary>Do you offer government/compliance-specific versions?</summary>
-      <p>Yes. The Enterprise tier includes FedRAMP/IRAP scoping, air-gapped deployment, and custom integrations for regulated environments.</p>
+      <summary>Do you offer government or compliance-specific versions?</summary>
+      <p>Yes. The Enterprise tier includes FedRAMP / IRAP scoping, air-gapped deployment, and custom integrations for regulated environments. Talk to sales for a scoping call.</p>
     </details>
   </div>
 </section>
 
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ CTA -->
 <section class="cta-strip" id="contact">
   <div class="container">
     <div class="cta-card">
       <div>
-        <p class="eyebrow">Deploy your robots</p>
-        <h2>See your robots in action in 30 minutes</h2>
-        <p>We'll spin up a sandbox with your data, deploy robots across your fleet, and show you exactly how they solve your biggest headaches.</p>
+        <p class="eyebrow">Deploy C1 Capsules</p>
+        <h2>See your C1 Capsules in action in 30 minutes</h2>
+        <p>We'll spin up a sandbox with your data, deploy C1 Capsules across your fleet, and show you exactly how they solve your biggest security headaches.</p>
         <p class="muted small">No credit card required. No commitment. Just clarity.</p>
       </div>
       <form class="cta-form" id="demo-form" method="post" action="https://formspree.io/f/placeholder" novalidate>
@@ -543,13 +742,13 @@ $ controlone fleet enrol \
           Fleet size
           <select name="fleet_size" required>
             <option value="">— Choose —</option>
-            <option>Under 50 hosts</option>
-            <option>50 – 250 hosts</option>
+            <option>Under 20 hosts</option>
+            <option>20 – 250 hosts</option>
             <option>250 – 1,000 hosts</option>
             <option>1,000+ hosts</option>
           </select>
         </label>
-        <button class="btn btn--primary btn--lg" type="submit">Deploy your robots</button>
+        <button class="btn btn--primary btn--lg" type="submit">Deploy your C1 Capsules</button>
         <p class="muted small" id="form-status" role="status"></p>
       </form>
     </div>
@@ -572,6 +771,7 @@ $ controlone fleet enrol \
         <h4>Product</h4>
         <a href="#platform">Platform</a>
         <a href="#capabilities">Capabilities</a>
+        <a href="#how-it-works">How it works</a>
         <a href="#pricing">Pricing</a>
         <a href="/console/">Sign in</a>
       </div>
