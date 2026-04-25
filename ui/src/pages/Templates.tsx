@@ -210,10 +210,9 @@ export function Templates(): JSX.Element {
     <section className="templates-page">
       <div className="page-header">
         <div>
-          <h2>Provisioning templates</h2>
+          <h2>Infrastructure templates</h2>
           <p>
-            Manage reusable infrastructure plans, version their payloads, and promote stable revisions for the
-            provisioning engine.
+            Version, test, and safely roll out infrastructure changes. Each template is reusable across tenants.
           </p>
         </div>
       </div>

@@ -13,6 +13,15 @@ import { Settings } from './pages/Settings';
 import { Secrets } from './pages/Secrets';
 import { FleetEnroll } from './pages/FleetEnroll';
 import { Hypervisors } from './pages/Hypervisors';
+import { Rules } from './pages/Rules';
+// RuleBuilder is now reached as a tab inside Rules; the standalone route
+// redirects so old bookmarks still land somewhere useful.
+import { Alerts } from './pages/Alerts';
+import { Access } from './pages/Access';
+import { Recommendations } from './pages/Recommendations';
+import { Reports } from './pages/Reports';
+import { ThreatFeeds } from './pages/ThreatFeeds';
+import { Sessions } from './pages/Sessions';
 import { OfflineBundle } from './pages/OfflineBundle';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
@@ -37,6 +46,14 @@ export function App(): JSX.Element {
         <Route path="jobs" element={<Jobs />} />
         <Route path="templates" element={<Templates />} />
         <Route path="compliance" element={<Compliance />} />
+        <Route path="rules" element={<Rules />} />
+        <Route path="rules/builder" element={<Navigate to="/rules" replace />} />
+        <Route path="alerts" element={<Alerts />} />
+        <Route path="access" element={<Access />} />
+        <Route path="recommendations" element={<Recommendations />} />
+        <Route path="reports" element={<Reports />} />
+        <Route path="threat-feeds" element={<ThreatFeeds />} />
+        <Route path="sessions" element={<Sessions />} />
         <Route path="audit" element={<Audit />} />
         <Route path="users" element={<Users />} />
         <Route path="telemetry" element={<Telemetry />} />

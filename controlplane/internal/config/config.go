@@ -22,6 +22,17 @@ type Config struct {
 	Agent         AgentConfig         `mapstructure:"agent"`
 	Remediation   RemediationConfig   `mapstructure:"remediation"`
 	Secrets       SecretsConfig       `mapstructure:"secrets"`
+	WebAuthn      WebAuthnConfig      `mapstructure:"webauthn"`
+}
+
+// WebAuthnConfig configures the relying-party identity advertised to browsers
+// during WebAuthn ceremonies. RPID must be the bare hostname users reach the
+// console at; RPOrigin must be the full origin (scheme + host + port).
+// Leaving both blank disables WebAuthn enrolment + step-up.
+type WebAuthnConfig struct {
+	RPID     string `mapstructure:"rp_id"`
+	RPName   string `mapstructure:"rp_name"`
+	RPOrigin string `mapstructure:"rp_origin"`
 }
 
 // SecretsConfig controls at-rest encryption of sensitive rows (e.g. provider

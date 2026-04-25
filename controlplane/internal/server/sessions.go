@@ -98,6 +98,12 @@ func (s *Server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		case "events":
 			s.handleSessionEvents(w, r, sessionID)
 			return
+		case "parsed":
+			s.handleSessionParsed(w, r, sessionID)
+			return
+		case "transcript":
+			s.handleSessionTranscript(w, r, sessionID)
+			return
 		}
 	}
 

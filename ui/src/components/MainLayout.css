@@ -254,3 +254,77 @@ section {
     display: none;
   }
 }
+
+/* Grouped navigation (post-IA refactor) */
+.nav-group {
+  margin-top: 1.1rem;
+}
+.nav-group:first-child {
+  margin-top: 0;
+}
+.nav-group__label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 0 1rem 0.4rem;
+}
+.side-nav nav .nav-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.side-nav .nav-group li {
+  margin: 0;
+}
+.side-nav .nav-group li a {
+  display: block;
+  padding: 0.5rem 1rem;
+  color: rgba(255, 255, 255, 0.78);
+  text-decoration: none;
+  border-radius: 6px;
+  margin: 0 0.5rem;
+  font-size: 0.88rem;
+  transition: background 120ms ease, color 120ms ease;
+}
+.side-nav .nav-group li a:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+.side-nav .nav-group li.active a {
+  background: rgba(120, 130, 255, 0.18);
+  color: #fff;
+}
+.side-nav .nav-group li a:focus-visible {
+  outline: 2px solid rgba(120, 130, 255, 0.6);
+  outline-offset: 2px;
+}
+
+/* Cmd+K hint at the bottom of the side nav */
+.cmdk-hint {
+  width: calc(100% - 1rem);
+  margin: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cmdk-hint:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+.cmdk-hint kbd {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.7rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.85);
+}

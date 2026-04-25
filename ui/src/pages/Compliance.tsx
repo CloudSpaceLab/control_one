@@ -128,8 +128,8 @@ export function Compliance(): JSX.Element {
     <div className="compliance-page">
       <div className="page-header">
         <div>
-          <h1>Compliance Dashboard</h1>
-          <p className="subtitle">Monitor compliance status, violations, and trends across your infrastructure</p>
+          <h1>Compliance posture</h1>
+          <p className="subtitle">Find violations, fix them, prove continuous control.</p>
         </div>
         <div className="page-actions">
           <button type="button" onClick={handleRefresh} className="btn-secondary">

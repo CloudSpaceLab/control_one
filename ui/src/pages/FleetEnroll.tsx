@@ -311,7 +311,7 @@ export function FleetEnroll(): JSX.Element {
       setJobStatus(null);
       setNodeStates({});
       showSuccess(`Fleet job ${response.job_id} queued for ${parsedTargets.length} target(s)`);
-      showToast(`Fleet enrollment started — ${parsedTargets.length} hosts`, { type: 'success' });
+      showToast(`Fleet enrollment started — ${parsedTargets.length} hosts`, 'success');
       if (tenantId) {
         // tenant id is captured purely for UX / downstream linking today;
         // the fleet endpoint infers the tenant from the enrollment token.
@@ -319,7 +319,7 @@ export function FleetEnroll(): JSX.Element {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Fleet enrollment failed';
       showError(message);
-      showToast(message, { type: 'error' });
+      showToast(message, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -369,9 +369,9 @@ export function FleetEnroll(): JSX.Element {
       <header className="dashboard-header">
         <div>
           <p className="eyebrow">Onboarding</p>
-          <h2 id="fleet-enroll-heading">Fleet Enrollment</h2>
+          <h2 id="fleet-enroll-heading">Bulk enrol hosts</h2>
           <p className="subtitle">
-            Enroll multiple hosts over SSH and watch each one walk the enrollment gate.
+            Onboard many hosts over SSH at once. Live progress per target.
           </p>
         </div>
       </header>

@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApiClient } from './useApiClient';
+import { useApiErrorHandler } from './useApiErrorHandler';
 export function useTenants(params = {}) {
     const api = useApiClient();
+    const handleError = useApiErrorHandler('Failed to load tenants');
     const [state, setState] = useState({
         data: [],
         pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
         loading: true,
         error: null,
     });
+    const [reloadToken, setReloadToken] = useState(0);
     const normalizedParams = useMemo(() => ({
         namePrefix: params.namePrefix,
         limit: params.limit,
@@ -29,13 +32,16 @@ export function useTenants(params = {}) {
                     data: [],
                     pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
                     loading: false,
-                    error: error.message,
+                    error: handleError(error),
                 });
             }
         });
         return () => {
             cancelled = true;
         };
-    }, [api, normalizedParams]);
-    return state;
+    }, [api, normalizedParams, reloadToken, handleError]);
+    return {
+        ...state,
+        reload: () => setReloadToken((token) => token + 1),
+    };
 }

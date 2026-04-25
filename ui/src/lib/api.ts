@@ -52,6 +52,255 @@ export interface HypervisorHostVerifyResponse {
   message?: string;
 }
 
+export interface SeverityBreakdown {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  total: number;
+}
+
+export interface NodeCountsBreakdown {
+  total: number;
+  healthy: number;
+  offline: number;
+}
+
+export interface ComplianceSnapshot {
+  total: number;
+  passed: number;
+  failed: number;
+}
+
+export interface DashboardOverview {
+  tenant_id?: string;
+  generated_at: string;
+  node_counts: NodeCountsBreakdown;
+  security_event_counts: SeverityBreakdown;
+  health_incident_counts: SeverityBreakdown;
+  compliance_summary: ComplianceSnapshot;
+  rule_trigger_counts_24h: Record<string, number>;
+  remediations_applied_24h: number;
+}
+
+export interface PortRule {
+  id: string;
+  tenant_id: string;
+  policy_id?: string;
+  name: string;
+  port: number;
+  protocol: 'tcp' | 'udp';
+  expected_state: 'open' | 'closed';
+  target_labels: Record<string, unknown>;
+  severity: string;
+  action: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePortRulePayload {
+  tenant_id: string;
+  policy_id?: string;
+  name: string;
+  port: number;
+  protocol: 'tcp' | 'udp';
+  expected_state: 'open' | 'closed';
+  target_labels?: Record<string, unknown>;
+  severity?: string;
+  action?: string;
+  enabled?: boolean;
+}
+
+export interface Alert {
+  id: string;
+  tenant_id: string;
+  rule_id?: string;
+  node_id?: string;
+  source: string;
+  severity: string;
+  title: string;
+  summary?: string;
+  state: 'open' | 'acked' | 'resolved';
+  dedup_key?: string;
+  context: Record<string, unknown>;
+  opened_at: string;
+  acked_at?: string;
+  acked_by?: string;
+  resolved_at?: string;
+  resolved_by?: string;
+}
+
+export interface AccessRequest {
+  id: string;
+  tenant_id: string;
+  user_id?: string;
+  target_node_id?: string;
+  target_resource_type: 'ssh' | 'rdp' | 'db';
+  requested_access: string;
+  justification?: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'revoked';
+  ttl_seconds: number;
+  requested_at: string;
+  decided_at?: string;
+  decided_by?: string;
+  decision_reason?: string;
+  expires_at?: string;
+}
+
+export interface CreateAccessRequestPayload {
+  tenant_id: string;
+  target_node_id?: string;
+  target_resource_type: 'ssh' | 'rdp' | 'db';
+  requested_access: string;
+  justification?: string;
+  ttl_seconds?: number;
+}
+
+export interface SessionRecording {
+  id: string;
+  node_id: string;
+  user_id?: string;
+  session_type: string;
+  started_at: string;
+  ended_at?: string;
+  duration_seconds?: number;
+  status: string;
+  metadata?: Record<string, unknown>;
+  artifact_path?: string;
+  artifact_size_bytes?: number;
+  checksum?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SessionEventKind = 'input' | 'output' | 'resize' | 'command' | 'other';
+
+export interface SessionEvent {
+  at: string;
+  kind: SessionEventKind;
+  payload: string;
+  command?: string;
+  cols?: number;
+  rows?: number;
+  sequence: number;
+}
+
+export interface SessionParsedResponse {
+  session_id: string;
+  data: SessionEvent[];
+  count: number;
+}
+
+export type ThreatFeedType =
+  | 'spamhaus_drop'
+  | 'spamhaus_edrop'
+  | 'firehol_l1'
+  | 'tor_exit'
+  | 'abuseipdb'
+  | 'otx'
+  | 'custom_lines'
+  | 'custom_spamhaus';
+
+export interface ThreatFeed {
+  id: string;
+  tenant_id: string;
+  name: string;
+  feed_type: ThreatFeedType;
+  url?: string;
+  has_api_key: boolean;
+  score_floor: number;
+  refresh_seconds: number;
+  category?: string;
+  enabled: boolean;
+  last_status?: string;
+  last_error?: string;
+  last_indicator_count: number;
+  last_refreshed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateThreatFeedPayload {
+  tenant_id: string;
+  name: string;
+  feed_type: ThreatFeedType;
+  url?: string;
+  api_key?: string;
+  score_floor?: number;
+  refresh_seconds?: number;
+  category?: string;
+  enabled?: boolean;
+}
+
+export interface UpdateThreatFeedPayload {
+  name?: string;
+  url?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+  score_floor?: number;
+  refresh_seconds?: number;
+  category?: string;
+  enabled?: boolean;
+}
+
+export interface SimulateResult {
+  rule_type: string;
+  window_days: number;
+  nodes_would_fail: number;
+  nodes_would_pass: number;
+  summary: string;
+  sample?: Record<string, unknown>[];
+}
+
+export interface ReportDesc {
+  slug: string;
+  title: string;
+  description: string;
+  default_range: string;
+  formats: string[];
+}
+
+export interface Recommendation {
+  kind: string;
+  title: string;
+  rationale: string;
+  confidence: number;
+  evidence: Record<string, unknown>;
+  draft: Record<string, unknown>;
+}
+
+export interface LogRule {
+  id: string;
+  tenant_id: string;
+  policy_id?: string;
+  name: string;
+  log_source: string;
+  pattern: string;
+  severity: string;
+  window_seconds: number;
+  threshold: number;
+  action: string;
+  target_labels: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateLogRulePayload {
+  tenant_id: string;
+  policy_id?: string;
+  name: string;
+  log_source: string;
+  pattern: string;
+  severity?: string;
+  window_seconds?: number;
+  threshold?: number;
+  action?: string;
+  target_labels?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
 export interface PaginatedItems<T> {
   items: T[];
   pagination: ServerPaginationMeta;
@@ -1242,6 +1491,243 @@ export class APIClient {
     return this.request<HypervisorHostVerifyResponse>(`/api/v1/hypervisor-hosts/${encoded}/verify`, {
       method: 'POST',
     });
+  }
+
+  async getDashboardOverview(tenantId?: string): Promise<DashboardOverview> {
+    const search = new URLSearchParams();
+    if (tenantId) {
+      search.set('tenant_id', tenantId);
+    }
+    const qs = search.toString();
+    const path = `/api/v1/dashboard/overview${qs ? `?${qs}` : ''}`;
+    return this.request<DashboardOverview>(path);
+  }
+
+  async listPortRules(params: { tenantId?: string; policyId?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<PortRule>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.policyId) search.set('policy_id', params.policyId);
+    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<PortRule>>(`/api/v1/rules/port${qs ? `?${qs}` : ''}`);
+  }
+
+  async createPortRule(payload: CreatePortRulePayload): Promise<PortRule> {
+    return this.request<PortRule>('/api/v1/rules/port', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePortRule(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/rules/port/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listLogRules(params: { tenantId?: string; policyId?: string; enabled?: boolean; logSource?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<LogRule>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.policyId) search.set('policy_id', params.policyId);
+    if (params.logSource) search.set('log_source', params.logSource);
+    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<LogRule>>(`/api/v1/rules/log${qs ? `?${qs}` : ''}`);
+  }
+
+  async createLogRule(payload: CreateLogRulePayload): Promise<LogRule> {
+    return this.request<LogRule>('/api/v1/rules/log', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteLogRule(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/rules/log/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listAlerts(params: { tenantId?: string; state?: string; severity?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<Alert>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.state) search.set('state', params.state);
+    if (params.severity) search.set('severity', params.severity);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<Alert>>(`/api/v1/alerts${qs ? `?${qs}` : ''}`);
+  }
+
+  async ackAlert(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/ack`, { method: 'POST' });
+  }
+
+  async resolveAlert(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
+  }
+
+  async listAccessRequests(params: { tenantId?: string; status?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<AccessRequest>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.status) search.set('status', params.status);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<AccessRequest>>(`/api/v1/access-requests${qs ? `?${qs}` : ''}`);
+  }
+
+  async createAccessRequest(payload: CreateAccessRequestPayload): Promise<AccessRequest> {
+    return this.request<AccessRequest>('/api/v1/access-requests', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async approveAccessRequest(id: string, reason = ''): Promise<AccessRequest> {
+    return this.request<AccessRequest>(`/api/v1/access-requests/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async denyAccessRequest(id: string, reason = ''): Promise<AccessRequest> {
+    return this.request<AccessRequest>(`/api/v1/access-requests/${encodeURIComponent(id)}/deny`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async listRecommendations(tenantId: string): Promise<{ data: Recommendation[] }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    return this.request<{ data: Recommendation[] }>(`/api/v1/compliance/recommendations?${search.toString()}`);
+  }
+
+  async listReports(): Promise<{ data: ReportDesc[] }> {
+    return this.request<{ data: ReportDesc[] }>('/api/v1/reports');
+  }
+
+  async listSessions(params: { nodeId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<SessionRecording>> {
+    const search = new URLSearchParams();
+    if (params.nodeId) search.set('node_id', params.nodeId);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<SessionRecording>>(`/api/v1/sessions${qs ? `?${qs}` : ''}`);
+  }
+
+  async getSessionParsed(id: string, search?: string): Promise<SessionParsedResponse> {
+    const qs = new URLSearchParams();
+    if (search) qs.set('search', search);
+    const suffix = qs.toString();
+    return this.request<SessionParsedResponse>(`/api/v1/sessions/${encodeURIComponent(id)}/parsed${suffix ? `?${suffix}` : ''}`);
+  }
+
+  async getSessionTranscript(id: string): Promise<string> {
+    const resp = await fetch(`${this.baseUrl}/api/v1/sessions/${encodeURIComponent(id)}/transcript`, {
+      headers: { ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+    });
+    if (!resp.ok) throw new APIError('Failed to load transcript', resp.status);
+    return resp.text();
+  }
+
+  async listThreatFeeds(tenantId: string): Promise<{ data: ThreatFeed[] }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    return this.request<{ data: ThreatFeed[] }>(`/api/v1/threat-feeds?${search.toString()}`);
+  }
+
+  async createThreatFeed(payload: CreateThreatFeedPayload): Promise<ThreatFeed> {
+    return this.request<ThreatFeed>('/api/v1/threat-feeds', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateThreatFeed(id: string, payload: UpdateThreatFeedPayload): Promise<ThreatFeed> {
+    return this.request<ThreatFeed>(`/api/v1/threat-feeds/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteThreatFeed(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/threat-feeds/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async simulateRule(payload: { tenant_id: string; rule_type: string; window_days?: number; rule: Record<string, unknown> }): Promise<SimulateResult> {
+    return this.request<SimulateResult>('/api/v1/compliance/simulate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  buildReportExportUrl(slug: string, params: { tenantId?: string; since?: string } = {}): string {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    const qs = search.toString();
+    return `${this.baseUrl}/api/v1/reports/${encodeURIComponent(slug)}${qs ? `?${qs}` : ''}`;
+  }
+
+  // streamEvents opens an authenticated Server-Sent Events stream using
+  // fetch + ReadableStream. Browsers' native EventSource cannot set custom
+  // Authorization headers, so we parse the SSE wire format ourselves. Returns
+  // an AbortController.abort-style cleanup function.
+  streamEvents(
+    opts: { tenantId: string; topics?: string[]; nodeId?: string },
+    onEvent: (ev: { topic: string; payload: unknown; tenant_id: string; node_id?: string }) => void,
+    onError?: (err: unknown) => void,
+  ): () => void {
+    const controller = new AbortController();
+    const search = new URLSearchParams();
+    search.set('tenant_id', opts.tenantId);
+    if (opts.nodeId) search.set('node_id', opts.nodeId);
+    if (opts.topics && opts.topics.length) search.set('topics', opts.topics.join(','));
+    const url = `${this.baseUrl}/api/v1/events/stream?${search.toString()}`;
+
+    const run = async () => {
+      try {
+        const resp = await fetch(url, {
+          headers: {
+            Accept: 'text/event-stream',
+            ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+          },
+          signal: controller.signal,
+        });
+        if (!resp.ok || !resp.body) {
+          throw new Error(`events stream status ${resp.status}`);
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (!controller.signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) !== -1) {
+            const frame = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            try {
+              const parsed = JSON.parse(dataLine.slice(6));
+              onEvent(parsed);
+            } catch {
+              // ignore malformed frame
+            }
+          }
+        }
+      } catch (err) {
+        if (!controller.signal.aborted && onError) {
+          onError(err);
+        }
+      }
+    };
+    void run();
+    return () => controller.abort();
   }
 
   // buildBundleDownloadUrl returns the fully qualified GET URL for the air-gapped

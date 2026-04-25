@@ -152,7 +152,11 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 	// lets it run immediately.
 	// ---------------------------------------------------------------------
 	now := time.Now().UTC()
-	enqueueAt := now
+	// enqueueAt remains zero (immediate) unless we explicitly defer below.
+	// Storing zero lets dispatchRemediationTask call worker.Enqueue() instead
+	// of EnqueueAt(now) — semantically "run as soon as a worker picks it up"
+	// rather than "schedule for this exact instant".
+	var enqueueAt time.Time
 	severity := strings.ToLower(strings.TrimSpace(result.Severity))
 	if !storage.IsInsideChangeWindow(cfg.ChangeWindows, now) {
 		if cfg.CriticalOverride && severity == "critical" {

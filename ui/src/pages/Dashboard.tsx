@@ -1,196 +1,195 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useApiClient } from '../hooks/useApiClient';
+import { useEventStream } from '../hooks/useEventStream';
 import { useTenants } from '../hooks/useTenants';
-import { useNodes } from '../hooks/useNodes';
-import { useJobs } from '../hooks/useJobs';
+import type { DashboardOverview, SeverityBreakdown } from '../lib/api';
 
-const JOB_POLL_INTERVAL = 0;
+const REFRESH_TOPICS = [
+  'security.event',
+  'health.incident',
+  'rule.triggered',
+  'remediation.applied',
+  'compliance.fired',
+  'alert.opened',
+];
+
+const INITIAL_SEV: SeverityBreakdown = { critical: 0, high: 0, medium: 0, low: 0, total: 0 };
+
+const INITIAL_OVERVIEW: DashboardOverview = {
+  generated_at: '',
+  node_counts: { total: 0, healthy: 0, offline: 0 },
+  security_event_counts: INITIAL_SEV,
+  health_incident_counts: INITIAL_SEV,
+  compliance_summary: { total: 0, passed: 0, failed: 0 },
+  rule_trigger_counts_24h: {},
+  remediations_applied_24h: 0,
+};
 
 export function Dashboard(): JSX.Element {
   const navigate = useNavigate();
-  const {
-    pagination: tenantPagination,
-    data: tenantSample,
-    loading: tenantsLoading,
-  } = useTenants({ limit: 5, offset: 0 });
-  const {
-    pagination: nodePagination,
-    loading: nodesLoading,
-  } = useNodes({ limit: 5, offset: 0 });
-  const {
-    pagination: jobPagination,
-    data: recentJobs,
-    loading: jobsLoading,
-  } = useJobs({ limit: 5, offset: 0, pollIntervalMs: JOB_POLL_INTERVAL });
+  const client = useApiClient();
+  const { data: tenants } = useTenants({ limit: 1, offset: 0 });
+  const tenantId = tenants[0]?.id;
 
-  const jobStatusSummary = useMemo(() => {
-    return recentJobs.reduce<Record<string, number>>((acc, job) => {
-      const key = job.status.toLowerCase();
-      acc[key] = (acc[key] ?? 0) + 1;
-      return acc;
-    }, {});
-  }, [recentJobs]);
+  const [overview, setOverview] = useState<DashboardOverview>(INITIAL_OVERVIEW);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const stats = [
-    {
-      label: 'Tenants',
-      value: tenantPagination.total || 0,
-      loading: tenantsLoading,
-      trend: tenantPagination.total > 0 ? '+ steady' : '—',
-    },
-    {
-      label: 'Managed Nodes',
-      value: nodePagination.total || 0,
-      loading: nodesLoading,
-      trend: nodePagination.total > 0 ? 'mesh healthy' : '—',
-    },
-    {
-      label: 'Jobs queued',
-      value: jobPagination.total || 0,
-      loading: jobsLoading,
-      trend: jobStatusSummary.running ? `${jobStatusSummary.running} running` : 'idle',
-    },
-    {
-      label: 'Successful jobs',
-      value: jobStatusSummary.succeeded ?? 0,
-      loading: jobsLoading,
-      trend: jobStatusSummary.failed ? `${jobStatusSummary.failed} failed` : 'clean slate',
-    },
-  ];
+  const refresh = useCallback(async () => {
+    try {
+      const data = await client.getDashboardOverview(tenantId);
+      setOverview(data);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard');
+    } finally {
+      setLoading(false);
+    }
+  }, [client, tenantId]);
 
-  const quickActions = [
-    {
-      title: 'Register node',
-      copy: 'Bootstrap a new agent and enroll it into a tenant boundary.',
-      action: () => navigate('/nodes'),
-    },
-    {
-      title: 'Create tenant',
-      copy: 'Spin up a workspace for a new environment or customer.',
-      action: () => navigate('/tenants'),
-    },
-    {
-      title: 'Launch job',
-      copy: 'Kick off a provisioning or compliance job against your fleet.',
-      action: () => navigate('/jobs'),
-    },
-  ];
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (cancelled) return;
+      await refresh();
+    })();
+    const poll = window.setInterval(() => {
+      if (!cancelled) refresh();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+    };
+  }, [refresh]);
+
+  // Realtime refresh on incoming events.
+  useEventStream(tenantId, REFRESH_TOPICS, () => {
+    refresh();
+  });
+
+  const totalRuleTriggers = useMemo(
+    () => Object.values(overview.rule_trigger_counts_24h ?? {}).reduce((a, b) => a + b, 0),
+    [overview.rule_trigger_counts_24h],
+  );
 
   return (
     <section className="dashboard-section">
       <header className="dashboard-header">
         <div>
-          <p className="eyebrow">Overview</p>
-          <h2>Welcome back</h2>
-          <p className="subtitle">Monitor posture, trigger workflows, or drill into tenants from here.</p>
+          <p className="eyebrow">Last 24 hours</p>
+          <h2>Your infrastructure at a glance</h2>
+          <p className="subtitle">
+            {loading ? 'Loading…' : `Updated ${new Date(overview.generated_at || Date.now()).toLocaleTimeString()}`}
+          </p>
         </div>
+        <button type="button" className="primary-button" onClick={refresh}>
+          Refresh
+        </button>
       </header>
 
+      {error ? <p className="error-banner">{error}</p> : null}
+
       <div className="stat-grid">
-        {stats.map((stat) => (
-          <article key={stat.label} className="stat-card">
-            <p>{stat.label}</p>
-            {stat.loading ? (
-              <span className="stat-value pulse">…</span>
-            ) : (
-              <StatValue value={stat.value} />
-            )}
-            <small>{stat.trend}</small>
-          </article>
-        ))}
+        <SeverityCard title="Security events (24h)" breakdown={overview.security_event_counts} />
+        <SeverityCard title="Open health incidents" breakdown={overview.health_incident_counts} />
+        <CountCard
+          title="Compliance alerts (24h)"
+          total={overview.compliance_summary.failed}
+          sub={`${overview.compliance_summary.passed} passed / ${overview.compliance_summary.total} total`}
+          onClick={() => navigate('/compliance')}
+        />
+        <CountCard
+          title="Rule triggers (24h)"
+          total={totalRuleTriggers}
+          sub={Object.entries(overview.rule_trigger_counts_24h ?? {})
+            .map(([k, v]) => `${k}:${v}`)
+            .join(' · ') || '—'}
+          onClick={() => navigate('/rules')}
+        />
+        <CountCard
+          title="Auto-remediations (24h)"
+          total={overview.remediations_applied_24h}
+          sub="Safety gates active"
+        />
+        <CountCard
+          title="Nodes"
+          total={overview.node_counts.total}
+          sub={`${overview.node_counts.healthy} healthy · ${overview.node_counts.offline} offline`}
+          onClick={() => navigate('/nodes')}
+        />
       </div>
 
       <div className="dashboard-panels">
         <article className="quick-actions">
           <h3>Quick actions</h3>
           <ul>
-            {quickActions.map((action) => (
-              <li key={action.title}>
-                <div>
-                  <strong>{action.title}</strong>
-                  <p>{action.copy}</p>
-                </div>
-                <button type="button" className="primary-button" onClick={action.action}>
-                  Go
-                </button>
-              </li>
-            ))}
+            <li>
+              <div>
+                <strong>Author a rule</strong>
+                <p>Compliance, port, or log rule — rolls out in realtime.</p>
+              </div>
+              <button type="button" className="primary-button" onClick={() => navigate('/rules')}>
+                Go
+              </button>
+            </li>
+            <li>
+              <div>
+                <strong>Register hypervisor</strong>
+                <p>Add a KVM / VMware / AWS / Azure host to provision from.</p>
+              </div>
+              <button type="button" className="primary-button" onClick={() => navigate('/hypervisors')}>
+                Go
+              </button>
+            </li>
+            <li>
+              <div>
+                <strong>Enroll a node</strong>
+                <p>Run the one-line installer or bulk-enroll via SSH.</p>
+              </div>
+              <button type="button" className="primary-button" onClick={() => navigate('/nodes')}>
+                Go
+              </button>
+            </li>
           </ul>
-        </article>
-
-        <article className="recent-activity">
-          <h3>Recent jobs</h3>
-          {jobsLoading ? (
-            <p className="muted">Loading activity…</p>
-          ) : recentJobs.length === 0 ? (
-            <p className="muted">No jobs have run yet.</p>
-          ) : (
-            <ul>
-              {recentJobs.map((job) => (
-                <li key={job.id}>
-                  <div>
-                    <strong>{job.type}</strong>
-                    <small>{new Date(job.created_at).toLocaleString()}</small>
-                  </div>
-                  <span className={`status-pill status-${job.status.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>
-                    {job.status}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-
-        <article className="tenant-preview">
-          <h3>Tenants at a glance</h3>
-          {tenantsLoading ? (
-            <p className="muted">Loading tenants…</p>
-          ) : tenantSample.length === 0 ? (
-            <p className="muted">No tenants yet. Create one to get started.</p>
-          ) : (
-            <dl>
-              {tenantSample.map((tenant) => (
-                <div key={tenant.id}>
-                  <dt>{tenant.name}</dt>
-                  <dd>{new Date(tenant.created_at).toLocaleDateString()}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
         </article>
       </div>
     </section>
   );
 }
 
-function StatValue({ value }: { value: number }): JSX.Element {
-  const [displayValue, setDisplayValue] = useState(0);
+function SeverityCard({ title, breakdown }: { title: string; breakdown: SeverityBreakdown }): JSX.Element {
+  return (
+    <article className="stat-card">
+      <p>{title}</p>
+      <span className="stat-value">{breakdown.total}</span>
+      <small>
+        {breakdown.critical} crit · {breakdown.high} high · {breakdown.medium} med · {breakdown.low} low
+      </small>
+    </article>
+  );
+}
 
-  useEffect(() => {
-    let frame: number | undefined;
-    let start: number | null = null;
-    const duration = 800;
-    const initial = displayValue;
-    const delta = value - initial;
-
-    const step = (timestamp: number) => {
-      if (start === null) {
-        start = timestamp;
-      }
-      const progress = Math.min((timestamp - start) / duration, 1);
-      setDisplayValue(initial + delta * progress);
-      if (progress < 1) {
-        frame = requestAnimationFrame(step);
-      }
-    };
-
-    frame = requestAnimationFrame(step);
-    return () => {
-      if (frame) {
-        cancelAnimationFrame(frame);
-      }
-    };
-  }, [value]);
-
-  return <span className="stat-value">{Math.round(displayValue).toLocaleString()}</span>;
+function CountCard({
+  title,
+  total,
+  sub,
+  onClick,
+}: {
+  title: string;
+  total: number;
+  sub: string;
+  onClick?: () => void;
+}): JSX.Element {
+  return (
+    <article
+      className="stat-card"
+      onClick={onClick}
+      style={onClick ? { cursor: 'pointer' } : undefined}
+    >
+      <p>{title}</p>
+      <span className="stat-value">{total}</span>
+      <small>{sub}</small>
+    </article>
+  );
 }

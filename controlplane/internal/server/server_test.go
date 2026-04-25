@@ -3320,3 +3320,169 @@ func (f *fakeStore) RecordHypervisorHostHealth(_ context.Context, _ uuid.UUID, _
 func (f *fakeStore) DeleteHypervisorHost(_ context.Context, _ uuid.UUID) error {
 	return sql.ErrNoRows
 }
+
+// --- Phase 2: port/log rules + dashboard events stubs ---
+
+func (f *fakeStore) CreatePortRule(_ context.Context, _ storage.CreatePortRuleParams) (*storage.PortMonitoringRule, error) {
+	return nil, errors.New("port rules not implemented in fakeStore")
+}
+func (f *fakeStore) GetPortRule(_ context.Context, _ uuid.UUID) (*storage.PortMonitoringRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListPortRules(_ context.Context, _ storage.PortRuleFilter, _, _ int) ([]storage.PortMonitoringRule, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) UpdatePortRule(_ context.Context, _ uuid.UUID, _ storage.UpdatePortRuleParams) (*storage.PortMonitoringRule, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) DeletePortRule(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) CreateLogRule(_ context.Context, _ storage.CreateLogRuleParams) (*storage.LogMonitoringRule, error) {
+	return nil, errors.New("log rules not implemented in fakeStore")
+}
+func (f *fakeStore) GetLogRule(_ context.Context, _ uuid.UUID) (*storage.LogMonitoringRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListLogRules(_ context.Context, _ storage.LogRuleFilter, _, _ int) ([]storage.LogMonitoringRule, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) UpdateLogRule(_ context.Context, _ uuid.UUID, _ storage.UpdateLogRuleParams) (*storage.LogMonitoringRule, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) DeleteLogRule(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) CreateSecurityEvent(_ context.Context, _ storage.CreateSecurityEventParams) (*storage.SecurityEvent, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) ListSecurityEvents(_ context.Context, _ storage.SecurityEventFilter, _, _ int) ([]storage.SecurityEvent, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) CountSecurityEvents(_ context.Context, _ storage.SecurityEventFilter) (storage.SecurityEventCounts, error) {
+	return storage.SecurityEventCounts{}, nil
+}
+func (f *fakeStore) CreateHealthIncident(_ context.Context, _ storage.CreateHealthIncidentParams) (*storage.HealthIncident, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) ResolveHealthIncident(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CountOpenHealthIncidents(_ context.Context, _ uuid.UUID) (storage.SecurityEventCounts, error) {
+	return storage.SecurityEventCounts{}, nil
+}
+func (f *fakeStore) CreateRuleTrigger(_ context.Context, _ storage.CreateRuleTriggerParams) (*storage.RuleTrigger, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) CountRuleTriggersSince(_ context.Context, _ uuid.UUID, _ time.Time) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+// --- MFA stubs (Phase 4 iter) ---
+
+func (f *fakeStore) CreateMFAFactor(_ context.Context, _ storage.CreateMFAFactorParams) (*storage.MFAFactor, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetMFAFactor(_ context.Context, _ uuid.UUID) (*storage.MFAFactor, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListMFAFactors(_ context.Context, _ uuid.UUID) ([]storage.MFAFactor, error) {
+	return nil, nil
+}
+func (f *fakeStore) DisableMFAFactor(_ context.Context, _ uuid.UUID) error          { return nil }
+func (f *fakeStore) EnableMFAFactor(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+func (f *fakeStore) RecordMFAUse(_ context.Context, _ uuid.UUID, _ int64) error    { return nil }
+func (f *fakeStore) CreateStepUpChallenge(_ context.Context, _ uuid.UUID, _, _ string, _ []byte, _ time.Duration) (*storage.StepUpChallenge, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) ConsumeStepUpChallenge(_ context.Context, _ uuid.UUID) (*storage.StepUpChallenge, error) {
+	return nil, nil
+}
+
+// --- Phase 3 stubs (alerts, PAM, correlation, baselines) ---
+
+func (f *fakeStore) CreateAlert(_ context.Context, _ storage.CreateAlertParams) (*storage.Alert, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetAlert(_ context.Context, _ uuid.UUID) (*storage.Alert, error) { return nil, nil }
+func (f *fakeStore) ListAlerts(_ context.Context, _ storage.AlertFilter, _, _ int) ([]storage.Alert, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) AckAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error     { return nil }
+func (f *fakeStore) ResolveAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) CreateAccessRequest(_ context.Context, _ storage.CreateAccessRequestParams) (*storage.AccessRequest, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetAccessRequest(_ context.Context, _ uuid.UUID) (*storage.AccessRequest, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListAccessRequests(_ context.Context, _ storage.AccessRequestFilter, _, _ int) ([]storage.AccessRequest, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) DecideAccessRequest(_ context.Context, _ uuid.UUID, _ string, _ uuid.UUID, _ string, _ *time.Time) (*storage.AccessRequest, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStore) CreateSSHCA(_ context.Context, _ storage.CreateSSHCAParams) (*storage.SSHCA, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetActiveSSHCA(_ context.Context, _ uuid.UUID) (*storage.SSHCA, error) {
+	return nil, nil
+}
+func (f *fakeStore) CreateIssuedCert(_ context.Context, _ storage.CreateIssuedCertParams) (*storage.IssuedCert, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) NextCertSerial(_ context.Context, _ uuid.UUID) (int64, error) { return 1, nil }
+func (f *fakeStore) ListIssuedCerts(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.IssuedCert, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) CreateCommandACL(_ context.Context, _ storage.CreateCommandACLParams) (*storage.CommandACL, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetCommandACL(_ context.Context, _ uuid.UUID) (*storage.CommandACL, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListCommandACLs(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.CommandACL, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) DeleteCommandACL(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) CreateCorrelationRule(_ context.Context, _ storage.CreateCorrelationRuleParams) (*storage.CorrelationRule, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetCorrelationRule(_ context.Context, _ uuid.UUID) (*storage.CorrelationRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListCorrelationRules(_ context.Context, _ uuid.UUID) ([]storage.CorrelationRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteCorrelationRule(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) UpsertBehavioralBaseline(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _, _ string, _ map[string]any, _ int) error {
+	return nil
+}
+func (f *fakeStore) ListBehavioralBaselines(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]storage.BehavioralBaseline, error) {
+	return nil, nil
+}
+func (f *fakeStore) CreatePortObservation(_ context.Context, _ storage.CreatePortObservationParams) error {
+	return nil
+}
+func (f *fakeStore) AggregatePortObservations(_ context.Context, _ uuid.UUID, _ time.Time) ([]storage.PortObservationStats, error) {
+	return nil, nil
+}
+
+// --- Threat feeds stubs ---
+func (f *fakeStore) CreateThreatFeed(_ context.Context, _ storage.CreateThreatFeedParams) (*storage.ThreatFeed, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) GetThreatFeed(_ context.Context, _ uuid.UUID) (*storage.ThreatFeed, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListThreatFeeds(_ context.Context, _ storage.ThreatFeedFilter) ([]storage.ThreatFeed, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateThreatFeed(_ context.Context, _ uuid.UUID, _ storage.UpdateThreatFeedParams) (*storage.ThreatFeed, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) DeleteThreatFeed(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) RecordThreatFeedRefresh(_ context.Context, _ uuid.UUID, _, _ string, _ int) error {
+	return nil
+}

@@ -55,6 +55,12 @@ type TelemetryLogFilter struct {
 	LogSource string
 	Since     *time.Time
 	Until     *time.Time
+	// Search performs a case-insensitive substring match over log_message.
+	// Requires the pg_trgm index (migration 0051) to stay fast on large tables.
+	Search string
+	// Regex enables POSIX regex matching on log_message (slow without a helper
+	// index; fine for interactive search).
+	Regex string
 }
 
 // CreateTelemetryMetricParams defines input for creating a metric.
@@ -208,6 +214,14 @@ func (s *Store) ListTelemetryLogs(ctx context.Context, filter TelemetryLogFilter
 	if filter.Until != nil {
 		args = append(args, *filter.Until)
 		clauses = append(clauses, fmt.Sprintf("timestamp <= $%d", len(args)))
+	}
+	if q := strings.TrimSpace(filter.Search); q != "" {
+		args = append(args, "%"+q+"%")
+		clauses = append(clauses, fmt.Sprintf("log_message ILIKE $%d", len(args)))
+	}
+	if q := strings.TrimSpace(filter.Regex); q != "" {
+		args = append(args, q)
+		clauses = append(clauses, fmt.Sprintf("log_message ~ $%d", len(args)))
 	}
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM telemetry_logs WHERE %s`, strings.Join(clauses, " AND "))

@@ -63,7 +63,7 @@ function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBun
 
 describe('OfflineBundle', () => {
   const showToastMock = vi.fn();
-  let windowLocationAssign: vi.Mock;
+  let windowLocationAssign: ReturnType<typeof vi.fn>;
   let originalLocation: Location;
 
   beforeEach(() => {

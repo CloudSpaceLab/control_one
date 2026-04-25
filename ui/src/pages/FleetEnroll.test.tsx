@@ -6,9 +6,9 @@ import { FleetEnroll } from './FleetEnroll';
 // The FleetEnroll page reaches into a handful of hooks. Mocking at the module
 // boundary keeps the test fast and lets us drive the full submit->poll loop
 // without spinning up providers.
-const startFleetEnroll = vi.fn<[unknown], Promise<FleetEnrollResponse>>();
-const getFleetEnrollStatus = vi.fn<[string], Promise<FleetEnrollStatus>>();
-const getNode = vi.fn<[string], Promise<NodeSummary>>();
+const startFleetEnroll = vi.fn<(payload: unknown) => Promise<FleetEnrollResponse>>();
+const getFleetEnrollStatus = vi.fn<(id: string) => Promise<FleetEnrollStatus>>();
+const getNode = vi.fn<(id: string) => Promise<NodeSummary>>();
 const showToast = vi.fn();
 
 vi.mock('../hooks/useApiClient', () => ({
@@ -49,7 +49,7 @@ describe('FleetEnroll', () => {
   it('renders the form heading', () => {
     render(<FleetEnroll />);
     expect(
-      screen.getByRole('heading', { name: /fleet enrollment/i }),
+      screen.getByRole('heading', { name: /bulk enrol hosts/i }),
     ).toBeInTheDocument();
   });
 

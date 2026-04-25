@@ -187,6 +187,13 @@ func (s *Server) handleTelemetryLogs(w http.ResponseWriter, r *http.Request) {
 		filter.Until = &ts
 	}
 
+	if q := strings.TrimSpace(r.URL.Query().Get("search")); q != "" {
+		filter.Search = q
+	}
+	if q := strings.TrimSpace(r.URL.Query().Get("regex")); q != "" {
+		filter.Regex = q
+	}
+
 	logs, total, err := s.store.ListTelemetryLogs(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.logger.Error("list telemetry logs", zap.Error(err))

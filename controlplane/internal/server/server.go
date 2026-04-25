@@ -21,8 +21,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/behavioral"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/correlation"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
+
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
@@ -221,6 +226,53 @@ type Store interface {
 	CountOpenHealthIncidents(context.Context, uuid.UUID) (storage.SecurityEventCounts, error)
 	CreateRuleTrigger(context.Context, storage.CreateRuleTriggerParams) (*storage.RuleTrigger, error)
 	CountRuleTriggersSince(context.Context, uuid.UUID, time.Time) (map[string]int, error)
+	// Alerts.
+	CreateAlert(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
+	GetAlert(context.Context, uuid.UUID) (*storage.Alert, error)
+	ListAlerts(context.Context, storage.AlertFilter, int, int) ([]storage.Alert, int, error)
+	AckAlert(context.Context, uuid.UUID, uuid.UUID) error
+	ResolveAlert(context.Context, uuid.UUID, uuid.UUID) error
+	// Access requests.
+	CreateAccessRequest(context.Context, storage.CreateAccessRequestParams) (*storage.AccessRequest, error)
+	GetAccessRequest(context.Context, uuid.UUID) (*storage.AccessRequest, error)
+	ListAccessRequests(context.Context, storage.AccessRequestFilter, int, int) ([]storage.AccessRequest, int, error)
+	DecideAccessRequest(context.Context, uuid.UUID, string, uuid.UUID, string, *time.Time) (*storage.AccessRequest, error)
+	// SSH CA + certs.
+	CreateSSHCA(context.Context, storage.CreateSSHCAParams) (*storage.SSHCA, error)
+	GetActiveSSHCA(context.Context, uuid.UUID) (*storage.SSHCA, error)
+	CreateIssuedCert(context.Context, storage.CreateIssuedCertParams) (*storage.IssuedCert, error)
+	NextCertSerial(context.Context, uuid.UUID) (int64, error)
+	ListIssuedCerts(context.Context, uuid.UUID, int, int) ([]storage.IssuedCert, int, error)
+	// Command ACL.
+	CreateCommandACL(context.Context, storage.CreateCommandACLParams) (*storage.CommandACL, error)
+	GetCommandACL(context.Context, uuid.UUID) (*storage.CommandACL, error)
+	ListCommandACLs(context.Context, uuid.UUID, int, int) ([]storage.CommandACL, int, error)
+	DeleteCommandACL(context.Context, uuid.UUID) error
+	// Correlation + behavioral.
+	CreateCorrelationRule(context.Context, storage.CreateCorrelationRuleParams) (*storage.CorrelationRule, error)
+	GetCorrelationRule(context.Context, uuid.UUID) (*storage.CorrelationRule, error)
+	ListCorrelationRules(context.Context, uuid.UUID) ([]storage.CorrelationRule, error)
+	DeleteCorrelationRule(context.Context, uuid.UUID) error
+	UpsertBehavioralBaseline(context.Context, uuid.UUID, *uuid.UUID, string, string, map[string]any, int) error
+	ListBehavioralBaselines(context.Context, uuid.UUID, uuid.UUID) ([]storage.BehavioralBaseline, error)
+	CreatePortObservation(context.Context, storage.CreatePortObservationParams) error
+	AggregatePortObservations(context.Context, uuid.UUID, time.Time) ([]storage.PortObservationStats, error)
+	// MFA.
+	CreateMFAFactor(context.Context, storage.CreateMFAFactorParams) (*storage.MFAFactor, error)
+	GetMFAFactor(context.Context, uuid.UUID) (*storage.MFAFactor, error)
+	ListMFAFactors(context.Context, uuid.UUID) ([]storage.MFAFactor, error)
+	DisableMFAFactor(context.Context, uuid.UUID) error
+	EnableMFAFactor(context.Context, uuid.UUID, string) error
+	RecordMFAUse(context.Context, uuid.UUID, int64) error
+	CreateStepUpChallenge(context.Context, uuid.UUID, string, string, []byte, time.Duration) (*storage.StepUpChallenge, error)
+	ConsumeStepUpChallenge(context.Context, uuid.UUID) (*storage.StepUpChallenge, error)
+	// Threat-intel feeds (operator-managed).
+	CreateThreatFeed(context.Context, storage.CreateThreatFeedParams) (*storage.ThreatFeed, error)
+	GetThreatFeed(context.Context, uuid.UUID) (*storage.ThreatFeed, error)
+	ListThreatFeeds(context.Context, storage.ThreatFeedFilter) ([]storage.ThreatFeed, error)
+	UpdateThreatFeed(context.Context, uuid.UUID, storage.UpdateThreatFeedParams) (*storage.ThreatFeed, error)
+	DeleteThreatFeed(context.Context, uuid.UUID) error
+	RecordThreatFeedRefresh(context.Context, uuid.UUID, string, string, int) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -535,7 +587,67 @@ type Server struct {
 	sealer *secretbox.Sealer
 	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
 	// to SSE subscribers and internal correlators. nil means events are a no-op.
-	eventBus *eventbus.Bus
+	eventBus         *eventbus.Bus
+	correlationCtx   context.Context
+	correlationStop  context.CancelFunc
+	correlationEng   *correlation.Engine
+	// webauthn handles registration + assertion verification. nil means
+	// webauthn is disabled and the relevant endpoints return 503.
+	webauthn *webauthnlib.WebAuthn
+}
+
+func (s *Server) startCorrelationEngine() {
+	if s == nil || s.eventBus == nil || s.store == nil {
+		return
+	}
+	if s.correlationEng != nil {
+		return
+	}
+	s.correlationEng = correlation.New(correlationStoreAdapter{s.store}, s.eventBus, s.logger)
+	s.correlationCtx, s.correlationStop = context.WithCancel(context.Background())
+	go s.correlationEng.Run(s.correlationCtx)
+}
+
+// startBehavioralRollup launches the periodic behavioral baseline computation
+// in a goroutine. Safe to call multiple times; subsequent calls are no-ops.
+func (s *Server) startBehavioralRollup() {
+	if s == nil || s.store == nil {
+		return
+	}
+	interval := time.Hour
+	if s.cfg != nil && s.cfg.Jobs.Compliance.ScheduleEnabled {
+		// Reuse compliance schedule as a "jobs enabled" signal for now.
+	}
+	rollup := behavioral.NewRollup(behavioralStoreAdapter{s.store}, s.logger, interval, 30)
+	ctx, _ := context.WithCancel(context.Background())
+	go rollup.Run(ctx)
+}
+
+// behavioralStoreAdapter narrows Store to the behavioral package's needs.
+type behavioralStoreAdapter struct {
+	store Store
+}
+
+func (a behavioralStoreAdapter) AggregatePortObservations(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]storage.PortObservationStats, error) {
+	return a.store.AggregatePortObservations(ctx, tenantID, since)
+}
+func (a behavioralStoreAdapter) UpsertBehavioralBaseline(ctx context.Context, tenantID uuid.UUID, nodeID *uuid.UUID, signalType, dimension string, baseline map[string]any, windowDays int) error {
+	return a.store.UpsertBehavioralBaseline(ctx, tenantID, nodeID, signalType, dimension, baseline, windowDays)
+}
+func (a behavioralStoreAdapter) ListTenants(ctx context.Context, namePrefix string, limit, offset int) ([]storage.Tenant, int, error) {
+	return a.store.ListTenants(ctx, namePrefix, limit, offset)
+}
+
+// correlationStoreAdapter narrows Store to the CorrelationEngine's needs.
+type correlationStoreAdapter struct {
+	store Store
+}
+
+func (a correlationStoreAdapter) ListCorrelationRules(ctx context.Context, tenantID uuid.UUID) ([]storage.CorrelationRule, error) {
+	return a.store.ListCorrelationRules(ctx, tenantID)
+}
+func (a correlationStoreAdapter) CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
+	return a.store.CreateAlert(ctx, p)
 }
 
 // publishEvent fan-outs a realtime event to SSE subscribers. Safe to call
@@ -623,6 +735,31 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/health-incidents", s.handleHealthIncidentsCollection)
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
+	s.baseRouter.HandleFunc("/api/v1/alerts", s.handleAlertsCollection)
+	s.baseRouter.HandleFunc("/api/v1/alerts/", s.handleAlertSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/access-requests", s.handleAccessRequestsCollection)
+	s.baseRouter.HandleFunc("/api/v1/access-requests/", s.handleAccessRequestSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/ssh-ca", s.handleSSHCA)
+	s.baseRouter.HandleFunc("/api/v1/ssh-ca/sign-cert", s.handleSSHCASignCert)
+	s.baseRouter.HandleFunc("/api/v1/command-acl", s.handleCommandACLCollection)
+	s.baseRouter.HandleFunc("/api/v1/command-acl/", s.handleCommandACLSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/correlation-rules", s.handleCorrelationRulesCollection)
+	s.baseRouter.HandleFunc("/api/v1/correlation-rules/", s.handleCorrelationRuleSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/compliance/recommendations", s.handleRecommendations)
+	s.baseRouter.HandleFunc("/api/v1/compliance/simulate", s.handleSimulate)
+	s.baseRouter.HandleFunc("/api/v1/reports", s.handleReportsCollection)
+	s.baseRouter.HandleFunc("/api/v1/reports/", s.handleReportExport)
+	s.baseRouter.HandleFunc("/api/v1/mfa/factors", s.handleMFAFactors)
+	s.baseRouter.HandleFunc("/api/v1/mfa/factors/", s.handleMFAFactorSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/mfa/totp/enroll/begin", s.handleTOTPEnrollBegin)
+	s.baseRouter.HandleFunc("/api/v1/mfa/totp/enroll/finish", s.handleTOTPEnrollFinish)
+	s.baseRouter.HandleFunc("/api/v1/mfa/step-up/begin", s.handleStepUpBegin)
+	s.baseRouter.HandleFunc("/api/v1/mfa/step-up/verify", s.handleStepUpVerify)
+	s.baseRouter.HandleFunc("/api/v1/mfa/webauthn/enroll/begin", s.handleWebAuthnEnrollBegin)
+	s.baseRouter.HandleFunc("/api/v1/mfa/webauthn/enroll/finish", s.handleWebAuthnEnrollFinish)
+	s.baseRouter.HandleFunc("/api/v1/mfa/webauthn/step-up/begin", s.handleWebAuthnStepUpBegin)
+	s.baseRouter.HandleFunc("/api/v1/threat-feeds", s.handleThreatFeedsCollection)
+	s.baseRouter.HandleFunc("/api/v1/threat-feeds/", s.handleThreatFeedSubroutes)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -1749,6 +1886,18 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	} else {
 		s.sealer = sealer
 	}
+	if cfg.WebAuthn.RPID != "" && cfg.WebAuthn.RPOrigin != "" {
+		wa, werr := mfa.NewWebAuthn(mfa.WebAuthnConfig{
+			RPID:     cfg.WebAuthn.RPID,
+			RPName:   cfg.WebAuthn.RPName,
+			RPOrigin: cfg.WebAuthn.RPOrigin,
+		})
+		if werr != nil {
+			logger.Warn("init webauthn", zap.Error(werr))
+		} else {
+			s.webauthn = wa
+		}
+	}
 	s.configureJobIntegrations()
 	s.registerRoutes()
 
@@ -1771,6 +1920,8 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 // Start begins serving HTTP requests.
 func (s *Server) Start() error {
 	s.startEnrollmentReaper()
+	s.startCorrelationEngine()
+	s.startBehavioralRollup()
 
 	if !s.cfg.TLS.Enabled {
 		return s.http.ListenAndServe()

@@ -15,6 +15,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/migrate"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/server"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/tracing"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
 
@@ -31,6 +32,19 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Fatal("load config", zap.Error(err))
+	}
+
+	tracerShutdown, err := tracing.Init(context.Background(), tracing.Options{})
+	if err != nil {
+		logger.Warn("init tracing", zap.Error(err))
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracerShutdown(shutdownCtx); err != nil {
+				logger.Warn("tracer shutdown", zap.Error(err))
+			}
+		}()
 	}
 
 	store, err := storage.New(logger, cfg.Database, storage.Options{})

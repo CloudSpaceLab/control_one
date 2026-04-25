@@ -118,8 +118,8 @@ export function Audit(): JSX.Element {
     <div className="audit-page">
       <div className="page-header">
         <div>
-          <h1>Audit Log</h1>
-          <p className="subtitle">View and search audit trail of all system activities</p>
+          <h1>Audit trail</h1>
+          <p className="subtitle">Who did what, when. Full record for SOC 2, ISO 27001, and incident review.</p>
         </div>
         <div className="page-actions">
           <button type="button" onClick={handleRefresh} className="btn-secondary">

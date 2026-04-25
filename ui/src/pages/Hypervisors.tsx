@@ -22,7 +22,73 @@ interface CredentialFormState {
   tenant_id: string;
   provider: HypervisorProvider;
   name: string;
+  // configText is the raw fallback for power users; the visual form state
+  // below covers the typical case so non-engineers don't need to edit JSON.
   configText: string;
+  showRawJSON: boolean;
+  fields: Record<string, string>;
+}
+
+interface ProviderFieldSpec {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'textarea';
+  placeholder?: string;
+  helper?: string;
+  required?: boolean;
+}
+
+// PROVIDER_FIELDS describes the visual form per provider. Keys match what the
+// Go adapters expect inside the credential JSON. Adding a new provider is a
+// matter of adding an entry here and wiring the adapter on the backend.
+const PROVIDER_FIELDS: Record<HypervisorProvider, ProviderFieldSpec[]> = {
+  libvirt: [
+    { key: 'username', label: 'SSH user', type: 'text', placeholder: 'root', required: true,
+      helper: 'User on the KVM host the agent connects as.' },
+    { key: 'private_key', label: 'SSH private key', type: 'textarea',
+      placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----\n…',
+      helper: 'PEM-encoded key. Stored encrypted; never displayed again.', required: true },
+    { key: 'known_hosts', label: 'Known hosts entry', type: 'textarea',
+      placeholder: 'kvm-01.example.com ssh-ed25519 AAAA…',
+      helper: 'Optional but recommended — avoids TOFU prompts.' },
+  ],
+  vmware: [
+    { key: 'username', label: 'vCenter user', type: 'text', placeholder: 'admin@vsphere.local', required: true },
+    { key: 'password', label: 'vCenter password', type: 'password', required: true },
+    { key: 'datacenter', label: 'Default datacenter', type: 'text', placeholder: 'DC-Production' },
+    { key: 'folder', label: 'VM folder', type: 'text', placeholder: '/Production/Linux' },
+    { key: 'insecure', label: 'Skip TLS verify (insecure)', type: 'text', placeholder: 'false' },
+  ],
+  aws: [
+    { key: 'access_key_id', label: 'AWS access key ID', type: 'text', placeholder: 'AKIA…', required: true },
+    { key: 'secret_access_key', label: 'AWS secret access key', type: 'password', required: true },
+    { key: 'region', label: 'Default region', type: 'text', placeholder: 'us-east-1', required: true },
+    { key: 'role_arn', label: 'Assume-role ARN (optional)', type: 'text',
+      placeholder: 'arn:aws:iam::1234:role/control-one' },
+  ],
+  azure: [
+    { key: 'tenant_id', label: 'Azure tenant ID', type: 'text', required: true },
+    { key: 'subscription_id', label: 'Subscription ID', type: 'text', required: true },
+    { key: 'client_id', label: 'Service principal client ID', type: 'text', required: true },
+    { key: 'client_secret', label: 'Service principal secret', type: 'password', required: true },
+    { key: 'resource_group', label: 'Default resource group', type: 'text', placeholder: 'rg-prod' },
+  ],
+};
+
+function defaultFieldsFor(provider: HypervisorProvider): Record<string, string> {
+  const out: Record<string, string> = {};
+  PROVIDER_FIELDS[provider].forEach((f) => {
+    out[f.key] = '';
+  });
+  return out;
+}
+
+function fieldsToConfigText(fields: Record<string, string>): string {
+  const trimmed: Record<string, string> = {};
+  Object.entries(fields).forEach(([k, v]) => {
+    if (v && v.trim() !== '') trimmed[k] = v;
+  });
+  return JSON.stringify(trimmed, null, 2);
 }
 
 interface HostFormState {
@@ -39,7 +105,9 @@ const CREDENTIAL_FORM_DEFAULT: CredentialFormState = {
   tenant_id: '',
   provider: 'libvirt',
   name: '',
-  configText: '{\n  "username": "",\n  "password": ""\n}',
+  configText: '',
+  showRawJSON: false,
+  fields: defaultFieldsFor('libvirt'),
 };
 
 const HOST_FORM_DEFAULT: HostFormState = {
@@ -98,11 +166,28 @@ export function Hypervisors(): JSX.Element {
     event.preventDefault();
     if (submittingCred) return;
     let config: Record<string, unknown>;
-    try {
-      config = JSON.parse(credentialForm.configText) as Record<string, unknown>;
-    } catch {
-      showToast('Invalid credential config: must be valid JSON', 'error');
-      return;
+    if (credentialForm.showRawJSON) {
+      try {
+        config = JSON.parse(credentialForm.configText) as Record<string, unknown>;
+      } catch {
+        showToast('Invalid credential config: must be valid JSON', 'error');
+        return;
+      }
+    } else {
+      // Visual form path — strip empty fields and require provider-specific
+      // required fields before submit so the operator gets a clear error
+      // before the round-trip.
+      const required = PROVIDER_FIELDS[credentialForm.provider]
+        .filter((f) => f.required)
+        .filter((f) => !credentialForm.fields[f.key] || credentialForm.fields[f.key].trim() === '');
+      if (required.length > 0) {
+        showToast(`Required: ${required.map((r) => r.label).join(', ')}`, 'error');
+        return;
+      }
+      config = {};
+      Object.entries(credentialForm.fields).forEach(([k, v]) => {
+        if (v && v.trim() !== '') (config as Record<string, unknown>)[k] = v;
+      });
     }
     if (!credentialForm.tenant_id || !credentialForm.name) {
       showToast('Tenant and name required', 'error');
@@ -376,7 +461,15 @@ export function Hypervisors(): JSX.Element {
             Provider
             <select
               value={credentialForm.provider}
-              onChange={(e) => setCredentialForm((f) => ({ ...f, provider: e.target.value as HypervisorProvider }))}
+              onChange={(e) => {
+                const next = e.target.value as HypervisorProvider;
+                setCredentialForm((f) => ({
+                  ...f,
+                  provider: next,
+                  fields: defaultFieldsFor(next),
+                  configText: '',
+                }));
+              }}
             >
               {PROVIDERS.map((p) => (
                 <option key={p} value={p}>
@@ -395,15 +488,65 @@ export function Hypervisors(): JSX.Element {
               required
             />
           </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Config (JSON)
-            <textarea
-              rows={6}
-              value={credentialForm.configText}
-              onChange={(e) => setCredentialForm((f) => ({ ...f, configText: e.target.value }))}
-              required
-            />
-          </label>
+
+          {!credentialForm.showRawJSON ? (
+            <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+              {PROVIDER_FIELDS[credentialForm.provider].map((spec) => (
+                <label key={spec.key} style={spec.type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
+                  {spec.label}{spec.required ? ' *' : ''}
+                  {spec.type === 'textarea' ? (
+                    <textarea
+                      rows={4}
+                      value={credentialForm.fields[spec.key] ?? ''}
+                      onChange={(e) =>
+                        setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: e.target.value } }))
+                      }
+                      placeholder={spec.placeholder}
+                      autoComplete="off"
+                    />
+                  ) : (
+                    <input
+                      type={spec.type}
+                      value={credentialForm.fields[spec.key] ?? ''}
+                      onChange={(e) =>
+                        setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: e.target.value } }))
+                      }
+                      placeholder={spec.placeholder}
+                      required={spec.required}
+                      autoComplete={spec.type === 'password' ? 'new-password' : 'off'}
+                    />
+                  )}
+                  {spec.helper ? <small className="muted">{spec.helper}</small> : null}
+                </label>
+              ))}
+            </div>
+          ) : (
+            <label style={{ gridColumn: '1 / -1' }}>
+              Config (raw JSON)
+              <textarea
+                rows={6}
+                value={credentialForm.configText || fieldsToConfigText(credentialForm.fields)}
+                onChange={(e) => setCredentialForm((f) => ({ ...f, configText: e.target.value }))}
+                required
+              />
+            </label>
+          )}
+
+          <div style={{ gridColumn: '1 / -1' }}>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() =>
+                setCredentialForm((f) => ({
+                  ...f,
+                  showRawJSON: !f.showRawJSON,
+                  configText: f.showRawJSON ? '' : fieldsToConfigText(f.fields),
+                }))
+              }
+            >
+              {credentialForm.showRawJSON ? 'Use visual form' : 'Edit raw JSON'}
+            </button>
+          </div>
           <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem' }}>
             <button type="submit" disabled={submittingCred}>
               {submittingCred ? 'Saving…' : 'Save credential'}

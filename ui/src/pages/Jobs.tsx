@@ -10,6 +10,84 @@ import { useCancelJob } from '../hooks/useCancelJob';
 const STATUS_FILTERS: JobStatus[] = ['queued', 'running', 'succeeded', 'failed', 'cancelled'];
 const POLL_INTERVAL_MS = 6000;
 
+interface JobFieldSpec {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'textarea';
+  placeholder?: string;
+  helper?: string;
+  required?: boolean;
+}
+
+interface JobTypeSpec {
+  type: string;
+  label: string;
+  description: string;
+  fields: JobFieldSpec[];
+}
+
+// JOB_CATALOG describes the fields each well-known job type expects so
+// operators don't have to hand-edit raw JSON. Custom job types fall back to
+// the JSON editor automatically.
+const JOB_CATALOG: JobTypeSpec[] = [
+  {
+    type: 'provision.apply',
+    label: 'Apply provisioning template',
+    description: 'Render a template version against a target node.',
+    fields: [
+      { key: 'plan_id', label: 'Template ID', type: 'text', required: true,
+        placeholder: 'uuid of the provisioning template' },
+      { key: 'node_id', label: 'Target node ID', type: 'text', required: true },
+      { key: 'template_version', label: 'Template version (optional)', type: 'number',
+        placeholder: 'leaves blank → current promoted version' },
+    ],
+  },
+  {
+    type: 'compliance.scan',
+    label: 'Run compliance scan',
+    description: 'Trigger a fresh policy scan across one or more nodes.',
+    fields: [
+      { key: 'node_id', label: 'Node ID (blank = all nodes in tenant)', type: 'text' },
+      { key: 'rule_set', label: 'Rule set (optional)', type: 'text',
+        placeholder: 'e.g. cis-level-1' },
+    ],
+  },
+  {
+    type: 'cluster.provision',
+    label: 'Provision cluster',
+    description: 'Spin up a new cluster from its role plan.',
+    fields: [
+      { key: 'cluster_id', label: 'Cluster ID', type: 'text', required: true },
+    ],
+  },
+  {
+    type: 'cluster.scale',
+    label: 'Scale cluster',
+    description: 'Adjust replica counts on an existing cluster.',
+    fields: [
+      { key: 'cluster_id', label: 'Cluster ID', type: 'text', required: true },
+      { key: 'role', label: 'Role to scale', type: 'text', required: true,
+        placeholder: 'e.g. worker' },
+      { key: 'count', label: 'Target count', type: 'number', required: true },
+    ],
+  },
+];
+
+const JOB_SPECS: Record<string, JobTypeSpec> = JOB_CATALOG.reduce(
+  (acc, j) => ({ ...acc, [j.type]: j }),
+  {} as Record<string, JobTypeSpec>,
+);
+
+function defaultPayloadFields(jobType: string): Record<string, string> {
+  const spec = JOB_SPECS[jobType];
+  if (!spec) return {};
+  const out: Record<string, string> = {};
+  spec.fields.forEach((f) => {
+    out[f.key] = '';
+  });
+  return out;
+}
+
 function formatDate(value?: string): string {
   if (!value) {
     return '—';
@@ -52,12 +130,13 @@ export function Jobs(): JSX.Element {
   const [offset, setOffset] = useState(0);
   const [jobTypeInput, setJobTypeInput] = useState('provision.apply');
   const [jobTenantId, setJobTenantId] = useState('');
-  const [jobPayload, setJobPayload] = useState(`{
-  "plan_id": "",
-  "tenant_id": "",
-  "node_id": "",
-  "metadata": {}
-}`);
+  const [showRawPayload, setShowRawPayload] = useState(false);
+  const [payloadFields, setPayloadFields] = useState<Record<string, string>>(
+    defaultPayloadFields('provision.apply'),
+  );
+  const [jobPayload, setJobPayload] = useState<string>(
+    JSON.stringify(defaultPayloadFields('provision.apply'), null, 2),
+  );
   const [maxRetries, setMaxRetries] = useState('3');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
@@ -254,15 +333,48 @@ export function Jobs(): JSX.Element {
       <form className="panel" onSubmit={handleSubmitJob}>
         <h3>Submit job</h3>
         <label htmlFor="job-type">Job type</label>
-        <input
+        <select
           id="job-type"
-          type="text"
-          value={jobTypeInput}
-          onChange={(event) => setJobTypeInput(event.target.value)}
-          placeholder="provision.apply"
+          value={JOB_SPECS[jobTypeInput] ? jobTypeInput : '__custom__'}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === '__custom__') {
+              setShowRawPayload(true);
+              return;
+            }
+            setJobTypeInput(next);
+            const fields = defaultPayloadFields(next);
+            setPayloadFields(fields);
+            setJobPayload(JSON.stringify(fields, null, 2));
+            setShowRawPayload(false);
+          }}
           disabled={submitting}
-          required
-        />
+        >
+          {JOB_CATALOG.map((spec) => (
+            <option key={spec.type} value={spec.type}>
+              {spec.label} — {spec.type}
+            </option>
+          ))}
+          <option value="__custom__">Custom (raw JSON)…</option>
+        </select>
+        {JOB_SPECS[jobTypeInput] && !showRawPayload ? (
+          <p className="muted" style={{ marginTop: '0.25rem' }}>{JOB_SPECS[jobTypeInput].description}</p>
+        ) : null}
+
+        {showRawPayload ? (
+          <>
+            <label htmlFor="job-type-custom">Custom job type</label>
+            <input
+              id="job-type-custom"
+              type="text"
+              value={jobTypeInput}
+              onChange={(event) => setJobTypeInput(event.target.value)}
+              placeholder="my.custom.job"
+              disabled={submitting}
+              required
+            />
+          </>
+        ) : null}
 
         <label htmlFor="job-tenant">Tenant</label>
         <select
@@ -289,14 +401,73 @@ export function Jobs(): JSX.Element {
           disabled={submitting}
         />
 
-        <label htmlFor="job-payload">Payload (JSON)</label>
-        <textarea
-          id="job-payload"
-          rows={6}
-          value={jobPayload}
-          onChange={(event) => setJobPayload(event.target.value)}
-          disabled={submitting}
-        />
+        {!showRawPayload && JOB_SPECS[jobTypeInput] ? (
+          <fieldset style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '0.75rem', marginTop: '0.5rem' }}>
+            <legend style={{ padding: '0 0.4rem' }}>Payload</legend>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.6rem' }}>
+              {JOB_SPECS[jobTypeInput].fields.map((spec) => (
+                <label key={spec.key} style={spec.type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
+                  {spec.label}{spec.required ? ' *' : ''}
+                  {spec.type === 'textarea' ? (
+                    <textarea
+                      rows={3}
+                      value={payloadFields[spec.key] ?? ''}
+                      onChange={(e) => {
+                        const next = { ...payloadFields, [spec.key]: e.target.value };
+                        setPayloadFields(next);
+                        setJobPayload(JSON.stringify(next, null, 2));
+                      }}
+                      placeholder={spec.placeholder}
+                      disabled={submitting}
+                    />
+                  ) : (
+                    <input
+                      type={spec.type}
+                      value={payloadFields[spec.key] ?? ''}
+                      onChange={(e) => {
+                        const next = { ...payloadFields, [spec.key]: e.target.value };
+                        setPayloadFields(next);
+                        setJobPayload(JSON.stringify(next, null, 2));
+                      }}
+                      placeholder={spec.placeholder}
+                      disabled={submitting}
+                      required={spec.required}
+                    />
+                  )}
+                  {spec.helper ? <small className="muted">{spec.helper}</small> : null}
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ marginTop: '0.5rem' }}
+              onClick={() => setShowRawPayload(true)}
+            >
+              Edit raw JSON
+            </button>
+          </fieldset>
+        ) : (
+          <>
+            <label htmlFor="job-payload">Payload (JSON)</label>
+            <textarea
+              id="job-payload"
+              rows={6}
+              value={jobPayload}
+              onChange={(event) => setJobPayload(event.target.value)}
+              disabled={submitting}
+            />
+            {JOB_SPECS[jobTypeInput] ? (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowRawPayload(false)}
+              >
+                Use visual form
+              </button>
+            ) : null}
+          </>
+        )}
 
         {submitError ? <p className="form-error">{submitError}</p> : null}
         {submitSuccess ? <p className="form-success">{submitSuccess}</p> : null}

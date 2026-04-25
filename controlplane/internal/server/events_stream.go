@@ -29,6 +29,9 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.authorize(w, r, roleViewer); !ok {
+		return
+	}
 	if s.eventBus == nil {
 		http.Error(w, "event bus not initialized", http.StatusServiceUnavailable)
 		return

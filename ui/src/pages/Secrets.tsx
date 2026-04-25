@@ -155,8 +155,8 @@ export function Secrets(): JSX.Element {
     <div className="secrets-page">
       <div className="page-header">
         <div>
-          <h1>Secrets Management</h1>
-          <p className="subtitle">Manage secret groups and sync status</p>
+          <h1>Secrets vault</h1>
+          <p className="subtitle">Encrypted credentials. Tracked rotations. Audit-ready access logs.</p>
         </div>
         <div className="page-actions">
           <button type="button" onClick={handleCreate} className="btn-primary">

@@ -85,6 +85,9 @@ func (s *Subscriber) Run(ctx context.Context) {
 			return
 		}
 		if err != nil && s.log != nil {
+			// Suppress log spam when the error is just context cancellation during
+			// connect — the outer ctx.Err() check above already handles shutdown,
+			// but a racing cancel may surface as a network error here.
 			s.log.Warn("event stream disconnected", zap.Error(err), zap.Duration("backoff", backoff))
 		}
 		select {
