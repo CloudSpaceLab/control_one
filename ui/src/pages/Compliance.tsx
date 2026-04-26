@@ -19,15 +19,15 @@ function formatDate(value?: string): string {
 function getSeverityColor(severity?: string): string {
   switch (severity?.toLowerCase()) {
     case 'critical':
-      return '#dc2626';
+      return 'var(--state-critical)';
     case 'high':
-      return '#ea580c';
+      return 'var(--state-warning)';
     case 'medium':
-      return '#f59e0b';
+      return 'var(--state-degraded)';
     case 'low':
-      return '#84cc16';
+      return 'var(--state-healthy)';
     default:
-      return '#6b7280';
+      return 'var(--text-secondary)';
   }
 }
 
@@ -358,13 +358,7 @@ export function Compliance(): JSX.Element {
                           {result.severity && (
                             <span
                               className="severity-badge"
-                              style={{
-                                backgroundColor: getSeverityColor(result.severity),
-                                color: '#fff',
-                                padding: '2px 8px',
-                                borderRadius: '4px',
-                                fontSize: '0.875rem',
-                              }}
+                              style={{ backgroundColor: getSeverityColor(result.severity) }}
                             >
                               {result.severity.toUpperCase()}
                             </span>

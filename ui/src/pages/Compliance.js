@@ -17,15 +17,15 @@ function formatDate(value) {
 function getSeverityColor(severity) {
     switch (severity?.toLowerCase()) {
         case 'critical':
-            return '#dc2626';
+            return 'var(--state-critical)';
         case 'high':
-            return '#ea580c';
+            return 'var(--state-warning)';
         case 'medium':
-            return '#f59e0b';
+            return 'var(--state-degraded)';
         case 'low':
-            return '#84cc16';
+            return 'var(--state-healthy)';
         default:
-            return '#6b7280';
+            return 'var(--text-secondary)';
     }
 }
 function exportToCSV(results) {
@@ -122,12 +122,6 @@ export function Compliance() {
                                 return (_jsxs("div", { className: "trend-bar-group", children: [_jsxs("div", { className: "trend-bar-container", children: [_jsx("div", { className: "trend-bar passed", style: { height: `${passedPercent}%` }, title: `Passed: ${trend.passed}` }), _jsx("div", { className: "trend-bar failed", style: { height: `${failedPercent}%` }, title: `Failed: ${trend.failed}` })] }), _jsx("div", { className: "trend-label", children: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) })] }, idx));
                             }) })) })] })), _jsxs("div", { className: "results-section", children: [_jsxs("div", { className: "section-header", children: [_jsx("h2", { children: "Compliance Results" }), _jsxs("div", { className: "results-count", children: ["Showing ", results.length, " of ", pagination.total] })] }), resultsLoading ? (_jsx("div", { className: "loading-placeholder", children: "Loading compliance results..." })) : results.length === 0 ? (_jsx("div", { className: "empty-state", children: _jsx("p", { children: "No compliance results found matching your filters." }) })) : (_jsxs(_Fragment, { children: [_jsx("div", { className: "results-table-container", children: _jsxs("table", { className: "results-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Rule ID" }), _jsx("th", { children: "Node" }), _jsx("th", { children: "Status" }), _jsx("th", { children: "Severity" }), _jsx("th", { children: "Checked At" }), _jsx("th", { children: "Details" })] }) }), _jsx("tbody", { children: results.map((result) => {
                                                 const node = nodes.find((n) => n.id === result.node_id);
-                                                return (_jsxs("tr", { className: result.passed ? 'passed' : 'failed', children: [_jsx("td", { children: _jsx("code", { children: result.rule_id }) }), _jsx("td", { children: node?.hostname || result.node_id || '—' }), _jsx("td", { children: _jsx("span", { className: `status-badge ${result.passed ? 'success' : 'error'}`, children: result.passed ? 'Passed' : 'Failed' }) }), _jsx("td", { children: result.severity && (_jsx("span", { className: "severity-badge", style: {
-                                                                    backgroundColor: getSeverityColor(result.severity),
-                                                                    color: '#fff',
-                                                                    padding: '2px 8px',
-                                                                    borderRadius: '4px',
-                                                                    fontSize: '0.875rem',
-                                                                }, children: result.severity.toUpperCase() })) }), _jsx("td", { children: formatDate(result.checked_at) }), _jsx("td", { className: "details-cell", children: result.details ? (_jsxs("details", { children: [_jsx("summary", { children: "View details" }), _jsx("pre", { children: result.details })] })) : ('—') })] }, result.id));
+                                                return (_jsxs("tr", { className: result.passed ? 'passed' : 'failed', children: [_jsx("td", { children: _jsx("code", { children: result.rule_id }) }), _jsx("td", { children: node?.hostname || result.node_id || '—' }), _jsx("td", { children: _jsx("span", { className: `status-badge ${result.passed ? 'success' : 'error'}`, children: result.passed ? 'Passed' : 'Failed' }) }), _jsx("td", { children: result.severity && (_jsx("span", { className: "severity-badge", style: { backgroundColor: getSeverityColor(result.severity) }, children: result.severity.toUpperCase() })) }), _jsx("td", { children: formatDate(result.checked_at) }), _jsx("td", { className: "details-cell", children: result.details ? (_jsxs("details", { children: [_jsx("summary", { children: "View details" }), _jsx("pre", { children: result.details })] })) : ('—') })] }, result.id));
                                             }) })] }) }), _jsxs("div", { className: "pagination", children: [_jsx("button", { type: "button", onClick: () => setOffset(Math.max(0, offset - limit)), disabled: offset === 0 || resultsLoading, className: "btn-secondary", children: "Previous" }), _jsxs("span", { className: "pagination-info", children: ["Page ", Math.floor(offset / limit) + 1, " of ", Math.ceil(pagination.total / limit) || 1] }), _jsx("button", { type: "button", onClick: () => setOffset(offset + limit), disabled: offset + limit >= pagination.total || resultsLoading, className: "btn-secondary", children: "Next" })] })] }))] })] }));
 }

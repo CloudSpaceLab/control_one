@@ -102,6 +102,7 @@ export function MainLayout(): JSX.Element {
   const [navOpen, setNavOpen] = useState(false);
   const userRoles = profile?.roles ?? [];
   const groups = filterGroups(NAV_GROUPS, userRoles);
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
 
   return (
     <div className="app-shell">
@@ -142,11 +143,15 @@ export function MainLayout(): JSX.Element {
             className="cmdk-hint"
             aria-label="Open command palette"
             onClick={() => {
-              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
+              window.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'k',
+                [isMac ? 'metaKey' : 'ctrlKey']: true,
+                bubbles: true,
+              }));
             }}
           >
             <span>Quick search</span>
-            <kbd>⌘K</kbd>
+            <kbd>{isMac ? '⌘K' : 'Ctrl+K'}</kbd>
           </button>
         </footer>
       </aside>

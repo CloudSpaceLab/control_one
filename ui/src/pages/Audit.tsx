@@ -37,12 +37,12 @@ function formatRelativeTime(value?: string): string {
 }
 
 function getActionColor(action: string): string {
-  if (action.includes('.create') || action.includes('.created')) return '#10b981';
-  if (action.includes('.update') || action.includes('.updated')) return '#3b82f6';
-  if (action.includes('.delete') || action.includes('.deleted')) return '#ef4444';
-  if (action.includes('.failed') || action.includes('.error')) return '#dc2626';
-  if (action.includes('.success') || action.includes('.succeeded')) return '#10b981';
-  return '#6b7280';
+  if (action.includes('.create') || action.includes('.created')) return 'var(--state-healthy)';
+  if (action.includes('.update') || action.includes('.updated')) return 'var(--state-info)';
+  if (action.includes('.delete') || action.includes('.deleted')) return 'var(--state-critical)';
+  if (action.includes('.failed') || action.includes('.error')) return 'var(--state-critical)';
+  if (action.includes('.success') || action.includes('.succeeded')) return 'var(--state-healthy)';
+  return 'var(--text-secondary)';
 }
 
 function exportToCSV(logs: AuditLog[]): void {

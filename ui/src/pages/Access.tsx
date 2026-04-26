@@ -57,9 +57,9 @@ export function Access(): JSX.Element {
 
       {error ? <p className="error-banner">{error}</p> : null}
 
-      <div className="tab-row" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        <button type="button" className={tab === 'pending' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('pending')}>Pending</button>
-        <button type="button" className={tab === 'all' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('all')}>All</button>
+      <div className="tab-row" role="tablist" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+        <button type="button" role="tab" aria-selected={tab === 'pending'} className={tab === 'pending' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('pending')}>Pending</button>
+        <button type="button" role="tab" aria-selected={tab === 'all'} className={tab === 'all' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('all')}>All</button>
       </div>
 
       <RequestForm tenantId={tenantId} onCreated={refresh} />
@@ -135,25 +135,25 @@ function RequestForm({ tenantId, onCreated }: { tenantId: string; onCreated: () 
 
   return (
     <form onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.5rem', alignItems: 'end' }}>
-      <label>
+      <label htmlFor="ar-type">
         Type
-        <select value={form.target_resource_type} onChange={(e) => setForm({ ...form, target_resource_type: e.target.value as 'ssh' | 'rdp' | 'db' })}>
+        <select id="ar-type" value={form.target_resource_type} onChange={(e) => setForm({ ...form, target_resource_type: e.target.value as 'ssh' | 'rdp' | 'db' })}>
           <option value="ssh">ssh</option>
           <option value="rdp">rdp</option>
           <option value="db">db</option>
         </select>
       </label>
-      <label>
+      <label htmlFor="ar-access">
         Access
-        <input required value={form.requested_access} onChange={(e) => setForm({ ...form, requested_access: e.target.value })} />
+        <input id="ar-access" required value={form.requested_access} onChange={(e) => setForm({ ...form, requested_access: e.target.value })} />
       </label>
-      <label style={{ gridColumn: 'span 2' }}>
+      <label htmlFor="ar-justification" style={{ gridColumn: 'span 2' }}>
         Justification
-        <input value={form.justification ?? ''} onChange={(e) => setForm({ ...form, justification: e.target.value })} />
+        <input id="ar-justification" value={form.justification ?? ''} onChange={(e) => setForm({ ...form, justification: e.target.value })} />
       </label>
-      <label>
+      <label htmlFor="ar-ttl">
         TTL (s)
-        <input type="number" min={60} value={form.ttl_seconds ?? 1800} onChange={(e) => setForm({ ...form, ttl_seconds: Number(e.target.value) })} />
+        <input id="ar-ttl" type="number" min={60} value={form.ttl_seconds ?? 1800} onChange={(e) => setForm({ ...form, ttl_seconds: Number(e.target.value) })} />
       </label>
       <button type="submit" className="primary-button" disabled={submitting} style={{ gridColumn: 'span 5' }}>
         Request access

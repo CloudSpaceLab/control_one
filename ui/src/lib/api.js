@@ -39,6 +39,80 @@ export class APIClient {
     async getProfile() {
         return this.request('/api/v1/me');
     }
+    // Email/password login. Returns a session token the caller stores via
+    // AuthProvider.signIn; from then on every request is Bearer-authed
+    // exactly like the legacy static-token path.
+    async loginWithPassword(email, password) {
+        return this.request('/api/v1/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password }),
+        });
+    }
+    async logout() {
+        await this.request('/api/v1/auth/logout', { method: 'POST' });
+    }
+    async getCurrentUser() {
+        return this.request('/api/v1/auth/me');
+    }
+    // ---- RBAC ---------------------------------------------------------
+    async listPermissions() {
+        return this.request('/api/v1/permissions');
+    }
+    async listRolesWithPermissions() {
+        return this.request('/api/v1/roles/permissions');
+    }
+    async setRolePermissions(roleId, permissions) {
+        await this.request(`/api/v1/roles/${encodeURIComponent(roleId)}/permissions`, {
+            method: 'PUT',
+            body: JSON.stringify({ permissions }),
+        });
+    }
+    async createCustomRole(payload) {
+        return this.request('/api/v1/roles/', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        });
+    }
+    async deleteRole(roleId) {
+        await this.request(`/api/v1/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
+    }
+    // ---- Custom dashboards -------------------------------------------
+    async listDashboards(tenantId) {
+        return this.request(`/api/v1/dashboards?tenant_id=${encodeURIComponent(tenantId)}`);
+    }
+    async getDashboard(id) {
+        return this.request(`/api/v1/dashboards/${encodeURIComponent(id)}`);
+    }
+    async createDashboard(payload) {
+        return this.request('/api/v1/dashboards', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        });
+    }
+    async updateDashboard(id, payload) {
+        await this.request(`/api/v1/dashboards/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+        });
+    }
+    async deleteDashboard(id) {
+        await this.request(`/api/v1/dashboards/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    }
+    async createWidget(dashboardId, payload) {
+        return this.request(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets`, {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        });
+    }
+    async updateWidget(dashboardId, widgetId, payload) {
+        await this.request(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+        });
+    }
+    async deleteWidget(dashboardId, widgetId) {
+        await this.request(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`, { method: 'DELETE' });
+    }
     async listTenants(params = {}) {
         const search = new URLSearchParams();
         if (params.namePrefix) {
@@ -863,6 +937,54 @@ export class APIClient {
             return undefined;
         }
         return (await response.json());
+    }
+    // ---- Connections / forensics (Phase 7) -------------------------------
+    async listConnections(params = {}) {
+        const search = new URLSearchParams();
+        if (params.tenantId)
+            search.set('tenant_id', params.tenantId);
+        if (params.ip)
+            search.set('ip', params.ip);
+        if (params.since)
+            search.set('since', params.since);
+        if (params.until)
+            search.set('until', params.until);
+        if (typeof params.limit === 'number')
+            search.set('limit', String(params.limit));
+        const q = search.toString();
+        return this.request(`/api/v1/connections${q ? `?${q}` : ''}`);
+    }
+    async getConnectionDetail(connID) {
+        return this.request(`/api/v1/connections/${encodeURIComponent(connID)}`);
+    }
+    async listTopTalkers(params = {}) {
+        const search = new URLSearchParams();
+        if (params.tenantId)
+            search.set('tenant_id', params.tenantId);
+        if (params.since)
+            search.set('since', params.since);
+        if (typeof params.limit === 'number')
+            search.set('limit', String(params.limit));
+        const q = search.toString();
+        return this.request(`/api/v1/connections/top-talkers${q ? `?${q}` : ''}`);
+    }
+    async fleetHealthSnapshot(params = {}) {
+        const search = new URLSearchParams();
+        if (params.tenantId)
+            search.set('tenant_id', params.tenantId);
+        if (params.since)
+            search.set('since', params.since);
+        const q = search.toString();
+        return this.request(`/api/v1/fleet/health${q ? `?${q}` : ''}`);
+    }
+    async getTenantEventFilters(tenantId) {
+        return this.request(`/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`);
+    }
+    async updateTenantEventFilters(tenantId, payload) {
+        return this.request(`/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`, {
+            method: 'PUT',
+            body: JSON.stringify(payload),
+        });
     }
 }
 function normalizePagination(meta) {

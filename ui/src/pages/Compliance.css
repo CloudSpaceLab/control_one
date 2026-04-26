@@ -18,7 +18,7 @@
 }
 
 .page-header .subtitle {
-  color: #6b7280;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -32,7 +32,7 @@
   gap: 1rem;
   margin-bottom: 2rem;
   padding: 1rem;
-  background: #f9fafb;
+  background: var(--bg-secondary);
   border-radius: 8px;
   flex-wrap: wrap;
 }
@@ -47,30 +47,23 @@
 .filter-group label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #374151;
+  color: var(--text-secondary);
 }
 
 .filter-group select {
   padding: 0.5rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   font-size: 0.875rem;
-  background: white;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .filter-group select:disabled {
-  background: #f3f4f6;
-  color: #9ca3af;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  opacity: 0.5;
   cursor: not-allowed;
-}
-
-.error-banner {
-  padding: 1rem;
-  background: #fee2e2;
-  border: 1px solid #fecaca;
-  border-radius: 6px;
-  color: #991b1b;
-  margin-bottom: 1.5rem;
 }
 
 .compliance-overview {
@@ -81,7 +74,7 @@
 }
 
 .score-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
   color: white;
   padding: 2rem;
   border-radius: 12px;
@@ -127,49 +120,49 @@
 }
 
 .stat-card {
-  background: white;
+  background: var(--bg-primary);
   padding: 1.5rem;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color);
   text-align: center;
 }
 
 .stat-card.success {
-  border-color: #10b981;
-  background: #f0fdf4;
+  border-color: var(--state-healthy);
+  background: rgba(16, 185, 129, 0.08);
 }
 
 .stat-card.error {
-  border-color: #ef4444;
-  background: #fef2f2;
+  border-color: var(--state-critical);
+  background: rgba(239, 68, 68, 0.08);
 }
 
 .stat-value {
   font-size: 2rem;
   font-weight: 700;
   margin-bottom: 0.5rem;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .stat-card.success .stat-value {
-  color: #059669;
+  color: var(--state-healthy);
 }
 
 .stat-card.error .stat-value {
-  color: #dc2626;
+  color: var(--state-critical);
 }
 
 .stat-label {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
 .severity-breakdown {
-  background: white;
+  background: var(--bg-primary);
   padding: 1.5rem;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color);
   margin-bottom: 2rem;
 }
 
@@ -190,9 +183,9 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background: #f9fafb;
+  background: var(--bg-secondary);
   border-radius: 6px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color);
 }
 
 .severity-indicator {
@@ -212,10 +205,10 @@
 }
 
 .trends-section {
-  background: white;
+  background: var(--bg-primary);
   padding: 1.5rem;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color);
   margin-bottom: 2rem;
 }
 
@@ -261,24 +254,24 @@
 }
 
 .trend-bar.passed {
-  background: #10b981;
+  background: var(--state-healthy);
 }
 
 .trend-bar.failed {
-  background: #ef4444;
+  background: var(--state-critical);
 }
 
 .trend-label {
   font-size: 0.75rem;
-  color: #6b7280;
+  color: var(--text-secondary);
   text-align: center;
 }
 
 .results-section {
-  background: white;
+  background: var(--bg-primary);
   padding: 1.5rem;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color);
 }
 
 .section-header {
@@ -296,7 +289,7 @@
 
 .results-count {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .results-table-container {
@@ -310,7 +303,7 @@
 }
 
 .results-table thead {
-  background: #f9fafb;
+  background: var(--bg-tertiary);
 }
 
 .results-table th {
@@ -318,26 +311,26 @@
   text-align: left;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #374151;
-  border-bottom: 2px solid #e5e7eb;
+  color: var(--text-secondary);
+  border-bottom: 2px solid var(--border-color);
 }
 
 .results-table td {
   padding: 0.75rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-color);
   font-size: 0.875rem;
 }
 
 .results-table tbody tr:hover {
-  background: #f9fafb;
+  background: var(--bg-secondary);
 }
 
 .results-table tbody tr.passed {
-  background: #f0fdf4;
+  background: rgba(16, 185, 129, 0.06);
 }
 
 .results-table tbody tr.failed {
-  background: #fef2f2;
+  background: rgba(239, 68, 68, 0.06);
 }
 
 .status-badge {
@@ -350,13 +343,22 @@
 }
 
 .status-badge.success {
-  background: #d1fae5;
-  color: #065f46;
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--state-healthy);
 }
 
 .status-badge.error {
-  background: #fee2e2;
-  color: #991b1b;
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--state-critical);
+}
+
+.severity-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: white;
 }
 
 .details-cell details {
@@ -364,7 +366,7 @@
 }
 
 .details-cell summary {
-  color: #3b82f6;
+  color: var(--state-info);
   font-size: 0.875rem;
   cursor: pointer;
 }
@@ -376,7 +378,7 @@
 .details-cell pre {
   margin: 0.5rem 0 0 0;
   padding: 0.75rem;
-  background: #f9fafb;
+  background: var(--bg-secondary);
   border-radius: 4px;
   font-size: 0.8125rem;
   white-space: pre-wrap;
@@ -393,63 +395,23 @@
 
 .pagination-info {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .loading-placeholder {
   padding: 3rem;
   text-align: center;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .empty-state {
   padding: 3rem;
   text-align: center;
-  color: #6b7280;
-}
-
-.btn-primary,
-.btn-secondary {
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: all 0.2s;
-}
-
-.btn-primary {
-  background: #3b82f6;
-  color: white;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #2563eb;
-}
-
-.btn-primary:disabled {
-  background: #9ca3af;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: white;
-  color: #374151;
-  border-color: #d1d5db;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: #f9fafb;
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  color: var(--text-secondary);
 }
 
 code {
-  background: #f3f4f6;
+  background: var(--bg-secondary);
   padding: 0.125rem 0.375rem;
   border-radius: 4px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
@@ -473,4 +435,3 @@ code {
     width: 100%;
   }
 }
-

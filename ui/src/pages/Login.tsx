@@ -9,8 +9,6 @@ interface RedirectState {
   from?: string;
 }
 
-// Email/password form is the default. SSO + bearer-token paths sit beneath
-// "More sign-in options" so the page stays clean for the common case.
 export function Login(): JSX.Element {
   const { signIn, loading, error, isAuthenticated } = useAuth();
   const [email, setEmail] = useState('');
@@ -35,9 +33,6 @@ export function Login(): JSX.Element {
     }
   }, [isAuthenticated, navigate, returnTo]);
 
-  // Email/password — primary path. Hits POST /api/v1/auth/login, stores
-  // the returned session token via signIn so subsequent requests are
-  // Bearer-authed.
   const handleEmailSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setEmailError(null);
@@ -61,9 +56,7 @@ export function Login(): JSX.Element {
     event.preventDefault();
     try {
       const trimmed = token.trim();
-      if (!trimmed) {
-        throw new Error('Token is required');
-      }
+      if (!trimmed) throw new Error('Token is required');
       setLocalError(null);
       await signIn(trimmed);
     } catch (err) {
@@ -90,99 +83,150 @@ export function Login(): JSX.Element {
   const oidcEnabled = isOidcConfigured();
 
   return (
-    <section className="login-card">
-      <h2>Sign in to Control One</h2>
-      <p>
-        Welcome back. Use your email + password, your single sign-on provider, or a developer
-        bearer token.
-      </p>
+    <div className="login-page">
+      {/* ── Left branding panel ── */}
+      <div className="login-left">
+        <div className="login-left__grid" aria-hidden="true" />
 
-      <div className="login-card__section">
-        <form onSubmit={handleEmailSubmit}>
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            autoComplete="email"
-            placeholder="you@company.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={emailLoading}
-            required
-          />
-          <label htmlFor="password" style={{ marginTop: 12 }}>
-            Password
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={emailLoading}
-            required
-          />
-          {emailError ? <span className="form-error">{emailError}</span> : null}
-          <button type="submit" className="primary" disabled={emailLoading} style={{ marginTop: 16 }}>
-            {emailLoading ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
-        <p style={{ marginTop: 12, fontSize: 13 }}>
-          <a href="/" style={{ color: 'var(--text-secondary)' }}>
-            ← Back to home
-          </a>
-        </p>
+        <div className="login-brand">
+          <span className="login-brand__mark" aria-hidden="true">◎</span>
+          <span className="login-brand__name">Control One</span>
+        </div>
+
+        <div className="login-hero">
+          <h1>
+            Find risk.<br />
+            Fix it.<br />
+            <em>Prove it.</em>
+          </h1>
+          <p>
+            Unified compliance, threat detection, just-in-time access, and infrastructure
+            provisioning across every node in your fleet.
+          </p>
+        </div>
+
+        <div className="login-features">
+          <div className="login-feature">
+            <div className="login-feature__icon">🛡</div>
+            <div className="login-feature__text">
+              <strong>Continuous compliance</strong>
+              <span>SOC 2, ISO 27001, CIS benchmarks — automated evidence collection.</span>
+            </div>
+          </div>
+          <div className="login-feature">
+            <div className="login-feature__icon">⚡</div>
+            <div className="login-feature__text">
+              <strong>Real-time threat detection</strong>
+              <span>Log, port, and anomaly rules with sub-second enforcement.</span>
+            </div>
+          </div>
+          <div className="login-feature">
+            <div className="login-feature__icon">🔑</div>
+            <div className="login-feature__text">
+              <strong>Zero standing privilege</strong>
+              <span>JIT access with full session recording and automatic expiry.</span>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => setShowAdvanced((v) => !v)}
-        style={{
-          background: 'transparent',
-          border: 'none',
-          color: 'var(--state-info)',
-          cursor: 'pointer',
-          marginTop: 8,
-          fontSize: 13,
-        }}
-      >
-        {showAdvanced ? 'Hide' : 'More'} sign-in options
-      </button>
+      {/* ── Right form panel ── */}
+      <div className="login-right">
+        {/* Mobile-only brand */}
+        <div className="login-mobile-brand">
+          <span className="login-brand__mark" aria-hidden="true">◎</span>
+          <span className="login-brand__name">Control One</span>
+        </div>
 
-      {showAdvanced ? (
-        <>
-          {oidcEnabled ? (
-            <div className="login-card__section">
-              <h3>Single Sign-On</h3>
-              <button type="button" className="primary" onClick={handleSso} disabled={ssoLoading}>
-                {ssoLoading ? 'Redirecting…' : 'Continue with SSO'}
-              </button>
-              {ssoError ? <span className="form-error">{ssoError}</span> : null}
-            </div>
-          ) : null}
-
-          <div className="login-card__section">
-            <h3>Developer bearer token</h3>
-            <form onSubmit={handleTokenSubmit}>
-              <label htmlFor="token">Bearer token</label>
-              <input
-                id="token"
-                name="token"
-                type="text"
-                placeholder="Paste JWT or static token"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                disabled={loading}
-              />
-              {localError ? <span className="form-error">{localError}</span> : null}
-              {error ? <span className="form-error">{error}</span> : null}
-              <button type="submit" disabled={loading}>
-                {loading ? 'Signing in…' : 'Continue'}
-              </button>
-            </form>
+        <div className="login-card">
+          <div>
+            <h2>Sign in</h2>
+            <p>Welcome back. Sign in to your operator console.</p>
           </div>
-        </>
-      ) : null}
-    </section>
+
+          <form onSubmit={handleEmailSubmit}>
+            <div className="login-field">
+              <label htmlFor="email">Email</label>
+              <input
+                id="email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={emailLoading}
+                required
+              />
+            </div>
+            <div className="login-field">
+              <label htmlFor="password">Password</label>
+              <input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={emailLoading}
+                required
+              />
+            </div>
+            {emailError ? <span className="form-error">{emailError}</span> : null}
+            <div className="login-submit">
+              <button type="submit" className="primary-button" disabled={emailLoading}>
+                {emailLoading ? 'Signing in…' : 'Sign in'}
+              </button>
+              <a href="https://control-one.cloudspacetechs.com/" className="login-back">
+                ← Back to home
+              </a>
+            </div>
+          </form>
+
+          <button
+            type="button"
+            className="login-advanced-toggle"
+            onClick={() => setShowAdvanced((v) => !v)}
+          >
+            {showAdvanced ? '↑ Hide' : '↓ More'} sign-in options
+          </button>
+
+          {showAdvanced ? (
+            <>
+              {oidcEnabled ? (
+                <div className="login-card__section">
+                  <h3>Single Sign-On</h3>
+                  <button type="button" className="primary-button" onClick={handleSso} disabled={ssoLoading}>
+                    {ssoLoading ? 'Redirecting…' : 'Continue with SSO'}
+                  </button>
+                  {ssoError ? <span className="form-error">{ssoError}</span> : null}
+                </div>
+              ) : null}
+
+              <div className="login-card__section">
+                <h3>Developer bearer token</h3>
+                <form onSubmit={handleTokenSubmit}>
+                  <label htmlFor="token">Bearer token</label>
+                  <input
+                    id="token"
+                    name="token"
+                    type="text"
+                    placeholder="Paste JWT or static token"
+                    value={token}
+                    onChange={(event) => setToken(event.target.value)}
+                    disabled={loading}
+                    style={{ marginTop: '0.4rem' }}
+                  />
+                  {localError ? <span className="form-error">{localError}</span> : null}
+                  {error ? <span className="form-error">{error}</span> : null}
+                  <button type="submit" className="primary-button" disabled={loading} style={{ marginTop: '0.75rem', width: '100%', justifyContent: 'center' }}>
+                    {loading ? 'Signing in…' : 'Continue'}
+                  </button>
+                </form>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }

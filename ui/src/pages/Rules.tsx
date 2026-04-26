@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, lazy, Suspense } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useEventStream } from '../hooks/useEventStream';
+import { ConfirmModal } from '../components/ConfirmModal';
 import type {
   CreateLogRulePayload,
   CreatePortRulePayload,
@@ -61,7 +62,7 @@ export function Rules(): JSX.Element {
         <div>
           <p className="eyebrow">Detection</p>
           <h2>Detection rules</h2>
-          <p className="subtitle">Define what's allowed. Detect violations instantly. Real-time enforcement on every node.</p>
+          <p className="subtitle">Define what&apos;s allowed. Detect violations instantly. Real-time enforcement on every node.</p>
         </div>
         <select
           value={tenantId}
@@ -145,6 +146,7 @@ function PortRulesPane({
     enabled: true,
   });
   const [submitting, setSubmitting] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     setForm((f) => ({ ...f, tenant_id: tenantId }));
@@ -164,21 +166,33 @@ function PortRulesPane({
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm('Delete this port rule?')) return;
     await client.deletePortRule(id);
     onRefresh();
   };
 
   return (
     <div>
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="Delete port rule?"
+        body="This cannot be undone."
+        variant="danger"
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (confirmDeleteId) remove(confirmDeleteId);
+          setConfirmDeleteId(null);
+        }}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
       <form className="form-row" onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '0.5rem', alignItems: 'end' }}>
-        <label>
+        <label htmlFor="pr-name">
           Name
-          <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input id="pr-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </label>
-        <label>
+        <label htmlFor="pr-port">
           Port
           <input
+            id="pr-port"
             type="number"
             min={1}
             max={65535}
@@ -187,16 +201,17 @@ function PortRulesPane({
             onChange={(e) => setForm({ ...form, port: Number(e.target.value) })}
           />
         </label>
-        <label>
+        <label htmlFor="pr-protocol">
           Protocol
-          <select value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value as 'tcp' | 'udp' })}>
+          <select id="pr-protocol" value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value as 'tcp' | 'udp' })}>
             <option value="tcp">tcp</option>
             <option value="udp">udp</option>
           </select>
         </label>
-        <label>
+        <label htmlFor="pr-expected">
           Expected
           <select
+            id="pr-expected"
             value={form.expected_state}
             onChange={(e) => setForm({ ...form, expected_state: e.target.value as 'open' | 'closed' })}
           >
@@ -204,9 +219,9 @@ function PortRulesPane({
             <option value="open">open</option>
           </select>
         </label>
-        <label>
+        <label htmlFor="pr-severity">
           Severity
-          <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })}>
+          <select id="pr-severity" value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })}>
             <option value="low">low</option>
             <option value="medium">medium</option>
             <option value="high">high</option>
@@ -245,7 +260,7 @@ function PortRulesPane({
                 <td>{r.severity}</td>
                 <td>{r.enabled ? 'yes' : 'no'}</td>
                 <td>
-                  <button type="button" className="secondary-button" onClick={() => remove(r.id)}>
+                  <button type="button" className="secondary-button" onClick={() => setConfirmDeleteId(r.id)}>
                     Delete
                   </button>
                 </td>
@@ -280,6 +295,7 @@ function LogRulesPane({
     enabled: true,
   });
   const [submitting, setSubmitting] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     setForm((f) => ({ ...f, tenant_id: tenantId }));
@@ -299,38 +315,51 @@ function LogRulesPane({
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm('Delete this log rule?')) return;
     await client.deleteLogRule(id);
     onRefresh();
   };
 
   return (
     <div>
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="Delete log rule?"
+        body="This cannot be undone."
+        variant="danger"
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (confirmDeleteId) remove(confirmDeleteId);
+          setConfirmDeleteId(null);
+        }}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
       <form className="form-row" onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.5rem', alignItems: 'end' }}>
-        <label>
+        <label htmlFor="lr-name">
           Name
-          <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input id="lr-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </label>
-        <label>
+        <label htmlFor="lr-source">
           Source
-          <input required value={form.log_source} onChange={(e) => setForm({ ...form, log_source: e.target.value })} />
+          <input id="lr-source" required value={form.log_source} onChange={(e) => setForm({ ...form, log_source: e.target.value })} />
         </label>
-        <label style={{ gridColumn: 'span 2' }}>
+        <label htmlFor="lr-pattern" style={{ gridColumn: 'span 2' }}>
           Pattern (regex)
-          <input required value={form.pattern} onChange={(e) => setForm({ ...form, pattern: e.target.value })} />
+          <input id="lr-pattern" required value={form.pattern} onChange={(e) => setForm({ ...form, pattern: e.target.value })} />
         </label>
-        <label>
+        <label htmlFor="lr-window">
           Window (s)
           <input
+            id="lr-window"
             type="number"
             min={1}
             value={form.window_seconds}
             onChange={(e) => setForm({ ...form, window_seconds: Number(e.target.value) })}
           />
         </label>
-        <label>
+        <label htmlFor="lr-threshold">
           Threshold
           <input
+            id="lr-threshold"
             type="number"
             min={1}
             value={form.threshold}
@@ -369,7 +398,7 @@ function LogRulesPane({
                 <td>{r.threshold}</td>
                 <td>{r.severity}</td>
                 <td>
-                  <button type="button" className="secondary-button" onClick={() => remove(r.id)}>
+                  <button type="button" className="secondary-button" onClick={() => setConfirmDeleteId(r.id)}>
                     Delete
                   </button>
                 </td>

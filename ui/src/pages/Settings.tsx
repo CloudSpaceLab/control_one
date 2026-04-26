@@ -5,6 +5,7 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { Webhook, CreateWebhookPayload, UpdateWebhookPayload } from '../lib/api';
+import { ConfirmModal } from '../components/ConfirmModal';
 import './Settings.css';
 
 function formatDate(value?: string): string {
@@ -59,6 +60,7 @@ export function Settings(): JSX.Element {
   } = useFormFeedback();
   const { showToast } = useToast();
   const [saving, setSaving] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [webhookForm, setWebhookForm] = useState<CreateWebhookPayload>({
     name: '',
@@ -160,10 +162,6 @@ export function Settings(): JSX.Element {
   };
 
   const handleDeleteWebhook = async (webhookId: string) => {
-    if (!confirm('Are you sure you want to delete this webhook?')) {
-      return;
-    }
-
     try {
       await api.deleteWebhook(webhookId);
       showToast('Webhook deleted successfully', 'success');
@@ -220,7 +218,7 @@ export function Settings(): JSX.Element {
         <div className="settings-content">
           <div className="section-header">
             <h2>Webhooks</h2>
-            <button type="button" onClick={handleCreateWebhook} className="btn-primary">
+            <button type="button" onClick={handleCreateWebhook} className="primary-button">
               Create Webhook
             </button>
           </div>
@@ -296,21 +294,21 @@ export function Settings(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => handleTestWebhook(webhook.id)}
-                      className="btn-secondary"
+                      className="ghost-button"
                     >
                       Test
                     </button>
                     <button
                       type="button"
                       onClick={() => handleEditWebhook(webhook)}
-                      className="btn-secondary"
+                      className="ghost-button"
                     >
                       Edit
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDeleteWebhook(webhook.id)}
-                      className="btn-danger"
+                      onClick={() => setConfirmDeleteId(webhook.id)}
+                      className="danger-button"
                     >
                       Delete
                     </button>
@@ -337,6 +335,19 @@ export function Settings(): JSX.Element {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="Delete webhook?"
+        body="This cannot be undone."
+        variant="danger"
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (confirmDeleteId) handleDeleteWebhook(confirmDeleteId);
+          setConfirmDeleteId(null);
+        }}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
 
       {(isCreatingWebhook || editingWebhook) && (
         <div className="modal-overlay" onClick={handleCancelEdit}>
@@ -456,10 +467,10 @@ export function Settings(): JSX.Element {
               </div>
 
               <div className="modal-footer">
-                <button type="button" onClick={handleCancelEdit} className="btn-secondary" disabled={saving}>
+                <button type="button" onClick={handleCancelEdit} className="ghost-button" disabled={saving}>
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={saving}>
+                <button type="submit" className="primary-button" disabled={saving}>
                   {saving ? 'Saving...' : editingWebhook ? 'Update' : 'Create'}
                 </button>
               </div>

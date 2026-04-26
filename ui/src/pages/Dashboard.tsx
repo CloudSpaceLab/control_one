@@ -87,7 +87,7 @@ export function Dashboard(): JSX.Element {
           </p>
         </div>
         <button type="button" className="primary-button" onClick={refresh}>
-          Refresh
+          {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </header>
 
@@ -190,6 +190,9 @@ function CountCard({
     <article
       className="stat-card"
       onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       style={onClick ? { cursor: 'pointer' } : undefined}
     >
       <p>{title}</p>
@@ -236,11 +239,8 @@ function FleetTopologyCard({ onNodeClick }: { onNodeClick: (n: TopologyNode) => 
       {error ? (
         <p style={{ color: 'var(--state-critical)', fontSize: 13 }}>Topology offline: {error.message}</p>
       ) : null}
-      {loading && nodes.length === 0 ? (
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Loading fleet…</p>
-      ) : (
-        <TopologyGrid nodes={nodes} onNodeClick={onNodeClick} />
-      )}
+      {loading ? <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Syncing…</p> : null}
+      <TopologyGrid nodes={nodes} onNodeClick={onNodeClick} />
       {data?.source === 'postgres-fallback' ? (
         <small style={{ color: 'var(--state-warning)', display: 'block', marginTop: 8 }}>
           Fast view — Doris unavailable, sourced from Postgres rollups.

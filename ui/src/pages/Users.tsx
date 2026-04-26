@@ -245,6 +245,7 @@ export function Users(): JSX.Element {
                       <th style={{ width: '40px' }}>
                         <input
                           type="checkbox"
+                          aria-label="Select all users"
                           checked={selectedUserIds.size === users.length && users.length > 0}
                           onChange={(e) => handleSelectAll(e.target.checked)}
                           title="Select all"
@@ -263,6 +264,7 @@ export function Users(): JSX.Element {
                         <td>
                           <input
                             type="checkbox"
+                            aria-label={`Select ${user.display_name || user.external_id || user.id}`}
                             checked={selectedUserIds.has(user.id)}
                             onChange={(e) => handleSelectUser(user.id, e.target.checked)}
                           />

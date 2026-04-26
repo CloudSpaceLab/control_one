@@ -2,6 +2,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { useToast } from '../providers/ToastProvider';
 const BLOCK_TEMPLATES = {
     port: {
         id: '',
@@ -22,6 +23,7 @@ const BLOCK_TEMPLATES = {
 export function RuleBuilder() {
     const client = useApiClient();
     const { data: tenants } = useTenants({ limit: 50, offset: 0 });
+    const { showToast } = useToast();
     const [tenantId, setTenantId] = useState('');
     const [blocks, setBlocks] = useState([]);
     const [simResult, setSimResult] = useState(null);
@@ -75,21 +77,26 @@ export function RuleBuilder() {
             return;
         const block = blocks[blocks.length - 1];
         if (block.kind !== 'port') {
-            alert('Promote supported for port rules in this build.');
+            showToast('Promote supported for port rules in this build.', 'info');
             return;
         }
-        const cfg = block.config;
-        const payload = {
-            tenant_id: tenantId,
-            name: String(cfg.name ?? `port-${cfg.port}-${cfg.expected_state}`),
-            port: Number(cfg.port),
-            protocol: String(cfg.protocol),
-            expected_state: String(cfg.expected_state),
-            severity: String(cfg.severity ?? 'medium'),
-            enabled: true,
-        };
-        await client.createPortRule(payload);
-        alert('Rule promoted.');
+        try {
+            const cfg = block.config;
+            const payload = {
+                tenant_id: tenantId,
+                name: String(cfg.name ?? `port-${cfg.port}-${cfg.expected_state}`),
+                port: Number(cfg.port),
+                protocol: String(cfg.protocol),
+                expected_state: String(cfg.expected_state),
+                severity: String(cfg.severity ?? 'medium'),
+                enabled: true,
+            };
+            await client.createPortRule(payload);
+            showToast('Rule promoted.', 'success');
+        }
+        catch (err) {
+            showToast(err instanceof Error ? err.message : 'Promote failed', 'error');
+        }
     };
     return (_jsxs("section", { className: "dashboard-section", children: [_jsxs("header", { className: "dashboard-header", children: [_jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Builder" }), _jsx("h2", { children: "Visual rule builder" }), _jsx("p", { className: "subtitle", children: "Compose blocks, simulate against history, then promote." })] }), _jsxs("select", { value: tenantId, onChange: (e) => setTenantId(e.target.value), "aria-label": "Tenant", children: [_jsx("option", { value: "", children: "Choose tenant\u2026" }), tenants.map((t) => _jsx("option", { value: t.id, children: t.name }, t.id))] })] }), _jsxs("div", { style: { display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }, children: [_jsx("button", { type: "button", className: "primary-button", onClick: () => addBlock('port'), children: "+ Port block" }), _jsx("button", { type: "button", className: "primary-button", onClick: () => addBlock('log'), children: "+ Log block" }), _jsx("button", { type: "button", className: "primary-button", onClick: () => addBlock('compliance'), children: "+ Compliance block" })] }), _jsxs("div", { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1rem' }, children: [_jsx("ol", { style: { listStyle: 'none', padding: 0 }, onDragOver: onDragOver, children: blocks.length === 0 ? (_jsx("p", { className: "muted", children: "No blocks yet. Add one above." })) : (blocks.map((b, i) => (_jsxs("li", { draggable: true, onDragStart: () => onDragStart(i), onDragOver: onDragOver, onDrop: () => onDrop(i), style: {
                                 border: '1px solid var(--border, #333)',

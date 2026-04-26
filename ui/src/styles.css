@@ -199,17 +199,217 @@ tbody tr:not(:last-child) {
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
 }
 
+/* ─── Login page — full-screen split layout ─────────────────────────────── */
+
+.login-page {
+  display: flex;
+  min-height: 100vh;
+  background: #000;
+  font-family: 'Inter', 'DM Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Left branding panel */
+.login-left {
+  display: none;
+  flex: 0 0 48%;
+  position: relative;
+  overflow: hidden;
+  background: #050507;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  padding: 3rem;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+@media (min-width: 900px) {
+  .login-left { display: flex; }
+}
+
+.login-left::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(99,102,241,0.18) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 50% at 80% 90%, rgba(56,189,248,0.10) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.login-left__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  position: relative;
+  z-index: 1;
+}
+
+.login-brand__mark {
+  font-size: 1.7rem;
+  color: #6366f1;
+  line-height: 1;
+}
+
+.login-brand__name {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  letter-spacing: -0.02em;
+}
+
+.login-hero {
+  position: relative;
+  z-index: 1;
+}
+
+.login-hero h1 {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+  color: #f1f5f9;
+  margin: 0 0 1rem;
+}
+
+.login-hero h1 em {
+  font-style: normal;
+  background: linear-gradient(135deg, #6366f1, #38bdf8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.login-hero p {
+  font-size: 0.95rem;
+  color: #94a3b8;
+  line-height: 1.65;
+  max-width: 360px;
+  margin: 0;
+}
+
+.login-features {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.login-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.login-feature__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(99,102,241,0.15);
+  border: 1px solid rgba(99,102,241,0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.login-feature__text strong {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin-bottom: 0.1rem;
+}
+
+.login-feature__text span {
+  font-size: 0.78rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+/* Right form panel */
+.login-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1.5rem;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-right::before {
+  content: '';
+  position: absolute;
+  top: -30%;
+  right: -20%;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(99,102,241,0.07) 0%, transparent 65%);
+  pointer-events: none;
+}
+
+/* Mobile brand shown only when left panel hidden */
+.login-mobile-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 2rem;
+}
+
+@media (min-width: 900px) {
+  .login-mobile-brand { display: none; }
+}
+
+.login-mobile-brand .login-brand__mark { font-size: 1.5rem; color: #6366f1; }
+.login-mobile-brand .login-brand__name {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+/* Form card */
 .login-card {
-  max-width: 420px;
-  margin: 4rem auto;
+  width: 100%;
+  max-width: 400px;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-  background: rgba(15, 23, 42, 0.8);
-  border-radius: 1.25rem;
-  padding: 1.75rem;
-  box-shadow: 0 25px 45px rgba(2, 6, 23, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  position: relative;
+  z-index: 1;
+}
+
+.login-card h2 {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #f1f5f9;
+  margin: 0;
+}
+
+.login-card > p {
+  font-size: 0.88rem;
+  color: #64748b;
+  margin: -0.75rem 0 0;
+  line-height: 1.5;
 }
 
 .login-card form {
@@ -218,29 +418,164 @@ tbody tr:not(:last-child) {
   gap: 1rem;
 }
 
-.login-card label {
-  font-size: 0.85rem;
-  letter-spacing: 0.05em;
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.login-field label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #94a3b8;
+  color: #64748b;
+}
+
+.login-field input {
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #0a0a0f;
+  color: #f1f5f9;
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  outline: none;
+}
+
+.login-field input::placeholder { color: #334155; }
+
+.login-field input:focus {
+  border-color: rgba(99,102,241,0.5);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+}
+
+.login-submit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.login-submit .primary-button {
+  width: 100%;
+  padding: 0.8rem 1.5rem;
+  font-size: 0.9rem;
+  justify-content: center;
+}
+
+.login-back {
+  font-size: 0.8rem;
+  color: #475569;
+  text-decoration: none;
+  text-align: center;
+  transition: color 120ms ease;
+}
+
+.login-back:hover { color: #94a3b8; }
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #1e293b;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,0.07);
+}
+
+.login-advanced-toggle {
+  background: transparent;
+  border: none;
+  color: #6366f1;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: inherit;
+  padding: 0;
+  text-align: center;
+  width: 100%;
+  transition: color 120ms ease;
+}
+
+.login-advanced-toggle:hover { color: #818cf8; }
+
+.login-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+.login-card__section h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+/* Legacy .login-card label/input fallback for advanced section */
+.login-card label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
 .login-card input {
   padding: 0.75rem 1rem;
-  border-radius: 0.75rem;
-  border: none;
-  background: rgba(30, 41, 59, 0.95);
-  color: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #0a0a0f;
+  color: #f1f5f9;
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color 150ms ease;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.login-card button {
-  align-self: flex-end;
-  padding: 0.6rem 1.5rem;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #38bdf8, #6366f1);
-  color: #0f172a;
-  font-weight: 600;
-  border: none;
+.login-card input:focus {
+  border-color: rgba(99,102,241,0.5);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+}
+
+.login-card button.primary-button {
+  width: 100%;
+  justify-content: center;
+}
+
+.error-banner {
+  padding: 0.85rem 1rem;
+  background: rgba(220, 38, 38, 0.12);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 0.75rem;
+  color: var(--state-critical);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.success-banner {
+  padding: 0.85rem 1rem;
+  background: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(22, 163, 74, 0.3);
+  border-radius: 0.75rem;
+  color: var(--state-healthy);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
 }
 
 .primary-button {

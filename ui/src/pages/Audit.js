@@ -38,16 +38,16 @@ function formatRelativeTime(value) {
 }
 function getActionColor(action) {
     if (action.includes('.create') || action.includes('.created'))
-        return '#10b981';
+        return 'var(--state-healthy)';
     if (action.includes('.update') || action.includes('.updated'))
-        return '#3b82f6';
+        return 'var(--state-info)';
     if (action.includes('.delete') || action.includes('.deleted'))
-        return '#ef4444';
+        return 'var(--state-critical)';
     if (action.includes('.failed') || action.includes('.error'))
-        return '#dc2626';
+        return 'var(--state-critical)';
     if (action.includes('.success') || action.includes('.succeeded'))
-        return '#10b981';
-    return '#6b7280';
+        return 'var(--state-healthy)';
+    return 'var(--text-secondary)';
 }
 function exportToCSV(logs) {
     const headers = ['Timestamp', 'Actor Type', 'Action', 'Resource Type', 'Resource ID', 'Tenant ID', 'Metadata'];

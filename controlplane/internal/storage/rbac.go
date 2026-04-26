@@ -250,7 +250,7 @@ func (s *Store) AssignRolesToUser(ctx context.Context, userID uuid.UUID, roles [
 		if _, roleErr = tx.ExecContext(ctx, `
             INSERT INTO user_roles (user_id, role_id, tenant_id, assigned_by, expires_at)
             VALUES ($1, $2, NULL, NULL, NULL)
-            ON CONFLICT (user_id, role_id, tenant_id) DO NOTHING
+            ON CONFLICT (user_id, role_id) WHERE tenant_id IS NULL DO NOTHING
         `, userID, roleID); roleErr != nil {
 			err = fmt.Errorf("assign role %s: %w", roleName, roleErr)
 			return err
