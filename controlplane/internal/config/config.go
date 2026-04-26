@@ -23,6 +23,58 @@ type Config struct {
 	Remediation   RemediationConfig   `mapstructure:"remediation"`
 	Secrets       SecretsConfig       `mapstructure:"secrets"`
 	WebAuthn      WebAuthnConfig      `mapstructure:"webauthn"`
+	Doris         DorisConfig         `mapstructure:"doris"`
+	Bastion       BastionConfig       `mapstructure:"bastion"`
+	LDAP          LDAPConfig          `mapstructure:"ldap"`
+}
+
+// LDAPConfig mirrors auth.LDAPConfig so viper can unmarshal directly. See
+// controlplane/internal/auth/ldap.go for field semantics.
+type LDAPConfig struct {
+	Enabled      bool              `mapstructure:"enabled"`
+	URL          string            `mapstructure:"url"`
+	StartTLS     bool              `mapstructure:"start_tls"`
+	SkipVerify   bool              `mapstructure:"skip_verify"`
+	BindDN       string            `mapstructure:"bind_dn"`
+	BindPassword string            `mapstructure:"bind_password"`
+	UserBaseDN   string            `mapstructure:"user_base_dn"`
+	UserFilter   string            `mapstructure:"user_filter"`
+	GroupBaseDN  string            `mapstructure:"group_base_dn"`
+	GroupFilter  string            `mapstructure:"group_filter"`
+	GroupAttr    string            `mapstructure:"group_attr"`
+	EmailAttr    string            `mapstructure:"email_attr"`
+	NameAttr     string            `mapstructure:"name_attr"`
+	GroupRoleMap map[string]string `mapstructure:"group_role_map"`
+	DefaultRole  string            `mapstructure:"default_role"`
+}
+
+// BastionConfig drives the optional SSH bastion proxy. When enabled the
+// controlplane starts an sshproxy listener that authenticates operators
+// via tenant-CA-signed user certs, forwards them to the target node's
+// agent (which terminates into local sshd), and emits
+// bastion.session.{open,close} events into the eventbus + Doris so the
+// forensic timeline cross-links every privileged session to the
+// connection rows it produced.
+type BastionConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	ListenAddr      string `mapstructure:"listen_addr"`
+	HostKeyFile     string `mapstructure:"host_key_file"`
+	CAPublicKeyFile string `mapstructure:"ca_public_key_file"`
+	NodeDialerAddr  string `mapstructure:"node_dialer_addr"` // host:port of nodeagent SSH tunnel listener
+}
+
+// DorisConfig describes the Apache Doris analytic store. When DSN +
+// HTTPEndpoint are both set the controlplane writes raw events to Doris in
+// addition to its existing Postgres rollups; otherwise event ingest still
+// works (rows live in the journal + rollups) and Doris features remain off.
+type DorisConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	DSN             string `mapstructure:"dsn"`
+	HTTPEndpoint    string `mapstructure:"http_endpoint"`
+	Database        string `mapstructure:"database"`
+	User            string `mapstructure:"user"`
+	Password        string `mapstructure:"password"`
+	ApplyMigrations bool   `mapstructure:"apply_migrations"`
 }
 
 // WebAuthnConfig configures the relying-party identity advertised to browsers

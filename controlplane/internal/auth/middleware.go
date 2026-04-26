@@ -64,6 +64,10 @@ type IdentityStore interface {
 	AssignRolesToUser(ctx context.Context, userID uuid.UUID, roles []string) error
 	ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, error)
 	GetUserByExternalID(ctx context.Context, externalID string) (*storage.User, error)
+	// ValidateSessionToken resolves a bearer token issued by /auth/login.
+	// Returns nil + nil + nil when no row matches; returns the session +
+	// user + nil on a valid hit; bumps last_used_at as a side-effect.
+	ValidateSessionToken(ctx context.Context, token string) (*storage.Session, *storage.LocalUser, error)
 }
 
 // NewMiddleware creates an auth middleware with optional client TLS enforcement.
@@ -74,10 +78,12 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 		authCfg:          authCfg,
 		store:            store,
 		publicPaths: map[string]struct{}{
-			"/healthz":         {},
-			"/metrics":         {},
-			"/api/v1/enroll":   {},
-			"/api/v1/register": {},
+			"/healthz":            {},
+			"/metrics":            {},
+			"/api/v1/enroll":      {},
+			"/api/v1/register":    {},
+			"/api/v1/auth/login":  {},
+			"/api/v1/auth/logout": {},
 		},
 	}
 }
@@ -119,6 +125,20 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 		token := strings.TrimSpace(authz[7:])
 		if token != "" {
+			// 1. Try login session token first — local + LDAP users.
+			if m.store != nil {
+				if sess, u, err := m.store.ValidateSessionToken(r.Context(), token); err == nil && sess != nil && u != nil {
+					roles, _ := m.store.ListUserRoles(r.Context(), u.ID)
+					return &Principal{
+						Type:    "user",
+						Name:    u.DisplayName,
+						Subject: u.ID.String(),
+						Email:   u.Email,
+						Roles:   roles,
+					}, nil
+				}
+			}
+			// 2. Static admin/operator tokens from config.
 			if principal, ok := m.staticPrincipal(token); ok {
 				return m.persistPrincipal(r.Context(), principal), nil
 			}

@@ -1226,6 +1226,10 @@ type fakeStore struct {
 	leases               map[uuid.UUID]storage.RemediationLease
 	enrollmentTokens     map[string]storage.EnrollmentToken // keyed by token hash
 	remediationConfigs   map[uuid.UUID]storage.TenantRemediationConfig
+	eventFilters         map[uuid.UUID]storage.TenantEventFilters
+	knownDestinations    map[string]int64
+	knownExeHashes       map[string]int64
+	knownQueryHashes     map[string]int64
 	remediationApprovals map[uuid.UUID]storage.RemediationApproval
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
@@ -2867,6 +2871,143 @@ func (f *fakeStore) UpsertTenantRemediationConfig(_ context.Context, cfg storage
 	return &copy, nil
 }
 
+func (f *fakeStore) GetTenantEventFilters(_ context.Context, tenantID uuid.UUID) (*storage.TenantEventFilters, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if cfg, ok := f.eventFilters[tenantID]; ok {
+		copy := cfg
+		return &copy, nil
+	}
+	defaults := storage.DefaultTenantEventFilters(tenantID)
+	return &defaults, nil
+}
+
+func (f *fakeStore) UpsertTenantEventFilters(_ context.Context, cfg storage.TenantEventFilters) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.eventFilters == nil {
+		f.eventFilters = map[uuid.UUID]storage.TenantEventFilters{}
+	}
+	cfg.UpdatedAt = time.Now().UTC()
+	f.eventFilters[cfg.TenantID] = cfg
+	return nil
+}
+
+// Anomaly baseline stubs — fakeStore tracks first-sightings in maps so
+// tests can assert detector behaviour without a real Postgres.
+
+func (f *fakeStore) UpsertKnownDestination(_ context.Context, tenantID uuid.UUID, dstIP string) (storage.UpsertKnownDestinationResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.knownDestinations == nil {
+		f.knownDestinations = map[string]int64{}
+	}
+	key := tenantID.String() + "|" + dstIP
+	if _, ok := f.knownDestinations[key]; ok {
+		f.knownDestinations[key]++
+		return storage.UpsertKnownDestinationResult{FirstSighting: false, ConnCount: f.knownDestinations[key]}, nil
+	}
+	f.knownDestinations[key] = 1
+	return storage.UpsertKnownDestinationResult{FirstSighting: true, ConnCount: 1, FirstSeenAt: time.Now().UTC()}, nil
+}
+
+func (f *fakeStore) UpsertKnownExeHash(_ context.Context, tenantID uuid.UUID, hash, _ string, _ int64, _ *uuid.UUID) (storage.UpsertKnownExeHashResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.knownExeHashes == nil {
+		f.knownExeHashes = map[string]int64{}
+	}
+	key := tenantID.String() + "|" + hash
+	if _, ok := f.knownExeHashes[key]; ok {
+		f.knownExeHashes[key]++
+		return storage.UpsertKnownExeHashResult{FirstSighting: false, ExecCount: f.knownExeHashes[key]}, nil
+	}
+	f.knownExeHashes[key] = 1
+	return storage.UpsertKnownExeHashResult{FirstSighting: true, ExecCount: 1}, nil
+}
+
+func (f *fakeStore) GetConnectionDurationBaseline(_ context.Context, _ uuid.UUID, _ string, _ int) (*storage.ConnectionDurationBaseline, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetConnectionBytesBaseline(_ context.Context, _ uuid.UUID, _ string, _ int) (*storage.ConnectionBytesBaseline, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) UpsertKnownQueryHash(_ context.Context, tenantID uuid.UUID, engine, db, user, hash, _ string, rows, execMS int64) (storage.UpsertKnownQueryHashResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.knownQueryHashes == nil {
+		f.knownQueryHashes = map[string]int64{}
+	}
+	key := tenantID.String() + "|" + engine + "|" + db + "|" + user + "|" + hash
+	if _, ok := f.knownQueryHashes[key]; ok {
+		f.knownQueryHashes[key]++
+		return storage.UpsertKnownQueryHashResult{FirstSighting: false, ExecCount: f.knownQueryHashes[key]}, nil
+	}
+	f.knownQueryHashes[key] = 1
+	return storage.UpsertKnownQueryHashResult{FirstSighting: true, ExecCount: 1}, nil
+}
+
+// --- Local + LDAP auth + RBAC + dashboards (Phase 9 + 10) ---
+// Tests don't exercise these paths against a real DB; the stubs return
+// safe defaults so server.New can satisfy the Store interface.
+
+func (f *fakeStore) CreateLocalUser(_ context.Context, p storage.CreateLocalUserParams) (*storage.LocalUser, error) {
+	return &storage.LocalUser{ID: uuid.New(), Email: p.Email, DisplayName: p.DisplayName, AuthProvider: p.Provider}, nil
+}
+func (f *fakeStore) VerifyLocalUserPassword(_ context.Context, _, _ string) (*storage.LocalUser, error) {
+	return nil, storage.ErrInvalidCredentials
+}
+func (f *fakeStore) GetLocalUserByEmail(_ context.Context, _ string) (*storage.LocalUser, error) {
+	return nil, nil
+}
+func (f *fakeStore) SetUserPassword(_ context.Context, _ uuid.UUID, _ string) error           { return nil }
+func (f *fakeStore) SetUserDisabled(_ context.Context, _ uuid.UUID, _ bool) error             { return nil }
+func (f *fakeStore) MarkLoginSuccess(_ context.Context, _ uuid.UUID) error                    { return nil }
+func (f *fakeStore) IssueSession(_ context.Context, userID uuid.UUID, ttl time.Duration, ua, ip string) (*storage.Session, error) {
+	return &storage.Session{ID: uuid.New(), UserID: userID, Token: "test-token", IssuedAt: time.Now(), ExpiresAt: time.Now().Add(ttl)}, nil
+}
+func (f *fakeStore) ValidateSessionToken(_ context.Context, _ string) (*storage.Session, *storage.LocalUser, error) {
+	return nil, nil, nil
+}
+func (f *fakeStore) RevokeSession(_ context.Context, _ uuid.UUID) error           { return nil }
+func (f *fakeStore) RevokeAllSessionsForUser(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) PurgeExpiredSessions(_ context.Context, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) ListPermissions(_ context.Context) ([]storage.Permission, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListRolesWithPermissions(_ context.Context) ([]storage.RolePermissions, error) {
+	return nil, nil
+}
+func (f *fakeStore) SetRolePermissions(_ context.Context, _ uuid.UUID, _ []string) error { return nil }
+func (f *fakeStore) CreateCustomRole(_ context.Context, name, desc string, perms []string) (*storage.RolePermissions, error) {
+	return &storage.RolePermissions{ID: uuid.New(), Name: name, Description: desc, Permissions: perms}, nil
+}
+func (f *fakeStore) DeleteRoleByID(_ context.Context, _ uuid.UUID) error              { return nil }
+func (f *fakeStore) GetUserPermissions(_ context.Context, _ uuid.UUID) ([]string, error) { return nil, nil }
+func (f *fakeStore) CreateDashboard(_ context.Context, t, o uuid.UUID, name, desc string, shared bool) (*storage.CustomDashboard, error) {
+	return &storage.CustomDashboard{ID: uuid.New(), TenantID: t, OwnerID: o, Name: name, Description: desc, Shared: shared}, nil
+}
+func (f *fakeStore) ListDashboardsForUser(_ context.Context, _, _ uuid.UUID) ([]storage.CustomDashboard, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetDashboard(_ context.Context, _, _ uuid.UUID) (*storage.CustomDashboard, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateDashboard(_ context.Context, _, _ uuid.UUID, _, _ string, _ bool, _ json.RawMessage) error {
+	return nil
+}
+func (f *fakeStore) DeleteDashboard(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CreateWidget(_ context.Context, w storage.DashboardWidget) (*storage.DashboardWidget, error) {
+	w.ID = uuid.New()
+	return &w, nil
+}
+func (f *fakeStore) UpdateWidget(_ context.Context, _ storage.DashboardWidget) error { return nil }
+func (f *fakeStore) DeleteWidget(_ context.Context, _ uuid.UUID) error               { return nil }
+
 func (f *fakeStore) CreateRemediationApproval(_ context.Context, params storage.CreateRemediationApprovalParams) (*storage.RemediationApproval, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -3485,4 +3626,24 @@ func (f *fakeStore) UpdateThreatFeed(_ context.Context, _ uuid.UUID, _ storage.U
 func (f *fakeStore) DeleteThreatFeed(_ context.Context, _ uuid.UUID) error { return nil }
 func (f *fakeStore) RecordThreatFeedRefresh(_ context.Context, _ uuid.UUID, _, _ string, _ int) error {
 	return nil
+}
+
+// --- Event ingest journal + rollup + retention stubs ---
+func (f *fakeStore) RecordEventIngest(_ context.Context, _ storage.CreateEventIngestBatchParams) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+func (f *fakeStore) MarkEventIngestStatus(_ context.Context, _ uuid.UUID, _, _, _ string) error {
+	return nil
+}
+func (f *fakeStore) PendingEventIngestBatches(_ context.Context, _ time.Duration, _ int) ([]storage.EventIngestBatch, error) {
+	return nil, nil
+}
+func (f *fakeStore) PruneAcceptedEventIngestBatches(_ context.Context, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) IncrementHourlyRollup(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ time.Time, _, _, _ int64, _ string) error {
+	return nil
+}
+func (f *fakeStore) QueryHourlyRollup(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]storage.HourlyRollupRow, error) {
+	return nil, nil
 }

@@ -29,11 +29,16 @@ CREATE INDEX IF NOT EXISTS provisioning_template_versions_promoted_at_idx
     ON provisioning_template_versions(promoted_at);
 
 ALTER TABLE provisioning_templates
-    ADD COLUMN promoted_version_id UUID,
-    ADD CONSTRAINT provisioning_templates_promoted_version_id_fkey
-        FOREIGN KEY (promoted_version_id)
-        REFERENCES provisioning_template_versions(id)
-        ON DELETE SET NULL;
+    ADD COLUMN IF NOT EXISTS promoted_version_id UUID;
+
+DO $$ BEGIN
+    ALTER TABLE provisioning_templates
+        ADD CONSTRAINT provisioning_templates_promoted_version_id_fkey
+            FOREIGN KEY (promoted_version_id)
+            REFERENCES provisioning_template_versions(id)
+            ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS provisioning_template_rollouts (
     id UUID PRIMARY KEY,

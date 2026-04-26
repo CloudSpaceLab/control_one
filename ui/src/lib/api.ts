@@ -905,6 +905,85 @@ export class APIClient {
     return this.request<Profile>('/api/v1/me');
   }
 
+  // Email/password login. Returns a session token the caller stores via
+  // AuthProvider.signIn; from then on every request is Bearer-authed
+  // exactly like the legacy static-token path.
+  async loginWithPassword(email: string, password: string): Promise<LoginResponse> {
+    return this.request<LoginResponse>('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async logout(): Promise<void> {
+    await this.request<void>('/api/v1/auth/logout', { method: 'POST' });
+  }
+
+  async getCurrentUser(): Promise<CurrentUser> {
+    return this.request<CurrentUser>('/api/v1/auth/me');
+  }
+
+  // ---- RBAC ---------------------------------------------------------
+  async listPermissions(): Promise<Permission[]> {
+    return this.request<Permission[]>('/api/v1/permissions');
+  }
+  async listRolesWithPermissions(): Promise<RoleWithPermissions[]> {
+    return this.request<RoleWithPermissions[]>('/api/v1/roles/permissions');
+  }
+  async setRolePermissions(roleId: string, permissions: string[]): Promise<void> {
+    await this.request<void>(`/api/v1/roles/${encodeURIComponent(roleId)}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions }),
+    });
+  }
+  async createCustomRole(payload: { name: string; description: string; permissions: string[] }): Promise<RoleWithPermissions> {
+    return this.request<RoleWithPermissions>('/api/v1/roles/', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+  async deleteRole(roleId: string): Promise<void> {
+    await this.request<void>(`/api/v1/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
+  }
+
+  // ---- Custom dashboards -------------------------------------------
+  async listDashboards(tenantId: string): Promise<CustomDashboard[]> {
+    return this.request<CustomDashboard[]>(`/api/v1/dashboards?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+  async getDashboard(id: string): Promise<CustomDashboard> {
+    return this.request<CustomDashboard>(`/api/v1/dashboards/${encodeURIComponent(id)}`);
+  }
+  async createDashboard(payload: { tenant_id: string; name: string; description?: string; shared?: boolean }): Promise<CustomDashboard> {
+    return this.request<CustomDashboard>('/api/v1/dashboards', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+  async updateDashboard(id: string, payload: Partial<CustomDashboard>): Promise<void> {
+    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+  async deleteDashboard(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+  async createWidget(dashboardId: string, payload: WidgetPayload): Promise<DashboardWidget> {
+    return this.request<DashboardWidget>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+  async updateWidget(dashboardId: string, widgetId: string, payload: WidgetPayload): Promise<void> {
+    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+  async deleteWidget(dashboardId: string, widgetId: string): Promise<void> {
+    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`, { method: 'DELETE' });
+  }
+
   async listTenants(params: ListTenantsParams = {}): Promise<PaginatedResponse<Tenant>> {
     const search = new URLSearchParams();
     if (params.namePrefix) {
@@ -1765,6 +1844,159 @@ export class APIClient {
 
     return (await response.json()) as T;
   }
+
+  // ---- Connections / forensics (Phase 7) -------------------------------
+
+  async listConnections(params: ListConnectionsParams = {}): Promise<ConnectionRow[]> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.ip) search.set('ip', params.ip);
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    const q = search.toString();
+    return this.request<ConnectionRow[]>(`/api/v1/connections${q ? `?${q}` : ''}`);
+  }
+
+  async getConnectionDetail(connID: string): Promise<ConnectionDetail> {
+    return this.request<ConnectionDetail>(`/api/v1/connections/${encodeURIComponent(connID)}`);
+  }
+
+  async listTopTalkers(params: { tenantId?: string; since?: string; limit?: number } = {}): Promise<TopTalker[]> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    const q = search.toString();
+    return this.request<TopTalker[]>(`/api/v1/connections/top-talkers${q ? `?${q}` : ''}`);
+  }
+
+  async fleetHealthSnapshot(params: { tenantId?: string; since?: string } = {}): Promise<FleetHealthSnapshot> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    const q = search.toString();
+    return this.request<FleetHealthSnapshot>(`/api/v1/fleet/health${q ? `?${q}` : ''}`);
+  }
+
+  async getTenantEventFilters(tenantId: string): Promise<TenantEventFilters> {
+    return this.request<TenantEventFilters>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`);
+  }
+
+  async updateTenantEventFilters(tenantId: string, payload: Partial<TenantEventFilters>): Promise<TenantEventFilters> {
+    return this.request<TenantEventFilters>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+}
+
+// ---- Connection / forensic types -------------------------------------
+
+export interface ListConnectionsParams {
+  tenantId?: string;
+  ip?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
+export interface ConnectionRow {
+  conn_id: string;
+  correlation_id?: string;
+  bastion_session_id?: string;
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  direction?: string;
+  pid?: number;
+  process_name?: string;
+  cmdline?: string;
+  user_name?: string;
+  src_ip?: string;
+  src_port?: number;
+  dst_ip?: string;
+  dst_port?: number;
+  protocol?: string;
+  bytes_in?: number;
+  bytes_out?: number;
+  packets_in?: number;
+  packets_out?: number;
+  threat_match?: boolean;
+  threat_feed?: string;
+  threat_score?: number;
+  closed_reason?: string;
+}
+
+export interface ForensicEvent {
+  ts: string;
+  source: 'event' | 'file' | 'db' | 'log' | 'alert' | 'process';
+  event_type: string;
+  pid?: number;
+  process_name?: string;
+  user_name?: string;
+  path?: string;
+  op?: string;
+  bytes?: number;
+  query_text?: string;
+  rows_affected?: number;
+  exec_time_ms?: number;
+  message?: string;
+  severity?: string;
+}
+
+export interface ConnectionDetail {
+  connection: ConnectionRow;
+  events: ForensicEvent[];
+}
+
+export interface TopTalker {
+  ip: string;
+  bytes_out: number;
+  bytes_in: number;
+  conn_count: number;
+  threat_match: boolean;
+}
+
+export interface NodeHealthSummary {
+  node_id: string;
+  hostname?: string;
+  cluster_id?: string;
+  cpu_p95?: number;
+  mem_p95?: number;
+  conn_count?: number;
+  threat_hits?: number;
+  alerts_open?: number;
+  state?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'unknown';
+}
+
+export interface FleetHealthSnapshot {
+  source: 'doris' | 'postgres-fallback';
+  totals: {
+    nodes: number;
+    healthy: number;
+    warning: number;
+    degraded: number;
+    critical: number;
+    unknown: number;
+  };
+  nodes: NodeHealthSummary[];
+}
+
+export interface TenantEventFilters {
+  tenant_id: string;
+  capture_external: boolean;
+  capture_internal_summary: boolean;
+  capture_listening_changes: boolean;
+  capture_files: boolean;
+  capture_db_queries: boolean;
+  threat_match_full: boolean;
+  file_paths_watch: string[];
+  file_size_min_bytes: number;
+  allowlist_cidrs: string[];
+  denylist_cidrs: string[];
+  db_query_text_capture: boolean;
+  forensic_mode: boolean;
 }
 
 function normalizePagination(meta: ServerPaginationMeta): PaginationMeta {
@@ -1776,4 +2008,76 @@ function normalizePagination(meta: ServerPaginationMeta): PaginationMeta {
     nextOffset: meta.next_offset ?? null,
     prevOffset: meta.prev_offset ?? null,
   };
+}
+
+// ---- Phase 9 + 10 types ----------------------------------------------
+
+export interface LoginResponse {
+  token: string;
+  expires_at: string;
+  user_id: string;
+  email: string;
+  display_name?: string;
+  roles: string[];
+  permissions: string[];
+}
+
+export interface CurrentUser {
+  user_id?: string;
+  subject?: string;
+  email?: string;
+  display_name?: string;
+  type?: string;
+  auth_provider?: string;
+  roles?: string[];
+  groups?: string[];
+  permissions?: string[];
+}
+
+export interface Permission {
+  name: string;
+  description: string;
+  category: string;
+}
+
+export interface RoleWithPermissions {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+}
+
+export type WidgetType = 'db_query' | 'sys_resources' | 'log_size' | 'network_bytes';
+
+export interface DashboardWidget {
+  id: string;
+  dashboard_id: string;
+  title: string;
+  widget_type: WidgetType;
+  spec: Record<string, unknown>;
+  node_ids: string[];
+  refresh_seconds: number;
+  sort_order: number;
+}
+
+export interface CustomDashboard {
+  id: string;
+  tenant_id: string;
+  owner_id: string;
+  name: string;
+  description: string;
+  layout: Record<string, unknown>;
+  shared: boolean;
+  created_at: string;
+  updated_at: string;
+  widgets?: DashboardWidget[];
+}
+
+export interface WidgetPayload {
+  title: string;
+  widget_type: WidgetType;
+  spec: Record<string, unknown>;
+  node_ids: string[];
+  refresh_seconds: number;
+  sort_order: number;
 }

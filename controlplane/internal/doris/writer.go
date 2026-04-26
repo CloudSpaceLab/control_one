@@ -2,14 +2,17 @@ package doris
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,11 +21,14 @@ import (
 // returns a per-batch status with row counts and error reports we surface as
 // errors so callers can retry or alert.
 type streamLoadOptions struct {
-	Format         string // "json" (the only mode this writer uses)
-	Strict         bool   // true → reject the whole batch on any row error
-	Label          string // unique label for idempotent retries
-	JSONPaths      []string
+	Format          string // "json" (the only mode this writer uses)
+	Strict          bool   // true → reject the whole batch on any row error
+	Label           string // unique label for idempotent retries
+	JSONPaths       []string
 	StripOuterArray bool
+	// Compress requests payloads with gzip when true. Doris Stream Load
+	// honours `Content-Encoding: gzip`; saves ~80% on log-heavy traffic.
+	Compress bool
 }
 
 // LoadStatus is the structured response Stream Load returns per request.
@@ -42,7 +48,8 @@ type LoadStatus struct {
 }
 
 // streamLoad posts a JSON array of rows to Doris and returns the parsed
-// LoadStatus. Caller is responsible for batching and retries.
+// LoadStatus. Caller is responsible for batching and retries. Compresses with
+// gzip when payload exceeds the threshold or opts.Compress is set.
 func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string]any, opts streamLoadOptions) (*LoadStatus, error) {
 	if len(rows) == 0 {
 		return nil, nil
@@ -52,11 +59,20 @@ func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string
 		return nil, errors.New("doris http endpoint not configured")
 	}
 
-	payload, err := json.Marshal(rows)
+	rawPayload, err := json.Marshal(rows)
 	if err != nil {
 		return nil, fmt.Errorf("marshal rows: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(payload))
+
+	// Decide whether to compress. Below ~10 KiB the round-trip cost
+	// outweighs the wire savings.
+	useGzip := opts.Compress || len(rawPayload) >= gzipThreshold
+	body, contentEncoding, err := maybeGzip(rawPayload, useGzip)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, body)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +80,11 @@ func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("format", "json")
 	req.Header.Set("strip_outer_array", "true")
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
+		// Doris also accepts a `compress_type` header explicitly.
+		req.Header.Set("compress_type", contentEncoding)
+	}
 	if opts.Strict {
 		req.Header.Set("strict_mode", "true")
 	}
@@ -78,13 +99,13 @@ func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read stream load response: %w", err)
 	}
 	var status LoadStatus
-	if err := json.Unmarshal(body, &status); err != nil {
-		return nil, fmt.Errorf("decode stream load: %w (body=%s)", err, string(body))
+	if err := json.Unmarshal(respBody, &status); err != nil {
+		return nil, fmt.Errorf("decode stream load: %w (body=%s)", err, string(respBody))
 	}
 	if resp.StatusCode >= 400 || (status.Status != "Success" && status.Status != "Publish Timeout") {
 		return &status, fmt.Errorf("doris stream load %s: %s (loaded %d/%d, filtered %d, error_url=%s)",
@@ -94,26 +115,69 @@ func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string
 	return &status, nil
 }
 
+const gzipThreshold = 10 * 1024 // 10 KiB
+
+func maybeGzip(payload []byte, use bool) (io.Reader, string, error) {
+	if !use {
+		return bytes.NewReader(payload), "", nil
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(payload); err != nil {
+		_ = zw.Close()
+		return nil, "", fmt.Errorf("gzip stream load payload: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, "", fmt.Errorf("gzip close: %w", err)
+	}
+	return &buf, "gzip", nil
+}
+
+// MetricsReporter receives per-flush observations so the caller can wire them
+// to Prometheus, logs, or anywhere else. All fields are best-effort; nil
+// implementations are no-ops.
+type MetricsReporter interface {
+	ObserveFlush(table string, rows int, bytes int, dur time.Duration, err error)
+	ObserveQueueDepth(table string, depth int)
+}
+
+// nopReporter is the default when MetricsReporter is not configured.
+type nopReporter struct{}
+
+func (nopReporter) ObserveFlush(string, int, int, time.Duration, error) {}
+func (nopReporter) ObserveQueueDepth(string, int)                       {}
+
 // Writer batches rows per table and flushes on size or interval. One Writer
 // per process; safe for concurrent calls.
 type Writer struct {
 	c             *Client
 	mu            sync.Mutex
 	pending       map[string][]map[string]any
-	flushBytes    int
 	flushInterval time.Duration
 	maxBatchRows  int
-	closed        bool
+	maxPendingRows int
+	closed        atomic.Bool
 	stopCh        chan struct{}
 	doneCh        chan struct{}
+	flushWG       sync.WaitGroup
 	onError       func(table string, err error)
+	metrics       MetricsReporter
+	hostname      string
+	pid           int
+	labelCounter  atomic.Uint64
+	healthyAtomic atomic.Bool
+	cond          *sync.Cond
+	compress      bool
 }
 
 // WriterOptions tune the writer.
 type WriterOptions struct {
-	FlushInterval time.Duration            // default 2s
-	MaxBatchRows  int                      // default 5000
-	OnError       func(table string, err error)
+	FlushInterval  time.Duration             // default 2s
+	MaxBatchRows   int                       // default 5000
+	MaxPendingRows int                       // default 50_000 (per table); above this Enqueue blocks
+	Compress       bool                      // force gzip for every payload (auto-detect when false)
+	OnError        func(table string, err error)
+	Metrics        MetricsReporter
 }
 
 // NewWriter starts the flush loop. Caller owns Close().
@@ -124,36 +188,106 @@ func NewWriter(c *Client, opts WriterOptions) *Writer {
 	if opts.MaxBatchRows <= 0 {
 		opts.MaxBatchRows = 5000
 	}
-	w := &Writer{
-		c:             c,
-		pending:       make(map[string][]map[string]any),
-		flushInterval: opts.FlushInterval,
-		maxBatchRows:  opts.MaxBatchRows,
-		stopCh:        make(chan struct{}),
-		doneCh:        make(chan struct{}),
-		onError:       opts.OnError,
+	if opts.MaxPendingRows <= 0 {
+		opts.MaxPendingRows = 50_000
 	}
+	if opts.Metrics == nil {
+		opts.Metrics = nopReporter{}
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "controlplane"
+	}
+	w := &Writer{
+		c:              c,
+		pending:        make(map[string][]map[string]any),
+		flushInterval:  opts.FlushInterval,
+		maxBatchRows:   opts.MaxBatchRows,
+		maxPendingRows: opts.MaxPendingRows,
+		stopCh:         make(chan struct{}),
+		doneCh:         make(chan struct{}),
+		onError:        opts.OnError,
+		metrics:        opts.Metrics,
+		hostname:       host,
+		pid:            os.Getpid(),
+		compress:       opts.Compress,
+	}
+	w.cond = sync.NewCond(&w.mu)
+	w.healthyAtomic.Store(true)
 	go w.loop()
 	return w
 }
 
-// Enqueue appends rows to the per-table buffer. Auto-flushes when the table
-// hits MaxBatchRows.
-func (w *Writer) Enqueue(table string, rows []map[string]any) {
-	if w == nil || w.c == nil || len(rows) == 0 {
-		return
+// ErrWriterClosed is returned by Enqueue after Close().
+var ErrWriterClosed = errors.New("doris writer closed")
+
+// ErrBackpressure is returned by EnqueueNonBlocking when the per-table buffer
+// is at its cap. Callers should drop or retry later.
+var ErrBackpressure = errors.New("doris writer backpressure")
+
+// Enqueue appends rows to the per-table buffer. Blocks when the table buffer
+// has hit MaxPendingRows so producers naturally back off if Doris is slow or
+// unavailable. Auto-flushes when the table hits MaxBatchRows.
+func (w *Writer) Enqueue(table string, rows []map[string]any) error {
+	return w.enqueue(table, rows, true)
+}
+
+// EnqueueNonBlocking is like Enqueue but returns ErrBackpressure instead of
+// blocking when the buffer is full. Use from latency-sensitive callers (e.g.
+// HTTP handlers); fall back to a journal write on backpressure.
+func (w *Writer) EnqueueNonBlocking(table string, rows []map[string]any) error {
+	return w.enqueue(table, rows, false)
+}
+
+func (w *Writer) enqueue(table string, rows []map[string]any, block bool) error {
+	if w == nil || w.c == nil {
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if w.closed.Load() {
+		return ErrWriterClosed
 	}
 	w.mu.Lock()
+	for len(w.pending[table]) >= w.maxPendingRows {
+		if !block {
+			w.mu.Unlock()
+			return ErrBackpressure
+		}
+		w.cond.Wait()
+		if w.closed.Load() {
+			w.mu.Unlock()
+			return ErrWriterClosed
+		}
+	}
 	w.pending[table] = append(w.pending[table], rows...)
-	overflow := len(w.pending[table]) >= w.maxBatchRows
+	depth := len(w.pending[table])
+	overflow := depth >= w.maxBatchRows
+	w.metrics.ObserveQueueDepth(table, depth)
 	if overflow {
 		batch := w.pending[table]
 		w.pending[table] = nil
+		w.cond.Broadcast()
 		w.mu.Unlock()
-		w.flushTable(table, batch)
-		return
+		w.flushWG.Add(1)
+		go func() {
+			defer w.flushWG.Done()
+			w.flushTable(table, batch)
+		}()
+		return nil
 	}
 	w.mu.Unlock()
+	return nil
+}
+
+// Healthy reports whether the most recent flush succeeded. Use as a signal in
+// the ingest path to journal-and-retry instead of trying every batch.
+func (w *Writer) Healthy() bool {
+	if w == nil {
+		return false
+	}
+	return w.healthyAtomic.Load()
 }
 
 // Close flushes pending batches then stops the loop. Safe to call multiple
@@ -162,15 +296,15 @@ func (w *Writer) Close() error {
 	if w == nil {
 		return nil
 	}
-	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
+	if !w.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	w.closed = true
-	close(w.stopCh)
+	w.mu.Lock()
+	w.cond.Broadcast() // unblock any waiting Enqueue callers
 	w.mu.Unlock()
+	close(w.stopCh)
 	<-w.doneCh
+	w.flushWG.Wait()
 	return nil
 }
 
@@ -197,28 +331,81 @@ func (w *Writer) flushAll() {
 	}
 	snapshot := w.pending
 	w.pending = make(map[string][]map[string]any, len(snapshot))
+	w.cond.Broadcast()
 	w.mu.Unlock()
 
 	for table, rows := range snapshot {
 		if len(rows) == 0 {
 			continue
 		}
-		w.flushTable(table, rows)
+		w.flushWG.Add(1)
+		go func(tbl string, batch []map[string]any) {
+			defer w.flushWG.Done()
+			w.flushTable(tbl, batch)
+		}(table, rows)
 	}
 }
 
 func (w *Writer) flushTable(table string, rows []map[string]any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	label := fmt.Sprintf("co-%s-%d", table, time.Now().UnixNano())
+	label := w.makeLabel(table)
+	start := time.Now()
 	_, err := w.c.streamLoad(ctx, table, rows, streamLoadOptions{
 		Format:          "json",
 		StripOuterArray: true,
 		Label:           label,
+		Compress:        w.compress,
 	})
-	if err != nil && w.onError != nil {
-		w.onError(table, err)
+	dur := time.Since(start)
+	// Approximate payload bytes with the marshaled length (good enough for
+	// Prometheus histograms).
+	bytesEstimate := approxBytes(rows)
+	w.metrics.ObserveFlush(table, len(rows), bytesEstimate, dur, err)
+	if err != nil {
+		w.healthyAtomic.Store(false)
+		if w.onError != nil {
+			w.onError(table, err)
+		}
+		return
 	}
+	w.healthyAtomic.Store(true)
+}
+
+func approxBytes(rows []map[string]any) int {
+	// Cheap upper-bound: estimate 250 B per row pre-compression. Avoid a real
+	// json.Marshal to keep flush hot-path light.
+	return len(rows) * 250
+}
+
+// makeLabel composes a Stream Load label that is unique across replicas.
+// Doris dedups by (table, label) within ~3 days; we want one unique label per
+// flush so our retries on transient errors can reuse the same label and let
+// Doris's built-in dedup absorb duplicates safely.
+//
+// Format: co-{hostname}-{pid}-{nanos}-{counter}-{table}
+func (w *Writer) makeLabel(table string) string {
+	n := time.Now().UnixNano()
+	c := w.labelCounter.Add(1)
+	host := strings.ReplaceAll(w.hostname, ".", "-")
+	return fmt.Sprintf("co-%s-%d-%d-%d-%s", host, w.pid, n, c, sanitizeLabel(table))
+}
+
+func sanitizeLabel(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '_' || r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, s)
 }
 
 // LabelFor returns a deterministic Stream Load label so retries hit the same

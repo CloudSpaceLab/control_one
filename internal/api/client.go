@@ -79,6 +79,30 @@ func (c *Client) Do(ctx context.Context, method, path string, body []byte) (*htt
 	return c.http.Do(req)
 }
 
+// DoWithHeaders is like Do but lets the caller set extra headers on the
+// request (e.g. Content-Encoding: gzip for ingest batches). The body is
+// passed unchanged — caller is responsible for compression.
+func (c *Client) DoWithHeaders(ctx context.Context, method, path string, body []byte, headers map[string]string) (*http.Response, error) {
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if c.token != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if req.Header.Get("Content-Type") == "" && body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return c.http.Do(req)
+}
+
 // Stream opens a long-running GET request (e.g. SSE) against the control plane
 // using the same mTLS + auth configuration. The caller owns the response body
 // and must close it when finished. The request has no client-side timeout —

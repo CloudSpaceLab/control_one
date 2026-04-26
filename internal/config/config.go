@@ -114,6 +114,18 @@ type Config struct {
 		CACertFile string `mapstructure:"ca_cert_file"`
 	} `mapstructure:"tls"`
 
+	// SSHTunnel exposes a local SSH listener that the bastion proxies into.
+	// When enabled, the agent emits bastion.session.{open,close} events so
+	// privileged sessions show up in the forensic timeline.
+	SSHTunnel struct {
+		Enabled        bool   `mapstructure:"enabled"`
+		ListenAddr     string `mapstructure:"listen_addr"`     // default :2222
+		ClientCAFile   string `mapstructure:"client_ca_file"`  // bastion's client-cert CA
+		ServerCertFile string `mapstructure:"server_cert_file"`
+		ServerKeyFile  string `mapstructure:"server_key_file"`
+		UpstreamAddr   string `mapstructure:"upstream_addr"`   // default 127.0.0.1:22
+	} `mapstructure:"ssh_tunnel"`
+
 	Intervals struct {
 		Heartbeat    time.Duration `mapstructure:"heartbeat"`
 		PolicySync   time.Duration `mapstructure:"policy_sync"`

@@ -41,6 +41,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/rules', label: 'Rules', roles: ['admin', 'operator'] },
       { to: '/threat-feeds', label: 'Threat sources', roles: ['admin', 'operator'] },
+      { to: '/connections', label: 'Connections' },
+      { to: '/dashboards', label: 'Custom dashboards' },
       { to: '/recommendations', label: 'Recommendations' },
     ],
   },
@@ -49,7 +51,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/access', label: 'Just-in-time access' },
       { to: '/sessions', label: 'Session replay' },
-      { to: '/users', label: 'Users & roles', roles: ['admin'] },
+      { to: '/users', label: 'Users', roles: ['admin'] },
+      { to: '/roles', label: 'Roles & permissions', roles: ['admin'] },
     ],
   },
   {

@@ -50,6 +50,26 @@ type Config struct {
 
 	// Log receives connection-level events. Optional.
 	Log *zap.Logger
+
+	// EmitSession is called once on session open and once on close so the
+	// eventbus can publish bastion.session.{open,close} rows joinable to
+	// connection rows via session_id.
+	EmitSession func(BastionSessionEvent)
+}
+
+// BastionSessionEvent captures what the upstream eventbus needs to know
+// about a bastion session for forensic linkage.
+type BastionSessionEvent struct {
+	Kind       string // "open" | "close"
+	SessionID  string
+	Principal  string
+	NodeID     string
+	RemoteIP   string
+	RemotePort int
+	BytesUp    int64 // operator -> node (close only)
+	BytesDown  int64 // node -> operator (close only)
+	StartedAt  time.Time
+	EndedAt    time.Time
 }
 
 // Proxy serves bastion SSH connections.
@@ -96,6 +116,9 @@ func (p *Proxy) handleConn(ctx context.Context, raw net.Conn) {
 	}
 	serverCfg.AddHostKey(p.cfg.HostSigner)
 
+	remoteIP, remotePort := splitAddr(raw.RemoteAddr())
+	startedAt := time.Now().UTC()
+
 	sshConn, chans, reqs, err := ssh.NewServerConn(raw, serverCfg)
 	if err != nil {
 		p.debug("bastion handshake failed", zap.Error(err))
@@ -110,6 +133,26 @@ func (p *Proxy) handleConn(ctx context.Context, raw net.Conn) {
 		p.debug("bastion no target-node-id extension on cert", zap.String("user", principal))
 		return
 	}
+
+	sessionID := fmt.Sprintf("%x-%s", sshConn.SessionID(), principal)
+	if p.cfg.EmitSession != nil {
+		p.cfg.EmitSession(BastionSessionEvent{
+			Kind: "open", SessionID: sessionID, Principal: principal, NodeID: nodeID,
+			RemoteIP: remoteIP, RemotePort: remotePort, StartedAt: startedAt,
+		})
+	}
+	var bytesUp, bytesDown int64
+	defer func() {
+		if p.cfg.EmitSession == nil {
+			return
+		}
+		p.cfg.EmitSession(BastionSessionEvent{
+			Kind: "close", SessionID: sessionID, Principal: principal, NodeID: nodeID,
+			RemoteIP: remoteIP, RemotePort: remotePort,
+			BytesUp: bytesUp, BytesDown: bytesDown,
+			StartedAt: startedAt, EndedAt: time.Now().UTC(),
+		})
+	}()
 
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -134,9 +177,11 @@ func (p *Proxy) handleConn(ctx context.Context, raw net.Conn) {
 			go ssh.DiscardRequests(chReqs)
 			var recorder io.WriteCloser
 			if p.cfg.NewRecorder != nil {
-				recorder = p.cfg.NewRecorder(string(sshConn.SessionID()) + "-" + principal)
+				recorder = p.cfg.NewRecorder(sessionID)
 			}
-			p.proxySession(ch, nodeConn, recorder)
+			up, down := p.proxySession(ch, nodeConn, recorder)
+			bytesUp += up
+			bytesDown += down
 		}()
 	}
 }
@@ -160,20 +205,25 @@ func (p *Proxy) publicKeyCallback(meta ssh.ConnMetadata, key ssh.PublicKey) (*ss
 	}, nil
 }
 
-func (p *Proxy) proxySession(ch ssh.Channel, nodeConn net.Conn, rec io.WriteCloser) {
+func (p *Proxy) proxySession(ch ssh.Channel, nodeConn net.Conn, rec io.WriteCloser) (int64, int64) {
 	if rec != nil {
 		defer func() { _ = rec.Close() }()
 	}
+	var up, down int64
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = copyWithTap(nodeConn, ch, rec)
+		n, _ := copyWithTap(nodeConn, ch, rec)
+		up = n
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = copyWithTap(ch, nodeConn, rec)
+		n, _ := copyWithTap(ch, nodeConn, rec)
+		down = n
 		done <- struct{}{}
 	}()
 	<-done
+	<-done
+	return up, down
 }
 
 // copyWithTap proxies src -> dst and optionally writes a copy to tap.
@@ -182,6 +232,22 @@ func copyWithTap(dst io.Writer, src io.Reader, tap io.Writer) (int64, error) {
 		return io.Copy(dst, src)
 	}
 	return io.Copy(io.MultiWriter(dst, tap), src)
+}
+
+func splitAddr(a net.Addr) (string, int) {
+	if a == nil {
+		return "", 0
+	}
+	if t, ok := a.(*net.TCPAddr); ok {
+		return t.IP.String(), t.Port
+	}
+	host, port, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String(), 0
+	}
+	p := 0
+	fmt.Sscanf(port, "%d", &p)
+	return host, p
 }
 
 func stringFromExtensions(perms *ssh.Permissions, key string) string {

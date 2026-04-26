@@ -4,6 +4,9 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
 import { useTenants } from '../hooks/useTenants';
 import type { DashboardOverview, SeverityBreakdown } from '../lib/api';
+import { useFleetSummary } from '../hooks/useFleetSummary';
+import TopologyGrid, { TopologyNode } from '../components/glyphs/TopologyGrid';
+import StatusDot, { State } from '../components/glyphs/StatusDot';
 
 const REFRESH_TOPICS = [
   'security.event',
@@ -120,6 +123,8 @@ export function Dashboard(): JSX.Element {
         />
       </div>
 
+      <FleetTopologyCard onNodeClick={(n) => navigate(`/nodes?focus=${encodeURIComponent(n.id)}`)} />
+
       <div className="dashboard-panels">
         <article className="quick-actions">
           <h3>Quick actions</h3>
@@ -191,5 +196,66 @@ function CountCard({
       <span className="stat-value">{total}</span>
       <small>{sub}</small>
     </article>
+  );
+}
+
+// FleetTopologyCard — every node as a colour dot. Tap to drill in. Adapts
+// from 5 nodes to thousands without code changes; --state-* tokens drive
+// the colour and the pulse on critical so accessibility wins for free.
+function FleetTopologyCard({ onNodeClick }: { onNodeClick: (n: TopologyNode) => void }) {
+  const { data, loading, error } = useFleetSummary({ intervalMs: 30000 });
+
+  const nodes: TopologyNode[] = (data?.nodes ?? []).map((n) => ({
+    id: n.node_id,
+    hostname: n.hostname,
+    state: (n.state ?? 'unknown') as State,
+    hint: `${n.hostname ?? n.node_id} · cpu ${Math.round((n.cpu_p95 ?? 0) * 100)}% · mem ${Math.round(
+      (n.mem_p95 ?? 0) * 100,
+    )}% · ${n.conn_count ?? 0} conns · ${n.alerts_open ?? 0} alerts`,
+  }));
+
+  const totals = data?.totals ?? {
+    nodes: 0, healthy: 0, warning: 0, degraded: 0, critical: 0, unknown: 0,
+  };
+
+  return (
+    <article className="card" style={{ padding: 16, marginTop: 24 }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div>
+          <p className="eyebrow">Fleet topology</p>
+          <h3 style={{ marginTop: 4 }}>{totals.nodes} nodes · live</h3>
+        </div>
+        <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+          <Legend label="Healthy" state="healthy" count={totals.healthy} />
+          <Legend label="Warning" state="warning" count={totals.warning} />
+          <Legend label="Degraded" state="degraded" count={totals.degraded} />
+          <Legend label="Critical" state="critical" count={totals.critical} />
+          <Legend label="Unknown" state="unknown" count={totals.unknown} />
+        </div>
+      </header>
+      {error ? (
+        <p style={{ color: 'var(--state-critical)', fontSize: 13 }}>Topology offline: {error.message}</p>
+      ) : null}
+      {loading && nodes.length === 0 ? (
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Loading fleet…</p>
+      ) : (
+        <TopologyGrid nodes={nodes} onNodeClick={onNodeClick} />
+      )}
+      {data?.source === 'postgres-fallback' ? (
+        <small style={{ color: 'var(--state-warning)', display: 'block', marginTop: 8 }}>
+          Fast view — Doris unavailable, sourced from Postgres rollups.
+        </small>
+      ) : null}
+    </article>
+  );
+}
+
+function Legend({ label, state, count }: { label: string; state: State; count: number }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <StatusDot state={state} />
+      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+      <strong>{count}</strong>
+    </span>
   );
 }

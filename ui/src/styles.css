@@ -35,6 +35,28 @@
 :root {
   background-color: var(--bg-primary);
   color: var(--text-primary);
+
+  /* Semantic state palette — used by StatusDot, Heatmap, badges, alerts.
+     Same names across themes so component code never branches. */
+  --state-healthy: #16a34a;
+  --state-warning: #f59e0b;
+  --state-degraded: #ef6c00;
+  --state-critical: #dc2626;
+  --state-unknown: #64748b;
+  --state-info: #6366f1;
+
+  --motion-fast: 120ms;
+  --motion-med: 220ms;
+  --motion-slow: 480ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-med: 0ms;
+    --motion-slow: 0ms;
+  }
 }
 
 body {

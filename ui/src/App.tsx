@@ -22,6 +22,9 @@ import { Recommendations } from './pages/Recommendations';
 import { Reports } from './pages/Reports';
 import { ThreatFeeds } from './pages/ThreatFeeds';
 import { Sessions } from './pages/Sessions';
+import { Connections } from './pages/Connections';
+import { Dashboards } from './pages/Dashboards';
+import { Roles } from './pages/Roles';
 import { OfflineBundle } from './pages/OfflineBundle';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
@@ -54,6 +57,9 @@ export function App(): JSX.Element {
         <Route path="reports" element={<Reports />} />
         <Route path="threat-feeds" element={<ThreatFeeds />} />
         <Route path="sessions" element={<Sessions />} />
+        <Route path="connections" element={<Connections />} />
+        <Route path="dashboards" element={<Dashboards />} />
+        <Route path="roles" element={<Roles />} />
         <Route path="audit" element={<Audit />} />
         <Route path="users" element={<Users />} />
         <Route path="telemetry" element={<Telemetry />} />

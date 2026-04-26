@@ -15,6 +15,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/eventstream"
 	"github.com/CloudSpaceLab/control_one/internal/hooks"
 	"github.com/CloudSpaceLab/control_one/internal/scanner"
 	"github.com/CloudSpaceLab/control_one/internal/telemetry/logs"
@@ -31,6 +32,19 @@ type Service struct {
 
 	triggerMu sync.Mutex
 	triggers  []*compiledTrigger
+
+	spike  *logSpikeDetector
+	stream *eventstream.Stream
+}
+
+// WithEventStream wires the agent's eventstream into the telemetry service
+// so log.spike (and future telemetry-emitted events) flow into Doris/UI
+// rather than only the local hooks subsystem. Idempotent.
+func (s *Service) WithEventStream(es *eventstream.Stream) {
+	if s == nil {
+		return
+	}
+	s.stream = es
 }
 
 type compiledTrigger struct {
@@ -56,7 +70,7 @@ func (s *Service) SendHeartbeat(ctx context.Context, nodeID, heartbeatID string)
 
 // New creates a telemetry service.
 func New(client *api.Client, log *zap.Logger, hooks hooks.Publisher) *Service {
-	return &Service{client: client, log: log, hooks: hooks}
+	return &Service{client: client, log: log, hooks: hooks, spike: newLogSpikeDetector()}
 }
 
 // LoadTriggers compiles and stores log triggers.
@@ -264,6 +278,26 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 			}
 			s.evaluateTriggers(ctx, nodeID, entry)
 			batch = append(batch, entry)
+			if spiked, baseline, current := s.spike.Record(source.Program, int64(len(entry.Message)), time.Now()); spiked {
+				details := map[string]any{
+					"program":            source.Program,
+					"current_bytes_min":  current,
+					"baseline_bytes_min": baseline,
+					"ratio":              float64(current) / float64(baseline+1),
+				}
+				s.publishHook(ctx, "log.spike", nodeID, details)
+				if s.stream != nil {
+					s.stream.Publish(eventstream.Event{
+						Type:     "log.spike",
+						TS:       time.Now(),
+						NodeID:   nodeID,
+						Severity: "warning",
+						Message:  source.Program,
+						Details:  details,
+						DedupKey: fmt.Sprintf("log.spike:%s:%d", source.Program, time.Now().Unix()/300),
+					})
+				}
+			}
 			if source.BatchSize > 0 && len(batch) >= source.BatchSize {
 				flush("batch_size")
 				resetTimer()

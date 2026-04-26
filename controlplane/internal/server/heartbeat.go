@@ -42,11 +42,12 @@ type heartbeatRequest struct {
 }
 
 type heartbeatResponse struct {
-	NodeID     string  `json:"node_id"`
-	State      string  `json:"state"`
-	LastSeenAt string  `json:"last_seen_at"`
-	Activated  bool    `json:"activated"`
-	Reason     *string `json:"reason,omitempty"`
+	NodeID       string                       `json:"node_id"`
+	State        string                       `json:"state"`
+	LastSeenAt   string                       `json:"last_seen_at"`
+	Activated    bool                         `json:"activated"`
+	Reason       *string                      `json:"reason,omitempty"`
+	EventFilters *storage.TenantEventFilters  `json:"event_filters,omitempty"`
 }
 
 // handleNodeHeartbeat is the mTLS endpoint the agent hits every heartbeat
@@ -127,6 +128,17 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		State:      resultState,
 		LastSeenAt: lastSeen,
 		Activated:  activated,
+	}
+	// Deliver tenant capture-filter policy back to the agent so collectors
+	// hot-reload without a restart. Storage layer returns defaults when no
+	// row exists (Phase 5 contract). Errors are logged + ignored — heartbeat
+	// is too important to fail on a policy lookup blip.
+	if filters, ferr := s.store.GetTenantEventFilters(r.Context(), node.TenantID); ferr == nil && filters != nil {
+		resp.EventFilters = filters
+	} else if ferr != nil {
+		s.logger.Warn("get tenant event filters during heartbeat",
+			zap.String("tenant_id", node.TenantID.String()),
+			zap.Error(ferr))
 	}
 	if resultState == storage.NodeStateEnrollmentPending {
 		// Surface which gate is still pending so the agent can log usefully.

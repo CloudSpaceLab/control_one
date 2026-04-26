@@ -9,10 +9,62 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/CloudSpaceLab/control_one/internal/eventstream"
 )
+
+// BastionSessionEvent describes an open/close bastion session for the
+// eventstream. Caller wires this through `internal/eventstream` so the
+// UI can join sessions to connection rows.
+type BastionSessionEvent struct {
+	Kind       string // "open" | "close"
+	SessionID  string
+	RemoteIP   string
+	RemotePort int
+	BytesIn    int64 // bastion -> nodeagent (close only)
+	BytesOut   int64 // nodeagent -> bastion (close only)
+	StartedAt  time.Time
+	EndedAt    time.Time
+}
+
+// SessionEmitter is invoked once on open and once on close. May be nil.
+type SessionEmitter func(BastionSessionEvent)
+
+// bastionEmitter converts BastionSessionEvent → eventstream.Event.
+// tenantID is left blank — the controlplane's ingest path resolves it
+// from the agent's mTLS principal so we don't have to plumb it here.
+func bastionEmitter(stream *eventstream.Stream, nodeID, tenantID string) SessionEmitter {
+	return func(e BastionSessionEvent) {
+		ts := e.StartedAt
+		if e.Kind == "close" && !e.EndedAt.IsZero() {
+			ts = e.EndedAt
+		}
+		dur := int64(0)
+		if !e.EndedAt.IsZero() {
+			dur = e.EndedAt.Sub(e.StartedAt).Milliseconds()
+		}
+		stream.Publish(eventstream.Event{
+			Type:          "bastion.session." + e.Kind,
+			TS:            ts,
+			NodeID:        nodeID,
+			TenantID:      tenantID,
+			BastionSessID: e.SessionID,
+			SrcIP:         e.RemoteIP,
+			SrcPort:       e.RemotePort,
+			BytesIn:       e.BytesIn,
+			BytesOut:      e.BytesOut,
+			DurationMS:    dur,
+			Severity:      "info",
+			Message:       fmt.Sprintf("bastion session %s from %s", e.Kind, e.RemoteIP),
+			DedupKey:      fmt.Sprintf("bastion.%s:%s", e.Kind, e.SessionID),
+		})
+	}
+}
 
 // sshTunnelConfig describes the bastion-facing listener the nodeagent runs.
 //
@@ -30,6 +82,7 @@ type sshTunnelConfig struct {
 	ServerCertFile string
 	ServerKeyFile  string
 	UpstreamAddr   string // default 127.0.0.1:22
+	EmitSession    SessionEmitter
 }
 
 // startSSHTunnel begins listening for bastion connections. Errors during
@@ -75,12 +128,12 @@ func startSSHTunnel(ctx context.Context, log *zap.Logger, cfg sshTunnelConfig) e
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	go acceptLoop(ctx, log, listener, cfg.UpstreamAddr)
+	go acceptLoop(ctx, log, listener, cfg.UpstreamAddr, cfg.EmitSession)
 	log.Info("ssh tunnel listening", zap.String("addr", cfg.ListenAddr), zap.String("upstream", cfg.UpstreamAddr))
 	return nil
 }
 
-func acceptLoop(ctx context.Context, log *zap.Logger, l net.Listener, upstream string) {
+func acceptLoop(ctx context.Context, log *zap.Logger, l net.Listener, upstream string, emit SessionEmitter) {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -90,25 +143,88 @@ func acceptLoop(ctx context.Context, log *zap.Logger, l net.Listener, upstream s
 			log.Warn("tunnel accept", zap.Error(err))
 			continue
 		}
-		go handleTunnelConn(ctx, log, conn, upstream)
+		go handleTunnelConn(ctx, log, conn, upstream, emit)
 	}
 }
 
-func handleTunnelConn(ctx context.Context, log *zap.Logger, conn net.Conn, upstream string) {
+// countingConn wraps net.Conn so we can report total bytes on close.
+type countingConn struct {
+	net.Conn
+	rx, tx atomic.Int64
+}
+
+func (c *countingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.rx.Add(int64(n))
+	return n, err
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.tx.Add(int64(n))
+	return n, err
+}
+
+func handleTunnelConn(ctx context.Context, log *zap.Logger, conn net.Conn, upstream string, emit SessionEmitter) {
 	defer func() { _ = conn.Close() }()
+
+	sessionID := uuid.NewString()
+	startedAt := time.Now().UTC()
+	remoteIP, remotePort := splitAddr(conn.RemoteAddr())
+	if emit != nil {
+		emit(BastionSessionEvent{
+			Kind: "open", SessionID: sessionID,
+			RemoteIP: remoteIP, RemotePort: remotePort,
+			StartedAt: startedAt,
+		})
+	}
+
+	cc := &countingConn{Conn: conn}
+
 	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	upstreamConn, err := dialer.DialContext(dialCtx, "tcp", upstream)
 	if err != nil {
 		log.Warn("tunnel upstream dial", zap.Error(err), zap.String("upstream", upstream))
+		if emit != nil {
+			emit(BastionSessionEvent{
+				Kind: "close", SessionID: sessionID,
+				RemoteIP: remoteIP, RemotePort: remotePort,
+				StartedAt: startedAt, EndedAt: time.Now().UTC(),
+			})
+		}
 		return
 	}
 	defer func() { _ = upstreamConn.Close() }()
 
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstreamConn, conn); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(conn, upstreamConn); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(upstreamConn, cc); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(cc, upstreamConn); done <- struct{}{} }()
 	<-done
+
+	if emit != nil {
+		emit(BastionSessionEvent{
+			Kind: "close", SessionID: sessionID,
+			RemoteIP: remoteIP, RemotePort: remotePort,
+			BytesIn: cc.rx.Load(), BytesOut: cc.tx.Load(),
+			StartedAt: startedAt, EndedAt: time.Now().UTC(),
+		})
+	}
+}
+
+func splitAddr(a net.Addr) (string, int) {
+	if a == nil {
+		return "", 0
+	}
+	if t, ok := a.(*net.TCPAddr); ok {
+		return t.IP.String(), t.Port
+	}
+	host, port, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String(), 0
+	}
+	p := 0
+	fmt.Sscanf(port, "%d", &p)
+	return host, p
 }

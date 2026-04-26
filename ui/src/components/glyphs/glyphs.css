@@ -1,0 +1,91 @@
+/* glyphs.css — shared SVG primitive styles. Component code passes a state
+   keyword and we resolve to the corresponding --state-* CSS variable. */
+
+.glyph-status-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.glyph-status-dot[data-state='healthy'] {
+  background: var(--state-healthy);
+}
+.glyph-status-dot[data-state='warning'] {
+  background: var(--state-warning);
+}
+.glyph-status-dot[data-state='degraded'] {
+  background: var(--state-degraded);
+}
+.glyph-status-dot[data-state='critical'] {
+  background: var(--state-critical);
+  animation: glyph-pulse 1.6s var(--ease-out) infinite;
+}
+.glyph-status-dot[data-state='unknown'] {
+  background: var(--state-unknown);
+}
+
+@keyframes glyph-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+
+.glyph-sparkline {
+  display: block;
+  width: 100%;
+  height: 32px;
+}
+
+.glyph-sparkline path {
+  fill: none;
+  stroke: var(--state-info);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.glyph-heatmap {
+  display: grid;
+  gap: 2px;
+}
+
+.glyph-heatmap-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.glyph-conn-arc path {
+  fill: none;
+  stroke: var(--state-info);
+  stroke-width: 1.5;
+  opacity: 0.7;
+}
+
+.glyph-topology-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.glyph-topology-node {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.glyph-topology-node:hover {
+  transform: scale(1.15);
+}

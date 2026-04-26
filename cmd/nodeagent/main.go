@@ -25,8 +25,13 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/dbquery"
 	"github.com/CloudSpaceLab/control_one/internal/events"
+	"github.com/CloudSpaceLab/control_one/internal/eventstream"
+	"github.com/CloudSpaceLab/control_one/internal/fileaccess"
 	"github.com/CloudSpaceLab/control_one/internal/hooks"
+	"github.com/CloudSpaceLab/control_one/internal/netflow"
+	"github.com/CloudSpaceLab/control_one/internal/procmon"
 	"github.com/CloudSpaceLab/control_one/internal/logger"
 	"github.com/CloudSpaceLab/control_one/internal/mesh"
 	"github.com/CloudSpaceLab/control_one/internal/policy"
@@ -181,6 +186,60 @@ func main() {
 	if len(cfg.TelemetryPrefs.Triggers) > 0 {
 		telemetrySvc.LoadTriggers(cfg.TelemetryPrefs.Triggers)
 	}
+
+	// ---- Phase 2/2.5/2.6/3 collectors ------------------------------------
+	// Buffered eventstream is fed by procmon, netflow, fileaccess, and
+	// dbquery; the batcher gzips + posts to /api/v1/events/ingest. Smart
+	// filters keep cardinality bounded.
+	eventStream := eventstream.NewStream(8192)
+	correlator := eventstream.NewCorrelator(2 * time.Second)
+	batcher := eventstream.NewBatcher(client, eventStream, log, eventstream.BatcherOptions{
+		Stamp: correlator.Stamp,
+	})
+	go batcher.Run(ctx)
+
+	procCollector := procmon.New(eventStream, log, procmon.Options{})
+	go procCollector.Run(ctx)
+
+	netflowMgr := netflow.NewManager(eventStream, log, netflow.Options{
+		FilterCfg: netflow.FilterConfig{
+			CaptureExternal:         true,
+			CaptureInternalSummary:  true,
+			CaptureListeningChanges: true,
+			AlwaysCaptureThreat:     true,
+		},
+	})
+	go netflowMgr.Run(ctx)
+
+	fileMgr := fileaccess.NewManager(eventStream, log, fileaccess.Options{})
+	go fileMgr.Run(ctx)
+
+	dbMgr := dbquery.NewManager(eventStream, log, dbquery.Options{})
+	go dbMgr.Run(ctx)
+
+	// Bastion SSH tunnel — when enabled the agent listens for
+	// mTLS-authenticated bastion connections and forwards bytes to local
+	// sshd. Each session emits bastion.session.{open,close} events so the
+	// forensic timeline cross-links to the connection rows by
+	// bastion_session_id.
+	if cfg.SSHTunnel.Enabled {
+		emitter := bastionEmitter(eventStream, state.NodeID, "" /* tenantID populated by ingest */)
+		if err := startSSHTunnel(ctx, log, sshTunnelConfig{
+			ListenAddr:     cfg.SSHTunnel.ListenAddr,
+			ClientCAFile:   cfg.SSHTunnel.ClientCAFile,
+			ServerCertFile: cfg.SSHTunnel.ServerCertFile,
+			ServerKeyFile:  cfg.SSHTunnel.ServerKeyFile,
+			UpstreamAddr:   cfg.SSHTunnel.UpstreamAddr,
+			EmitSession:    emitter,
+		}); err != nil {
+			log.Warn("ssh tunnel disabled", zap.Error(err))
+		}
+	}
+
+	// Telemetry log-spike publish path — wires the spike detector through
+	// the eventstream so log.spike events land in Doris/UI, not just the
+	// local hooks subsystem.
+	telemetrySvc.WithEventStream(eventStream)
 
 	meshMgr := mesh.New(log, client, mesh.Options{
 		Enabled:        cfg.Mesh.Enabled,
@@ -433,7 +492,8 @@ func main() {
 	// scan, transition the node out of enrollment_pending. Sprint 2 Pillar
 	// 1.7/1.8. Distinct from the telemetry heartbeat above: that one writes
 	// to the telemetry table; this one drives the node state machine.
-	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat)
+	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
+		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr))
 
 	sched.Start()
 	sigCh := make(chan os.Signal, 1)

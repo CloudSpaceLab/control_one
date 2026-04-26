@@ -24,6 +24,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/behavioral"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/correlation"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
 
@@ -273,6 +274,50 @@ type Store interface {
 	UpdateThreatFeed(context.Context, uuid.UUID, storage.UpdateThreatFeedParams) (*storage.ThreatFeed, error)
 	DeleteThreatFeed(context.Context, uuid.UUID) error
 	RecordThreatFeedRefresh(context.Context, uuid.UUID, string, string, int) error
+	// Event ingest journal + hourly rollup.
+	RecordEventIngest(context.Context, storage.CreateEventIngestBatchParams) (uuid.UUID, error)
+	MarkEventIngestStatus(context.Context, uuid.UUID, string, string, string) error
+	PendingEventIngestBatches(context.Context, time.Duration, int) ([]storage.EventIngestBatch, error)
+	PruneAcceptedEventIngestBatches(context.Context, time.Duration) (int64, error)
+	IncrementHourlyRollup(context.Context, uuid.UUID, *uuid.UUID, string, time.Time, int64, int64, int64, string) error
+	QueryHourlyRollup(context.Context, uuid.UUID, time.Time, time.Time) ([]storage.HourlyRollupRow, error)
+	// Tenant event-filter policy (smart capture knobs + forensic mode).
+	GetTenantEventFilters(context.Context, uuid.UUID) (*storage.TenantEventFilters, error)
+	UpsertTenantEventFilters(context.Context, storage.TenantEventFilters) error
+	// Behavioural anomaly baselines + first-seen registries (Phase F).
+	UpsertKnownDestination(context.Context, uuid.UUID, string) (storage.UpsertKnownDestinationResult, error)
+	UpsertKnownExeHash(context.Context, uuid.UUID, string, string, int64, *uuid.UUID) (storage.UpsertKnownExeHashResult, error)
+	GetConnectionDurationBaseline(context.Context, uuid.UUID, string, int) (*storage.ConnectionDurationBaseline, error)
+	GetConnectionBytesBaseline(context.Context, uuid.UUID, string, int) (*storage.ConnectionBytesBaseline, error)
+	UpsertKnownQueryHash(context.Context, uuid.UUID, string, string, string, string, string, int64, int64) (storage.UpsertKnownQueryHashResult, error)
+	// Local + LDAP auth — bcrypt-hashed passwords, opaque session tokens,
+	// and granular RBAC permission catalog. Phase 9.
+	CreateLocalUser(context.Context, storage.CreateLocalUserParams) (*storage.LocalUser, error)
+	VerifyLocalUserPassword(context.Context, string, string) (*storage.LocalUser, error)
+	GetLocalUserByEmail(context.Context, string) (*storage.LocalUser, error)
+	SetUserPassword(context.Context, uuid.UUID, string) error
+	SetUserDisabled(context.Context, uuid.UUID, bool) error
+	MarkLoginSuccess(context.Context, uuid.UUID) error
+	IssueSession(context.Context, uuid.UUID, time.Duration, string, string) (*storage.Session, error)
+	ValidateSessionToken(context.Context, string) (*storage.Session, *storage.LocalUser, error)
+	RevokeSession(context.Context, uuid.UUID) error
+	RevokeAllSessionsForUser(context.Context, uuid.UUID) error
+	PurgeExpiredSessions(context.Context, time.Duration) (int64, error)
+	ListPermissions(context.Context) ([]storage.Permission, error)
+	ListRolesWithPermissions(context.Context) ([]storage.RolePermissions, error)
+	SetRolePermissions(context.Context, uuid.UUID, []string) error
+	CreateCustomRole(context.Context, string, string, []string) (*storage.RolePermissions, error)
+	DeleteRoleByID(context.Context, uuid.UUID) error
+	GetUserPermissions(context.Context, uuid.UUID) ([]string, error)
+	// Custom dashboards (Phase 10).
+	CreateDashboard(context.Context, uuid.UUID, uuid.UUID, string, string, bool) (*storage.CustomDashboard, error)
+	ListDashboardsForUser(context.Context, uuid.UUID, uuid.UUID) ([]storage.CustomDashboard, error)
+	GetDashboard(context.Context, uuid.UUID, uuid.UUID) (*storage.CustomDashboard, error)
+	UpdateDashboard(context.Context, uuid.UUID, uuid.UUID, string, string, bool, json.RawMessage) error
+	DeleteDashboard(context.Context, uuid.UUID, uuid.UUID) error
+	CreateWidget(context.Context, storage.DashboardWidget) (*storage.DashboardWidget, error)
+	UpdateWidget(context.Context, storage.DashboardWidget) error
+	DeleteWidget(context.Context, uuid.UUID) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -569,6 +614,7 @@ type Server struct {
 	provisioningEngine  *provisioning.Engine
 	complianceEngine    *compliance.Engine
 	complianceScheduler *ComplianceScheduler
+	retentionScheduler  *RetentionScheduler
 	agentSigningOnce    sync.Once
 	agentSigning        *agentSigningMaterial
 
@@ -594,6 +640,38 @@ type Server struct {
 	// webauthn handles registration + assertion verification. nil means
 	// webauthn is disabled and the relevant endpoints return 503.
 	webauthn *webauthnlib.WebAuthn
+	// Doris analytic store. Both nil when not configured.
+	dorisClient *doris.Client
+	dorisWriter *doris.Writer
+	// Per-(tenant, node) token-bucket rate limiter for /events/ingest. Lazily
+	// initialised on first request.
+	ingestLimiter *rateLimiterRegistry
+	// LDAP authenticator — nil when LDAP is disabled in config. Login flow
+	// falls through to it after local password verify fails.
+	ldapProvider *auth.LDAPProvider
+}
+
+// deepHealthy reports whether all critical sub-systems are reachable. Used
+// by /healthz/deep so load balancers can route around degraded replicas
+// without taking healthy ones down on a transient blip.
+func (s *Server) deepHealthy(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	if s.store == nil {
+		return false
+	}
+	if s.dorisClient != nil {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if err := s.dorisClient.Ping(ctx); err != nil {
+			return false
+		}
+	}
+	if s.dorisWriter != nil && !s.dorisWriter.Healthy() {
+		return false
+	}
+	return true
 }
 
 func (s *Server) startCorrelationEngine() {
@@ -666,6 +744,18 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/ping", s.handlePing)
+	// Local + LDAP login (Phase 9). /login + /logout do NOT require an
+	// existing session; the auth middleware whitelists them.
+	s.baseRouter.HandleFunc("/api/v1/auth/login", s.handleAuthLogin)
+	s.baseRouter.HandleFunc("/api/v1/auth/logout", s.handleAuthLogout)
+	s.baseRouter.HandleFunc("/api/v1/auth/me", s.handleAuthMe)
+	// RBAC + permissions catalog.
+	s.baseRouter.HandleFunc("/api/v1/permissions", s.handlePermissions)
+	s.baseRouter.HandleFunc("/api/v1/roles/permissions", s.handleRolesWithPermissions)
+	s.baseRouter.HandleFunc("/api/v1/roles/", s.handleRoleSubroutes)
+	// Custom dashboards builder (Phase 10).
+	s.baseRouter.HandleFunc("/api/v1/dashboards", s.handleDashboardsCollection)
+	s.baseRouter.HandleFunc("/api/v1/dashboards/", s.handleDashboardSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
@@ -760,6 +850,11 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/mfa/webauthn/step-up/begin", s.handleWebAuthnStepUpBegin)
 	s.baseRouter.HandleFunc("/api/v1/threat-feeds", s.handleThreatFeedsCollection)
 	s.baseRouter.HandleFunc("/api/v1/threat-feeds/", s.handleThreatFeedSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/events/ingest", s.handleEventsIngest)
+	s.baseRouter.HandleFunc("/api/v1/connections", s.handleConnectionsList)
+	s.baseRouter.HandleFunc("/api/v1/connections/", s.handleConnectionDetail)
+	s.baseRouter.HandleFunc("/api/v1/connections/top-talkers", s.handleTopTalkers)
+	s.baseRouter.HandleFunc("/api/v1/fleet/health", s.handleFleetHealth)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -1196,8 +1291,19 @@ func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/tenants/")
-	tenantID, err := uuid.Parse(idStr)
+	rest := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/tenants/")
+	// Subroutes under a tenant: dispatch by suffix.
+	if i := strings.Index(rest, "/"); i >= 0 {
+		switch rest[i+1:] {
+		case "event-filters":
+			s.handleTenantEventFilters(w, r)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
+	tenantID, err := uuid.Parse(rest)
 	if err != nil {
 		http.Error(w, "invalid tenant id", http.StatusBadRequest)
 		return
@@ -1849,7 +1955,20 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 // New constructs a Server with default routes and middleware.
 func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) *Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// /healthz is defined here as a closure so the post-construction Server
+	// can plug in deep-storage health (Doris ping, writer health) below
+	// without re-registering the route.
+	var serverRef *Server
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		// Liveness only — we always 200 unless the binary is dead.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/healthz/deep", func(w http.ResponseWriter, r *http.Request) {
+		if serverRef != nil && !serverRef.deepHealthy(r.Context()) {
+			http.Error(w, "degraded", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -1881,6 +2000,38 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	}
 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true, eventBus: eventbus.New(64)}
+	serverRef = s
+	// Doris analytic store. Optional — when unconfigured, ingest stays
+	// on Postgres + journal (see /events/ingest).
+	if cfg.Doris.Enabled && cfg.Doris.DSN != "" {
+		dorisCli, derr := doris.New(doris.Config{
+			DSN:          cfg.Doris.DSN,
+			HTTPEndpoint: cfg.Doris.HTTPEndpoint,
+			Database:     cfg.Doris.Database,
+			User:         cfg.Doris.User,
+			Password:     cfg.Doris.Password,
+		})
+		if derr != nil {
+			logger.Error("init doris client", zap.Error(derr))
+		} else {
+			s.dorisClient = dorisCli
+			s.dorisWriter = doris.NewWriter(dorisCli, doris.WriterOptions{
+				FlushInterval: 2 * time.Second,
+				MaxBatchRows:  5000,
+				Metrics:       doris.NewPrometheusReporter(nil),
+				OnError: func(table string, e error) {
+					logger.Warn("doris write", zap.String("table", table), zap.Error(e))
+				},
+			})
+			if cfg.Doris.ApplyMigrations {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				if mErr := doris.ApplyMigrations(ctx, dorisCli); mErr != nil {
+					logger.Error("apply doris migrations", zap.Error(mErr))
+				}
+				cancel()
+			}
+		}
+	}
 	if sealer, err := secretbox.NewSealerFromConfig(cfg.Secrets.EncryptionKey); err != nil {
 		logger.Warn("init secrets sealer", zap.Error(err))
 	} else {
@@ -1914,6 +2065,54 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		}
 	}
 
+	// Retention runs unconditionally — operators rely on it to keep
+	// telemetry tables bounded. Hardcoded six-hour cron unless overridden.
+	if store != nil {
+		retention := NewRetentionScheduler(s)
+		if err := retention.Start("0 */6 * * *"); err != nil {
+			logger.Error("start retention scheduler", zap.Error(err))
+		} else {
+			s.retentionScheduler = retention
+		}
+	}
+
+	// Bastion proxy — opt-in. When enabled the proxy listens on
+	// cfg.Bastion.ListenAddr, authenticates operators via tenant-CA-signed
+	// SSH certs, dials the target node via the existing mTLS tunnel
+	// (sshproxy.MTLSDialer), and emits bastion.session.{open,close}
+	// events into the eventbus + Doris so the timeline links every
+	// privileged session to the connection rows it produces.
+	if cfg.Bastion.Enabled {
+		if err := s.startBastionProxy(context.Background()); err != nil {
+			logger.Error("start bastion proxy", zap.Error(err))
+		}
+	}
+
+	if cfg.LDAP.Enabled {
+		ldapCfg := auth.LDAPConfig{
+			Enabled:      cfg.LDAP.Enabled,
+			URL:          cfg.LDAP.URL,
+			StartTLS:     cfg.LDAP.StartTLS,
+			SkipVerify:   cfg.LDAP.SkipVerify,
+			BindDN:       cfg.LDAP.BindDN,
+			BindPassword: cfg.LDAP.BindPassword,
+			UserBaseDN:   cfg.LDAP.UserBaseDN,
+			UserFilter:   cfg.LDAP.UserFilter,
+			GroupBaseDN:  cfg.LDAP.GroupBaseDN,
+			GroupFilter:  cfg.LDAP.GroupFilter,
+			GroupAttr:    cfg.LDAP.GroupAttr,
+			EmailAttr:    cfg.LDAP.EmailAttr,
+			NameAttr:     cfg.LDAP.NameAttr,
+			GroupRoleMap: cfg.LDAP.GroupRoleMap,
+			DefaultRole:  cfg.LDAP.DefaultRole,
+		}
+		if p, err := auth.NewLDAPProvider(ldapCfg, logger); err != nil {
+			logger.Error("init ldap provider", zap.Error(err))
+		} else {
+			s.ldapProvider = p
+		}
+	}
+
 	return s
 }
 
@@ -1940,6 +2139,9 @@ func (s *Server) Start() error {
 func (s *Server) Stop(ctx context.Context) error {
 	if s.complianceScheduler != nil {
 		s.complianceScheduler.Stop()
+	}
+	if s.retentionScheduler != nil {
+		s.retentionScheduler.Stop()
 	}
 	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

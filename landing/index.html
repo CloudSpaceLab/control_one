@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="icon" type="image/svg+xml" href="/img/favicon.svg" />
-<link rel="stylesheet" href="/css/landing.css" />
+<link rel="stylesheet" href="/css/landing.css?v=3" />
 </head>
 <body>
 <div class="cursor-spotlight" id="cursor-spotlight"></div>
@@ -215,21 +215,21 @@
         <span>Datacenter</span><span>Clusters</span><span>Hosts</span><span>Posture</span><span>C1 Capsules</span>
       </div>
       <div class="dash-row" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
-        <span class="dash-host">🌍 EU-WEST-1 · London</span>
+        <span class="dash-host"><span class="dash-region dash-region--eu">EU</span> EU-WEST-1 · London</span>
         <span style="color:#94a3b8;font-size:0.8rem">5</span>
         <span style="color:#94a3b8;font-size:0.8rem">94</span>
         <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:97%"></div></div><span class="dash-pct">97%</span></span>
         <span class="capsule-status"><span class="dot dot--green"></span>94 active</span>
       </div>
       <div class="dash-row" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
-        <span class="dash-host">🌎 US-EAST-1 · Virginia</span>
+        <span class="dash-host"><span class="dash-region dash-region--us">US</span> US-EAST-1 · Virginia</span>
         <span style="color:#94a3b8;font-size:0.8rem">5</span>
         <span style="color:#94a3b8;font-size:0.8rem">112</span>
         <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill" style="width:99%"></div></div><span class="dash-pct">99%</span></span>
         <span class="capsule-status"><span class="dot dot--green"></span>112 active</span>
       </div>
       <div class="dash-row" style="grid-template-columns:2fr 0.7fr 0.7fr 2.2fr 1.5fr">
-        <span class="dash-host">🌏 AP-SOUTH-1 · Singapore</span>
+        <span class="dash-host"><span class="dash-region dash-region--ap">AP</span> AP-SOUTH-1 · Singapore</span>
         <span style="color:#94a3b8;font-size:0.8rem">2</span>
         <span style="color:#94a3b8;font-size:0.8rem">41</span>
         <span class="posture-bar"><div class="posture-bar__track"><div class="posture-bar__fill posture-bar__fill--warn" style="width:91%"></div></div><span class="dash-pct" style="color:#fbbf24">91%</span></span>
@@ -322,28 +322,28 @@
         </div>
         <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
           <span class="dash-host" style="font-size:0.75rem">192.0.2.45</span>
-          <span class="dash-country">🇷🇺 RU</span>
+          <span class="dash-country"><img src="https://flagcdn.com/16x12/ru.png" width="16" height="12" alt="" aria-hidden="true"> RU</span>
           <span class="dash-score dash-score--high">87 <span class="dash-score__trend">▲</span></span>
           <span><span class="dash-bytes">2.4 GB · 14 act</span></span>
           <span class="dash-action dash-action--block">BLOCKED</span>
         </div>
         <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
           <span class="dash-host" style="font-size:0.75rem">10.0.2.199</span>
-          <span class="dash-country">🇨🇳 CN</span>
+          <span class="dash-country"><img src="https://flagcdn.com/16x12/cn.png" width="16" height="12" alt="" aria-hidden="true"> CN</span>
           <span class="dash-score dash-score--high">71 <span class="dash-score__trend">▲</span></span>
           <span><span class="dash-bytes">890 MB · 7 act</span></span>
           <span class="dash-action dash-action--rate">RATE LIM</span>
         </div>
         <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
           <span class="dash-host" style="font-size:0.75rem">198.51.100.3</span>
-          <span class="dash-country">🇰🇵 KP</span>
+          <span class="dash-country"><img src="https://flagcdn.com/16x12/kp.png" width="16" height="12" alt="" aria-hidden="true"> KP</span>
           <span class="dash-score dash-score--med">64</span>
           <span><span class="dash-bytes">234 MB · 3 act</span></span>
           <span class="dash-action dash-action--flag">FLAGGED</span>
         </div>
         <div class="dash-row" style="grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 1.1fr">
           <span class="dash-host" style="font-size:0.75rem">203.0.113.12</span>
-          <span class="dash-country">🇺🇸 US</span>
+          <span class="dash-country"><img src="https://flagcdn.com/16x12/us.png" width="16" height="12" alt="" aria-hidden="true"> US</span>
           <span class="dash-score dash-score--low">12</span>
           <span><span class="dash-bytes">12 MB · 2 act</span></span>
           <span class="dash-action dash-action--allow">ALLOWED</span>
