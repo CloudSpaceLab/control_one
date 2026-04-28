@@ -1,4 +1,6 @@
-const DEFAULT_API_BASE_URL = 'http://localhost:8443';
+// Default to same-origin (empty string) for production builds,
+// localhost:8443 for local development
+const DEFAULT_API_BASE_URL = import.meta.env.PROD ? '' : 'http://localhost:8443';
 const HTTP_STATUS_UNAUTHORIZED = 401;
 
 export type HypervisorProvider = 'aws' | 'azure' | 'vmware' | 'libvirt';
@@ -72,6 +74,63 @@ export interface ComplianceSnapshot {
   failed: number;
 }
 
+// Executive Risk Dashboard Types
+export interface RiskComponent {
+  name: string;
+  weight: number;
+  raw_score: number;
+  max_score: number;
+  description: string;
+}
+
+export interface RiskScore {
+  score: number;
+  max_score: number;
+  percent: number;
+  trend_direction: 'up' | 'down' | 'stable';
+  trend_delta: number;
+  components: RiskComponent[];
+  calculated_at: string;
+}
+
+export interface MTTDMetrics {
+  severity: string;
+  mean_minutes: number;
+  median_minutes: number;
+  p95_minutes: number;
+  event_count: number;
+  period: string;
+  calculated_at: string;
+}
+
+export interface MTTRMetrics {
+  severity: string;
+  mean_minutes: number;
+  median_minutes: number;
+  p95_minutes: number;
+  remediation_count: number;
+  period: string;
+  calculated_at: string;
+}
+
+export interface RemediationVelocity {
+  period: string;
+  period_count: number;
+  remediations: number;
+  avg_per_period: number;
+  trend_direction: 'up' | 'down' | 'stable';
+  trend_percent: number;
+}
+
+export interface FindingAging {
+  severity: string;
+  less_than_7_days: number;
+  days_7_to_30: number;
+  days_30_to_90: number;
+  over_90_days: number;
+  total_open: number;
+}
+
 export interface DashboardOverview {
   tenant_id?: string;
   generated_at: string;
@@ -81,6 +140,199 @@ export interface DashboardOverview {
   compliance_summary: ComplianceSnapshot;
   rule_trigger_counts_24h: Record<string, number>;
   remediations_applied_24h: number;
+}
+
+// History + framework series
+export interface RiskScorePoint { ts: string; score: number; }
+export interface RiskScoreHistory { points: RiskScorePoint[]; }
+export interface RemediationVelocityPoint { ts: string; count: number; }
+export interface RemediationVelocityHistory { points: RemediationVelocityPoint[]; }
+export interface FrameworkComplianceSummary {
+  name: string;
+  pass: number;
+  fail: number;
+  coverage: number;
+}
+export interface ComplianceByFramework { frameworks: FrameworkComplianceSummary[]; }
+
+// Admin endpoints
+export interface AdminSelfHealth {
+  api_p95_ms: number;
+  nats_lag_ms: number;
+  db_p95_ms: number;
+  queue_depth: number;
+  status: 'ok' | 'degraded' | 'down';
+}
+
+export interface AdminIngestSeriesPoint {
+  ts: string;
+  events_per_sec: number;
+  bytes_per_sec: number;
+}
+export interface AdminIngestThroughput {
+  series: AdminIngestSeriesPoint[];
+  totals: { events: number; bytes: number };
+}
+
+export interface AdminTenantActivity {
+  tenant_id: string;
+  name: string;
+  events_24h: number;
+  nodes: number;
+  users_active: number;
+  last_seen?: string;
+}
+export interface AdminTenantsActivity {
+  active_count: number;
+  total_count: number;
+  top: AdminTenantActivity[];
+}
+
+export interface AdminSLOEntry {
+  name: string;
+  target: number;
+  actual: number;
+  burn_rate: number;
+  window: string;
+}
+export interface AdminSLO { slos: AdminSLOEntry[]; }
+
+export interface AdminCapacity {
+  disk_used: number;
+  disk_total: number;
+  doris_status: string;
+  postgres_status: string;
+  retention_days_remaining: number;
+}
+
+// Investigate / search
+export interface ClassificationChip {
+  label: string;
+  tone?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown';
+}
+
+export interface SearchHit {
+  type: string;
+  id: string;
+  score: number;
+  snippet?: string;
+  classification?: ClassificationChip[];
+}
+export interface SearchFacet { type: string; count: number; }
+export interface InvestigateSearchResult {
+  facets: SearchFacet[];
+  items: SearchHit[];
+  next_cursor?: string;
+}
+
+export interface EntityDetail {
+  type: string;
+  id: string;
+  classification?: ClassificationChip[];
+  first_seen?: string;
+  last_seen?: string;
+  counts?: {
+    events: number;
+    alerts: number;
+    audit: number;
+    sessions: number;
+    remediations: number;
+  };
+  meta?: Record<string, unknown>;
+}
+
+export interface LifecycleItem {
+  ts: string;
+  source: string;
+  severity?: string;
+  actor?: string;
+  target?: string;
+  summary: string;
+  raw_id?: string;
+}
+export interface EntityLifecycle {
+  items: LifecycleItem[];
+  next_cursor?: string;
+}
+
+export interface RelatedEntity {
+  type: string;
+  id: string;
+  score: number;
+  co_occurrences: number;
+}
+export interface EntityRelated { related: RelatedEntity[]; }
+
+export interface IpEnrichment {
+  addr: string;
+  classification?: ClassificationChip[];
+  geo?: {
+    country?: string;
+    country_code?: string;
+    city?: string;
+    region?: string;
+    asn?: number | string;
+    org?: string;
+    isp?: string;
+    timezone?: string;
+    latitude?: number;
+    longitude?: number;
+  };
+  threat_feeds?: { feed: string; severity?: string; first_seen?: string }[];
+  reputation_score?: number;
+}
+
+export interface SavedSearch {
+  id: string;
+  tenant_id: string;
+  owner_user_id: string;
+  name: string;
+  query: string;
+  entity_type?: string;
+  filters?: Record<string, unknown>;
+  shared: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface SavedSearchInput {
+  name: string;
+  query: string;
+  entity_type?: string;
+  filters?: Record<string, unknown>;
+  shared?: boolean;
+}
+
+// Onboarding wizard
+export type OnboardingProtocol = 'ssh' | 'winrm' | 'rdp';
+export type OnboardingAuth = 'password' | 'private_key' | 'agent';
+export interface TestConnectionPayload {
+  protocol: OnboardingProtocol;
+  host: string;
+  port?: number;
+  username?: string;
+  auth?: OnboardingAuth;
+  password?: string;
+  private_key?: string;
+  passphrase?: string;
+  https?: boolean;
+  skip_verify?: boolean;
+  timeout_ms?: number;
+}
+export interface ConnectionProbe {
+  reachable: boolean;
+  latency_ms?: number;
+  os?: string;
+  os_version?: string;
+  hostname?: string;
+  architecture?: string;
+  capabilities?: string[];
+  banner?: string;
+  detected_at: string;
+}
+export interface TestConnectionResult {
+  ok: boolean;
+  probe?: ConnectionProbe;
+  error?: string;
 }
 
 export interface PortRule {
@@ -794,6 +1046,15 @@ export interface ListEnrollmentTokensParams {
   offset?: number;
 }
 
+export interface CreateEnrollmentTokenPayload {
+  name: string;
+  tenant_id: string;
+  max_nodes: number;
+  ttl: string; // Go duration string, e.g. "24h"
+  labels?: Record<string, string>;
+  capabilities?: string[];
+}
+
 export interface BundleDownloadOptions {
   os: string;
   arch: string;
@@ -888,9 +1149,25 @@ export class APIClient {
 
   constructor({ baseUrl, token }: APIClientOptions = {}) {
     const configured = baseUrl ?? (import.meta.env.VITE_API_URL as string | undefined);
-    const resolved = configured ? configured.replace(/\/$/, '') : DEFAULT_API_BASE_URL;
-    this.baseUrl = resolved;
+    this.baseUrl = APIClient.normalizeBase(configured);
     this.token = token ?? null;
+  }
+
+  /**
+   * Normalize a base URL once. Every request path in this client starts with
+   * `/api/v1/...`, so the base URL must never carry its own `/api` segment;
+   * we strip trailing slashes plus an optional `/api` (or `/api/v1`) suffix
+   * defensively so that mis-configured deploys don't produce `/api/api/...`.
+   * Same-origin (PROD) is the default when nothing is configured.
+   */
+  static normalizeBase(configured: string | undefined | null): string {
+    if (configured === undefined || configured === null) {
+      return DEFAULT_API_BASE_URL;
+    }
+    if (configured === '') return '';
+    let resolved = configured.replace(/\/+$/, '');
+    resolved = resolved.replace(/\/api(?:\/v\d+)?$/i, '');
+    return resolved;
   }
 
   setToken(token: string | null): void {
@@ -1496,6 +1773,13 @@ export class APIClient {
     };
   }
 
+  async createEnrollmentToken(payload: CreateEnrollmentTokenPayload): Promise<EnrollmentToken> {
+    return this.request<EnrollmentToken>('/api/v1/enrollment-tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listEnrollmentTokens(
     params: ListEnrollmentTokensParams = {},
   ): Promise<PaginatedResponse<EnrollmentToken>> {
@@ -1580,6 +1864,189 @@ export class APIClient {
     const qs = search.toString();
     const path = `/api/v1/dashboard/overview${qs ? `?${qs}` : ''}`;
     return this.request<DashboardOverview>(path);
+  }
+
+  // ---- Executive Risk Dashboard Metrics -------------------------------------------
+  async getRiskScore(tenantId?: string): Promise<RiskScore> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    const qs = search.toString();
+    return this.request<RiskScore>(`/api/v1/metrics/risk-score${qs ? `?${qs}` : ''}`);
+  }
+
+  async getMTTDMetrics(tenantId?: string, severity?: string, days?: number): Promise<MTTDMetrics> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (severity) search.set('severity', severity);
+    if (days) search.set('days', String(days));
+    const qs = search.toString();
+    return this.request<MTTDMetrics>(`/api/v1/metrics/mttd${qs ? `?${qs}` : ''}`);
+  }
+
+  async getMTTRMetrics(tenantId?: string, severity?: string, days?: number): Promise<MTTRMetrics> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (severity) search.set('severity', severity);
+    if (days) search.set('days', String(days));
+    const qs = search.toString();
+    return this.request<MTTRMetrics>(`/api/v1/metrics/mttr${qs ? `?${qs}` : ''}`);
+  }
+
+  async getRemediationVelocity(tenantId?: string, period?: number): Promise<RemediationVelocity> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (period) search.set('period', String(period));
+    const qs = search.toString();
+    return this.request<RemediationVelocity>(`/api/v1/metrics/remediation-velocity${qs ? `?${qs}` : ''}`);
+  }
+
+  async getFindingsAging(tenantId?: string, severity?: string): Promise<FindingAging> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (severity) search.set('severity', severity);
+    const qs = search.toString();
+    return this.request<FindingAging>(`/api/v1/metrics/findings-aging${qs ? `?${qs}` : ''}`);
+  }
+
+  // ── Dashboard / metric history ─────────────────────────────────────────
+  async getRiskScoreHistory(tenantId?: string, days = 90): Promise<RiskScoreHistory> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    search.set('days', String(days));
+    return this.request<RiskScoreHistory>(`/api/v1/dashboard/metrics/risk-score/history?${search.toString()}`);
+  }
+
+  async getRemediationVelocityHistory(tenantId?: string, days = 90): Promise<RemediationVelocityHistory> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    search.set('days', String(days));
+    return this.request<RemediationVelocityHistory>(`/api/v1/dashboard/metrics/remediation-velocity/history?${search.toString()}`);
+  }
+
+  async getComplianceByFramework(tenantId?: string): Promise<ComplianceByFramework> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    const qs = search.toString();
+    return this.request<ComplianceByFramework>(`/api/v1/dashboard/metrics/compliance/by-framework${qs ? `?${qs}` : ''}`);
+  }
+
+  // ── Admin endpoints ────────────────────────────────────────────────────
+  async getAdminSelfHealth(): Promise<AdminSelfHealth> {
+    return this.request<AdminSelfHealth>('/api/v1/admin/self-health');
+  }
+
+  async getAdminIngestThroughput(stream = 'events', interval = '1m'): Promise<AdminIngestThroughput> {
+    const search = new URLSearchParams();
+    search.set('stream', stream);
+    search.set('interval', interval);
+    return this.request<AdminIngestThroughput>(`/api/v1/admin/ingest/throughput?${search.toString()}`);
+  }
+
+  async getAdminTenantsActivity(period = '24h'): Promise<AdminTenantsActivity> {
+    const search = new URLSearchParams();
+    search.set('period', period);
+    return this.request<AdminTenantsActivity>(`/api/v1/admin/tenants/activity?${search.toString()}`);
+  }
+
+  async getAdminSLO(): Promise<AdminSLO> {
+    return this.request<AdminSLO>('/api/v1/admin/slo');
+  }
+
+  async getAdminCapacity(): Promise<AdminCapacity> {
+    return this.request<AdminCapacity>('/api/v1/admin/capacity');
+  }
+
+  // ── Investigate / search ───────────────────────────────────────────────
+  async investigateSearch(params: {
+    q: string;
+    types?: string[];
+    since?: string;
+    until?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<InvestigateSearchResult> {
+    const search = new URLSearchParams();
+    search.set('q', params.q);
+    if (params.types?.length) search.set('types', params.types.join(','));
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    return this.request<InvestigateSearchResult>(`/api/v1/search?${search.toString()}`);
+  }
+
+  async getEntity(type: string, id: string): Promise<EntityDetail> {
+    return this.request<EntityDetail>(`/api/v1/entities/${type}/${encodeURIComponent(id)}`);
+  }
+
+  async getEntityLifecycle(
+    type: string,
+    id: string,
+    params: { since?: string; until?: string; sources?: string[]; cursor?: string; limit?: number } = {},
+  ): Promise<EntityLifecycle> {
+    const search = new URLSearchParams();
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (params.sources?.length) search.set('sources', params.sources.join(','));
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    const qs = search.toString();
+    return this.request<EntityLifecycle>(
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/lifecycle${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getEntityRelated(type: string, id: string): Promise<EntityRelated> {
+    return this.request<EntityRelated>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/related`);
+  }
+
+  async enrichIp(addr: string): Promise<IpEnrichment> {
+    return this.request<IpEnrichment>(`/api/v1/entities/ip/${encodeURIComponent(addr)}/enrich`);
+  }
+
+  async listSavedSearches(): Promise<{ items: SavedSearch[] }> {
+    return this.request<{ items: SavedSearch[] }>('/api/v1/saved-searches');
+  }
+
+  async createSavedSearch(payload: SavedSearchInput): Promise<SavedSearch> {
+    return this.request<SavedSearch>('/api/v1/saved-searches', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSavedSearch(id: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/saved-searches/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async addEntityTag(type: string, id: string, tag: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag }),
+    });
+  }
+
+  async entityAction(
+    type: string,
+    id: string,
+    payload: { action: 'block' | 'allow' | 'quarantine'; reason?: string; ttl?: string },
+  ): Promise<{ status: string; audit_id?: string }> {
+    return this.request<{ status: string; audit_id?: string }>(
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  // ── Onboarding wizard ──────────────────────────────────────────────────
+  async listOnboardingProtocols(): Promise<{ protocols: OnboardingProtocol[] }> {
+    return this.request<{ protocols: OnboardingProtocol[] }>('/api/v1/onboarding/protocols');
+  }
+
+  async testServerConnection(payload: TestConnectionPayload): Promise<TestConnectionResult> {
+    return this.request<TestConnectionResult>('/api/v1/onboarding/test-connection', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 
   async listPortRules(params: { tenantId?: string; policyId?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<PortRule>> {

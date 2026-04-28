@@ -1,4 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Lightbulb, RefreshCw } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Label } from '../components/ui/label';
+import {
+  EmptyState,
+  KpiTile,
+  Panel,
+  SectionHeader,
+} from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useToast } from '../providers/ToastProvider';
@@ -11,6 +20,7 @@ export function Recommendations(): JSX.Element {
   const [tenantId, setTenantId] = useState('');
   const [items, setItems] = useState<Recommendation[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!tenantId && tenants[0]?.id) setTenantId(tenants[0].id);
@@ -18,12 +28,15 @@ export function Recommendations(): JSX.Element {
 
   const refresh = useCallback(async () => {
     if (!tenantId) return;
+    setLoading(true);
     try {
       const resp = await client.listRecommendations(tenantId);
       setItems(resp.data);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'load failed');
+    } finally {
+      setLoading(false);
     }
   }, [client, tenantId]);
 
@@ -55,43 +68,111 @@ export function Recommendations(): JSX.Element {
     }
   };
 
+  const avgConfidence =
+    items.length > 0
+      ? Math.round((items.reduce((s, r) => s + r.confidence, 0) / items.length) * 100)
+      : 0;
+
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Behavioral</p>
-          <h2>Recommendations</h2>
-          <p className="subtitle">Derived from 30 days of port observations.</p>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="BEHAVIORAL · RECOMMENDATIONS"
+        title="Recommendations"
+        description="Derived from 30 days of port observations."
+        actions={
+          <Button variant="secondary" size="md" onClick={refresh} disabled={loading}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+        }
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <KpiTile label="DRAFTS READY" value={items.length} tone={items.length > 0 ? 'brand' : 'unknown'} />
+        <KpiTile label="AVG CONFIDENCE" value={`${avgConfidence}%`} tone="info" />
+      </div>
+
+      <Panel padding="md" eyebrow="FILTERS" title="Refine">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FilterSelect
+            label="Tenant"
+            value={tenantId}
+            onChange={(v) => setTenantId(v)}
+            options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+          />
         </div>
-        <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} aria-label="Tenant">
-          {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-      </header>
+      </Panel>
 
-      {error ? <p className="error-banner">{error}</p> : null}
-
-      {items.length === 0 ? (
-        <p className="muted">No recommendations yet. Data needs ≥30 days of observations.</p>
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {items.map((rec, i) => (
-            <li key={i} style={{ border: '1px solid var(--border)', padding: '0.75rem', marginBottom: '0.5rem', borderRadius: 4 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <strong>{rec.title}</strong>
-                  <div className="muted">{rec.rationale}</div>
-                  <small>Confidence: {(rec.confidence * 100).toFixed(1)}%</small>
-                </div>
-                <button type="button" className="primary-button" onClick={() => promote(rec)}>Promote</button>
-              </div>
-              <details style={{ marginTop: '0.5rem' }}>
-                <summary>Draft</summary>
-                <pre>{JSON.stringify(rec.draft, null, 2)}</pre>
-              </details>
-            </li>
-          ))}
-        </ul>
+      {error && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
+          <p className="text-sm text-state-critical">{error}</p>
+        </Panel>
       )}
-    </section>
+
+      {items.length === 0 && !loading ? (
+        <EmptyState
+          icon={<Lightbulb />}
+          title="No recommendations yet"
+          description="Data needs ≥30 days of observations before drafts are produced."
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-3">
+          {items.map((rec, i) => (
+            <Panel
+              key={i}
+              padding="md"
+              eyebrow={rec.kind.toUpperCase()}
+              title={rec.title}
+              actions={
+                <Button variant="primary" size="sm" onClick={() => promote(rec)}>
+                  Promote
+                </Button>
+              }
+            >
+              <p className="text-sm text-text-secondary">{rec.rationale}</p>
+              <div className="text-xs font-mono text-text-muted">
+                Confidence: {(rec.confidence * 100).toFixed(1)}%
+              </div>
+              <details className="mt-1">
+                <summary className="cursor-pointer text-xs text-text-secondary hover:text-foreground">
+                  Draft
+                </summary>
+                <pre className="mt-1 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed">
+                  {JSON.stringify(rec.draft, null, 2)}
+                </pre>
+              </details>
+            </Panel>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

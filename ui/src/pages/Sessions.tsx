@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Play, RefreshCw, Terminal } from 'lucide-react';
 import { useApiClient } from '../hooks/useApiClient';
-import { Badge, stateToVariant } from '../components/Badge';
-import { EmptyState } from '../components/EmptyState';
 import { SessionReplay } from '../components/SessionReplay';
+import { Button } from '../components/ui/button';
+import {
+  DataTable,
+  EmptyState,
+  EntityChip,
+  Panel,
+  SectionHeader,
+  StatusTag,
+  type StateTone,
+} from '../components/kit';
 import type { SessionRecording } from '../lib/api';
+import type { ColumnDef } from '@tanstack/react-table';
+
+const STATUS_TONE: Record<string, StateTone> = {
+  active: 'info',
+  completed: 'healthy',
+  failed: 'critical',
+  terminated: 'warning',
+};
 
 export function Sessions(): JSX.Element {
   const client = useApiClient();
@@ -29,67 +46,112 @@ export function Sessions(): JSX.Element {
     refresh();
   }, [refresh]);
 
-  return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Privileged sessions</p>
-          <h2>Recorded SSH &amp; RDP sessions</h2>
-          <p className="subtitle">Replay any privileged session to verify what happened. Search commands, scrub
-            timeline, export transcript for incident review.</p>
-        </div>
-        <button type="button" className="secondary-button" onClick={refresh} disabled={loading}>
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
-      </header>
+  const columns: ColumnDef<SessionRecording>[] = [
+    {
+      accessorKey: 'started_at',
+      header: 'Started',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs">{new Date(getValue() as string).toLocaleString()}</span>
+      ),
+    },
+    {
+      accessorKey: 'session_type',
+      header: 'Type',
+      cell: ({ getValue }) => (
+        <StatusTag tone="info">{(getValue() as string).toUpperCase()}</StatusTag>
+      ),
+    },
+    {
+      accessorKey: 'node_id',
+      header: 'Node',
+      cell: ({ getValue }) => <EntityChip type="host" value={getValue() as string} />,
+    },
+    {
+      accessorKey: 'user_id',
+      header: 'User',
+      cell: ({ getValue }) => {
+        const v = getValue() as string | undefined;
+        return v ? <EntityChip type="user" value={v} /> : <span className="text-text-muted">—</span>;
+      },
+    },
+    {
+      accessorKey: 'duration_seconds',
+      header: 'Duration',
+      cell: ({ getValue }) => {
+        const d = getValue() as number | undefined;
+        return (
+          <span className="font-mono text-xs tabular-nums">
+            {d ? `${Math.round(d)}s` : 'live'}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'status',
+      header: 'State',
+      cell: ({ getValue }) => {
+        const s = getValue() as string;
+        return <StatusTag tone={STATUS_TONE[s] ?? 'unknown'}>{s}</StatusTag>;
+      },
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => setOpenSession(row.original.id)}
+          disabled={!row.original.artifact_path}
+          title={row.original.artifact_path ? 'Replay session' : 'No artifact stored'}
+        >
+          <Play className="h-3.5 w-3.5" /> Replay
+        </Button>
+      ),
+    },
+  ];
 
-      {error ? <p className="error-banner">{error}</p> : null}
+  return (
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="ACCESS · PRIVILEGED SESSIONS"
+        title="Recorded SSH & RDP sessions"
+        description="Replay any privileged session to verify what happened. Search commands, scrub timeline, export transcript."
+        actions={
+          <Button variant="secondary" size="md" onClick={refresh} disabled={loading}>
+            <RefreshCw className="h-4 w-4" /> {loading ? 'Loading…' : 'Refresh'}
+          </Button>
+        }
+      />
+
+      {error && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Load failed">
+          <p className="text-sm text-state-critical">{error}</p>
+        </Panel>
+      )}
 
       {openSession ? (
-        <SessionReplay sessionId={openSession} onClose={() => setOpenSession(null)} />
-      ) : sessions.length === 0 && !loading ? (
-        <EmptyState
-          title="No recorded sessions yet"
-          description="Sessions appear here when an operator connects through the Control One bastion. Wire up access requests in /access to start capturing replays."
-        />
+        <Panel padding="sm" eyebrow="REPLAY" title="Session playback">
+          <SessionReplay sessionId={openSession} onClose={() => setOpenSession(null)} />
+        </Panel>
       ) : (
-        <table className="data-table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th>Started</th>
-              <th>Type</th>
-              <th>Node</th>
-              <th>User</th>
-              <th>Duration</th>
-              <th>State</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((s) => (
-              <tr key={s.id}>
-                <td>{new Date(s.started_at).toLocaleString()}</td>
-                <td>{s.session_type}</td>
-                <td><code>{s.node_id.slice(0, 8)}</code></td>
-                <td>{s.user_id ? <code>{s.user_id.slice(0, 8)}</code> : '—'}</td>
-                <td>{s.duration_seconds ? `${Math.round(s.duration_seconds)}s` : 'live'}</td>
-                <td><Badge variant={stateToVariant(s.status)} size="sm">{s.status}</Badge></td>
-                <td>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    onClick={() => setOpenSession(s.id)}
-                    disabled={!s.artifact_path}
-                    title={s.artifact_path ? 'Replay session' : 'No artifact stored'}
-                  >
-                    Replay
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <Panel padding="sm" tone="inset" eyebrow={`SESSIONS · ${sessions.length}`} title="Recordings">
+          <DataTable
+            columns={columns}
+            rows={sessions}
+            rowKey={(r) => r.id}
+            loading={loading}
+            compact
+            empty={
+              <EmptyState
+                icon={<Terminal />}
+                title="No recorded sessions yet"
+                description="Sessions appear here when an operator connects through the bastion. Wire up requests in /access to start capturing replays."
+              />
+            }
+          />
+        </Panel>
       )}
-    </section>
+    </div>
   );
 }

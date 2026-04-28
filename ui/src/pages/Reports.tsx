@@ -1,4 +1,12 @@
 import { useEffect, useState } from 'react';
+import { Download, FileBarChart } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Label } from '../components/ui/label';
+import {
+  EmptyState,
+  Panel,
+  SectionHeader,
+} from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import type { ReportDesc } from '../lib/api';
@@ -40,45 +48,92 @@ export function Reports(): JSX.Element {
   };
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Exports</p>
-          <h2>Reports</h2>
-          <p className="subtitle">Download CSV extracts for compliance, audit, alerts, and access.</p>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} aria-label="Tenant">
-            {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select value={range} onChange={(e) => setRange(Number(e.target.value))} aria-label="Range">
-            {RANGE_PRESETS.map((p) => <option key={p.days} value={p.days}>{p.label}</option>)}
-          </select>
-        </div>
-      </header>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="POSTURE · REPORTS"
+        title="Reports"
+        description="Download CSV extracts for compliance, audit, alerts, and access."
+      />
 
-      {error ? <p className="error-banner">{error}</p> : null}
+      <Panel padding="md" eyebrow="FILTERS" title="Refine">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FilterSelect
+            label="Tenant"
+            value={tenantId}
+            onChange={(v) => setTenantId(v)}
+            options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+          />
+          <FilterSelect
+            label="Range"
+            value={String(range)}
+            onChange={(v) => setRange(Number(v))}
+            options={RANGE_PRESETS.map((p) => ({ label: p.label, value: String(p.days) }))}
+          />
+        </div>
+      </Panel>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
-        {reports.map((rep) => (
-          <article key={rep.slug} className="stat-card" style={{ padding: '1rem' }}>
-            <p style={{ marginTop: 0 }}><strong>{rep.title}</strong></p>
-            <p className="muted" style={{ minHeight: '3em' }}>{rep.description}</p>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {rep.formats.map((fmt) => (
-                <button
-                  key={fmt}
-                  type="button"
-                  className="primary-button"
-                  onClick={() => download(rep.slug)}
-                >
-                  Download {fmt.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </article>
+      {error && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
+          <p className="text-sm text-state-critical">{error}</p>
+        </Panel>
+      )}
+
+      {reports.length === 0 ? (
+        <EmptyState
+          icon={<FileBarChart />}
+          title="No reports available"
+          description="The catalog is empty for this build."
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {reports.map((rep) => (
+            <Panel key={rep.slug} padding="md" eyebrow={rep.slug.toUpperCase()} title={rep.title}>
+              <p className="min-h-[3em] text-sm text-text-secondary">{rep.description}</p>
+              <div className="flex flex-wrap gap-2">
+                {rep.formats.map((fmt) => (
+                  <Button
+                    key={fmt}
+                    variant="primary"
+                    size="sm"
+                    onClick={() => download(rep.slug)}
+                  >
+                    <Download className="h-4 w-4" /> {fmt.toUpperCase()}
+                  </Button>
+                ))}
+              </div>
+            </Panel>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
         ))}
-      </div>
-    </section>
+      </select>
+    </div>
   );
 }

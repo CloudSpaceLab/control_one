@@ -10,6 +10,19 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Apply persisted theme synchronously before any paint so light-mode
+      // users don't see a flash of dark canvas while React mounts.
+      (function () {
+        try {
+          var t = localStorage.getItem('theme');
+          if (t !== 'light' && t !== 'dark') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.classList.add(t);
+        } catch (_) { /* ignore */ }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

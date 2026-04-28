@@ -225,7 +225,20 @@ func (m *Middleware) persistPrincipal(ctx context.Context, principal *Principal)
 		return principal
 	}
 	if len(storedRoles) > 0 {
-		principal.Roles = storedRoles
+		// Dedupe — ListUserRoles may surface the same role twice (e.g.
+		// global "admin" + tenant-scoped "admin"). The downstream RBAC
+		// gate doesn't care, but the JSON response (`roles` array) shows
+		// up duplicated in clients without the dedupe.
+		seen := make(map[string]struct{}, len(storedRoles))
+		uniq := make([]string, 0, len(storedRoles))
+		for _, r := range storedRoles {
+			if _, ok := seen[r]; ok {
+				continue
+			}
+			seen[r] = struct{}{}
+			uniq = append(uniq, r)
+		}
+		principal.Roles = uniq
 	}
 	return principal
 }

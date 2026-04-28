@@ -1,4 +1,5 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { SectionHeader } from '../components/kit';
 import { useJobs } from '../hooks/useJobs';
 import { useTenants } from '../hooks/useTenants';
 import type { Job, JobStatus } from '../lib/api';
@@ -275,9 +276,12 @@ export function Jobs(): JSX.Element {
   };
 
   return (
-    <section>
-      <h2>Jobs</h2>
-      <p>Background tasks across provisioning and compliance workflows.</p>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="AUTOMATION · JOBS"
+        title="Jobs"
+        description="Background tasks across provisioning and compliance workflows."
+      />
 
       <div className="worker-overview">
         <article className="worker-panel">
@@ -686,6 +690,6 @@ export function Jobs(): JSX.Element {
           ) : null}
         </aside>
       ) : null}
-    </section>
+    </div>
   );
 }

@@ -1,0 +1,150 @@
+.aging-table {
+  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 12px;
+  padding: 24px;
+  color: #f8fafc;
+}
+
+.aging-table.skeleton {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.skeleton-header {
+  height: 20px;
+  background: #334155;
+  border-radius: 4px;
+  width: 40%;
+  margin-bottom: 16px;
+}
+
+.skeleton-row {
+  height: 40px;
+  background: #334155;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.aging-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.aging-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.severity-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+.total-findings {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.1);
+}
+
+.total-label {
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
+.total-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.aging-buckets {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aging-bucket {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bucket-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bucket-label {
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
+.bucket-count {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.bucket-bar {
+  height: 8px;
+  background: #334155;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bucket-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.aging-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+}
+
+.alert-icon {
+  font-size: 1rem;
+}
+
+.alert-text {
+  font-size: 0.875rem;
+  color: #fca5a5;
+}
+
+.aging-table.empty {
+  text-align: center;
+  padding: 40px;
+}
+
+.aging-table.empty h3 {
+  margin: 0 0 8px 0;
+  color: #e2e8f0;
+}
+
+.aging-table.empty p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.875rem;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

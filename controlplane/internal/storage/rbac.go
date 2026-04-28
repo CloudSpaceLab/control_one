@@ -247,10 +247,24 @@ func (s *Store) AssignRolesToUser(ctx context.Context, userID uuid.UUID, roles [
 			return err
 		}
 
+		// Check if role assignment already exists (idempotent)
+		var existingID uuid.UUID
+		checkErr := tx.QueryRowContext(ctx,
+			`SELECT id FROM user_roles WHERE user_id = $1 AND role_id = $2 AND tenant_id IS NULL LIMIT 1`,
+			userID, roleID).Scan(&existingID)
+		if checkErr == nil {
+			// Role assignment already exists, skip
+			continue
+		}
+		if !errors.Is(checkErr, sql.ErrNoRows) {
+			err = fmt.Errorf("check role %s: %w", roleName, checkErr)
+			return err
+		}
+
+		// Insert role assignment
 		if _, roleErr = tx.ExecContext(ctx, `
             INSERT INTO user_roles (user_id, role_id, tenant_id, assigned_by, expires_at)
             VALUES ($1, $2, NULL, NULL, NULL)
-            ON CONFLICT (user_id, role_id) WHERE tenant_id IS NULL DO NOTHING
         `, userID, roleID); roleErr != nil {
 			err = fmt.Errorf("assign role %s: %w", roleName, roleErr)
 			return err

@@ -1,4 +1,9 @@
 import { useMemo, useState } from 'react';
+import { Plus, Play, ArrowUp, X } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Panel, SectionHeader } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useToast } from '../providers/ToastProvider';
@@ -115,93 +120,135 @@ export function RuleBuilder(): JSX.Element {
   };
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Builder</p>
-          <h2>Visual rule builder</h2>
-          <p className="subtitle">Compose blocks, simulate against history, then promote.</p>
-        </div>
-        <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} aria-label="Tenant">
-          <option value="">Choose tenant…</option>
-          {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-      </header>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="POSTURE · BUILDER"
+        title="Visual rule builder"
+        description="Compose blocks, simulate against history, then promote."
+        actions={
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rb-tenant" className="sr-only">
+              Tenant
+            </Label>
+            <select
+              id="rb-tenant"
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              aria-label="Tenant"
+              className="flex h-9 rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+            >
+              <option value="">Choose tenant…</option>
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
+      />
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        <button type="button" className="primary-button" onClick={() => addBlock('port')}>+ Port block</button>
-        <button type="button" className="primary-button" onClick={() => addBlock('log')}>+ Log block</button>
-        <button type="button" className="primary-button" onClick={() => addBlock('compliance')}>+ Compliance block</button>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="secondary" onClick={() => addBlock('port')}>
+          <Plus className="h-4 w-4" /> Port block
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => addBlock('log')}>
+          <Plus className="h-4 w-4" /> Log block
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => addBlock('compliance')}>
+          <Plus className="h-4 w-4" /> Compliance block
+        </Button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1rem' }}>
-        <ol style={{ listStyle: 'none', padding: 0 }} onDragOver={onDragOver}>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <Panel padding="md" eyebrow="BLOCKS" title="Composition">
           {blocks.length === 0 ? (
-            <p className="muted">No blocks yet. Add one above.</p>
+            <p className="text-sm text-text-muted">No blocks yet. Add one above.</p>
           ) : (
-            blocks.map((b, i) => (
-              <li
-                key={b.id}
-                draggable
-                onDragStart={() => onDragStart(i)}
-                onDragOver={onDragOver}
-                onDrop={() => onDrop(i)}
-                style={{
-                  border: '1px solid var(--border, #333)',
-                  borderRadius: 6,
-                  padding: '0.75rem',
-                  marginBottom: '0.5rem',
-                  background: 'var(--surface, #151515)',
-                  cursor: 'move',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong>{b.kind.toUpperCase()} block</strong>
-                  <button type="button" className="secondary-button" onClick={() => removeBlock(b.id)}>×</button>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginTop: '0.5rem' }}>
-                  {Object.entries(b.config).map(([k, v]) => (
-                    <label key={k} style={{ fontSize: '0.85rem' }}>
-                      {k}
-                      <input
-                        value={String(v)}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          const parsed = !isNaN(Number(raw)) && raw !== '' ? Number(raw) : raw;
-                          updateConfig(b.id, k, parsed);
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </li>
-            ))
+            <ol className="m-0 flex list-none flex-col gap-2 p-0" onDragOver={onDragOver}>
+              {blocks.map((b, i) => (
+                <li
+                  key={b.id}
+                  draggable
+                  onDragStart={() => onDragStart(i)}
+                  onDragOver={onDragOver}
+                  onDrop={() => onDrop(i)}
+                  className="cursor-move rounded-md border border-border-subtle bg-surface p-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <strong className="text-sm font-semibold text-foreground">
+                      {b.kind.toUpperCase()} block
+                    </strong>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeBlock(b.id)}
+                      aria-label="Remove block"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
+                    {Object.entries(b.config).map(([k, v]) => (
+                      <div key={k} className="flex flex-col gap-1.5">
+                        <Label htmlFor={`${b.id}-${k}`} className="text-xs">
+                          {k}
+                        </Label>
+                        <Input
+                          id={`${b.id}-${k}`}
+                          value={String(v)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const parsed =
+                              !isNaN(Number(raw)) && raw !== '' ? Number(raw) : raw;
+                            updateConfig(b.id, k, parsed);
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ol>
           )}
-        </ol>
-        <aside style={{ background: 'var(--surface, #151515)', border: '1px solid var(--border, #333)', borderRadius: 6, padding: '0.75rem' }}>
-          <h3 style={{ marginTop: 0 }}>YAML preview</h3>
-          <pre style={{ fontSize: '0.8rem', overflow: 'auto' }}>{yaml || '# no blocks'}</pre>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button type="button" className="primary-button" onClick={simulate} disabled={!tenantId || blocks.length === 0 || simBusy}>
-              {simBusy ? 'Simulating…' : 'Simulate'}
-            </button>
-            <button type="button" className="primary-button" onClick={promote} disabled={!tenantId || blocks.length === 0}>
-              Promote
-            </button>
+        </Panel>
+
+        <Panel padding="md" tone="inset" eyebrow="PREVIEW" title="YAML">
+          <pre className="overflow-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-[0.75rem] leading-relaxed text-text-secondary">
+            {yaml || '# no blocks'}
+          </pre>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              onClick={simulate}
+              disabled={!tenantId || blocks.length === 0 || simBusy}
+            >
+              <Play className="h-4 w-4" /> {simBusy ? 'Simulating…' : 'Simulate'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={promote}
+              disabled={!tenantId || blocks.length === 0}
+            >
+              <ArrowUp className="h-4 w-4" /> Promote
+            </Button>
           </div>
-          {error ? <p className="error-banner">{error}</p> : null}
-          {simResult ? (
-            <div style={{ marginTop: '0.5rem' }}>
-              <strong>Simulation</strong>
-              <p className="muted" style={{ fontSize: '0.85rem' }}>{simResult.summary}</p>
-              <p style={{ fontSize: '0.85rem' }}>
+          {error && <p className="text-sm text-state-critical">{error}</p>}
+          {simResult && (
+            <div className="rounded-md border border-border-subtle bg-surface p-3">
+              <strong className="text-sm font-semibold text-foreground">Simulation</strong>
+              <p className="mt-1 text-xs text-text-muted">{simResult.summary}</p>
+              <p className="mt-1 text-xs text-text-secondary">
                 Pass: {simResult.nodes_would_pass} · Fail: {simResult.nodes_would_fail}
               </p>
             </div>
-          ) : null}
-        </aside>
+          )}
+        </Panel>
       </div>
-    </section>
+    </div>
   );
 }
 

@@ -1,4 +1,18 @@
 import { useCallback, useEffect, useState, lazy, Suspense } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Skeleton } from '../components/ui/skeleton';
+import {
+  DataTable,
+  EmptyState,
+  Panel,
+  SectionHeader,
+  StatusTag,
+  type StateTone,
+} from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useEventStream } from '../hooks/useEventStream';
@@ -9,6 +23,7 @@ import type {
   LogRule,
   PortRule,
 } from '../lib/api';
+import type { ColumnDef } from '@tanstack/react-table';
 
 // Lazy-load the visual builder so its drag/drop state machine doesn't slow
 // the initial page render for operators who only want to author rules in the
@@ -16,6 +31,14 @@ import type {
 const RuleBuilder = lazy(() => import('./RuleBuilder').then((m) => ({ default: m.RuleBuilder })));
 
 type Tab = 'port' | 'log' | 'builder';
+
+function severityTone(severity: string): StateTone {
+  const s = severity.toLowerCase();
+  if (s === 'critical') return 'critical';
+  if (s === 'high') return 'warning';
+  if (s === 'medium') return 'info';
+  return 'unknown';
+}
 
 export function Rules(): JSX.Element {
   const client = useApiClient();
@@ -57,71 +80,66 @@ export function Rules(): JSX.Element {
   });
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Detection</p>
-          <h2>Detection rules</h2>
-          <p className="subtitle">Define what&apos;s allowed. Detect violations instantly. Real-time enforcement on every node.</p>
-        </div>
-        <select
-          value={tenantId}
-          onChange={(e) => setTenantId(e.target.value)}
-          aria-label="Tenant"
-          style={{ padding: '0.4rem' }}
-        >
-          {tenants.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-      </header>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="POSTURE · DETECTION"
+        title="Detection rules"
+        description="Define what's allowed. Detect violations instantly. Real-time enforcement on every node."
+        actions={
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rules-tenant" className="sr-only">
+              Tenant
+            </Label>
+            <select
+              id="rules-tenant"
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              aria-label="Tenant"
+              className="flex h-9 rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+            >
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
+      />
 
-      {error ? <p className="error-banner">{error}</p> : null}
-      {notice ? <p className="muted">{notice}</p> : null}
-
-      <div className="tab-row" role="tablist" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'port'}
-          className={tab === 'port' ? 'primary-button' : 'secondary-button'}
-          onClick={() => setTab('port')}
-        >
-          Port rules ({portRules.length})
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'log'}
-          className={tab === 'log' ? 'primary-button' : 'secondary-button'}
-          onClick={() => setTab('log')}
-        >
-          Log rules ({logRules.length})
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'builder'}
-          className={tab === 'builder' ? 'primary-button' : 'secondary-button'}
-          onClick={() => setTab('builder')}
-          title="Compose rules visually with drag-and-drop blocks"
-        >
-          Visual builder
-        </button>
-      </div>
-
-      {tab === 'port' ? (
-        <PortRulesPane tenantId={tenantId} rules={portRules} onRefresh={refresh} />
-      ) : tab === 'log' ? (
-        <LogRulesPane tenantId={tenantId} rules={logRules} onRefresh={refresh} />
-      ) : (
-        <Suspense fallback={<p className="muted">Loading builder…</p>}>
-          <RuleBuilder />
-        </Suspense>
+      {error && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed">
+          <p className="text-sm text-state-critical">{error}</p>
+        </Panel>
       )}
-    </section>
+      {notice && (
+        <Panel padding="sm" tone="inset" toneAccent="brand" eyebrow="REALTIME" title={notice}>
+          <span className="sr-only">Realtime update received.</span>
+        </Panel>
+      )}
+
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+        <TabsList>
+          <TabsTrigger value="port">Port rules ({portRules.length})</TabsTrigger>
+          <TabsTrigger value="log">Log rules ({logRules.length})</TabsTrigger>
+          <TabsTrigger value="builder" title="Compose rules visually with drag-and-drop blocks">
+            Visual builder
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="port" className="mt-4">
+          <PortRulesPane tenantId={tenantId} rules={portRules} onRefresh={refresh} />
+        </TabsContent>
+        <TabsContent value="log" className="mt-4">
+          <LogRulesPane tenantId={tenantId} rules={logRules} onRefresh={refresh} />
+        </TabsContent>
+        <TabsContent value="builder" className="mt-4">
+          <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+            <RuleBuilder />
+          </Suspense>
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }
 
@@ -170,8 +188,45 @@ function PortRulesPane({
     onRefresh();
   };
 
+  const columns: ColumnDef<PortRule>[] = [
+    { accessorKey: 'name', header: 'Name' },
+    { accessorKey: 'port', header: 'Port' },
+    { accessorKey: 'protocol', header: 'Proto' },
+    { accessorKey: 'expected_state', header: 'Expected' },
+    {
+      accessorKey: 'severity',
+      header: 'Severity',
+      cell: ({ getValue }) => {
+        const s = String(getValue());
+        return <StatusTag tone={severityTone(s)}>{s}</StatusTag>;
+      },
+    },
+    {
+      accessorKey: 'enabled',
+      header: 'Enabled',
+      cell: ({ getValue }) => (
+        <StatusTag tone={getValue() ? 'healthy' : 'unknown'}>{getValue() ? 'yes' : 'no'}</StatusTag>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setConfirmDeleteId(row.original.id)}
+        >
+          <Trash2 className="h-4 w-4" />
+          Delete
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <div>
+    <div className="flex flex-col gap-4">
       <ConfirmModal
         open={confirmDeleteId !== null}
         title="Delete port rule?"
@@ -184,91 +239,102 @@ function PortRulesPane({
         }}
         onCancel={() => setConfirmDeleteId(null)}
       />
-      <form className="form-row" onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '0.5rem', alignItems: 'end' }}>
-        <label htmlFor="pr-name">
-          Name
-          <input id="pr-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </label>
-        <label htmlFor="pr-port">
-          Port
-          <input
-            id="pr-port"
-            type="number"
-            min={1}
-            max={65535}
-            required
-            value={form.port}
-            onChange={(e) => setForm({ ...form, port: Number(e.target.value) })}
-          />
-        </label>
-        <label htmlFor="pr-protocol">
-          Protocol
-          <select id="pr-protocol" value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value as 'tcp' | 'udp' })}>
-            <option value="tcp">tcp</option>
-            <option value="udp">udp</option>
-          </select>
-        </label>
-        <label htmlFor="pr-expected">
-          Expected
-          <select
-            id="pr-expected"
-            value={form.expected_state}
-            onChange={(e) => setForm({ ...form, expected_state: e.target.value as 'open' | 'closed' })}
-          >
-            <option value="closed">closed</option>
-            <option value="open">open</option>
-          </select>
-        </label>
-        <label htmlFor="pr-severity">
-          Severity
-          <select id="pr-severity" value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })}>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="critical">critical</option>
-          </select>
-        </label>
-        <button type="submit" className="primary-button" disabled={submitting}>
-          Add rule
-        </button>
-      </form>
 
-      <table className="data-table" style={{ marginTop: '1rem', width: '100%' }}>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Port</th>
-            <th>Proto</th>
-            <th>Expected</th>
-            <th>Severity</th>
-            <th>Enabled</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rules.length === 0 ? (
-            <tr>
-              <td colSpan={7} className="muted">No port rules yet.</td>
-            </tr>
-          ) : (
-            rules.map((r) => (
-              <tr key={r.id}>
-                <td>{r.name}</td>
-                <td>{r.port}</td>
-                <td>{r.protocol}</td>
-                <td>{r.expected_state}</td>
-                <td>{r.severity}</td>
-                <td>{r.enabled ? 'yes' : 'no'}</td>
-                <td>
-                  <button type="button" className="secondary-button" onClick={() => setConfirmDeleteId(r.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+      <Panel padding="md" eyebrow="NEW RULE" title="Add a port rule">
+        <form onSubmit={submit} className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pr-name">Name</Label>
+            <Input
+              id="pr-name"
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pr-port">Port</Label>
+            <Input
+              id="pr-port"
+              type="number"
+              min={1}
+              max={65535}
+              required
+              value={form.port}
+              onChange={(e) => setForm({ ...form, port: Number(e.target.value) })}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pr-protocol">Protocol</Label>
+            <select
+              id="pr-protocol"
+              value={form.protocol}
+              onChange={(e) =>
+                setForm({ ...form, protocol: e.target.value as 'tcp' | 'udp' })
+              }
+              className="flex h-9 rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+            >
+              <option value="tcp">tcp</option>
+              <option value="udp">udp</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pr-expected">Expected</Label>
+            <select
+              id="pr-expected"
+              value={form.expected_state}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  expected_state: e.target.value as 'open' | 'closed',
+                })
+              }
+              className="flex h-9 rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+            >
+              <option value="closed">closed</option>
+              <option value="open">open</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pr-severity">Severity</Label>
+            <select
+              id="pr-severity"
+              value={form.severity}
+              onChange={(e) => setForm({ ...form, severity: e.target.value })}
+              className="flex h-9 rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+            >
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <Button type="submit" variant="primary" disabled={submitting} className="w-full">
+              <Plus className="h-4 w-4" /> Add rule
+            </Button>
+          </div>
+        </form>
+      </Panel>
+
+      <Panel
+        padding="sm"
+        tone="inset"
+        eyebrow={`PORT RULES · ${rules.length}`}
+        title="Active rules"
+      >
+        <DataTable
+          columns={columns}
+          rows={rules}
+          rowKey={(r) => r.id}
+          compact
+          empty={
+            <EmptyState
+              title="No port rules yet"
+              description="Add one above to start monitoring open/closed ports."
+            />
+          }
+        />
+      </Panel>
     </div>
   );
 }
@@ -319,8 +385,51 @@ function LogRulesPane({
     onRefresh();
   };
 
+  const columns: ColumnDef<LogRule>[] = [
+    { accessorKey: 'name', header: 'Name' },
+    { accessorKey: 'log_source', header: 'Source' },
+    {
+      accessorKey: 'pattern',
+      header: 'Pattern',
+      cell: ({ getValue }) => (
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem] text-text-secondary">
+          {String(getValue())}
+        </code>
+      ),
+    },
+    {
+      accessorKey: 'window_seconds',
+      header: 'Win',
+      cell: ({ getValue }) => `${getValue()}s`,
+    },
+    { accessorKey: 'threshold', header: 'Thresh' },
+    {
+      accessorKey: 'severity',
+      header: 'Sev',
+      cell: ({ getValue }) => {
+        const s = String(getValue());
+        return <StatusTag tone={severityTone(s)}>{s}</StatusTag>;
+      },
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setConfirmDeleteId(row.original.id)}
+        >
+          <Trash2 className="h-4 w-4" />
+          Delete
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <div>
+    <div className="flex flex-col gap-4">
       <ConfirmModal
         open={confirmDeleteId !== null}
         title="Delete log rule?"
@@ -333,80 +442,85 @@ function LogRulesPane({
         }}
         onCancel={() => setConfirmDeleteId(null)}
       />
-      <form className="form-row" onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.5rem', alignItems: 'end' }}>
-        <label htmlFor="lr-name">
-          Name
-          <input id="lr-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </label>
-        <label htmlFor="lr-source">
-          Source
-          <input id="lr-source" required value={form.log_source} onChange={(e) => setForm({ ...form, log_source: e.target.value })} />
-        </label>
-        <label htmlFor="lr-pattern" style={{ gridColumn: 'span 2' }}>
-          Pattern (regex)
-          <input id="lr-pattern" required value={form.pattern} onChange={(e) => setForm({ ...form, pattern: e.target.value })} />
-        </label>
-        <label htmlFor="lr-window">
-          Window (s)
-          <input
-            id="lr-window"
-            type="number"
-            min={1}
-            value={form.window_seconds}
-            onChange={(e) => setForm({ ...form, window_seconds: Number(e.target.value) })}
-          />
-        </label>
-        <label htmlFor="lr-threshold">
-          Threshold
-          <input
-            id="lr-threshold"
-            type="number"
-            min={1}
-            value={form.threshold}
-            onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })}
-          />
-        </label>
-        <button type="submit" className="primary-button" disabled={submitting}>
-          Add rule
-        </button>
-      </form>
 
-      <table className="data-table" style={{ marginTop: '1rem', width: '100%' }}>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Source</th>
-            <th>Pattern</th>
-            <th>Win</th>
-            <th>Thresh</th>
-            <th>Sev</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rules.length === 0 ? (
-            <tr>
-              <td colSpan={7} className="muted">No log rules yet.</td>
-            </tr>
-          ) : (
-            rules.map((r) => (
-              <tr key={r.id}>
-                <td>{r.name}</td>
-                <td>{r.log_source}</td>
-                <td><code>{r.pattern}</code></td>
-                <td>{r.window_seconds}s</td>
-                <td>{r.threshold}</td>
-                <td>{r.severity}</td>
-                <td>
-                  <button type="button" className="secondary-button" onClick={() => setConfirmDeleteId(r.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+      <Panel padding="md" eyebrow="NEW RULE" title="Add a log rule">
+        <form onSubmit={submit} className="grid grid-cols-2 gap-3 lg:grid-cols-7">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="lr-name">Name</Label>
+            <Input
+              id="lr-name"
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="lr-source">Source</Label>
+            <Input
+              id="lr-source"
+              required
+              value={form.log_source}
+              onChange={(e) => setForm({ ...form, log_source: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 lg:col-span-2">
+            <Label htmlFor="lr-pattern">Pattern (regex)</Label>
+            <Input
+              id="lr-pattern"
+              required
+              value={form.pattern}
+              onChange={(e) => setForm({ ...form, pattern: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="lr-window">Window (s)</Label>
+            <Input
+              id="lr-window"
+              type="number"
+              min={1}
+              value={form.window_seconds}
+              onChange={(e) =>
+                setForm({ ...form, window_seconds: Number(e.target.value) })
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="lr-threshold">Threshold</Label>
+            <Input
+              id="lr-threshold"
+              type="number"
+              min={1}
+              value={form.threshold}
+              onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })}
+            />
+          </div>
+          <div className="flex items-end">
+            <Button type="submit" variant="primary" disabled={submitting} className="w-full">
+              <Plus className="h-4 w-4" /> Add rule
+            </Button>
+          </div>
+        </form>
+      </Panel>
+
+      <Panel
+        padding="sm"
+        tone="inset"
+        eyebrow={`LOG RULES · ${rules.length}`}
+        title="Active rules"
+      >
+        <DataTable
+          columns={columns}
+          rows={rules}
+          rowKey={(r) => r.id}
+          compact
+          empty={
+            <EmptyState
+              title="No log rules yet"
+              description="Add one above to start matching log patterns."
+            />
+          }
+        />
+      </Panel>
     </div>
   );
 }

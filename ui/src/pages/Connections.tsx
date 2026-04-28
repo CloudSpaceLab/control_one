@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
+import { SectionHeader } from '../components/kit';
 import { Badge } from '../components/Badge';
 import { EmptyState } from '../components/EmptyState';
 import EventTimeline from '../components/EventTimeline';
@@ -60,16 +61,13 @@ export function Connections(): JSX.Element {
   );
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Network forensics</p>
-          <h2>Connections</h2>
-          <p className="subtitle">
-            Every external connection on every node — process, user, bytes in/out, duration. Click a row to see
-            files touched, DB queries, and log events that share its correlation window.
-          </p>
-        </div>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="DETECT & RESPOND · NETWORK FORENSICS"
+        title="Connections"
+        description="Every external connection on every node — process, user, bytes in/out, duration. Click a row to see files touched, DB queries, and log events that share its correlation window."
+      />
+      <div className="flex items-center gap-2">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             type="search"
@@ -90,7 +88,7 @@ export function Connections(): JSX.Element {
             {loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
-      </header>
+      </div>
 
       {error ? <p className="error-banner">{error}</p> : null}
 
@@ -158,7 +156,7 @@ export function Connections(): JSX.Element {
           onClose={() => setSelected(null)}
         />
       ) : null}
-    </section>
+    </div>
   );
 }
 

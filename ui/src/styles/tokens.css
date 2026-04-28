@@ -1,0 +1,193 @@
+/*
+ * control_one design tokens — single source of truth.
+ * Layered:
+ *   A — primitive palette + type/motion/radii (theme-invariant)
+ *   B — semantic dark surfaces + shadcn aliases
+ *   C — semantic light surfaces + shadcn aliases
+ * Imported before Tailwind so @theme can read the variables.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ─── Layer A — primitives ─────────────────────────────────────────── */
+  --brand-400: #818cf8;
+  --brand-500: #6366f1;
+  --brand-600: #4f46e5;
+
+  --accent-400: #7dd3fc;
+  --accent-500: #38bdf8;
+  --accent-600: #0284c7;
+
+  --state-healthy: #22d3a4;
+  --state-warning: #fbbf24;
+  --state-degraded: #f97316;
+  --state-critical: #f87171;
+  --state-info: #38bdf8;
+  --state-unknown: #64748b;
+
+  --font-display: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --fs-micro: 0.5625rem;   /* 9px */
+  --fs-caption: 0.625rem;  /* 10px */
+  --fs-xs: 0.6875rem;      /* 11px */
+  --fs-sm: 0.8125rem;      /* 13px */
+  --fs-base: 0.875rem;     /* 14px */
+  --fs-lg: 1.0625rem;      /* 17px */
+  --fs-xl: 1.25rem;        /* 20px */
+  --fs-2xl: 1.5rem;        /* 24px */
+  --fs-display: clamp(2rem, 1.4rem + 1.6vw, 2.75rem);
+
+  --motion-fast: 120ms;
+  --motion-med: 220ms;
+  --motion-slow: 480ms;
+  --motion-shimmer: 3500ms;
+  --motion-pulse: 2500ms;
+  --motion-glow: 5000ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --radius-sm: 4px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --z-shell: 50;
+  --z-popover: 60;
+  --z-modal: 80;
+  --z-toast: 90;
+
+  color-scheme: dark light;
+  font-family: var(--font-body);
+  min-height: 100%;
+}
+
+/* ─── Layer B — semantic dark (default) ──────────────────────────────── */
+:root,
+:root[data-theme="dark"],
+:root.dark {
+  --bg-canvas: #000000;
+  --bg-surface: #0a0a0f;
+  --bg-surface-2: #111118;
+  --bg-elevated: rgba(15, 23, 42, 0.85);
+  --bg-hover: rgba(30, 41, 59, 0.8);
+
+  --border-subtle: rgba(148, 163, 184, 0.18);
+  --border-default: rgba(99, 102, 241, 0.22);
+  --border-strong: rgba(99, 102, 241, 0.5);
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --shadow-panel: 0 18px 38px rgba(2, 6, 23, 0.55);
+  --shadow-glow-brand: 0 0 40px rgba(99, 102, 241, 0.25);
+  --shadow-glow-state: 0 0 32px var(--state-info);
+
+  /* Row stripe + hover used by table primitives + legacy selectors. */
+  --row-stripe: rgba(148, 163, 184, 0.06);
+  --row-hover: rgba(99, 102, 241, 0.10);
+  --overlay-scrim: rgba(0, 0, 0, 0.55);
+
+  /* shadcn semantic aliases (HSL-free; we use raw color values) */
+  --background: var(--bg-canvas);
+  --foreground: var(--text-primary);
+  --card: var(--bg-surface);
+  --card-foreground: var(--text-primary);
+  --popover: var(--bg-surface-2);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--brand-500);
+  --primary-foreground: #0f172a;
+  --secondary: var(--bg-elevated);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--bg-surface-2);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--accent-500);
+  --accent-foreground: #0f172a;
+  --destructive: var(--state-critical);
+  --destructive-foreground: #0f172a;
+  --border: var(--border-subtle);
+  --input: var(--border-default);
+  --ring: var(--brand-500);
+
+  /* Migration aliases — drop after one release */
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-surface-2);
+  --text-tertiary: var(--text-primary);
+  --border-color: var(--border-subtle);
+  --border-hover: var(--border-strong);
+  --shadow: rgba(2, 6, 23, 0.55);
+
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+/* ─── Layer C — semantic light ───────────────────────────────────────── */
+:root[data-theme="light"],
+:root.light {
+  --bg-canvas: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f1f5f9;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e2e8f0;
+
+  --border-subtle: rgba(15, 23, 42, 0.08);
+  --border-default: rgba(99, 102, 241, 0.24);
+  --border-strong: rgba(99, 102, 241, 0.5);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  --shadow-panel: 0 8px 24px rgba(15, 23, 42, 0.06);
+  --shadow-glow-brand: 0 0 28px rgba(99, 102, 241, 0.18);
+
+  --row-stripe: rgba(15, 23, 42, 0.025);
+  --row-hover: rgba(99, 102, 241, 0.07);
+  --overlay-scrim: rgba(15, 23, 42, 0.35);
+
+  --background: var(--bg-canvas);
+  --foreground: var(--text-primary);
+  --card: var(--bg-surface);
+  --card-foreground: var(--text-primary);
+  --popover: var(--bg-surface);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--brand-500);
+  --primary-foreground: #ffffff;
+  --secondary: var(--bg-surface-2);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--bg-surface-2);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--accent-500);
+  --accent-foreground: #ffffff;
+  --destructive: var(--state-critical);
+  --destructive-foreground: #ffffff;
+  --border: var(--border-subtle);
+  --input: var(--border-subtle);
+  --ring: var(--brand-500);
+
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-surface-2);
+  --text-tertiary: var(--text-primary);
+  --border-color: var(--border-subtle);
+  --border-hover: var(--border-strong);
+  --shadow: rgba(15, 23, 42, 0.08);
+
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-med: 0ms;
+    --motion-slow: 0ms;
+    --motion-shimmer: 0ms;
+    --motion-pulse: 0ms;
+    --motion-glow: 0ms;
+  }
+}

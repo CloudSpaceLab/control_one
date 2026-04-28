@@ -57,10 +57,15 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   }, [token]);
 
   const handleSessionEnded = useCallback((message?: string | null) => {
+    // Clear the apiClient token SYNCHRONOUSLY so any in-flight request
+    // dispatched by other consumers in the same tick uses null, not the
+    // stale token. The useEffect that mirrors token state would otherwise
+    // run after the tear-down rerender.
+    apiClient.setToken(null);
     setToken(null);
     setProfile(null);
     setError(message ?? 'Session has expired. Please sign in again.');
-  }, []);
+  }, [apiClient]);
 
   useEffect(() => {
     apiClient.onUnauthorized(() => handleSessionEnded());
@@ -126,6 +131,13 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         if (!trimmed) {
           throw new Error('Token is required');
         }
+        // Sync the apiClient token BEFORE flipping the React state.
+        // Other consumers (TenantProvider, dashboards) react to
+        // isAuthenticated flipping true and immediately call into
+        // apiClient — without this sync those calls would fly without
+        // an Authorization header and bounce 401, triggering the
+        // unauthorized handler and logging the user back out instantly.
+        apiClient.setToken(trimmed);
         setToken(trimmed);
         setProfile(null);
         setError(null);

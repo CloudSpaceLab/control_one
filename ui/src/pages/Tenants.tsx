@@ -1,8 +1,22 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { Building2, RefreshCw } from 'lucide-react';
 import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import {
+  DataTable,
+  EmptyState,
+  EntityChip,
+  KpiTile,
+  Panel,
+  SectionHeader,
+} from '../components/kit';
+import type { ColumnDef } from '@tanstack/react-table';
+import type { Tenant } from '../lib/api';
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -135,168 +149,178 @@ export function Tenants(): JSX.Element {
     }
   };
 
+  const columns = useMemo<ColumnDef<Tenant>[]>(() => [
+    {
+      accessorKey: 'name',
+      header: 'Name',
+      cell: ({ getValue }) => <span className="font-medium">{getValue() as string}</span>,
+    },
+    {
+      accessorKey: 'id',
+      header: 'Tenant ID',
+      cell: ({ getValue }) => <EntityChip type="tenant" value={getValue() as string} />,
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums">{formatDate(getValue() as string)}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => openTenantDetails(row.original.id)}
+        >
+          {selectedTenantId === row.original.id ? 'Hide' : 'View'}
+        </Button>
+      ),
+    },
+  ], [selectedTenantId, rows]);
+
   return (
-    <section className="tenants-page">
-      <div className="page-header">
-        <div>
-          <h2>Tenants</h2>
-          <p>Tenants represent isolation boundaries for infrastructure, policy, and compliance scope.</p>
-        </div>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="GOVERNANCE · TENANTS"
+        title="Tenants"
+        description="Tenants represent isolation boundaries for infrastructure, policy, and compliance scope."
+        actions={
+          <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
+            <RefreshCw className="h-4 w-4" /> {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile label="TOTAL TENANTS" value={summary.total} tone="brand" />
+        <KpiTile label="MOST RECENT" value={summary.newestName} tone="info" hint={summary.newestDate} />
       </div>
 
-      <div className="stat-card-grid">
-        <article className="stat-card">
-          <span className="muted">Total tenants</span>
-          <strong>{summary.total}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="muted">Most recent</span>
-          <strong>{summary.newestName}</strong>
-          <small className="muted">{summary.newestDate}</small>
-        </article>
-      </div>
-
-      <div className="tenants-layout">
-        <form className="panel tenants-form" onSubmit={handleCreateTenant}>
-          <h3>Create tenant</h3>
-          <label htmlFor="tenant-name">Name</label>
-          <input
-            id="tenant-name"
-            name="tenant-name"
-            type="text"
-            value={tenantName}
-            onChange={(event) => setTenantName(event.target.value)}
-            placeholder="e.g. Production Cluster"
-            disabled={submitting}
-            required
-          />
-          {formError ? <p className="form-error">{formError}</p> : null}
-          {formSuccess ? <p className="form-success">{formSuccess}</p> : null}
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Creating…' : 'Create tenant'}
-          </button>
-        </form>
-
-        <div className="panel tenants-list">
-          <div className="toolbar tenants-toolbar">
-            <label htmlFor="tenant-search">
-              Filter
-              <input
-                id="tenant-search"
-                type="search"
-                placeholder="Search by name"
-                value={nameFilter}
-                onChange={(event) => {
-                  setNameFilter(event.target.value);
-                  setOffset(0);
-                }}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,360px),1fr,minmax(0,360px)]">
+        <Panel padding="md" eyebrow="CREATE" title="Create tenant">
+          <form className="flex flex-col gap-3" onSubmit={handleCreateTenant}>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="tenant-name">Name</Label>
+              <Input
+                id="tenant-name"
+                name="tenant-name"
+                type="text"
+                value={tenantName}
+                onChange={(event) => setTenantName(event.target.value)}
+                placeholder="e.g. Production Cluster"
+                disabled={submitting}
+                required
               />
-            </label>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => {
-                reload();
-              }}
-              disabled={loading}
-            >
-              {loading ? 'Refreshing…' : 'Refresh'}
-            </button>
-          </div>
+            </div>
+            {formError ? <p className="text-xs text-state-critical">{formError}</p> : null}
+            {formSuccess ? <p className="text-xs text-state-healthy">{formSuccess}</p> : null}
+            <Button type="submit" variant="primary" size="md" disabled={submitting}>
+              {submitting ? 'Creating…' : 'Create tenant'}
+            </Button>
+          </form>
+        </Panel>
 
-          {loading ? <p className="muted">Loading tenants&hellip;</p> : null}
-          {error ? <p className="form-error">Failed to load tenants: {error}</p> : null}
-          {!loading && !error && rows.length === 0 ? <p className="muted">No tenants match the current filters.</p> : null}
-
-          {!loading && !error && rows.length > 0 ? (
-            <>
-              <table className="tenants-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Tenant ID</th>
-                    <th>Created</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((tenant) => (
-                    <tr key={tenant.id} className={selectedTenantId === tenant.id ? 'active-row' : undefined}>
-                      <td>{tenant.name}</td>
-                      <td>{tenant.id}</td>
-                      <td>{formatDate(tenant.created_at)}</td>
-                      <td>
-                        <button type="button" className="ghost-button" onClick={() => openTenantDetails(tenant.id)}>
-                          {selectedTenantId === tenant.id ? 'Hide' : 'View'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="pagination">
-                <button
-                  type="button"
-                  disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
-                  onClick={() => setOffset(pagination.prevOffset ?? 0)}
-                >
-                  Previous
-                </button>
-                <span>
-                  Showing {rows.length} of {pagination.total} tenants
-                </span>
-                <button
-                  type="button"
-                  disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
-                  onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
-                >
-                  Next
-                </button>
+        <Panel padding="sm" tone="inset" eyebrow={`TENANTS · ${rows.length} of ${pagination.total}`} title="Directory">
+          <div className="flex flex-col gap-3 px-1 pt-1">
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex flex-1 flex-col gap-1.5 min-w-[200px]">
+                <Label htmlFor="tenant-search">Filter</Label>
+                <Input
+                  id="tenant-search"
+                  type="search"
+                  placeholder="Search by name"
+                  value={nameFilter}
+                  onChange={(event) => {
+                    setNameFilter(event.target.value);
+                    setOffset(0);
+                  }}
+                />
               </div>
-            </>
-          ) : null}
-        </div>
+            </div>
+
+            {error ? (
+              <Panel padding="sm" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load tenants">
+                <p className="text-sm text-state-critical">{error}</p>
+              </Panel>
+            ) : null}
+
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.id}
+              loading={loading}
+              compact
+              empty={
+                <EmptyState
+                  icon={<Building2 />}
+                  title="No tenants"
+                  description="No tenants match the current filters."
+                />
+              }
+            />
+            <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
+                onClick={() => setOffset(pagination.prevOffset ?? 0)}
+              >
+                Previous
+              </Button>
+              <span className="font-mono text-xs text-text-muted">
+                Showing {rows.length} of {pagination.total} tenants
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
+                onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </Panel>
 
         {selectedTenant ? (
-          <aside className="panel tenant-detail">
-            <h3>Tenant details</h3>
-            <dl className="meta-grid">
-              <div>
-                <dt>Name</dt>
-                <dd>{selectedTenant.name}</dd>
+          <Panel padding="md" eyebrow="DETAILS" title={selectedTenant.name}>
+            <dl className="grid grid-cols-1 gap-2 text-sm">
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs text-text-muted uppercase tracking-wider">Tenant ID</dt>
+                <dd className="font-mono text-xs text-text-secondary break-all">{selectedTenant.id}</dd>
               </div>
-              <div>
-                <dt>Tenant ID</dt>
-                <dd className="mono">{selectedTenant.id}</dd>
-              </div>
-              <div>
-                <dt>Created</dt>
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs text-text-muted uppercase tracking-wider">Created</dt>
                 <dd>{formatDate(selectedTenant.created_at)}</dd>
               </div>
             </dl>
-            <div className="tenant-detail-form">
-              <label htmlFor="rename-tenant">Rename tenant</label>
-              <input
+            <div className="flex flex-col gap-2 pt-2 border-t border-border-subtle">
+              <Label htmlFor="rename-tenant">Rename tenant</Label>
+              <Input
                 id="rename-tenant"
                 type="text"
                 value={renameValue}
                 onChange={(event) => setRenameValue(event.target.value)}
               />
-              <div className="detail-actions">
-                <button type="button" className="ghost-button" onClick={() => setSelectedTenantId(null)}>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setSelectedTenantId(null)}>
                   Close
-                </button>
-                <button type="button" className="primary-button" onClick={handleRenameTenant} disabled={renaming}>
+                </Button>
+                <Button variant="primary" size="sm" onClick={handleRenameTenant} disabled={renaming}>
                   {renaming ? 'Saving…' : 'Save changes'}
-                </button>
-                <button type="button" className="danger-button" onClick={handleDeleteTenant} disabled={deleting}>
+                </Button>
+                <Button variant="danger" size="sm" onClick={handleDeleteTenant} disabled={deleting}>
                   {deleting ? 'Deleting…' : 'Delete tenant'}
-                </button>
+                </Button>
               </div>
             </div>
-          </aside>
+          </Panel>
         ) : null}
       </div>
-    </section>
+    </div>
   );
 }

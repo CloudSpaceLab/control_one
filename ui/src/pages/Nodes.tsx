@@ -1,4 +1,5 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { SectionHeader } from '../components/kit';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useApiClient } from '../hooks/useApiClient';
@@ -221,13 +222,12 @@ export function Nodes(): JSX.Element {
   };
 
   return (
-    <section className="nodes-page">
-      <div className="page-header">
-        <div>
-          <h2>Nodes</h2>
-          <p>Connected agents reporting into the control plane.</p>
-        </div>
-      </div>
+    <div className="flex flex-col gap-5 nodes-page">
+      <SectionHeader
+        eyebrow="INFRASTRUCTURE · NODES"
+        title="Nodes"
+        description="Connected agents reporting into the control plane."
+      />
 
       <div className="stat-card-grid">
         <article className="stat-card">
@@ -493,6 +493,6 @@ export function Nodes(): JSX.Element {
           </aside>
         ) : null}
       </div>
-    </section>
+    </div>
   );
 }

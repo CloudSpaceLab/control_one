@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Template } from '../lib/api';
+import { SectionHeader } from '../components/kit';
 import { useTemplates } from '../hooks/useTemplates';
 import { useTemplateVersions } from '../hooks/useTemplateVersions';
 import { useApiClient } from '../hooks/useApiClient';
@@ -207,15 +208,12 @@ export function Templates(): JSX.Element {
   };
 
   return (
-    <section className="templates-page">
-      <div className="page-header">
-        <div>
-          <h2>Infrastructure templates</h2>
-          <p>
-            Version, test, and safely roll out infrastructure changes. Each template is reusable across tenants.
-          </p>
-        </div>
-      </div>
+    <div className="flex flex-col gap-5 templates-page">
+      <SectionHeader
+        eyebrow="INFRASTRUCTURE · TEMPLATES"
+        title="Infrastructure templates"
+        description="Version, test, and safely roll out infrastructure changes. Each template is reusable across tenants."
+      />
 
       <div className="stat-card-grid">
         <article className="stat-card">
@@ -559,6 +557,6 @@ export function Templates(): JSX.Element {
           </aside>
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }

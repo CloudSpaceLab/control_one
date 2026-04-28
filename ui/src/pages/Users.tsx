@@ -1,11 +1,21 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { RefreshCw, Users as UsersIcon } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useRoles } from '../hooks/useRoles';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { User, Role } from '../lib/api';
-import './Users.css';
+import { Button } from '../components/ui/button';
+import {
+  DataTable,
+  EmptyState,
+  KpiTile,
+  Panel,
+  SectionHeader,
+  StatusTag,
+} from '../components/kit';
+import type { ColumnDef } from '@tanstack/react-table';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -163,264 +173,250 @@ export function Users(): JSX.Element {
     }
   };
 
-  return (
-    <div className="users-page">
-      <div className="page-header">
-        <div>
-          <h1>Users & Roles</h1>
-          <p className="subtitle">Manage users and their role assignments</p>
+  const columns = useMemo<ColumnDef<User>[]>(() => [
+    {
+      id: 'select',
+      header: () => (
+        <input
+          type="checkbox"
+          aria-label="Select all users"
+          checked={selectedUserIds.size === users.length && users.length > 0}
+          onChange={(e) => handleSelectAll(e.target.checked)}
+          title="Select all"
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.original.display_name || row.original.external_id || row.original.id}`}
+          checked={selectedUserIds.has(row.original.id)}
+          onChange={(e) => handleSelectUser(row.original.id, e.target.checked)}
+        />
+      ),
+    },
+    {
+      id: 'user',
+      header: 'User',
+      cell: ({ row }) => (
+        <div className="flex flex-col">
+          <span className="font-medium">{row.original.display_name || row.original.external_id}</span>
+          <span className="font-mono text-[0.65rem] text-text-muted">ID: {row.original.id.slice(0, 8)}...</span>
         </div>
-        <div className="page-actions">
-          {selectedUserIds.size > 0 && (
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                {selectedUserIds.size} selected
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsBulkAssigning(true)}
-                className="btn-primary"
-                disabled={isBulkAssigning}
-              >
-                Bulk Assign Roles
-              </button>
-            </div>
+      ),
+    },
+    {
+      accessorKey: 'email',
+      header: 'Email',
+      cell: ({ getValue }) => <span className="text-sm">{(getValue() as string) || '—'}</span>,
+    },
+    {
+      id: 'roles',
+      header: 'Roles',
+      cell: ({ row }) => (
+        <div className="flex flex-wrap gap-1">
+          {row.original.roles && row.original.roles.length > 0 ? (
+            row.original.roles.map((roleName) => {
+              const role = roleMap.get(roleName);
+              return (
+                <StatusTag key={roleName} tone="info" {...(role?.description ? { title: role.description } : {})}>
+                  {roleName}
+                </StatusTag>
+              );
+            })
+          ) : (
+            <span className="text-xs text-text-muted">No roles assigned</span>
           )}
-          <button type="button" onClick={handleRefresh} className="btn-secondary">
-            Refresh
-          </button>
         </div>
-      </div>
+      ),
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums">{formatDate(getValue() as string)}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => (
+        <Button variant="ghost" size="sm" onClick={() => handleEditRoles(row.original)}>
+          Edit Roles
+        </Button>
+      ),
+    },
+  ], [users, selectedUserIds, roleMap]);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="GOVERNANCE · IDENTITY"
+        title="Users & Roles"
+        description="Manage users and their role assignments."
+        actions={
+          <>
+            {selectedUserIds.size > 0 && (
+              <>
+                <span className="text-sm text-text-secondary">{selectedUserIds.size} selected</span>
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => setIsBulkAssigning(true)}
+                  disabled={isBulkAssigning}
+                >
+                  Bulk Assign Roles
+                </Button>
+              </>
+            )}
+            <Button variant="secondary" size="md" onClick={handleRefresh}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+          </>
+        }
+      />
 
       {usersError && (
-        <div className="error-banner">
-          <p>Error loading users: {usersError}</p>
-        </div>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load users">
+          <p className="text-sm text-state-critical">{usersError}</p>
+        </Panel>
       )}
-
       {rolesError && (
-        <div className="error-banner">
-          <p>Error loading roles: {rolesError}</p>
-        </div>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load roles">
+          <p className="text-sm text-state-critical">{rolesError}</p>
+        </Panel>
       )}
 
-      <div className="users-stats">
-        <div className="stat-card">
-          <div className="stat-value">{pagination.total}</div>
-          <div className="stat-label">Total Users</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{roles.length}</div>
-          <div className="stat-label">Available Roles</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">
-            {users.filter((u) => u.roles && u.roles.length > 0).length}
-          </div>
-          <div className="stat-label">Users with Roles</div>
-        </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile label="TOTAL USERS" value={pagination.total} tone="brand" />
+        <KpiTile label="AVAILABLE ROLES" value={roles.length} tone="info" />
+        <KpiTile
+          label="USERS WITH ROLES"
+          value={users.filter((u) => u.roles && u.roles.length > 0).length}
+          tone="healthy"
+        />
       </div>
 
-      <div className="content-grid">
-        <div className="users-section">
-          <div className="section-header">
-            <h2>Users</h2>
-            <div className="results-count">
-              Showing {users.length} of {pagination.total}
-            </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr,1fr]">
+        <Panel padding="sm" tone="inset" eyebrow={`USERS · ${users.length} of ${pagination.total}`} title="Directory">
+          <DataTable
+            columns={columns}
+            rows={users}
+            rowKey={(r) => r.id}
+            loading={usersLoading}
+            compact
+            empty={
+              <EmptyState icon={<UsersIcon />} title="No users found" description="No users match the current filters." />
+            }
+          />
+          <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setOffset(Math.max(0, offset - limit))}
+              disabled={offset === 0 || usersLoading}
+            >
+              Previous
+            </Button>
+            <span className="font-mono text-xs text-text-muted">
+              Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setOffset(offset + limit)}
+              disabled={offset + limit >= pagination.total || usersLoading}
+            >
+              Next
+            </Button>
           </div>
+        </Panel>
 
-          {usersLoading ? (
-            <div className="loading-placeholder">Loading users...</div>
-          ) : users.length === 0 ? (
-            <div className="empty-state">
-              <p>No users found.</p>
-            </div>
-          ) : (
-            <>
-              <div className="table-container">
-                <table className="users-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '40px' }}>
-                        <input
-                          type="checkbox"
-                          aria-label="Select all users"
-                          checked={selectedUserIds.size === users.length && users.length > 0}
-                          onChange={(e) => handleSelectAll(e.target.checked)}
-                          title="Select all"
-                        />
-                      </th>
-                      <th>User</th>
-                      <th>Email</th>
-                      <th>Roles</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((user) => (
-                      <tr key={user.id}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            aria-label={`Select ${user.display_name || user.external_id || user.id}`}
-                            checked={selectedUserIds.has(user.id)}
-                            onChange={(e) => handleSelectUser(user.id, e.target.checked)}
-                          />
-                        </td>
-                        <td>
-                          <div className="user-info">
-                            <div className="user-name">
-                              {user.display_name || user.external_id}
-                            </div>
-                            <div className="user-id">ID: {user.id.slice(0, 8)}...</div>
-                          </div>
-                        </td>
-                        <td>{user.email || '—'}</td>
-                        <td>
-                          <div className="roles-list">
-                            {user.roles && user.roles.length > 0 ? (
-                              user.roles.map((roleName) => {
-                                const role = roleMap.get(roleName);
-                                return (
-                                  <span key={roleName} className="role-badge" title={role?.description}>
-                                    {roleName}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="no-roles">No roles assigned</span>
-                            )}
-                          </div>
-                        </td>
-                        <td>{formatDate(user.created_at)}</td>
-                        <td>
-                          <button
-                            type="button"
-                            onClick={() => handleEditRoles(user)}
-                            className="btn-link"
-                          >
-                            Edit Roles
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="pagination">
-                <button
-                  type="button"
-                  onClick={() => setOffset(Math.max(0, offset - limit))}
-                  disabled={offset === 0 || usersLoading}
-                  className="btn-secondary"
-                >
-                  Previous
-                </button>
-                <span className="pagination-info">
-                  Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setOffset(offset + limit)}
-                  disabled={offset + limit >= pagination.total || usersLoading}
-                  className="btn-secondary"
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="roles-section">
-          <div className="section-header">
-            <h2>Available Roles</h2>
-          </div>
-
+        <Panel padding="md" eyebrow="RBAC" title="Available Roles">
           {rolesLoading ? (
-            <div className="loading-placeholder">Loading roles...</div>
+            <p className="text-sm text-text-muted">Loading roles...</p>
           ) : roles.length === 0 ? (
-            <div className="empty-state">
-              <p>No roles found.</p>
-            </div>
+            <EmptyState title="No roles found" />
           ) : (
-            <div className="roles-list-container">
+            <div className="flex flex-col gap-2">
               {roles.map((role) => (
-                <div key={role.id} className="role-card">
-                  <div className="role-header">
-                    <h3 className="role-name">{role.name}</h3>
-                  </div>
-                  {role.description && (
-                    <p className="role-description">{role.description}</p>
-                  )}
-                  <div className="role-meta">
-                    <span className="role-users-count">
+                <div
+                  key={role.id}
+                  className="rounded-md border border-border-subtle bg-surface p-3 flex flex-col gap-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-display text-sm font-semibold">{role.name}</h3>
+                    <span className="text-[0.65rem] text-text-muted">
                       {users.filter((u) => u.roles?.includes(role.name)).length} user(s)
                     </span>
                   </div>
+                  {role.description && (
+                    <p className="text-xs text-text-secondary">{role.description}</p>
+                  )}
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </Panel>
       </div>
 
       {isEditingRoles && selectedUser && (
-        <div className="modal-overlay" onClick={handleCancelEdit}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Edit Roles for {selectedUser.display_name || selectedUser.external_id}</h2>
-              <button type="button" onClick={handleCancelEdit} className="modal-close">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={handleCancelEdit}
+        >
+          <div
+            className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border-subtle p-4">
+              <h2 className="font-display text-base font-semibold">
+                Edit Roles for {selectedUser.display_name || selectedUser.external_id}
+              </h2>
+              <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
                 ×
-              </button>
+              </Button>
             </div>
 
             <form onSubmit={handleSaveRoles}>
-              <div className="modal-body">
+              <div className="flex flex-col gap-3 p-4">
                 {formError && (
-                  <div className="error-banner">
-                    <p>{formError}</p>
-                  </div>
+                  <p className="text-xs text-state-critical">{formError}</p>
                 )}
-
                 {formSuccess && (
-                  <div className="success-banner">
-                    <p>{formSuccess}</p>
-                  </div>
+                  <p className="text-xs text-state-healthy">{formSuccess}</p>
                 )}
 
-                <div className="roles-selection">
-                  <p className="selection-hint">Select roles to assign to this user:</p>
-                  <div className="roles-checkboxes">
-                    {roles.map((role) => (
-                      <label key={role.id} className="role-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={selectedRoles.includes(role.name)}
-                          onChange={() => handleRoleToggle(role.name)}
-                        />
-                        <div className="checkbox-content">
-                          <span className="checkbox-role-name">{role.name}</span>
-                          {role.description && (
-                            <span className="checkbox-role-desc">{role.description}</span>
-                          )}
-                        </div>
-                      </label>
-                    ))}
-                  </div>
+                <p className="text-sm text-text-secondary">Select roles to assign to this user:</p>
+                <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
+                  {roles.map((role) => (
+                    <label
+                      key={role.id}
+                      className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface p-2 cursor-pointer hover:border-border-strong"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedRoles.includes(role.name)}
+                        onChange={() => handleRoleToggle(role.name)}
+                        className="mt-0.5"
+                      />
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-sm font-medium">{role.name}</span>
+                        {role.description && (
+                          <span className="text-xs text-text-secondary">{role.description}</span>
+                        )}
+                      </div>
+                    </label>
+                  ))}
                 </div>
               </div>
 
-              <div className="modal-footer">
-                <button type="button" onClick={handleCancelEdit} className="btn-secondary" disabled={updating}>
+              <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">
+                <Button variant="secondary" size="md" type="button" onClick={handleCancelEdit} disabled={updating}>
                   Cancel
-                </button>
-                <button type="submit" className="btn-primary" disabled={updating}>
+                </Button>
+                <Button variant="primary" size="md" type="submit" disabled={updating}>
                   {updating ? 'Saving...' : 'Save Changes'}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -428,22 +424,31 @@ export function Users(): JSX.Element {
       )}
 
       {isBulkAssigning && (
-        <div className="modal-overlay" onClick={() => setIsBulkAssigning(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Bulk Assign Roles</h2>
-              <button type="button" onClick={() => setIsBulkAssigning(false)} className="modal-close">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setIsBulkAssigning(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border-subtle p-4">
+              <h2 className="font-display text-base font-semibold">Bulk Assign Roles</h2>
+              <Button variant="ghost" size="sm" onClick={() => setIsBulkAssigning(false)}>
                 ×
-              </button>
+              </Button>
             </div>
 
-            <div className="modal-body">
-              <p className="selection-hint">
+            <div className="flex flex-col gap-3 p-4">
+              <p className="text-sm text-text-secondary">
                 Assign roles to {selectedUserIds.size} selected user(s):
               </p>
-              <div className="roles-checkboxes">
+              <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
                 {roles.map((role) => (
-                  <label key={role.id} className="role-checkbox">
+                  <label
+                    key={role.id}
+                    className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface p-2 cursor-pointer hover:border-border-strong"
+                  >
                     <input
                       type="checkbox"
                       checked={bulkAssignRoles.includes(role.name)}
@@ -451,14 +456,15 @@ export function Users(): JSX.Element {
                         setBulkAssignRoles((prev) =>
                           prev.includes(role.name)
                             ? prev.filter((r) => r !== role.name)
-                            : [...prev, role.name]
+                            : [...prev, role.name],
                         );
                       }}
+                      className="mt-0.5"
                     />
-                    <div className="checkbox-content">
-                      <span className="checkbox-role-name">{role.name}</span>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium">{role.name}</span>
                       {role.description && (
-                        <span className="checkbox-role-desc">{role.description}</span>
+                        <span className="text-xs text-text-secondary">{role.description}</span>
                       )}
                     </div>
                   </label>
@@ -466,26 +472,28 @@ export function Users(): JSX.Element {
               </div>
             </div>
 
-            <div className="modal-footer">
-              <button
+            <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">
+              <Button
+                variant="secondary"
+                size="md"
                 type="button"
                 onClick={() => {
                   setIsBulkAssigning(false);
                   setBulkAssignRoles([]);
                 }}
-                className="btn-secondary"
                 disabled={isBulkAssigning}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
                 type="button"
                 onClick={handleBulkAssignRoles}
-                className="btn-primary"
                 disabled={isBulkAssigning || bulkAssignRoles.length === 0}
               >
                 {isBulkAssigning ? 'Assigning...' : `Assign to ${selectedUserIds.size} User(s)`}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -493,4 +501,3 @@ export function Users(): JSX.Element {
     </div>
   );
 }
-

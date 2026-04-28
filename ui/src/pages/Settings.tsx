@@ -6,6 +6,7 @@ import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { Webhook, CreateWebhookPayload, UpdateWebhookPayload } from '../lib/api';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { SectionHeader } from '../components/kit';
 import './Settings.css';
 
 function formatDate(value?: string): string {
@@ -189,13 +190,12 @@ export function Settings(): JSX.Element {
   };
 
   return (
-    <div className="settings-page">
-      <div className="page-header">
-        <div>
-          <h1>Settings</h1>
-          <p className="subtitle">Configure system settings, webhooks, and integrations</p>
-        </div>
-      </div>
+    <div className="flex flex-col gap-5 settings-page">
+      <SectionHeader
+        eyebrow="CONFIGURATION · SETTINGS"
+        title="Settings"
+        description="Configure system settings, webhooks, and integrations."
+      />
 
       <div className="settings-tabs">
         <button

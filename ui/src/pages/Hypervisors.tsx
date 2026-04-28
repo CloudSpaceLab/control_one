@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useToast } from '../providers/ToastProvider';
+import { SectionHeader } from '../components/kit';
 import type {
   CreateHypervisorHostPayload,
   CreateProviderCredentialPayload,
@@ -289,11 +290,12 @@ export function Hypervisors(): JSX.Element {
   }
 
   return (
-    <section className="page">
-      <header>
-        <h2>Hypervisors &amp; Provider Credentials</h2>
-        <p>Register the virtualization hosts and cloud accounts Control One provisions against. Multiple hosts per tenant across datacenters are supported.</p>
-      </header>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="INFRASTRUCTURE · HYPERVISORS"
+        title="Hypervisors & provider credentials"
+        description="Register the virtualization hosts and cloud accounts Control One provisions against. Multiple hosts per tenant across datacenters are supported."
+      />
 
       <div className="card" style={{ marginTop: '1rem' }}>
         <h3>Add hypervisor host</h3>
@@ -591,6 +593,6 @@ export function Hypervisors(): JSX.Element {
           </table>
         )}
       </div>
-    </section>
+    </div>
   );
 }

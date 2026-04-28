@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { classifyValue, ENTITY_TYPE_LABELS, entityRoute } from '../lib/entity';
+import type { EntityType } from './kit';
 import './CommandPalette.css';
 
 interface Command {
@@ -41,6 +43,9 @@ const COMMANDS: Command[] = [
   { id: 'go.settings', group: 'Go to', label: 'Settings', to: '/settings' },
   { id: 'go.telemetry', group: 'Go to', label: 'Telemetry', to: '/telemetry' },
   { id: 'go.bundle', group: 'Go to', label: 'Offline Bundle', to: '/offline-bundle' },
+  // Investigate
+  { id: 'go.investigate', group: 'Investigate', label: 'Search & lifecycle', hint: 'Open Investigate', to: '/investigate', keywords: ['search', 'lookup', 'pivot'] },
+  { id: 'go.investigate.saved', group: 'Investigate', label: 'Saved searches', hint: 'Recall investigations', to: '/investigate/saved' },
 ];
 
 // CommandPalette is the Cmd+K (Ctrl+K on Windows/Linux) launcher. It searches
@@ -79,12 +84,36 @@ export function CommandPalette(): JSX.Element | null {
   }, [open]);
 
   const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return COMMANDS;
-    return COMMANDS.filter((c) => {
+    const raw = query.trim();
+    const q = raw.toLowerCase();
+
+    const dynamic: Command[] = [];
+    if (raw.length > 1) {
+      const det = classifyValue(raw);
+      if (det.type !== 'unknown') {
+        dynamic.push({
+          id: 'inv.entity',
+          group: 'Investigate',
+          label: `Investigate ${ENTITY_TYPE_LABELS[det.type as EntityType]}: ${raw}`,
+          hint: 'Open lifecycle',
+          to: entityRoute(det.type as EntityType, raw),
+        });
+      }
+      dynamic.push({
+        id: 'inv.search',
+        group: 'Investigate',
+        label: `Full search "${raw}"`,
+        hint: 'Faceted results',
+        to: `/search?q=${encodeURIComponent(raw)}`,
+      });
+    }
+
+    if (!q) return [...dynamic, ...COMMANDS];
+    const filtered = COMMANDS.filter((c) => {
       const hay = [c.label, c.hint ?? '', c.group, ...(c.keywords ?? [])].join(' ').toLowerCase();
       return hay.includes(q);
     });
+    return [...dynamic, ...filtered];
   }, [query]);
 
   const grouped = useMemo(() => {

@@ -26,6 +26,22 @@ type Config struct {
 	Doris         DorisConfig         `mapstructure:"doris"`
 	Bastion       BastionConfig       `mapstructure:"bastion"`
 	LDAP          LDAPConfig          `mapstructure:"ldap"`
+	IPIntel       IPIntelConfig       `mapstructure:"ipintel"`
+}
+
+// IPIntelConfig governs the IP enrichment pipeline that backs Investigate
+// /api/v1/entities/ip/{addr}/enrich. When IpqueryBaseURL is set the service
+// calls a self-hosted akyriako/ipquery instance for combined geo + ASN +
+// risk lookups; otherwise it falls back to AbuseIPDB-only when an API key
+// is configured. Results are cached in Postgres (ip_enrichment_cache) for
+// CacheTTL — set to 0 to disable caching, default 1h.
+type IPIntelConfig struct {
+	Enabled          bool          `mapstructure:"enabled"`
+	IpqueryBaseURL   string        `mapstructure:"ipquery_base_url"`
+	AbuseIPDBKey     string        `mapstructure:"abuseipdb_api_key"`
+	CacheTTL         time.Duration `mapstructure:"cache_ttl"`
+	HTTPTimeout      time.Duration `mapstructure:"http_timeout"`
+	AbuseScoreCutoff int           `mapstructure:"abuse_score_cutoff"` // chip emitted when score ≥ this; default 25
 }
 
 // LDAPConfig mirrors auth.LDAPConfig so viper can unmarshal directly. See
@@ -310,6 +326,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.groups_claim", "groups")
 	v.SetDefault("auth.oidc.cache_ttl", time.Minute*5)
 	v.SetDefault("auth.rbac.default_role", "viewer")
+
+	// IP intelligence (Investigate)
+	v.SetDefault("ipintel.enabled", true)
+	v.SetDefault("ipintel.cache_ttl", time.Hour)
+	v.SetDefault("ipintel.http_timeout", 5*time.Second)
+	v.SetDefault("ipintel.abuse_score_cutoff", 25)
+	v.BindEnv("ipintel.ipquery_base_url", "IPQUERY_BASE_URL")
+	v.BindEnv("ipintel.abuseipdb_api_key", "ABUSEIPDB_API_KEY")
 }
 
 func applyFallbacks(cfg *Config) {

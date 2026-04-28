@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { EnrollmentToken } from '../lib/api';
 import { useApiClient } from '../hooks/useApiClient';
+import { SectionHeader } from '../components/kit';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 
@@ -112,17 +113,12 @@ export function OfflineBundle(): JSX.Element {
   };
 
   return (
-    <section className="offline-bundle-page">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Air-gapped onboarding</p>
-          <h2>Offline agent bundle</h2>
-          <p className="subtitle">
-            Download an install tarball containing the agent binary, its signature, the CA cert, and the offline
-            install script. SCP it into your isolated network to enroll nodes without internet access.
-          </p>
-        </div>
-      </header>
+    <div className="flex flex-col gap-5 offline-bundle-page">
+      <SectionHeader
+        eyebrow="AUTOMATION · OFFLINE BUNDLE"
+        title="Offline agent bundle"
+        description="Download an install tarball containing the agent binary, its signature, the CA cert, and the offline install script. SCP it into your isolated network to enroll nodes without internet access."
+      />
 
       <form className="panel offline-bundle-form" onSubmit={handleSubmit}>
         <h3>Build a bundle</h3>
@@ -219,6 +215,6 @@ export function OfflineBundle(): JSX.Element {
           </button>
         </div>
       </article>
-    </section>
+    </div>
   );
 }

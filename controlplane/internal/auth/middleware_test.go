@@ -141,6 +141,10 @@ func (f *fakeIdentityStore) GetUserByExternalID(_ context.Context, externalID st
 	return &storage.User{ID: f.userID, ExternalID: externalID}, nil
 }
 
+func (f *fakeIdentityStore) ValidateSessionToken(_ context.Context, token string) (*storage.Session, *storage.LocalUser, error) {
+	return nil, nil, nil
+}
+
 func TestMiddlewareRejectsOpaqueBearerWhenOIDCDisabled(t *testing.T) {
 	store := &fakeIdentityStore{}
 	cfg := config.AuthConfig{

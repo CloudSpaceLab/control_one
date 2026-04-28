@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
+import { SectionHeader } from '../components/kit';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import type {
@@ -365,16 +366,12 @@ export function FleetEnroll(): JSX.Element {
   const showReadyNotice = jobTerminal && !anyStillPending && Object.keys(nodeStates).length > 0;
 
   return (
-    <section className="dashboard-section" aria-labelledby="fleet-enroll-heading">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Onboarding</p>
-          <h2 id="fleet-enroll-heading">Bulk enrol hosts</h2>
-          <p className="subtitle">
-            Onboard many hosts over SSH at once. Live progress per target.
-          </p>
-        </div>
-      </header>
+    <div className="flex flex-col gap-5" aria-labelledby="fleet-enroll-heading">
+      <SectionHeader
+        eyebrow="INFRASTRUCTURE · ONBOARDING"
+        title="Bulk enrol hosts"
+        description="Onboard many hosts over SSH at once. Live progress per target."
+      />
 
       <article className="card">
         <h3>1. Targets</h3>
@@ -547,6 +544,6 @@ export function FleetEnroll(): JSX.Element {
           ) : null}
         </article>
       ) : null}
-    </section>
+    </div>
   );
 }

@@ -17,9 +17,21 @@ interface NavGroup {
 }
 
 // Grouped IA: 7 sections, each with a clear workflow. Inside each group items
-// are ordered by frequency, not alphabetically — execs hit "Posture" then
-// scan to "Compliance"; sysadmins hit "Infrastructure" then "Nodes".
+// are ordered by frequency, not alphabetically.
 const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'Get started',
+    items: [
+      { to: '/onboard', label: 'Onboard a server', roles: ['admin', 'operator'] },
+    ],
+  },
+  {
+    label: 'Investigate',
+    items: [
+      { to: '/investigate', label: 'Search & lifecycle' },
+      { to: '/investigate/saved', label: 'Saved searches' },
+    ],
+  },
   {
     label: 'Visibility',
     items: [
@@ -100,6 +112,7 @@ export function MainLayout(): JSX.Element {
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
+
   const userRoles = profile?.roles ?? [];
   const groups = filterGroups(NAV_GROUPS, userRoles);
   const isMac = navigator.platform.toUpperCase().includes('MAC');
@@ -117,7 +130,7 @@ export function MainLayout(): JSX.Element {
         </div>
         <nav aria-label="Primary">
           {groups.map((group) => (
-            <div key={group.label} className="nav-group">
+            <div className="nav-group" key={group.label}>
               <div className="nav-group__label">{group.label}</div>
               <ul>
                 {group.items.map((item) => {
@@ -143,11 +156,13 @@ export function MainLayout(): JSX.Element {
             className="cmdk-hint"
             aria-label="Open command palette"
             onClick={() => {
-              window.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'k',
-                [isMac ? 'metaKey' : 'ctrlKey']: true,
-                bubbles: true,
-              }));
+              window.dispatchEvent(
+                new KeyboardEvent('keydown', {
+                  key: 'k',
+                  [isMac ? 'metaKey' : 'ctrlKey']: true,
+                  bubbles: true,
+                }),
+              );
             }}
           >
             <span>Quick search</span>
@@ -155,7 +170,9 @@ export function MainLayout(): JSX.Element {
           </button>
         </footer>
       </aside>
-      {navOpen ? <div className="nav-backdrop" onClick={() => setNavOpen(false)} /> : null}
+      {navOpen ? (
+        <div className="nav-backdrop" onClick={() => setNavOpen(false)} />
+      ) : null}
       <div className="content-area">
         <header className="content-header">
           <div>

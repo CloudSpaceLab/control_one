@@ -1,0 +1,67 @@
+/*
+ * Motion keyframes — ported from landing/css/landing.css.
+ * Every keyframe respects prefers-reduced-motion via the duration vars
+ * defined in tokens.css.
+ */
+
+@keyframes co-shimmer {
+  0% { transform: translateX(-110%) skewX(-12deg); }
+  100% { transform: translateX(220%) skewX(-12deg); }
+}
+
+@keyframes co-pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--shadow-glow-brand);
+  }
+  50% {
+    box-shadow: 0 0 28px 2px var(--shadow-glow-brand);
+  }
+}
+
+@keyframes co-dot-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 8px currentColor;
+  }
+  50% {
+    opacity: 0.45;
+    box-shadow: 0 0 14px currentColor;
+  }
+}
+
+@keyframes co-orb-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(2%, -3%, 0) scale(1.06); }
+}
+
+@keyframes co-fade-in-up {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes co-fade-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes co-skeleton {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.co-anim-shimmer { animation: co-shimmer var(--motion-shimmer) ease-in-out infinite; }
+.co-anim-pulse-glow { animation: co-pulse-glow var(--motion-glow) ease-in-out infinite; }
+.co-anim-dot-pulse { animation: co-dot-pulse var(--motion-pulse) ease-in-out infinite; }
+.co-anim-orb-drift { animation: co-orb-drift 12s ease-in-out infinite; }
+.co-anim-fade-in-up { animation: co-fade-in-up var(--motion-med) var(--ease-out) both; }
+.co-anim-fade-in { animation: co-fade-in var(--motion-med) var(--ease-out) both; }
+.co-anim-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 0%,
+    var(--bg-elevated) 50%,
+    var(--bg-surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: co-skeleton 1.6s linear infinite;
+}

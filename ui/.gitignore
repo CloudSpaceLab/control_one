@@ -1,0 +1,4 @@
+
+# stale tsc shadows (defensive — tsconfig.noEmit=true should prevent)
+src/**/*.js
+!src/**/*.config.js

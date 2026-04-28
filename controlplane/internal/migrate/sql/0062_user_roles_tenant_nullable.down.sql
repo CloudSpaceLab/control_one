@@ -1,0 +1,1 @@
+ALTER TABLE user_roles ALTER COLUMN tenant_id SET NOT NULL;

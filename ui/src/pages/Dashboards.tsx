@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { SectionHeader } from '../components/kit';
 import { EmptyState } from '../components/EmptyState';
 import type {
   CustomDashboard,
@@ -131,20 +132,17 @@ export function Dashboards(): JSX.Element {
   };
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Custom dashboards</p>
-          <h2>Build views that pull from the servers + metrics that matter to you</h2>
-          <p className="subtitle">
-            DB queries, system resources, log volume, network bytes — pick one or more nodes per
-            widget, set a refresh interval, and the data renders live.
-          </p>
-        </div>
-        <button type="button" className="primary-button" onClick={() => setCreating(true)}>
-          New dashboard
-        </button>
-      </header>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="DETECT & RESPOND · CUSTOM DASHBOARDS"
+        title="Build views that pull from the servers + metrics that matter to you"
+        description="DB queries, system resources, log volume, network bytes — pick one or more nodes per widget, set a refresh interval, and data renders live."
+        actions={
+          <button type="button" className="primary-button" onClick={() => setCreating(true)}>
+            New dashboard
+          </button>
+        }
+      />
 
       {error ? <p className="error-banner">{error}</p> : null}
 
@@ -264,7 +262,7 @@ export function Dashboards(): JSX.Element {
           </main>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 

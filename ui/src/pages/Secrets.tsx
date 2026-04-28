@@ -1,11 +1,24 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
+import { AlertTriangle, KeyRound } from 'lucide-react';
 import { useSecretGroups, useSecretSyncs } from '../hooks/useSecrets';
 import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { CreateSecretGroupPayload } from '../lib/api';
-import './Secrets.css';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import {
+  DataTable,
+  EmptyState,
+  KpiTile,
+  Panel,
+  SectionHeader,
+  StatusTag,
+  type StateTone,
+} from '../components/kit';
+import type { ColumnDef } from '@tanstack/react-table';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -16,6 +29,33 @@ function formatDate(value?: string): string {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+function syncStatusTone(status: string): StateTone {
+  const s = status.toLowerCase();
+  if (s === 'success' || s === 'succeeded' || s === 'ok') return 'healthy';
+  if (s === 'failed' || s === 'error') return 'critical';
+  if (s === 'pending' || s === 'queued') return 'warning';
+  if (s === 'running' || s === 'syncing') return 'info';
+  return 'unknown';
+}
+
+interface GroupRow {
+  id: string;
+  name: string;
+  endpoint?: string;
+  backend: string;
+  sync_status: string;
+  sync_error?: string;
+  last_sync_at?: string;
+}
+
+interface SyncRow {
+  id: string;
+  secret_path: string;
+  secret_version?: string | number;
+  sync_status: string;
+  synced_at?: string;
 }
 
 export function Secrets(): JSX.Element {
@@ -151,254 +191,245 @@ export function Secrets(): JSX.Element {
 
   const selectedGroup = groups.find((g) => g.id === selectedGroupId) || null;
 
+  const groupColumns = useMemo<ColumnDef<GroupRow>[]>(() => [
+    {
+      id: 'name',
+      header: 'Name',
+      cell: ({ row }) => (
+        <div className="flex flex-col">
+          <span className="font-medium">{row.original.name}</span>
+          {row.original.endpoint && (
+            <span className="font-mono text-[0.65rem] text-text-muted">{row.original.endpoint}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'backend',
+      header: 'Backend',
+      cell: ({ getValue }) => <StatusTag tone="info">{getValue() as string}</StatusTag>,
+    },
+    {
+      id: 'sync_status',
+      header: 'Sync Status',
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <StatusTag tone={syncStatusTone(row.original.sync_status)}>{row.original.sync_status}</StatusTag>
+          {row.original.sync_error && (
+            <span title={row.original.sync_error} className="text-state-warning">
+              <AlertTriangle className="h-3.5 w-3.5" />
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'last_sync_at',
+      header: 'Last Sync',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums">{formatDate(getValue() as string)}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => (
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSync(row.original.id);
+            }}
+            disabled={isSyncing}
+          >
+            Sync
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-state-critical hover:text-state-critical"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDelete(row.original.id);
+            }}
+          >
+            Delete
+          </Button>
+        </div>
+      ),
+    },
+  ], [isSyncing]);
+
+  const syncColumns = useMemo<ColumnDef<SyncRow>[]>(() => [
+    {
+      accessorKey: 'secret_path',
+      header: 'Secret Path',
+      cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() as string}</span>,
+    },
+    {
+      accessorKey: 'secret_version',
+      header: 'Version',
+      cell: ({ getValue }) => <span className="font-mono text-xs">{(getValue() as string) || '—'}</span>,
+    },
+    {
+      accessorKey: 'sync_status',
+      header: 'Status',
+      cell: ({ getValue }) => (
+        <StatusTag tone={syncStatusTone(getValue() as string)}>{getValue() as string}</StatusTag>
+      ),
+    },
+    {
+      accessorKey: 'synced_at',
+      header: 'Synced At',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums">{formatDate(getValue() as string)}</span>
+      ),
+    },
+  ], []);
+
   return (
-    <div className="secrets-page">
-      <div className="page-header">
-        <div>
-          <h1>Secrets vault</h1>
-          <p className="subtitle">Encrypted credentials. Tracked rotations. Audit-ready access logs.</p>
-        </div>
-        <div className="page-actions">
-          <button type="button" onClick={handleCreate} className="btn-primary">
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="POSTURE · SECRETS"
+        title="Secrets vault"
+        description="Encrypted credentials. Tracked rotations. Audit-ready access logs."
+        actions={
+          <Button variant="primary" size="md" onClick={handleCreate}>
             Create Secret Group
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {groupsError && (
-        <div className="error-banner">
-          <p>Error loading secret groups: {groupsError}</p>
-        </div>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load secret groups">
+          <p className="text-sm text-state-critical">{groupsError}</p>
+        </Panel>
       )}
 
-      <div className="secrets-stats">
-        <div className="stat-card">
-          <div className="stat-value">{pagination.total}</div>
-          <div className="stat-label">Total Groups</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">
-            {groups.filter((g) => g.sync_status === 'success').length}
-          </div>
-          <div className="stat-label">Synced</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">
-            {groups.filter((g) => g.sync_status === 'failed').length}
-          </div>
-          <div className="stat-label">Failed</div>
-        </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile label="TOTAL GROUPS" value={pagination.total} tone="brand" />
+        <KpiTile
+          label="SYNCED"
+          value={groups.filter((g) => g.sync_status === 'success').length}
+          tone="healthy"
+        />
+        <KpiTile
+          label="FAILED"
+          value={groups.filter((g) => g.sync_status === 'failed').length}
+          tone="critical"
+        />
       </div>
 
-      <div className="content-grid">
-        <div className="groups-section">
-          <div className="section-header">
-            <h2>Secret Groups</h2>
-            <div className="results-count">
-              Showing {groups.length} of {pagination.total}
-            </div>
-          </div>
-
-          {groupsLoading ? (
-            <div className="loading-placeholder">Loading secret groups...</div>
-          ) : groups.length === 0 ? (
-            <div className="empty-state">
-              <p>No secret groups found.</p>
-            </div>
-          ) : (
-            <div className="table-container">
-              <table className="groups-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Backend</th>
-                    <th>Sync Status</th>
-                    <th>Last Sync</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groups.map((group) => (
-                    <tr
-                      key={group.id}
-                      className={selectedGroupId === group.id ? 'selected' : ''}
-                      onClick={() => setSelectedGroupId(group.id)}
-                    >
-                      <td>
-                        <div className="group-name">{group.name}</div>
-                        {group.endpoint && (
-                          <div className="group-endpoint">{group.endpoint}</div>
-                        )}
-                      </td>
-                      <td>
-                        <span className="backend-badge">{group.backend}</span>
-                      </td>
-                      <td>
-                        <span className={`status-pill status-${group.sync_status}`}>
-                          {group.sync_status}
-                        </span>
-                        {group.sync_error && (
-                          <div className="sync-error" title={group.sync_error}>
-                            ⚠️
-                          </div>
-                        )}
-                      </td>
-                      <td>{formatDate(group.last_sync_at)}</td>
-                      <td>
-                        <div className="action-buttons">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSync(group.id);
-                            }}
-                            className="btn-link"
-                            disabled={isSyncing}
-                          >
-                            Sync
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(group.id);
-                            }}
-                            className="btn-link danger"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div className="pagination">
-            <button
-              type="button"
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr,1fr]">
+        <Panel padding="sm" tone="inset" eyebrow={`SECRET GROUPS · ${groups.length} of ${pagination.total}`} title="Groups">
+          <DataTable
+            columns={groupColumns}
+            rows={groups as unknown as GroupRow[]}
+            rowKey={(r) => r.id}
+            loading={groupsLoading}
+            compact
+            onRowClick={(r) => setSelectedGroupId(r.id)}
+            empty={
+              <EmptyState icon={<KeyRound />} title="No secret groups found" />
+            }
+          />
+          <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setOffset(Math.max(0, offset - limit))}
               disabled={offset === 0 || groupsLoading}
-              className="btn-secondary"
             >
               Previous
-            </button>
-            <span className="pagination-info">
+            </Button>
+            <span className="font-mono text-xs text-text-muted">
               Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
             </span>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setOffset(offset + limit)}
               disabled={offset + limit >= pagination.total || groupsLoading}
-              className="btn-secondary"
             >
               Next
-            </button>
+            </Button>
           </div>
-        </div>
+        </Panel>
 
         {selectedGroup && (
-          <div className="syncs-section">
-            <div className="section-header">
-              <h2>Sync History</h2>
-              <button
-                type="button"
-                onClick={() => setSelectedGroupId(null)}
-                className="btn-link"
-              >
+          <Panel
+            padding="md"
+            eyebrow="SYNC HISTORY"
+            title={selectedGroup.name}
+            actions={
+              <Button variant="ghost" size="sm" onClick={() => setSelectedGroupId(null)}>
                 Close
-              </button>
-            </div>
-
-            <div className="group-details">
-              <h3>{selectedGroup.name}</h3>
-              <dl>
-                <dt>Backend</dt>
+              </Button>
+            }
+          >
+            <dl className="grid grid-cols-1 gap-2 text-sm">
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Backend</dt>
                 <dd>{selectedGroup.backend}</dd>
-                <dt>Endpoint</dt>
-                <dd>{selectedGroup.endpoint || '—'}</dd>
-                <dt>Sync Status</dt>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Endpoint</dt>
+                <dd className="font-mono text-xs">{selectedGroup.endpoint || '—'}</dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Sync Status</dt>
                 <dd>
-                  <span className={`status-pill status-${selectedGroup.sync_status}`}>
-                    {selectedGroup.sync_status}
-                  </span>
+                  <StatusTag tone={syncStatusTone(selectedGroup.sync_status)}>{selectedGroup.sync_status}</StatusTag>
                 </dd>
-                <dt>Last Sync</dt>
-                <dd>{formatDate(selectedGroup.last_sync_at)}</dd>
-              </dl>
-            </div>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Last Sync</dt>
+                <dd className="font-mono text-xs">{formatDate(selectedGroup.last_sync_at)}</dd>
+              </div>
+            </dl>
 
-            {syncsLoading ? (
-              <div className="loading-placeholder">Loading sync history...</div>
-            ) : syncsError ? (
-              <div className="error-banner">
-                <p>Error loading sync history: {syncsError}</p>
-              </div>
-            ) : syncs.length === 0 ? (
-              <div className="empty-state">
-                <p>No sync history available.</p>
-              </div>
+            {syncsError ? (
+              <Panel padding="sm" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load sync history">
+                <p className="text-sm text-state-critical">{syncsError}</p>
+              </Panel>
             ) : (
-              <div className="table-container">
-                <table className="syncs-table">
-                  <thead>
-                    <tr>
-                      <th>Secret Path</th>
-                      <th>Version</th>
-                      <th>Status</th>
-                      <th>Synced At</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {syncs.map((sync) => (
-                      <tr key={sync.id}>
-                        <td>{sync.secret_path}</td>
-                        <td>{sync.secret_version || '—'}</td>
-                        <td>
-                          <span className={`status-pill status-${sync.sync_status}`}>
-                            {sync.sync_status}
-                          </span>
-                        </td>
-                        <td>{formatDate(sync.synced_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <DataTable
+                columns={syncColumns}
+                rows={syncs as unknown as SyncRow[]}
+                rowKey={(r) => r.id}
+                loading={syncsLoading}
+                compact
+                empty={<EmptyState title="No sync history available" />}
+              />
             )}
-          </div>
+          </Panel>
         )}
       </div>
 
       {isCreating && (
-        <div className="modal-overlay" onClick={handleCancel}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Create Secret Group</h2>
-              <button type="button" onClick={handleCancel} className="modal-close">
-                ×
-              </button>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={handleCancel}
+        >
+          <div
+            className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border-subtle p-4">
+              <h2 className="font-display text-base font-semibold">Create Secret Group</h2>
+              <Button variant="ghost" size="sm" onClick={handleCancel}>×</Button>
             </div>
 
             <form onSubmit={handleSubmit}>
-              <div className="modal-body">
-                {formError && (
-                  <div className="error-banner">
-                    <p>{formError}</p>
-                  </div>
-                )}
+              <div className="flex flex-col gap-3 p-4">
+                {formError && <p className="text-xs text-state-critical">{formError}</p>}
+                {formSuccess && <p className="text-xs text-state-healthy">{formSuccess}</p>}
 
-                {formSuccess && (
-                  <div className="success-banner">
-                    <p>{formSuccess}</p>
-                  </div>
-                )}
-
-                <div className="form-group">
-                  <label htmlFor="name">Name *</label>
-                  <input
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="name">Name *</Label>
+                  <Input
                     id="name"
                     type="text"
                     value={formData.name}
@@ -407,21 +438,22 @@ export function Secrets(): JSX.Element {
                   />
                 </div>
 
-                <div className="form-group">
-                  <label htmlFor="backend">Backend *</label>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="backend">Backend *</Label>
                   <select
                     id="backend"
                     value={formData.backend}
                     onChange={(e) => setFormData({ ...formData, backend: e.target.value })}
                     required
+                    className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
                   >
                     <option value="vault">Vault</option>
                   </select>
                 </div>
 
-                <div className="form-group">
-                  <label htmlFor="endpoint">Endpoint</label>
-                  <input
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="endpoint">Endpoint</Label>
+                  <Input
                     id="endpoint"
                     type="text"
                     value={formData.endpoint}
@@ -430,9 +462,9 @@ export function Secrets(): JSX.Element {
                   />
                 </div>
 
-                <div className="form-group">
-                  <label htmlFor="sync_interval">Sync Interval (seconds)</label>
-                  <input
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="sync_interval">Sync Interval (seconds)</Label>
+                  <Input
                     id="sync_interval"
                     type="number"
                     value={formData.sync_interval_seconds}
@@ -442,23 +474,18 @@ export function Secrets(): JSX.Element {
                         sync_interval_seconds: parseInt(e.target.value, 10) || 900,
                       })
                     }
-                    min="60"
+                    min={60}
                   />
                 </div>
               </div>
 
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  onClick={handleCancel}
-                  className="btn-secondary"
-                  disabled={saving}
-                >
+              <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">
+                <Button variant="secondary" size="md" type="button" onClick={handleCancel} disabled={saving}>
                   Cancel
-                </button>
-                <button type="submit" className="btn-primary" disabled={saving}>
+                </Button>
+                <Button variant="primary" size="md" type="submit" disabled={saving}>
                   {saving ? 'Creating...' : 'Create'}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -467,4 +494,3 @@ export function Secrets(): JSX.Element {
     </div>
   );
 }
-

@@ -1,0 +1,82 @@
+/*
+ * Top-level stylesheet.
+ *   1. tokens.css   — design tokens (light + dark)
+ *   2. motion.css   — keyframes
+ *   3. tailwindcss  — utility engine
+ *   4. @theme inline — bridge tokens → Tailwind utilities
+ *   5. base.css     — typography + reset
+ *   6. legacy.css   — old selectors kept temporarily until pages migrate
+ */
+
+@import "./tokens.css";
+@import "./motion.css";
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ─── Tailwind theme bridge ──────────────────────────────────────────────── */
+@theme inline {
+  --color-canvas: var(--bg-canvas);
+  --color-surface: var(--bg-surface);
+  --color-surface-2: var(--bg-surface-2);
+  --color-elevated: var(--bg-elevated);
+  --color-hover: var(--bg-hover);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-accent-400: var(--accent-400);
+  --color-accent-500: var(--accent-500);
+  --color-accent-600: var(--accent-600);
+
+  --color-state-healthy: var(--state-healthy);
+  --color-state-warning: var(--state-warning);
+  --color-state-degraded: var(--state-degraded);
+  --color-state-critical: var(--state-critical);
+  --color-state-info: var(--state-info);
+  --color-state-unknown: var(--state-unknown);
+
+  /* shadcn semantic mappings */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-display: var(--font-display);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+
+  --radius-sm: var(--radius-sm);
+  --radius: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+
+  --animate-shimmer: co-shimmer var(--motion-shimmer) ease-in-out infinite;
+  --animate-pulse-glow: co-pulse-glow var(--motion-glow) ease-in-out infinite;
+  --animate-dot-pulse: co-dot-pulse var(--motion-pulse) ease-in-out infinite;
+  --animate-fade-in-up: co-fade-in-up var(--motion-med) var(--ease-out) both;
+}
+
+@import "./base.css";
+@import "./legacy.css";

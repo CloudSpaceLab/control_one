@@ -1,9 +1,23 @@
 import { useMemo, useState } from 'react';
+import { Download, FileText, RefreshCw } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Label } from '../components/ui/label';
+import {
+  Chart,
+  DataTable,
+  EmptyState,
+  KpiTile,
+  Panel,
+  PostureBar,
+  SectionHeader,
+  StatusTag,
+  type StateTone,
+} from '../components/kit';
 import { useComplianceResults, useComplianceSummary, useComplianceTrends } from '../hooks/useCompliance';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
-import { ComplianceResult } from '../lib/api';
-import './Compliance.css';
+import type { ComplianceResult } from '../lib/api';
+import type { ColumnDef } from '@tanstack/react-table';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -16,18 +30,20 @@ function formatDate(value?: string): string {
   return parsed.toLocaleString();
 }
 
-function getSeverityColor(severity?: string): string {
-  switch (severity?.toLowerCase()) {
+function severityTone(severity?: string): StateTone {
+  switch ((severity ?? '').toLowerCase()) {
     case 'critical':
-      return 'var(--state-critical)';
+      return 'critical';
     case 'high':
-      return 'var(--state-warning)';
+      return 'degraded';
     case 'medium':
-      return 'var(--state-degraded)';
+      return 'warning';
     case 'low':
-      return 'var(--state-healthy)';
+      return 'info';
+    case 'info':
+      return 'info';
     default:
-      return 'var(--text-secondary)';
+      return 'unknown';
   }
 }
 
@@ -124,289 +140,344 @@ export function Compliance(): JSX.Element {
     reloadResults();
   };
 
+  const columns = useMemo<ColumnDef<ComplianceResult>[]>(() => [
+    {
+      accessorKey: 'rule_id',
+      header: 'Rule ID',
+      cell: ({ getValue }) => (
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem] text-text-secondary">
+          {getValue() as string}
+        </code>
+      ),
+    },
+    {
+      id: 'node',
+      header: 'Node',
+      cell: ({ row }) => {
+        const node = nodes.find((n) => n.id === row.original.node_id);
+        return (
+          <span className="text-sm text-foreground">
+            {node?.hostname || row.original.node_id || '—'}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'passed',
+      header: 'Status',
+      cell: ({ getValue }) => {
+        const passed = getValue() as boolean;
+        return (
+          <StatusTag tone={passed ? 'healthy' : 'critical'}>
+            {passed ? 'Passed' : 'Failed'}
+          </StatusTag>
+        );
+      },
+    },
+    {
+      accessorKey: 'severity',
+      header: 'Severity',
+      cell: ({ getValue }) => {
+        const sev = getValue() as string | undefined;
+        if (!sev) return <span className="text-text-muted">—</span>;
+        return (
+          <StatusTag tone={severityTone(sev)} className="font-mono uppercase">
+            {sev}
+          </StatusTag>
+        );
+      },
+    },
+    {
+      accessorKey: 'checked_at',
+      header: 'Checked At',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums text-text-secondary">
+          {formatDate(getValue() as string)}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'details',
+      header: 'Details',
+      cell: ({ getValue }) => {
+        const d = getValue() as string | undefined;
+        return d ? (
+          <details>
+            <summary className="cursor-pointer text-xs text-text-secondary hover:text-foreground">
+              View details
+            </summary>
+            <pre className="mt-1 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed">
+              {d}
+            </pre>
+          </details>
+        ) : (
+          <span className="text-text-muted">—</span>
+        );
+      },
+    },
+  ], [nodes]);
+
+  const trendChartData = useMemo(() => {
+    if (!trends.length) return null;
+    const labels = trends.map((t) =>
+      new Date(t.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    );
+    return {
+      labels,
+      datasets: [
+        {
+          label: 'Passed',
+          data: trends.map((t) => t.passed),
+          borderColor: 'var(--state-healthy)',
+          backgroundColor: 'var(--state-healthy)',
+        },
+        {
+          label: 'Failed',
+          data: trends.map((t) => t.failed),
+          borderColor: 'var(--state-critical)',
+          backgroundColor: 'var(--state-critical)',
+        },
+      ],
+    };
+  }, [trends]);
+
   return (
-    <div className="compliance-page">
-      <div className="page-header">
-        <div>
-          <h1>Compliance posture</h1>
-          <p className="subtitle">Find violations, fix them, prove continuous control.</p>
-        </div>
-        <div className="page-actions">
-          <button type="button" onClick={handleRefresh} className="btn-secondary">
-            Refresh
-          </button>
-          <button type="button" onClick={handleExport} className="btn-primary" disabled={results.length === 0}>
-            Export CSV
-          </button>
-        </div>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="POSTURE · COMPLIANCE"
+        title="Compliance posture"
+        description="Find violations, fix them, prove continuous control."
+        actions={
+          <>
+            <Button variant="secondary" size="md" onClick={handleRefresh} disabled={summaryLoading || resultsLoading}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <Button variant="primary" size="md" onClick={handleExport} disabled={results.length === 0}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <KpiTile
+          label="COMPLIANCE SCORE"
+          value={complianceScore !== null ? `${complianceScore}%` : '—'}
+          tone={
+            complianceScore === null
+              ? 'unknown'
+              : complianceScore >= 80
+              ? 'healthy'
+              : complianceScore >= 60
+              ? 'warning'
+              : 'critical'
+          }
+          loading={summaryLoading}
+          hint={
+            summary ? `${summary.passed} of ${summary.total} checks passed` : undefined
+          }
+        />
+        <KpiTile
+          label="TOTAL CHECKS"
+          value={summary?.total ?? 0}
+          tone="brand"
+          loading={summaryLoading}
+        />
+        <KpiTile
+          label="PASSED"
+          value={summary?.passed ?? 0}
+          tone="healthy"
+          loading={summaryLoading}
+        />
+        <KpiTile
+          label="FAILED"
+          value={summary?.failed ?? 0}
+          tone={summary && summary.failed > 0 ? 'critical' : 'healthy'}
+          loading={summaryLoading}
+        />
       </div>
 
-      <div className="filters-section">
-        <div className="filter-group">
-          <label htmlFor="tenant-filter">Tenant</label>
-          <select
-            id="tenant-filter"
-            value={selectedTenant || ''}
-            onChange={(e) => {
-              setSelectedTenant(e.target.value || undefined);
+      {complianceScore !== null && (
+        <Panel padding="md" eyebrow="FRAMEWORK SCORE" title="Posture">
+          <PostureBar
+            score={complianceScore}
+            ariaLabel={`Compliance score ${complianceScore}%`}
+            showLabels
+          />
+        </Panel>
+      )}
+
+      <Panel padding="md" eyebrow="FILTERS" title="Refine">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <FilterSelect
+            label="Tenant"
+            value={selectedTenant ?? ''}
+            onChange={(v) => {
+              setSelectedTenant(v || undefined);
               setSelectedNode(undefined);
               setOffset(0);
             }}
-          >
-            <option value="">All Tenants</option>
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="filter-group">
-          <label htmlFor="node-filter">Node</label>
-          <select
-            id="node-filter"
-            value={selectedNode || ''}
-            onChange={(e) => {
-              setSelectedNode(e.target.value || undefined);
+            options={[
+              { label: 'All tenants', value: '' },
+              ...tenants.map((t) => ({ label: t.name, value: t.id })),
+            ]}
+          />
+          <FilterSelect
+            label="Node"
+            value={selectedNode ?? ''}
+            onChange={(v) => {
+              setSelectedNode(v || undefined);
               setOffset(0);
             }}
+            options={[
+              { label: 'All nodes', value: '' },
+              ...nodes.map((n) => ({ label: n.hostname, value: n.id })),
+            ]}
             disabled={!selectedTenant}
-          >
-            <option value="">All Nodes</option>
-            {nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.hostname}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="filter-group">
-          <label htmlFor="severity-filter">Severity</label>
-          <select
-            id="severity-filter"
+          />
+          <FilterSelect
+            label="Severity"
             value={severityFilter}
-            onChange={(e) => {
-              setSeverityFilter(e.target.value);
+            onChange={(v) => {
+              setSeverityFilter(v);
               setOffset(0);
             }}
-          >
-            <option value="">All Severities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-        </div>
-
-        <div className="filter-group">
-          <label htmlFor="passed-filter">Status</label>
-          <select
-            id="passed-filter"
+            options={[
+              { label: 'All severities', value: '' },
+              { label: 'Critical', value: 'critical' },
+              { label: 'High', value: 'high' },
+              { label: 'Medium', value: 'medium' },
+              { label: 'Low', value: 'low' },
+            ]}
+          />
+          <FilterSelect
+            label="Status"
             value={passedFilter === undefined ? '' : passedFilter.toString()}
-            onChange={(e) => {
-              const value = e.target.value;
-              setPassedFilter(value === '' ? undefined : value === 'true');
+            onChange={(v) => {
+              setPassedFilter(v === '' ? undefined : v === 'true');
               setOffset(0);
             }}
-          >
-            <option value="">All</option>
-            <option value="true">Passed</option>
-            <option value="false">Failed</option>
-          </select>
+            options={[
+              { label: 'All', value: '' },
+              { label: 'Passed', value: 'true' },
+              { label: 'Failed', value: 'false' },
+            ]}
+          />
         </div>
-      </div>
+      </Panel>
 
       {summaryError && (
-        <div className="error-banner">
-          <p>Error loading compliance summary: {summaryError}</p>
-        </div>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load summary">
+          <p className="text-sm text-state-critical">{summaryError}</p>
+        </Panel>
       )}
 
       {resultsError && (
-        <div className="error-banner">
-          <p>Error loading compliance results: {resultsError}</p>
-        </div>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load results">
+          <p className="text-sm text-state-critical">{resultsError}</p>
+        </Panel>
       )}
 
-      <div className="compliance-overview">
-        <div className="score-card">
-          <div className="score-value">
-            {summaryLoading ? (
-              <span className="loading">—</span>
-            ) : complianceScore !== null ? (
-              <>
-                <span className="score-number">{complianceScore}</span>
-                <span className="score-unit">%</span>
-              </>
-            ) : (
-              '—'
-            )}
-          </div>
-          <div className="score-label">Compliance Score</div>
-          {summary && (
-            <div className="score-details">
-              {summary.passed} of {summary.total} checks passed
-            </div>
-          )}
-        </div>
-
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-value">{summaryLoading ? '—' : summary?.total || 0}</div>
-            <div className="stat-label">Total Checks</div>
-          </div>
-          <div className="stat-card success">
-            <div className="stat-value">{summaryLoading ? '—' : summary?.passed || 0}</div>
-            <div className="stat-label">Passed</div>
-          </div>
-          <div className="stat-card error">
-            <div className="stat-value">{summaryLoading ? '—' : summary?.failed || 0}</div>
-            <div className="stat-label">Failed</div>
-          </div>
-        </div>
-      </div>
-
       {severityBreakdown.length > 0 && (
-        <div className="severity-breakdown">
-          <h2>Violations by Severity</h2>
-          <div className="severity-list">
+        <Panel padding="md" eyebrow="VIOLATIONS" title="By severity">
+          <div className="flex flex-wrap gap-3">
             {severityBreakdown.map(({ severity, count }) => (
-              <div key={severity} className="severity-item">
-                <div className="severity-indicator" style={{ backgroundColor: getSeverityColor(severity) }} />
-                <span className="severity-name">{severity.toUpperCase()}</span>
-                <span className="severity-count">{count}</span>
+              <div
+                key={severity}
+                className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-1.5"
+              >
+                <StatusTag tone={severityTone(severity)} className="font-mono uppercase">
+                  {severity}
+                </StatusTag>
+                <span className="font-mono text-sm tabular-nums text-foreground">{count}</span>
               </div>
             ))}
           </div>
-        </div>
+        </Panel>
       )}
 
-      {trends.length > 0 && (
-        <div className="trends-section">
-          <h2>Compliance Trends (Last 30 Days)</h2>
-          <div className="trends-chart">
-            {trendsLoading ? (
-              <div className="loading-placeholder">Loading trends...</div>
-            ) : (
-              <div className="trends-bars">
-                {trends.map((trend, idx) => {
-                  const maxValue = Math.max(...trends.map((t) => t.total));
-                  const passedPercent = maxValue > 0 ? (trend.passed / maxValue) * 100 : 0;
-                  const failedPercent = maxValue > 0 ? (trend.failed / maxValue) * 100 : 0;
-                  const date = new Date(trend.date);
-                  return (
-                    <div key={idx} className="trend-bar-group">
-                      <div className="trend-bar-container">
-                        <div className="trend-bar passed" style={{ height: `${passedPercent}%` }} title={`Passed: ${trend.passed}`} />
-                        <div className="trend-bar failed" style={{ height: `${failedPercent}%` }} title={`Failed: ${trend.failed}`} />
-                      </div>
-                      <div className="trend-label">{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+      {trendChartData && (
+        <Panel padding="md" eyebrow="TRENDS · 30 DAYS" title="Compliance trend" loading={trendsLoading}>
+          <div className="h-56">
+            <Chart kind="line" data={trendChartData} ariaLabel="Compliance trend" />
           </div>
-        </div>
+        </Panel>
       )}
 
-      <div className="results-section">
-        <div className="section-header">
-          <h2>Compliance Results</h2>
-          <div className="results-count">
-            Showing {results.length} of {pagination.total}
-          </div>
+      <Panel
+        padding="sm"
+        tone="inset"
+        eyebrow={`RESULTS · ${results.length} of ${pagination.total}`}
+        title="Compliance results"
+      >
+        <DataTable
+          columns={columns}
+          rows={results}
+          rowKey={(r) => r.id}
+          loading={resultsLoading}
+          compact
+          empty={
+            <EmptyState
+              icon={<FileText />}
+              title="No compliance results"
+              description="No results match the current filters."
+            />
+          }
+        />
+        <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setOffset(Math.max(0, offset - limit))}
+            disabled={offset === 0 || resultsLoading}
+          >
+            Previous
+          </Button>
+          <span className="font-mono text-xs text-text-muted">
+            Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setOffset(offset + limit)}
+            disabled={offset + limit >= pagination.total || resultsLoading}
+          >
+            Next
+          </Button>
         </div>
-
-        {resultsLoading ? (
-          <div className="loading-placeholder">Loading compliance results...</div>
-        ) : results.length === 0 ? (
-          <div className="empty-state">
-            <p>No compliance results found matching your filters.</p>
-          </div>
-        ) : (
-          <>
-            <div className="results-table-container">
-              <table className="results-table">
-                <thead>
-                  <tr>
-                    <th>Rule ID</th>
-                    <th>Node</th>
-                    <th>Status</th>
-                    <th>Severity</th>
-                    <th>Checked At</th>
-                    <th>Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.map((result) => {
-                    const node = nodes.find((n) => n.id === result.node_id);
-                    return (
-                      <tr key={result.id} className={result.passed ? 'passed' : 'failed'}>
-                        <td>
-                          <code>{result.rule_id}</code>
-                        </td>
-                        <td>{node?.hostname || result.node_id || '—'}</td>
-                        <td>
-                          <span className={`status-badge ${result.passed ? 'success' : 'error'}`}>
-                            {result.passed ? 'Passed' : 'Failed'}
-                          </span>
-                        </td>
-                        <td>
-                          {result.severity && (
-                            <span
-                              className="severity-badge"
-                              style={{ backgroundColor: getSeverityColor(result.severity) }}
-                            >
-                              {result.severity.toUpperCase()}
-                            </span>
-                          )}
-                        </td>
-                        <td>{formatDate(result.checked_at)}</td>
-                        <td className="details-cell">
-                          {result.details ? (
-                            <details>
-                              <summary>View details</summary>
-                              <pre>{result.details}</pre>
-                            </details>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="pagination">
-              <button
-                type="button"
-                onClick={() => setOffset(Math.max(0, offset - limit))}
-                disabled={offset === 0 || resultsLoading}
-                className="btn-secondary"
-              >
-                Previous
-              </button>
-              <span className="pagination-info">
-                Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
-              </span>
-              <button
-                type="button"
-                onClick={() => setOffset(offset + limit)}
-                disabled={offset + limit >= pagination.total || resultsLoading}
-                className="btn-secondary"
-              >
-                Next
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+      </Panel>
     </div>
   );
 }
 
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}

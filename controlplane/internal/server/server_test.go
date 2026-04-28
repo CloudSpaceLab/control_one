@@ -2962,16 +2962,16 @@ func (f *fakeStore) VerifyLocalUserPassword(_ context.Context, _, _ string) (*st
 func (f *fakeStore) GetLocalUserByEmail(_ context.Context, _ string) (*storage.LocalUser, error) {
 	return nil, nil
 }
-func (f *fakeStore) SetUserPassword(_ context.Context, _ uuid.UUID, _ string) error           { return nil }
-func (f *fakeStore) SetUserDisabled(_ context.Context, _ uuid.UUID, _ bool) error             { return nil }
-func (f *fakeStore) MarkLoginSuccess(_ context.Context, _ uuid.UUID) error                    { return nil }
+func (f *fakeStore) SetUserPassword(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+func (f *fakeStore) SetUserDisabled(_ context.Context, _ uuid.UUID, _ bool) error   { return nil }
+func (f *fakeStore) MarkLoginSuccess(_ context.Context, _ uuid.UUID) error          { return nil }
 func (f *fakeStore) IssueSession(_ context.Context, userID uuid.UUID, ttl time.Duration, ua, ip string) (*storage.Session, error) {
 	return &storage.Session{ID: uuid.New(), UserID: userID, Token: "test-token", IssuedAt: time.Now(), ExpiresAt: time.Now().Add(ttl)}, nil
 }
 func (f *fakeStore) ValidateSessionToken(_ context.Context, _ string) (*storage.Session, *storage.LocalUser, error) {
 	return nil, nil, nil
 }
-func (f *fakeStore) RevokeSession(_ context.Context, _ uuid.UUID) error           { return nil }
+func (f *fakeStore) RevokeSession(_ context.Context, _ uuid.UUID) error            { return nil }
 func (f *fakeStore) RevokeAllSessionsForUser(_ context.Context, _ uuid.UUID) error { return nil }
 func (f *fakeStore) PurgeExpiredSessions(_ context.Context, _ time.Duration) (int64, error) {
 	return 0, nil
@@ -2986,8 +2986,10 @@ func (f *fakeStore) SetRolePermissions(_ context.Context, _ uuid.UUID, _ []strin
 func (f *fakeStore) CreateCustomRole(_ context.Context, name, desc string, perms []string) (*storage.RolePermissions, error) {
 	return &storage.RolePermissions{ID: uuid.New(), Name: name, Description: desc, Permissions: perms}, nil
 }
-func (f *fakeStore) DeleteRoleByID(_ context.Context, _ uuid.UUID) error              { return nil }
-func (f *fakeStore) GetUserPermissions(_ context.Context, _ uuid.UUID) ([]string, error) { return nil, nil }
+func (f *fakeStore) DeleteRoleByID(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) GetUserPermissions(_ context.Context, _ uuid.UUID) ([]string, error) {
+	return nil, nil
+}
 func (f *fakeStore) CreateDashboard(_ context.Context, t, o uuid.UUID, name, desc string, shared bool) (*storage.CustomDashboard, error) {
 	return &storage.CustomDashboard{ID: uuid.New(), TenantID: t, OwnerID: o, Name: name, Description: desc, Shared: shared}, nil
 }
@@ -3528,7 +3530,7 @@ func (f *fakeStore) ListMFAFactors(_ context.Context, _ uuid.UUID) ([]storage.MF
 }
 func (f *fakeStore) DisableMFAFactor(_ context.Context, _ uuid.UUID) error          { return nil }
 func (f *fakeStore) EnableMFAFactor(_ context.Context, _ uuid.UUID, _ string) error { return nil }
-func (f *fakeStore) RecordMFAUse(_ context.Context, _ uuid.UUID, _ int64) error    { return nil }
+func (f *fakeStore) RecordMFAUse(_ context.Context, _ uuid.UUID, _ int64) error     { return nil }
 func (f *fakeStore) CreateStepUpChallenge(_ context.Context, _ uuid.UUID, _, _ string, _ []byte, _ time.Duration) (*storage.StepUpChallenge, error) {
 	return nil, errors.New("not implemented")
 }
@@ -3646,4 +3648,68 @@ func (f *fakeStore) IncrementHourlyRollup(_ context.Context, _ uuid.UUID, _ *uui
 }
 func (f *fakeStore) QueryHourlyRollup(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]storage.HourlyRollupRow, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) CalculateRiskScore(_ context.Context, _ uuid.UUID) (*storage.RiskScore, error) {
+	return &storage.RiskScore{
+		Score:          0,
+		MaxScore:       100,
+		Percent:        0,
+		TrendDirection: "stable",
+		TrendDelta:     0,
+		Components:     []storage.RiskComponent{},
+		CalculatedAt:   time.Now().UTC(),
+	}, nil
+}
+
+func (f *fakeStore) GetFindingAging(_ context.Context, _ uuid.UUID, severity string) (*storage.FindingAging, error) {
+	return &storage.FindingAging{Severity: severity}, nil
+}
+
+func (f *fakeStore) GetMTTDMetrics(_ context.Context, _ uuid.UUID, severity string, _ time.Time) (*storage.MTTDMetrics, error) {
+	return &storage.MTTDMetrics{Severity: severity, CalculatedAt: time.Now().UTC()}, nil
+}
+
+func (f *fakeStore) GetMTTRMetrics(_ context.Context, _ uuid.UUID, severity string, _ time.Time) (*storage.MTTRMetrics, error) {
+	return &storage.MTTRMetrics{Severity: severity, CalculatedAt: time.Now().UTC()}, nil
+}
+
+func (f *fakeStore) GetRemediationVelocity(_ context.Context, _ uuid.UUID, periodDays int) (*storage.RemediationVelocity, error) {
+	return &storage.RemediationVelocity{Period: fmt.Sprintf("%d days", periodDays)}, nil
+}
+
+func (f *fakeStore) GetRiskScoreHistory(_ context.Context, _ uuid.UUID, days int) ([]storage.RiskScorePoint, error) {
+	if days <= 0 {
+		days = 1
+	}
+	out := make([]storage.RiskScorePoint, 0, days)
+	now := time.Now().UTC()
+	for i := 0; i < days; i++ {
+		out = append(out, storage.RiskScorePoint{
+			Timestamp: now.AddDate(0, 0, -i),
+			Score:     50,
+		})
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetRemediationVelocityHistory(_ context.Context, _ uuid.UUID, days int) ([]storage.RemediationVelocityPoint, error) {
+	if days <= 0 {
+		days = 1
+	}
+	out := make([]storage.RemediationVelocityPoint, 0, days)
+	now := time.Now().UTC()
+	for i := 0; i < days; i++ {
+		out = append(out, storage.RemediationVelocityPoint{
+			Timestamp: now.AddDate(0, 0, -i),
+			Count:     0,
+		})
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetComplianceByFramework(_ context.Context, _ uuid.UUID) ([]storage.FrameworkComplianceSummary, error) {
+	return []storage.FrameworkComplianceSummary{
+		{Name: "cis-foundations", Pass: 4, Fail: 1, Coverage: 0.8},
+	}, nil
 }

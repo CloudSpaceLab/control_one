@@ -25,15 +25,17 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/correlation"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/connect"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
 
-	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 )
 
 // Store defines persistence operations used by the server.
@@ -318,6 +320,15 @@ type Store interface {
 	CreateWidget(context.Context, storage.DashboardWidget) (*storage.DashboardWidget, error)
 	UpdateWidget(context.Context, storage.DashboardWidget) error
 	DeleteWidget(context.Context, uuid.UUID) error
+	// Executive Risk Dashboard metrics (Phase 0)
+	GetMTTDMetrics(context.Context, uuid.UUID, string, time.Time) (*storage.MTTDMetrics, error)
+	GetMTTRMetrics(context.Context, uuid.UUID, string, time.Time) (*storage.MTTRMetrics, error)
+	GetRemediationVelocity(context.Context, uuid.UUID, int) (*storage.RemediationVelocity, error)
+	GetFindingAging(context.Context, uuid.UUID, string) (*storage.FindingAging, error)
+	CalculateRiskScore(context.Context, uuid.UUID) (*storage.RiskScore, error)
+	GetRiskScoreHistory(context.Context, uuid.UUID, int) ([]storage.RiskScorePoint, error)
+	GetRemediationVelocityHistory(context.Context, uuid.UUID, int) ([]storage.RemediationVelocityPoint, error)
+	GetComplianceByFramework(context.Context, uuid.UUID) ([]storage.FrameworkComplianceSummary, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -633,10 +644,10 @@ type Server struct {
 	sealer *secretbox.Sealer
 	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
 	// to SSE subscribers and internal correlators. nil means events are a no-op.
-	eventBus         *eventbus.Bus
-	correlationCtx   context.Context
-	correlationStop  context.CancelFunc
-	correlationEng   *correlation.Engine
+	eventBus        *eventbus.Bus
+	correlationCtx  context.Context
+	correlationStop context.CancelFunc
+	correlationEng  *correlation.Engine
 	// webauthn handles registration + assertion verification. nil means
 	// webauthn is disabled and the relevant endpoints return 503.
 	webauthn *webauthnlib.WebAuthn
@@ -649,6 +660,15 @@ type Server struct {
 	// LDAP authenticator — nil when LDAP is disabled in config. Login flow
 	// falls through to it after local password verify fails.
 	ldapProvider *auth.LDAPProvider
+	// ipIntel handles geo + ASN + reputation lookups for Investigate.
+	// nil when no provider is configured; handler degrades gracefully.
+	ipIntel *ipintel.Service
+	// connectRegistry powers the operator "onboard a server" wizard. Lazy
+	// because most servers never invoke it; tests inject a stub via
+	// connectRegistryOverride to skip real network calls.
+	connectRegistryOnce     sync.Once
+	connectRegistryInst     *connect.Registry
+	connectRegistryOverride *connect.Registry
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -825,6 +845,26 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/health-incidents", s.handleHealthIncidentsCollection)
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
+	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
+	s.baseRouter.HandleFunc("/api/v1/metrics/mttd", s.handleMetricsMTTD)
+	s.baseRouter.HandleFunc("/api/v1/metrics/mttr", s.handleMetricsMTTR)
+	s.baseRouter.HandleFunc("/api/v1/metrics/remediation-velocity", s.handleMetricsRemediationVelocity)
+	s.baseRouter.HandleFunc("/api/v1/metrics/findings-aging", s.handleMetricsFindingsAging)
+	// Per-role dashboard history + framework breakdown.
+	s.baseRouter.HandleFunc("/api/v1/dashboard/metrics/risk-score/history", s.handleMetricsRiskScoreHistory)
+	s.baseRouter.HandleFunc("/api/v1/dashboard/metrics/remediation-velocity/history", s.handleMetricsRemediationVelocityHistory)
+	s.baseRouter.HandleFunc("/api/v1/dashboard/metrics/compliance/by-framework", s.handleMetricsComplianceByFramework)
+	// Admin self-health, ingest, tenant activity, SLO and capacity dashboards.
+	s.baseRouter.HandleFunc("/api/v1/admin/self-health", s.handleAdminSelfHealth)
+	s.baseRouter.HandleFunc("/api/v1/admin/ingest/throughput", s.handleAdminIngestThroughput)
+	s.baseRouter.HandleFunc("/api/v1/admin/tenants/activity", s.handleAdminTenantsActivity)
+	s.baseRouter.HandleFunc("/api/v1/admin/slo", s.handleAdminSLO)
+	s.baseRouter.HandleFunc("/api/v1/admin/capacity", s.handleAdminCapacity)
+
+	// Onboarding wizard (operator "add a server" flow)
+	s.baseRouter.HandleFunc("/api/v1/onboarding/test-connection", s.handleOnboardingTestConnection)
+	s.baseRouter.HandleFunc("/api/v1/onboarding/protocols", s.handleOnboardingProtocols)
+
 	s.baseRouter.HandleFunc("/api/v1/alerts", s.handleAlertsCollection)
 	s.baseRouter.HandleFunc("/api/v1/alerts/", s.handleAlertSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/access-requests", s.handleAccessRequestsCollection)
@@ -855,6 +895,11 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/connections/", s.handleConnectionDetail)
 	s.baseRouter.HandleFunc("/api/v1/connections/top-talkers", s.handleTopTalkers)
 	s.baseRouter.HandleFunc("/api/v1/fleet/health", s.handleFleetHealth)
+	// SIEM Investigate / entity-search surface (Phase Investigate).
+	s.baseRouter.HandleFunc("/api/v1/search", s.handleInvestigateSearch)
+	s.baseRouter.HandleFunc("/api/v1/entities/", s.handleEntitySubroutes)
+	s.baseRouter.HandleFunc("/api/v1/saved-searches", s.handleSavedSearchesCollection)
+	s.baseRouter.HandleFunc("/api/v1/saved-searches/", s.handleSavedSearchSubroute)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -2001,6 +2046,20 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true, eventBus: eventbus.New(64)}
 	serverRef = s
+
+	// IP intelligence (Investigate). Wires akyriako/ipquery + AbuseIPDB with
+	// a Postgres-backed cache when *storage.Store is available; falls back
+	// to an in-memory cache otherwise (tests + minimal deployments).
+	if enabled, primary := ipintel.Validate(cfg.IPIntel); enabled {
+		var cache ipintel.Cache = ipintel.NewMemCache()
+		if concrete, ok := store.(*storage.Store); ok && concrete != nil {
+			cache = storage.NewIPIntelCache(concrete.DB())
+		}
+		s.ipIntel = ipintel.New(cfg.IPIntel, cache)
+		logger.Info("ipintel enabled", zap.String("primary_provider", primary))
+	} else {
+		logger.Info("ipintel disabled — set IPQUERY_BASE_URL or ABUSEIPDB_API_KEY to enable")
+	}
 	// Doris analytic store. Optional — when unconfigured, ingest stays
 	// on Postgres + journal (see /events/ingest).
 	if cfg.Doris.Enabled && cfg.Doris.DSN != "" {

@@ -7,6 +7,17 @@ import type { DashboardOverview, SeverityBreakdown } from '../lib/api';
 import { useFleetSummary } from '../hooks/useFleetSummary';
 import TopologyGrid, { TopologyNode } from '../components/glyphs/TopologyGrid';
 import StatusDot, { State } from '../components/glyphs/StatusDot';
+import {
+  RiskScoreCard,
+  MetricTrend,
+  AgingTable,
+  type RiskScore,
+  type MTTDMetrics,
+  type MTTRMetrics,
+  type RemediationVelocity,
+  type FindingAging,
+} from '../components/executive';
+import './Dashboard.css';
 
 const REFRESH_TOPICS = [
   'security.event',
@@ -39,6 +50,14 @@ export function Dashboard(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Executive Risk Dashboard State
+  const [riskScore, setRiskScore] = useState<RiskScore | null>(null);
+  const [mttdMetrics, setMttdMetrics] = useState<MTTDMetrics | null>(null);
+  const [mttrMetrics, setMttrMetrics] = useState<MTTRMetrics | null>(null);
+  const [remediationVelocity, setRemediationVelocity] = useState<RemediationVelocity | null>(null);
+  const [criticalAging, setCriticalAging] = useState<FindingAging | null>(null);
+  const [executiveLoading, setExecutiveLoading] = useState(true);
+
   const refresh = useCallback(async () => {
     try {
       const data = await client.getDashboardOverview(tenantId);
@@ -51,20 +70,51 @@ export function Dashboard(): JSX.Element {
     }
   }, [client, tenantId]);
 
+  // Executive metrics refresh
+  const refreshExecutiveMetrics = useCallback(async () => {
+    if (!tenantId) return;
+    
+    setExecutiveLoading(true);
+    try {
+      // Fetch all executive metrics in parallel using public API methods
+      const [risk, mttd, mttr, velocity, aging] = await Promise.all([
+        client.getRiskScore(tenantId),
+        client.getMTTDMetrics(tenantId, 'critical', 7),
+        client.getMTTRMetrics(tenantId, 'critical', 7),
+        client.getRemediationVelocity(tenantId, 30),
+        client.getFindingsAging(tenantId, 'critical'),
+      ]);
+
+      setRiskScore(risk);
+      setMttdMetrics(mttd);
+      setMttrMetrics(mttr);
+      setRemediationVelocity(velocity);
+      setCriticalAging(aging);
+    } catch (err) {
+      console.error('Failed to load executive metrics:', err);
+    } finally {
+      setExecutiveLoading(false);
+    }
+  }, [client, tenantId]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (cancelled) return;
       await refresh();
+      await refreshExecutiveMetrics();
     })();
     const poll = window.setInterval(() => {
-      if (!cancelled) refresh();
+      if (!cancelled) {
+        refresh();
+        refreshExecutiveMetrics();
+      }
     }, 30_000);
     return () => {
       cancelled = true;
       window.clearInterval(poll);
     };
-  }, [refresh]);
+  }, [refresh, refreshExecutiveMetrics]);
 
   // Realtime refresh on incoming events.
   useEventStream(tenantId, REFRESH_TOPICS, () => {
@@ -77,21 +127,102 @@ export function Dashboard(): JSX.Element {
   );
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Last 24 hours</p>
-          <h2>Your infrastructure at a glance</h2>
-          <p className="subtitle">
-            {loading ? 'Loading…' : `Updated ${new Date(overview.generated_at || Date.now()).toLocaleTimeString()}`}
-          </p>
-        </div>
-        <button type="button" className="primary-button" onClick={refresh}>
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </header>
+    <section className="dashboard-root">
+      <div className="dashboard-container">
+        {/* Executive Risk Dashboard */}
+        <div className="executive-section">
+          <header className="executive-header">
+            <div>
+              <p className="executive-eyebrow">Executive Risk Dashboard</p>
+              <h2 className="executive-title">Security Posture at a Glance</h2>
+              <p className="executive-subtitle">
+                {executiveLoading ? 'Loading executive metrics…' : 'Real-time risk visibility and operational metrics'}
+              </p>
+            </div>
+            <button 
+              type="button" 
+              className="refresh-btn" 
+              onClick={() => { refresh(); refreshExecutiveMetrics(); }}
+              disabled={executiveLoading || loading}
+            >
+              {executiveLoading || loading ? '⟳ Refreshing…' : '↻ Refresh'}
+            </button>
+          </header>
 
-      {error ? <p className="error-banner">{error}</p> : null}
+          {/* Error State */}
+          {error && (
+            <div className="error-card" style={{ marginBottom: '24px' }}>
+              <svg className="error-icon" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              <p className="error-message">{error}</p>
+              <button className="error-retry-btn" onClick={() => { refresh(); refreshExecutiveMetrics(); }}>
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* Executive Metrics Grid */}
+          <div className="executive-grid">
+            {/* Left Column - Risk Score */}
+            <div className="executive-metric-large">
+              <RiskScoreCard score={riskScore} loading={executiveLoading} />
+            </div>
+
+            {/* Right Column - Metrics Row + Aging */}
+            <div>
+              <div className="executive-metrics-row">
+                <MetricTrend
+                  title="MTTD (Mean Time to Detect)"
+                  value={mttdMetrics?.mean_minutes ?? null}
+                  unit=""
+                  target={15}
+                  trend={mttdMetrics?.mean_minutes ? (mttdMetrics.mean_minutes < 15 ? 'up' : 'down') : undefined}
+                  trendValue={5}
+                  loading={executiveLoading}
+                  format="time"
+                />
+                <MetricTrend
+                  title="MTTR (Mean Time to Remediate)"
+                  value={mttrMetrics?.mean_minutes ?? null}
+                  unit=""
+                  target={240}
+                  trend={mttrMetrics?.mean_minutes ? (mttrMetrics.mean_minutes < 240 ? 'up' : 'down') : undefined}
+                  trendValue={10}
+                  loading={executiveLoading}
+                  format="time"
+                />
+                <MetricTrend
+                  title="Remediation Velocity"
+                  value={remediationVelocity?.remediations ?? null}
+                  unit="findings"
+                  trend={remediationVelocity?.trend_direction}
+                  trendValue={remediationVelocity?.trend_percent}
+                  loading={executiveLoading}
+                  format="number"
+                />
+              </div>
+              <div className="executive-aging-container" style={{ marginTop: '16px' }}>
+                <AgingTable aging={criticalAging} loading={executiveLoading} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Visual Separator */}
+        <div className="dashboard-divider" />
+
+        {/* Operational Section */}
+        <div className="operational-section">
+          <header className="operational-header">
+            <div>
+              <p className="operational-eyebrow">Operational Details</p>
+              <h3 className="operational-title">Infrastructure Overview</h3>
+              <p className="operational-subtitle">
+                {loading ? 'Loading operational data…' : `Last updated ${new Date(overview.generated_at || Date.now()).toLocaleTimeString()}`}
+              </p>
+            </div>
+          </header>
 
       <div className="stat-grid">
         <SeverityCard title="Security events (24h)" breakdown={overview.security_event_counts} />
@@ -159,6 +290,8 @@ export function Dashboard(): JSX.Element {
           </ul>
         </article>
       </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -169,7 +302,10 @@ function SeverityCard({ title, breakdown }: { title: string; breakdown: Severity
       <p>{title}</p>
       <span className="stat-value">{breakdown.total}</span>
       <small>
-        {breakdown.critical} crit · {breakdown.high} high · {breakdown.medium} med · {breakdown.low} low
+        <span className="crit">{breakdown.critical}</span> crit ·{' '}
+        <span className="high">{breakdown.high}</span> high ·{' '}
+        <span className="med">{breakdown.medium}</span> med ·{' '}
+        <span className="low">{breakdown.low}</span> low
       </small>
     </article>
   );
@@ -259,3 +395,4 @@ function Legend({ label, state, count }: { label: string; state: State; count: n
     </span>
   );
 }
+

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { SectionHeader } from '../components/kit';
 import { Badge, severityToVariant } from '../components/Badge';
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -177,22 +178,24 @@ export function ThreatFeeds(): JSX.Element {
   };
 
   return (
-    <section className="dashboard-section">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">Threat intelligence</p>
-          <h2>Abuse IP data sources</h2>
-          <p className="subtitle">
-            Choose which feeds to consume. Built-in lists are free; commercial feeds need an API key. Custom URLs are
-            supported for in-house honeypots and partner shares.
-          </p>
-        </div>
-        <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} aria-label="Tenant">
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="DETECT & RESPOND · THREAT FEEDS"
+        title="Abuse IP data sources"
+        description="Choose which feeds to consume. Built-in lists are free; commercial feeds need an API key. Custom URLs are supported for in-house honeypots and partner shares."
+        actions={
+          <select
+            value={tenantId}
+            onChange={(e) => setTenantId(e.target.value)}
+            aria-label="Tenant"
+            className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+          >
           {tenants.map((t) => (
             <option key={t.id} value={t.id}>{t.name}</option>
           ))}
         </select>
-      </header>
+        }
+      />
 
       {error ? <p className="error-banner">{error}</p> : null}
 
@@ -354,6 +357,6 @@ export function ThreatFeeds(): JSX.Element {
         onConfirm={remove}
         onCancel={() => setConfirmId(null)}
       />
-    </section>
+    </div>
   );
 }

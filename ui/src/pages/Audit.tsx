@@ -1,48 +1,51 @@
 import { useMemo, useState } from 'react';
+import { Download, FileText, RefreshCw } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import {
+  DataTable,
+  EmptyState,
+  EntityChip,
+  KpiTile,
+  Panel,
+  SectionHeader,
+  StatusTag,
+  type StateTone,
+} from '../components/kit';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { useAuditLogs } from '../hooks/useAuditLogs';
 import { useTenants } from '../hooks/useTenants';
-import { AuditLog } from '../lib/api';
-import './Audit.css';
+import { classifyValue } from '../lib/entity';
+import type { AuditLog } from '../lib/api';
+import type { ColumnDef } from '@tanstack/react-table';
 
 function formatDate(value?: string): string {
-  if (!value) {
-    return '—';
-  }
+  if (!value) return '—';
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
+  if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
 }
 
 function formatRelativeTime(value?: string): string {
-  if (!value) {
-    return '—';
-  }
+  if (!value) return '—';
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  const now = new Date();
-  const diffMs = now.getTime() - parsed.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (Number.isNaN(parsed.getTime())) return value;
+  const diff = Date.now() - parsed.getTime();
+  const m = Math.floor(diff / 60_000);
+  if (m < 1) return 'Just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(diff / 3_600_000);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(diff / 86_400_000);
+  if (d < 7) return `${d}d ago`;
   return parsed.toLocaleDateString();
 }
 
-function getActionColor(action: string): string {
-  if (action.includes('.create') || action.includes('.created')) return 'var(--state-healthy)';
-  if (action.includes('.update') || action.includes('.updated')) return 'var(--state-info)';
-  if (action.includes('.delete') || action.includes('.deleted')) return 'var(--state-critical)';
-  if (action.includes('.failed') || action.includes('.error')) return 'var(--state-critical)';
-  if (action.includes('.success') || action.includes('.succeeded')) return 'var(--state-healthy)';
-  return 'var(--text-secondary)';
+function actionTone(action: string): StateTone {
+  if (action.includes('.delete') || action.includes('.error') || action.includes('.failed')) return 'critical';
+  if (action.includes('.create') || action.includes('.success') || action.includes('.succeeded')) return 'healthy';
+  if (action.includes('.update')) return 'info';
+  return 'unknown';
 }
 
 function exportToCSV(logs: AuditLog[]): void {
@@ -56,7 +59,6 @@ function exportToCSV(logs: AuditLog[]): void {
     log.tenant_id || '',
     JSON.stringify(log.metadata || {}),
   ]);
-
   const csv = [headers.join(','), ...rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
@@ -68,23 +70,16 @@ function exportToCSV(logs: AuditLog[]): void {
 }
 
 export function Audit(): JSX.Element {
-  const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
-  const [actorTypeFilter, setActorTypeFilter] = useState<string>('');
-  const [actionFilter, setActionFilter] = useState<string>('');
-  const [resourceTypeFilter, setResourceTypeFilter] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'table' | 'timeline'>('table');
+  const [selectedTenant, setSelectedTenant] = useState<string | undefined>();
+  const [actorTypeFilter, setActorTypeFilter] = useState('');
+  const [actionFilter, setActionFilter] = useState('');
+  const [resourceTypeFilter, setResourceTypeFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [limit] = useState(100);
   const [offset, setOffset] = useState(0);
 
   const { data: tenants } = useTenants();
-
-  const {
-    data: logs,
-    loading,
-    error,
-    pagination,
-    reload,
-  } = useAuditLogs({
+  const { data: logs, loading, error, pagination, reload } = useAuditLogs({
     tenant_id: selectedTenant,
     actor_type: actorTypeFilter || undefined,
     action: actionFilter || undefined,
@@ -94,287 +89,258 @@ export function Audit(): JSX.Element {
   });
 
   const uniqueActions = useMemo(() => {
-    const actions = new Set<string>();
-    logs.forEach((log) => actions.add(log.action));
-    return Array.from(actions).sort();
+    const a = new Set<string>();
+    logs.forEach((l) => a.add(l.action));
+    return Array.from(a).sort();
   }, [logs]);
 
   const uniqueResourceTypes = useMemo(() => {
-    const types = new Set<string>();
-    logs.forEach((log) => types.add(log.resource_type));
-    return Array.from(types).sort();
+    const t = new Set<string>();
+    logs.forEach((l) => t.add(l.resource_type));
+    return Array.from(t).sort();
   }, [logs]);
 
-  const handleExport = () => {
-    if (logs.length === 0) return;
-    exportToCSV(logs);
-  };
+  const columns = useMemo<ColumnDef<AuditLog>[]>(() => [
+    {
+      accessorKey: 'created_at',
+      header: 'When',
+      cell: ({ getValue }) => (
+        <div className="flex flex-col">
+          <span className="font-mono text-xs tabular-nums">{formatDate(getValue() as string)}</span>
+          <span className="text-[0.65rem] text-text-muted">{formatRelativeTime(getValue() as string)}</span>
+        </div>
+      ),
+    },
+    {
+      id: 'actor',
+      header: 'Actor',
+      cell: ({ row }) => (
+        <div className="inline-flex items-center gap-2">
+          <StatusTag tone={row.original.actor_type === 'system' ? 'info' : 'healthy'}>
+            {row.original.actor_type}
+          </StatusTag>
+          {row.original.actor_id && (
+            <span className="font-mono text-[0.65rem] text-text-muted">
+              {row.original.actor_id.slice(0, 8)}…
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'action',
+      header: 'Action',
+      cell: ({ getValue }) => {
+        const a = getValue() as string;
+        return <StatusTag tone={actionTone(a)} className="font-mono">{a}</StatusTag>;
+      },
+    },
+    {
+      id: 'resource',
+      header: 'Resource',
+      cell: ({ row }) => {
+        const id = row.original.resource_id;
+        const det = id ? classifyValue(id) : { type: 'unknown' as const };
+        return (
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-text-secondary">{row.original.resource_type}</span>
+            {id && det.type !== 'unknown' ? (
+              <EntityChip type={det.type} value={id} />
+            ) : id ? (
+              <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem] text-text-secondary">
+                {id.length > 20 ? `${id.slice(0, 20)}…` : id}
+              </code>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      id: 'metadata',
+      header: 'Details',
+      cell: ({ row }) =>
+        row.original.metadata && Object.keys(row.original.metadata).length > 0 ? (
+          <details>
+            <summary className="cursor-pointer text-xs text-text-secondary hover:text-foreground">
+              View metadata
+            </summary>
+            <pre className="mt-1 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed">
+              {JSON.stringify(row.original.metadata, null, 2)}
+            </pre>
+          </details>
+        ) : (
+          <span className="text-text-muted">—</span>
+        ),
+    },
+  ], []);
 
-  const handleRefresh = () => {
-    reload();
-  };
+  const filtered = useMemo(() => {
+    if (!search.trim()) return logs;
+    const q = search.toLowerCase();
+    return logs.filter(
+      (l) =>
+        l.action.toLowerCase().includes(q) ||
+        l.resource_type.toLowerCase().includes(q) ||
+        (l.resource_id ?? '').toLowerCase().includes(q) ||
+        (l.actor_id ?? '').toLowerCase().includes(q),
+    );
+  }, [logs, search]);
+
+  const userCount = logs.filter((l) => l.actor_type === 'user').length;
+  const systemCount = logs.filter((l) => l.actor_type === 'system').length;
 
   return (
-    <div className="audit-page">
-      <div className="page-header">
-        <div>
-          <h1>Audit trail</h1>
-          <p className="subtitle">Who did what, when. Full record for SOC 2, ISO 27001, and incident review.</p>
-        </div>
-        <div className="page-actions">
-          <button type="button" onClick={handleRefresh} className="btn-secondary">
-            Refresh
-          </button>
-          <button type="button" onClick={handleExport} className="btn-primary" disabled={logs.length === 0}>
-            Export CSV
-          </button>
-        </div>
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="POSTURE · AUDIT"
+        title="Audit trail"
+        description="Who did what, when. Full record for SOC 2, ISO 27001, and incident review."
+        actions={
+          <>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <Button variant="primary" size="md" onClick={() => exportToCSV(logs)} disabled={logs.length === 0}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile label="TOTAL EVENTS" value={pagination.total.toLocaleString()} tone="brand" />
+        <KpiTile label="USER ACTIONS" value={userCount} tone="healthy" />
+        <KpiTile label="SYSTEM EVENTS" value={systemCount} tone="info" />
       </div>
 
-      <div className="filters-section">
-        <div className="filter-group">
-          <label htmlFor="tenant-filter">Tenant</label>
-          <select
-            id="tenant-filter"
-            value={selectedTenant || ''}
-            onChange={(e) => {
-              setSelectedTenant(e.target.value || undefined);
-              setOffset(0);
-            }}
-          >
-            <option value="">All Tenants</option>
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="filter-group">
-          <label htmlFor="actor-type-filter">Actor Type</label>
-          <select
-            id="actor-type-filter"
+      <Panel padding="md" eyebrow="FILTERS" title="Refine">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <FilterSelect
+            label="Tenant"
+            value={selectedTenant ?? ''}
+            onChange={(v) => { setSelectedTenant(v || undefined); setOffset(0); }}
+            options={[
+              { label: 'All tenants', value: '' },
+              ...tenants.map((t) => ({ label: t.name, value: t.id })),
+            ]}
+          />
+          <FilterSelect
+            label="Actor type"
             value={actorTypeFilter}
-            onChange={(e) => {
-              setActorTypeFilter(e.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">All Types</option>
-            <option value="user">User</option>
-            <option value="system">System</option>
-          </select>
-        </div>
-
-        <div className="filter-group">
-          <label htmlFor="action-filter">Action</label>
-          <select
-            id="action-filter"
+            onChange={(v) => { setActorTypeFilter(v); setOffset(0); }}
+            options={[
+              { label: 'All types', value: '' },
+              { label: 'User', value: 'user' },
+              { label: 'System', value: 'system' },
+            ]}
+          />
+          <FilterSelect
+            label="Action"
             value={actionFilter}
-            onChange={(e) => {
-              setActionFilter(e.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">All Actions</option>
-            {uniqueActions.map((action) => (
-              <option key={action} value={action}>
-                {action}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="filter-group">
-          <label htmlFor="resource-type-filter">Resource Type</label>
-          <select
-            id="resource-type-filter"
+            onChange={(v) => { setActionFilter(v); setOffset(0); }}
+            options={[
+              { label: 'All actions', value: '' },
+              ...uniqueActions.map((a) => ({ label: a, value: a })),
+            ]}
+          />
+          <FilterSelect
+            label="Resource"
             value={resourceTypeFilter}
-            onChange={(e) => {
-              setResourceTypeFilter(e.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">All Resources</option>
-            {uniqueResourceTypes.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => { setResourceTypeFilter(v); setOffset(0); }}
+            options={[
+              { label: 'All resources', value: '' },
+              ...uniqueResourceTypes.map((t) => ({ label: t, value: t })),
+            ]}
+          />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="audit-search">Search</Label>
+            <Input
+              id="audit-search"
+              placeholder="action, resource id…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
-
-        <div className="filter-group">
-          <label htmlFor="view-mode-filter">View</label>
-          <select
-            id="view-mode-filter"
-            value={viewMode}
-            onChange={(e) => setViewMode(e.target.value as 'table' | 'timeline')}
-          >
-            <option value="table">Table</option>
-            <option value="timeline">Timeline</option>
-          </select>
-        </div>
-      </div>
+      </Panel>
 
       {error && (
-        <div className="error-banner">
-          <p>Error loading audit logs: {error}</p>
-        </div>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
+          <p className="text-sm text-state-critical">{error}</p>
+        </Panel>
       )}
 
-      <div className="audit-stats">
-        <div className="stat-card">
-          <div className="stat-value">{pagination.total}</div>
-          <div className="stat-label">Total Events</div>
+      <Panel
+        padding="sm"
+        tone="inset"
+        eyebrow={`AUDIT LOG · ${filtered.length} of ${pagination.total}`}
+        title="Entries"
+      >
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          rowKey={(r) => r.id}
+          loading={loading}
+          compact
+          empty={
+            <EmptyState
+              icon={<FileText />}
+              title="No audit entries"
+              description="No events match the current filters."
+            />
+          }
+        />
+        <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setOffset(Math.max(0, offset - limit))}
+            disabled={offset === 0 || loading}
+          >
+            Previous
+          </Button>
+          <span className="font-mono text-xs text-text-muted">
+            Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setOffset(offset + limit)}
+            disabled={offset + limit >= pagination.total || loading}
+          >
+            Next
+          </Button>
         </div>
-        <div className="stat-card">
-          <div className="stat-value">{logs.filter((l) => l.actor_type === 'user').length}</div>
-          <div className="stat-label">User Actions</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{logs.filter((l) => l.actor_type === 'system').length}</div>
-          <div className="stat-label">System Events</div>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="loading-placeholder">Loading audit logs...</div>
-      ) : logs.length === 0 ? (
-        <div className="empty-state">
-          <p>No audit logs found matching your filters.</p>
-        </div>
-      ) : viewMode === 'table' ? (
-        <>
-          <div className="results-section">
-            <div className="section-header">
-              <h2>Audit Log Entries</h2>
-              <div className="results-count">
-                Showing {logs.length} of {pagination.total}
-              </div>
-            </div>
-
-            <div className="table-container">
-              <table className="audit-table">
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>Actor</th>
-                    <th>Action</th>
-                    <th>Resource</th>
-                    <th>Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((log) => (
-                    <tr key={log.id}>
-                      <td className="timestamp-cell">
-                        <div className="timestamp-primary">{formatDate(log.created_at)}</div>
-                        <div className="timestamp-secondary">{formatRelativeTime(log.created_at)}</div>
-                      </td>
-                      <td>
-                        <span className="actor-badge">{log.actor_type}</span>
-                        {log.actor_id && <span className="actor-id">({log.actor_id.slice(0, 8)}...)</span>}
-                      </td>
-                      <td>
-                        <span className="action-badge" style={{ backgroundColor: getActionColor(log.action) }}>
-                          {log.action}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="resource-info">
-                          <span className="resource-type">{log.resource_type}</span>
-                          {log.resource_id && (
-                            <code className="resource-id" title={log.resource_id}>
-                              {log.resource_id.length > 20 ? `${log.resource_id.slice(0, 20)}...` : log.resource_id}
-                            </code>
-                          )}
-                        </div>
-                      </td>
-                      <td className="details-cell">
-                        {log.metadata && Object.keys(log.metadata).length > 0 ? (
-                          <details>
-                            <summary>View metadata</summary>
-                            <pre>{JSON.stringify(log.metadata, null, 2)}</pre>
-                          </details>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="pagination">
-              <button
-                type="button"
-                onClick={() => setOffset(Math.max(0, offset - limit))}
-                disabled={offset === 0 || loading}
-                className="btn-secondary"
-              >
-                Previous
-              </button>
-              <span className="pagination-info">
-                Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
-              </span>
-              <button
-                type="button"
-                onClick={() => setOffset(offset + limit)}
-                disabled={offset + limit >= pagination.total || loading}
-                className="btn-secondary"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="timeline-section">
-          <h2>Timeline View</h2>
-          <div className="timeline">
-            {logs.map((log) => (
-              <div key={log.id} className="timeline-item">
-                <div className="timeline-marker" style={{ backgroundColor: getActionColor(log.action) }} />
-                <div className="timeline-content">
-                  <div className="timeline-header">
-                    <span className="timeline-action" style={{ color: getActionColor(log.action) }}>
-                      {log.action}
-                    </span>
-                    <span className="timeline-time">{formatRelativeTime(log.created_at)}</span>
-                  </div>
-                  <div className="timeline-body">
-                    <div className="timeline-details">
-                      <span className="detail-label">Actor:</span>
-                      <span className="detail-value">{log.actor_type}</span>
-                      {log.actor_id && <span className="detail-value secondary">({log.actor_id.slice(0, 8)}...)</span>}
-                    </div>
-                    <div className="timeline-details">
-                      <span className="detail-label">Resource:</span>
-                      <span className="detail-value">{log.resource_type}</span>
-                      {log.resource_id && (
-                        <code className="detail-value secondary">{log.resource_id.slice(0, 20)}...</code>
-                      )}
-                    </div>
-                    {log.metadata && Object.keys(log.metadata).length > 0 && (
-                      <details className="timeline-metadata">
-                        <summary>Metadata</summary>
-                        <pre>{JSON.stringify(log.metadata, null, 2)}</pre>
-                      </details>
-                    )}
-                  </div>
-                  <div className="timeline-footer">
-                    <span className="timeline-timestamp">{formatDate(log.created_at)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      </Panel>
     </div>
   );
 }
 
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
