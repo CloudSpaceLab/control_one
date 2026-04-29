@@ -275,3 +275,111 @@ func (s *Store) UpdateAuditReportStatus(ctx context.Context, id uuid.UUID, statu
 	`, id, status, pdfPath, generatedAt)
 	return err
 }
+
+// ListComplianceReviews returns a paginated list of compliance reviews for a tenant.
+func (s *Store) ListComplianceReviews(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]ComplianceReview, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM compliance_reviews WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count compliance reviews: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, review_type, scheduled_for, completed_at, reviewed_by, status, notes, recurrence, created_at
+		FROM compliance_reviews
+		WHERE tenant_id = $1
+		ORDER BY scheduled_for ASC NULLS LAST, created_at DESC
+		LIMIT $2 OFFSET $3
+	`, tenantID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list compliance reviews: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ComplianceReview
+	for rows.Next() {
+		var r ComplianceReview
+		if err := rows.Scan(
+			&r.ID, &r.TenantID, &r.ReviewType, &r.ScheduledFor, &r.CompletedAt,
+			&r.ReviewedBy, &r.Status, &r.Notes, &r.Recurrence, &r.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan compliance review: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, total, rows.Err()
+}
+
+// CreateComplianceReview inserts a new compliance review.
+func (s *Store) CreateComplianceReview(ctx context.Context, r *ComplianceReview) (*ComplianceReview, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	if r.Status == "" {
+		r.Status = "pending"
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO compliance_reviews (id, tenant_id, review_type, scheduled_for, completed_at, reviewed_by, status, notes, recurrence, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, r.ID, r.TenantID, r.ReviewType, r.ScheduledFor, r.CompletedAt, r.ReviewedBy, r.Status, r.Notes, r.Recurrence, r.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create compliance review: %w", err)
+	}
+	return r, nil
+}
+
+// GetComplianceReview returns a single compliance review by ID.
+func (s *Store) GetComplianceReview(ctx context.Context, id uuid.UUID) (*ComplianceReview, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	var r ComplianceReview
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, review_type, scheduled_for, completed_at, reviewed_by, status, notes, recurrence, created_at
+		FROM compliance_reviews WHERE id = $1
+	`, id).Scan(
+		&r.ID, &r.TenantID, &r.ReviewType, &r.ScheduledFor, &r.CompletedAt,
+		&r.ReviewedBy, &r.Status, &r.Notes, &r.Recurrence, &r.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get compliance review: %w", err)
+	}
+	return &r, nil
+}
+
+// CompleteComplianceReview marks a review as completed.
+func (s *Store) CompleteComplianceReview(ctx context.Context, id uuid.UUID, reviewedBy uuid.UUID, notes *string) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE compliance_reviews SET status=$2, completed_at=$3, reviewed_by=$4, notes=$5 WHERE id=$1
+	`, id, "completed", now, reviewedBy, notes)
+	return err
+}
+
+// DeleteComplianceReview removes a compliance review.
+func (s *Store) DeleteComplianceReview(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM compliance_reviews WHERE id = $1`, id)
+	return err
+}

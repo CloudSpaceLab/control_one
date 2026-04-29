@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,7 +15,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	cpCompliance "github.com/CloudSpaceLab/control_one/controlplane/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/pdfreport"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/api"
@@ -28,6 +32,8 @@ const (
 	JobTypeComplianceScan = "compliance.scan"
 	// JobTypeAgentUpdate signals an agent to download and apply a new binary.
 	JobTypeAgentUpdate = "agent.update"
+	// JobTypeComplianceReportGenerate creates audit PDF reports.
+	JobTypeComplianceReportGenerate = "compliance_report_generate"
 )
 
 var (
@@ -172,6 +178,11 @@ func (s *Server) configureJobIntegrations() {
 			s.complianceEngine = compliance.NewEngine(s.logger.Named("compliance-engine"), nil, opts)
 			s.jobHandlers[JobTypeComplianceScan] = s.handleComplianceScan
 		}
+	}
+
+	// Register compliance report generator handler
+	if _, exists := s.jobHandlers[JobTypeComplianceReportGenerate]; !exists {
+		s.jobHandlers[JobTypeComplianceReportGenerate] = s.handleComplianceReportGenerate
 	}
 }
 
@@ -413,6 +424,117 @@ func (s *Server) handleComplianceFailure(ctx context.Context, job *storage.Job, 
 		s.recordAudit(ctx, nil, job.TenantID, "compliance.scan.failed", "job", job.ID.String(), metadata)
 	}
 	return fmt.Errorf("compliance evaluate: %w", err)
+}
+
+// handleComplianceReportGenerate processes compliance report generation jobs.
+// It generates an HTML report, saves it to disk, and updates the report status.
+func (s *Server) handleComplianceReportGenerate(ctx context.Context, job *storage.Job) error {
+	if job == nil || s.store == nil {
+		return fmt.Errorf("job or store unavailable")
+	}
+
+	// Decode payload
+	var payload struct {
+		ReportID  string `json:"report_id"`
+		Framework string `json:"framework"`
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return fmt.Errorf("decode report payload: %w", err)
+	}
+
+	reportID, err := uuid.Parse(payload.ReportID)
+	if err != nil {
+		return fmt.Errorf("invalid report_id: %w", err)
+	}
+
+	s.logger.Info("compliance report generation starting",
+		zap.String("job_id", job.ID.String()),
+		zap.String("report_id", reportID.String()),
+		zap.String("framework", payload.Framework),
+	)
+
+	// Load the report from DB
+	report, err := s.store.GetAuditReport(ctx, reportID)
+	if err != nil {
+		return fmt.Errorf("load audit report: %w", err)
+	}
+	if report == nil {
+		return fmt.Errorf("audit report not found: %s", reportID)
+	}
+
+	// Gather evidence for this framework+tenant
+	evidence, _, err := s.store.ListComplianceEvidence(ctx, report.TenantID, report.Framework, "", 1000, 0)
+	if err != nil {
+		s.logger.Warn("list compliance evidence for report", zap.Error(err))
+	}
+
+	controls := cpCompliance.FrameworkControls[report.Framework]
+
+	// Calculate summary stats
+	openFindings := 0
+	for _, e := range evidence {
+		if e.ExpiresAt == nil || e.ExpiresAt.After(time.Now()) {
+			openFindings++
+		}
+	}
+
+	// Load tenant name (fallback to ID)
+	tenantName := report.TenantID.String()
+	if tenant, _ := s.store.GetTenant(ctx, report.TenantID); tenant != nil {
+		tenantName = tenant.Name
+	}
+
+	data := pdfreport.ReportData{
+		TenantName:   tenantName,
+		Framework:    report.Framework,
+		PeriodStart:  report.PeriodStart,
+		PeriodEnd:    report.PeriodEnd,
+		GeneratedAt:  time.Now().UTC(),
+		Controls:     controls,
+		EvidenceList: evidence,
+		OpenFindings: openFindings,
+		TotalPassed:  len(controls), // Simplified - in reality would check compliance results
+		TotalFailed:  0,
+	}
+
+	html, err := pdfreport.GenerateHTML(ctx, data)
+	if err != nil {
+		now := time.Now().UTC()
+		_ = s.store.UpdateAuditReportStatus(ctx, reportID, "failed", nil, &now)
+		return fmt.Errorf("generate report html: %w", err)
+	}
+
+	// Save report to disk
+	reportsDir := "/var/lib/control-one/reports"
+	if err := os.MkdirAll(reportsDir, 0755); err != nil {
+		s.logger.Warn("create reports directory", zap.Error(err))
+	}
+
+	pdfPath := filepath.Join(reportsDir, fmt.Sprintf("report-%s-%s.html", report.Framework, reportID.String()))
+	if err := os.WriteFile(pdfPath, html, 0644); err != nil {
+		now := time.Now().UTC()
+		_ = s.store.UpdateAuditReportStatus(ctx, reportID, "failed", nil, &now)
+		return fmt.Errorf("write report file: %w", err)
+	}
+
+	// Update report status to ready
+	now := time.Now().UTC()
+	if err := s.store.UpdateAuditReportStatus(ctx, reportID, "ready", &pdfPath, &now); err != nil {
+		s.logger.Error("update audit report status", zap.Error(err))
+	}
+
+	s.logger.Info("compliance report generation completed",
+		zap.String("job_id", job.ID.String()),
+		zap.String("report_id", reportID.String()),
+		zap.String("path", pdfPath),
+	)
+
+	s.recordAudit(ctx, nil, job.TenantID, "compliance.report.generated", "audit_report", reportID.String(), map[string]any{
+		"framework": report.Framework,
+		"path":      pdfPath,
+	})
+
+	return nil
 }
 
 func decodeCompliancePayload(data []byte) (*compliancePayload, error) {

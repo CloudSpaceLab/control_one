@@ -2763,6 +2763,50 @@ export class APIClient {
   buildEvidenceDownloadUrl(id: string): string {
     return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download`;
   }
+
+  // ---- Compliance Reviews ----------------------------------------
+
+  async listComplianceReviews(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<ComplianceReview>> {
+    const q = new URLSearchParams({ tenant_id: params.tenantId });
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    const raw = await this.request<{ data: ComplianceReview[]; pagination: ServerPaginationMeta }>(
+      `/api/v1/compliance/reviews?${q.toString()}`
+    );
+    return {
+      data: raw.data ?? [],
+      pagination: {
+        total: raw.pagination?.total ?? 0,
+        count: (raw.data ?? []).length,
+        limit: raw.pagination?.limit ?? (params.limit ?? 50),
+        offset: raw.pagination?.offset ?? (params.offset ?? 0),
+        nextOffset: raw.pagination?.next_offset ?? null,
+        prevOffset: raw.pagination?.prev_offset ?? null,
+      },
+    };
+  }
+
+  async createComplianceReview(payload: CreateComplianceReviewPayload): Promise<ComplianceReview> {
+    return this.request<ComplianceReview>('/api/v1/compliance/reviews', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async completeComplianceReview(id: string, notes?: string): Promise<ComplianceReview> {
+    return this.request<ComplianceReview>(`/api/v1/compliance/reviews/${encodeURIComponent(id)}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  async deleteComplianceReview(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/compliance/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
 }
 
 // ---- Connection / forensic types -------------------------------------
@@ -3167,4 +3211,25 @@ export interface CreateAuditReportPayload {
   framework: string;
   period_start: string;
   period_end: string;
+}
+
+export interface ComplianceReview {
+  id: string;
+  tenant_id: string;
+  review_type: string;
+  scheduled_for?: string;
+  completed_at?: string;
+  reviewed_by?: string;
+  status: 'pending' | 'completed' | 'overdue';
+  notes?: string;
+  recurrence?: string;
+  created_at: string;
+}
+
+export interface CreateComplianceReviewPayload {
+  tenant_id: string;
+  review_type: string;
+  scheduled_for?: string;
+  recurrence?: string;
+  notes?: string;
 }

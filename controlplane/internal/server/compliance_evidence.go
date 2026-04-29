@@ -514,10 +514,263 @@ func (s *Server) handleDownloadAuditReport(w http.ResponseWriter, r *http.Reques
 	now := time.Now().UTC()
 	_ = s.store.UpdateAuditReportStatus(r.Context(), id, "ready", nil, &now)
 
-	filename := fmt.Sprintf("compliance-report-%s-%s.pdf", report.Framework, report.PeriodEnd.Format("2006-01-02"))
+	filename := fmt.Sprintf("compliance-report-%s-%s.html", report.Framework, report.PeriodEnd.Format("2006-01-02"))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(html)
 }
 
+// ── Reviews collection: GET + POST ───────────────────────────────────────────
+
+func (s *Server) handleComplianceReviewsCollection(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListComplianceReviews(w, r)
+	case http.MethodPost:
+		s.handleCreateComplianceReview(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleListComplianceReviews(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+	tenantID, err := uuid.Parse(q.Get("tenant_id"))
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+
+	limit, offset := 50, 0
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	reviews, total, err := s.store.ListComplianceReviews(r.Context(), tenantID, limit, offset)
+	if err != nil {
+		s.logger.Sugar().Errorw("list compliance reviews", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": reviews,
+		"pagination": map[string]any{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+		},
+	})
+}
+
+type createComplianceReviewRequest struct {
+	TenantID     uuid.UUID  `json:"tenant_id"`
+	ReviewType   string     `json:"review_type"`
+	ScheduledFor *time.Time `json:"scheduled_for,omitempty"`
+	Recurrence   *string    `json:"recurrence,omitempty"`
+	Notes        *string    `json:"notes,omitempty"`
+}
+
+func (s *Server) handleCreateComplianceReview(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req createComplianceReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.TenantID == uuid.Nil {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if req.ReviewType == "" {
+		http.Error(w, "review_type is required", http.StatusBadRequest)
+		return
+	}
+
+	review := &storage.ComplianceReview{
+		TenantID:     req.TenantID,
+		ReviewType:   req.ReviewType,
+		ScheduledFor: req.ScheduledFor,
+		Recurrence:   req.Recurrence,
+		Notes:        req.Notes,
+		Status:       "pending",
+	}
+
+	created, err := s.store.CreateComplianceReview(r.Context(), review)
+	if err != nil {
+		s.logger.Sugar().Errorw("create compliance review", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	s.recordAudit(r.Context(), principal, req.TenantID, "compliance.review.created", "compliance_review", created.ID.String(), map[string]any{
+		"review_type": req.ReviewType,
+	})
+
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// ── Reviews resource: GET + POST complete + DELETE ────────────────────────────
+
+func (s *Server) handleComplianceReviewsResource(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/compliance/reviews/"), "/")
+	if len(parts) < 1 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	id, err := uuid.Parse(parts[0])
+	if err != nil {
+		http.Error(w, "invalid review id", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetComplianceReview(w, r, id)
+	case http.MethodPost:
+		// Check for /complete sub-action
+		if len(parts) > 1 && parts[1] == "complete" {
+			s.handleCompleteComplianceReview(w, r, id)
+			return
+		}
+		http.Error(w, "invalid action", http.StatusBadRequest)
+	case http.MethodDelete:
+		s.handleDeleteComplianceReview(w, r, id)
+	default:
+		w.Header().Set("Allow", "GET, POST, DELETE")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleGetComplianceReview(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	review, err := s.store.GetComplianceReview(r.Context(), id)
+	if err != nil {
+		s.logger.Sugar().Errorw("get compliance review", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if review == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, review)
+}
+
+type completeComplianceReviewRequest struct {
+	Notes string `json:"notes,omitempty"`
+}
+
+func (s *Server) handleCompleteComplianceReview(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req completeComplianceReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	review, err := s.store.GetComplianceReview(r.Context(), id)
+	if err != nil {
+		s.logger.Sugar().Errorw("get compliance review for complete", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if review == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	reviewedBy := s.userIDForPrincipalCtx(r.Context(), principal)
+	var notesPtr *string
+	if req.Notes != "" {
+		notesPtr = &req.Notes
+	}
+
+	if err := s.store.CompleteComplianceReview(r.Context(), id, reviewedBy, notesPtr); err != nil {
+		s.logger.Sugar().Errorw("complete compliance review", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	s.recordAudit(r.Context(), principal, review.TenantID, "compliance.review.completed", "compliance_review", id.String(), nil)
+
+	// Return updated review
+	updated, _ := s.store.GetComplianceReview(r.Context(), id)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleDeleteComplianceReview(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	review, err := s.store.GetComplianceReview(r.Context(), id)
+	if err != nil {
+		s.logger.Sugar().Errorw("get compliance review for delete", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if review == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := s.store.DeleteComplianceReview(r.Context(), id); err != nil {
+		s.logger.Sugar().Errorw("delete compliance review", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	s.recordAudit(r.Context(), principal, review.TenantID, "compliance.review.deleted", "compliance_review", id.String(), map[string]any{
+		"review_type": review.ReviewType,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -12,7 +12,7 @@ import {
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
-import type { ComplianceEvidence as CEType } from '../lib/api';
+import type { ComplianceEvidence as CEType, ComplianceReview } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
 const EVIDENCE_TYPES = [
@@ -76,6 +76,20 @@ export function ComplianceEvidence(): JSX.Element {
     description: '',
   });
 
+  // Reviews state
+  const [reviews, setReviews] = useState<ComplianceReview[]>([]);
+  const [reviewsLoading, setReviewsLoading] = useState(false);
+  const [reviewForm, setReviewForm] = useState({
+    review_type: 'quarterly_access_review',
+    scheduled_for: '',
+    recurrence: '',
+    notes: '',
+  });
+  const [creatingReview, setCreatingReview] = useState(false);
+  const [completeReviewId, setCompleteReviewId] = useState<string | null>(null);
+  const [completeNotes, setCompleteNotes] = useState('');
+  const [deleteReviewId, setDeleteReviewId] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (!selectedTenant) return;
     setLoading(true);
@@ -96,9 +110,31 @@ export function ComplianceEvidence(): JSX.Element {
     }
   }, [client, selectedTenant, frameworkFilter, activeTab]);
 
+  const loadReviews = useCallback(async () => {
+    if (!selectedTenant) return;
+    setReviewsLoading(true);
+    try {
+      const res = await client.listComplianceReviews({
+        tenantId: selectedTenant,
+        limit: 100,
+      });
+      setReviews(res.data);
+    } catch {
+      setReviews([]);
+    } finally {
+      setReviewsLoading(false);
+    }
+  }, [client, selectedTenant]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (activeTab === 'Reviews') {
+      void loadReviews();
+    }
+  }, [loadReviews, activeTab]);
 
   // Auto-select first tenant
   useEffect(() => {
@@ -363,11 +399,191 @@ export function ComplianceEvidence(): JSX.Element {
       )}
 
       {activeTab === 'Reviews' && (
-        <Panel>
-          <div className="p-6 text-center text-muted-foreground text-sm">
-            Compliance reviews scheduling — coming soon.
-          </div>
-        </Panel>
+        <>
+          <Panel>
+            <SectionHeader title="Scheduled Reviews" className="mb-4" />
+            {reviewsLoading ? (
+              <div className="p-6 text-center text-muted-foreground">Loading...</div>
+            ) : reviews.length === 0 ? (
+              <EmptyState title="No reviews scheduled" description="Create one below to track compliance reviews." />
+            ) : (
+              <DataTable<ComplianceReview>
+                rows={reviews}
+                columns={[
+                  { accessorKey: 'review_type', header: 'Review Type' },
+                  {
+                    accessorKey: 'scheduled_for',
+                    header: 'Scheduled For',
+                    cell: ({ getValue }) => <span>{formatDate(getValue() as string)}</span>,
+                  },
+                  {
+                    accessorKey: 'status',
+                    header: 'Status',
+                    cell: ({ getValue }) => {
+                      const status = getValue() as string;
+                      const tone: StateTone =
+                        status === 'completed' ? 'healthy' : status === 'overdue' ? 'critical' : 'warning';
+                      return <StatusTag tone={tone}>{status}</StatusTag>;
+                    },
+                  },
+                  { accessorKey: 'recurrence', header: 'Recurrence' },
+                  {
+                    id: 'actions',
+                    header: 'Actions',
+                    cell: ({ row }) => (
+                      <div className="flex gap-2">
+                        {row.original.status !== 'completed' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setCompleteReviewId(row.original.id)}
+                          >
+                            Complete
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          onClick={() => setDeleteReviewId(row.original.id)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            )}
+          </Panel>
+
+          <Panel>
+            <SectionHeader title="Schedule New Review" className="mb-4" />
+            <div className="flex flex-col gap-4 max-w-xl">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Review Type *</label>
+                  <select
+                    className="border rounded px-3 py-1.5 text-sm bg-background"
+                    value={reviewForm.review_type}
+                    onChange={(e) => setReviewForm((p) => ({ ...p, review_type: e.target.value }))}
+                  >
+                    <option value="quarterly_access_review">Quarterly Access Review</option>
+                    <option value="annual_policy_review">Annual Policy Review</option>
+                    <option value="security_assessment">Security Assessment</option>
+                    <option value="compliance_audit">Compliance Audit</option>
+                    <option value="vendor_review">Vendor Review</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Scheduled For *</label>
+                  <input
+                    type="date"
+                    className="border rounded px-3 py-1.5 text-sm bg-background"
+                    value={reviewForm.scheduled_for}
+                    onChange={(e) => setReviewForm((p) => ({ ...p, scheduled_for: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium">Recurrence</label>
+                <select
+                  className="border rounded px-3 py-1.5 text-sm bg-background"
+                  value={reviewForm.recurrence}
+                  onChange={(e) => setReviewForm((p) => ({ ...p, recurrence: e.target.value }))}
+                >
+                  <option value="">One-time</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="annual">Annual</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium">Notes</label>
+                <textarea
+                  className="border rounded px-3 py-1.5 text-sm bg-background resize-none"
+                  rows={2}
+                  value={reviewForm.notes}
+                  onChange={(e) => setReviewForm((p) => ({ ...p, notes: e.target.value }))}
+                  placeholder="Optional notes..."
+                />
+              </div>
+              <div>
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    if (!selectedTenant || !reviewForm.scheduled_for) return;
+                    setCreatingReview(true);
+                    try {
+                      await client.createComplianceReview({
+                        tenant_id: selectedTenant,
+                        review_type: reviewForm.review_type,
+                        scheduled_for: reviewForm.scheduled_for,
+                        recurrence: reviewForm.recurrence || undefined,
+                        notes: reviewForm.notes || undefined,
+                      });
+                      setReviewForm({
+                        review_type: 'quarterly_access_review',
+                        scheduled_for: '',
+                        recurrence: '',
+                        notes: '',
+                      });
+                      void loadReviews();
+                    } catch (err) {
+                      console.error('Failed to create review:', err);
+                    } finally {
+                      setCreatingReview(false);
+                    }
+                  }}
+                  disabled={creatingReview || !selectedTenant || !reviewForm.scheduled_for}
+                >
+                  {creatingReview ? 'Creating...' : 'Schedule Review'}
+                </Button>
+              </div>
+            </div>
+          </Panel>
+
+          <ConfirmModal
+            open={!!completeReviewId}
+            onCancel={() => {
+              setCompleteReviewId(null);
+              setCompleteNotes('');
+            }}
+            onConfirm={async () => {
+              if (!completeReviewId) return;
+              try {
+                await client.completeComplianceReview(completeReviewId, completeNotes);
+                setCompleteReviewId(null);
+                setCompleteNotes('');
+                void loadReviews();
+              } catch (err) {
+                console.error('Failed to complete review:', err);
+              }
+            }}
+            title="Complete Review"
+            body={completeNotes}
+          />
+
+          <ConfirmModal
+            open={!!deleteReviewId}
+            onCancel={() => setDeleteReviewId(null)}
+            onConfirm={async () => {
+              if (!deleteReviewId) return;
+              try {
+                await client.deleteComplianceReview(deleteReviewId);
+                setDeleteReviewId(null);
+                void loadReviews();
+              } catch (err) {
+                console.error('Failed to delete review:', err);
+              }
+            }}
+            title="Delete Review"
+            body="Are you sure you want to delete this review? This action cannot be undone."
+            variant="danger"
+          />
+        </>
       )}
     </div>
   );

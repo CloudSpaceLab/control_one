@@ -25,22 +25,22 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/config"
-	"github.com/CloudSpaceLab/control_one/internal/securityfacts"
 	"github.com/CloudSpaceLab/control_one/internal/dbquery"
 	"github.com/CloudSpaceLab/control_one/internal/events"
 	"github.com/CloudSpaceLab/control_one/internal/eventstream"
 	"github.com/CloudSpaceLab/control_one/internal/fileaccess"
 	"github.com/CloudSpaceLab/control_one/internal/hooks"
-	"github.com/CloudSpaceLab/control_one/internal/netflow"
-	"github.com/CloudSpaceLab/control_one/internal/procmon"
 	"github.com/CloudSpaceLab/control_one/internal/logger"
 	"github.com/CloudSpaceLab/control_one/internal/mesh"
+	"github.com/CloudSpaceLab/control_one/internal/netflow"
 	"github.com/CloudSpaceLab/control_one/internal/policy"
+	"github.com/CloudSpaceLab/control_one/internal/procmon"
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
 	"github.com/CloudSpaceLab/control_one/internal/registration"
 	"github.com/CloudSpaceLab/control_one/internal/scanner"
 	"github.com/CloudSpaceLab/control_one/internal/scheduler"
 	"github.com/CloudSpaceLab/control_one/internal/secrets"
+	"github.com/CloudSpaceLab/control_one/internal/securityfacts"
 	"github.com/CloudSpaceLab/control_one/internal/sessionrecording"
 	"github.com/CloudSpaceLab/control_one/internal/telemetry"
 	"github.com/CloudSpaceLab/control_one/internal/util"
@@ -517,6 +517,28 @@ func main() {
 	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
 		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr),
 		NewDefaultSelfUpdater())
+
+	// DLP scanner - periodically scan for PII based on rules from control plane
+	if cfg.DLP.Enabled && cfg.Intervals.DLP > 0 {
+		dlpScanner := NewDLPScanner(client, log.Named("dlp"), state.NodeID, state.TenantID, cfg.DLP.ScanPaths)
+		if _, err := sched.AddInterval("dlp-scan", cfg.Intervals.DLP, func() {
+			if err := dlpScanner.Run(ctx); err != nil {
+				log.Warn("dlp scan failed", zap.Error(err))
+				emitHook(ctx, hooksService, log, "dlp.scan.failed", state.NodeID, map[string]any{"error": err.Error()})
+			} else {
+				emitHook(ctx, hooksService, log, "dlp.scan.completed", state.NodeID, nil)
+			}
+		}); err != nil {
+			log.Fatal("schedule dlp scan", zap.Error(err))
+		}
+		// Run initial scan after 30 seconds
+		go func() {
+			time.Sleep(30 * time.Second)
+			if err := dlpScanner.Run(ctx); err != nil {
+				log.Warn("initial dlp scan failed", zap.Error(err))
+			}
+		}()
+	}
 
 	sched.Start()
 	sigCh := make(chan os.Signal, 1)

@@ -26,7 +26,7 @@ func (s *Store) GetNodeByMachineID(ctx context.Context, tenantID uuid.UUID, mach
 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		       last_seen_at, first_scan_at, labels,
+		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
 		WHERE tenant_id = $1 AND machine_id = $2
@@ -118,7 +118,7 @@ func (s *Store) TouchNodeHeartbeat(ctx context.Context, id uuid.UUID) (*Node, er
 		SET last_seen_at = $2, updated_at = $2
 		WHERE id = $1
 		RETURNING id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		          last_seen_at, first_scan_at, labels,
+		          last_seen_at, first_scan_at, labels, agent_version,
 		          created_at, updated_at
 	`, id, now)
 
@@ -153,7 +153,7 @@ func (s *Store) MarkNodeFirstScan(ctx context.Context, id uuid.UUID) (*Node, err
 		SET first_scan_at = COALESCE(first_scan_at, $2), updated_at = $2
 		WHERE id = $1
 		RETURNING id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		          last_seen_at, first_scan_at, labels,
+		          last_seen_at, first_scan_at, labels, agent_version,
 		          created_at, updated_at
 	`, id, now)
 
@@ -217,7 +217,7 @@ func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff 
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		       last_seen_at, first_scan_at, labels,
+		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
 		WHERE state = $1 AND created_at < $2
@@ -239,7 +239,7 @@ func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff 
 		if err := rows.Scan(
 			&n.ID, &n.TenantID, &n.Hostname,
 			&n.OS, &n.Arch, &n.PublicIP, &n.MachineID, &n.State,
-			&lastSeen, &firstScan, &labelsBytes,
+			&lastSeen, &firstScan, &labelsBytes, &n.AgentVersion,
 			&n.CreatedAt, &n.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending node: %w", err)
@@ -269,6 +269,84 @@ func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff 
 	}
 
 	return out, nil
+}
+
+// UpdateNodeAgentVersion persists the agent version string reported by the
+// agent in heartbeat payloads. Idempotent — identical version strings are
+// a no-op for updated_at to avoid spurious update timestamps.
+func (s *Store) UpdateNodeAgentVersion(ctx context.Context, id uuid.UUID, version string) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return errors.New("node id is required")
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET agent_version = $2, updated_at = NOW()
+		WHERE id = $1 AND (agent_version IS DISTINCT FROM $2)
+	`, id, version)
+	return err
+}
+
+// GetPendingAgentUpdateJob returns the first queued agent.update job whose
+// payload targets the given nodeID, or nil if no such job exists.
+func (s *Store) GetPendingAgentUpdateJob(ctx context.Context, nodeID uuid.UUID) (*Job, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if nodeID == uuid.Nil {
+		return nil, errors.New("node id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, type, status, payload, retries, max_retries,
+		       scheduled_at, started_at, finished_at, created_at, updated_at
+		FROM jobs
+		WHERE type = 'agent.update'
+		  AND status = 'queued'
+		  AND payload->>'node_id' = $1
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, nodeID.String())
+
+	var (
+		job       Job
+		tenant    sql.NullString
+		scheduled sql.NullTime
+		started   sql.NullTime
+		finished  sql.NullTime
+	)
+	if err := row.Scan(
+		&job.ID, &tenant, &job.Type, &job.Status, &job.Payload,
+		&job.Retries, &job.MaxRetries,
+		&scheduled, &started, &finished,
+		&job.CreatedAt, &job.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get pending agent update job: %w", err)
+	}
+	if tenant.Valid {
+		job.TenantID, _ = uuid.Parse(tenant.String)
+	}
+	if scheduled.Valid {
+		t := scheduled.Time
+		job.ScheduledAt = &t
+	}
+	if started.Valid {
+		t := started.Time
+		job.StartedAt = &t
+	}
+	if finished.Valid {
+		t := finished.Time
+		job.FinishedAt = &t
+	}
+	return &job, nil
 }
 
 // GetNodeCertHistory returns every certificate history row for a node ordered by

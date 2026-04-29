@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Building2, RefreshCw } from 'lucide-react';
 import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
@@ -16,7 +16,7 @@ import {
   SectionHeader,
 } from '../components/kit';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { Tenant } from '../lib/api';
+import type { Tenant, TenantRemediationConfig } from '../lib/api';
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -44,6 +44,36 @@ export function Tenants(): JSX.Element {
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Remediation config state
+  const [remediationCfg, setRemediationCfg] = useState<TenantRemediationConfig | null>(null);
+  const [remediationLoading, setRemediationLoading] = useState(false);
+  const [savingRemediation, setSavingRemediation] = useState(false);
+
+  useEffect(() => {
+    if (!selectedTenantId) { setRemediationCfg(null); return; }
+    let cancelled = false;
+    setRemediationLoading(true);
+    api.getTenantRemediationConfig(selectedTenantId)
+      .then((r) => { if (!cancelled) setRemediationCfg(r); })
+      .catch(() => { if (!cancelled) setRemediationCfg(null); })
+      .finally(() => { if (!cancelled) setRemediationLoading(false); });
+    return () => { cancelled = true; };
+  }, [api, selectedTenantId]);
+
+  const handleSaveRemediation = async () => {
+    if (!remediationCfg || !selectedTenantId) return;
+    setSavingRemediation(true);
+    try {
+      const updated = await api.upsertTenantRemediationConfig(selectedTenantId, remediationCfg);
+      setRemediationCfg(updated);
+      showToast('Remediation config saved.', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to save.', 'error');
+    } finally {
+      setSavingRemediation(false);
+    }
+  };
 
   const rows = useMemo(() => data, [data]);
   const selectedTenant = useMemo(
@@ -317,6 +347,82 @@ export function Tenants(): JSX.Element {
                   {deleting ? 'Deleting…' : 'Delete tenant'}
                 </Button>
               </div>
+            </div>
+
+            {/* Remediation config */}
+            <div className="mt-4 border-t border-border-subtle pt-4">
+              <p className="mb-3 font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+                Auto-remediation safety gates
+              </p>
+              {remediationLoading ? (
+                <p className="text-sm text-text-muted">Loading…</p>
+              ) : remediationCfg ? (
+                <div className="flex flex-col gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rem-min-severity">Min approval severity</Label>
+                      <select
+                        id="rem-min-severity"
+                        className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={remediationCfg.MinApprovalSeverity ?? 'high'}
+                        onChange={(e) => setRemediationCfg((c) => c ? { ...c, MinApprovalSeverity: e.target.value } : c)}
+                      >
+                        {['low', 'medium', 'high', 'critical'].map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rem-cb-window">Circuit breaker window (min)</Label>
+                      <Input
+                        id="rem-cb-window"
+                        type="number"
+                        min={1}
+                        value={remediationCfg.CircuitBreakerWindowMin ?? 15}
+                        onChange={(e) => setRemediationCfg((c) => c ? { ...c, CircuitBreakerWindowMin: Number(e.target.value) } : c)}
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rem-cb-fail">Circuit breaker fail % threshold</Label>
+                      <Input
+                        id="rem-cb-fail"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={remediationCfg.CircuitBreakerFailPct ?? 30}
+                        onChange={(e) => setRemediationCfg((c) => c ? { ...c, CircuitBreakerFailPct: Number(e.target.value) } : c)}
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rem-cb-samples">Min samples</Label>
+                      <Input
+                        id="rem-cb-samples"
+                        type="number"
+                        min={1}
+                        value={remediationCfg.CircuitBreakerMinSamples ?? 5}
+                        onChange={(e) => setRemediationCfg((c) => c ? { ...c, CircuitBreakerMinSamples: Number(e.target.value) } : c)}
+                        className="h-8"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="rem-critical-override"
+                      type="checkbox"
+                      checked={remediationCfg.CriticalOverride ?? true}
+                      onChange={(e) => setRemediationCfg((c) => c ? { ...c, CriticalOverride: e.target.checked } : c)}
+                    />
+                    <Label htmlFor="rem-critical-override" className="cursor-pointer">
+                      Allow critical-severity auto-remediation to bypass approval window
+                    </Label>
+                  </div>
+                  <Button type="button" variant="primary" size="sm" onClick={handleSaveRemediation} disabled={savingRemediation}>
+                    {savingRemediation ? 'Saving…' : 'Save remediation config'}
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </Panel>
         ) : null}

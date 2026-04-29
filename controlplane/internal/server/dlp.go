@@ -38,20 +38,20 @@ func newDLPRuleResponse(r storage.DataClassificationRule) dlpRuleResponse {
 }
 
 type columnClassificationResponse struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id"`
-	NodeID          string  `json:"node_id"`
-	DatabaseName    string  `json:"database_name"`
-	SchemaName      string  `json:"schema_name"`
-	TableName       string  `json:"table_name"`
-	ColumnName      string  `json:"column_name"`
-	PIIType         *string `json:"pii_type,omitempty"`
-	Encrypted       *bool   `json:"encrypted,omitempty"`
-	EncryptionKind  *string `json:"encryption_kind,omitempty"`
-	MinValueLength  *int    `json:"min_value_length,omitempty"`
-	MaxValueLength  *int    `json:"max_value_length,omitempty"`
-	SampleCount     *int    `json:"sample_count,omitempty"`
-	LastScannedAt   *string `json:"last_scanned_at,omitempty"`
+	ID             string  `json:"id"`
+	TenantID       string  `json:"tenant_id"`
+	NodeID         string  `json:"node_id"`
+	DatabaseName   string  `json:"database_name"`
+	SchemaName     string  `json:"schema_name"`
+	TableName      string  `json:"table_name"`
+	ColumnName     string  `json:"column_name"`
+	PIIType        *string `json:"pii_type,omitempty"`
+	Encrypted      *bool   `json:"encrypted,omitempty"`
+	EncryptionKind *string `json:"encryption_kind,omitempty"`
+	MinValueLength *int    `json:"min_value_length,omitempty"`
+	MaxValueLength *int    `json:"max_value_length,omitempty"`
+	SampleCount    *int    `json:"sample_count,omitempty"`
+	LastScannedAt  *string `json:"last_scanned_at,omitempty"`
 }
 
 func newColumnClassificationResponse(cc storage.ColumnClassification) columnClassificationResponse {
@@ -277,11 +277,19 @@ func (s *Server) handleDLPFindingsCollection(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListDLPFindings(w, r)
+	case http.MethodPost:
+		s.handleCreateDLPFindings(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
 	}
+}
+
+func (s *Server) handleListDLPFindings(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
@@ -315,6 +323,98 @@ func (s *Server) handleDLPFindingsCollection(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, paginatedResponse[piiFindingResponse]{
 		Data:       items,
 		Pagination: newPaginationMeta(total, limit, offset, len(items)),
+	})
+}
+
+// handleCreateDLPFindings receives bulk PII findings from node agents.
+func (s *Server) handleCreateDLPFindings(w http.ResponseWriter, r *http.Request) {
+	// Accept mTLS-authenticated agents or operators/admins
+	principal, authOK := s.authorize(w, r, roleOperator, roleAdmin)
+	if !authOK {
+		return
+	}
+
+	var payload struct {
+		NodeID       string `json:"node_id"`
+		TenantID     string `json:"tenant_id"`
+		FilesScanned int    `json:"files_scanned"`
+		ScannedAt    string `json:"scanned_at"`
+		Findings     []struct {
+			Path       string `json:"path"`
+			LineNumber int    `json:"line_number"`
+			Match      string `json:"match"`
+			PIIType    string `json:"pii_type"`
+			Severity   string `json:"severity"`
+			RuleID     string `json:"rule_id"`
+		} `json:"findings"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	tenantID, err := uuid.Parse(payload.TenantID)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	nodeID, err := uuid.Parse(payload.NodeID)
+	if err != nil {
+		http.Error(w, "invalid node_id", http.StatusBadRequest)
+		return
+	}
+
+	// For mTLS-authenticated agents, verify they can only report for themselves
+	if principal.Type == "agent" || principal.Type == "mtls" {
+		agentTenantID, agentNodeID, err := s.tenantNodeForAgent(r.Context(), principal)
+		if err != nil {
+			http.Error(w, "unauthorized agent", http.StatusUnauthorized)
+			return
+		}
+		if agentTenantID != tenantID || agentNodeID != nodeID {
+			http.Error(w, "agent can only report findings for its own node", http.StatusForbidden)
+			return
+		}
+	}
+
+	created := 0
+	for _, f := range payload.Findings {
+		ruleID, _ := uuid.Parse(f.RuleID)
+		severity := f.Severity
+		if severity == "" {
+			severity = "medium"
+		}
+		details := f.Match
+		if len(details) > 200 {
+			details = details[:197] + "..."
+		}
+
+		finding := &storage.PIIFinding{
+			TenantID: tenantID,
+			Severity: severity,
+			Details:  &details,
+		}
+		if ruleID != uuid.Nil {
+			finding.RuleID = &ruleID
+		}
+
+		if _, err := s.store.CreatePIIFinding(r.Context(), finding); err != nil {
+			s.logger.Warn("create pii finding", zap.Error(err), zap.String("path", f.Path))
+			continue
+		}
+		created++
+	}
+
+	s.recordAudit(r.Context(), principal, tenantID, "dlp.findings.reported", "pii_finding", tenantID.String(), map[string]any{
+		"node_id":        nodeID.String(),
+		"files_scanned":  payload.FilesScanned,
+		"findings_count": created,
+	})
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"created":        created,
+		"files_scanned":  payload.FilesScanned,
+		"findings_total": len(payload.Findings),
 	})
 }
 

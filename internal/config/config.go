@@ -119,11 +119,11 @@ type Config struct {
 	// privileged sessions show up in the forensic timeline.
 	SSHTunnel struct {
 		Enabled        bool   `mapstructure:"enabled"`
-		ListenAddr     string `mapstructure:"listen_addr"`     // default :2222
-		ClientCAFile   string `mapstructure:"client_ca_file"`  // bastion's client-cert CA
+		ListenAddr     string `mapstructure:"listen_addr"`    // default :2222
+		ClientCAFile   string `mapstructure:"client_ca_file"` // bastion's client-cert CA
 		ServerCertFile string `mapstructure:"server_cert_file"`
 		ServerKeyFile  string `mapstructure:"server_key_file"`
-		UpstreamAddr   string `mapstructure:"upstream_addr"`   // default 127.0.0.1:22
+		UpstreamAddr   string `mapstructure:"upstream_addr"` // default 127.0.0.1:22
 	} `mapstructure:"ssh_tunnel"`
 
 	Intervals struct {
@@ -132,7 +132,14 @@ type Config struct {
 		Scan         time.Duration `mapstructure:"scan"`
 		Telemetry    time.Duration `mapstructure:"telemetry"`
 		Provisioning time.Duration `mapstructure:"provisioning"`
+		DLP          time.Duration `mapstructure:"dlp"`
 	} `mapstructure:"intervals"`
+
+	DLP struct {
+		Enabled     bool     `mapstructure:"enabled"`
+		ScanPaths   []string `mapstructure:"scan_paths"`
+		MaxFileSize int64    `mapstructure:"max_file_size_mb"`
+	} `mapstructure:"dlp"`
 
 	SessionRecording struct {
 		Enabled          bool          `mapstructure:"enabled"`
@@ -454,6 +461,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intervals.scan", "15m")
 	v.SetDefault("intervals.telemetry", "1m")
 	v.SetDefault("intervals.provisioning", defaultProvisioningInterval.String())
+	v.SetDefault("intervals.dlp", "24h")
+
+	v.SetDefault("dlp.enabled", false)
+	v.SetDefault("dlp.scan_paths", []string{"/var/log", "/etc", "/home"})
+	v.SetDefault("dlp.max_file_size_mb", 100)
 
 	v.SetDefault("scanner.enabled", true)
 	v.SetDefault("scanner.preferred", []string{"openscap", "inspec", "ansible", "trivy"})

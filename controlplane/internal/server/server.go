@@ -23,9 +23,9 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/behavioral"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/connect"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/correlation"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/connect"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
@@ -350,6 +350,12 @@ type Store interface {
 	ListAuditReports(context.Context, uuid.UUID, int, int) ([]storage.AuditReport, int, error)
 	GetAuditReport(context.Context, uuid.UUID) (*storage.AuditReport, error)
 	UpdateAuditReportStatus(context.Context, uuid.UUID, string, *string, *time.Time) error
+	// Compliance reviews.
+	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
+	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
+	GetComplianceReview(context.Context, uuid.UUID) (*storage.ComplianceReview, error)
+	CompleteComplianceReview(context.Context, uuid.UUID, uuid.UUID, *string) error
+	DeleteComplianceReview(context.Context, uuid.UUID) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -934,6 +940,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/frameworks", s.handleComplianceFrameworks)
 	s.baseRouter.HandleFunc("/api/v1/compliance/reports", s.handleComplianceReportsCollection)
 	s.baseRouter.HandleFunc("/api/v1/compliance/reports/", s.handleComplianceReportsResource)
+	s.baseRouter.HandleFunc("/api/v1/compliance/reviews", s.handleComplianceReviewsCollection)
+	s.baseRouter.HandleFunc("/api/v1/compliance/reviews/", s.handleComplianceReviewsResource)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {

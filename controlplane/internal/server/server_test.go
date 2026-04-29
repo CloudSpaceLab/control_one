@@ -3785,3 +3785,20 @@ func (f *fakeStore) GetAuditReport(_ context.Context, _ uuid.UUID) (*storage.Aud
 func (f *fakeStore) UpdateAuditReportStatus(_ context.Context, _ uuid.UUID, _ string, _ *string, _ *time.Time) error {
 	return nil
 }
+
+// ComplianceReview stubs
+func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) CreateComplianceReview(_ context.Context, r *storage.ComplianceReview) (*storage.ComplianceReview, error) {
+	return r, nil
+}
+func (f *fakeStore) GetComplianceReview(_ context.Context, _ uuid.UUID) (*storage.ComplianceReview, error) {
+	return nil, nil
+}
+func (f *fakeStore) CompleteComplianceReview(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ *string) error {
+	return nil
+}
+func (f *fakeStore) DeleteComplianceReview(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
