@@ -23,6 +23,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/lib/pq v1.10.9
+	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
 	github.com/microsoft/go-mssqldb v1.9.8
 	github.com/prometheus/client_golang v1.20.4
 	github.com/robfig/cron/v3 v3.0.1
@@ -108,7 +109,6 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/masterzen/simplexml v0.0.0-20190410153822-31eea3082786 // indirect
-	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/patternmatcher v0.6.0 // indirect
 	github.com/moby/sys/sequential v0.5.0 // indirect

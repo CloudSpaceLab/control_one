@@ -2670,6 +2670,91 @@ export class APIClient {
     return this.request<{ codes: string[] }>('/api/v1/auth/mfa/recovery-codes');
   }
 
+  // TOTP enrollment
+  async beginTOTPEnroll(): Promise<{ factor_id: string; secret: string; provisioning_uri: string }> {
+    return this.request<{ factor_id: string; secret: string; provisioning_uri: string }>('/api/v1/mfa/totp/enroll/begin', { method: 'POST' });
+  }
+
+  async finishTOTPEnroll(factorId: string, code: string, label: string): Promise<{ factor_id: string; verified: boolean }> {
+    return this.request<{ factor_id: string; verified: boolean }>('/api/v1/mfa/totp/enroll/finish', {
+      method: 'POST',
+      body: JSON.stringify({ factor_id: factorId, code, label }),
+    });
+  }
+
+  // WebAuthn enrollment
+  async beginWebAuthnEnroll(): Promise<{ challenge: any; user: any }> {
+    return this.request<{ challenge: any; user: any }>('/api/v1/mfa/webauthn/enroll/begin', { method: 'POST' });
+  }
+
+  async finishWebAuthnEnroll(credential: any): Promise<{ factor_id: string; verified: boolean }> {
+    return this.request<{ factor_id: string; verified: boolean }>('/api/v1/mfa/webauthn/enroll/finish', {
+      method: 'POST',
+      body: JSON.stringify(credential),
+    });
+  }
+
+  // ── Trust Center admin ───────────────────────────────────────────────
+  async listSubprocessors(tenantId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v1/trust/subprocessors?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async createSubprocessor(tenantId: string, data: any): Promise<any> {
+    return this.request<any>('/api/v1/trust/subprocessors', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, tenant_id: tenantId }),
+    });
+  }
+
+  async deleteSubprocessor(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/trust/subprocessors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listCertifications(tenantId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v1/trust/certifications?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async createCertification(tenantId: string, data: any): Promise<any> {
+    return this.request<any>('/api/v1/trust/certifications', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, tenant_id: tenantId }),
+    });
+  }
+
+  async deleteCertification(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/trust/certifications/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listFAQItems(tenantId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v1/trust/faq?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async createFAQItem(tenantId: string, data: any): Promise<any> {
+    return this.request<any>('/api/v1/trust/faq', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, tenant_id: tenantId }),
+    });
+  }
+
+  async deleteFAQItem(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/trust/faq/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listIncidents(tenantId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v1/trust/incidents?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async createIncident(tenantId: string, data: any): Promise<any> {
+    return this.request<any>('/api/v1/trust/incidents', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, tenant_id: tenantId }),
+    });
+  }
+
+  async deleteIncident(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/trust/incidents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   // ── Tenant remediation config ─────────────────────────────────────────
   async getTenantRemediationConfig(tenantId: string): Promise<TenantRemediationConfig> {
     return this.request<TenantRemediationConfig>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`);

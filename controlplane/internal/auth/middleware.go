@@ -78,19 +78,21 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 		authCfg:          authCfg,
 		store:            store,
 		publicPaths: map[string]struct{}{
-			"/healthz":                       {},
-			"/metrics":                       {},
-			"/api/v1/enroll":                 {},
-			"/api/v1/register":               {},
-			"/api/v1/auth/login":             {},
-			"/api/v1/auth/logout":            {},
+			"/healthz":            {},
+			"/metrics":            {},
+			"/api/v1/enroll":      {},
+			"/api/v1/register":    {},
+			"/api/v1/auth/login":  {},
+			"/api/v1/auth/logout": {},
 			// Agent install-script is authenticated by the token query param
 			// inside the handler itself; the middleware must not block it.
-			"/api/v1/agent/install-script":   {},
+			"/api/v1/agent/install-script": {},
 			// Binary endpoints are token-validated inside the handler.
-			"/api/v1/agent/binary":           {},
-			"/api/v1/agent/binary/manifest":  {},
-			"/api/v1/agent/public-key":       {},
+			"/api/v1/agent/binary":          {},
+			"/api/v1/agent/binary/manifest": {},
+			"/api/v1/agent/public-key":      {},
+			// Trust Center public endpoint (no auth required).
+			"/api/v1/trust": {},
 		},
 	}
 }

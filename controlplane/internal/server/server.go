@@ -356,6 +356,21 @@ type Store interface {
 	GetComplianceReview(context.Context, uuid.UUID) (*storage.ComplianceReview, error)
 	CompleteComplianceReview(context.Context, uuid.UUID, uuid.UUID, *string) error
 	DeleteComplianceReview(context.Context, uuid.UUID) error
+	// Trust Center (public compliance portal).
+	CreateSubprocessor(context.Context, *storage.Subprocessor) error
+	ListSubprocessors(context.Context, string) ([]storage.Subprocessor, error)
+	DeleteSubprocessor(context.Context, string) error
+	CreateCertification(context.Context, *storage.Certification) error
+	ListCertifications(context.Context, string) ([]storage.Certification, error)
+	DeleteCertification(context.Context, string) error
+	CreateFAQItem(context.Context, *storage.SecurityFAQItem) error
+	ListFAQItems(context.Context, string) ([]storage.SecurityFAQItem, error)
+	DeleteFAQItem(context.Context, string) error
+	CreateIncidentReport(context.Context, *storage.IncidentReport) error
+	ListIncidentReports(context.Context, string, int) ([]storage.IncidentReport, error)
+	DeleteIncidentReport(context.Context, string) error
+	GetTrustCenterData(context.Context, string) (*storage.TrustCenterData, error)
+	GetTenantByName(context.Context, string) (*storage.Tenant, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -641,20 +656,21 @@ type workerStatusProvider interface {
 
 // Server wraps the HTTP server lifecycle for the control plane API.
 type Server struct {
-	logger              *zap.Logger
-	cfg                 *config.Config
-	http                *http.Server
-	store               Store
-	worker              TaskQueue
-	authMW              *auth.Middleware
-	baseRouter          *http.ServeMux
-	jobHandlers         map[string]jobHandler
-	provisioningEngine  *provisioning.Engine
-	complianceEngine    *compliance.Engine
-	complianceScheduler *ComplianceScheduler
-	retentionScheduler  *RetentionScheduler
-	agentSigningOnce    sync.Once
-	agentSigning        *agentSigningMaterial
+	logger                  *zap.Logger
+	cfg                     *config.Config
+	http                    *http.Server
+	store                   Store
+	worker                  TaskQueue
+	authMW                  *auth.Middleware
+	baseRouter              *http.ServeMux
+	jobHandlers             map[string]jobHandler
+	provisioningEngine      *provisioning.Engine
+	complianceEngine        *compliance.Engine
+	complianceScheduler     *ComplianceScheduler
+	retentionScheduler      *RetentionScheduler
+	reviewReminderScheduler *ReviewReminderScheduler
+	agentSigningOnce        sync.Once
+	agentSigning            *agentSigningMaterial
 
 	// enrollmentReaper drives the background loop that flips nodes stuck in
 	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
@@ -744,8 +760,9 @@ func (s *Server) startBehavioralRollup() {
 		// Reuse compliance schedule as a "jobs enabled" signal for now.
 	}
 	rollup := behavioral.NewRollup(behavioralStoreAdapter{s.store}, s.logger, interval, 30)
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	go rollup.Run(ctx)
+	_ = cancel
 }
 
 // behavioralStoreAdapter narrows Store to the behavioral package's needs.
@@ -942,6 +959,16 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/reports/", s.handleComplianceReportsResource)
 	s.baseRouter.HandleFunc("/api/v1/compliance/reviews", s.handleComplianceReviewsCollection)
 	s.baseRouter.HandleFunc("/api/v1/compliance/reviews/", s.handleComplianceReviewsResource)
+	// Trust Center (public compliance portal).
+	s.baseRouter.HandleFunc("/api/v1/trust/{name}", s.handleTrustCenterPublic)
+	s.baseRouter.HandleFunc("/api/v1/trust/subprocessors", s.handleSubprocessorsCollection)
+	s.baseRouter.HandleFunc("/api/v1/trust/subprocessors/{id}", s.handleSubprocessorResource)
+	s.baseRouter.HandleFunc("/api/v1/trust/certifications", s.handleCertificationsCollection)
+	s.baseRouter.HandleFunc("/api/v1/trust/certifications/{id}", s.handleCertificationResource)
+	s.baseRouter.HandleFunc("/api/v1/trust/faq", s.handleFAQCollection)
+	s.baseRouter.HandleFunc("/api/v1/trust/faq/{id}", s.handleFAQResource)
+	s.baseRouter.HandleFunc("/api/v1/trust/incidents", s.handleIncidentsCollection)
+	s.baseRouter.HandleFunc("/api/v1/trust/incidents/{id}", s.handleIncidentResource)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -2184,6 +2211,16 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 			logger.Error("start retention scheduler", zap.Error(err))
 		} else {
 			s.retentionScheduler = retention
+		}
+	}
+
+	// Review reminder scheduler — sends reminders for upcoming compliance reviews.
+	if store != nil {
+		reviewReminder := NewReviewReminderScheduler(s)
+		if err := reviewReminder.Start("0 9 * * *"); err != nil {
+			logger.Error("start review reminder scheduler", zap.Error(err))
+		} else {
+			s.reviewReminderScheduler = reviewReminder
 		}
 	}
 

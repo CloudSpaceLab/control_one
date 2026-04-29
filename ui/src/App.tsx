@@ -44,6 +44,7 @@ const DataSecurity = lazy(() => import('./pages/DataSecurity').then((m) => ({ de
 const ComplianceEvidence = lazy(() => import('./pages/ComplianceEvidence').then((m) => ({ default: m.ComplianceEvidence })));
 const AuditReports = lazy(() => import('./pages/AuditReports').then((m) => ({ default: m.AuditReports })));
 const Frameworks = lazy(() => import('./pages/Frameworks').then((m) => ({ default: m.Frameworks })));
+const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ default: m.TrustCenter })));
 
 function PageFallback(): JSX.Element {
   return (
@@ -68,6 +69,15 @@ export function App(): JSX.Element {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/auth/callback" element={<AuthCallback />} />
+      {/* Public Trust Center - no authentication required */}
+      <Route
+        path="/trust/:tenantSlug"
+        element={
+          <Suspense fallback={<PageFallback />}>
+            <TrustCenter />
+          </Suspense>
+        }
+      />
       <Route
         path="/"
         element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace />}
