@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, FileText, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
@@ -16,6 +16,7 @@ import {
 import { useComplianceResults, useComplianceSummary, useComplianceTrends } from '../hooks/useCompliance';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
+import { useApiClient } from '../hooks/useApiClient';
 import type { ComplianceResult } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -70,15 +71,25 @@ function exportToCSV(results: ComplianceResult[]): void {
 }
 
 export function Compliance(): JSX.Element {
+  const client = useApiClient();
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [selectedNode, setSelectedNode] = useState<string | undefined>(undefined);
   const [severityFilter, setSeverityFilter] = useState<string>('');
   const [passedFilter, setPassedFilter] = useState<boolean | undefined>(undefined);
+  const [frameworkFilter, setFrameworkFilter] = useState<string>('');
+  const [availableFrameworks, setAvailableFrameworks] = useState<string[]>([]);
   const [limit] = useState(50);
   const [offset, setOffset] = useState(0);
 
   const { data: tenants } = useTenants();
   const { data: nodes } = useNodes({ tenantId: selectedTenant, limit: 1000 });
+
+  // Load framework list for filter dropdown
+  useEffect(() => {
+    client.listComplianceFrameworks()
+      .then((res) => setAvailableFrameworks(res.frameworks))
+      .catch(() => { /* non-critical */ });
+  }, [client]);
 
   const {
     data: summary,
@@ -110,6 +121,7 @@ export function Compliance(): JSX.Element {
     tenant_id: selectedTenant,
     node_id: selectedNode,
     severity: severityFilter || undefined,
+    framework: frameworkFilter || undefined,
     passed: passedFilter,
     limit,
     offset,
@@ -308,7 +320,7 @@ export function Compliance(): JSX.Element {
       )}
 
       <Panel padding="md" eyebrow="FILTERS" title="Refine">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <FilterSelect
             label="Tenant"
             value={selectedTenant ?? ''}
@@ -361,6 +373,18 @@ export function Compliance(): JSX.Element {
               { label: 'All', value: '' },
               { label: 'Passed', value: 'true' },
               { label: 'Failed', value: 'false' },
+            ]}
+          />
+          <FilterSelect
+            label="Framework"
+            value={frameworkFilter}
+            onChange={(v) => {
+              setFrameworkFilter(v);
+              setOffset(0);
+            }}
+            options={[
+              { label: 'All frameworks', value: '' },
+              ...availableFrameworks.map((f) => ({ label: f, value: f })),
             ]}
           />
         </div>

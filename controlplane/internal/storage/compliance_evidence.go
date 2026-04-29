@@ -1,0 +1,277 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// ComplianceEvidence is a file or record uploaded as evidence for a compliance control.
+type ComplianceEvidence struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	EvidenceType  string
+	Framework     *string
+	ControlRef    *string
+	Title         string
+	Description   *string
+	FilePath      *string
+	FileSizeBytes *int64
+	MimeType      *string
+	Checksum      *string
+	UploadedBy    uuid.UUID
+	UploadedAt    time.Time
+	ExpiresAt     *time.Time
+}
+
+// ComplianceReview represents a scheduled or completed compliance review.
+type ComplianceReview struct {
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	ReviewType   string
+	ScheduledFor *time.Time
+	CompletedAt  *time.Time
+	ReviewedBy   *uuid.UUID
+	Status       string
+	Notes        *string
+	Recurrence   *string
+	CreatedAt    time.Time
+}
+
+// AuditReport represents a generated (or in-progress) compliance audit report.
+type AuditReport struct {
+	ID          uuid.UUID
+	TenantID    uuid.UUID
+	Framework   string
+	PeriodStart time.Time
+	PeriodEnd   time.Time
+	Status      string
+	PDFPath     *string
+	GeneratedBy *uuid.UUID
+	GeneratedAt *time.Time
+	CreatedAt   time.Time
+}
+
+// CreateComplianceEvidence inserts a new evidence record.
+func (s *Store) CreateComplianceEvidence(ctx context.Context, e *ComplianceEvidence) (*ComplianceEvidence, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if e.ID == uuid.Nil {
+		e.ID = uuid.New()
+	}
+	if e.UploadedAt.IsZero() {
+		e.UploadedAt = time.Now().UTC()
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO compliance_evidence
+			(id, tenant_id, evidence_type, framework, control_ref, title, description,
+			 file_path, file_size_bytes, mime_type, checksum, uploaded_by, uploaded_at, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`,
+		e.ID, e.TenantID, e.EvidenceType, e.Framework, e.ControlRef, e.Title, e.Description,
+		e.FilePath, e.FileSizeBytes, e.MimeType, e.Checksum, e.UploadedBy, e.UploadedAt, e.ExpiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create compliance evidence: %w", err)
+	}
+	return e, nil
+}
+
+// ListComplianceEvidence returns a paginated list of evidence filtered by optional framework and type.
+func (s *Store) ListComplianceEvidence(ctx context.Context, tenantID uuid.UUID, framework, evidenceType string, limit, offset int) ([]ComplianceEvidence, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	args := []any{tenantID}
+	where := "WHERE tenant_id = $1"
+	idx := 2
+	if framework != "" {
+		where += fmt.Sprintf(" AND framework = $%d", idx)
+		args = append(args, framework)
+		idx++
+	}
+	if evidenceType != "" {
+		where += fmt.Sprintf(" AND evidence_type = $%d", idx)
+		args = append(args, evidenceType)
+		idx++
+	}
+
+	var total int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM compliance_evidence `+where, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count compliance evidence: %w", err)
+	}
+
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, evidence_type, framework, control_ref, title, description,
+		       file_path, file_size_bytes, mime_type, checksum, uploaded_by, uploaded_at, expires_at
+		FROM compliance_evidence
+		`+where+`
+		ORDER BY uploaded_at DESC
+		LIMIT $`+fmt.Sprintf("%d", idx)+` OFFSET $`+fmt.Sprintf("%d", idx+1),
+		args...,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list compliance evidence: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ComplianceEvidence
+	for rows.Next() {
+		var e ComplianceEvidence
+		if err := rows.Scan(
+			&e.ID, &e.TenantID, &e.EvidenceType, &e.Framework, &e.ControlRef, &e.Title, &e.Description,
+			&e.FilePath, &e.FileSizeBytes, &e.MimeType, &e.Checksum, &e.UploadedBy, &e.UploadedAt, &e.ExpiresAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan compliance evidence: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, total, rows.Err()
+}
+
+// GetComplianceEvidence returns a single evidence record by ID.
+func (s *Store) GetComplianceEvidence(ctx context.Context, id uuid.UUID) (*ComplianceEvidence, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	var e ComplianceEvidence
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, evidence_type, framework, control_ref, title, description,
+		       file_path, file_size_bytes, mime_type, checksum, uploaded_by, uploaded_at, expires_at
+		FROM compliance_evidence WHERE id = $1
+	`, id).Scan(
+		&e.ID, &e.TenantID, &e.EvidenceType, &e.Framework, &e.ControlRef, &e.Title, &e.Description,
+		&e.FilePath, &e.FileSizeBytes, &e.MimeType, &e.Checksum, &e.UploadedBy, &e.UploadedAt, &e.ExpiresAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get compliance evidence: %w", err)
+	}
+	return &e, nil
+}
+
+// DeleteComplianceEvidence removes an evidence record by ID.
+func (s *Store) DeleteComplianceEvidence(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM compliance_evidence WHERE id = $1`, id)
+	return err
+}
+
+// CreateAuditReport inserts a new audit report record.
+func (s *Store) CreateAuditReport(ctx context.Context, r *AuditReport) (*AuditReport, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	if r.Status == "" {
+		r.Status = "pending"
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO audit_reports
+			(id, tenant_id, framework, period_start, period_end, status, pdf_path, generated_by, generated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`,
+		r.ID, r.TenantID, r.Framework, r.PeriodStart, r.PeriodEnd, r.Status, r.PDFPath, r.GeneratedBy, r.GeneratedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create audit report: %w", err)
+	}
+	return r, nil
+}
+
+// ListAuditReports returns a paginated list of audit reports for a tenant.
+func (s *Store) ListAuditReports(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]AuditReport, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_reports WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count audit reports: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, framework, period_start, period_end, status, pdf_path, generated_by, generated_at, metadata
+		FROM audit_reports
+		WHERE tenant_id = $1
+		ORDER BY period_end DESC
+		LIMIT $2 OFFSET $3
+	`, tenantID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list audit reports: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AuditReport
+	for rows.Next() {
+		var r AuditReport
+		var metadata []byte
+		if err := rows.Scan(
+			&r.ID, &r.TenantID, &r.Framework, &r.PeriodStart, &r.PeriodEnd, &r.Status,
+			&r.PDFPath, &r.GeneratedBy, &r.GeneratedAt, &metadata,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan audit report: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, total, rows.Err()
+}
+
+// GetAuditReport returns a single audit report by ID.
+func (s *Store) GetAuditReport(ctx context.Context, id uuid.UUID) (*AuditReport, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	var r AuditReport
+	var metadata []byte
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, framework, period_start, period_end, status, pdf_path, generated_by, generated_at, metadata
+		FROM audit_reports WHERE id = $1
+	`, id).Scan(
+		&r.ID, &r.TenantID, &r.Framework, &r.PeriodStart, &r.PeriodEnd, &r.Status,
+		&r.PDFPath, &r.GeneratedBy, &r.GeneratedAt, &metadata,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get audit report: %w", err)
+	}
+	return &r, nil
+}
+
+// UpdateAuditReportStatus updates the status and optional PDF path/generated_at of a report.
+func (s *Store) UpdateAuditReportStatus(ctx context.Context, id uuid.UUID, status string, pdfPath *string, generatedAt *time.Time) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE audit_reports SET status=$2, pdf_path=$3, generated_at=$4 WHERE id=$1
+	`, id, status, pdfPath, generatedAt)
+	return err
+}

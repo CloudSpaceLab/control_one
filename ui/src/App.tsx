@@ -39,6 +39,9 @@ const Secrets = lazy(() => import('./pages/Secrets').then((m) => ({ default: m.S
 const OfflineBundle = lazy(() => import('./pages/OfflineBundle').then((m) => ({ default: m.OfflineBundle })));
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const Onboard = lazy(() => import('./pages/Onboard').then((m) => ({ default: m.Onboard })));
+const ComplianceEvidence = lazy(() => import('./pages/ComplianceEvidence').then((m) => ({ default: m.ComplianceEvidence })));
+const AuditReports = lazy(() => import('./pages/AuditReports').then((m) => ({ default: m.AuditReports })));
+const Frameworks = lazy(() => import('./pages/Frameworks').then((m) => ({ default: m.Frameworks })));
 
 function PageFallback(): JSX.Element {
   return (
@@ -102,6 +105,9 @@ export function App(): JSX.Element {
                 <Route path="secrets" element={<Secrets />} />
                 <Route path="offline-bundle" element={<OfflineBundle />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="compliance-evidence" element={<ComplianceEvidence />} />
+                <Route path="audit-reports" element={<AuditReports />} />
+                <Route path="frameworks" element={<Frameworks />} />
               </Routes>
             </Suspense>
           }

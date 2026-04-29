@@ -1,0 +1,374 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Upload, Trash2, Download, RefreshCw } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import {
+  DataTable,
+  EmptyState,
+  Panel,
+  SectionHeader,
+  StatusTag,
+  type StateTone,
+} from '../components/kit';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { useApiClient } from '../hooks/useApiClient';
+import { useTenants } from '../hooks/useTenants';
+import type { ComplianceEvidence as CEType } from '../lib/api';
+import type { ColumnDef } from '@tanstack/react-table';
+
+const EVIDENCE_TYPES = [
+  'training_completion',
+  'meeting',
+  'review',
+  'attestation',
+  'policy',
+  'audit_log_export',
+  'other',
+];
+
+const FRAMEWORKS = ['SOC2', 'ISO27001', 'HIPAA', 'PCI-DSS', 'GDPR', 'other'];
+
+const TABS = ['Evidence', 'Training records', 'Reviews'] as const;
+type Tab = (typeof TABS)[number];
+
+function frameworkTone(fw: string | undefined): StateTone {
+  switch (fw) {
+    case 'SOC2':
+      return 'healthy';
+    case 'ISO27001':
+      return 'info';
+    case 'HIPAA':
+      return 'warning';
+    case 'PCI-DSS':
+      return 'degraded';
+    case 'GDPR':
+      return 'critical';
+    default:
+      return 'unknown';
+  }
+}
+
+function formatDate(v?: string | null): string {
+  if (!v) return '—';
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? v : d.toLocaleDateString();
+}
+
+export function ComplianceEvidence(): JSX.Element {
+  const client = useApiClient();
+  const { data: tenantList } = useTenants();
+
+  const [activeTab, setActiveTab] = useState<Tab>('Evidence');
+  const [selectedTenant, setSelectedTenant] = useState<string>('');
+  const [frameworkFilter, setFrameworkFilter] = useState<string>('');
+  const [items, setItems] = useState<CEType[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  // Upload form state
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [form, setForm] = useState({
+    title: '',
+    evidence_type: EVIDENCE_TYPES[0],
+    framework: '',
+    control_ref: '',
+    description: '',
+  });
+
+  const load = useCallback(async () => {
+    if (!selectedTenant) return;
+    setLoading(true);
+    try {
+      const evidenceType =
+        activeTab === 'Training records' ? 'training_completion' : '';
+      const res = await client.listComplianceEvidence({
+        tenantId: selectedTenant,
+        framework: frameworkFilter || undefined,
+        evidenceType: evidenceType || undefined,
+        limit: 100,
+      });
+      setItems(res.data);
+    } catch {
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [client, selectedTenant, frameworkFilter, activeTab]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Auto-select first tenant
+  useEffect(() => {
+    if (!selectedTenant && tenantList.length > 0) {
+      setSelectedTenant(tenantList[0].id);
+    }
+  }, [tenantList, selectedTenant]);
+
+  const handleUpload = async () => {
+    if (!selectedTenant || !form.title) {
+      setUploadError('Tenant and title are required.');
+      return;
+    }
+    const file = fileRef.current?.files?.[0];
+    setUploading(true);
+    setUploadError(null);
+
+    const fd = new FormData();
+    fd.append('tenant_id', selectedTenant);
+    fd.append('title', form.title);
+    fd.append('evidence_type', form.evidence_type);
+    if (form.framework) fd.append('framework', form.framework);
+    if (form.control_ref) fd.append('control_ref', form.control_ref);
+    if (form.description) fd.append('description', form.description);
+    if (file) fd.append('file', file);
+
+    try {
+      await client.uploadComplianceEvidence(fd);
+      setForm({ title: '', evidence_type: EVIDENCE_TYPES[0], framework: '', control_ref: '', description: '' });
+      if (fileRef.current) fileRef.current.value = '';
+      void load();
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    try {
+      await client.deleteComplianceEvidence(deleteId);
+      void load();
+    } finally {
+      setDeleteId(null);
+    }
+  };
+
+  const columns: ColumnDef<CEType, unknown>[] = [
+    { accessorKey: 'title', header: 'Title' },
+    {
+      accessorKey: 'framework',
+      header: 'Framework',
+      cell: ({ getValue }) => {
+        const v = getValue() as string | undefined;
+        if (!v) return <span className="text-muted-foreground">—</span>;
+        return <StatusTag tone={frameworkTone(v)}>{v}</StatusTag>;
+      },
+    },
+    {
+      accessorKey: 'control_ref',
+      header: 'Control Ref',
+      cell: ({ getValue }) => {
+        const v = getValue() as string | undefined;
+        return <span>{v ?? '—'}</span>;
+      },
+    },
+    { accessorKey: 'evidence_type', header: 'Type' },
+    {
+      accessorKey: 'uploaded_at',
+      header: 'Uploaded',
+      cell: ({ getValue }) => <span>{formatDate(getValue() as string)}</span>,
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <div className="flex gap-1 justify-end">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => window.open(client.buildEvidenceDownloadUrl(row.original.id), '_blank')}
+          >
+            <Download className="w-3.5 h-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setDeleteId(row.original.id)}>
+            <Trash2 className="w-3.5 h-3.5 text-destructive" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <ConfirmModal
+        open={deleteId !== null}
+        title="Delete evidence?"
+        body="This will permanently remove the evidence record and any attached file."
+        variant="danger"
+        confirmLabel="Delete"
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setDeleteId(null)}
+      />
+
+      <SectionHeader title="Compliance Evidence" description="Upload and manage evidence for compliance controls." />
+
+      <div className="flex flex-wrap gap-3 items-center">
+        <select
+          className="border rounded px-3 py-1.5 text-sm bg-background"
+          value={selectedTenant}
+          onChange={(e) => setSelectedTenant(e.target.value)}
+        >
+          <option value="">Select tenant...</option>
+          {tenantList.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="border rounded px-3 py-1.5 text-sm bg-background"
+          value={frameworkFilter}
+          onChange={(e) => setFrameworkFilter(e.target.value)}
+        >
+          <option value="">All frameworks</option>
+          {FRAMEWORKS.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+        <Button variant="outline" size="sm" onClick={() => void load()}>
+          <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+          Refresh
+        </Button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b">
+        {TABS.map((tab) => (
+          <button
+            key={tab}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === tab
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {activeTab !== 'Reviews' && (
+        <>
+          {loading ? (
+            <div className="text-muted-foreground text-sm py-4">Loading...</div>
+          ) : items.length === 0 ? (
+            <EmptyState
+              title="No evidence found"
+              description="Upload evidence to get started."
+            />
+          ) : (
+            <DataTable columns={columns} rows={items} />
+          )}
+
+          {/* Upload form */}
+          <Panel>
+            <div className="p-4 flex flex-col gap-3">
+              <h3 className="font-semibold text-sm">Upload evidence</h3>
+
+              {uploadError && (
+                <p className="text-sm text-destructive">{uploadError}</p>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Title *</label>
+                  <input
+                    className="border rounded px-3 py-1.5 text-sm bg-background"
+                    value={form.title}
+                    onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+                    placeholder="e.g. Q1 Security Training"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Evidence type *</label>
+                  <select
+                    className="border rounded px-3 py-1.5 text-sm bg-background"
+                    value={form.evidence_type}
+                    onChange={(e) => setForm((p) => ({ ...p, evidence_type: e.target.value }))}
+                  >
+                    {EVIDENCE_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Framework</label>
+                  <select
+                    className="border rounded px-3 py-1.5 text-sm bg-background"
+                    value={form.framework}
+                    onChange={(e) => setForm((p) => ({ ...p, framework: e.target.value }))}
+                  >
+                    <option value="">None</option>
+                    {FRAMEWORKS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Control Ref</label>
+                  <input
+                    className="border rounded px-3 py-1.5 text-sm bg-background"
+                    value={form.control_ref}
+                    onChange={(e) => setForm((p) => ({ ...p, control_ref: e.target.value }))}
+                    placeholder="e.g. CC6.1"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium">Description</label>
+                <textarea
+                  className="border rounded px-3 py-1.5 text-sm bg-background resize-none"
+                  rows={2}
+                  value={form.description}
+                  onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+                  placeholder="Optional description..."
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium">File</label>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  className="text-sm"
+                  accept=".pdf,.png,.jpg,.jpeg,.docx,.zip"
+                />
+              </div>
+
+              <div>
+                <Button
+                  size="sm"
+                  onClick={() => void handleUpload()}
+                  disabled={uploading || !selectedTenant}
+                >
+                  <Upload className="w-3.5 h-3.5 mr-1.5" />
+                  {uploading ? 'Uploading...' : 'Upload evidence'}
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        </>
+      )}
+
+      {activeTab === 'Reviews' && (
+        <Panel>
+          <div className="p-6 text-center text-muted-foreground text-sm">
+            Compliance reviews scheduling — coming soon.
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}

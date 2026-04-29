@@ -874,6 +874,7 @@ export interface ListComplianceResultsParams {
   rule_id?: string;
   passed?: boolean;
   severity?: string;
+  framework?: string;
   since?: string;
   until?: string;
   limit?: number;
@@ -1536,6 +1537,7 @@ export class APIClient {
     if (params.rule_id) search.set('rule_id', params.rule_id);
     if (typeof params.passed === 'boolean') search.set('passed', params.passed.toString());
     if (params.severity) search.set('severity', params.severity);
+    if (params.framework) search.set('framework', params.framework);
     if (params.since) search.set('since', params.since);
     if (params.until) search.set('until', params.until);
     if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
@@ -2356,6 +2358,102 @@ export class APIClient {
       body: JSON.stringify(payload),
     });
   }
+
+  // ---- Sprint 3: Compliance Evidence + Audit Reports + Frameworks ----------
+
+  /** Upload compliance evidence as a multipart/form-data POST. */
+  async uploadComplianceEvidence(formData: FormData): Promise<ComplianceEvidence> {
+    const url = `${this.baseUrl}/api/v1/compliance/evidence`;
+    const headers: Record<string, string> = {};
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    const res = await fetch(url, { method: 'POST', headers, body: formData });
+    if (res.status === HTTP_STATUS_UNAUTHORIZED) {
+      this.unauthorizedHandler?.();
+      throw new APIError('Unauthorized', res.status);
+    }
+    if (!res.ok) {
+      const msg = await safeErrorMessage(res);
+      throw new APIError(msg ?? res.statusText, res.status);
+    }
+    return res.json() as Promise<ComplianceEvidence>;
+  }
+
+  async listComplianceEvidence(params: {
+    tenantId: string;
+    framework?: string;
+    evidenceType?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<ComplianceEvidence>> {
+    const q = new URLSearchParams({ tenant_id: params.tenantId });
+    if (params.framework) q.set('framework', params.framework);
+    if (params.evidenceType) q.set('evidence_type', params.evidenceType);
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    const raw = await this.request<{ data: ComplianceEvidence[]; pagination: ServerPaginationMeta }>(
+      `/api/v1/compliance/evidence?${q.toString()}`
+    );
+    return {
+      data: raw.data ?? [],
+      pagination: {
+        total: raw.pagination?.total ?? 0,
+        count: (raw.data ?? []).length,
+        limit: raw.pagination?.limit ?? (params.limit ?? 50),
+        offset: raw.pagination?.offset ?? (params.offset ?? 0),
+        nextOffset: raw.pagination?.next_offset ?? null,
+        prevOffset: raw.pagination?.prev_offset ?? null,
+      },
+    };
+  }
+
+  async deleteComplianceEvidence(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/compliance/evidence/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listComplianceFrameworks(): Promise<{ frameworks: string[]; controls: Record<string, FrameworkControl[]> }> {
+    return this.request<{ frameworks: string[]; controls: Record<string, FrameworkControl[]> }>(
+      '/api/v1/compliance/frameworks'
+    );
+  }
+
+  async createAuditReport(payload: CreateAuditReportPayload): Promise<AuditReport> {
+    return this.request<AuditReport>('/api/v1/compliance/reports', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listAuditReports(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<AuditReport>> {
+    const q = new URLSearchParams({ tenant_id: params.tenantId });
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    const raw = await this.request<{ data: AuditReport[]; pagination: ServerPaginationMeta }>(
+      `/api/v1/compliance/reports?${q.toString()}`
+    );
+    return {
+      data: raw.data ?? [],
+      pagination: {
+        total: raw.pagination?.total ?? 0,
+        count: (raw.data ?? []).length,
+        limit: raw.pagination?.limit ?? (params.limit ?? 50),
+        offset: raw.pagination?.offset ?? (params.offset ?? 0),
+        nextOffset: raw.pagination?.next_offset ?? null,
+        prevOffset: raw.pagination?.prev_offset ?? null,
+      },
+    };
+  }
+
+  buildReportDownloadUrl(id: string): string {
+    return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download`;
+  }
+
+  buildEvidenceDownloadUrl(id: string): string {
+    return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download`;
+  }
 }
 
 // ---- Connection / forensic types -------------------------------------
@@ -2547,4 +2645,49 @@ export interface WidgetPayload {
   node_ids: string[];
   refresh_seconds: number;
   sort_order: number;
+}
+
+// ---- Sprint 3: Compliance Evidence + Audit Reports + Frameworks -----------
+
+export interface ComplianceEvidence {
+  id: string;
+  tenant_id: string;
+  evidence_type: string;
+  framework?: string;
+  control_ref?: string;
+  title: string;
+  description?: string;
+  file_path?: string;
+  file_size_bytes?: number;
+  mime_type?: string;
+  checksum?: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  expires_at?: string;
+}
+
+export interface AuditReport {
+  id: string;
+  tenant_id: string;
+  framework: string;
+  period_start: string;
+  period_end: string;
+  status: string;
+  pdf_path?: string;
+  generated_by?: string;
+  generated_at?: string;
+}
+
+export interface FrameworkControl {
+  framework: string;
+  control_id: string;
+  title: string;
+  description: string;
+}
+
+export interface CreateAuditReportPayload {
+  tenant_id: string;
+  framework: string;
+  period_start: string;
+  period_end: string;
 }
