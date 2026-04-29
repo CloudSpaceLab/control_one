@@ -1575,6 +1575,16 @@ func (f *fakeStore) ListNodes(_ context.Context, tenantID uuid.UUID, hostnamePre
 	return filtered, total, nil
 }
 
+func (f *fakeStore) FindNodesByPublicIP(_ context.Context, ip string) ([]storage.Node, error) {
+	var found []storage.Node
+	for _, n := range f.nodes {
+		if n.PublicIP.Valid && strings.EqualFold(n.PublicIP.String, ip) {
+			found = append(found, n)
+		}
+	}
+	return found, nil
+}
+
 func (f *fakeStore) GetNode(_ context.Context, id uuid.UUID) (*storage.Node, error) {
 	for _, node := range f.nodes {
 		if node.ID == id {
@@ -3426,6 +3436,22 @@ func (f *fakeStore) ListEnrollmentPendingNodesOlderThan(_ context.Context, cutof
 		out = append(out, copy)
 	}
 	return out, nil
+}
+
+func (f *fakeStore) UpdateNodeAgentVersion(_ context.Context, id uuid.UUID, version string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].AgentVersion = sql.NullString{String: version, Valid: version != ""}
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeStore) GetPendingAgentUpdateJob(_ context.Context, _ uuid.UUID) (*storage.Job, error) {
+	return nil, nil
 }
 
 // ── Phase 1 Worktree (provider credentials + hypervisor hosts) ─────────────

@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Bookmark, Hash, Network, Search, Terminal, User as UserIcon } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Eyebrow, Panel, SectionHeader } from '@/components/kit';
-import { GlobalSearch } from '@/components/shell';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { entityRoute } from '@/lib/entity';
@@ -13,7 +14,16 @@ import type { EntityType } from '@/components/kit';
 
 export function InvestigateHome(): JSX.Element {
   const client = useApiClient();
+  const navigate = useNavigate();
   const [recents] = useLocalStorage<string[]>('co.search.recents', []);
+  const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleSearch = () => {
+    const q = query.trim();
+    if (!q) return;
+    navigate(`/search?q=${encodeURIComponent(q)}`);
+  };
 
   const savedQ = useQuery({
     queryKey: ['saved-searches'],
@@ -41,9 +51,25 @@ export function InvestigateHome(): JSX.Element {
         <h2 className="mt-1 mb-4 font-display text-xl font-semibold text-foreground">
           What do you want to investigate?
         </h2>
-        <GlobalSearch />
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-text-muted" />
+            <Input
+              ref={inputRef}
+              autoFocus
+              className="h-12 pl-10 text-base"
+              placeholder="IP, SHA256, hostname, process, email…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            />
+          </div>
+          <Button variant="primary" className="h-12 px-5" onClick={handleSearch}>
+            Search
+          </Button>
+        </div>
         <p className="mt-3 text-xs text-text-muted">
-          Tip: paste an IP, SHA256, email, hostname or process name. Press <kbd className="rounded border border-border-subtle bg-surface px-1 font-mono text-[0.65rem]">Ctrl/⌘+K</kbd> from anywhere.
+          Tip: paste an IP, SHA256, email, hostname or process name. Press <kbd className="rounded border border-border-subtle bg-surface px-1 font-mono text-[0.65rem]">Ctrl/⌘+K</kbd> from anywhere for quick nav.
         </p>
       </div>
 
@@ -102,7 +128,7 @@ export function InvestigateHome(): JSX.Element {
         >
           {savedQ.isLoading ? (
             <p className="text-sm text-text-muted">Loading…</p>
-          ) : (savedQ.data?.items.length ?? 0) === 0 ? (
+          ) : (savedQ.data?.items?.length ?? 0) === 0 ? (
             <p className="text-sm text-text-muted">No saved searches. Save any investigation to come back to it later.</p>
           ) : (
             <ul className="flex flex-col gap-1.5">

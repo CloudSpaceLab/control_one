@@ -68,6 +68,10 @@ type Probe struct {
 	Architecture string        `json:"architecture,omitempty"`
 	Capabilities []string      `json:"capabilities,omitempty"`   // e.g. "sudo", "powershell", "package_apt"
 	Banner       string        `json:"banner,omitempty"`         // SSH banner / WinRM PSVersion
+	// Extended OS detail
+	Distro     string `json:"distro,omitempty"`      // e.g. "Ubuntu 24.04.2 LTS" from /etc/os-release
+	CPUCount   int    `json:"cpu_count,omitempty"`   // logical CPU count from nproc
+	MemoryMB   int    `json:"memory_mb,omitempty"`   // total RAM in MB from /proc/meminfo
 	Detected     time.Time     `json:"detected_at"`
 }
 

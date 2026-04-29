@@ -29,7 +29,7 @@ export function TopBar({ liveState = 'live', mobileNav }: TopBarProps) {
         </Sheet>
       )}
 
-      <div className="flex flex-1 items-center justify-center max-w-md">
+      <div className="flex flex-1 items-center justify-center">
         <GlobalSearch />
       </div>
 

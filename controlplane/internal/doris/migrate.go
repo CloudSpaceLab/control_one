@@ -14,7 +14,7 @@ import (
 )
 
 // Migrations are vendored as numbered .sql files under the embedded fs below.
-// We track applied versions in a tiny `_doris_migrations` table living in the
+// We track applied versions in a tiny `doris_migrations` table living in the
 // same Doris database; each row records the script's checksum so a changed
 // file fails loud instead of silently re-running with skewed history.
 //
@@ -107,7 +107,7 @@ func ApplyMigrations(ctx context.Context, c *Client) error {
 
 func ensureMigrationTable(ctx context.Context, c *Client) error {
 	const ddl = `
-CREATE TABLE IF NOT EXISTS _doris_migrations (
+CREATE TABLE IF NOT EXISTS doris_migrations (
   version BIGINT,
   name VARCHAR(255),
   hash VARCHAR(64),
@@ -127,7 +127,7 @@ type appliedRecord struct {
 }
 
 func loadApplied(ctx context.Context, c *Client) (map[int]appliedRecord, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT version, hash, applied_at FROM _doris_migrations`)
+	rows, err := c.db.QueryContext(ctx, `SELECT version, hash, applied_at FROM doris_migrations`)
 	if err != nil {
 		return nil, fmt.Errorf("query applied: %w", err)
 	}
@@ -156,7 +156,7 @@ func runMigration(ctx context.Context, c *Client, mig migrationFile) error {
 		}
 	}
 	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO _doris_migrations (version, name, hash, applied_at)
+		INSERT INTO doris_migrations (version, name, hash, applied_at)
 		VALUES (?, ?, ?, NOW())
 	`, mig.Version, mig.Name, mig.Hash)
 	return err

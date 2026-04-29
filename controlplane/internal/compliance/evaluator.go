@@ -160,6 +160,12 @@ func resolveNestedField(path string, data map[string]any) (any, bool) {
 		return nil, false
 	}
 
+	// Try the full path as a flat key first — this supports agent-sent facts
+	// like {"security.fail2ban.installed": "true"} without requiring nesting.
+	if val, ok := data[path]; ok {
+		return val, true
+	}
+
 	parts := strings.SplitN(path, ".", 2)
 	val, ok := data[parts[0]]
 	if !ok {

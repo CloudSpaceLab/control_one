@@ -198,14 +198,14 @@ BINARY_PATH="${TMP_DIR}/controlone-agent"
 MANIFEST_PATH="${TMP_DIR}/manifest.json"
 
 info "Fetching binary manifest..."
-HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%%{http_code}" -o "$MANIFEST_PATH" "$MANIFEST_URL" 2>/dev/null || true)
+HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%{http_code}" -o "$MANIFEST_PATH" "$MANIFEST_URL" 2>/dev/null || true)
 if [[ "${HTTP_CODE}" != "200" ]] || [[ ! -s "$MANIFEST_PATH" ]]; then
     warn "Manifest unavailable (HTTP ${HTTP_CODE:-???}); proceeding without integrity check."
     MANIFEST_PATH=""
 fi
 
 info "Downloading agent binary..."
-HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%%{http_code}" -o "$BINARY_PATH" "$BINARY_URL" 2>/dev/null) || true
+HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%{http_code}" -o "$BINARY_PATH" "$BINARY_URL" 2>/dev/null) || true
 
 [[ ! -f "$BINARY_PATH" ]] || [[ ! -s "$BINARY_PATH" ]] && fatal "Download failed (HTTP ${HTTP_CODE:-???})."
 [[ "${HTTP_CODE}" != "200" ]] && fatal "Unexpected HTTP ${HTTP_CODE}."
@@ -753,11 +753,15 @@ func (s *Server) deriveControlPlaneURL(r *http.Request) string {
 		return strings.TrimRight(addr, "/")
 	}
 
-	// Derive from request.
+	// Prefer X-Forwarded-Proto set by the reverse proxy (nginx).
+	// Fall back to TLS detection, then plain http.
 	scheme := "https"
-	if r.TLS == nil {
+	if fwd := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); fwd != "" {
+		scheme = fwd
+	} else if r.TLS == nil {
 		scheme = "http"
 	}
+
 	host := r.Host
 	if host == "" {
 		host = r.URL.Host

@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { Bookmark } from 'lucide-react';
-import { useState } from 'react';
+import { Bookmark, Search } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmptyState, Eyebrow, Panel, SectionHeader, StatusTag, type StateTone } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
@@ -20,10 +21,24 @@ const SEV_TO_TONE: Record<string, StateTone> = {
 };
 
 export function SearchResults(): JSX.Element {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const client = useApiClient();
   const [tab, setTab] = useState('all');
+  const [refineQuery, setRefineQuery] = useState(q);
+
+  // Keep refine input in sync when URL changes (e.g. browser back)
+  useEffect(() => {
+    setRefineQuery(q);
+  }, [q]);
+
+  const handleRefine = () => {
+    const trimmed = refineQuery.trim();
+    if (trimmed && trimmed !== q) {
+      setParams({ q: trimmed });
+      setTab('all');
+    }
+  };
 
   const searchQ = useQuery<InvestigateSearchResult>({
     queryKey: ['search', q],
@@ -38,6 +53,23 @@ export function SearchResults(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Refinement search bar */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+          <Input
+            className="pl-9"
+            value={refineQuery}
+            onChange={(e) => setRefineQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleRefine()}
+            placeholder="Refine search…"
+          />
+        </div>
+        <Button variant="secondary" onClick={handleRefine}>
+          Search
+        </Button>
+      </div>
+
       <SectionHeader
         eyebrow="SEARCH RESULTS"
         title={
@@ -59,7 +91,7 @@ export function SearchResults(): JSX.Element {
       />
 
       {q.length === 0 ? (
-        <EmptyState title="Enter a query" description="Use the global search palette to start." />
+        <EmptyState title="Enter a query" description="Type in the search bar above and press Enter or click Search." />
       ) : (
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>

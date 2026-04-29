@@ -17,7 +17,8 @@ import {
   type RemediationVelocity,
   type FindingAging,
 } from '../components/executive';
-import './Dashboard.css';
+import { KpiTile, Panel } from '../components/kit';
+import { Button } from '../components/ui/button';
 
 const REFRESH_TOPICS = [
   'security.event',
@@ -73,7 +74,7 @@ export function Dashboard(): JSX.Element {
   // Executive metrics refresh
   const refreshExecutiveMetrics = useCallback(async () => {
     if (!tenantId) return;
-    
+
     setExecutiveLoading(true);
     try {
       // Fetch all executive metrics in parallel using public API methods
@@ -127,187 +128,198 @@ export function Dashboard(): JSX.Element {
   );
 
   return (
-    <section className="dashboard-root">
-      <div className="dashboard-container">
-        {/* Executive Risk Dashboard */}
-        <div className="executive-section">
-          <header className="executive-header">
-            <div>
-              <p className="executive-eyebrow">Executive Risk Dashboard</p>
-              <h2 className="executive-title">Security Posture at a Glance</h2>
-              <p className="executive-subtitle">
-                {executiveLoading ? 'Loading executive metrics…' : 'Real-time risk visibility and operational metrics'}
-              </p>
-            </div>
-            <button 
-              type="button" 
-              className="refresh-btn" 
-              onClick={() => { refresh(); refreshExecutiveMetrics(); }}
-              disabled={executiveLoading || loading}
-            >
-              {executiveLoading || loading ? '⟳ Refreshing…' : '↻ Refresh'}
-            </button>
-          </header>
+    <div className="flex flex-col gap-8">
+      {/* Executive Risk Dashboard */}
+      <div className="flex flex-col gap-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+              Executive Risk Dashboard
+            </p>
+            <h2 className="mt-0.5 font-display text-xl font-semibold text-foreground">
+              Security Posture at a Glance
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">
+              {executiveLoading ? 'Loading executive metrics…' : 'Real-time risk visibility and operational metrics'}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => { refresh(); refreshExecutiveMetrics(); }}
+            disabled={executiveLoading || loading}
+          >
+            {executiveLoading || loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        </div>
 
-          {/* Error State */}
-          {error && (
-            <div className="error-card" style={{ marginBottom: '24px' }}>
-              <svg className="error-icon" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-              </svg>
-              <p className="error-message">{error}</p>
-              <button className="error-retry-btn" onClick={() => { refresh(); refreshExecutiveMetrics(); }}>
-                Retry
-              </button>
-            </div>
-          )}
+        {/* Error State */}
+        {error && (
+          <div className="rounded-lg border border-state-critical/30 bg-state-critical/10 px-4 py-3 text-sm text-state-critical flex items-center gap-3">
+            <svg className="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+            </svg>
+            <span className="flex-1">{error}</span>
+            <Button variant="ghost" size="sm" onClick={() => { refresh(); refreshExecutiveMetrics(); }}>
+              Retry
+            </Button>
+          </div>
+        )}
 
-          {/* Executive Metrics Grid */}
-          <div className="executive-grid">
-            {/* Left Column - Risk Score */}
-            <div className="executive-metric-large">
-              <RiskScoreCard score={riskScore} loading={executiveLoading} />
-            </div>
+        {/* Executive Metrics Grid */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_2fr]">
+          {/* Left Column - Risk Score */}
+          <div>
+            <RiskScoreCard score={riskScore} loading={executiveLoading} />
+          </div>
 
-            {/* Right Column - Metrics Row + Aging */}
-            <div>
-              <div className="executive-metrics-row">
-                <MetricTrend
-                  title="MTTD (Mean Time to Detect)"
-                  value={mttdMetrics?.mean_minutes ?? null}
-                  unit=""
-                  target={15}
-                  trend={mttdMetrics?.mean_minutes ? (mttdMetrics.mean_minutes < 15 ? 'up' : 'down') : undefined}
-                  trendValue={5}
-                  loading={executiveLoading}
-                  format="time"
-                />
-                <MetricTrend
-                  title="MTTR (Mean Time to Remediate)"
-                  value={mttrMetrics?.mean_minutes ?? null}
-                  unit=""
-                  target={240}
-                  trend={mttrMetrics?.mean_minutes ? (mttrMetrics.mean_minutes < 240 ? 'up' : 'down') : undefined}
-                  trendValue={10}
-                  loading={executiveLoading}
-                  format="time"
-                />
-                <MetricTrend
-                  title="Remediation Velocity"
-                  value={remediationVelocity?.remediations ?? null}
-                  unit="findings"
-                  trend={remediationVelocity?.trend_direction}
-                  trendValue={remediationVelocity?.trend_percent}
-                  loading={executiveLoading}
-                  format="number"
-                />
-              </div>
-              <div className="executive-aging-container" style={{ marginTop: '16px' }}>
-                <AgingTable aging={criticalAging} loading={executiveLoading} />
-              </div>
+          {/* Right Column - Metrics Row + Aging */}
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <MetricTrend
+                title="MTTD (Mean Time to Detect)"
+                value={mttdMetrics?.mean_minutes ?? null}
+                unit=""
+                target={15}
+                trend={mttdMetrics?.mean_minutes ? (mttdMetrics.mean_minutes < 15 ? 'up' : 'down') : undefined}
+                trendValue={5}
+                loading={executiveLoading}
+                format="time"
+              />
+              <MetricTrend
+                title="MTTR (Mean Time to Remediate)"
+                value={mttrMetrics?.mean_minutes ?? null}
+                unit=""
+                target={240}
+                trend={mttrMetrics?.mean_minutes ? (mttrMetrics.mean_minutes < 240 ? 'up' : 'down') : undefined}
+                trendValue={10}
+                loading={executiveLoading}
+                format="time"
+              />
+              <MetricTrend
+                title="Remediation Velocity"
+                value={remediationVelocity?.remediations ?? null}
+                unit="findings"
+                trend={remediationVelocity?.trend_direction}
+                trendValue={remediationVelocity?.trend_percent}
+                loading={executiveLoading}
+                format="number"
+              />
             </div>
+            <AgingTable aging={criticalAging} loading={executiveLoading} />
           </div>
         </div>
-
-        {/* Visual Separator */}
-        <div className="dashboard-divider" />
-
-        {/* Operational Section */}
-        <div className="operational-section">
-          <header className="operational-header">
-            <div>
-              <p className="operational-eyebrow">Operational Details</p>
-              <h3 className="operational-title">Infrastructure Overview</h3>
-              <p className="operational-subtitle">
-                {loading ? 'Loading operational data…' : `Last updated ${new Date(overview.generated_at || Date.now()).toLocaleTimeString()}`}
-              </p>
-            </div>
-          </header>
-
-      <div className="stat-grid">
-        <SeverityCard title="Security events (24h)" breakdown={overview.security_event_counts} />
-        <SeverityCard title="Open health incidents" breakdown={overview.health_incident_counts} />
-        <CountCard
-          title="Compliance alerts (24h)"
-          total={overview.compliance_summary.failed}
-          sub={`${overview.compliance_summary.passed} passed / ${overview.compliance_summary.total} total`}
-          onClick={() => navigate('/compliance')}
-        />
-        <CountCard
-          title="Rule triggers (24h)"
-          total={totalRuleTriggers}
-          sub={Object.entries(overview.rule_trigger_counts_24h ?? {})
-            .map(([k, v]) => `${k}:${v}`)
-            .join(' · ') || '—'}
-          onClick={() => navigate('/rules')}
-        />
-        <CountCard
-          title="Auto-remediations (24h)"
-          total={overview.remediations_applied_24h}
-          sub="Safety gates active"
-        />
-        <CountCard
-          title="Nodes"
-          total={overview.node_counts.total}
-          sub={`${overview.node_counts.healthy} healthy · ${overview.node_counts.offline} offline`}
-          onClick={() => navigate('/nodes')}
-        />
       </div>
 
-      <FleetTopologyCard onNodeClick={(n) => navigate(`/nodes?focus=${encodeURIComponent(n.id)}`)} />
+      <hr className="border-border-subtle" />
 
-      <div className="dashboard-panels">
-        <article className="quick-actions">
-          <h3>Quick actions</h3>
-          <ul>
-            <li>
+      {/* Operational Section */}
+      <div className="flex flex-col gap-4">
+        <div>
+          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+            Operational Details
+          </p>
+          <h3 className="mt-0.5 font-display text-lg font-semibold text-foreground">
+            Infrastructure Overview
+          </h3>
+          <p className="mt-1 text-sm text-text-muted">
+            {loading
+              ? 'Loading operational data…'
+              : `Last updated ${new Date(overview.generated_at || Date.now()).toLocaleTimeString()}`}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+          <SeverityCard title="Security events (24h)" breakdown={overview.security_event_counts} />
+          <SeverityCard title="Open health incidents" breakdown={overview.health_incident_counts} />
+          <CountCard
+            title="Compliance alerts (24h)"
+            total={overview.compliance_summary.failed}
+            sub={`${overview.compliance_summary.passed} passed / ${overview.compliance_summary.total} total`}
+            onClick={() => navigate('/compliance')}
+          />
+          <CountCard
+            title="Rule triggers (24h)"
+            total={totalRuleTriggers}
+            sub={
+              Object.entries(overview.rule_trigger_counts_24h ?? {})
+                .map(([k, v]) => `${k}:${v}`)
+                .join(' · ') || '—'
+            }
+            onClick={() => navigate('/rules')}
+          />
+          <CountCard
+            title="Auto-remediations (24h)"
+            total={overview.remediations_applied_24h}
+            sub="Safety gates active"
+          />
+          <CountCard
+            title="Nodes"
+            total={overview.node_counts.total}
+            sub={`${overview.node_counts.healthy} healthy · ${overview.node_counts.offline} offline`}
+            onClick={() => navigate('/nodes')}
+          />
+        </div>
+
+        <FleetTopologyCard onNodeClick={(n) => navigate(`/nodes?focus=${encodeURIComponent(n.id)}`)} />
+
+        {/* Quick Actions */}
+        <Panel padding="md" title="Quick actions">
+          <ul className="flex flex-col gap-3">
+            <li className="flex items-center justify-between gap-4">
               <div>
-                <strong>Author a rule</strong>
-                <p>Compliance, port, or log rule — rolls out in realtime.</p>
+                <p className="text-sm font-medium text-foreground">Author a rule</p>
+                <p className="text-xs text-text-muted">Compliance, port, or log rule — rolls out in realtime.</p>
               </div>
-              <button type="button" className="primary-button" onClick={() => navigate('/rules')}>
+              <Button type="button" variant="primary" size="sm" onClick={() => navigate('/rules')}>
                 Go
-              </button>
+              </Button>
             </li>
-            <li>
+            <li className="flex items-center justify-between gap-4">
               <div>
-                <strong>Register hypervisor</strong>
-                <p>Add a KVM / VMware / AWS / Azure host to provision from.</p>
+                <p className="text-sm font-medium text-foreground">Register hypervisor</p>
+                <p className="text-xs text-text-muted">Add a KVM / VMware / AWS / Azure host to provision from.</p>
               </div>
-              <button type="button" className="primary-button" onClick={() => navigate('/hypervisors')}>
+              <Button type="button" variant="primary" size="sm" onClick={() => navigate('/hypervisors')}>
                 Go
-              </button>
+              </Button>
             </li>
-            <li>
+            <li className="flex items-center justify-between gap-4">
               <div>
-                <strong>Enroll a node</strong>
-                <p>Run the one-line installer or bulk-enroll via SSH.</p>
+                <p className="text-sm font-medium text-foreground">Enroll a node</p>
+                <p className="text-xs text-text-muted">Run the one-line installer or bulk-enroll via SSH.</p>
               </div>
-              <button type="button" className="primary-button" onClick={() => navigate('/nodes')}>
+              <Button type="button" variant="primary" size="sm" onClick={() => navigate('/nodes')}>
                 Go
-              </button>
+              </Button>
             </li>
           </ul>
-        </article>
+        </Panel>
       </div>
-        </div>
-      </div>
-    </section>
+    </div>
   );
 }
 
 function SeverityCard({ title, breakdown }: { title: string; breakdown: SeverityBreakdown }): JSX.Element {
   return (
-    <article className="stat-card">
-      <p>{title}</p>
-      <span className="stat-value">{breakdown.total}</span>
-      <small>
-        <span className="crit">{breakdown.critical}</span> crit ·{' '}
-        <span className="high">{breakdown.high}</span> high ·{' '}
-        <span className="med">{breakdown.medium}</span> med ·{' '}
-        <span className="low">{breakdown.low}</span> low
-      </small>
-    </article>
+    <KpiTile
+      label={title}
+      value={breakdown.total}
+      size="sm"
+      hint={
+        <span className="flex gap-1.5 flex-wrap">
+          <span className="text-state-critical">{breakdown.critical}</span>
+          <span className="text-text-muted">crit ·</span>
+          <span className="text-state-warning">{breakdown.high}</span>
+          <span className="text-text-muted">high ·</span>
+          <span className="text-yellow-400">{breakdown.medium}</span>
+          <span className="text-text-muted">med ·</span>
+          <span className="text-state-healthy">{breakdown.low}</span>
+          <span className="text-text-muted">low</span>
+        </span>
+      }
+    />
   );
 }
 
@@ -323,18 +335,15 @@ function CountCard({
   onClick?: () => void;
 }): JSX.Element {
   return (
-    <article
-      className="stat-card"
+    <div
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
-      style={onClick ? { cursor: 'pointer' } : undefined}
+      className={onClick ? 'cursor-pointer' : undefined}
     >
-      <p>{title}</p>
-      <span className="stat-value">{total}</span>
-      <small>{sub}</small>
-    </article>
+      <KpiTile label={title} value={total} size="sm" hint={sub} />
+    </div>
   );
 }
 
@@ -358,13 +367,15 @@ function FleetTopologyCard({ onNodeClick }: { onNodeClick: (n: TopologyNode) => 
   };
 
   return (
-    <article className="card" style={{ padding: 16, marginTop: 24 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <Panel padding="md">
+      <header className="flex items-center justify-between gap-3">
         <div>
-          <p className="eyebrow">Fleet topology</p>
-          <h3 style={{ marginTop: 4 }}>{totals.nodes} nodes · live</h3>
+          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Fleet topology</p>
+          <h3 className="mt-0.5 font-display text-base font-semibold text-foreground">
+            {totals.nodes} nodes · live
+          </h3>
         </div>
-        <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+        <div className="flex flex-wrap gap-3 text-xs">
           <Legend label="Healthy" state="healthy" count={totals.healthy} />
           <Legend label="Warning" state="warning" count={totals.warning} />
           <Legend label="Degraded" state="degraded" count={totals.degraded} />
@@ -373,26 +384,25 @@ function FleetTopologyCard({ onNodeClick }: { onNodeClick: (n: TopologyNode) => 
         </div>
       </header>
       {error ? (
-        <p style={{ color: 'var(--state-critical)', fontSize: 13 }}>Topology offline: {error.message}</p>
+        <p className="text-xs text-state-critical">Topology offline: {error.message}</p>
       ) : null}
-      {loading ? <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Syncing…</p> : null}
+      {loading ? <p className="text-xs text-text-muted">Syncing…</p> : null}
       <TopologyGrid nodes={nodes} onNodeClick={onNodeClick} />
       {data?.source === 'postgres-fallback' ? (
-        <small style={{ color: 'var(--state-warning)', display: 'block', marginTop: 8 }}>
+        <p className="mt-1 text-xs text-state-warning">
           Fast view — Doris unavailable, sourced from Postgres rollups.
-        </small>
+        </p>
       ) : null}
-    </article>
+    </Panel>
   );
 }
 
 function Legend({ label, state, count }: { label: string; state: State; count: number }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+    <span className="inline-flex items-center gap-1">
       <StatusDot state={state} />
-      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+      <span className="text-text-muted">{label}</span>
       <strong>{count}</strong>
     </span>
   );
 }
-

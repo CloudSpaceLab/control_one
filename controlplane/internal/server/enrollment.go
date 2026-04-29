@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -462,6 +463,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	writeJSON(w, http.StatusCreated, resp)
+
+	// Seed default security compliance policies for this tenant if not yet done.
+	// Runs in a goroutine so it never blocks the enrollment response.
+	go s.ensureDefaultPolicies(context.Background(), tenant.ID)
 
 	// Audit log with system actor since there is no authenticated principal
 	s.recordAudit(r.Context(), s.systemActor(), tenant.ID, "node.enrolled", "node", created.ID.String(), map[string]any{

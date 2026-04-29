@@ -5,6 +5,7 @@ import { Badge } from '../components/Badge';
 import { EmptyState } from '../components/EmptyState';
 import EventTimeline from '../components/EventTimeline';
 import StatusDot from '../components/glyphs/StatusDot';
+import { useTenant } from '../providers/TenantProvider';
 import type { ConnectionDetail, ConnectionRow } from '../lib/api';
 
 // Connections — full lifecycle table the user asked for. src/dst, pid,
@@ -12,6 +13,7 @@ import type { ConnectionDetail, ConnectionRow } from '../lib/api';
 // row → forensic timeline panel keyed by correlation_id.
 export function Connections(): JSX.Element {
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const [rows, setRows] = useState<ConnectionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,9 +22,11 @@ export function Connections(): JSX.Element {
   const [detailLoading, setDetailLoading] = useState(false);
 
   const refresh = useCallback(async () => {
+    // Backend requires both tenant_id and ip — skip auto-load until ip is entered
+    if (!filter.ip) return;
     setLoading(true);
     try {
-      const resp = await client.listConnections({ ip: filter.ip, limit: 100 });
+      const resp = await client.listConnections({ tenantId: currentTenantId ?? undefined, ip: filter.ip, limit: 100 });
       setRows(filter.threatOnly ? resp.filter((r) => r.threat_match) : resp);
       setError(null);
     } catch (err) {
@@ -30,7 +34,7 @@ export function Connections(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [client, filter.ip, filter.threatOnly]);
+  }, [client, currentTenantId, filter.ip, filter.threatOnly]);
 
   useEffect(() => {
     refresh();
@@ -100,8 +104,12 @@ export function Connections(): JSX.Element {
 
       {rows.length === 0 && !loading ? (
         <EmptyState
-          title="No connections in this window"
-          description="Once agents start streaming through the new ingest pipeline, every external connection on every node lands here."
+          title={filter.ip ? 'No connections found' : 'Enter an IP address to search'}
+          description={
+            filter.ip
+              ? 'No connections match the current filter in this window.'
+              : 'Type a source or destination IP in the filter above, then click Refresh to load connections.'
+          }
         />
       ) : (
         <table className="data-table" style={{ width: '100%' }}>

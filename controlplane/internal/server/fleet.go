@@ -142,7 +142,7 @@ func (s *Server) handleFleetEnroll(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Enqueue work.
-	jobFn := s.buildFleetEnrollJob(created.ID, req)
+	jobFn := s.buildFleetEnrollJob(created.ID, req, s.deriveControlPlaneURL(r))
 
 	if s.worker != nil {
 		task := worker.Task{
@@ -173,7 +173,7 @@ func (s *Server) handleFleetEnroll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) buildFleetEnrollJob(jobID uuid.UUID, req fleetEnrollRequest) func(context.Context) error {
+func (s *Server) buildFleetEnrollJob(jobID uuid.UUID, req fleetEnrollRequest, cpURL string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, "provisioning targets", map[string]any{
 			"started_at": time.Now(),
@@ -192,11 +192,6 @@ func (s *Server) buildFleetEnrollJob(jobID uuid.UUID, req fleetEnrollRequest) fu
 				return fmt.Errorf("%s", errMsg)
 			}
 			sshKey = decoded
-		}
-
-		cpURL := strings.TrimSpace(s.cfg.HTTP.Address)
-		if !strings.HasPrefix(cpURL, "http") {
-			cpURL = fmt.Sprintf("https://localhost%s", cpURL)
 		}
 
 		provReq := fleet.ProvisionRequest{

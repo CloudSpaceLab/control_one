@@ -25,6 +25,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/securityfacts"
 	"github.com/CloudSpaceLab/control_one/internal/dbquery"
 	"github.com/CloudSpaceLab/control_one/internal/events"
 	"github.com/CloudSpaceLab/control_one/internal/eventstream"
@@ -400,41 +401,62 @@ func main() {
 		}
 	}
 
+	// runComplianceScan collects security facts, merges scanner results, and
+	// evaluates policies against the control plane. Called on first startup and
+	// on every cfg.Intervals.Scan tick thereafter.
+	runComplianceScan := func() {
+		policies, err := policySyncer.LoadCached()
+		if err != nil {
+			log.Warn("load cached policies", zap.Error(err))
+			emitHook(ctx, hooksService, log, "compliance.scan.skipped", state.NodeID, map[string]any{"error": err.Error()})
+			return
+		}
+		results, err := scannerSvc.Run(ctx, policies)
+		if err != nil {
+			log.Warn("run compliance scan", zap.Error(err))
+			emitHook(ctx, hooksService, log, "compliance.scan.failed", state.NodeID, map[string]any{"error": err.Error()})
+			return
+		}
+		ruleMap := make(map[string]string, len(policies)+32)
+		for _, rule := range policies {
+			ruleMap[rule.ID] = rule.Check
+		}
+
+		// Collect host security facts and inject them as evaluation facts.
+		// The server-side JSON-DSL evaluator reads these from the policies map.
+		secFacts := securityfacts.Collect(ctx)
+		for k, v := range secFacts {
+			ruleMap[k] = v
+		}
+
+		useRealScan := cfg.Scanner.UseRealScan && cfg.Scanner.Enabled
+		if useRealScan {
+			ruleMap["use_real_scan"] = "true"
+		}
+
+		if compResults, err := complianceEngine.Evaluate(ctx, state.NodeID, ruleMap); err != nil {
+			log.Warn("compliance evaluation", zap.Error(err))
+			emitHook(ctx, hooksService, log, "compliance.evaluate.failed", state.NodeID, map[string]any{"error": err.Error()})
+			return
+		} else if len(compResults) > 0 {
+			log.Info("compliance evaluation complete", zap.Int("rules", len(compResults)))
+			emitHook(ctx, hooksService, log, "compliance.evaluate.completed", state.NodeID, map[string]any{"rules": len(compResults)})
+		}
+		telemetrySvc.SendCompliance(ctx, state.NodeID, results)
+		emitHook(ctx, hooksService, log, "telemetry.compliance.sent", state.NodeID, map[string]any{"checks": len(results)})
+	}
+
+	// Run an immediate compliance scan on first startup so the node transitions
+	// out of enrollment_pending quickly (doesn't wait for the first interval tick).
+	go func() {
+		// Brief delay so the scheduler and policy syncer are fully ready.
+		time.Sleep(10 * time.Second)
+		log.Info("running initial compliance scan")
+		runComplianceScan()
+	}()
+
 	if cfg.Intervals.Scan > 0 {
-		if _, err := sched.AddInterval("compliance-scan", cfg.Intervals.Scan, func() {
-			policies, err := policySyncer.LoadCached()
-			if err != nil {
-				log.Warn("load cached policies", zap.Error(err))
-				emitHook(ctx, hooksService, log, "compliance.scan.skipped", state.NodeID, map[string]any{"error": err.Error()})
-				return
-			}
-			results, err := scannerSvc.Run(ctx, policies)
-			if err != nil {
-				log.Warn("run compliance scan", zap.Error(err))
-				emitHook(ctx, hooksService, log, "compliance.scan.failed", state.NodeID, map[string]any{"error": err.Error()})
-				return
-			}
-			ruleMap := make(map[string]string, len(policies))
-			for _, rule := range policies {
-				ruleMap[rule.ID] = rule.Check
-			}
-
-			useRealScan := cfg.Scanner.UseRealScan && cfg.Scanner.Enabled
-			if useRealScan {
-				ruleMap["use_real_scan"] = "true"
-			}
-
-			if compResults, err := complianceEngine.Evaluate(ctx, state.NodeID, ruleMap); err != nil {
-				log.Warn("compliance evaluation", zap.Error(err))
-				emitHook(ctx, hooksService, log, "compliance.evaluate.failed", state.NodeID, map[string]any{"error": err.Error()})
-				return
-			} else if len(compResults) > 0 {
-				log.Info("compliance evaluation complete", zap.Int("rules", len(compResults)))
-				emitHook(ctx, hooksService, log, "compliance.evaluate.completed", state.NodeID, map[string]any{"rules": len(compResults)})
-			}
-			telemetrySvc.SendCompliance(ctx, state.NodeID, results)
-			emitHook(ctx, hooksService, log, "telemetry.compliance.sent", state.NodeID, map[string]any{"checks": len(results)})
-		}); err != nil {
+		if _, err := sched.AddInterval("compliance-scan", cfg.Intervals.Scan, runComplianceScan); err != nil {
 			log.Fatal("schedule compliance scan", zap.Error(err))
 		}
 	}
@@ -493,7 +515,8 @@ func main() {
 	// 1.7/1.8. Distinct from the telemetry heartbeat above: that one writes
 	// to the telemetry table; this one drives the node state machine.
 	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
-		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr))
+		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr),
+		NewDefaultSelfUpdater())
 
 	sched.Start()
 	sigCh := make(chan os.Signal, 1)

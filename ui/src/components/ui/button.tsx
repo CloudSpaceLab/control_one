@@ -48,25 +48,31 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         className={cn(
           buttonVariants({ variant, size }),
-          shimmer && variant === 'primary' && 'relative overflow-hidden',
+          !asChild && shimmer && variant === 'primary' && 'relative overflow-hidden',
           className,
         )}
         disabled={disabled || loading}
         {...props}
       >
-        {shimmer && variant === 'primary' && (
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent co-anim-shimmer"
-          />
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {shimmer && variant === 'primary' && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent co-anim-shimmer"
+              />
+            )}
+            {loading && (
+              <span
+                className="size-3.5 rounded-full border-2 border-current border-t-transparent animate-spin"
+                aria-hidden
+              />
+            )}
+            {children}
+          </>
         )}
-        {loading && (
-          <span
-            className="size-3.5 rounded-full border-2 border-current border-t-transparent animate-spin"
-            aria-hidden
-          />
-        )}
-        {children}
       </Comp>
     );
   },

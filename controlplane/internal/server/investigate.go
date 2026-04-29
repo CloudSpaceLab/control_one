@@ -110,6 +110,22 @@ func (s *Server) handleInvestigateSearch(w http.ResponseWriter, r *http.Request)
 			} else {
 				item.Classification = ClassifyIP(q, nil, nil)
 			}
+			// Overlay a NODE chip when the IP belongs to a registered agent.
+			// Searches across all tenants — no tenant filter needed because
+			// IP ownership is unambiguous and the caller is already authed.
+			if s.store != nil {
+				if nodes, err := s.store.FindNodesByPublicIP(r.Context(), q); err == nil && len(nodes) > 0 {
+					n := nodes[0]
+					label := "NODE"
+					if n.Hostname != "" {
+						label = "NODE:" + n.Hostname
+					}
+					item.Classification = append(
+						[]ClassificationChip{{Label: label, Severity: "healthy"}},
+						item.Classification...,
+					)
+				}
+			}
 		}
 		resp.Items = append(resp.Items, item)
 		resp.Facets = append(resp.Facets, searchFacet{Type: detected, Count: 1})
@@ -156,7 +172,19 @@ func (s *Server) handleEntityOverview(w http.ResponseWriter, r *http.Request, en
 	// Tack on classification chips for IPs.
 	if entityType == EntityTypeIP {
 		assets, _ := ib.ListAssetCIDRs(r.Context(), tenantID)
-		summary.Meta = map[string]any{"classification": ClassifyIP(entityID, assets, nil)}
+		chips := ClassifyIP(entityID, assets, nil)
+		// Prepend NODE chip when IP is a registered agent.
+		if s.store != nil {
+			if nodes, err := s.store.FindNodesByPublicIP(r.Context(), entityID); err == nil && len(nodes) > 0 {
+				n := nodes[0]
+				label := "NODE"
+				if n.Hostname != "" {
+					label = "NODE:" + n.Hostname
+				}
+				chips = append([]ClassificationChip{{Label: label, Severity: "healthy"}}, chips...)
+			}
+		}
+		summary.Meta = map[string]any{"classification": chips}
 	}
 
 	writeJSON(w, http.StatusOK, summary)

@@ -42,12 +42,13 @@ type heartbeatRequest struct {
 }
 
 type heartbeatResponse struct {
-	NodeID       string                       `json:"node_id"`
-	State        string                       `json:"state"`
-	LastSeenAt   string                       `json:"last_seen_at"`
-	Activated    bool                         `json:"activated"`
-	Reason       *string                      `json:"reason,omitempty"`
-	EventFilters *storage.TenantEventFilters  `json:"event_filters,omitempty"`
+	NodeID         string                      `json:"node_id"`
+	State          string                      `json:"state"`
+	LastSeenAt     string                      `json:"last_seen_at"`
+	Activated      bool                        `json:"activated"`
+	Reason         *string                     `json:"reason,omitempty"`
+	EventFilters   *storage.TenantEventFilters `json:"event_filters,omitempty"`
+	PendingActions []string                    `json:"pending_actions,omitempty"`
 }
 
 // handleNodeHeartbeat is the mTLS endpoint the agent hits every heartbeat
@@ -116,6 +117,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		return
 	}
 
+	// Persist agent version so operators can see it in the nodes table.
+	if body.AgentVersion != "" {
+		if verr := s.store.UpdateNodeAgentVersion(r.Context(), nodeID, body.AgentVersion); verr != nil {
+			s.logger.Warn("update agent version", zap.Error(verr))
+		}
+	}
+
 	activated, resultState := s.maybeActivatePendingNode(r.Context(), node)
 
 	lastSeen := time.Now().UTC().Format(time.RFC3339)
@@ -150,7 +158,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		}
 		resp.Reason = &reason
 	}
-	_ = body // reserved for future use (e.g. agent_version telemetry).
+	// Check for queued self-update and signal the agent.
+	if pendingJob, jerr := s.store.GetPendingAgentUpdateJob(r.Context(), nodeID); jerr == nil && pendingJob != nil {
+		resp.PendingActions = []string{"agent_update"}
+		// Transition job to running so it won't appear again on the next heartbeat
+		// until the agent confirms completion (or the job times out).
+		_ = s.store.UpdateJobStatus(r.Context(), pendingJob.ID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

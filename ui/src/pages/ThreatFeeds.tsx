@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
-import { SectionHeader } from '../components/kit';
-import { Badge, severityToVariant } from '../components/Badge';
-import { EmptyState } from '../components/EmptyState';
+import { Panel, SectionHeader, EmptyState, DataTable, StatusTag, SelectField } from '../components/kit';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { ConfirmModal } from '../components/ConfirmModal';
+import type { ColumnDef } from '@tanstack/react-table';
 import type { CreateThreatFeedPayload, ThreatFeed, ThreatFeedType } from '../lib/api';
 
 interface FeedTypeMeta {
@@ -177,6 +179,101 @@ export function ThreatFeeds(): JSX.Element {
     }));
   };
 
+  const columns = useMemo<ColumnDef<ThreatFeed, unknown>[]>(
+    () => [
+      {
+        id: 'name',
+        header: 'Name',
+        accessorKey: 'name',
+        cell: ({ row }) => (
+          <span className="font-medium text-foreground">{row.original.name}</span>
+        ),
+      },
+      {
+        id: 'type',
+        header: 'Type',
+        accessorKey: 'feed_type',
+        cell: ({ row }) => FEED_META[row.original.feed_type]?.label ?? row.original.feed_type,
+      },
+      {
+        id: 'last_refresh',
+        header: 'Last refresh',
+        accessorKey: 'last_refreshed_at',
+        cell: ({ row }) =>
+          row.original.last_refreshed_at
+            ? new Date(row.original.last_refreshed_at).toLocaleString()
+            : '—',
+      },
+      {
+        id: 'indicators',
+        header: 'Indicators',
+        accessorKey: 'last_indicator_count',
+        cell: ({ row }) =>
+          row.original.last_indicator_count != null
+            ? row.original.last_indicator_count.toLocaleString()
+            : '—',
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        accessorKey: 'last_status',
+        cell: ({ row }) => {
+          const s = row.original.last_status;
+          const tone =
+            s === 'active' || s === 'ok'
+              ? 'healthy'
+              : s === 'error' || s === 'failed'
+              ? 'critical'
+              : s === 'pending' || s === 'refreshing'
+              ? 'warning'
+              : 'unknown';
+          return <StatusTag tone={tone}>{s ?? 'unknown'}</StatusTag>;
+        },
+      },
+      {
+        id: 'score_floor',
+        header: 'Score floor',
+        accessorKey: 'score_floor',
+        cell: ({ row }) => row.original.score_floor,
+      },
+      {
+        id: 'refresh',
+        header: 'Refresh',
+        accessorKey: 'refresh_seconds',
+        cell: ({ row }) => `${row.original.refresh_seconds}s`,
+      },
+      {
+        id: 'enabled',
+        header: 'Enabled',
+        accessorKey: 'enabled',
+        cell: ({ row }) => (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => toggleEnabled(row.original)}
+          >
+            {row.original.enabled ? 'Enabled' : 'Disabled'}
+          </Button>
+        ),
+      },
+      {
+        id: 'actions',
+        header: '',
+        cell: ({ row }) => (
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => setConfirmId(row.original.id)}
+          >
+            Remove
+          </Button>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
@@ -184,169 +281,126 @@ export function ThreatFeeds(): JSX.Element {
         title="Abuse IP data sources"
         description="Choose which feeds to consume. Built-in lists are free; commercial feeds need an API key. Custom URLs are supported for in-house honeypots and partner shares."
         actions={
-          <select
+          <SelectField
             value={tenantId}
             onChange={(e) => setTenantId(e.target.value)}
             aria-label="Tenant"
-            className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
           >
-          {tenants.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </SelectField>
         }
       />
 
-      {error ? <p className="error-banner">{error}</p> : null}
+      <Panel padding="md" eyebrow="ADD SOURCE" title="Register a threat feed" toneAccent="brand">
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <SelectField
+              id="feed-type"
+              label="Source"
+              value={form.feed_type}
+              onChange={(e) => onTypeChange(e.target.value as ThreatFeedType)}
+            >
+              {FEED_CATALOG.map((m) => (
+                <option key={m.type} value={m.type}>{m.label}</option>
+              ))}
+            </SelectField>
 
-      <form
-        onSubmit={submit}
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: '0.75rem',
-          alignItems: 'end',
-          padding: '1rem',
-          background: 'rgba(255,255,255,0.025)',
-          borderRadius: 10,
-          border: '1px solid rgba(255,255,255,0.06)',
-          marginBottom: '1rem',
-        }}
-      >
-        <label>
-          Name
-          <input
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="e.g. Spamhaus production"
-          />
-        </label>
-        <label>
-          Source
-          <select
-            value={form.feed_type}
-            onChange={(e) => onTypeChange(e.target.value as ThreatFeedType)}
-          >
-            {FEED_CATALOG.map((m) => (
-              <option key={m.type} value={m.type}>{m.label}</option>
-            ))}
-          </select>
-        </label>
-        {meta.needsURL !== 'never' ? (
-          <label>
-            URL{meta.needsURL === 'optional' ? ' (optional)' : ''}
-            <input
-              required={meta.needsURL === 'required'}
-              value={form.url ?? ''}
-              onChange={(e) => setForm({ ...form, url: e.target.value })}
-              placeholder={meta.defaultURL ?? 'https://example.com/list.txt'}
-            />
-          </label>
-        ) : null}
-        {meta.needsAPIKey ? (
-          <label>
-            API key
-            <input
-              required
-              type="password"
-              value={form.api_key ?? ''}
-              onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-              placeholder="paste key"
-              autoComplete="off"
-            />
-          </label>
-        ) : null}
-        <label>
-          Score floor
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={form.score_floor ?? 50}
-            onChange={(e) => setForm({ ...form, score_floor: Number(e.target.value) })}
-          />
-        </label>
-        <label>
-          Refresh (s)
-          <input
-            type="number"
-            min={60}
-            value={form.refresh_seconds ?? 3600}
-            onChange={(e) => setForm({ ...form, refresh_seconds: Number(e.target.value) })}
-          />
-        </label>
-        <button type="submit" className="primary-button" disabled={submitting || !tenantId}>
-          {submitting ? 'Adding…' : 'Add source'}
-        </button>
-        <p className="muted" style={{ gridColumn: '1 / -1', margin: 0, fontSize: '0.8rem' }}>
-          {meta.description}
-        </p>
-      </form>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="feed-name">Name</Label>
+              <Input
+                id="feed-name"
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Spamhaus production"
+              />
+            </div>
+          </div>
 
-      {loading && feeds.length === 0 ? (
-        <p className="muted">Loading sources…</p>
-      ) : feeds.length === 0 ? (
-        <EmptyState
-          title="No threat sources configured yet"
-          description="Add Spamhaus DROP for free baseline coverage, or paste a custom URL from your honeypot or SOC team."
-        />
-      ) : (
-        <table className="data-table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Last refresh</th>
-              <th>Indicators</th>
-              <th>Status</th>
-              <th>Score</th>
-              <th>Refresh</th>
-              <th>Enabled</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {feeds.map((f) => (
-              <tr key={f.id}>
-                <td>
-                  <strong>{f.name}</strong>
-                  {f.url ? <small style={{ display: 'block', color: 'var(--text-muted)' }}>{f.url}</small> : null}
-                </td>
-                <td>{FEED_META[f.feed_type]?.label ?? f.feed_type}</td>
-                <td>{f.last_refreshed_at ? new Date(f.last_refreshed_at).toLocaleString() : '—'}</td>
-                <td>{f.last_indicator_count.toLocaleString()}</td>
-                <td>
-                  {f.last_status === 'ok' ? <Badge variant="success" size="sm">healthy</Badge>
-                    : f.last_status === 'error' ? <Badge variant="error" size="sm">error</Badge>
-                    : <Badge variant="neutral" size="sm">pending</Badge>}
-                  {f.last_error ? <small style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>{f.last_error}</small> : null}
-                </td>
-                <td>
-                  <Badge variant={severityToVariant(f.score_floor >= 80 ? 'high' : f.score_floor >= 50 ? 'medium' : 'low')} size="sm">
-                    ≥ {f.score_floor}
-                  </Badge>
-                </td>
-                <td>{Math.round(f.refresh_seconds / 60)} min</td>
-                <td>
-                  <button
-                    type="button"
-                    className={f.enabled ? 'primary-button' : 'secondary-button'}
-                    onClick={() => toggleEnabled(f)}
-                  >
-                    {f.enabled ? 'On' : 'Off'}
-                  </button>
-                </td>
-                <td>
-                  <button type="button" className="secondary-button" onClick={() => setConfirmId(f.id)}>
-                    Remove
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          {FEED_CATALOG.find((c) => c.type === form.feed_type)?.description && (
+            <p className="text-xs text-text-muted">
+              {FEED_CATALOG.find((c) => c.type === form.feed_type)?.description}
+            </p>
+          )}
+
+          {meta.needsURL !== 'never' && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="feed-url">
+                URL{meta.needsURL === 'optional' ? ' (optional)' : ''}
+              </Label>
+              <Input
+                id="feed-url"
+                required={meta.needsURL === 'required'}
+                value={form.url ?? ''}
+                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                placeholder={meta.defaultURL ?? 'https://example.com/list.txt'}
+              />
+            </div>
+          )}
+
+          {meta.needsAPIKey && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="feed-api-key">API key</Label>
+              <Input
+                id="feed-api-key"
+                required
+                type="password"
+                value={form.api_key ?? ''}
+                onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+                placeholder="paste key"
+                autoComplete="off"
+              />
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="feed-score-floor">Score floor</Label>
+              <Input
+                id="feed-score-floor"
+                type="number"
+                min={0}
+                max={100}
+                value={form.score_floor ?? 50}
+                onChange={(e) => setForm({ ...form, score_floor: Number(e.target.value) })}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="feed-refresh">Refresh (seconds)</Label>
+              <Input
+                id="feed-refresh"
+                type="number"
+                min={60}
+                value={form.refresh_seconds ?? 3600}
+                onChange={(e) => setForm({ ...form, refresh_seconds: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-state-critical">{error}</p>}
+
+          <div className="flex items-center justify-end gap-2">
+            <Button type="submit" variant="primary" loading={submitting}>
+              Add source
+            </Button>
+          </div>
+        </form>
+      </Panel>
+
+      <DataTable<ThreatFeed>
+        columns={columns}
+        rows={feeds}
+        rowKey={(row) => row.id}
+        loading={loading && feeds.length === 0}
+        empty={
+          <EmptyState
+            title="No threat feeds configured"
+            description="Add a source above to start enriching alerts with threat intelligence."
+          />
+        }
+      />
 
       <ConfirmModal
         open={confirmId !== null}

@@ -96,6 +96,30 @@ func (c *SSHConnector) Test(ctx context.Context, t Target) (*Probe, error) {
 	}
 
 	probe.Capabilities = sshCapabilities(client, probe.OS)
+
+	// Extended info: distro, CPU, memory — best-effort, errors ignored.
+	if probe.OS == "linux" || probe.OS == "macos" {
+		if dist, ok := runOnce(client, `cat /etc/os-release 2>/dev/null | grep ^PRETTY_NAME | cut -d= -f2 | tr -d '"'`); ok {
+			probe.Distro = strings.TrimSpace(dist)
+		}
+		if cpus, ok := runOnce(client, "nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 0"); ok {
+			if n := strings.TrimSpace(cpus); n != "" && n != "0" {
+				var cnt int
+				if _, err := fmt.Sscanf(n, "%d", &cnt); err == nil {
+					probe.CPUCount = cnt
+				}
+			}
+		}
+		if mem, ok := runOnce(client, `awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null`); ok {
+			if m := strings.TrimSpace(mem); m != "" {
+				var mb int
+				if _, err := fmt.Sscanf(m, "%d", &mb); err == nil {
+					probe.MemoryMB = mb
+				}
+			}
+		}
+	}
+
 	return probe, nil
 }
 

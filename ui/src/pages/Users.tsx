@@ -179,6 +179,7 @@ export function Users(): JSX.Element {
       header: () => (
         <input
           type="checkbox"
+          className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
           aria-label="Select all users"
           checked={selectedUserIds.size === users.length && users.length > 0}
           onChange={(e) => handleSelectAll(e.target.checked)}
@@ -188,6 +189,7 @@ export function Users(): JSX.Element {
       cell: ({ row }) => (
         <input
           type="checkbox"
+          className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
           aria-label={`Select ${row.original.display_name || row.original.external_id || row.original.id}`}
           checked={selectedUserIds.has(row.original.id)}
           onChange={(e) => handleSelectUser(row.original.id, e.target.checked)}
@@ -395,9 +397,9 @@ export function Users(): JSX.Element {
                     >
                       <input
                         type="checkbox"
+                        className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                         checked={selectedRoles.includes(role.name)}
                         onChange={() => handleRoleToggle(role.name)}
-                        className="mt-0.5"
                       />
                       <div className="flex flex-col gap-0.5">
                         <span className="text-sm font-medium">{role.name}</span>
@@ -451,6 +453,7 @@ export function Users(): JSX.Element {
                   >
                     <input
                       type="checkbox"
+                      className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                       checked={bulkAssignRoles.includes(role.name)}
                       onChange={() => {
                         setBulkAssignRoles((prev) =>
@@ -459,7 +462,6 @@ export function Users(): JSX.Element {
                             : [...prev, role.name],
                         );
                       }}
-                      className="mt-0.5"
                     />
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium">{role.name}</span>

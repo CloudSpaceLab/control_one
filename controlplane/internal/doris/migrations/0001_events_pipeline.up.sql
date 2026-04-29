@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS events (
   message            STRING,
   details_json       STRING,
   dedup_key          VARCHAR(128),
-  INVERTED INDEX idx_msg (message) PROPERTIES("parser"="english")
+  INDEX idx_msg (message) USING INVERTED PROPERTIES("parser"="english")
 )
 DUPLICATE KEY (event_date, tenant_id, ts)
 PARTITION BY RANGE (event_date) ()

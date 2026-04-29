@@ -3,7 +3,7 @@ import { Plus, Play, ArrowUp, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Panel, SectionHeader } from '../components/kit';
+import { Panel, SectionHeader, SelectField } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useToast } from '../providers/ToastProvider';
@@ -126,25 +126,19 @@ export function RuleBuilder(): JSX.Element {
         title="Visual rule builder"
         description="Compose blocks, simulate against history, then promote."
         actions={
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="rb-tenant" className="sr-only">
-              Tenant
-            </Label>
-            <select
-              id="rb-tenant"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-              aria-label="Tenant"
-              className="flex h-9 rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
-            >
-              <option value="">Choose tenant…</option>
-              {tenants.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <SelectField
+            id="rb-tenant"
+            value={tenantId}
+            onChange={(e) => setTenantId(e.target.value)}
+            aria-label="Tenant"
+          >
+            <option value="">Choose tenant…</option>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </SelectField>
         }
       />
 

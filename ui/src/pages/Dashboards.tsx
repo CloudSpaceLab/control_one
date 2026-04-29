@@ -1,8 +1,10 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
-import { SectionHeader } from '../components/kit';
-import { EmptyState } from '../components/EmptyState';
+import { SectionHeader, Panel, EmptyState, SelectField } from '../components/kit';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import type {
   CustomDashboard,
   DashboardWidget,
@@ -54,8 +56,7 @@ export function Dashboards(): JSX.Element {
     refresh();
   }, [refresh]);
 
-  const handleCreate = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleCreate = async () => {
     if (!tenantId || !newName.trim()) return;
     try {
       const d = await client.createDashboard({ tenant_id: tenantId, name: newName.trim() });
@@ -138,48 +139,61 @@ export function Dashboards(): JSX.Element {
         title="Build views that pull from the servers + metrics that matter to you"
         description="DB queries, system resources, log volume, network bytes — pick one or more nodes per widget, set a refresh interval, and data renders live."
         actions={
-          <button type="button" className="primary-button" onClick={() => setCreating(true)}>
+          <Button type="button" variant="primary" onClick={() => setCreating(true)}>
             New dashboard
-          </button>
+          </Button>
         }
       />
 
-      {error ? <p className="error-banner">{error}</p> : null}
+      {error ? (
+        <div className="rounded-lg border border-state-critical/30 bg-state-critical/10 px-4 py-3 text-sm text-state-critical">
+          {error}
+        </div>
+      ) : null}
 
       {creating ? (
-        <form onSubmit={handleCreate} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <input
-            autoFocus
-            placeholder="Dashboard name"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button type="submit" className="primary-button">
-            Create
-          </button>
-          <button type="button" className="secondary-button" onClick={() => setCreating(false)}>
-            Cancel
-          </button>
-        </form>
+        <Panel padding="md" eyebrow="NEW DASHBOARD" title="Create dashboard" toneAccent="brand">
+          <div className="flex gap-3">
+            <Input
+              autoFocus
+              placeholder="Dashboard name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <Button type="button" variant="primary" onClick={handleCreate}>
+              Create
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
+              Cancel
+            </Button>
+          </div>
+        </Panel>
       ) : null}
 
       {dashboards.length === 0 ? (
         <EmptyState
           title="No dashboards yet"
-          description="Click New dashboard to author your first one. Add widgets that pull from the nodes + metrics you care about."
+          description="Create your first custom dashboard to track the metrics that matter to your team."
+          action={
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              Create dashboard
+            </Button>
+          }
         />
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24 }}>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_1fr]">
           <aside>
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            <ul className="flex flex-col gap-1">
               {dashboards.map((d) => (
                 <li key={d.id}>
                   <button
                     type="button"
                     onClick={() => handleSelect(d)}
-                    className={selected?.id === d.id ? 'primary-button' : 'secondary-button'}
-                    style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 4 }}
+                    className={
+                      selected?.id === d.id
+                        ? 'w-full rounded-md bg-brand-500/15 px-3 py-2 text-left text-sm font-medium text-brand-400 border border-brand-500/30'
+                        : 'w-full rounded-md px-3 py-2 text-left text-sm text-foreground hover:bg-hover border border-transparent'
+                    }
                   >
                     {d.name}
                   </button>
@@ -187,54 +201,59 @@ export function Dashboards(): JSX.Element {
               ))}
             </ul>
           </aside>
-          <main>
+          <main className="flex flex-col gap-4">
             {selected ? (
               <>
-                <header style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h3>{selected.name}</h3>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                    <h3 className="font-display text-base font-semibold text-foreground">{selected.name}</h3>
+                    <p className="mt-0.5 text-xs text-text-muted">
                       {selected.description || 'No description'} · {selected.widgets?.length ?? 0} widget(s)
                       {selected.shared ? ' · shared with tenant' : ' · private'}
                     </p>
                   </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button type="button" className="primary-button" onClick={() => setAdding(true)}>
+                  <div className="flex shrink-0 gap-2">
+                    <Button type="button" variant="primary" size="sm" onClick={() => setAdding(true)}>
                       Add widget
-                    </button>
-                    <button type="button" className="secondary-button" onClick={handleDeleteDashboard}>
+                    </Button>
+                    <Button type="button" variant="danger" size="sm" onClick={handleDeleteDashboard}>
                       Delete dashboard
-                    </button>
+                    </Button>
                   </div>
-                </header>
+                </div>
 
                 {(selected.widgets ?? []).length === 0 ? (
                   <EmptyState
                     title="No widgets on this dashboard yet"
                     description="Click Add widget to pull data from one or more nodes."
+                    action={
+                      <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
+                        Add widget
+                      </Button>
+                    }
                   />
                 ) : (
-                  <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                     {(selected.widgets ?? []).map((w) => (
-                      <article key={w.id} className="card" style={{ padding: 16 }}>
-                        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                          <h4>{w.title}</h4>
-                          <small style={{ color: 'var(--text-secondary)' }}>
+                      <Panel key={w.id} padding="md">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <h4 className="font-display text-sm font-semibold text-foreground">{w.title}</h4>
+                          <span className="shrink-0 text-xs text-text-muted">
                             {WIDGET_TYPES.find((t) => t.value === w.widget_type)?.label}
-                          </small>
-                        </header>
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                          </span>
+                        </div>
+                        <p className="text-xs text-text-muted">
                           {w.node_ids.length === 0 ? 'All nodes' : `${w.node_ids.length} node(s)`} · refresh every {w.refresh_seconds}s
                         </p>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                          <button type="button" className="secondary-button" onClick={() => setEditingWidget(w)}>
+                        <div className="flex gap-2 pt-1">
+                          <Button type="button" variant="secondary" size="sm" onClick={() => setEditingWidget(w)}>
                             Edit
-                          </button>
-                          <button type="button" className="secondary-button" onClick={() => handleDeleteWidget(w.id)}>
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => handleDeleteWidget(w.id)}>
                             Remove
-                          </button>
+                          </Button>
                         </div>
-                      </article>
+                      </Panel>
                     ))}
                   </div>
                 )}
@@ -257,6 +276,11 @@ export function Dashboards(): JSX.Element {
               <EmptyState
                 title="Pick a dashboard"
                 description="Select one from the left, or create a new one."
+                action={
+                  <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
+                    Create dashboard
+                  </Button>
+                }
               />
             )}
           </main>
@@ -280,6 +304,8 @@ function WidgetEditor({ initial, onCancel, onSave }: EditorProps) {
   const [allNodes, setAllNodes] = useState<NodeSummary[]>([]);
   const [selectedNodeIDs, setSelectedNodeIDs] = useState<string[]>(initial?.node_ids ?? []);
   const [specJson, setSpecJson] = useState(JSON.stringify(initial?.spec ?? defaultSpec(widgetType), null, 2));
+  const [nodeFilter, setNodeFilter] = useState('');
+  const [rawJsonMode, setRawJsonMode] = useState(false);
 
   useEffect(() => {
     if (!initial) {
@@ -290,6 +316,25 @@ function WidgetEditor({ initial, onCancel, onSave }: EditorProps) {
   useEffect(() => {
     client.listNodes({ limit: 200 }).then((r) => setAllNodes(r.data)).catch(() => {});
   }, [client]);
+
+  const parsedSpec = (): Record<string, unknown> => {
+    try { return JSON.parse(specJson); } catch { return {}; }
+  };
+
+  const updateSpec = (key: string, value: unknown) => {
+    const current = parsedSpec();
+    setSpecJson(JSON.stringify({ ...current, [key]: value }, null, 2));
+  };
+
+  const filteredNodes = allNodes.filter((n) =>
+    nodeFilter === '' || (n.hostname || n.id).toLowerCase().includes(nodeFilter.toLowerCase()),
+  );
+
+  const toggleNode = (id: string) => {
+    setSelectedNodeIDs((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -311,57 +356,265 @@ function WidgetEditor({ initial, onCancel, onSave }: EditorProps) {
   };
 
   return (
-    <aside
-      style={{
-        position: 'fixed', right: 0, top: 0, bottom: 0,
-        width: 'min(560px, 90vw)', zIndex: 100,
-        background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)',
-        boxShadow: '0 0 24px var(--shadow)', padding: 24, overflow: 'auto',
-      }}
-    >
-      <header style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <h3>{initial ? 'Edit widget' : 'New widget'}</h3>
-        <button type="button" className="secondary-button" onClick={onCancel}>Close</button>
-      </header>
-      <form onSubmit={submit} style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-        <label>Title
-          <input value={title} onChange={(e) => setTitle(e.target.value)} required />
-        </label>
-        <label>Widget type
-          <select value={widgetType} onChange={(e) => setWidgetType(e.target.value as WidgetType)}>
-            {WIDGET_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-          <small style={{ display: 'block', color: 'var(--text-secondary)', marginTop: 4 }}>
-            {WIDGET_TYPES.find((t) => t.value === widgetType)?.description}
-          </small>
-        </label>
-        <label>Refresh interval (seconds)
-          <input type="number" min={5} value={refresh} onChange={(e) => setRefresh(Number(e.target.value))} />
-        </label>
-        <label>Servers (empty = all nodes in tenant)
-          <select multiple value={selectedNodeIDs} onChange={(e) =>
-            setSelectedNodeIDs(Array.from(e.target.selectedOptions).map((o) => o.value))
-          } style={{ minHeight: 120 }}>
-            {allNodes.map((n) => (
-              <option key={n.id} value={n.id}>{n.hostname || n.id}</option>
-            ))}
-          </select>
-        </label>
-        <label>Spec (JSON — see widget-type description)
-          <textarea
-            rows={8}
-            value={specJson}
-            onChange={(e) => setSpecJson(e.target.value)}
-            style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
-          />
-        </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="submit" className="primary-button">{initial ? 'Save' : 'Create'}</button>
-          <button type="button" className="secondary-button" onClick={onCancel}>Cancel</button>
+    <>
+      <div className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
+      <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(560px,90vw)] flex-col overflow-auto border-l border-border-subtle bg-elevated shadow-[0_0_24px_var(--shadow)]">
+        <div className="flex items-center justify-between border-b border-border-subtle px-6 py-4">
+          <h3 className="font-display text-base font-semibold text-foreground">
+            {initial ? 'Edit widget' : 'New widget'}
+          </h3>
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+            Close
+          </Button>
         </div>
-      </form>
-    </aside>
+        <form onSubmit={submit} className="flex flex-col gap-4 p-6">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="widget-title">Title</Label>
+            <Input
+              id="widget-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <SelectField
+              id="widget-type"
+              label="Widget type"
+              value={widgetType}
+              onChange={(e) => setWidgetType(e.target.value as WidgetType)}
+            >
+              {WIDGET_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </SelectField>
+            <p className="text-xs text-text-muted">
+              {WIDGET_TYPES.find((t) => t.value === widgetType)?.description}
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="widget-refresh">Refresh interval (seconds)</Label>
+            <Input
+              id="widget-refresh"
+              type="number"
+              min={5}
+              value={refresh}
+              onChange={(e) => setRefresh(Number(e.target.value))}
+            />
+          </div>
+
+          {/* Node checklist */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Servers</Label>
+              {selectedNodeIDs.length > 0 && (
+                <span className="rounded-full bg-brand-500/15 px-2 py-0.5 text-xs font-medium text-brand-400">
+                  {selectedNodeIDs.length} selected
+                </span>
+              )}
+            </div>
+            <Input
+              placeholder="Filter nodes…"
+              value={nodeFilter}
+              onChange={(e) => setNodeFilter(e.target.value)}
+            />
+            <div className="max-h-[180px] overflow-y-auto rounded-md border border-border-subtle bg-surface">
+              <label className="flex cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-sm text-text-muted hover:bg-hover">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border-subtle accent-brand-500"
+                  checked={selectedNodeIDs.length === 0}
+                  onChange={() => setSelectedNodeIDs([])}
+                />
+                <span className="italic">All nodes (tenant default)</span>
+              </label>
+              {filteredNodes.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-text-muted">
+                  {allNodes.length === 0 ? 'No nodes registered.' : 'No nodes match filter.'}
+                </p>
+              ) : (
+                filteredNodes.map((n) => (
+                  <label
+                    key={n.id}
+                    className="flex cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-sm last:border-0 hover:bg-hover"
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-border-subtle accent-brand-500"
+                      checked={selectedNodeIDs.includes(n.id)}
+                      onChange={() => toggleNode(n.id)}
+                    />
+                    <span className="text-foreground">{n.hostname || n.id}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Spec / configuration */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Configuration</Label>
+              <button
+                type="button"
+                className="text-xs text-brand-400 hover:underline"
+                onClick={() => setRawJsonMode((m) => !m)}
+              >
+                {rawJsonMode ? 'Use form' : 'Edit raw JSON'}
+              </button>
+            </div>
+            {rawJsonMode ? (
+              <textarea
+                className="flex min-h-[120px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+                rows={8}
+                value={specJson}
+                onChange={(e) => setSpecJson(e.target.value)}
+              />
+            ) : (
+              <SpecForm widgetType={widgetType} spec={parsedSpec()} onChange={updateSpec} />
+            )}
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <Button type="submit" variant="primary">
+              {initial ? 'Save' : 'Create'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </aside>
+    </>
   );
+}
+
+interface SpecFormProps {
+  widgetType: WidgetType;
+  spec: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}
+
+function SpecForm({ widgetType, spec, onChange }: SpecFormProps) {
+  switch (widgetType) {
+    case 'sys_resources':
+      return (
+        <div className="flex flex-col gap-3">
+          <SelectField
+            label="Metric"
+            value={String(spec.metric ?? 'cpu')}
+            onChange={(e) => onChange('metric', e.target.value)}
+          >
+            <option value="cpu">CPU</option>
+            <option value="memory">Memory</option>
+            <option value="disk">Disk</option>
+            <option value="network">Network</option>
+          </SelectField>
+          <SelectField
+            label="Time range"
+            value={String(spec.range ?? '1h')}
+            onChange={(e) => onChange('range', e.target.value)}
+          >
+            <option value="1h">Last 1 hour</option>
+            <option value="6h">Last 6 hours</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+          </SelectField>
+        </div>
+      );
+    case 'log_size':
+      return (
+        <div className="flex flex-col gap-3">
+          <SelectField
+            label="Time range"
+            value={String(spec.range ?? '24h')}
+            onChange={(e) => onChange('range', e.target.value)}
+          >
+            <option value="1h">Last 1 hour</option>
+            <option value="6h">Last 6 hours</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+          </SelectField>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="spec-source">Source program (optional)</Label>
+            <Input
+              id="spec-source"
+              placeholder="e.g. nginx, sshd"
+              value={String(spec.source_program ?? '')}
+              onChange={(e) => onChange('source_program', e.target.value)}
+            />
+          </div>
+        </div>
+      );
+    case 'network_bytes':
+      return (
+        <div className="flex flex-col gap-3">
+          <SelectField
+            label="Direction"
+            value={String(spec.direction ?? 'both')}
+            onChange={(e) => onChange('direction', e.target.value)}
+          >
+            <option value="in">Inbound</option>
+            <option value="out">Outbound</option>
+            <option value="both">Both</option>
+          </SelectField>
+          <SelectField
+            label="Time range"
+            value={String(spec.range ?? '1h')}
+            onChange={(e) => onChange('range', e.target.value)}
+          >
+            <option value="1h">Last 1 hour</option>
+            <option value="6h">Last 6 hours</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+          </SelectField>
+        </div>
+      );
+    case 'db_query':
+      return (
+        <div className="flex flex-col gap-3">
+          <SelectField
+            label="Database engine"
+            value={String(spec.engine ?? 'postgres')}
+            onChange={(e) => onChange('engine', e.target.value)}
+          >
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL / MariaDB</option>
+          </SelectField>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="spec-target">Target name</Label>
+            <Input
+              id="spec-target"
+              placeholder="e.g. mydb"
+              value={String(spec.target_name ?? '')}
+              onChange={(e) => onChange('target_name', e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="spec-limit">Limit (rows)</Label>
+            <Input
+              id="spec-limit"
+              type="number"
+              min={1}
+              max={1000}
+              value={Number(spec.limit ?? 10)}
+              onChange={(e) => onChange('limit', Number(e.target.value))}
+            />
+          </div>
+          <SelectField
+            label="Order by"
+            value={String(spec.order_by ?? 'rows')}
+            onChange={(e) => onChange('order_by', e.target.value)}
+          >
+            <option value="rows">Rows returned</option>
+            <option value="duration">Duration</option>
+            <option value="calls">Calls</option>
+          </SelectField>
+        </div>
+      );
+  }
 }
 
 function defaultSpec(t: WidgetType): Record<string, unknown> {

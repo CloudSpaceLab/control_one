@@ -25,12 +25,13 @@ type heartbeatPayload struct {
 // doesn't strictly need to interpret the body, but logging the state/
 // activated flags is useful for operator debugging during enrollment.
 type heartbeatAckResponse struct {
-	NodeID       string           `json:"node_id"`
-	State        string           `json:"state"`
-	LastSeenAt   string           `json:"last_seen_at"`
-	Activated    bool             `json:"activated"`
-	Reason       *string          `json:"reason,omitempty"`
-	EventFilters *json.RawMessage `json:"event_filters,omitempty"`
+	NodeID         string           `json:"node_id"`
+	State          string           `json:"state"`
+	LastSeenAt     string           `json:"last_seen_at"`
+	Activated      bool             `json:"activated"`
+	Reason         *string          `json:"reason,omitempty"`
+	EventFilters   *json.RawMessage `json:"event_filters,omitempty"`
+	PendingActions []string         `json:"pending_actions,omitempty"`
 }
 
 // FilterApplier is invoked once per heartbeat with the controlplane-issued
@@ -51,7 +52,7 @@ var agentVersion = "dev"
 // Parameters are deliberately simple: the nodeagent main() owns the *api.Client
 // (already wired with the mTLS cert), the node id, and the heartbeat interval
 // from the enrollment response.
-func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier) {
+func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, selfUpdater SelfUpdater) {
 	if client == nil || nodeID == "" {
 		log.Warn("heartbeat loop not started: missing client or node id")
 		return
@@ -60,10 +61,10 @@ func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *za
 		interval = 60 * time.Second
 	}
 
-	go runControlPlaneHeartbeat(ctx, client, log, nodeID, interval, applyFilters)
+	go runControlPlaneHeartbeat(ctx, client, log, nodeID, interval, applyFilters, selfUpdater)
 }
 
-func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier) {
+func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, selfUpdater SelfUpdater) {
 	logger := log.Named("cp-heartbeat")
 	logger.Info("starting control-plane heartbeat",
 		zap.String("node_id", nodeID),
@@ -76,7 +77,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 	// Fire one immediately so the UI sees the node moving quickly — operators
 	// watching the enrollment table don't want to wait a full interval for
 	// the first update.
-	if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters); err != nil {
+	if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, selfUpdater); err != nil {
 		logger.Debug("initial heartbeat failed", zap.Error(err))
 	}
 
@@ -86,7 +87,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 			logger.Info("heartbeat loop stopped")
 			return
 		case <-ticker.C:
-			if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters); err != nil {
+			if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, selfUpdater); err != nil {
 				logger.Debug("heartbeat attempt failed", zap.Error(err))
 			}
 		}
@@ -96,7 +97,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 // sendHeartbeat performs one POST. Errors are logged at debug — a transient
 // network blip should not clutter the operator console. The response body is
 // parsed only for informational logging.
-func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier) error {
+func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, selfUpdater SelfUpdater) error {
 	payload := heartbeatPayload{AgentVersion: heartbeatAgentVersion()}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -136,12 +137,17 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 		)
 	}
 
-	// Hot-reload tenant capture-filter policy. The applier — wired from
-	// main.go — dispatches into the netflow / fileaccess / dbquery managers
-	// without restarting them, so forensic_mode flips take effect within
-	// one heartbeat interval.
+	// Hot-reload tenant capture-filter policy.
 	if applyFilters != nil && ack.EventFilters != nil {
 		applyFilters(*ack.EventFilters)
+	}
+
+	// Dispatch pending actions instructed by the control plane.
+	for _, action := range ack.PendingActions {
+		if action == "agent_update" && selfUpdater != nil {
+			log.Info("control plane requested agent self-update")
+			go selfUpdater.TriggerUpdate(ctx, client, log)
+		}
 	}
 	return nil
 }

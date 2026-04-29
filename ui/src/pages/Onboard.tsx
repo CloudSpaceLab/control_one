@@ -22,8 +22,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import {
   EmptyState,
   Eyebrow,
+  FileUploadButton,
   Panel,
   SectionHeader,
+  SelectField,
   StatusTag,
   type StateTone,
 } from '../components/kit';
@@ -263,17 +265,19 @@ export function Onboard(): JSX.Element {
               </Field>
               {protocol === 'winrm' && (
                 <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2">
-                  <label className="inline-flex items-center gap-2 text-sm">
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
                     <input
                       type="checkbox"
+                      className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                       checked={https}
                       onChange={(e) => setHttps(e.target.checked)}
                     />
                     HTTPS (recommended — port 5986)
                   </label>
-                  <label className="inline-flex items-center gap-2 text-sm">
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
                     <input
                       type="checkbox"
+                      className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                       checked={skipVerify}
                       onChange={(e) => setSkipVerify(e.target.checked)}
                     />
@@ -315,20 +319,33 @@ export function Onboard(): JSX.Element {
                       </Field>
                     </TabsContent>
                     <TabsContent value="private_key">
-                      <Field label="Private key (PEM body)">
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between">
+                          <Label className="inline-flex items-center gap-1.5">
+                            <Key className="h-3.5 w-3.5" />
+                            Private key (PEM body)
+                          </Label>
+                          <FileUploadButton
+                            accept=".pem,.key,.pub,text/plain"
+                            label="Upload .pem"
+                            onContent={(text) => setPrivateKey(text.trim())}
+                          />
+                        </div>
                         <textarea
-                          className="flex min-h-[120px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
+                          className="flex min-h-[120px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 resize-y"
                           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----…"
                           value={privateKey}
                           onChange={(e) => setPrivateKey(e.target.value)}
+                          autoComplete="off"
                         />
-                      </Field>
+                      </div>
                       <Field label="Passphrase (optional)">
                         <Input
                           type="password"
                           placeholder="leave blank if key is unencrypted"
                           value={passphrase}
                           onChange={(e) => setPassphrase(e.target.value)}
+                          autoComplete="new-password"
                         />
                       </Field>
                     </TabsContent>
@@ -421,23 +438,21 @@ export function Onboard(): JSX.Element {
                     — override anytime. Group is stored as a label so existing nodes pages, rules and dashboards filter by it automatically.
                   </p>
                 </Field>
-                <Field label="Tenant">
-                  <select
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Tenant"
                     value={enrolTenantId ?? ''}
                     onChange={(e) => setEnrolTenantId(e.target.value || null)}
-                    className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
                   >
                     <option value="">Select tenant…</option>
                     {tenants.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
+                      <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
-                  </select>
+                  </SelectField>
                   <p className="text-[0.65rem] text-text-muted">
                     Defaults to the active tenant. Single-server enrolment scopes the new node here.
                   </p>
-                </Field>
+                </div>
               </div>
 
               <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
@@ -465,7 +480,7 @@ export function Onboard(): JSX.Element {
                   <span className="font-mono text-[0.7rem] uppercase tracking-wider">Job started</span>{' '}
                   <span className="font-mono text-xs">{jobId}</span>{' '}
                   <Link
-                    to="/fleet-enroll"
+                    to={`/fleet-enroll?job_id=${jobId}`}
                     className="ml-2 underline hover:text-state-healthy/80"
                   >
                     Watch progress →
@@ -549,27 +564,54 @@ function Field({ label, icon, children }: { label: string; icon?: ReactNode; chi
 
 function ProbeSummary({ probe }: { probe: ConnectionProbe }) {
   const tone: StateTone = probe.reachable ? 'healthy' : 'critical';
+
+  function formatMem(mb?: number): string {
+    if (!mb) return '—';
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+    return `${mb} MB`;
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      <Stat label="Reachable">
-        <StatusTag tone={tone}>{probe.reachable ? 'YES' : 'NO'}</StatusTag>
-      </Stat>
-      <Stat label="Latency">{probe.latency_ms ? `${probe.latency_ms} ms` : '—'}</Stat>
-      <Stat label="OS">{probe.os || '—'}</Stat>
-      <Stat label="OS version">{probe.os_version || '—'}</Stat>
-      <Stat label="Hostname">{probe.hostname || '—'}</Stat>
-      <Stat label="Architecture">{probe.architecture || '—'}</Stat>
-      {probe.banner && (
-        <div className="col-span-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-[0.7rem] text-text-secondary">
-          {probe.banner}
-        </div>
-      )}
+    <div className="flex flex-col gap-3">
+      {/* Primary stats row */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Reachable">
+          <StatusTag tone={tone}>{probe.reachable ? 'YES' : 'NO'}</StatusTag>
+        </Stat>
+        <Stat label="Latency">{probe.latency_ms ? `${probe.latency_ms} ms` : '—'}</Stat>
+        <Stat label="Hostname">{probe.hostname || '—'}</Stat>
+        <Stat label="Architecture">{probe.architecture || '—'}</Stat>
+      </div>
+
+      {/* OS / distro row */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="OS">{probe.os || '—'}</Stat>
+        <Stat label="Distribution">{probe.distro || probe.os_version || '—'}</Stat>
+        <Stat label="CPUs">{probe.cpu_count ? `${probe.cpu_count} cores` : '—'}</Stat>
+        <Stat label="Memory">{formatMem(probe.memory_mb)}</Stat>
+      </div>
+
+      {/* Capabilities */}
       {probe.capabilities && probe.capabilities.length > 0 && (
-        <div className="col-span-full flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Eyebrow>capabilities</Eyebrow>
           {probe.capabilities.map((c) => (
             <StatusTag key={c} tone="info">{c}</StatusTag>
           ))}
+        </div>
+      )}
+
+      {/* SSH banner */}
+      {probe.banner && (
+        <div className="rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-[0.7rem] text-text-secondary">
+          <span className="text-text-muted">SSH banner: </span>{probe.banner}
+        </div>
+      )}
+
+      {/* Full uname for power users */}
+      {probe.os_version && probe.os_version !== probe.distro && (
+        <div className="rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-[0.7rem] text-text-secondary break-all">
+          <span className="text-text-muted">kernel: </span>{probe.os_version}
         </div>
       )}
     </div>

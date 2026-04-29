@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Lightbulb, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import { Label } from '../components/ui/label';
 import {
   EmptyState,
+  ExpandableCode,
   KpiTile,
   Panel,
   SectionHeader,
+  SelectField,
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
@@ -132,14 +133,7 @@ export function Recommendations(): JSX.Element {
               <div className="text-xs font-mono text-text-muted">
                 Confidence: {(rec.confidence * 100).toFixed(1)}%
               </div>
-              <details className="mt-1">
-                <summary className="cursor-pointer text-xs text-text-secondary hover:text-foreground">
-                  Draft
-                </summary>
-                <pre className="mt-1 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed">
-                  {JSON.stringify(rec.draft, null, 2)}
-                </pre>
-              </details>
+              <ExpandableCode label="Draft" content={JSON.stringify(rec.draft, null, 2)} />
             </Panel>
           ))}
         </div>
@@ -160,19 +154,16 @@ function FilterSelect({
   options: { label: string; value: string }[];
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label>{label}</Label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
+    <SelectField
+      label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </SelectField>
   );
 }

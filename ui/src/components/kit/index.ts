@@ -14,4 +14,7 @@ export { Chart, type ChartProps } from './Chart';
 export { DataTable, type DataTableProps } from './DataTable';
 export { EntityChip, type EntityChipProps } from './EntityChip';
 export { OnboardingChecklist, type OnboardingChecklistProps, type OnboardingStep } from './OnboardingChecklist';
+export { SelectField, SELECT_CLASS, type SelectFieldProps } from './SelectField';
+export { ExpandableCode, type ExpandableCodeProps } from './ExpandableCode';
+export { FileUploadButton, type FileUploadButtonProps } from './FileUploadButton';
 export { TONE_COLOR, TONE_CLASS, type StateTone, type EntityType } from './types';

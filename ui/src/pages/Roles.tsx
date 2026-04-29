@@ -189,6 +189,7 @@ export function Roles(): JSX.Element {
                             <td key={`${r.id}-${p.name}`} className="text-center px-3 py-2">
                               <input
                                 type="checkbox"
+                                className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                                 checked={has}
                                 onChange={(e) => togglePermission(r, p.name, e.target.checked)}
                               />
@@ -263,6 +264,7 @@ function NewRoleForm({
               <label key={p.name} className="flex gap-2 p-1 cursor-pointer hover:bg-hover rounded">
                 <input
                   type="checkbox"
+                  className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                   checked={selected.includes(p.name)}
                   onChange={(e) => {
                     setSelected((cur) =>

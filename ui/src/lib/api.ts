@@ -327,6 +327,9 @@ export interface ConnectionProbe {
   architecture?: string;
   capabilities?: string[];
   banner?: string;
+  distro?: string;
+  cpu_count?: number;
+  memory_mb?: number;
   detected_at: string;
 }
 export interface TestConnectionResult {
@@ -588,6 +591,7 @@ export interface NodeSummary {
   state: NodeState | string;
   last_seen_at?: string;
   first_scan_at?: string;
+  agent_version?: string;
   labels?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -637,7 +641,8 @@ export interface FleetEnrollStatus {
 export interface RegisterNodePayload {
   tenant_id?: string;
   tenant_name?: string;
-  hostname: string;
+  /** Optional — the installed agent will self-report the real hostname on first connect. */
+  hostname?: string;
   os?: string;
   arch?: string;
   public_ip?: string;
@@ -884,6 +889,68 @@ export interface ComplianceTrendsParams {
   tenant_id?: string;
   node_id?: string;
   days?: number;
+}
+
+// ── Compliance policies ───────────────────────────────────────────────────────
+
+export interface Policy {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  description?: string;
+  rule_type: string;
+  enabled: boolean;
+  labels: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+  archived_at?: string;
+}
+
+export interface PolicyVersion {
+  id: string;
+  version: number;
+  rule_definition: string;
+  checksum?: string;
+  metadata?: Record<string, unknown>;
+  created_by?: string;
+  created_at: string;
+  promoted_at?: string;
+}
+
+export interface CreatePolicyPayload {
+  tenant_id?: string;
+  name: string;
+  description?: string;
+  rule_type: string;
+  enabled: boolean;
+  labels?: Record<string, string>;
+}
+
+export interface CreatePolicyVersionPayload {
+  rule_definition: string;
+  checksum?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ComplianceEvaluatePayload {
+  node_id: string;
+  region: string;
+  rulesets: string[];
+  certifications?: string[];
+  policies?: Record<string, string>;
+  use_real_scan?: boolean;
+}
+
+export interface ComplianceEvaluateResult {
+  rule_id: string;
+  passed: boolean;
+  severity?: string;
+  details?: string;
+  checked_at?: string;
+}
+
+export interface ComplianceEvaluateResponse {
+  results: ComplianceEvaluateResult[];
 }
 
 export interface AuditLog {
@@ -1568,6 +1635,67 @@ export class APIClient {
     return response.trends || [];
   }
 
+  // ── Compliance policies ─────────────────────────────────────────────────────
+
+  async listPolicies(params: { tenant_id?: string; rule_type?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<Policy>> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.rule_type) search.set('rule_type', params.rule_type);
+    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    const response = await this.request<RawPaginatedResponse<Policy>>(`/api/v1/policies${qs ? `?${qs}` : ''}`);
+    return { data: response.data, pagination: normalizePagination(response.pagination) };
+  }
+
+  async createPolicy(payload: CreatePolicyPayload): Promise<Policy> {
+    return this.request<Policy>('/api/v1/policies', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updatePolicy(id: string, payload: Partial<CreatePolicyPayload> & { archived?: boolean }): Promise<Policy> {
+    return this.request<Policy>(`/api/v1/policies/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePolicy(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/policies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listPolicyVersions(policyId: string): Promise<PaginatedResponse<PolicyVersion>> {
+    const response = await this.request<RawPaginatedResponse<PolicyVersion>>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/versions`,
+    );
+    return { data: response.data, pagination: normalizePagination(response.pagination) };
+  }
+
+  async createPolicyVersion(policyId: string, payload: CreatePolicyVersionPayload): Promise<PolicyVersion> {
+    return this.request<PolicyVersion>(`/api/v1/policies/${encodeURIComponent(policyId)}/versions`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async promotePolicyVersion(policyId: string, version: number): Promise<void> {
+    await this.request<void>(`/api/v1/policies/${encodeURIComponent(policyId)}/versions/${version}/promote`, {
+      method: 'POST',
+    });
+  }
+
+  async evaluateCompliance(payload: ComplianceEvaluatePayload): Promise<ComplianceEvaluateResponse> {
+    return this.request<ComplianceEvaluateResponse>('/api/v1/compliance/evaluate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ── Audit logs ──────────────────────────────────────────────────────────────
+
   async listAuditLogs(params: ListAuditLogsParams = {}): Promise<PaginatedResponse<AuditLog>> {
     const search = new URLSearchParams();
     if (params.tenant_id) search.set('tenant_id', params.tenant_id);
@@ -2005,7 +2133,9 @@ export class APIClient {
   }
 
   async listSavedSearches(): Promise<{ items: SavedSearch[] }> {
-    return this.request<{ items: SavedSearch[] }>('/api/v1/saved-searches');
+    // Backend returns PaginatedResponse { data: [...] } but consumers expect { items: [...] }.
+    const resp = await this.request<PaginatedResponse<SavedSearch>>('/api/v1/saved-searches');
+    return { items: resp.data ?? [] };
   }
 
   async createSavedSearch(payload: SavedSearchInput): Promise<SavedSearch> {
@@ -2356,6 +2486,126 @@ export class APIClient {
       body: JSON.stringify(payload),
     });
   }
+
+  // ── Agent self-update ─────────────────────────────────────────────────
+  async updateAgent(nodeId: string, targetVersion?: string): Promise<AgentUpdateResponse> {
+    return this.request<AgentUpdateResponse>(`/api/v1/nodes/${encodeURIComponent(nodeId)}/update-agent`, {
+      method: 'POST',
+      body: JSON.stringify({ target_version: targetVersion ?? '' }),
+    });
+  }
+
+  // ── Behavioral baselines ──────────────────────────────────────────────
+  async listBehavioralBaselines(params: { tenantId?: string; nodeId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<BehavioralBaseline>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.nodeId) search.set('node_id', params.nodeId);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<BehavioralBaseline>>(`/api/v1/behavioral/baselines${qs ? `?${qs}` : ''}`);
+  }
+
+  async listAnomalies(params: { tenantId?: string; baselineId?: string; resolved?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<BehavioralAnomaly>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.baselineId) search.set('baseline_id', params.baselineId);
+    if (typeof params.resolved === 'boolean') search.set('resolved', String(params.resolved));
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<BehavioralAnomaly>>(`/api/v1/behavioral/anomalies${qs ? `?${qs}` : ''}`);
+  }
+
+  // ── Correlation rules ─────────────────────────────────────────────────
+  async listCorrelationRules(params: { tenantId?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<CorrelationRule>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<CorrelationRule>>(`/api/v1/correlation/rules${qs ? `?${qs}` : ''}`);
+  }
+
+  async createCorrelationRule(payload: CreateCorrelationRulePayload): Promise<CorrelationRule> {
+    return this.request<CorrelationRule>('/api/v1/correlation/rules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteCorrelationRule(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/correlation/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  // ── Command ACLs ──────────────────────────────────────────────────────
+  async listCommandACLs(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<CommandACL>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<CommandACL>>(`/api/v1/command-acls${qs ? `?${qs}` : ''}`);
+  }
+
+  async createCommandACL(payload: CreateCommandACLPayload): Promise<CommandACL> {
+    return this.request<CommandACL>('/api/v1/command-acls', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteCommandACL(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/command-acls/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  // ── Cluster rollout waves ─────────────────────────────────────────────
+  async listClusterRolloutWaves(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<ClusterRolloutWave>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return this.request<PaginatedResponse<ClusterRolloutWave>>(`/api/v1/rollout/waves${qs ? `?${qs}` : ''}`);
+  }
+
+  async updateClusterRolloutWave(id: string, payload: UpdateClusterRolloutWavePayload): Promise<ClusterRolloutWave> {
+    return this.request<ClusterRolloutWave>(`/api/v1/rollout/waves/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ── MFA factors ───────────────────────────────────────────────────────
+  async listMFAFactors(): Promise<{ factors: MFAFactor[] }> {
+    return this.request<{ factors: MFAFactor[] }>('/api/v1/auth/mfa/factors');
+  }
+
+  async deleteMFAFactor(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/auth/mfa/factors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async getMFARecoveryCodes(): Promise<{ codes: string[] }> {
+    return this.request<{ codes: string[] }>('/api/v1/auth/mfa/recovery-codes');
+  }
+
+  // ── Tenant remediation config ─────────────────────────────────────────
+  async getTenantRemediationConfig(tenantId: string): Promise<TenantRemediationConfig> {
+    return this.request<TenantRemediationConfig>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`);
+  }
+
+  async upsertTenantRemediationConfig(tenantId: string, payload: Partial<TenantRemediationConfig>): Promise<TenantRemediationConfig> {
+    return this.request<TenantRemediationConfig>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ── Worker pool status ────────────────────────────────────────────────
+  async getWorkerPoolStatus(): Promise<WorkerPoolStatus> {
+    return this.request<WorkerPoolStatus>('/api/v1/admin/worker-pool');
+  }
 }
 
 // ---- Connection / forensic types -------------------------------------
@@ -2547,4 +2797,124 @@ export interface WidgetPayload {
   node_ids: string[];
   refresh_seconds: number;
   sort_order: number;
+}
+
+// ── Sprint 1 types ────────────────────────────────────────────────────────
+
+export interface AgentUpdateResponse {
+  node_id: string;
+  job_id: string;
+  message: string;
+}
+
+export interface BehavioralBaseline {
+  id: string;
+  tenant_id: string;
+  node_id?: string;
+  metric: string;
+  window: string;
+  mean: number;
+  stddev: number;
+  sample_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BehavioralAnomaly {
+  id: string;
+  tenant_id: string;
+  baseline_id: string;
+  node_id?: string;
+  metric: string;
+  observed_value: number;
+  z_score: number;
+  resolved: boolean;
+  resolved_at?: string;
+  created_at: string;
+}
+
+export interface CorrelationRule {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  conditions: Record<string, unknown>;
+  severity: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCorrelationRulePayload {
+  tenant_id: string;
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  conditions: Record<string, unknown>;
+  severity: string;
+}
+
+export interface CommandACL {
+  id: string;
+  tenant_id: string;
+  name: string;
+  pattern: string;
+  action: 'allow' | 'deny';
+  roles: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCommandACLPayload {
+  tenant_id: string;
+  name: string;
+  pattern: string;
+  action: 'allow' | 'deny';
+  roles: string[];
+}
+
+export interface ClusterRolloutWave {
+  id: string;
+  tenant_id: string;
+  name: string;
+  order: number;
+  status: 'pending' | 'running' | 'paused' | 'done' | 'aborted';
+  node_count: number;
+  done_count: number;
+  started_at?: string;
+  finished_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateClusterRolloutWavePayload {
+  status?: 'paused' | 'running' | 'aborted';
+}
+
+export interface MFAFactor {
+  id: string;
+  type: 'totp' | 'webauthn' | 'recovery';
+  name: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export interface TenantRemediationConfig {
+  TenantID: string;
+  MinApprovalSeverity: string;
+  ChangeWindows: { days: number[]; start_hour: number; end_hour: number; timezone?: string; label?: string }[];
+  CriticalOverride: boolean;
+  CircuitBreakerWindowMin: number;
+  CircuitBreakerFailPct: number;
+  CircuitBreakerMinSamples: number;
+  UpdatedAt?: string;
+}
+
+export interface WorkerPoolStatus {
+  workers: number;
+  queue_depth: number;
+  active: number;
+  idle: number;
+  jobs_processed_total: number;
+  jobs_failed_total: number;
 }

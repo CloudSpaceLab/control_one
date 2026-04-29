@@ -26,6 +26,8 @@ const (
 	JobTypeProvisionApply = "provision.apply"
 	// JobTypeComplianceScan represents a compliance scan across nodes.
 	JobTypeComplianceScan = "compliance.scan"
+	// JobTypeAgentUpdate signals an agent to download and apply a new binary.
+	JobTypeAgentUpdate = "agent.update"
 )
 
 var (

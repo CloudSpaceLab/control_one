@@ -28,7 +28,7 @@ const queryClient = new QueryClient({
 
 createRoot(container).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename="/console">
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <AuthProvider>

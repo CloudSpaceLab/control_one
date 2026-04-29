@@ -1,11 +1,20 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Template } from '../lib/api';
-import { SectionHeader } from '../components/kit';
+import { Template, ClusterRolloutWave } from '../lib/api';
+import { SectionHeader, Panel, KpiTile, EmptyState, StatusTag, DataTable } from '../components/kit';
+import { Button } from '@/components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { useTemplates } from '../hooks/useTemplates';
 import { useTemplateVersions } from '../hooks/useTemplateVersions';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { useTenants } from '../hooks/useTenants';
+import type { ColumnDef } from '@tanstack/react-table';
+import type { StateTone } from '../components/kit';
+import { FileText, Layers } from 'lucide-react';
+
+type PageTab = 'templates' | 'rollouts';
 import {
   DEFAULT_METADATA_SCHEMA,
   DEFAULT_TEMPLATE_BODY,
@@ -25,7 +34,16 @@ function formatDate(value?: string): string {
   return date.toLocaleString();
 }
 
+function templateStatusTone(tpl: Template): StateTone {
+  const s = templateStatus(tpl);
+  if (s === 'archived') return 'unknown';
+  if (s === 'promoted') return 'healthy';
+  return 'info';
+}
+
 export function Templates(): JSX.Element {
+  // Page-level tab
+  const [pageTab, setPageTab] = useState<PageTab>('templates');
   const api = useApiClient();
   const { showToast } = useToast();
   const [limit] = useState(20);
@@ -93,6 +111,29 @@ export function Templates(): JSX.Element {
   const [versionChecksum, setVersionChecksum] = useState('');
   const [versionMetadata, setVersionMetadata] = useState(DEFAULT_METADATA_SCHEMA);
   const [versionNotes, setVersionNotes] = useState('');
+
+  // Rollout waves state
+  const { data: tenants } = useTenants();
+  const [rolloutTenantId, setRolloutTenantId] = useState('');
+  const [waves, setWaves] = useState<ClusterRolloutWave[]>([]);
+  const [wavesLoading, setWavesLoading] = useState(false);
+  const [wavesReloadToken, setWavesReloadToken] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setWavesLoading(true);
+    api
+      .listClusterRolloutWaves({ tenantId: rolloutTenantId || undefined })
+      .then((r) => { if (!cancelled) setWaves(r.data ?? []); })
+      .catch(() => { if (!cancelled) setWaves([]); })
+      .finally(() => { if (!cancelled) setWavesLoading(false); });
+    return () => { cancelled = true; };
+  }, [api, rolloutTenantId, wavesReloadToken]);
+
+  const handleWaveAction = async (id: string, action: 'paused' | 'running' | 'aborted') => {
+    await api.updateClusterRolloutWave(id, { status: action });
+    setWavesReloadToken((n) => n + 1);
+  };
 
   const handleCreateTemplate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -207,356 +248,563 @@ export function Templates(): JSX.Element {
     }
   };
 
+  const templateColumns: ColumnDef<Template>[] = [
+    {
+      header: 'Name',
+      accessorKey: 'name',
+      cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
+    },
+    {
+      header: 'Provider',
+      accessorKey: 'provider',
+      cell: ({ row }) => <span className="text-text-secondary">{row.original.provider || '—'}</span>,
+    },
+    {
+      header: 'Status',
+      id: 'status',
+      cell: ({ row }) => (
+        <StatusTag tone={templateStatusTone(row.original)}>
+          {templateStatus(row.original)}
+        </StatusTag>
+      ),
+    },
+    {
+      header: 'Updated',
+      accessorKey: 'updated_at',
+      cell: ({ row }) => (
+        <span className="text-text-secondary">{formatDate(row.original.updated_at)}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => setSelectedTemplateId(row.original.id)}
+        >
+          View
+        </Button>
+      ),
+    },
+  ];
+
+  const waveStatusTone = (s: ClusterRolloutWave['status']): StateTone => {
+    switch (s) {
+      case 'running': return 'healthy';
+      case 'done': return 'info';
+      case 'paused': return 'warning';
+      case 'aborted': return 'critical';
+      default: return 'unknown';
+    }
+  };
+
+  const waveColumns: ColumnDef<ClusterRolloutWave>[] = [
+    {
+      header: 'Name',
+      accessorKey: 'name',
+      cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
+    },
+    {
+      header: 'Order',
+      accessorKey: 'order',
+      cell: ({ row }) => <span className="font-mono text-xs">{row.original.order}</span>,
+    },
+    {
+      header: 'Status',
+      accessorKey: 'status',
+      cell: ({ row }) => (
+        <StatusTag tone={waveStatusTone(row.original.status)} className="capitalize">
+          {row.original.status}
+        </StatusTag>
+      ),
+    },
+    {
+      header: 'Progress',
+      id: 'progress',
+      cell: ({ row }) => {
+        const pct = row.original.node_count > 0
+          ? Math.round((row.original.done_count / row.original.node_count) * 100)
+          : 0;
+        return (
+          <div className="flex items-center gap-2">
+            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-border-subtle">
+              <div className="h-full rounded-full bg-brand-500" style={{ width: `${pct}%` }} />
+            </div>
+            <span className="font-mono text-xs text-text-muted">
+              {row.original.done_count}/{row.original.node_count}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => {
+        const s = row.original.status;
+        return (
+          <div className="flex items-center gap-1">
+            {s === 'running' && (
+              <Button variant="secondary" size="sm" onClick={() => handleWaveAction(row.original.id, 'paused')}>
+                Pause
+              </Button>
+            )}
+            {s === 'paused' && (
+              <Button variant="primary" size="sm" onClick={() => handleWaveAction(row.original.id, 'running')}>
+                Resume
+              </Button>
+            )}
+            {(s === 'running' || s === 'paused') && (
+              <Button variant="ghost" size="sm" onClick={() => handleWaveAction(row.original.id, 'aborted')}>
+                Abort
+              </Button>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+
+  const tabClass = (t: PageTab) =>
+    `px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
+      pageTab === t
+        ? 'bg-surface text-foreground border border-border-subtle border-b-surface'
+        : 'text-text-secondary hover:text-foreground'
+    }`;
+
   return (
-    <div className="flex flex-col gap-5 templates-page">
+    <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="INFRASTRUCTURE · TEMPLATES"
         title="Infrastructure templates"
         description="Version, test, and safely roll out infrastructure changes. Each template is reusable across tenants."
       />
 
-      <div className="stat-card-grid">
-        <article className="stat-card">
-          <span className="muted">Total templates</span>
-          <strong>{summary.total}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="muted">Promoted</span>
-          <strong>{summary.promoted}</strong>
-          <small className="muted">stable rollouts</small>
-        </article>
-        <article className="stat-card">
-          <span className="muted">Archived</span>
-          <strong>{summary.archived}</strong>
-          <small className="muted">hidden from provisioning</small>
-        </article>
-      </div>
-
-      <form className="panel templates-form" onSubmit={handleCreateTemplate}>
-        <h3>Create template</h3>
-        <div className="grid two-col">
-          <label htmlFor="template-name">
-            Name
-            <input
-              id="template-name"
-              type="text"
-              value={templateName}
-              onChange={(event) => setTemplateName(event.target.value)}
-              placeholder="e.g. aws-foundation"
-              disabled={creatingTemplate}
-              required
-            />
-          </label>
-          <label htmlFor="template-provider">
-            Provider
-            <input
-              id="template-provider"
-              type="text"
-              value={templateProvider}
-              onChange={(event) => setTemplateProvider(event.target.value)}
-              placeholder="aws|azure|gcp|mock"
-              disabled={creatingTemplate}
-              required
-            />
-          </label>
-        </div>
-        <label htmlFor="template-description">
-          Description
-          <textarea
-            id="template-description"
-            rows={3}
-            value={templateDescription}
-            onChange={(event) => setTemplateDescription(event.target.value)}
-            placeholder="High-level purpose"
-            disabled={creatingTemplate}
-          />
-        </label>
-        <label htmlFor="template-labels">
-          Labels (JSON)
-          <textarea
-            id="template-labels"
-            rows={3}
-            value={templateLabels}
-            onChange={(event) => setTemplateLabels(event.target.value)}
-            disabled={creatingTemplate}
-          />
-        </label>
-        {templateForm.error ? <p className="form-error">{templateForm.error}</p> : null}
-        {templateForm.success ? <p className="form-success">{templateForm.success}</p> : null}
-        <button type="submit" disabled={creatingTemplate}>
-          {creatingTemplate ? 'Saving…' : 'Create template'}
+      <div className="flex gap-1 border-b border-border-subtle">
+        <button type="button" className={tabClass('templates')} onClick={() => setPageTab('templates')}>
+          Templates
         </button>
-      </form>
-
-      <div className="panel toolbar templates-toolbar">
-        <label htmlFor="name-filter">
-          Name prefix
-          <input
-            id="name-filter"
-            type="text"
-            value={nameFilter}
-            onChange={(event) => {
-              setNameFilter(event.target.value);
-              setOffset(0);
-            }}
-            placeholder="search by name"
-          />
-        </label>
-        <label htmlFor="provider-filter">
-          Provider
-          <input
-            id="provider-filter"
-            type="text"
-            value={providerFilter}
-            onChange={(event) => {
-              setProviderFilter(event.target.value);
-              setOffset(0);
-            }}
-            placeholder="aws"
-          />
-        </label>
-        <label htmlFor="include-archived" className="checkbox-inline">
-          <input
-            id="include-archived"
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(event) => {
-              setIncludeArchived(event.target.checked);
-              setOffset(0);
-            }}
-          />
-          Include archived
-        </label>
+        <button type="button" className={tabClass('rollouts')} onClick={() => setPageTab('rollouts')}>
+          Rollouts
+        </button>
       </div>
 
-      {loading ? <p className="muted">Loading templates…</p> : null}
-      {error ? <p className="form-error">Failed to load templates: {error}</p> : null}
-      {!loading && !error && templates.length === 0 ? (
-        <div className="empty-state">
-          <p className="muted">No templates found. Create one to get started.</p>
+      {pageTab === 'rollouts' && (
+        <>
+          <div className="flex items-center gap-3">
+            <select
+              className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-brand-500"
+              value={rolloutTenantId}
+              onChange={(e) => setRolloutTenantId(e.target.value)}
+            >
+              <option value="">All tenants</option>
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setWavesReloadToken((n) => n + 1)}
+              disabled={wavesLoading}
+            >
+              Refresh
+            </Button>
+          </div>
+          <Panel padding="md" eyebrow="ROLLOUT · WAVES" title="Cluster rollout waves">
+            <DataTable
+              columns={waveColumns}
+              rows={waves}
+              rowKey={(r) => r.id}
+              loading={wavesLoading}
+              empty={
+                <EmptyState
+                  icon={<Layers />}
+                  title="No rollout waves"
+                  description="Cluster rollout waves appear here when a deployment is in progress."
+                />
+              }
+            />
+          </Panel>
+        </>
+      )}
+
+      {pageTab === 'templates' && (
+        <>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+        <KpiTile label="Total templates" value={summary.total} tone="brand" />
+        <KpiTile label="Promoted" value={summary.promoted} hint="stable rollouts" />
+        <KpiTile label="Archived" value={summary.archived} hint="hidden from provisioning" />
+      </div>
+
+      {/* Create template */}
+      <Panel padding="md" eyebrow="CREATE" title="New template" toneAccent="brand">
+        <form onSubmit={handleCreateTemplate} className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="template-name">Name</Label>
+              <Input
+                id="template-name"
+                type="text"
+                value={templateName}
+                onChange={(event) => setTemplateName(event.target.value)}
+                placeholder="e.g. aws-foundation"
+                disabled={creatingTemplate}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="template-provider">Provider</Label>
+              <Input
+                id="template-provider"
+                type="text"
+                value={templateProvider}
+                onChange={(event) => setTemplateProvider(event.target.value)}
+                placeholder="aws|azure|gcp|mock"
+                disabled={creatingTemplate}
+                required
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="template-description">Description</Label>
+            <textarea
+              id="template-description"
+              className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+              rows={3}
+              value={templateDescription}
+              onChange={(event) => setTemplateDescription(event.target.value)}
+              placeholder="High-level purpose"
+              disabled={creatingTemplate}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="template-labels">Labels (JSON)</Label>
+            <textarea
+              id="template-labels"
+              className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+              rows={3}
+              value={templateLabels}
+              onChange={(event) => setTemplateLabels(event.target.value)}
+              disabled={creatingTemplate}
+            />
+          </div>
+
+          {templateForm.error ? <p className="text-sm text-state-critical" role="alert">{templateForm.error}</p> : null}
+          {templateForm.success ? <p className="text-sm text-state-healthy" role="status">{templateForm.success}</p> : null}
+
+          <div className="flex items-center gap-2 pt-2">
+            <Button type="submit" variant="primary" disabled={creatingTemplate}>
+              {creatingTemplate ? 'Saving…' : 'Create template'}
+            </Button>
+          </div>
+        </form>
+      </Panel>
+
+      {/* Filter panel */}
+      <Panel padding="md" tone="inset" eyebrow="FILTER" title="Find templates">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-col gap-1.5 flex-1 min-w-[140px]">
+            <Label htmlFor="name-filter">Name prefix</Label>
+            <Input
+              id="name-filter"
+              type="text"
+              value={nameFilter}
+              onChange={(event) => {
+                setNameFilter(event.target.value);
+                setOffset(0);
+              }}
+              placeholder="search by name"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 flex-1 min-w-[140px]">
+            <Label htmlFor="provider-filter">Provider</Label>
+            <Input
+              id="provider-filter"
+              type="text"
+              value={providerFilter}
+              onChange={(event) => {
+                setProviderFilter(event.target.value);
+                setOffset(0);
+              }}
+              placeholder="aws"
+            />
+          </div>
+          <div className="flex items-center gap-2 pt-5">
+            <input
+              id="include-archived"
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(event) => {
+                setIncludeArchived(event.target.checked);
+                setOffset(0);
+              }}
+              className="h-4 w-4 rounded border border-border-subtle"
+            />
+            <Label htmlFor="include-archived">Include archived</Label>
+          </div>
         </div>
+      </Panel>
+
+      {loading ? <p className="text-text-muted">Loading templates…</p> : null}
+      {error ? <p className="text-sm text-state-critical" role="alert">Failed to load templates: {error}</p> : null}
+
+      {!loading && !error && templates.length === 0 ? (
+        <EmptyState
+          title="No templates"
+          description="No templates found. Create one to get started."
+          icon={<FileText />}
+        />
       ) : null}
 
       {!loading && templates.length > 0 ? (
-        <div className="templates-layout">
-          <div className="templates-list">
-            <table className="templates-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map((template) => (
-                  <tr key={template.id} className={template.id === selectedTemplateId ? 'active-row' : ''}>
-                    <td>{template.name}</td>
-                    <td>{template.provider || '—'}</td>
-                    <td>
-                      <span className="badge">{templateStatus(template)}</span>
-                    </td>
-                    <td>{formatDate(template.updated_at)}</td>
-                    <td>
-                      <button type="button" onClick={() => setSelectedTemplateId(template.id)}>
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="pagination">
-              <button
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {/* LEFT: Template list */}
+          <div className="flex flex-col gap-4">
+            <DataTable
+              columns={templateColumns}
+              rows={templates}
+              rowKey={(row) => row.id}
+            />
+            <div className="flex items-center justify-between gap-4 pt-2 text-sm text-text-muted">
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
                 onClick={() => setOffset(pagination.prevOffset ?? 0)}
               >
-                Previous
-              </button>
-              <span>
-                Showing {templates.length} of {pagination.total} templates
-              </span>
-              <button
+                ← Previous
+              </Button>
+              <span>Showing {templates.length} of {pagination.total} templates</span>
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
                 onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
               >
-                Next
-              </button>
+                Next →
+              </Button>
             </div>
           </div>
-          <aside className="panel templates-detail">
-            {selectedTemplate ? (
-              <>
-                <header>
-                  <div>
-                    <p className="eyebrow">{selectedTemplate.provider.toUpperCase()}</p>
-                    <h3>{selectedTemplate.name}</h3>
+
+          {/* RIGHT: Template detail */}
+          {selectedTemplate ? (
+            <Panel
+              padding="md"
+              eyebrow={selectedTemplate.provider.toUpperCase()}
+              title={selectedTemplate.name}
+              actions={
+                <Button
+                  type="button"
+                  variant={selectedTemplate.archived_at ? 'primary' : 'danger'}
+                  size="sm"
+                  onClick={handleToggleArchived}
+                  disabled={updatingTemplate}
+                >
+                  {updatingTemplate
+                    ? 'Updating…'
+                    : selectedTemplate.archived_at
+                      ? 'Restore'
+                      : 'Archive'}
+                </Button>
+              }
+            >
+              {selectedTemplate.description ? (
+                <p className="text-sm text-text-secondary">{selectedTemplate.description}</p>
+              ) : null}
+
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <div className="flex flex-col gap-0.5">
+                  <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">ID</dt>
+                  <dd><code className="font-mono text-xs text-text-secondary">{selectedTemplate.id}</code></dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Created</dt>
+                  <dd className="text-foreground">{formatDate(selectedTemplate.created_at)}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Updated</dt>
+                  <dd className="text-foreground">{formatDate(selectedTemplate.updated_at)}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Archived</dt>
+                  <dd className="text-foreground">
+                    {selectedTemplate.archived_at ? formatDate(selectedTemplate.archived_at) : '—'}
+                  </dd>
+                </div>
+              </dl>
+
+              <hr className="border-border-subtle" />
+
+              <div className="flex flex-col gap-2">
+                <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Labels</p>
+                {selectedTemplate.labels && Object.keys(selectedTemplate.labels).length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(selectedTemplate.labels).map(([key, value]) => (
+                      <span
+                        key={key}
+                        className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface px-2.5 py-0.5 text-xs text-text-secondary"
+                      >
+                        <span className="font-medium text-foreground">{key}</span>
+                        <span className="text-text-muted">:</span>
+                        <span>{String(value)}</span>
+                      </span>
+                    ))}
                   </div>
-                  <span className="badge">{templateStatus(selectedTemplate)}</span>
-                </header>
-                {selectedTemplate.description ? <p>{selectedTemplate.description}</p> : null}
-                <dl className="meta-grid">
-                  <div>
-                    <dt>Template ID</dt>
-                    <dd>{selectedTemplate.id}</dd>
-                  </div>
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{formatDate(selectedTemplate.created_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{formatDate(selectedTemplate.updated_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Archived</dt>
-                    <dd>{selectedTemplate.archived_at ? formatDate(selectedTemplate.archived_at) : '—'}</dd>
-                  </div>
-                </dl>
-                <section>
-                  <h4>Labels</h4>
-                  {selectedTemplate.labels && Object.keys(selectedTemplate.labels).length > 0 ? (
-                    <ul className="label-list">
-                      {Object.entries(selectedTemplate.labels).map(([key, value]) => (
-                        <li key={key}>
-                          <strong>{key}</strong>
-                          <span>{value}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="muted">No labels assigned.</p>
-                  )}
-                </section>
-                <section>
-                  <h4>Versions</h4>
-                  {versionsLoading ? <p className="muted">Loading versions…</p> : null}
-                  {versionsError ? <p className="form-error">{versionsError}</p> : null}
-                  {!versionsLoading && versions.length === 0 ? (
-                    <p className="muted">No versions published yet.</p>
-                  ) : null}
-                  {!versionsLoading && versions.length > 0 ? (
-                    <ul className="versions-list">
-                      {versions.map((version) => (
-                        <li key={version.id}>
-                          <div>
-                            <strong>v{version.version}</strong> • {formatDate(version.created_at)}
+                ) : (
+                  <p className="text-sm text-text-muted">No labels assigned.</p>
+                )}
+              </div>
+
+              <hr className="border-border-subtle" />
+
+              <div className="flex flex-col gap-3">
+                <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Versions</p>
+                {versionsLoading ? <p className="text-sm text-text-muted">Loading versions…</p> : null}
+                {versionsError ? <p className="text-sm text-state-critical">{versionsError}</p> : null}
+                {!versionsLoading && versions.length === 0 ? (
+                  <p className="text-sm text-text-muted">No versions published yet.</p>
+                ) : null}
+                {!versionsLoading && versions.length > 0 ? (
+                  <ul className="flex flex-col gap-2">
+                    {versions.map((version) => (
+                      <li
+                        key={version.id}
+                        className="rounded-md border border-border-subtle bg-surface px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-semibold text-foreground">
+                              v{version.version}
+                            </span>
+                            <span className="text-xs text-text-muted">
+                              {formatDate(version.created_at)}
+                            </span>
                             {version.promoted_at ? (
-                              <span className="badge badge-success">Promoted</span>
+                              <StatusTag tone="healthy">Promoted</StatusTag>
                             ) : null}
                           </div>
-                          {version.rollout_notes ? <p>{version.rollout_notes}</p> : null}
-                          <div className="version-actions">
-                            <button type="button" onClick={() => handlePromoteVersion(version.version)}>
-                              Promote
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  <div className="pagination">
-                    <button
-                      type="button"
-                      disabled={
-                        versionPagination.prevOffset === null || versionPagination.prevOffset === undefined
-                      }
-                      onClick={() => setVersionOffset(versionPagination.prevOffset ?? 0)}
-                    >
-                      Previous
-                    </button>
-                    <span>
-                      Showing {versions.length} of {versionPagination.total} versions
-                    </span>
-                    <button
-                      type="button"
-                      disabled={
-                        versionPagination.nextOffset === null || versionPagination.nextOffset === undefined
-                      }
-                      onClick={() => setVersionOffset(versionPagination.nextOffset ?? versionOffset + versionLimit)}
-                    >
-                      Next
-                    </button>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handlePromoteVersion(version.version)}
+                          >
+                            Promote
+                          </Button>
+                        </div>
+                        {version.rollout_notes ? (
+                          <p className="mt-1 text-xs text-text-secondary">{version.rollout_notes}</p>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
+                <div className="flex items-center justify-between gap-4 text-sm text-text-muted">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={versionPagination.prevOffset === null || versionPagination.prevOffset === undefined}
+                    onClick={() => setVersionOffset(versionPagination.prevOffset ?? 0)}
+                  >
+                    ← Previous
+                  </Button>
+                  <span>Showing {versions.length} of {versionPagination.total}</span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={versionPagination.nextOffset === null || versionPagination.nextOffset === undefined}
+                    onClick={() => setVersionOffset(versionPagination.nextOffset ?? versionOffset + versionLimit)}
+                  >
+                    Next →
+                  </Button>
+                </div>
+              </div>
+
+              <hr className="border-border-subtle" />
+
+              <div className="flex flex-col gap-3">
+                <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Create version</p>
+                <form onSubmit={handleCreateVersion} className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="version-body">Body (JSON/YAML)</Label>
+                    <textarea
+                      id="version-body"
+                      className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+                      rows={6}
+                      value={versionBody}
+                      onChange={(event) => setVersionBody(event.target.value)}
+                      disabled={creatingVersion}
+                    />
                   </div>
-                </section>
-                <section>
-                  <h4>Create version</h4>
-                  <form onSubmit={handleCreateVersion} className="version-form">
-                    <label htmlFor="version-body">
-                      Body (JSON/YAML)
-                      <textarea
-                        id="version-body"
-                        rows={6}
-                        value={versionBody}
-                        onChange={(event) => setVersionBody(event.target.value)}
-                        disabled={creatingVersion}
-                      />
-                    </label>
-                    <label htmlFor="version-checksum">
-                      Checksum
-                      <input
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="version-checksum">Checksum</Label>
+                      <Input
                         id="version-checksum"
                         type="text"
                         value={versionChecksum}
                         onChange={(event) => setVersionChecksum(event.target.value)}
                         disabled={creatingVersion}
                       />
-                    </label>
-                    <label htmlFor="version-metadata">
-                      Metadata schema (JSON)
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="version-metadata">Metadata schema (JSON)</Label>
                       <textarea
                         id="version-metadata"
+                        className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
                         rows={4}
                         value={versionMetadata}
                         onChange={(event) => setVersionMetadata(event.target.value)}
                         disabled={creatingVersion}
                       />
-                    </label>
-                    <label htmlFor="version-notes">
-                      Rollout notes
-                      <textarea
-                        id="version-notes"
-                        rows={3}
-                        value={versionNotes}
-                        onChange={(event) => setVersionNotes(event.target.value)}
-                        disabled={creatingVersion}
-                      />
-                    </label>
-                    {versionForm.error ? <p className="form-error">{versionForm.error}</p> : null}
-                    {versionForm.success ? <p className="form-success">{versionForm.success}</p> : null}
-                    <button type="submit" disabled={creatingVersion}>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="version-notes">Rollout notes</Label>
+                    <textarea
+                      id="version-notes"
+                      className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+                      rows={3}
+                      value={versionNotes}
+                      onChange={(event) => setVersionNotes(event.target.value)}
+                      disabled={creatingVersion}
+                    />
+                  </div>
+
+                  {versionForm.error ? (
+                    <p className="text-sm text-state-critical" role="alert">{versionForm.error}</p>
+                  ) : null}
+                  {versionForm.success ? (
+                    <p className="text-sm text-state-healthy" role="status">{versionForm.success}</p>
+                  ) : null}
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <Button type="submit" variant="primary" disabled={creatingVersion}>
                       {creatingVersion ? 'Publishing…' : 'Create version'}
-                    </button>
-                  </form>
-                </section>
-                <div className="detail-actions">
-                  <button type="button" className="ghost-button" onClick={reload} disabled={loading}>
-                    {loading ? 'Refreshing…' : 'Refresh list'}
-                  </button>
-                  <button
-                    type="button"
-                    className={selectedTemplate.archived_at ? 'primary-button' : 'danger-button'}
-                    onClick={handleToggleArchived}
-                    disabled={updatingTemplate}
-                  >
-                    {updatingTemplate
-                      ? 'Updating…'
-                      : selectedTemplate.archived_at
-                        ? 'Restore template'
-                        : 'Archive template'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="muted">Select a template to inspect versions and metadata.</p>
-            )}
-          </aside>
+                    </Button>
+                  </div>
+                </form>
+              </div>
+            </Panel>
+          ) : null}
         </div>
       ) : null}
+        </>
+      )}
     </div>
   );
 }

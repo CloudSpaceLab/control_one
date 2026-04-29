@@ -53,12 +53,15 @@ type Store interface {
 	DeleteNode(context.Context, uuid.UUID) error
 	RetireNode(context.Context, uuid.UUID) error
 	ListNodes(context.Context, uuid.UUID, string, int, int) ([]storage.Node, int, error)
+	FindNodesByPublicIP(context.Context, string) ([]storage.Node, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
 	SetNodeState(context.Context, uuid.UUID, string) error
 	TouchNodeHeartbeat(context.Context, uuid.UUID) (*storage.Node, error)
 	MarkNodeFirstScan(context.Context, uuid.UUID) (*storage.Node, error)
 	UpdateNodeLabels(context.Context, uuid.UUID, map[string]any) error
 	ListEnrollmentPendingNodesOlderThan(context.Context, time.Time) ([]storage.Node, error)
+	UpdateNodeAgentVersion(context.Context, uuid.UUID, string) error
+	GetPendingAgentUpdateJob(context.Context, uuid.UUID) (*storage.Job, error)
 	GetUserByExternalID(context.Context, string) (*storage.User, error)
 	GetUser(context.Context, uuid.UUID) (*storage.User, error)
 	ListUsers(context.Context, int, int) ([]storage.User, int, error)
@@ -1343,6 +1346,9 @@ func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
 		case "event-filters":
 			s.handleTenantEventFilters(w, r)
 			return
+		case "remediation-config":
+			s.handleTenantRemediationConfig(w, r)
+			return
 		}
 		http.NotFound(w, r)
 		return
@@ -1651,6 +1657,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && segments[1] == "update-agent" {
+		s.handleNodeAgentUpdate(w, r, nodeID)
+		return
+	}
+
 	if len(segments) != 1 {
 		http.NotFound(w, r)
 		return
@@ -1811,32 +1822,34 @@ func (r createNodeRequest) validate() error {
 }
 
 type nodeResponse struct {
-	ID          string         `json:"id"`
-	TenantID    string         `json:"tenant_id"`
-	Hostname    string         `json:"hostname"`
-	OS          *string        `json:"os,omitempty"`
-	Arch        *string        `json:"arch,omitempty"`
-	PublicIP    *string        `json:"public_ip,omitempty"`
-	State       string         `json:"state"`
-	LastSeenAt  *string        `json:"last_seen_at,omitempty"`
-	FirstScanAt *string        `json:"first_scan_at,omitempty"`
-	Labels      map[string]any `json:"labels"`
-	CreatedAt   string         `json:"created_at"`
-	UpdatedAt   string         `json:"updated_at"`
+	ID           string         `json:"id"`
+	TenantID     string         `json:"tenant_id"`
+	Hostname     string         `json:"hostname"`
+	OS           *string        `json:"os,omitempty"`
+	Arch         *string        `json:"arch,omitempty"`
+	PublicIP     *string        `json:"public_ip,omitempty"`
+	State        string         `json:"state"`
+	LastSeenAt   *string        `json:"last_seen_at,omitempty"`
+	FirstScanAt  *string        `json:"first_scan_at,omitempty"`
+	Labels       map[string]any `json:"labels"`
+	AgentVersion *string        `json:"agent_version,omitempty"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
 }
 
 func nodeResponseFromModel(n storage.Node) nodeResponse {
 	resp := nodeResponse{
-		ID:        n.ID.String(),
-		TenantID:  n.TenantID.String(),
-		Hostname:  n.Hostname,
-		OS:        nullStringPtr(n.OS),
-		Arch:      nullStringPtr(n.Arch),
-		PublicIP:  nullStringPtr(n.PublicIP),
-		State:     n.State,
-		Labels:    n.Labels,
-		CreatedAt: n.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt: n.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:           n.ID.String(),
+		TenantID:     n.TenantID.String(),
+		Hostname:     n.Hostname,
+		OS:           nullStringPtr(n.OS),
+		Arch:         nullStringPtr(n.Arch),
+		PublicIP:     nullStringPtr(n.PublicIP),
+		State:        n.State,
+		AgentVersion: nullStringPtr(n.AgentVersion),
+		Labels:       n.Labels,
+		CreatedAt:    n.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:    n.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if resp.Labels == nil {
 		resp.Labels = map[string]any{}
@@ -2301,4 +2314,14 @@ func (w *responseWriter) Write(b []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += int64(n)
 	return n, err
+}
+
+// Flush implements http.Flusher by delegating to the underlying ResponseWriter.
+// Without this, SSE handlers that do w.(http.Flusher) receive ok=false and
+// return 500 "streaming unsupported" because loggingMiddleware wraps every
+// request in *responseWriter, hiding the underlying Flusher implementation.
+func (w *responseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

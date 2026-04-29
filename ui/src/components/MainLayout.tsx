@@ -53,6 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/rules', label: 'Rules', roles: ['admin', 'operator'] },
       { to: '/threat-feeds', label: 'Threat sources', roles: ['admin', 'operator'] },
+      { to: '/behavioral', label: 'Behavioral analytics', roles: ['admin', 'operator'] },
       { to: '/connections', label: 'Connections' },
       { to: '/dashboards', label: 'Custom dashboards' },
       { to: '/recommendations', label: 'Recommendations' },

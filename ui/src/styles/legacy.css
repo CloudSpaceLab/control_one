@@ -229,8 +229,16 @@ tbody tr:not(:last-child) { border-bottom: 1px solid var(--border-subtle); }
 .primary-button:hover { transform: translateY(-2px); box-shadow: 0 15px 25px rgba(99, 102, 241, 0.4); }
 .primary-button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-.ghost-button { border-radius: 0.75rem; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-primary); padding: 0.45rem 1rem; font-weight: 600; }
+.ghost-button { border-radius: 0.75rem; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-primary); padding: 0.45rem 1rem; font-weight: 600; cursor: pointer; }
+.ghost-button:hover { background: var(--bg-hover); }
 .ghost-button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.secondary-button { border-radius: 0.75rem; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-primary); padding: 0.4rem 1rem; font-weight: 600; cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
+.secondary-button:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.secondary-button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.search-input { border: 1px solid var(--border-subtle); border-radius: 0.75rem; padding: 0.4rem 0.75rem; background: var(--bg-surface); color: var(--text-primary); font-size: 0.875rem; outline: none; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.search-input:focus { border-color: rgba(99, 102, 241, 0.5); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
 
 .danger-button {
   border-radius: 0.75rem;

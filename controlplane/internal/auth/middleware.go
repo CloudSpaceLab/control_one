@@ -78,12 +78,19 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 		authCfg:          authCfg,
 		store:            store,
 		publicPaths: map[string]struct{}{
-			"/healthz":            {},
-			"/metrics":            {},
-			"/api/v1/enroll":      {},
-			"/api/v1/register":    {},
-			"/api/v1/auth/login":  {},
-			"/api/v1/auth/logout": {},
+			"/healthz":                       {},
+			"/metrics":                       {},
+			"/api/v1/enroll":                 {},
+			"/api/v1/register":               {},
+			"/api/v1/auth/login":             {},
+			"/api/v1/auth/logout":            {},
+			// Agent install-script is authenticated by the token query param
+			// inside the handler itself; the middleware must not block it.
+			"/api/v1/agent/install-script":   {},
+			// Binary endpoints are token-validated inside the handler.
+			"/api/v1/agent/binary":           {},
+			"/api/v1/agent/binary/manifest":  {},
+			"/api/v1/agent/public-key":       {},
 		},
 	}
 }
@@ -119,6 +126,21 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 			Subject: cert.Subject.String(),
 			Roles:   []string{"agent"},
 		}, nil
+	}
+
+	// When the controlplane runs behind nginx (TLS terminated at the edge),
+	// nginx forwards the client cert subject DN via X-SSL-Client-S-DN.
+	// nginx always overwrites this header from the TLS negotiation result, so
+	// it cannot be forged by an external caller — an absent cert yields "".
+	if dn := strings.TrimSpace(r.Header.Get("X-SSL-Client-S-DN")); dn != "" {
+		if cn := extractCertCN(dn); cn != "" {
+			return &Principal{
+				Type:    "agent",
+				Name:    cn,
+				Subject: dn,
+				Roles:   []string{"agent"},
+			}, nil
+		}
 	}
 
 	authz := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -279,6 +301,30 @@ func (m *Middleware) staticPrincipal(token string) (*Principal, bool) {
 	}
 
 	return principal, true
+}
+
+// extractCertCN parses the CN component from an X.509 Subject DN string as
+// forwarded by nginx via $ssl_client_s_dn (RFC 4514 format: "CN=val,O=org,…"
+// or legacy OpenSSL slash format "/CN=val/O=org").
+func extractCertCN(dn string) string {
+	// RFC 4514: comma-separated, attributes in "key=value" pairs.
+	for _, part := range strings.Split(dn, ",") {
+		part = strings.TrimSpace(part)
+		upper := strings.ToUpper(part)
+		if strings.HasPrefix(upper, "CN=") {
+			return strings.TrimSpace(part[3:])
+		}
+	}
+	// OpenSSL legacy slash format: /CN=value/O=...
+	upper := strings.ToUpper(dn)
+	if idx := strings.Index(upper, "CN="); idx >= 0 {
+		val := dn[idx+3:]
+		if end := strings.IndexAny(val, "/,"); end >= 0 {
+			val = val[:end]
+		}
+		return strings.TrimSpace(val)
+	}
+	return ""
 }
 
 func sanitizeStringsLocal(values []string) []string {

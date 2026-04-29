@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, lazy, Suspense } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Library } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -17,6 +17,9 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useEventStream } from '../hooks/useEventStream';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { ApplyPackModal } from '../components/ApplyPackModal';
+import { RULE_PACK_CATALOG, type RulePack, type Category } from '../lib/rulePacks';
+import { cn } from '@/lib/utils';
 import type {
   CreateLogRulePayload,
   CreatePortRulePayload,
@@ -30,7 +33,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 // flat form.
 const RuleBuilder = lazy(() => import('./RuleBuilder').then((m) => ({ default: m.RuleBuilder })));
 
-type Tab = 'port' | 'log' | 'builder';
+type Tab = 'port' | 'log' | 'builder' | 'templates';
 
 function severityTone(severity: string): StateTone {
   const s = severity.toLowerCase();
@@ -49,6 +52,23 @@ export function Rules(): JSX.Element {
   const [logRules, setLogRules] = useState<LogRule[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [packSearch, setPackSearch] = useState('');
+  const [packCategory, setPackCategory] = useState<Category | null>(null);
+  const [selectedPack, setSelectedPack] = useState<RulePack | null>(null);
+
+  const CATEGORIES = Array.from(new Set(RULE_PACK_CATALOG.map((p) => p.category)));
+  const filteredPacks = RULE_PACK_CATALOG.filter((p) => {
+    if (packCategory && p.category !== packCategory) return false;
+    if (packSearch) {
+      const q = packSearch.toLowerCase();
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q) ||
+        p.tags.some((t) => t.includes(q))
+      );
+    }
+    return true;
+  });
 
   useEffect(() => {
     if (!tenantId && tenants[0]?.id) setTenantId(tenants[0].id);
@@ -125,6 +145,10 @@ export function Rules(): JSX.Element {
           <TabsTrigger value="builder" title="Compose rules visually with drag-and-drop blocks">
             Visual builder
           </TabsTrigger>
+          <TabsTrigger value="templates">
+            <Library className="h-3.5 w-3.5" />
+            Templates
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="port" className="mt-4">
@@ -138,7 +162,96 @@ export function Rules(): JSX.Element {
             <RuleBuilder />
           </Suspense>
         </TabsContent>
+
+        <TabsContent value="templates" className="mt-4">
+          <div className="flex flex-col gap-5">
+            {/* Header */}
+            <div className="flex flex-col gap-1">
+              <h3 className="font-display text-base font-semibold text-foreground">
+                Monitoring rule packs
+              </h3>
+              <p className="text-sm text-text-secondary">
+                One-click rule bundles for common server applications. Applies port monitoring + log
+                pattern rules directly to your tenant.
+              </p>
+            </div>
+
+            {/* Search + category filter */}
+            <div className="flex flex-col gap-3">
+              <Input
+                placeholder="Search packs… (nginx, postgres, redis, sshd…)"
+                value={packSearch}
+                onChange={(e) => setPackSearch(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                {(['All', ...CATEGORIES] as const).map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setPackCategory(cat === 'All' ? null : (cat as Category))}
+                    className={cn(
+                      'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                      (cat === 'All' ? packCategory === null : packCategory === cat)
+                        ? 'bg-brand-500 text-[#0f172a]'
+                        : 'bg-surface border border-border-subtle text-text-secondary hover:border-border-strong hover:text-foreground',
+                    )}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Pack grid */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {filteredPacks.map((pack) => (
+                <Panel
+                  key={pack.id}
+                  padding="md"
+                  eyebrow={pack.category}
+                  title={pack.name}
+                  actions={
+                    <Button variant="primary" size="sm" onClick={() => setSelectedPack(pack)}>
+                      Apply
+                    </Button>
+                  }
+                >
+                  <p className="text-sm text-text-secondary line-clamp-2">{pack.description}</p>
+                  <div className="flex flex-wrap gap-1">
+                    {pack.tags.map((tag) => (
+                      <StatusTag key={tag} tone="info">
+                        <span className="font-mono text-[0.65rem]">{tag}</span>
+                      </StatusTag>
+                    ))}
+                  </div>
+                  <p className="text-xs text-text-muted">
+                    {pack.portRules.length} port rule{pack.portRules.length !== 1 ? 's' : ''} ·{' '}
+                    {pack.logRules.length} log rule{pack.logRules.length !== 1 ? 's' : ''}
+                  </p>
+                </Panel>
+              ))}
+            </div>
+
+            {filteredPacks.length === 0 && (
+              <EmptyState
+                title="No packs match"
+                description="Try a different search term or category."
+              />
+            )}
+          </div>
+        </TabsContent>
       </Tabs>
+
+      <ApplyPackModal
+        pack={selectedPack}
+        onClose={() => setSelectedPack(null)}
+        tenants={tenants}
+        defaultTenantId={tenantId}
+        onApplied={() => {
+          setSelectedPack(null);
+          refresh();
+        }}
+      />
     </div>
   );
 }

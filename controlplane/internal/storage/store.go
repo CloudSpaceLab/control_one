@@ -35,7 +35,7 @@ func (s *Store) GetNode(ctx context.Context, id uuid.UUID) (*Node, error) {
 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		       last_seen_at, first_scan_at, labels,
+		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
 		WHERE id = $1
@@ -60,7 +60,7 @@ func scanNodeRow(row interface {
 	if err := row.Scan(
 		&node.ID, &node.TenantID, &node.Hostname,
 		&node.OS, &node.Arch, &node.PublicIP, &node.MachineID, &node.State,
-		&lastSeen, &firstScan, &labelsBytes,
+		&lastSeen, &firstScan, &labelsBytes, &node.AgentVersion,
 		&node.CreatedAt, &node.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1109,6 +1109,7 @@ type Node struct {
 	LastSeenAt    *time.Time
 	FirstScanAt   *time.Time
 	Labels        map[string]any
+	AgentVersion  sql.NullString
 	CertSerial    sql.NullString
 	CertRotatedAt sql.NullTime
 	CreatedAt     time.Time
@@ -1454,7 +1455,7 @@ func (s *Store) GetNodeByHostname(ctx context.Context, tenantID uuid.UUID, hostn
 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		       last_seen_at, first_scan_at, labels,
+		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
 		WHERE tenant_id = $1 AND hostname = $2
@@ -1571,7 +1572,7 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		       last_seen_at, first_scan_at, labels,
+		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
 		WHERE %s
@@ -1622,7 +1623,7 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 		if err := rows.Scan(
 			&n.ID, &n.TenantID, &n.Hostname,
 			&n.OS, &n.Arch, &n.PublicIP, &n.MachineID, &n.State,
-			&lastSeen, &firstScan, &labelsBytes,
+			&lastSeen, &firstScan, &labelsBytes, &n.AgentVersion,
 			&n.CreatedAt, &n.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan node: %w", err)
@@ -1654,6 +1655,66 @@ func (s *Store) ListNodes(ctx context.Context, tenantID uuid.UUID, hostnamePrefi
 	return nodes, total, nil
 }
 
+// FindNodesByPublicIP returns all nodes (across all tenants) whose public_ip
+// matches the given address. Intentionally tenant-agnostic so the investigate
+// endpoint can classify an IP without knowing the tenant in advance.
+func (s *Store) FindNodesByPublicIP(ctx context.Context, ip string) ([]Node, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
+		       last_seen_at, first_scan_at, labels, agent_version,
+		       created_at, updated_at
+		FROM nodes
+		WHERE public_ip = $1
+		ORDER BY created_at DESC
+		LIMIT 10`, ip)
+	if err != nil {
+		return nil, fmt.Errorf("find nodes by public ip: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var nodes []Node
+	for rows.Next() {
+		var (
+			n           Node
+			lastSeen    sql.NullTime
+			firstScan   sql.NullTime
+			labelsBytes []byte
+		)
+		if err := rows.Scan(
+			&n.ID, &n.TenantID, &n.Hostname,
+			&n.OS, &n.Arch, &n.PublicIP, &n.MachineID, &n.State,
+			&lastSeen, &firstScan, &labelsBytes, &n.AgentVersion,
+			&n.CreatedAt, &n.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan node: %w", err)
+		}
+		if lastSeen.Valid {
+			t := lastSeen.Time
+			n.LastSeenAt = &t
+		}
+		if firstScan.Valid {
+			t := firstScan.Time
+			n.FirstScanAt = &t
+		}
+		if len(labelsBytes) > 0 {
+			var labels map[string]any
+			if err := json.Unmarshal(labelsBytes, &labels); err == nil {
+				n.Labels = labels
+			}
+		}
+		if n.Labels == nil {
+			n.Labels = map[string]any{}
+		}
+		nodes = append(nodes, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate nodes: %w", err)
+	}
+	return nodes, nil
+}
+
 // UpdateNode persists changes to a node record.
 func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
 	if s.db == nil {
@@ -1678,7 +1739,7 @@ func (s *Store) UpdateNode(ctx context.Context, node *Node) (*Node, error) {
 		    updated_at = $7
 		WHERE id = $1
 		RETURNING id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-		          last_seen_at, first_scan_at, labels,
+		          last_seen_at, first_scan_at, labels, agent_version,
 		          created_at, updated_at
 	`
 

@@ -1,9 +1,13 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { EnrollmentToken } from '../lib/api';
 import { useApiClient } from '../hooks/useApiClient';
-import { SectionHeader } from '../components/kit';
+import { SectionHeader, Panel } from '../components/kit';
+import { Button } from '@/components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { useTenant } from '../providers/TenantProvider';
 
 // Air-gapped deployments only ship the platforms the CP has binaries for. If
 // the binary directory is missing an entry the server returns 404 and the UI
@@ -24,6 +28,7 @@ export function OfflineBundle(): JSX.Element {
   const api = useApiClient();
   const { showToast } = useToast();
   const feedback = useFormFeedback();
+  const { currentTenantId } = useTenant();
 
   const [tokens, setTokens] = useState<EnrollmentToken[]>([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -38,7 +43,7 @@ export function OfflineBundle(): JSX.Element {
     setTokensLoading(true);
     setTokensError(null);
     try {
-      const response = await api.listEnrollmentTokens({ limit: 50, offset: 0 });
+      const response = await api.listEnrollmentTokens({ tenant_id: currentTenantId ?? undefined, limit: 50, offset: 0 });
       setTokens(response.data);
       // Pre-select the first non-revoked token so the happy path is one-click.
       const firstUsable = response.data.find((token) => !token.revoked_at);
@@ -51,7 +56,7 @@ export function OfflineBundle(): JSX.Element {
     } finally {
       setTokensLoading(false);
     }
-  }, [api]);
+  }, [api, currentTenantId]);
 
   useEffect(() => {
     void loadTokens();
@@ -112,109 +117,143 @@ export function OfflineBundle(): JSX.Element {
     window.location.assign(url);
   };
 
+  const selectClass = 'h-9 w-full rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:cursor-not-allowed disabled:opacity-50';
+
   return (
-    <div className="flex flex-col gap-5 offline-bundle-page">
+    <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="AUTOMATION · OFFLINE BUNDLE"
         title="Offline agent bundle"
         description="Download an install tarball containing the agent binary, its signature, the CA cert, and the offline install script. SCP it into your isolated network to enroll nodes without internet access."
       />
 
-      <form className="panel offline-bundle-form" onSubmit={handleSubmit}>
-        <h3>Build a bundle</h3>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* LEFT: Build bundle */}
+        <Panel padding="md" eyebrow="BUILD BUNDLE" title="Configure download" toneAccent="brand">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="offline-bundle-token">Enrollment token</Label>
+              <select
+                id="offline-bundle-token"
+                className={selectClass}
+                value={selectedTokenId}
+                onChange={(event) => {
+                  setSelectedTokenId(event.target.value);
+                  setTokenOverride('');
+                }}
+                disabled={tokensLoading || tokens.length === 0}
+              >
+                <option value="">{tokensLoading ? 'Loading tokens…' : 'Select a token'}</option>
+                {tokens.map((token) => (
+                  <option key={token.id} value={token.id} disabled={Boolean(token.revoked_at)}>
+                    {token.name}
+                    {token.revoked_at ? ' (revoked)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <label htmlFor="offline-bundle-token">
-          Enrollment token
-          <select
-            id="offline-bundle-token"
-            value={selectedTokenId}
-            onChange={(event) => {
-              setSelectedTokenId(event.target.value);
-              setTokenOverride('');
-            }}
-            disabled={tokensLoading || tokens.length === 0}
-          >
-            <option value="">{tokensLoading ? 'Loading tokens…' : 'Select a token'}</option>
-            {tokens.map((token) => (
-              <option key={token.id} value={token.id} disabled={Boolean(token.revoked_at)}>
-                {token.name}
-                {token.revoked_at ? ' (revoked)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        {tokensError ? <p className="form-error">{tokensError}</p> : null}
-        {!tokensLoading && tokens.length === 0 ? (
-          <p className="muted">
-            No enrollment tokens yet. Create one in Nodes → Enrollment tokens before building a bundle.
+            {tokensError ? (
+              <p className="text-sm text-state-critical" role="alert">{tokensError}</p>
+            ) : null}
+            {!tokensLoading && tokens.length === 0 ? (
+              <p className="text-sm text-text-muted">
+                No enrollment tokens yet. Create one in Nodes → Enrollment tokens before building a bundle.
+              </p>
+            ) : null}
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="offline-bundle-token-override">Raw token value</Label>
+              <Input
+                id="offline-bundle-token-override"
+                type="text"
+                value={tokenOverride}
+                onChange={(event) => setTokenOverride(event.target.value)}
+                placeholder={selectedToken?.token ? 'Using value from picker' : 'cot_…'}
+                autoComplete="off"
+              />
+              <p className="text-xs text-text-muted">
+                Paste the raw token if the picker does not carry it — the list endpoint only returns the secret
+                portion at creation time.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="offline-bundle-os">Operating system</Label>
+                <select
+                  id="offline-bundle-os"
+                  className={selectClass}
+                  value={os}
+                  onChange={(event) => setOs(event.target.value)}
+                >
+                  {OS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="offline-bundle-arch">Architecture</Label>
+                <select
+                  id="offline-bundle-arch"
+                  className={selectClass}
+                  value={arch}
+                  onChange={(event) => setArch(event.target.value)}
+                >
+                  {ARCH_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {feedback.error ? (
+              <p className="text-sm text-state-critical" role="alert">{feedback.error}</p>
+            ) : null}
+            {feedback.success ? (
+              <p className="text-sm text-state-healthy" role="status">{feedback.success}</p>
+            ) : null}
+
+            <div className="flex items-center gap-2 pt-2">
+              <Button type="submit" variant="primary" disabled={tokensLoading}>
+                Download bundle
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={loadTokens}
+                disabled={tokensLoading}
+              >
+                {tokensLoading ? 'Refreshing…' : 'Reload tokens'}
+              </Button>
+            </div>
+          </form>
+        </Panel>
+
+        {/* RIGHT: SCP instructions */}
+        <Panel padding="md" eyebrow="COPY TO ISOLATED NETWORK" title="SCP commands">
+          <p className="text-sm text-text-secondary">
+            After the download completes, copy the tarball into the target host and run the bundled
+            installer. The commands below assume Linux/macOS — on Windows run the{' '}
+            <code className="font-mono text-xs text-text-secondary">install-offline.ps1</code> script instead.
           </p>
-        ) : null}
-
-        <label htmlFor="offline-bundle-token-override">
-          Raw token value
-          <input
-            id="offline-bundle-token-override"
-            type="text"
-            value={tokenOverride}
-            onChange={(event) => setTokenOverride(event.target.value)}
-            placeholder={selectedToken?.token ? 'Using value from picker' : 'cot_…'}
-            autoComplete="off"
-          />
-          <small className="muted">
-            Paste the raw token if the picker does not carry it — the list endpoint only returns the secret
-            portion at creation time.
-          </small>
-        </label>
-
-        <div className="grid two-col">
-          <label htmlFor="offline-bundle-os">
-            Operating system
-            <select id="offline-bundle-os" value={os} onChange={(event) => setOs(event.target.value)}>
-              {OS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label htmlFor="offline-bundle-arch">
-            Architecture
-            <select id="offline-bundle-arch" value={arch} onChange={(event) => setArch(event.target.value)}>
-              {ARCH_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {feedback.error ? <p className="form-error">{feedback.error}</p> : null}
-        {feedback.success ? <p className="form-success">{feedback.success}</p> : null}
-
-        <div className="form-actions">
-          <button type="submit" className="primary-button" disabled={tokensLoading}>
-            Download bundle
-          </button>
-          <button type="button" className="ghost-button" onClick={loadTokens} disabled={tokensLoading}>
-            {tokensLoading ? 'Refreshing…' : 'Reload tokens'}
-          </button>
-        </div>
-      </form>
-
-      <article className="panel scp-instructions">
-        <h3>Copy into your isolated network</h3>
-        <p className="muted">
-          After the download completes, copy the tarball into the target host and run the bundled installer. The
-          commands below assume Linux/macOS — on Windows run the <code>install-offline.ps1</code> script instead.
-        </p>
-        <pre className="code-block" aria-label="SCP command template">{scpCommand}</pre>
-        <div className="detail-actions">
-          <button type="button" className="ghost-button" onClick={handleCopyScp}>
-            Copy SCP command
-          </button>
-        </div>
-      </article>
+          <pre
+            className="rounded-md border border-border-subtle bg-surface p-4 font-mono text-xs text-foreground overflow-x-auto whitespace-pre-wrap"
+            aria-label="SCP command template"
+          >
+            {scpCommand}
+          </pre>
+          <div className="flex items-center gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={handleCopyScp}>
+              Copy SCP command
+            </Button>
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }

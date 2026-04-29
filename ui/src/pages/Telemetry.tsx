@@ -7,9 +7,11 @@ import {
   Chart,
   DataTable,
   EmptyState,
+  ExpandableCode,
   KpiTile,
   Panel,
   SectionHeader,
+  SelectField,
   StatusTag,
   type StateTone,
 } from '../components/kit';
@@ -177,14 +179,7 @@ export function Telemetry(): JSX.Element {
       header: 'Labels',
       cell: ({ row }) =>
         row.original.labels && Object.keys(row.original.labels).length > 0 ? (
-          <details>
-            <summary className="cursor-pointer text-xs text-text-secondary hover:text-foreground">
-              View labels
-            </summary>
-            <pre className="mt-1 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed">
-              {JSON.stringify(row.original.labels, null, 2)}
-            </pre>
-          </details>
+          <ExpandableCode label="View labels" content={JSON.stringify(row.original.labels, null, 2)} />
         ) : (
           <span className="text-text-muted">—</span>
         ),
@@ -508,20 +503,17 @@ function FilterSelect({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label>{label}</Label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
+    <SelectField
+      label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </SelectField>
   );
 }

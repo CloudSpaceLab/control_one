@@ -2,7 +2,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useToast } from '../providers/ToastProvider';
-import { SectionHeader } from '../components/kit';
+import { SectionHeader, Panel, EmptyState, StatusTag, DataTable, SelectField, FileUploadButton } from '../components/kit';
+import { Button } from '@/components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Server } from 'lucide-react';
+import type { StateTone } from '../components/kit';
 import type {
   CreateHypervisorHostPayload,
   CreateProviderCredentialPayload,
@@ -17,6 +23,13 @@ function formatDate(value?: string): string {
   if (!value) return '—';
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function healthTone(status?: string): StateTone {
+  const s = (status ?? '').toLowerCase();
+  if (s === 'ok' || s === 'healthy') return 'healthy';
+  if (s === 'error' || s === 'unreachable') return 'critical';
+  return 'unknown';
 }
 
 interface CredentialFormState {
@@ -130,6 +143,7 @@ export function Hypervisors(): JSX.Element {
   const [hosts, setHosts] = useState<HypervisorHost[]>([]);
   const [loading, setLoading] = useState(true);
   const [verifying, setVerifying] = useState<string | null>(null);
+  const [scanning, setScanning] = useState<string | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(CREDENTIAL_FORM_DEFAULT);
   const [hostForm, setHostForm] = useState<HostFormState>(HOST_FORM_DEFAULT);
   const [submittingCred, setSubmittingCred] = useState(false);
@@ -278,6 +292,22 @@ export function Hypervisors(): JSX.Element {
     }
   }
 
+  async function handleScan(host: HypervisorHost): Promise<void> {
+    setScanning(host.id);
+    try {
+      const job = await api.createJob({
+        type: 'hypervisor.scan',
+        tenant_id: host.tenant_id,
+        payload: { host_id: host.id, provider: host.provider },
+      });
+      showToast(`Scan job queued: ${job.id.slice(0, 8)}…`, 'success');
+    } catch (err) {
+      showToast(`Failed to start scan: ${String(err)}`, 'error');
+    } finally {
+      setScanning(null);
+    }
+  }
+
   async function handleDeleteCredential(cred: ProviderCredential): Promise<void> {
     if (!window.confirm(`Delete credential "${cred.name}"? Hosts referencing it will lose their credential_id.`)) return;
     try {
@@ -289,6 +319,127 @@ export function Hypervisors(): JSX.Element {
     }
   }
 
+  const hostColumns: ColumnDef<HypervisorHost>[] = [
+    {
+      header: 'Name',
+      accessorKey: 'name',
+      cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
+    },
+    {
+      header: 'Provider',
+      accessorKey: 'provider',
+      cell: ({ row }) => <span className="text-text-secondary">{row.original.provider}</span>,
+    },
+    {
+      header: 'Endpoint',
+      accessorKey: 'endpoint_url',
+      cell: ({ row }) => (
+        <code className="font-mono text-xs text-text-secondary">{row.original.endpoint_url}</code>
+      ),
+    },
+    {
+      header: 'Datacenter',
+      accessorKey: 'datacenter',
+      cell: ({ row }) => <span className="text-text-secondary">{row.original.datacenter ?? '—'}</span>,
+    },
+    {
+      header: 'Health',
+      id: 'health',
+      cell: ({ row }) => (
+        <div className="flex flex-col gap-0.5">
+          <StatusTag tone={healthTone(row.original.health_status)}>
+            {row.original.health_status ?? 'unknown'}
+          </StatusTag>
+          {row.original.health_message ? (
+            <span className="text-xs text-text-muted">{row.original.health_message}</span>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      header: 'Last verified',
+      id: 'last_verified',
+      cell: ({ row }) => (
+        <span className="text-text-secondary">{formatDate(row.original.last_verified_at)}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => handleScan(row.original)}
+            disabled={scanning === row.original.id || verifying === row.original.id}
+          >
+            {scanning === row.original.id ? 'Scanning…' : 'Scan'}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => handleVerify(row.original)}
+            disabled={verifying === row.original.id || scanning === row.original.id}
+          >
+            {verifying === row.original.id ? 'Verifying…' : 'Verify'}
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            onClick={() => handleDeleteHost(row.original)}
+          >
+            Remove
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  const credColumns: ColumnDef<ProviderCredential>[] = [
+    {
+      header: 'Name',
+      accessorKey: 'name',
+      cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
+    },
+    {
+      header: 'Provider',
+      accessorKey: 'provider',
+      cell: ({ row }) => <span className="text-text-secondary">{row.original.provider}</span>,
+    },
+    {
+      header: 'Created',
+      accessorKey: 'created_at',
+      cell: ({ row }) => (
+        <span className="text-text-secondary">{formatDate(row.original.created_at)}</span>
+      ),
+    },
+    {
+      header: 'Rotated',
+      accessorKey: 'rotated_at',
+      cell: ({ row }) => (
+        <span className="text-text-secondary">{formatDate(row.original.rotated_at)}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="danger"
+          size="sm"
+          onClick={() => handleDeleteCredential(row.original)}
+        >
+          Delete
+        </Button>
+      ),
+    },
+  ];
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
@@ -297,247 +448,226 @@ export function Hypervisors(): JSX.Element {
         description="Register the virtualization hosts and cloud accounts Control One provisions against. Multiple hosts per tenant across datacenters are supported."
       />
 
-      <div className="card" style={{ marginTop: '1rem' }}>
-        <h3>Add hypervisor host</h3>
-        <form onSubmit={handleCreateHost} style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
-          <label>
-            Tenant
-            <select
-              value={hostForm.tenant_id}
-              onChange={(e) => setHostForm((f) => ({ ...f, tenant_id: e.target.value }))}
-              required
-            >
-              <option value="">Select tenant…</option>
-              {tenants?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Provider
-            <select
-              value={hostForm.provider}
-              onChange={(e) => setHostForm((f) => ({ ...f, provider: e.target.value as HypervisorProvider, credential_id: '' }))}
-            >
-              {PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Name
-            <input
-              type="text"
-              value={hostForm.name}
-              onChange={(e) => setHostForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="lon-kvm-01"
-              required
-            />
-          </label>
-          <label>
-            Endpoint URL
-            <input
-              type="text"
-              value={hostForm.endpoint_url}
-              onChange={(e) => setHostForm((f) => ({ ...f, endpoint_url: e.target.value }))}
-              placeholder={hostForm.provider === 'libvirt' ? 'qemu+ssh://root@kvm-01/system' : 'https://vcenter.lon'}
-              required
-            />
-          </label>
-          <label>
-            Datacenter (optional)
-            <input
-              type="text"
-              value={hostForm.datacenter}
-              onChange={(e) => setHostForm((f) => ({ ...f, datacenter: e.target.value }))}
-              placeholder="lon-dc-1"
-            />
-          </label>
-          <label>
-            Credential
-            <select
-              value={hostForm.credential_id}
-              onChange={(e) => setHostForm((f) => ({ ...f, credential_id: e.target.value }))}
-            >
-              <option value="">No credential (env-based)</option>
-              {(credentialsByProvider[hostForm.provider] || []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Labels (JSON, optional)
-            <textarea
-              rows={3}
-              value={hostForm.labelsText}
-              onChange={(e) => setHostForm((f) => ({ ...f, labelsText: e.target.value }))}
-              placeholder='{"tier":"prod","region":"eu-west"}'
-            />
-          </label>
-          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem' }}>
-            <button type="submit" disabled={submittingHost}>
-              {submittingHost ? 'Saving…' : 'Add host'}
-            </button>
-            <button type="button" onClick={() => setHostForm(HOST_FORM_DEFAULT)} disabled={submittingHost}>
-              Reset
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div className="card" style={{ marginTop: '1rem' }}>
-        <h3>Registered hosts</h3>
-        {loading ? (
-          <p>Loading…</p>
-        ) : hosts.length === 0 ? (
-          <p>No hypervisor hosts configured yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Provider</th>
-                <th>Endpoint</th>
-                <th>Datacenter</th>
-                <th>Health</th>
-                <th>Last verified</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {hosts.map((host) => (
-                <tr key={host.id}>
-                  <td>{host.name}</td>
-                  <td>{host.provider}</td>
-                  <td><code>{host.endpoint_url}</code></td>
-                  <td>{host.datacenter ?? '—'}</td>
-                  <td>
-                    <span className={`badge status-${host.health_status}`}>{host.health_status}</span>
-                    {host.health_message ? <div style={{ fontSize: '0.8em', opacity: 0.7 }}>{host.health_message}</div> : null}
-                  </td>
-                  <td>{formatDate(host.last_verified_at)}</td>
-                  <td style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button type="button" onClick={() => handleVerify(host)} disabled={verifying === host.id}>
-                      {verifying === host.id ? 'Verifying…' : 'Verify'}
-                    </button>
-                    <button type="button" onClick={() => handleDeleteHost(host)} className="danger">
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="card" style={{ marginTop: '1rem' }}>
-        <h3>Add provider credential</h3>
-        <p>
-          Credentials are encrypted at rest with AES-256-GCM using the key in <code>secrets.encryption_key</code>. Never shown again after save — rotate by posting a
-          new config.
-        </p>
-        <form onSubmit={handleCreateCredential} style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
-          <label>
-            Tenant
-            <select
-              value={credentialForm.tenant_id}
-              onChange={(e) => setCredentialForm((f) => ({ ...f, tenant_id: e.target.value }))}
-              required
-            >
-              <option value="">Select tenant…</option>
-              {tenants?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Provider
-            <select
-              value={credentialForm.provider}
-              onChange={(e) => {
-                const next = e.target.value as HypervisorProvider;
-                setCredentialForm((f) => ({
-                  ...f,
-                  provider: next,
-                  fields: defaultFieldsFor(next),
-                  configText: '',
-                }));
-              }}
-            >
-              {PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Name
-            <input
-              type="text"
-              value={credentialForm.name}
-              onChange={(e) => setCredentialForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="kvm-root"
-              required
-            />
-          </label>
-
-          {!credentialForm.showRawJSON ? (
-            <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-              {PROVIDER_FIELDS[credentialForm.provider].map((spec) => (
-                <label key={spec.key} style={spec.type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
-                  {spec.label}{spec.required ? ' *' : ''}
-                  {spec.type === 'textarea' ? (
-                    <textarea
-                      rows={4}
-                      value={credentialForm.fields[spec.key] ?? ''}
-                      onChange={(e) =>
-                        setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: e.target.value } }))
-                      }
-                      placeholder={spec.placeholder}
-                      autoComplete="off"
-                    />
-                  ) : (
-                    <input
-                      type={spec.type}
-                      value={credentialForm.fields[spec.key] ?? ''}
-                      onChange={(e) =>
-                        setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: e.target.value } }))
-                      }
-                      placeholder={spec.placeholder}
-                      required={spec.required}
-                      autoComplete={spec.type === 'password' ? 'new-password' : 'off'}
-                    />
-                  )}
-                  {spec.helper ? <small className="muted">{spec.helper}</small> : null}
-                </label>
-              ))}
-            </div>
-          ) : (
-            <label style={{ gridColumn: '1 / -1' }}>
-              Config (raw JSON)
-              <textarea
-                rows={6}
-                value={credentialForm.configText || fieldsToConfigText(credentialForm.fields)}
-                onChange={(e) => setCredentialForm((f) => ({ ...f, configText: e.target.value }))}
+      {/* Forms row */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* LEFT: Add host */}
+        <Panel padding="md" eyebrow="ADD HOST" title="Register hypervisor host" toneAccent="brand">
+          <form onSubmit={handleCreateHost} className="flex flex-col gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <SelectField
+                id="host-tenant"
+                label="Tenant"
+                value={hostForm.tenant_id}
+                onChange={(e) => setHostForm((f) => ({ ...f, tenant_id: e.target.value }))}
                 required
-              />
-            </label>
-          )}
+              >
+                <option value="">Select tenant…</option>
+                {tenants?.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </SelectField>
+              <SelectField
+                id="host-provider"
+                label="Provider"
+                value={hostForm.provider}
+                onChange={(e) => setHostForm((f) => ({ ...f, provider: e.target.value as HypervisorProvider, credential_id: '' }))}
+              >
+                {PROVIDERS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </SelectField>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="host-name">Name</Label>
+                <Input
+                  id="host-name"
+                  type="text"
+                  value={hostForm.name}
+                  onChange={(e) => setHostForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="lon-kvm-01"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="host-endpoint">Endpoint URL</Label>
+                <Input
+                  id="host-endpoint"
+                  type="text"
+                  value={hostForm.endpoint_url}
+                  onChange={(e) => setHostForm((f) => ({ ...f, endpoint_url: e.target.value }))}
+                  placeholder={hostForm.provider === 'libvirt' ? 'qemu+ssh://root@kvm-01/system' : 'https://vcenter.lon'}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="host-datacenter">Datacenter (optional)</Label>
+                <Input
+                  id="host-datacenter"
+                  type="text"
+                  value={hostForm.datacenter}
+                  onChange={(e) => setHostForm((f) => ({ ...f, datacenter: e.target.value }))}
+                  placeholder="lon-dc-1"
+                />
+              </div>
+              <SelectField
+                id="host-credential"
+                label="Credential"
+                value={hostForm.credential_id}
+                onChange={(e) => setHostForm((f) => ({ ...f, credential_id: e.target.value }))}
+              >
+                <option value="">No credential (env-based)</option>
+                {(credentialsByProvider[hostForm.provider] || []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </SelectField>
+            </div>
 
-          <div style={{ gridColumn: '1 / -1' }}>
-            <button
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="host-labels">Labels (JSON, optional)</Label>
+              <textarea
+                id="host-labels"
+                className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+                rows={3}
+                value={hostForm.labelsText}
+                onChange={(e) => setHostForm((f) => ({ ...f, labelsText: e.target.value }))}
+                placeholder='{"tier":"prod","region":"eu-west"}'
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <Button type="submit" variant="primary" disabled={submittingHost}>
+                {submittingHost ? 'Saving…' : 'Add host'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setHostForm(HOST_FORM_DEFAULT)}
+                disabled={submittingHost}
+              >
+                Reset
+              </Button>
+            </div>
+          </form>
+        </Panel>
+
+        {/* RIGHT: Add credential */}
+        <Panel padding="md" eyebrow="ADD CREDENTIAL" title="Provider credential" toneAccent="accent">
+          <p className="text-xs text-text-muted">
+            Credentials are encrypted at rest with AES-256-GCM. Never shown again after save — rotate by posting a new config.
+          </p>
+          <form onSubmit={handleCreateCredential} className="flex flex-col gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <SelectField
+                id="cred-tenant"
+                label="Tenant"
+                value={credentialForm.tenant_id}
+                onChange={(e) => setCredentialForm((f) => ({ ...f, tenant_id: e.target.value }))}
+                required
+              >
+                <option value="">Select tenant…</option>
+                {tenants?.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </SelectField>
+              <SelectField
+                id="cred-provider"
+                label="Provider"
+                value={credentialForm.provider}
+                onChange={(e) => {
+                  const next = e.target.value as HypervisorProvider;
+                  setCredentialForm((f) => ({
+                    ...f,
+                    provider: next,
+                    fields: defaultFieldsFor(next),
+                    configText: '',
+                  }));
+                }}
+              >
+                {PROVIDERS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </SelectField>
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <Label htmlFor="cred-name">Name</Label>
+                <Input
+                  id="cred-name"
+                  type="text"
+                  value={credentialForm.name}
+                  onChange={(e) => setCredentialForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="kvm-root"
+                  required
+                />
+              </div>
+            </div>
+
+            {!credentialForm.showRawJSON ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {PROVIDER_FIELDS[credentialForm.provider].map((spec) => (
+                  spec.type === 'textarea' ? (
+                    <div key={spec.key} className="flex flex-col gap-1.5 sm:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor={`cred-field-${spec.key}`}>
+                          {spec.label}{spec.required ? ' *' : ''}
+                        </Label>
+                        <FileUploadButton
+                          accept=".pem,.key,.pub,.crt,.cer,text/plain"
+                          label="Upload file"
+                          onContent={(text) =>
+                            setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: text.trim() } }))
+                          }
+                        />
+                      </div>
+                      <textarea
+                        id={`cred-field-${spec.key}`}
+                        className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50 resize-y"
+                        rows={4}
+                        value={credentialForm.fields[spec.key] ?? ''}
+                        onChange={(e) =>
+                          setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: e.target.value } }))
+                        }
+                        placeholder={spec.placeholder}
+                        autoComplete="off"
+                      />
+                      {spec.helper ? <p className="text-xs text-text-muted">{spec.helper}</p> : null}
+                    </div>
+                  ) : (
+                    <div key={spec.key} className="flex flex-col gap-1.5">
+                      <Label htmlFor={`cred-field-${spec.key}`}>
+                        {spec.label}{spec.required ? ' *' : ''}
+                      </Label>
+                      <Input
+                        id={`cred-field-${spec.key}`}
+                        type={spec.type}
+                        value={credentialForm.fields[spec.key] ?? ''}
+                        onChange={(e) =>
+                          setCredentialForm((f) => ({ ...f, fields: { ...f.fields, [spec.key]: e.target.value } }))
+                        }
+                        placeholder={spec.placeholder}
+                        required={spec.required}
+                        autoComplete={spec.type === 'password' ? 'new-password' : 'off'}
+                      />
+                      {spec.helper ? <p className="text-xs text-text-muted">{spec.helper}</p> : null}
+                    </div>
+                  )
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="cred-raw-json">Config (raw JSON)</Label>
+                <textarea
+                  id="cred-raw-json"
+                  className="flex min-h-[100px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:opacity-50"
+                  rows={6}
+                  value={credentialForm.configText || fieldsToConfigText(credentialForm.fields)}
+                  onChange={(e) => setCredentialForm((f) => ({ ...f, configText: e.target.value }))}
+                  required
+                />
+              </div>
+            )}
+
+            <Button
               type="button"
-              className="secondary-button"
+              variant="secondary"
+              size="sm"
               onClick={() =>
                 setCredentialForm((f) => ({
                   ...f,
@@ -547,52 +677,56 @@ export function Hypervisors(): JSX.Element {
               }
             >
               {credentialForm.showRawJSON ? 'Use visual form' : 'Edit raw JSON'}
-            </button>
-          </div>
-          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem' }}>
-            <button type="submit" disabled={submittingCred}>
-              {submittingCred ? 'Saving…' : 'Save credential'}
-            </button>
-            <button type="button" onClick={() => setCredentialForm(CREDENTIAL_FORM_DEFAULT)} disabled={submittingCred}>
-              Reset
-            </button>
-          </div>
-        </form>
+            </Button>
+
+            <div className="flex items-center gap-2 pt-2">
+              <Button type="submit" variant="primary" disabled={submittingCred}>
+                {submittingCred ? 'Saving…' : 'Save credential'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setCredentialForm(CREDENTIAL_FORM_DEFAULT)}
+                disabled={submittingCred}
+              >
+                Reset
+              </Button>
+            </div>
+          </form>
+        </Panel>
       </div>
 
-      <div className="card" style={{ marginTop: '1rem' }}>
-        <h3>Stored credentials</h3>
-        {credentials.length === 0 ? (
-          <p>No provider credentials configured yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Provider</th>
-                <th>Created</th>
-                <th>Rotated</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {credentials.map((cred) => (
-                <tr key={cred.id}>
-                  <td>{cred.name}</td>
-                  <td>{cred.provider}</td>
-                  <td>{formatDate(cred.created_at)}</td>
-                  <td>{formatDate(cred.rotated_at)}</td>
-                  <td>
-                    <button type="button" onClick={() => handleDeleteCredential(cred)} className="danger">
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {/* Hosts table */}
+      <Panel padding="md" eyebrow="HOSTS" title="Registered hosts">
+        <DataTable
+          columns={hostColumns}
+          rows={hosts}
+          loading={loading}
+          rowKey={(row) => row.id}
+          empty={
+            <EmptyState
+              title="No hypervisor hosts"
+              description="No hypervisor hosts configured yet."
+              icon={<Server />}
+            />
+          }
+        />
+      </Panel>
+
+      {/* Credentials table */}
+      <Panel padding="md" eyebrow="CREDENTIALS" title="Stored credentials">
+        <DataTable
+          columns={credColumns}
+          rows={credentials}
+          rowKey={(row) => row.id}
+          empty={
+            <EmptyState
+              title="No credentials"
+              description="No provider credentials configured yet."
+            />
+          }
+        />
+      </Panel>
     </div>
   );
 }

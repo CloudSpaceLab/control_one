@@ -15,6 +15,7 @@ import {
   KpiTile,
   Panel,
   SectionHeader,
+  SelectField,
   StatusTag,
   type StateTone,
 } from '../components/kit';
@@ -438,18 +439,15 @@ export function Secrets(): JSX.Element {
                   />
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="backend">Backend *</Label>
-                  <select
-                    id="backend"
-                    value={formData.backend}
-                    onChange={(e) => setFormData({ ...formData, backend: e.target.value })}
-                    required
-                    className="flex h-9 w-full rounded-md border border-border-subtle bg-surface px-3 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
-                  >
-                    <option value="vault">Vault</option>
-                  </select>
-                </div>
+                <SelectField
+                  id="backend"
+                  label="Backend *"
+                  value={formData.backend}
+                  onChange={(e) => setFormData({ ...formData, backend: e.target.value })}
+                  required
+                >
+                  <option value="vault">Vault</option>
+                </SelectField>
 
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="endpoint">Endpoint</Label>

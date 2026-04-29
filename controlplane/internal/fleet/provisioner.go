@@ -136,8 +136,16 @@ func (p *Provisioner) provisionOne(ctx context.Context, host string, port int, u
 	}
 	defer func() { _ = client.Close() }()
 
+	// Download the install script to a temp file first, then execute it.
+	// Using a pipe (curl ... | bash) masks curl's non-zero exit when the
+	// server returns an error (e.g. 401, 404) because bash exits 0 on an
+	// empty stdin. The two-step approach ensures any download failure
+	// (network, HTTP error, auth failure) is immediately visible as a
+	// non-zero exit code and appears in ssh_output for diagnosis.
 	installCmd := fmt.Sprintf(
-		"curl -fsSL '%s/api/v1/agent/install-script?token=%s' | bash",
+		`_c1tmp=$(mktemp /tmp/c1-install.XXXXXX.sh) && `+
+			`curl -fsSL '%s/api/v1/agent/install-script?token=%s' -o "$_c1tmp" && `+
+			`bash "$_c1tmp"; _c1ret=$?; rm -f "$_c1tmp"; exit $_c1ret`,
 		req.CPURL, req.TokenRaw,
 	)
 
