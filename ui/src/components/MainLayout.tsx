@@ -44,6 +44,9 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Posture',
     items: [
       { to: '/compliance', label: 'Compliance' },
+      { to: '/compliance-evidence', label: 'Evidence', roles: ['admin', 'operator'] },
+      { to: '/audit-reports', label: 'Audit reports', roles: ['admin', 'operator'] },
+      { to: '/frameworks', label: 'Frameworks' },
       { to: '/audit', label: 'Audit log' },
       { to: '/telemetry', label: 'Telemetry' },
     ],

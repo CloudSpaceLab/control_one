@@ -341,6 +341,15 @@ type Store interface {
 	ListPIIFindings(context.Context, uuid.UUID, *bool, int, int) ([]storage.PIIFinding, int, error)
 	ResolvePIIFinding(context.Context, uuid.UUID, uuid.UUID) error
 	CreatePIIFinding(context.Context, *storage.PIIFinding) (*storage.PIIFinding, error)
+	// Compliance evidence + audit reports (Sprint 3).
+	CreateComplianceEvidence(context.Context, *storage.ComplianceEvidence) (*storage.ComplianceEvidence, error)
+	ListComplianceEvidence(context.Context, uuid.UUID, string, string, int, int) ([]storage.ComplianceEvidence, int, error)
+	GetComplianceEvidence(context.Context, uuid.UUID) (*storage.ComplianceEvidence, error)
+	DeleteComplianceEvidence(context.Context, uuid.UUID) error
+	CreateAuditReport(context.Context, *storage.AuditReport) (*storage.AuditReport, error)
+	ListAuditReports(context.Context, uuid.UUID, int, int) ([]storage.AuditReport, int, error)
+	GetAuditReport(context.Context, uuid.UUID) (*storage.AuditReport, error)
+	UpdateAuditReportStatus(context.Context, uuid.UUID, string, *string, *time.Time) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -919,6 +928,12 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/dlp/findings", s.handleDLPFindingsCollection)
 	s.baseRouter.HandleFunc("/api/v1/dlp/findings/", s.handleDLPFindingsResource)
 	s.baseRouter.HandleFunc("/api/v1/dlp/seed-rules", s.handleDLPSeedRules)
+	// Compliance evidence + audit reports + frameworks (Sprint 3).
+	s.baseRouter.HandleFunc("/api/v1/compliance/evidence", s.handleComplianceEvidenceCollection)
+	s.baseRouter.HandleFunc("/api/v1/compliance/evidence/", s.handleComplianceEvidenceResource)
+	s.baseRouter.HandleFunc("/api/v1/compliance/frameworks", s.handleComplianceFrameworks)
+	s.baseRouter.HandleFunc("/api/v1/compliance/reports", s.handleComplianceReportsCollection)
+	s.baseRouter.HandleFunc("/api/v1/compliance/reports/", s.handleComplianceReportsResource)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {

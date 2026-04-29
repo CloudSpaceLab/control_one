@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, FileText, Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -160,15 +160,24 @@ export function Compliance(): JSX.Element {
 // ── Posture tab (existing) ────────────────────────────────────────────────────
 
 function PostureTab(): JSX.Element {
+  const client = useApiClient();
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [selectedNode, setSelectedNode] = useState<string | undefined>(undefined);
   const [severityFilter, setSeverityFilter] = useState<string>('');
   const [passedFilter, setPassedFilter] = useState<boolean | undefined>(undefined);
+  const [frameworkFilter, setFrameworkFilter] = useState<string>('');
+  const [availableFrameworks, setAvailableFrameworks] = useState<string[]>([]);
   const [limit] = useState(50);
   const [offset, setOffset] = useState(0);
 
   const { data: tenants } = useTenants();
   const { data: nodes } = useNodes({ tenantId: selectedTenant, limit: 1000 });
+
+  useEffect(() => {
+    client.listComplianceFrameworks()
+      .then((res) => setAvailableFrameworks(res.frameworks))
+      .catch(() => { /* non-critical */ });
+  }, [client]);
 
   const { data: summary, loading: summaryLoading, error: summaryError, reload: reloadSummary } =
     useComplianceSummary({ tenant_id: selectedTenant, node_id: selectedNode });
@@ -181,6 +190,7 @@ function PostureTab(): JSX.Element {
       tenant_id: selectedTenant,
       node_id: selectedNode,
       severity: severityFilter || undefined,
+      framework: frameworkFilter || undefined,
       passed: passedFilter,
       limit,
       offset,
@@ -300,7 +310,7 @@ function PostureTab(): JSX.Element {
       )}
 
       <Panel padding="md" eyebrow="FILTERS" title="Refine">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <FilterSelect label="Tenant" value={selectedTenant ?? ''}
             onChange={(v) => { setSelectedTenant(v || undefined); setSelectedNode(undefined); setOffset(0); }}
             options={[{ label: 'All tenants', value: '' }, ...tenants.map((t) => ({ label: t.name, value: t.id }))]}
@@ -320,6 +330,18 @@ function PostureTab(): JSX.Element {
           <FilterSelect label="Status" value={passedFilter === undefined ? '' : passedFilter.toString()}
             onChange={(v) => { setPassedFilter(v === '' ? undefined : v === 'true'); setOffset(0); }}
             options={[{ label: 'All', value: '' }, { label: 'Passed', value: 'true' }, { label: 'Failed', value: 'false' }]}
+          />
+          <FilterSelect
+            label="Framework"
+            value={frameworkFilter}
+            onChange={(v) => {
+              setFrameworkFilter(v);
+              setOffset(0);
+            }}
+            options={[
+              { label: 'All frameworks', value: '' },
+              ...availableFrameworks.map((f) => ({ label: f, value: f })),
+            ]}
           />
         </div>
       </Panel>

@@ -3761,3 +3761,27 @@ func (f *fakeStore) ResolvePIIFinding(_ context.Context, _, _ uuid.UUID) error {
 func (f *fakeStore) CreatePIIFinding(_ context.Context, _ *storage.PIIFinding) (*storage.PIIFinding, error) {
 	return nil, nil
 }
+
+// Compliance evidence + audit reports stubs (Sprint 3).
+func (f *fakeStore) CreateComplianceEvidence(_ context.Context, e *storage.ComplianceEvidence) (*storage.ComplianceEvidence, error) {
+	return e, nil
+}
+func (f *fakeStore) ListComplianceEvidence(_ context.Context, _ uuid.UUID, _, _ string, _, _ int) ([]storage.ComplianceEvidence, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) GetComplianceEvidence(_ context.Context, _ uuid.UUID) (*storage.ComplianceEvidence, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteComplianceEvidence(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CreateAuditReport(_ context.Context, r *storage.AuditReport) (*storage.AuditReport, error) {
+	return r, nil
+}
+func (f *fakeStore) ListAuditReports(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.AuditReport, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) GetAuditReport(_ context.Context, _ uuid.UUID) (*storage.AuditReport, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateAuditReportStatus(_ context.Context, _ uuid.UUID, _ string, _ *string, _ *time.Time) error {
+	return nil
+}
