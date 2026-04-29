@@ -3625,6 +3625,48 @@ func (f *fakeStore) ListCorrelationRules(_ context.Context, _ uuid.UUID) ([]stor
 }
 func (f *fakeStore) DeleteCorrelationRule(_ context.Context, _ uuid.UUID) error { return nil }
 
+func (f *fakeStore) CreateCertification(_ context.Context, _ *storage.Certification) error {
+	return nil
+}
+func (f *fakeStore) ListCertifications(_ context.Context, _ string) ([]storage.Certification, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteCertification(_ context.Context, _ string) error {
+	return nil
+}
+func (f *fakeStore) CreateFAQItem(_ context.Context, _ *storage.SecurityFAQItem) error {
+	return nil
+}
+func (f *fakeStore) ListFAQItems(_ context.Context, _ string) ([]storage.SecurityFAQItem, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteFAQItem(_ context.Context, _ string) error {
+	return nil
+}
+func (f *fakeStore) CreateIncidentReport(_ context.Context, _ *storage.IncidentReport) error {
+	return nil
+}
+func (f *fakeStore) ListIncidentReports(_ context.Context, _ string, _ int) ([]storage.IncidentReport, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteIncidentReport(_ context.Context, _ string) error {
+	return nil
+}
+func (f *fakeStore) CreateSubprocessor(_ context.Context, _ *storage.Subprocessor) error {
+	return nil
+}
+func (f *fakeStore) ListSubprocessors(_ context.Context, _ string) ([]storage.Subprocessor, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteSubprocessor(_ context.Context, _ string) error {
+	return nil
+}
+func (f *fakeStore) GetTrustCenterData(_ context.Context, _ string) (*storage.TrustCenterData, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetTenantByName(_ context.Context, _ string) (*storage.Tenant, error) {
+	return nil, nil
+}
 func (f *fakeStore) UpsertBehavioralBaseline(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _, _ string, _ map[string]any, _ int) error {
 	return nil
 }
