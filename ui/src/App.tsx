@@ -40,6 +40,7 @@ const OfflineBundle = lazy(() => import('./pages/OfflineBundle').then((m) => ({ 
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const Onboard = lazy(() => import('./pages/Onboard').then((m) => ({ default: m.Onboard })));
 const Behavioral = lazy(() => import('./pages/Behavioral').then((m) => ({ default: m.Behavioral })));
+const DataSecurity = lazy(() => import('./pages/DataSecurity').then((m) => ({ default: m.DataSecurity })));
 
 function PageFallback(): JSX.Element {
   return (
@@ -104,6 +105,7 @@ export function App(): JSX.Element {
                 <Route path="offline-bundle" element={<OfflineBundle />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="behavioral" element={<Behavioral />} />
+                <Route path="data-security" element={<DataSecurity />} />
               </Routes>
             </Suspense>
           }

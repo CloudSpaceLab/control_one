@@ -2535,6 +2535,21 @@ export class APIClient {
     });
   }
 
+  // ---- DLP / Data Classification (Sprint 2) --------------------------------
+
+  async listDLPRules(tenantId: string): Promise<PaginatedResponse<DataClassificationRule>> {
+    return this.request<PaginatedResponse<DataClassificationRule>>(
+      `/api/v1/dlp/rules?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createDLPRule(payload: CreateDLPRulePayload): Promise<DataClassificationRule> {
+    return this.request<DataClassificationRule>('/api/v1/dlp/rules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async deleteCorrelationRule(id: string): Promise<void> {
     await this.request<void>(`/api/v1/correlation/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
@@ -2605,6 +2620,49 @@ export class APIClient {
   // ── Worker pool status ────────────────────────────────────────────────
   async getWorkerPoolStatus(): Promise<WorkerPoolStatus> {
     return this.request<WorkerPoolStatus>('/api/v1/admin/worker-pool');
+  }
+
+  // ---- DLP / Data Classification (Sprint 2) --------------------------------
+
+  async deleteDLPRule(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/dlp/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listColumnClassifications(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<ColumnClassification>> {
+    const q = new URLSearchParams({ tenant_id: params.tenantId });
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    return this.request<PaginatedResponse<ColumnClassification>>(`/api/v1/dlp/columns?${q}`);
+  }
+
+  async listPIIFindings(params: {
+    tenantId: string;
+    resolved?: boolean;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<PIIFinding>> {
+    const q = new URLSearchParams({ tenant_id: params.tenantId });
+    if (params.resolved !== undefined) q.set('resolved', String(params.resolved));
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    return this.request<PaginatedResponse<PIIFinding>>(`/api/v1/dlp/findings?${q}`);
+  }
+
+  async resolvePIIFinding(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve`, {
+      method: 'POST',
+    });
+  }
+
+  async seedDLPRules(tenantId: string): Promise<{ seeded: number }> {
+    return this.request<{ seeded: number }>('/api/v1/dlp/seed-rules', {
+      method: 'POST',
+      body: JSON.stringify({ tenant_id: tenantId }),
+    });
   }
 }
 
@@ -2917,4 +2975,52 @@ export interface WorkerPoolStatus {
   idle: number;
   jobs_processed_total: number;
   jobs_failed_total: number;
+}
+
+// ---- DLP / Data Classification types (Sprint 2) ---------------------------
+
+export interface DataClassificationRule {
+  id: string;
+  tenant_id: string;
+  name: string;
+  pii_type: string;
+  regex: string;
+  severity: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface ColumnClassification {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  database_name: string;
+  schema_name: string;
+  table_name: string;
+  column_name: string;
+  pii_type?: string;
+  encrypted?: boolean;
+  encryption_kind?: string;
+  min_value_length?: number;
+  max_value_length?: number;
+  sample_count?: number;
+  last_scanned_at?: string;
+}
+
+export interface PIIFinding {
+  id: string;
+  tenant_id: string;
+  severity: string;
+  details?: string;
+  resolved_at?: string;
+  resolved_by?: string;
+  created_at: string;
+}
+
+export interface CreateDLPRulePayload {
+  tenant_id: string;
+  name: string;
+  pii_type: string;
+  regex: string;
+  severity: string;
 }
