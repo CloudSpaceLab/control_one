@@ -3713,3 +3713,25 @@ func (f *fakeStore) GetComplianceByFramework(_ context.Context, _ uuid.UUID) ([]
 		{Name: "cis-foundations", Pass: 4, Fail: 1, Coverage: 0.8},
 	}, nil
 }
+
+// Data classification / DLP stubs (Sprint 2).
+func (f *fakeStore) ListDataClassificationRules(_ context.Context, _ uuid.UUID) ([]storage.DataClassificationRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) CreateDataClassificationRule(_ context.Context, _ *storage.DataClassificationRule) (*storage.DataClassificationRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteDataClassificationRule(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) UpsertColumnClassification(_ context.Context, _ *storage.ColumnClassification) (*storage.ColumnClassification, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListColumnClassifications(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ColumnClassification, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) ListPIIFindings(_ context.Context, _ uuid.UUID, _ *bool, _, _ int) ([]storage.PIIFinding, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) ResolvePIIFinding(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CreatePIIFinding(_ context.Context, _ *storage.PIIFinding) (*storage.PIIFinding, error) {
+	return nil, nil
+}

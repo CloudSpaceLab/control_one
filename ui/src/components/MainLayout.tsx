@@ -56,6 +56,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/connections', label: 'Connections' },
       { to: '/dashboards', label: 'Custom dashboards' },
       { to: '/recommendations', label: 'Recommendations' },
+      { to: '/data-security', label: 'Data security', roles: ['admin', 'operator'] },
     ],
   },
   {

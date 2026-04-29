@@ -329,6 +329,15 @@ type Store interface {
 	GetRiskScoreHistory(context.Context, uuid.UUID, int) ([]storage.RiskScorePoint, error)
 	GetRemediationVelocityHistory(context.Context, uuid.UUID, int) ([]storage.RemediationVelocityPoint, error)
 	GetComplianceByFramework(context.Context, uuid.UUID) ([]storage.FrameworkComplianceSummary, error)
+	// Data classification / DLP (Sprint 2).
+	ListDataClassificationRules(context.Context, uuid.UUID) ([]storage.DataClassificationRule, error)
+	CreateDataClassificationRule(context.Context, *storage.DataClassificationRule) (*storage.DataClassificationRule, error)
+	DeleteDataClassificationRule(context.Context, uuid.UUID) error
+	UpsertColumnClassification(context.Context, *storage.ColumnClassification) (*storage.ColumnClassification, error)
+	ListColumnClassifications(context.Context, uuid.UUID, int, int) ([]storage.ColumnClassification, int, error)
+	ListPIIFindings(context.Context, uuid.UUID, *bool, int, int) ([]storage.PIIFinding, int, error)
+	ResolvePIIFinding(context.Context, uuid.UUID, uuid.UUID) error
+	CreatePIIFinding(context.Context, *storage.PIIFinding) (*storage.PIIFinding, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -900,6 +909,13 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/entities/", s.handleEntitySubroutes)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches", s.handleSavedSearchesCollection)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches/", s.handleSavedSearchSubroute)
+	// Data classification / DLP (Sprint 2).
+	s.baseRouter.HandleFunc("/api/v1/dlp/rules", s.handleDLPRulesCollection)
+	s.baseRouter.HandleFunc("/api/v1/dlp/rules/", s.handleDLPRulesResource)
+	s.baseRouter.HandleFunc("/api/v1/dlp/columns", s.handleDLPColumnsCollection)
+	s.baseRouter.HandleFunc("/api/v1/dlp/findings", s.handleDLPFindingsCollection)
+	s.baseRouter.HandleFunc("/api/v1/dlp/findings/", s.handleDLPFindingsResource)
+	s.baseRouter.HandleFunc("/api/v1/dlp/seed-rules", s.handleDLPSeedRules)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
