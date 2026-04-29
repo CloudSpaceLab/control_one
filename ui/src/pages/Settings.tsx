@@ -41,13 +41,20 @@ const AVAILABLE_EVENTS = [
 
 export function Settings(): JSX.Element {
   const api = useApiClient();
-  const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations'>('webhooks');
+  const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center'>('webhooks');
 
   // MFA state
   const [mfaFactors, setMfaFactors] = useState<MFAFactor[]>([]);
   const [mfaLoading, setMfaLoading] = useState(false);
   const [mfaReloadToken, setMfaReloadToken] = useState(0);
   const [deleteMfaId, setDeleteMfaId] = useState<string | null>(null);
+  const [totpEnrollStep, setTotpEnrollStep] = useState<'idle' | 'scanning' | 'verifying'>('idle');
+  const [totpEnrollData, setTotpEnrollData] = useState<{ factor_id: string; secret: string; provisioning_uri: string } | null>(null);
+  const [totpCode, setTotpCode] = useState('');
+  const [totpLabel, setTotpLabel] = useState('Authenticator app');
+  const [webauthnEnrollStep, setWebauthnEnrollStep] = useState<'idle' | 'enrolling'>('idle');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [showRecoveryCodes, setShowRecoveryCodes] = useState(false);
 
   // Worker pool
   const { status: workerStatus, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus({ pollIntervalMs: 0 });
@@ -68,6 +75,59 @@ export function Settings(): JSX.Element {
     await api.deleteMFAFactor(deleteMfaId);
     setDeleteMfaId(null);
     setMfaReloadToken((n) => n + 1);
+  };
+
+  const handleBeginTOTPEnroll = async () => {
+    try {
+      const data = await api.beginTOTPEnroll();
+      setTotpEnrollData(data);
+      setTotpEnrollStep('scanning');
+    } catch (err) {
+      console.error('Failed to begin TOTP enrollment', err);
+    }
+  };
+
+  const handleFinishTOTPEnroll = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!totpEnrollData || !totpCode) return;
+    try {
+      await api.finishTOTPEnroll(totpEnrollData.factor_id, totpCode, totpLabel);
+      setTotpEnrollStep('idle');
+      setTotpEnrollData(null);
+      setTotpCode('');
+      setMfaReloadToken((n) => n + 1);
+    } catch (err) {
+      console.error('Failed to finish TOTP enrollment', err);
+    }
+  };
+
+  const handleCancelTOTPEnroll = () => {
+    setTotpEnrollStep('idle');
+    setTotpEnrollData(null);
+    setTotpCode('');
+  };
+
+  const handleBeginWebAuthnEnroll = async () => {
+    try {
+      setWebauthnEnrollStep('enrolling');
+      const data = await api.beginWebAuthnEnroll();
+      // WebAuthn enrollment requires browser API - placeholder for now
+      console.log('WebAuthn enrollment challenge:', data);
+      setWebauthnEnrollStep('idle');
+    } catch (err) {
+      console.error('Failed to begin WebAuthn enrollment', err);
+      setWebauthnEnrollStep('idle');
+    }
+  };
+
+  const handleViewRecoveryCodes = async () => {
+    try {
+      const data = await api.getMFARecoveryCodes();
+      setRecoveryCodes(data.codes);
+      setShowRecoveryCodes(true);
+    } catch (err) {
+      console.error('Failed to fetch recovery codes', err);
+    }
   };
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [isCreatingWebhook, setIsCreatingWebhook] = useState(false);
@@ -231,12 +291,13 @@ export function Settings(): JSX.Element {
         description="Webhook endpoints and platform integrations."
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations')}>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center')}>
         <TabsList>
           <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="system">System health</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="trust-center">Trust Center</TabsTrigger>
         </TabsList>
 
         <TabsContent value="webhooks" className="mt-4 flex flex-col gap-4">
@@ -473,17 +534,75 @@ export function Settings(): JSX.Element {
             eyebrow="MFA · WEBAUTHN"
             title="Enrolled factors"
             actions={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => setMfaReloadToken((n) => n + 1)}
-                disabled={mfaLoading}
-              >
-                Refresh
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleBeginTOTPEnroll}
+                  disabled={totpEnrollStep !== 'idle' || mfaLoading}
+                >
+                  Add TOTP
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleBeginWebAuthnEnroll}
+                  disabled={webauthnEnrollStep !== 'idle' || mfaLoading}
+                >
+                  Add Security Key
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setMfaReloadToken((n) => n + 1)}
+                  disabled={mfaLoading}
+                >
+                  Refresh
+                </Button>
+              </div>
             }
           >
+            {totpEnrollStep === 'scanning' && totpEnrollData && (
+              <div className="p-4 rounded-lg border border-border-subtle bg-surface mb-4">
+                <h3 className="text-sm font-medium text-foreground mb-2">Scan QR Code</h3>
+                <div className="flex flex-col gap-3">
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(totpEnrollData.provisioning_uri)}`} alt="TOTP QR Code" className="w-48 h-48 mx-auto" />
+                  <p className="text-xs text-text-muted text-center">Or enter this secret: <code className="bg-surface-2 px-1 rounded">{totpEnrollData.secret}</code></p>
+                  <form onSubmit={handleFinishTOTPEnroll} className="flex flex-col gap-2">
+                    <Label htmlFor="totp-code">Verification Code</Label>
+                    <Input
+                      id="totp-code"
+                      type="text"
+                      placeholder="6-digit code"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value)}
+                      maxLength={6}
+                      pattern="[0-9]{6}"
+                    />
+                    <Label htmlFor="totp-label">Label</Label>
+                    <Input
+                      id="totp-label"
+                      type="text"
+                      value={totpLabel}
+                      onChange={(e) => setTotpLabel(e.target.value)}
+                      placeholder="Authenticator app"
+                    />
+                    <div className="flex gap-2">
+                      <Button type="submit" variant="primary" size="sm">
+                        Verify & Enable
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={handleCancelTOTPEnroll}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
             {mfaLoading ? (
               <p className="text-sm text-text-muted">Loading factors…</p>
             ) : mfaFactors.length === 0 ? (
@@ -526,6 +645,36 @@ export function Settings(): JSX.Element {
             onConfirm={handleDeleteMFA}
             onCancel={() => setDeleteMfaId(null)}
           />
+
+          <Panel
+            padding="md"
+            eyebrow="RECOVERY CODES"
+            title="Backup Codes"
+            actions={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleViewRecoveryCodes}
+              >
+                View Codes
+              </Button>
+            }
+          >
+            <p className="text-sm text-text-secondary mb-4">
+              Recovery codes can be used to access your account if you lose your MFA device. Store them securely.
+            </p>
+            {showRecoveryCodes && recoveryCodes && (
+              <div className="p-4 rounded-lg border border-border-subtle bg-surface">
+                <p className="text-xs text-state-critical mb-2">Save these codes now. They won't be shown again.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {recoveryCodes.map((code, idx) => (
+                    <code key={idx} className="text-sm font-mono bg-surface-2 px-2 py-1 rounded">{code}</code>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Panel>
         </TabsContent>
 
         <TabsContent value="system" className="mt-4 flex flex-col gap-4">
@@ -571,6 +720,90 @@ export function Settings(): JSX.Element {
             title="Integrations coming soon"
             description="Native integrations with Slack, PagerDuty, OpsGenie, Jira, and SIEM platforms are on the roadmap."
           />
+        </TabsContent>
+
+        <TabsContent value="trust-center" className="mt-4 flex flex-col gap-4">
+          <Panel
+            padding="md"
+            eyebrow="TRUST CENTER · ADMIN"
+            title="Public Trust Center Management"
+          >
+            <p className="text-sm text-text-secondary mb-4">
+              Manage the public-facing compliance transparency portal for your tenants.
+            </p>
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-text-secondary">
+                The Trust Center displays subprocessors, certifications, security FAQ, and incident history to the public.
+                Access the public portal at <code className="text-brand-600">/trust/:tenant-name</code>.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+                <Button variant="secondary" asChild>
+                  <a href={`/trust/${selectedTenant || 'default'}`} target="_blank" rel="noopener noreferrer">
+                    View Public Trust Center
+                  </a>
+                </Button>
+                <Button variant="secondary" onClick={() => window.location.href = '/settings'}>
+                  Manage via API
+                </Button>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel
+            padding="md"
+            eyebrow="SUBPROCESSORS"
+            title="Third-Party Service Providers"
+          >
+            <p className="text-sm text-text-secondary mb-4">
+              Add and manage subprocessors that may process customer data.
+            </p>
+            <EmptyState
+              title="Manage via API"
+              description="Use the Trust Center API endpoints to manage subprocessors, certifications, FAQ, and incidents."
+            />
+          </Panel>
+
+          <Panel
+            padding="md"
+            eyebrow="CERTIFICATIONS"
+            title="Compliance Certifications"
+          >
+            <p className="text-sm text-text-secondary mb-4">
+              Add and manage security and compliance certifications.
+            </p>
+            <EmptyState
+              title="Manage via API"
+              description="Use the Trust Center API endpoints to manage certifications."
+            />
+          </Panel>
+
+          <Panel
+            padding="md"
+            eyebrow="SECURITY FAQ"
+            title="Frequently Asked Questions"
+          >
+            <p className="text-sm text-text-secondary mb-4">
+              Add and manage security and privacy FAQ items.
+            </p>
+            <EmptyState
+              title="Manage via API"
+              description="Use the Trust Center API endpoints to manage FAQ items."
+            />
+          </Panel>
+
+          <Panel
+            padding="md"
+            eyebrow="INCIDENTS"
+            title="Security Incident History"
+          >
+            <p className="text-sm text-text-secondary mb-4">
+              Publish security incidents and their resolution status.
+            </p>
+            <EmptyState
+              title="Manage via API"
+              description="Use the Trust Center API endpoints to manage incident reports."
+            />
+          </Panel>
         </TabsContent>
       </Tabs>
     </div>
