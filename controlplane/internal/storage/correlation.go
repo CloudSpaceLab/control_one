@@ -130,14 +130,14 @@ func scanCorrelationRule(sc scanner) (*CorrelationRule, error) {
 // ---------- behavioral_baselines ----------
 
 type BehavioralBaseline struct {
-	ID          uuid.UUID
-	TenantID    uuid.UUID
-	NodeID      uuid.NullUUID
-	SignalType  string
-	Dimension   string
-	Baseline    map[string]any
-	WindowDays  int
-	ComputedAt  time.Time
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	NodeID     uuid.NullUUID
+	SignalType string
+	Dimension  string
+	Baseline   map[string]any
+	WindowDays int
+	ComputedAt time.Time
 }
 
 // UpsertBehavioralBaseline inserts or updates a baseline row for

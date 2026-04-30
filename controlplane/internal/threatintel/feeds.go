@@ -34,13 +34,13 @@ import (
 
 // Indicator represents one bad IP / CIDR with provenance.
 type Indicator struct {
-	IP       string    // single IP if no /n
-	CIDR     string    // canonical CIDR string when source supplied a netblock
-	Feed     string    // feed identifier
-	Category string    // optional taxonomy ("scanner", "tor-exit", "malware", ...)
-	Score    int       // 0-100 confidence
+	IP        string // single IP if no /n
+	CIDR      string // canonical CIDR string when source supplied a netblock
+	Feed      string // feed identifier
+	Category  string // optional taxonomy ("scanner", "tor-exit", "malware", ...)
+	Score     int    // 0-100 confidence
 	FirstSeen time.Time
-	Evidence string
+	Evidence  string
 }
 
 // IndicatorSet is the in-memory view used for fast lookup. Keyed by canonical
@@ -343,8 +343,8 @@ func (t TorExitNodes) Fetch(ctx context.Context, client *http.Client) ([]Indicat
 
 // AbuseIPDBBlocklist — requires API key in cfg. Returns confidence-scored IPs.
 type AbuseIPDBBlocklist struct {
-	APIKey         string
-	ConfidenceMin  int // default 75
+	APIKey        string
+	ConfidenceMin int // default 75
 }
 
 func (a AbuseIPDBBlocklist) Name() string { return "abuseipdb" }

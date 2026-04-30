@@ -16,19 +16,19 @@ import (
 // tenant can provision against. Multiple hosts per tenant are supported so a
 // customer can operate across datacenters and accounts.
 type HypervisorHost struct {
-	ID              uuid.UUID
-	TenantID        uuid.UUID
-	Provider        string
-	Name            string
-	EndpointURL     string
-	CredentialID    uuid.NullUUID
-	Datacenter      sql.NullString
-	Labels          map[string]any
-	HealthStatus    string
-	HealthMessage   sql.NullString
-	LastVerifiedAt  sql.NullTime
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID             uuid.UUID
+	TenantID       uuid.UUID
+	Provider       string
+	Name           string
+	EndpointURL    string
+	CredentialID   uuid.NullUUID
+	Datacenter     sql.NullString
+	Labels         map[string]any
+	HealthStatus   string
+	HealthMessage  sql.NullString
+	LastVerifiedAt sql.NullTime
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // CreateHypervisorHostParams defines input for inserting a host.

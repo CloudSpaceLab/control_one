@@ -24,9 +24,7 @@ const Command = forwardRef<
 ));
 Command.displayName = 'Command';
 
-interface CommandDialogProps extends ComponentPropsWithoutRef<typeof Dialog> {}
-
-const CommandDialog = ({ children, ...props }: CommandDialogProps) => (
+const CommandDialog = ({ children, ...props }: ComponentPropsWithoutRef<typeof Dialog>) => (
   <Dialog {...props}>
     <DialogContent className="overflow-hidden p-0 shadow-[var(--shadow-panel)] max-w-2xl">
       {/* Radix DialogContent requires DialogTitle + DialogDescription for a11y */}
@@ -45,7 +43,7 @@ const CommandInput = forwardRef<
   ElementRef<typeof CommandPrimitive.Input>,
   ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
 >(({ className, ...props }, ref) => (
-  <div className="flex items-center border-b border-border-subtle px-3" cmdk-input-wrapper="">
+  <div className="flex items-center border-b border-border-subtle px-3" data-cmdk-input-wrapper>
     <Search className="mr-2 h-4 w-4 shrink-0 text-text-muted" />
     <CommandPrimitive.Input
       ref={ref}

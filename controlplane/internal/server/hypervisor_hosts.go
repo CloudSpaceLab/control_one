@@ -348,10 +348,10 @@ func (s *Server) verifyHypervisorHost(w http.ResponseWriter, r *http.Request, id
 // by calling Apply with `dry_run=true` metadata.
 func (s *Server) verifyHypervisorHostOnce(r *http.Request, host *storage.HypervisorHost) error {
 	metadata := map[string]string{
-		"_endpoint_url":        host.EndpointURL,
-		"_hypervisor_host_id":  host.ID.String(),
-		"_hypervisor_host_dc":  strOrEmpty(host.Datacenter),
-		"_verify_only":         "true",
+		"_endpoint_url":       host.EndpointURL,
+		"_hypervisor_host_id": host.ID.String(),
+		"_hypervisor_host_dc": strOrEmpty(host.Datacenter),
+		"_verify_only":        "true",
 	}
 
 	if host.CredentialID.Valid {

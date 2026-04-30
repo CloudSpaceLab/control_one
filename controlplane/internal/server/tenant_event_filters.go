@@ -14,8 +14,8 @@ import (
 
 // handleTenantEventFilters serves
 //
-//   GET  /api/v1/tenants/{id}/event-filters
-//   PUT  /api/v1/tenants/{id}/event-filters
+//	GET  /api/v1/tenants/{id}/event-filters
+//	PUT  /api/v1/tenants/{id}/event-filters
 //
 // Operators tune which events the agent captures and whether forensic mode
 // is on. The agent receives the latest policy on its next heartbeat and

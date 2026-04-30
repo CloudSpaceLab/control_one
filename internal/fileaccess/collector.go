@@ -5,11 +5,11 @@
 //
 // Smart filter (FilterConfig) keeps cardinality bounded:
 //
-//   * Only emit when path matches a watched prefix (default: /etc/, /var/lib/,
+//   - Only emit when path matches a watched prefix (default: /etc/, /var/lib/,
 //     /var/log/, /opt/, /home/, /root/, /tmp/sensitive/).
-//   * OR the process owning the access has an active external network
+//   - OR the process owning the access has an active external network
 //     connection — captures "while attacker was connected".
-//   * Aggregates per (pid, path, 5s bucket) so 1 event per file per process
+//   - Aggregates per (pid, path, 5s bucket) so 1 event per file per process
 //     per window, not per syscall.
 package fileaccess
 
@@ -25,15 +25,15 @@ import (
 
 // FileEvent is the wire shape every backend emits.
 type FileEvent struct {
-	Op       string // "open" | "read" | "write" | "unlink" | "rename"
-	Path     string
-	PID      int
-	Process  string
-	User     string
-	Bytes    int64
-	OpCount  int
+	Op        string // "open" | "read" | "write" | "unlink" | "rename"
+	Path      string
+	PID       int
+	Process   string
+	User      string
+	Bytes     int64
+	OpCount   int
 	StartedAt time.Time
-	EndedAt  time.Time
+	EndedAt   time.Time
 	// CorrelationID lets the eventstream correlator skip its own join when
 	// a backend already attaches it (e.g. the eBPF LSM hook can read the
 	// agent's per-PID correlation map).

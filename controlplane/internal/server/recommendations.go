@@ -24,10 +24,10 @@ type recommendationResponse struct {
 // Current source of truth: port_observations aggregated over the request
 // window. Logic:
 //
-//	1. For each (port, protocol), compute the dominant state ratio.
-//	2. If >95% of observations over the window are in one state and the
-//	   port has been observed enough (>=50 samples), propose a port rule
-//	   locking in that state.
+//  1. For each (port, protocol), compute the dominant state ratio.
+//  2. If >95% of observations over the window are in one state and the
+//     port has been observed enough (>=50 samples), propose a port rule
+//     locking in that state.
 //
 // This is intentionally a thin shell that future behavioral rollup can extend.
 func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {

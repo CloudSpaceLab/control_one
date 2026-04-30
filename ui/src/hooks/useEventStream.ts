@@ -28,5 +28,6 @@ export function useEventStream(
       (ev) => handlerRef.current(ev as StreamedEvent),
     );
     return () => cancel();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, tenantId, topics.join(',')]);
 }

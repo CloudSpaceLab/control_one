@@ -139,7 +139,7 @@ export function GlobalSearch({ trigger }: { trigger?: ReactNode }) {
           <CommandEmpty>
             {query.trim() ? (
               <div className="flex flex-col items-center gap-1 py-2">
-                <span className="text-sm text-text-secondary">No results for <span className="font-mono text-foreground">"{query}"</span></span>
+                <span className="text-sm text-text-secondary">No results for <span className="font-mono text-foreground">&ldquo;{query}&rdquo;</span></span>
                 <span className="text-xs text-text-muted">Press ↵ to search across all data</span>
               </div>
             ) : (
@@ -176,7 +176,7 @@ export function GlobalSearch({ trigger }: { trigger?: ReactNode }) {
                   onSelect={() => onPick(`/search?q=${encodeURIComponent(query.trim())}`, query.trim())}
                 >
                   <Search className="h-4 w-4 text-text-muted" />
-                  <span className="text-sm">Full search results for "{query.trim()}"</span>
+                  <span className="text-sm">Full search results for &ldquo;{query.trim()}&rdquo;</span>
                   <CommandShortcut>↵ ⌥</CommandShortcut>
                 </CommandItem>
               </CommandGroup>

@@ -34,8 +34,8 @@ func TestStreamLoadBuildsRequest(t *testing.T) {
 	defer server.Close()
 
 	c := &Client{
-		cfg: Config{HTTPEndpoint: server.URL, Database: "controlone", User: "u", Password: "p"},
-		db:  nil,
+		cfg:  Config{HTTPEndpoint: server.URL, Database: "controlone", User: "u", Password: "p"},
+		db:   nil,
 		http: &http.Client{Timeout: 5 * time.Second},
 	}
 	rows := []map[string]any{
@@ -69,7 +69,7 @@ func TestStreamLoadFailsOnNonSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 	c := &Client{
-		cfg: Config{HTTPEndpoint: server.URL, Database: "co"},
+		cfg:  Config{HTTPEndpoint: server.URL, Database: "co"},
 		http: &http.Client{Timeout: 5 * time.Second},
 	}
 	if _, err := c.streamLoad(context.Background(), "x", []map[string]any{{"a": 1}}, streamLoadOptions{}); err == nil {

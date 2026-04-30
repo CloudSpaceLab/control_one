@@ -68,17 +68,17 @@ type CreateClusterParams struct {
 
 // UpdateClusterParams captures patchable fields on a cluster.
 type UpdateClusterParams struct {
-	Name                   *string
-	Provider               *string
-	DesiredSize            *int
-	RolePlan               *map[string]any
-	Labels                 *map[string]any
-	FailureDomainStrategy  *string
-	State                  *string
-	TemplateID             *uuid.UUID
-	ClearTemplateID        bool
-	HypervisorHostID       *uuid.UUID
-	ClearHypervisorHostID  bool
+	Name                  *string
+	Provider              *string
+	DesiredSize           *int
+	RolePlan              *map[string]any
+	Labels                *map[string]any
+	FailureDomainStrategy *string
+	State                 *string
+	TemplateID            *uuid.UUID
+	ClearTemplateID       bool
+	HypervisorHostID      *uuid.UUID
+	ClearHypervisorHostID bool
 }
 
 // CreateClusterRolloutParams defines input for creating a cluster rollout.

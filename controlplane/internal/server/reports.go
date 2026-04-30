@@ -28,10 +28,10 @@ func (s *Server) handleReportsCollection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	type reportDesc struct {
-		Slug         string `json:"slug"`
-		Title        string `json:"title"`
-		Description  string `json:"description"`
-		DefaultRange string `json:"default_range"`
+		Slug         string   `json:"slug"`
+		Title        string   `json:"title"`
+		Description  string   `json:"description"`
+		DefaultRange string   `json:"default_range"`
 		Formats      []string `json:"formats"`
 	}
 	reports := []reportDesc{

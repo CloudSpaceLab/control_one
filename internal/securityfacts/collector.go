@@ -90,18 +90,18 @@ func (c *collector) collect() map[string]string {
 	portOpen := func(port string) bool {
 		return c.shell("ss -tlnp 2>/dev/null | grep -q ':" + port + " '")
 	}
-	f["security.port.21.open"] = tf(portOpen("21"))   // FTP
-	f["security.port.23.open"] = tf(portOpen("23"))   // Telnet
-	f["security.port.25.open"] = tf(portOpen("25"))   // SMTP
-	f["security.port.110.open"] = tf(portOpen("110")) // POP3
-	f["security.port.143.open"] = tf(portOpen("143")) // IMAP
-	f["security.port.3306.open"] = tf(portOpen("3306")) // MySQL / MariaDB
-	f["security.port.5432.open"] = tf(portOpen("5432")) // PostgreSQL
-	f["security.port.6379.open"] = tf(portOpen("6379")) // Redis
+	f["security.port.21.open"] = tf(portOpen("21"))       // FTP
+	f["security.port.23.open"] = tf(portOpen("23"))       // Telnet
+	f["security.port.25.open"] = tf(portOpen("25"))       // SMTP
+	f["security.port.110.open"] = tf(portOpen("110"))     // POP3
+	f["security.port.143.open"] = tf(portOpen("143"))     // IMAP
+	f["security.port.3306.open"] = tf(portOpen("3306"))   // MySQL / MariaDB
+	f["security.port.5432.open"] = tf(portOpen("5432"))   // PostgreSQL
+	f["security.port.6379.open"] = tf(portOpen("6379"))   // Redis
 	f["security.port.27017.open"] = tf(portOpen("27017")) // MongoDB
-	f["security.port.9200.open"] = tf(portOpen("9200")) // Elasticsearch / OpenSearch
-	f["security.port.3389.open"] = tf(portOpen("3389")) // RDP
-	f["security.port.5900.open"] = tf(portOpen("5900")) // VNC
+	f["security.port.9200.open"] = tf(portOpen("9200"))   // Elasticsearch / OpenSearch
+	f["security.port.3389.open"] = tf(portOpen("3389"))   // RDP
+	f["security.port.5900.open"] = tf(portOpen("5900"))   // VNC
 
 	// ── automatic security updates ────────────────────────────────────────────
 	unattendedUpgrades := c.shell("command -v unattended-upgrades >/dev/null 2>&1") ||

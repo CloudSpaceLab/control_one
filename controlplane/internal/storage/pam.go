@@ -188,15 +188,15 @@ func scanAccessRequest(sc scanner) (*AccessRequest, error) {
 // ---------- ssh_ca ----------
 
 type SSHCA struct {
-	ID             uuid.UUID
-	TenantID       uuid.UUID
-	PublicKey      string
-	PrivateSealed  []byte
-	Nonce          []byte
-	KeyType        string
-	Active         bool
-	CreatedAt      time.Time
-	RotatedAt      sql.NullTime
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	PublicKey     string
+	PrivateSealed []byte
+	Nonce         []byte
+	KeyType       string
+	Active        bool
+	CreatedAt     time.Time
+	RotatedAt     sql.NullTime
 }
 
 type CreateSSHCAParams struct {
@@ -250,19 +250,19 @@ func (s *Store) GetActiveSSHCA(ctx context.Context, tenantID uuid.UUID) (*SSHCA,
 // ---------- issued_certs ----------
 
 type IssuedCert struct {
-	ID             uuid.UUID
-	TenantID       uuid.UUID
+	ID              uuid.UUID
+	TenantID        uuid.UUID
 	AccessRequestID uuid.NullUUID
-	CAID           uuid.UUID
-	SubjectUser    string
-	Principals     []string
-	Serial         int64
-	PublicKey      string
-	SignedCert     string
-	IssuedAt       time.Time
-	ExpiresAt      time.Time
-	RevokedAt      sql.NullTime
-	RevokedReason  sql.NullString
+	CAID            uuid.UUID
+	SubjectUser     string
+	Principals      []string
+	Serial          int64
+	PublicKey       string
+	SignedCert      string
+	IssuedAt        time.Time
+	ExpiresAt       time.Time
+	RevokedAt       sql.NullTime
+	RevokedReason   sql.NullString
 }
 
 type CreateIssuedCertParams struct {

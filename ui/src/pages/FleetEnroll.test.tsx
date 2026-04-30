@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { FleetEnrollStatus, FleetEnrollResponse, NodeSummary } from '../lib/api';
 import { FleetEnroll } from './FleetEnroll';
 
@@ -47,14 +48,22 @@ describe('FleetEnroll', () => {
   });
 
   it('renders the form heading', () => {
-    render(<FleetEnroll />);
+    render(
+      <MemoryRouter>
+        <FleetEnroll />
+      </MemoryRouter>,
+    );
     expect(
       screen.getByRole('heading', { name: /bulk enrol hosts/i }),
     ).toBeInTheDocument();
   });
 
   it('rejects submit with no targets', async () => {
-    render(<FleetEnroll />);
+    render(
+      <MemoryRouter>
+        <FleetEnroll />
+      </MemoryRouter>,
+    );
     const submit = screen.getByRole('button', { name: /start fleet enrollment/i });
 
     await act(async () => {
@@ -101,7 +110,11 @@ describe('FleetEnroll', () => {
       updated_at: '2026-04-20T00:00:05Z',
     });
 
-    render(<FleetEnroll />);
+    render(
+      <MemoryRouter>
+        <FleetEnroll />
+      </MemoryRouter>,
+    );
 
     fireEvent.change(screen.getByLabelText(/targets/i), {
       target: { value: '10.0.0.5\n' },
@@ -151,7 +164,11 @@ describe('FleetEnroll', () => {
     startFleetEnroll.mockResolvedValue({ job_id: 'job-2', status: 'queued', message: 'ok' });
     getFleetEnrollStatus.mockResolvedValue({ job_id: 'job-2', status: 'running', results: [] });
 
-    render(<FleetEnroll />);
+    render(
+      <MemoryRouter>
+        <FleetEnroll />
+      </MemoryRouter>,
+    );
     fireEvent.change(screen.getByLabelText(/targets/i), {
       target: { value: 'admin@10.0.0.9:2222\n# comment\n   \nroot@10.0.0.10' },
     });

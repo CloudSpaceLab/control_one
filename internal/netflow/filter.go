@@ -55,9 +55,9 @@ func DefaultFilterConfig() FilterConfig {
 
 // Filter implements smart-filter for the netflow Manager.
 type Filter struct {
-	cfg   FilterConfig
-	mu    sync.Mutex
-	roll  map[summaryKey]*summaryBucket
+	cfg  FilterConfig
+	mu   sync.Mutex
+	roll map[summaryKey]*summaryBucket
 }
 
 type summaryKey struct {
@@ -67,15 +67,15 @@ type summaryKey struct {
 }
 
 type summaryBucket struct {
-	bytesIn   uint64
-	bytesOut  uint64
-	count     int
-	dst       net.IP
-	process   string
-	user      string
-	first     time.Time
-	last      time.Time
-	protocol  string
+	bytesIn  uint64
+	bytesOut uint64
+	count    int
+	dst      net.IP
+	process  string
+	user     string
+	first    time.Time
+	last     time.Time
+	protocol string
 }
 
 // NewFilter constructs a Filter from a config.

@@ -666,7 +666,7 @@ export function Settings(): JSX.Element {
             </p>
             {showRecoveryCodes && recoveryCodes && (
               <div className="p-4 rounded-lg border border-border-subtle bg-surface">
-                <p className="text-xs text-state-critical mb-2">Save these codes now. They won't be shown again.</p>
+                <p className="text-xs text-state-critical mb-2">Save these codes now. They won&apos;t be shown again.</p>
                 <div className="grid grid-cols-2 gap-2">
                   {recoveryCodes.map((code, idx) => (
                     <code key={idx} className="text-sm font-mono bg-surface-2 px-2 py-1 rounded">{code}</code>

@@ -73,7 +73,7 @@ function DecisionPanel({ request, intent, onConfirm, onCancel }: DecisionPanelPr
         </code>{' '}
         {request.target_resource_type} access
         {request.justification ? (
-          <span className="text-text-muted"> — "{request.justification}"</span>
+          <span className="text-text-muted"> — &ldquo;{request.justification}&rdquo;</span>
         ) : null}
       </p>
       <div className="flex flex-col gap-1.5">
@@ -277,7 +277,7 @@ export function Access(): JSX.Element {
             )}
             {r.decision_reason && (
               <span className="max-w-[160px] truncate text-xs italic text-text-muted">
-                "{r.decision_reason}"
+                &ldquo;{r.decision_reason}&rdquo;
               </span>
             )}
           </div>

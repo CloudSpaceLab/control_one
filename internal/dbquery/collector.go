@@ -1,9 +1,9 @@
 // Package dbquery polls database stat tables and publishes per-query events.
 // Backends:
 //
-//   * Postgres — pg_stat_activity + pg_stat_statements (extension required;
+//   - Postgres — pg_stat_activity + pg_stat_statements (extension required;
 //     deploy step enables it).
-//   * MySQL    — performance_schema.events_statements_history.
+//   - MySQL    — performance_schema.events_statements_history.
 //
 // Each tracked target is described by a Target struct (DSN + engine +
 // scrape interval). The Manager spawns one goroutine per target; failures on
@@ -42,7 +42,7 @@ const (
 
 // Target is one database the agent polls.
 type Target struct {
-	Name           string        // human-friendly label
+	Name           string // human-friendly label
 	Engine         Engine
 	DSN            string        // database/sql DSN
 	ScrapeInterval time.Duration // default 5s
@@ -233,14 +233,14 @@ func (m *Manager) publish(t Target, q queryState, now time.Time) {
 		msg = truncString(q.queryText, 512)
 	}
 	m.stream.Publish(eventstream.Event{
-		Type:        "db.query",
-		TS:          now,
-		NodeID:      m.opts.NodeID,
-		TenantID:    m.opts.TenantID,
-		Severity:    "info",
-		Message:     msg,
-		DurationMS:  int64(q.totalTimeMS),
-		DedupKey:    fmt.Sprintf("db.query:%s:%s:%d", t.Name, q.queryHash, now.Unix()),
+		Type:       "db.query",
+		TS:         now,
+		NodeID:     m.opts.NodeID,
+		TenantID:   m.opts.TenantID,
+		Severity:   "info",
+		Message:    msg,
+		DurationMS: int64(q.totalTimeMS),
+		DedupKey:   fmt.Sprintf("db.query:%s:%s:%d", t.Name, q.queryHash, now.Unix()),
 		Details: map[string]any{
 			"engine":         string(t.Engine),
 			"database_name":  q.dbName,

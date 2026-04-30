@@ -22,13 +22,13 @@ type bucketKey struct {
 }
 
 type bucketAccum struct {
-	bytes    int64
-	count    int
-	process  string
-	user     string
+	bytes     int64
+	count     int
+	process   string
+	user      string
 	startedAt time.Time
-	endedAt  time.Time
-	corr     string
+	endedAt   time.Time
+	corr      string
 }
 
 func newBucketAggregator(window time.Duration) *bucketAggregator {
@@ -81,15 +81,15 @@ func (b *bucketAggregator) drain(now time.Time) []FileEvent {
 			continue
 		}
 		out = append(out, FileEvent{
-			Op:           k.op,
-			Path:         k.path,
-			PID:          k.pid,
-			Process:      a.process,
-			User:         a.user,
-			Bytes:        a.bytes,
-			OpCount:      a.count,
-			StartedAt:    a.startedAt,
-			EndedAt:      a.endedAt,
+			Op:            k.op,
+			Path:          k.path,
+			PID:           k.pid,
+			Process:       a.process,
+			User:          a.user,
+			Bytes:         a.bytes,
+			OpCount:       a.count,
+			StartedAt:     a.startedAt,
+			EndedAt:       a.endedAt,
 			CorrelationID: a.corr,
 		})
 		delete(b.buckets, k)

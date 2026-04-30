@@ -14,15 +14,15 @@ type fakeBackend struct {
 	applied []firewall.Rule
 }
 
-func (f *fakeBackend) Name() string                                              { return "fake" }
-func (f *fakeBackend) Available() bool                                           { return true }
+func (f *fakeBackend) Name() string    { return "fake" }
+func (f *fakeBackend) Available() bool { return true }
 func (f *fakeBackend) Apply(_ context.Context, r firewall.Rule) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = append(f.applied, r)
 	return nil
 }
-func (f *fakeBackend) Remove(_ context.Context, _ firewall.Rule) error          { return nil }
+func (f *fakeBackend) Remove(_ context.Context, _ firewall.Rule) error           { return nil }
 func (f *fakeBackend) List(_ context.Context, _ string) ([]firewall.Rule, error) { return nil, nil }
 
 func newPipeline(t *testing.T, p Policy) (*Pipeline, *fakeBackend) {

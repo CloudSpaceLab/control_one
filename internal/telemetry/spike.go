@@ -16,11 +16,11 @@ import (
 //     making early-process spikes look infinite).
 //   - Spike = current ≥ ratio * baseline AND baseline ≥ MinBytesPerMin.
 type logSpikeDetector struct {
-	mu        sync.Mutex
-	sources   map[string]*spikeWindow
-	ratio     float64       // default 10×
-	minBytes  int64         // floor on baseline so noise doesn't fire
-	cooldown  time.Duration // suppression window per source
+	mu       sync.Mutex
+	sources  map[string]*spikeWindow
+	ratio    float64       // default 10×
+	minBytes int64         // floor on baseline so noise doesn't fire
+	cooldown time.Duration // suppression window per source
 }
 
 type spikeWindow struct {

@@ -11,8 +11,8 @@
 //   - SSH        — golang.org/x/crypto/ssh (stdlib-grade, already a dep)
 //   - WinRM      — github.com/masterzen/winrm (actively maintained)
 //   - RDP        — no production-quality Go RDP client; we emit a TCP probe
-//                  only and rely on a downstream Windows agent install via
-//                  WinRM when full management is needed.
+//     only and rely on a downstream Windows agent install via
+//     WinRM when full management is needed.
 //
 // Each protocol implements Connector. The Registry chooses the right one
 // based on Target.Protocol so handlers don't switch on protocol strings.
@@ -38,41 +38,41 @@ const (
 type AuthMethod string
 
 const (
-	AuthPassword       AuthMethod = "password"
-	AuthPrivateKey     AuthMethod = "private_key"
-	AuthAgentSocket    AuthMethod = "agent" // SSH only — relies on SSH_AUTH_SOCK on the controlplane host
+	AuthPassword    AuthMethod = "password"
+	AuthPrivateKey  AuthMethod = "private_key"
+	AuthAgentSocket AuthMethod = "agent" // SSH only — relies on SSH_AUTH_SOCK on the controlplane host
 )
 
 // Target describes a server the operator wants to onboard.
 type Target struct {
-	Protocol   Protocol   `json:"protocol"`
-	Host       string     `json:"host"`
-	Port       int        `json:"port,omitempty"` // 0 = protocol default
-	Username   string     `json:"username"`
-	Auth       AuthMethod `json:"auth"`
-	Password   string     `json:"password,omitempty"`     // when Auth == AuthPassword
-	PrivateKey string     `json:"private_key,omitempty"`  // PEM body (Auth == AuthPrivateKey)
-	Passphrase string     `json:"passphrase,omitempty"`   // optional, for encrypted keys
-	HTTPS      bool       `json:"https,omitempty"`        // WinRM over HTTPS
-	SkipVerify bool       `json:"skip_verify,omitempty"`  // bypass cert verification (lab only)
-	Timeout    time.Duration `json:"-"`                   // optional override, default 10s
+	Protocol   Protocol      `json:"protocol"`
+	Host       string        `json:"host"`
+	Port       int           `json:"port,omitempty"` // 0 = protocol default
+	Username   string        `json:"username"`
+	Auth       AuthMethod    `json:"auth"`
+	Password   string        `json:"password,omitempty"`    // when Auth == AuthPassword
+	PrivateKey string        `json:"private_key,omitempty"` // PEM body (Auth == AuthPrivateKey)
+	Passphrase string        `json:"passphrase,omitempty"`  // optional, for encrypted keys
+	HTTPS      bool          `json:"https,omitempty"`       // WinRM over HTTPS
+	SkipVerify bool          `json:"skip_verify,omitempty"` // bypass cert verification (lab only)
+	Timeout    time.Duration `json:"-"`                     // optional override, default 10s
 }
 
 // Probe is the structured result of Connector.Test.
 type Probe struct {
-	Reachable    bool          `json:"reachable"`
-	LatencyMs    int64         `json:"latency_ms,omitempty"`
-	OS           string        `json:"os,omitempty"`             // linux | windows | macos | unknown
-	OSVersion    string        `json:"os_version,omitempty"`
-	Hostname     string        `json:"hostname,omitempty"`
-	Architecture string        `json:"architecture,omitempty"`
-	Capabilities []string      `json:"capabilities,omitempty"`   // e.g. "sudo", "powershell", "package_apt"
-	Banner       string        `json:"banner,omitempty"`         // SSH banner / WinRM PSVersion
+	Reachable    bool     `json:"reachable"`
+	LatencyMs    int64    `json:"latency_ms,omitempty"`
+	OS           string   `json:"os,omitempty"` // linux | windows | macos | unknown
+	OSVersion    string   `json:"os_version,omitempty"`
+	Hostname     string   `json:"hostname,omitempty"`
+	Architecture string   `json:"architecture,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"` // e.g. "sudo", "powershell", "package_apt"
+	Banner       string   `json:"banner,omitempty"`       // SSH banner / WinRM PSVersion
 	// Extended OS detail
-	Distro     string `json:"distro,omitempty"`      // e.g. "Ubuntu 24.04.2 LTS" from /etc/os-release
-	CPUCount   int    `json:"cpu_count,omitempty"`   // logical CPU count from nproc
-	MemoryMB   int    `json:"memory_mb,omitempty"`   // total RAM in MB from /proc/meminfo
-	Detected     time.Time     `json:"detected_at"`
+	Distro   string    `json:"distro,omitempty"`    // e.g. "Ubuntu 24.04.2 LTS" from /etc/os-release
+	CPUCount int       `json:"cpu_count,omitempty"` // logical CPU count from nproc
+	MemoryMB int       `json:"memory_mb,omitempty"` // total RAM in MB from /proc/meminfo
+	Detected time.Time `json:"detected_at"`
 }
 
 // Connector tests connectivity for one protocol.

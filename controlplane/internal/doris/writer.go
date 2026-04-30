@@ -150,32 +150,32 @@ func (nopReporter) ObserveQueueDepth(string, int)                       {}
 // Writer batches rows per table and flushes on size or interval. One Writer
 // per process; safe for concurrent calls.
 type Writer struct {
-	c             *Client
-	mu            sync.Mutex
-	pending       map[string][]map[string]any
-	flushInterval time.Duration
-	maxBatchRows  int
+	c              *Client
+	mu             sync.Mutex
+	pending        map[string][]map[string]any
+	flushInterval  time.Duration
+	maxBatchRows   int
 	maxPendingRows int
-	closed        atomic.Bool
-	stopCh        chan struct{}
-	doneCh        chan struct{}
-	flushWG       sync.WaitGroup
-	onError       func(table string, err error)
-	metrics       MetricsReporter
-	hostname      string
-	pid           int
-	labelCounter  atomic.Uint64
-	healthyAtomic atomic.Bool
-	cond          *sync.Cond
-	compress      bool
+	closed         atomic.Bool
+	stopCh         chan struct{}
+	doneCh         chan struct{}
+	flushWG        sync.WaitGroup
+	onError        func(table string, err error)
+	metrics        MetricsReporter
+	hostname       string
+	pid            int
+	labelCounter   atomic.Uint64
+	healthyAtomic  atomic.Bool
+	cond           *sync.Cond
+	compress       bool
 }
 
 // WriterOptions tune the writer.
 type WriterOptions struct {
-	FlushInterval  time.Duration             // default 2s
-	MaxBatchRows   int                       // default 5000
-	MaxPendingRows int                       // default 50_000 (per table); above this Enqueue blocks
-	Compress       bool                      // force gzip for every payload (auto-detect when false)
+	FlushInterval  time.Duration // default 2s
+	MaxBatchRows   int           // default 5000
+	MaxPendingRows int           // default 50_000 (per table); above this Enqueue blocks
+	Compress       bool          // force gzip for every payload (auto-detect when false)
 	OnError        func(table string, err error)
 	Metrics        MetricsReporter
 }

@@ -13,23 +13,23 @@ import (
 
 // ThreatFeed describes one operator-configured threat-intel data source.
 type ThreatFeed struct {
-	ID                  uuid.UUID
-	TenantID            uuid.UUID
-	Name                string
-	FeedType            string
-	URL                 sql.NullString
-	APIKeySealed        []byte
-	Nonce               []byte
-	ScoreFloor          int
-	RefreshSeconds      int
-	Category            sql.NullString
-	Enabled             bool
-	LastStatus          sql.NullString
-	LastError           sql.NullString
-	LastIndicatorCount  int
-	LastRefreshedAt     sql.NullTime
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                 uuid.UUID
+	TenantID           uuid.UUID
+	Name               string
+	FeedType           string
+	URL                sql.NullString
+	APIKeySealed       []byte
+	Nonce              []byte
+	ScoreFloor         int
+	RefreshSeconds     int
+	Category           sql.NullString
+	Enabled            bool
+	LastStatus         sql.NullString
+	LastError          sql.NullString
+	LastIndicatorCount int
+	LastRefreshedAt    sql.NullTime
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type CreateThreatFeedParams struct {
