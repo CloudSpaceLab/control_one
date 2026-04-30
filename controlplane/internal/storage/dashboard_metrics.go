@@ -12,34 +12,34 @@ import (
 
 // MTTDMetrics represents Mean Time To Detect for security events.
 type MTTDMetrics struct {
-	Severity        string        `json:"severity"`
-	MeanMinutes     float64       `json:"mean_minutes"`
-	MedianMinutes   float64       `json:"median_minutes"`
-	P95Minutes      float64       `json:"p95_minutes"`
-	EventCount      int           `json:"event_count"`
-	Period          string        `json:"period"`
-	CalculatedAt    time.Time     `json:"calculated_at"`
+	Severity      string    `json:"severity"`
+	MeanMinutes   float64   `json:"mean_minutes"`
+	MedianMinutes float64   `json:"median_minutes"`
+	P95Minutes    float64   `json:"p95_minutes"`
+	EventCount    int       `json:"event_count"`
+	Period        string    `json:"period"`
+	CalculatedAt  time.Time `json:"calculated_at"`
 }
 
 // MTTRMetrics represents Mean Time To Remediate for compliance findings.
 type MTTRMetrics struct {
-	Severity           string        `json:"severity"`
-	MeanMinutes        float64       `json:"mean_minutes"`
-	MedianMinutes      float64       `json:"median_minutes"`
-	P95Minutes         float64       `json:"p95_minutes"`
-	RemediationCount   int           `json:"remediation_count"`
-	Period             string        `json:"period"`
-	CalculatedAt       time.Time     `json:"calculated_at"`
+	Severity         string    `json:"severity"`
+	MeanMinutes      float64   `json:"mean_minutes"`
+	MedianMinutes    float64   `json:"median_minutes"`
+	P95Minutes       float64   `json:"p95_minutes"`
+	RemediationCount int       `json:"remediation_count"`
+	Period           string    `json:"period"`
+	CalculatedAt     time.Time `json:"calculated_at"`
 }
 
 // RemediationVelocity represents the rate of remediations over time.
 type RemediationVelocity struct {
-	Period          string  `json:"period"`
-	PeriodCount     int     `json:"period_count"`
-	Remediations    int     `json:"remediations"`
-	AvgPerPeriod    float64 `json:"avg_per_period"`
-	TrendDirection  string  `json:"trend_direction"` // "up", "down", "stable"
-	TrendPercent    float64 `json:"trend_percent"`
+	Period         string  `json:"period"`
+	PeriodCount    int     `json:"period_count"`
+	Remediations   int     `json:"remediations"`
+	AvgPerPeriod   float64 `json:"avg_per_period"`
+	TrendDirection string  `json:"trend_direction"` // "up", "down", "stable"
+	TrendPercent   float64 `json:"trend_percent"`
 }
 
 // FindingAging represents the age distribution of open findings.
@@ -54,13 +54,13 @@ type FindingAging struct {
 
 // RiskScore represents the executive risk score calculation.
 type RiskScore struct {
-	Score           int       `json:"score"`
-	MaxScore        int       `json:"max_score"`
-	Percent         float64   `json:"percent"`
-	TrendDirection  string    `json:"trend_direction"`
-	TrendDelta      float64   `json:"trend_delta"`
-	Components      []RiskComponent `json:"components"`
-	CalculatedAt    time.Time `json:"calculated_at"`
+	Score          int             `json:"score"`
+	MaxScore       int             `json:"max_score"`
+	Percent        float64         `json:"percent"`
+	TrendDirection string          `json:"trend_direction"`
+	TrendDelta     float64         `json:"trend_delta"`
+	Components     []RiskComponent `json:"components"`
+	CalculatedAt   time.Time       `json:"calculated_at"`
 }
 
 // RiskComponent represents a component of the risk score.
@@ -221,7 +221,7 @@ func (s *Store) GetRemediationVelocity(ctx context.Context, tenantID uuid.UUID, 
 				AVG(CASE WHEN dr.row_num > h.mid THEN dr.count END) as second_half_avg
 			FROM daily_remediations dr, halfway h
 		`
-		
+
 		var firstHalfAvg, secondHalfAvg float64
 		err := s.db.QueryRowContext(ctx, fmt.Sprintf(trendQuery, periodDays), tenantID).Scan(&firstHalfAvg, &secondHalfAvg)
 		if err == nil && firstHalfAvg > 0 {

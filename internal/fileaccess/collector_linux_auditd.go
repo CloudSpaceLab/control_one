@@ -86,8 +86,8 @@ func openTail(path string) (*os.File, error) {
 
 // process handles one audit log line. Audit lines look like:
 //
-//   type=SYSCALL msg=audit(1700000000.123:123): syscall=2 ... pid=1234 ...
-//   type=PATH msg=audit(1700000000.123:123): item=0 name="/etc/shadow" nametype=NORMAL
+//	type=SYSCALL msg=audit(1700000000.123:123): syscall=2 ... pid=1234 ...
+//	type=PATH msg=audit(1700000000.123:123): item=0 name="/etc/shadow" nametype=NORMAL
 //
 // We collect the SYSCALL fields (pid, comm, exe), then attach the PATH name
 // to the same audit msg id, and emit on the second PATH line (or on a

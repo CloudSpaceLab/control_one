@@ -27,9 +27,9 @@ func TestClassifyValue(t *testing.T) {
 		{"10.0.0.1", EntityTypeIP},
 		{"::1", EntityTypeIP},
 		{"2001:db8::1", EntityTypeIP},
-		{"d41d8cd98f00b204e9800998ecf8427e", EntityTypeHash},                                                 // md5
-		{"da39a3ee5e6b4b0d3255bfef95601890afd80709", EntityTypeHash},                                         // sha1
-		{"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", EntityTypeHash},                // sha256
+		{"d41d8cd98f00b204e9800998ecf8427e", EntityTypeHash},                                 // md5
+		{"da39a3ee5e6b4b0d3255bfef95601890afd80709", EntityTypeHash},                         // sha1
+		{"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", EntityTypeHash}, // sha256
 		{"00000000-0000-0000-0000-000000000001", EntityTypeUUID},
 		{"alice@example.com", EntityTypeEmail},
 		{"example.com", EntityTypeDomain},

@@ -29,12 +29,12 @@ import (
 
 // Candidate is one IP / CIDR being considered for action.
 type Candidate struct {
-	IP        string
-	CIDR      string
-	Source    string // "threat-intel:abuseipdb" | "rule-trigger:<rule_id>" | etc.
-	Score     int
-	Reason    string
-	Observed  time.Time
+	IP       string
+	CIDR     string
+	Source   string // "threat-intel:abuseipdb" | "rule-trigger:<rule_id>" | etc.
+	Score    int
+	Reason   string
+	Observed time.Time
 }
 
 // Policy controls when the pipeline acts.

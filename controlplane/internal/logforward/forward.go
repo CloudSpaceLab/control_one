@@ -41,9 +41,9 @@ type Source interface {
 
 // Options controls the forwarder loop.
 type Options struct {
-	Interval     time.Duration // min: 1s; default 5s
-	MaxBatchSize int           // default 500
-	InitialCursor time.Time    // where to start reading from
+	Interval      time.Duration // min: 1s; default 5s
+	MaxBatchSize  int           // default 500
+	InitialCursor time.Time     // where to start reading from
 }
 
 // Forwarder loops source -> sink until ctx is cancelled.

@@ -20,11 +20,11 @@ type simulateRequest struct {
 }
 
 type simulateResponse struct {
-	RuleType       string         `json:"rule_type"`
-	WindowDays     int            `json:"window_days"`
-	NodesWouldFail int            `json:"nodes_would_fail"`
-	NodesWouldPass int            `json:"nodes_would_pass"`
-	Summary        string         `json:"summary"`
+	RuleType       string           `json:"rule_type"`
+	WindowDays     int              `json:"window_days"`
+	NodesWouldFail int              `json:"nodes_would_fail"`
+	NodesWouldPass int              `json:"nodes_would_pass"`
+	Summary        string           `json:"summary"`
 	Sample         []map[string]any `json:"sample"`
 }
 

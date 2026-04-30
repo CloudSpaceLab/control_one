@@ -103,13 +103,13 @@ func (r *Rollup) rollupPorts(ctx context.Context, tenantID uuid.UUID, since time
 	for k, states := range byPort {
 		dominant, ratio := dominantState(states)
 		baseline := map[string]any{
-			"port":             k.Port,
-			"protocol":         k.Protocol,
-			"states":           states,
-			"total_samples":    totals[k],
-			"dominant_state":   dominant,
-			"dominant_ratio":   ratio,
-			"computed_at_utc":  time.Now().UTC().Format(time.RFC3339),
+			"port":            k.Port,
+			"protocol":        k.Protocol,
+			"states":          states,
+			"total_samples":   totals[k],
+			"dominant_state":  dominant,
+			"dominant_ratio":  ratio,
+			"computed_at_utc": time.Now().UTC().Format(time.RFC3339),
 		}
 		dim := k.Protocol + ":" + itoa10(k.Port)
 		if err := r.store.UpsertBehavioralBaseline(ctx, tenantID, nil, "port_state", dim, baseline, r.windowDays); err != nil {

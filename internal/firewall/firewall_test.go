@@ -14,8 +14,8 @@ type fakeBackend struct {
 	removed   []Rule
 }
 
-func (f *fakeBackend) Name() string                     { return f.name }
-func (f *fakeBackend) Available() bool                  { return f.available }
+func (f *fakeBackend) Name() string    { return f.name }
+func (f *fakeBackend) Available() bool { return f.available }
 func (f *fakeBackend) Apply(_ context.Context, r Rule) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

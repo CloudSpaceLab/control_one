@@ -19,13 +19,13 @@ import (
 // Batcher drains a Stream and POSTs ndjson batches to the controlplane.
 // Configuration knobs:
 //
-//   FlushInterval: 2s default. Forces a flush even when the batch is small,
-//                  so latency-sensitive events (alerts, conn.open) reach
-//                  the controlplane quickly.
-//   FlushBytes:    256 KiB default. Forces a flush when the encoded batch
-//                  hits this threshold so we never produce a 1+ MiB POST.
-//   MaxRows:       5_000 default. Ceiling matches the server-side cap.
-//   RetryBackoff:  exponential 0.5s → 30s on 5xx + 429.
+//	FlushInterval: 2s default. Forces a flush even when the batch is small,
+//	               so latency-sensitive events (alerts, conn.open) reach
+//	               the controlplane quickly.
+//	FlushBytes:    256 KiB default. Forces a flush when the encoded batch
+//	               hits this threshold so we never produce a 1+ MiB POST.
+//	MaxRows:       5_000 default. Ceiling matches the server-side cap.
+//	RetryBackoff:  exponential 0.5s → 30s on 5xx + 429.
 type Batcher struct {
 	client       *api.Client
 	log          *zap.Logger

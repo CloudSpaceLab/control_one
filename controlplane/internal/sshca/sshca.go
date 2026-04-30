@@ -19,8 +19,8 @@ import (
 
 // Keypair holds a freshly generated CA key.
 type Keypair struct {
-	PublicKey   ssh.PublicKey
-	PrivateKey  ed25519.PrivateKey
+	PublicKey              ssh.PublicKey
+	PrivateKey             ed25519.PrivateKey
 	PublicKeyAuthorizedKey string // OpenSSH authorized_keys line
 }
 
@@ -43,13 +43,13 @@ func Generate() (*Keypair, error) {
 
 // SignUserCertParams captures the inputs needed to sign a user certificate.
 type SignUserCertParams struct {
-	CAPrivate    ed25519.PrivateKey
-	UserPubKey   ssh.PublicKey
-	KeyID        string   // human identifier (e.g. "alice@access-request-abc")
-	Principals   []string // SSH login names the cert is valid for
-	Serial       uint64
-	ValidFor     time.Duration // capped at 24h
-	Extensions   map[string]string
+	CAPrivate  ed25519.PrivateKey
+	UserPubKey ssh.PublicKey
+	KeyID      string   // human identifier (e.g. "alice@access-request-abc")
+	Principals []string // SSH login names the cert is valid for
+	Serial     uint64
+	ValidFor   time.Duration // capped at 24h
+	Extensions map[string]string
 }
 
 // SignUserCert returns the cert in authorized_keys wire format (base64 cert

@@ -318,9 +318,9 @@ func renderCloneVolumeXML(name, _ string) string {
 		} `xml:"format"`
 	}
 	type storageVolume struct {
-		XMLName  xml.Name      `xml:"volume"`
-		Type     string        `xml:"type,attr,omitempty"`
-		Name     string        `xml:"name"`
+		XMLName  xml.Name `xml:"volume"`
+		Type     string   `xml:"type,attr,omitempty"`
+		Name     string   `xml:"name"`
 		Capacity struct {
 			Unit  string `xml:"unit,attr"`
 			Value int    `xml:",chardata"`

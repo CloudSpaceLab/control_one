@@ -269,13 +269,13 @@ func (s *Server) handleAccessRequestSubroutes(w http.ResponseWriter, r *http.Req
 // ---------- ssh ca + cert issuance ----------
 
 type sshCAResponse struct {
-	ID         string  `json:"id"`
-	TenantID   string  `json:"tenant_id"`
-	PublicKey  string  `json:"public_key"`
-	KeyType    string  `json:"key_type"`
-	Active     bool    `json:"active"`
-	CreatedAt  string  `json:"created_at"`
-	RotatedAt  *string `json:"rotated_at,omitempty"`
+	ID        string  `json:"id"`
+	TenantID  string  `json:"tenant_id"`
+	PublicKey string  `json:"public_key"`
+	KeyType   string  `json:"key_type"`
+	Active    bool    `json:"active"`
+	CreatedAt string  `json:"created_at"`
+	RotatedAt *string `json:"rotated_at,omitempty"`
 }
 
 func (s *Server) handleSSHCA(w http.ResponseWriter, r *http.Request) {
@@ -726,4 +726,3 @@ func zeroPrivateKey(priv ed25519.PrivateKey) {
 		priv[i] = 0
 	}
 }
-

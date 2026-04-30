@@ -23,13 +23,14 @@ func scrape(ctx context.Context, db *sql.DB, t Target) ([]queryState, error) {
 // must be created on the target DB; the deploy step does this at install.
 //
 // Cumulative columns from pg_stat_statements:
-//   queryid     int8     — stable hash of the normalised query
-//   userid      oid      — joined to pg_user
-//   dbid        oid      — joined to pg_database
-//   query       text     — normalised statement
-//   calls       int8     — cumulative call count
-//   total_exec_time double — cumulative ms
-//   rows        int8     — cumulative rows returned
+//
+//	queryid     int8     — stable hash of the normalised query
+//	userid      oid      — joined to pg_user
+//	dbid        oid      — joined to pg_database
+//	query       text     — normalised statement
+//	calls       int8     — cumulative call count
+//	total_exec_time double — cumulative ms
+//	rows        int8     — cumulative rows returned
 func scrapePostgres(ctx context.Context, db *sql.DB) ([]queryState, error) {
 	const q = `
 		SELECT s.queryid::text,

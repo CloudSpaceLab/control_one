@@ -43,13 +43,13 @@ const (
 // when the backend supports it so the pipeline can find/update its own rules
 // without trampling rules the operator added by hand.
 type Rule struct {
-	Source    string    // IP or CIDR; empty == any
-	Dest      string    // IP or CIDR; empty == any
-	Port      int       // 0 == any
-	Protocol  string    // tcp | udp | icmp | ""
+	Source    string // IP or CIDR; empty == any
+	Dest      string // IP or CIDR; empty == any
+	Port      int    // 0 == any
+	Protocol  string // tcp | udp | icmp | ""
 	Direction Direction
 	Action    Action
-	Tag       string    // e.g. "controlone:ti:abuseipdb"
+	Tag       string // e.g. "controlone:ti:abuseipdb"
 	Comment   string
 }
 

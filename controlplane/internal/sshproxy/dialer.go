@@ -26,10 +26,10 @@ import (
 // the WG tunnel as the route, and the dialer just dials the node's tunnel
 // listen address.
 type MTLSDialer struct {
-	store        DialerStore
-	clientCert   tls.Certificate
-	caCert       *x509.CertPool
-	dialTimeout  time.Duration
+	store       DialerStore
+	clientCert  tls.Certificate
+	caCert      *x509.CertPool
+	dialTimeout time.Duration
 }
 
 // DialerStore is the slice of storage.Store the dialer needs to look up node
@@ -40,11 +40,11 @@ type DialerStore interface {
 
 // MTLSDialerConfig captures mTLS material + lookup wiring.
 type MTLSDialerConfig struct {
-	Store           DialerStore
-	ClientCertFile  string
-	ClientKeyFile   string
-	CACertFile      string
-	DialTimeout     time.Duration
+	Store          DialerStore
+	ClientCertFile string
+	ClientKeyFile  string
+	CACertFile     string
+	DialTimeout    time.Duration
 }
 
 func NewMTLSDialer(cfg MTLSDialerConfig) (*MTLSDialer, error) {

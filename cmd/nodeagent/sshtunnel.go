@@ -70,7 +70,7 @@ func bastionEmitter(stream *eventstream.Stream, nodeID, tenantID string) Session
 //
 // Flow:
 //
-//   bastion (control plane)  --mTLS-->  nodeagent listen :2222  -->  127.0.0.1:22 (sshd)
+//	bastion (control plane)  --mTLS-->  nodeagent listen :2222  -->  127.0.0.1:22 (sshd)
 //
 // The mTLS step authenticates the bastion: only the bastion's client cert
 // (signed by the control-plane CA) can connect. Once authenticated the
