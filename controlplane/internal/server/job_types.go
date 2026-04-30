@@ -41,4 +41,9 @@ func init() {
 			return decodeCompliancePayload(payload)
 		},
 	})
+	// Agent update jobs don't need tenant (derived from node) and have no payload validation
+	registerJobDefinition(JobTypeAgentUpdate, jobDefinition{
+		RequiresTenant: false,
+		Validate:       nil,
+	})
 }

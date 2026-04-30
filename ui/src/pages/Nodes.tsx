@@ -514,7 +514,13 @@ export function Nodes(): JSX.Element {
 
       {/* Node detail aside panel */}
       {selectedNode ? (
-        <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(560px,90vw)] flex-col gap-5 overflow-y-auto border-l border-border-subtle bg-elevated p-6 shadow-2xl">
+        <>
+          {/* Backdrop overlay */}
+          <div
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+            onClick={() => setSelectedNodeId(null)}
+          />
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(560px,90vw)] flex-col gap-5 overflow-y-auto border-l border-border-subtle bg-surface p-6 shadow-2xl">
           <header className="flex items-start justify-between gap-4">
             <div>
               <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">NODE</p>
@@ -620,6 +626,7 @@ export function Nodes(): JSX.Element {
             </Button>
           </div>
         </aside>
+        </>
       ) : null}
     </div>
   );
