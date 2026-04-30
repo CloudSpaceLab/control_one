@@ -34,6 +34,16 @@ vi.mock('../hooks/useTenants', () => ({
   }),
 }));
 
+// FleetEnroll reads ?job_id from useSearchParams; stub it instead of mounting
+// a router so the page renders standalone.
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return {
+    ...actual,
+    useSearchParams: () => [new URLSearchParams(), () => {}],
+  };
+});
+
 describe('FleetEnroll', () => {
   beforeEach(() => {
     startFleetEnroll.mockReset();

@@ -7,6 +7,20 @@ import * as useApiClientModule from '../hooks/useApiClient';
 import * as useToastModule from '../providers/ToastProvider';
 import type { APIClient, EnrollmentToken } from '../lib/api';
 
+// OfflineBundle calls useTenant() on render; stub the hook so tests don't
+// need to mount AuthProvider + TenantProvider.
+vi.mock('../providers/TenantProvider', () => ({
+  useTenant: () => ({
+    currentTenantId: 'tenant-a',
+    currentTenant: null,
+    tenants: [],
+    loading: false,
+    error: null,
+    setCurrentTenantId: () => {},
+    refresh: async () => {},
+  }),
+}));
+
 // Minimal ToastProvider stub — real provider pulls createContext whose value
 // we override via the module mock below, so we can render the page in tests
 // without wiring AuthProvider + ToastProvider.

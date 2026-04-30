@@ -481,7 +481,7 @@ export function FleetEnroll(): JSX.Element {
           {/* Results table with expandable ssh_output rows */}
           {results.length > 0 ? (
             <div className="overflow-x-auto rounded-md border border-border-subtle">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" aria-label="per-host enrollment progress">
                 <thead>
                   <tr className="border-b border-border-subtle bg-surface/60">
                     <th className="px-3 py-2 text-left font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
