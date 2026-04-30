@@ -24,7 +24,7 @@ const Command = forwardRef<
 ));
 Command.displayName = 'Command';
 
-interface CommandDialogProps extends ComponentPropsWithoutRef<typeof Dialog> {}
+type CommandDialogProps = ComponentPropsWithoutRef<typeof Dialog>;
 
 const CommandDialog = ({ children, ...props }: CommandDialogProps) => (
   <Dialog {...props}>
@@ -45,6 +45,7 @@ const CommandInput = forwardRef<
   ElementRef<typeof CommandPrimitive.Input>,
   ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
 >(({ className, ...props }, ref) => (
+  // eslint-disable-next-line react/no-unknown-property -- cmdk uses this attribute as a CSS hook for the [cmdk-input-wrapper] selector
   <div className="flex items-center border-b border-border-subtle px-3" cmdk-input-wrapper="">
     <Search className="mr-2 h-4 w-4 shrink-0 text-text-muted" />
     <CommandPrimitive.Input
