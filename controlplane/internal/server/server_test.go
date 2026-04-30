@@ -804,7 +804,7 @@ func TestRBACAuthorization(t *testing.T) {
 	}
 
 	tenantID := uuid.New()
-	store.tenants = []storage.Tenant{{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)}}
+	store.setTenants([]storage.Tenant{{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)}})
 	store.jobs = map[uuid.UUID]*storage.Job{}
 	store.events = map[uuid.UUID][]storage.JobEvent{}
 	templateID := uuid.New()
@@ -858,9 +858,9 @@ func TestRBACAuthorization(t *testing.T) {
 	})
 
 	t.Run("POST /api/v1/jobs enqueues job", func(t *testing.T) {
-		store.tenants = []storage.Tenant{
+		store.setTenants([]storage.Tenant{
 			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
-		}
+		})
 		body := fmt.Sprintf(`{
 			"type":"%s",
 			"tenant_id":"%s",
@@ -1622,6 +1622,23 @@ func (f *fakeStore) DeleteNode(_ context.Context, id uuid.UUID) error {
 	return sql.ErrNoRows
 }
 
+// setTenants replaces the tenants slice. Tests must use this (not direct
+// `store.tenants = ...`) once Server.New has been called, because
+// ReviewReminderScheduler launches a goroutine that reads via ListTenants.
+func (f *fakeStore) setTenants(ts []storage.Tenant) {
+	f.mu.Lock()
+	f.tenants = ts
+	f.mu.Unlock()
+}
+
+// appendTenant adds a tenant under the same lock. Same goroutine-safety
+// contract as setTenants.
+func (f *fakeStore) appendTenant(t storage.Tenant) {
+	f.mu.Lock()
+	f.tenants = append(f.tenants, t)
+	f.mu.Unlock()
+}
+
 func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*storage.Tenant, error) {
 	if tenant.ID == uuid.Nil {
 		tenant.ID = uuid.New()
@@ -1629,15 +1646,21 @@ func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*st
 	if tenant.CreatedAt.IsZero() {
 		tenant.CreatedAt = time.Now()
 	}
+	f.mu.Lock()
 	f.createdTenant = tenant
 	f.tenants = append(f.tenants, *tenant)
+	f.mu.Unlock()
 	return tenant, nil
 }
 
 func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset int) ([]storage.Tenant, int, error) {
 	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	f.mu.Lock()
+	snapshot := make([]storage.Tenant, len(f.tenants))
+	copy(snapshot, f.tenants)
+	f.mu.Unlock()
 	var filtered []storage.Tenant
-	for _, tenant := range f.tenants {
+	for _, tenant := range snapshot {
 		if prefix != "" && !strings.HasPrefix(strings.ToLower(tenant.Name), prefix) {
 			continue
 		}
