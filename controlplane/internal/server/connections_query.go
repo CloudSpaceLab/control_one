@@ -14,7 +14,8 @@ import (
 )
 
 // handleConnectionsList serves
-//   GET /api/v1/connections?tenant_id=...&ip=...&since=...&until=...&limit=...
+//
+//	GET /api/v1/connections?tenant_id=...&ip=...&since=...&until=...&limit=...
 //
 // Backed by the Doris `process_connections` table. When Doris is not
 // configured the endpoint returns 503 — the UI degrades to its
@@ -57,7 +58,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 // handleConnectionDetail returns the connection-level record + correlated
 // timeline.
 //
-//   GET /api/v1/connections/{conn_id}?tenant_id=...
+//	GET /api/v1/connections/{conn_id}?tenant_id=...
 func (s *Server) handleConnectionDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -99,7 +100,7 @@ func (s *Server) handleConnectionDetail(w http.ResponseWriter, r *http.Request) 
 
 // handleTopTalkers powers the dashboard "Top Talkers" card.
 //
-//   GET /api/v1/connections/top-talkers?tenant_id=...&since=...
+//	GET /api/v1/connections/top-talkers?tenant_id=...&since=...
 func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -131,7 +132,7 @@ func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 
 // handleFleetHealth powers the dashboard topology grid.
 //
-//   GET /api/v1/fleet/health?tenant_id=...&since=...
+//	GET /api/v1/fleet/health?tenant_id=...&since=...
 func (s *Server) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -164,11 +165,11 @@ func (s *Server) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	// Aggregate across event_type per node for the topology view.
 	type acc struct {
-		count   int64
-		bytesIn int64
+		count    int64
+		bytesIn  int64
 		bytesOut int64
-		sevMax  string
-		nodeID  string
+		sevMax   string
+		nodeID   string
 	}
 	byNode := map[string]*acc{}
 	for _, r := range rollups {

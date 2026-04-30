@@ -34,7 +34,7 @@ func TestEngineFiresAtThreshold(t *testing.T) {
 	node := uuid.New()
 	rule := storage.CorrelationRule{
 		ID: uuid.New(), TenantID: tenant, Name: "3 sec events on same node",
-		EventTypes: []string{eventbus.TopicSecurityEvent},
+		EventTypes:    []string{eventbus.TopicSecurityEvent},
 		WindowSeconds: 300, Threshold: 3, Dimension: "node_id", Severity: "high", Enabled: true,
 	}
 	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
@@ -61,7 +61,7 @@ func TestEngineWindowExpiresBeforeFiring(t *testing.T) {
 	node := uuid.New()
 	rule := storage.CorrelationRule{
 		ID: uuid.New(), TenantID: tenant, Name: "window",
-		EventTypes: []string{eventbus.TopicSecurityEvent},
+		EventTypes:    []string{eventbus.TopicSecurityEvent},
 		WindowSeconds: 5, Threshold: 2, Dimension: "node_id", Severity: "high", Enabled: true,
 	}
 	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
@@ -83,7 +83,7 @@ func TestEngineFiltersByEventType(t *testing.T) {
 	node := uuid.New()
 	rule := storage.CorrelationRule{
 		ID: uuid.New(), TenantID: tenant, Name: "only security",
-		EventTypes: []string{eventbus.TopicSecurityEvent},
+		EventTypes:    []string{eventbus.TopicSecurityEvent},
 		WindowSeconds: 60, Threshold: 1, Dimension: "node_id", Severity: "high", Enabled: true,
 	}
 	store := &fakeStore{rules: []storage.CorrelationRule{rule}}

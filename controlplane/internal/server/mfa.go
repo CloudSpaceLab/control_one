@@ -134,9 +134,9 @@ func (s *Server) handleMFAFactorSubroutes(w http.ResponseWriter, r *http.Request
 // --- TOTP enrolment ----------------------------------------------------
 
 type totpBeginResponse struct {
-	FactorID         string `json:"factor_id"`
-	Secret           string `json:"secret"`
-	ProvisioningURI  string `json:"provisioning_uri"`
+	FactorID        string `json:"factor_id"`
+	Secret          string `json:"secret"`
+	ProvisioningURI string `json:"provisioning_uri"`
 }
 
 type totpFinishRequest struct {
@@ -270,9 +270,9 @@ type stepUpBeginRequest struct {
 }
 
 type stepUpBeginResponse struct {
-	ChallengeID string `json:"challenge_id"`
-	Action      string `json:"action"`
-	ExpiresAt   string `json:"expires_at"`
+	ChallengeID string   `json:"challenge_id"`
+	Action      string   `json:"action"`
+	ExpiresAt   string   `json:"expires_at"`
 	FactorTypes []string `json:"factor_types"`
 }
 
@@ -459,8 +459,8 @@ func (s *Server) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), principal, uuid.Nil, "auth.step_up.verify", "step_up", challenge.ID.String(), map[string]any{
-		"action":   challenge.Action,
-		"factor":   factor.FactorType,
+		"action": challenge.Action,
+		"factor": factor.FactorType,
 	})
 	writeJSON(w, http.StatusOK, stepUpVerifyResponse{StepUpToken: token, ExpiresAt: formatTime(expiresAt)})
 }

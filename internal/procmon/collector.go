@@ -4,10 +4,10 @@
 //
 // Scope:
 //
-//   * proc.exec  — emitted when a PID first appears between snapshots.
-//   * proc.exit  — emitted when a previously-seen PID is gone.
-//   * proc.usage — emitted for the top K processes (by combined CPU + mem
-//                  pressure) every snapshot interval. Default K=20.
+//   - proc.exec  — emitted when a PID first appears between snapshots.
+//   - proc.exit  — emitted when a previously-seen PID is gone.
+//   - proc.usage — emitted for the top K processes (by combined CPU + mem
+//     pressure) every snapshot interval. Default K=20.
 //
 // Forensic value: every proc.exec carries the executable's xxhash64 + cmdline
 // + user, so an analyst can later answer "which binary made this connection"
@@ -65,10 +65,10 @@ type processSnapshot struct {
 	exe        string
 	cpuPercent float64
 	memRSS     uint64
-	numFDs    int32
-	numThread int32
-	createdMS int64
-	exeHash   string
+	numFDs     int32
+	numThread  int32
+	createdMS  int64
+	exeHash    string
 }
 
 // New constructs a Collector. NodeID + TenantID are stamped on every event.
@@ -273,10 +273,10 @@ func (c *Collector) emitTopK(current map[int32]processSnapshot, ts time.Time) {
 			Severity:    "info",
 			DedupKey:    fmt.Sprintf("proc.usage:%d:%d", r.s.pid, ts.Unix()),
 			Details: map[string]any{
-				"cpu_percent":  r.s.cpuPercent,
-				"mem_rss":      int64(r.s.memRSS),
-				"num_fds":      int64(r.s.numFDs),
-				"num_threads":  int64(r.s.numThread),
+				"cpu_percent": r.s.cpuPercent,
+				"mem_rss":     int64(r.s.memRSS),
+				"num_fds":     int64(r.s.numFDs),
+				"num_threads": int64(r.s.numThread),
 			},
 		})
 	}

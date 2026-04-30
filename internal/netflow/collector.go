@@ -3,10 +3,10 @@
 // eventstream. The collector picks the strongest backend available at
 // runtime:
 //
-//   * Linux ≥5.4 with CAP_BPF: cilium/ebpf tcplife (collector_linux_ebpf.go)
-//   * Linux fallback: /proc/net/tcp{,6} polling (collector_linux_proc.go)
-//   * Windows: PowerShell Get-NetTCPConnection polling (collector_windows.go)
-//   * Darwin: lsof + nettop polling (collector_darwin.go)
+//   - Linux ≥5.4 with CAP_BPF: cilium/ebpf tcplife (collector_linux_ebpf.go)
+//   - Linux fallback: /proc/net/tcp{,6} polling (collector_linux_proc.go)
+//   - Windows: PowerShell Get-NetTCPConnection polling (collector_windows.go)
+//   - Darwin: lsof + nettop polling (collector_darwin.go)
 //
 // Smart filter (filter.go) decides per-event whether full lifecycle data is
 // emitted (non-RFC1918 / threat-intel match / listening-port change) or
@@ -29,7 +29,7 @@ import (
 
 // ConnectionEvent is the platform-agnostic shape every backend emits.
 type ConnectionEvent struct {
-	Kind          string    // "open" | "close" | "state_change" | "summary"
+	Kind          string // "open" | "close" | "state_change" | "summary"
 	PID           int
 	Process       string
 	User          string
@@ -63,8 +63,8 @@ type Collector interface {
 
 // Options configure the manager + filter + emit path.
 type Options struct {
-	NodeID    string
-	TenantID  string
+	NodeID   string
+	TenantID string
 	// FilterCfg drives smart-filter decisions. Hot-reload by replacing the
 	// pointer atomically (Manager.SetFilter).
 	FilterCfg FilterConfig
@@ -75,13 +75,13 @@ type Options struct {
 // Manager picks the best available collector and forwards filtered events
 // into the supplied eventstream.
 type Manager struct {
-	stream    *eventstream.Stream
-	log       *zap.Logger
-	opts      Options
-	mu        sync.RWMutex
-	filter    *Filter
-	chosen    Collector
-	stopCh    chan struct{}
+	stream *eventstream.Stream
+	log    *zap.Logger
+	opts   Options
+	mu     sync.RWMutex
+	filter *Filter
+	chosen Collector
+	stopCh chan struct{}
 }
 
 // NewManager wires the manager. Run() picks a backend lazily; if no backend
@@ -197,12 +197,12 @@ func (m *Manager) handle(ev ConnectionEvent) {
 		ThreatFeed:  ev.ThreatFeed,
 		ThreatScore: ev.ThreatScore,
 		Details: map[string]any{
-			"state":          ev.State,
-			"direction":      ev.Direction,
-			"cmdline":        ev.Cmdline,
-			"packets_in":     int64(ev.PacketsIn),
-			"packets_out":    int64(ev.PacketsOut),
-			"bytes_in_delta": int64(ev.BytesInDelta),
+			"state":           ev.State,
+			"direction":       ev.Direction,
+			"cmdline":         ev.Cmdline,
+			"packets_in":      int64(ev.PacketsIn),
+			"packets_out":     int64(ev.PacketsOut),
+			"bytes_in_delta":  int64(ev.BytesInDelta),
 			"bytes_out_delta": int64(ev.BytesOutDelta),
 		},
 	}

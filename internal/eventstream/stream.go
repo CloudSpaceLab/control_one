@@ -53,9 +53,9 @@ type Event struct {
 // channel; the batcher drains it. When the buffer fills we drop the oldest
 // event and increment a counter so operators see the loss.
 type Stream struct {
-	out      chan Event
-	dropped  uint64
-	mu       sync.Mutex
+	out     chan Event
+	dropped uint64
+	mu      sync.Mutex
 }
 
 // NewStream returns a Stream with the given buffer capacity. 4096 is a

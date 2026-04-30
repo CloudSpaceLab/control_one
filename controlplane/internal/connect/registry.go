@@ -11,7 +11,7 @@ import (
 // SSHConnector / WinRMConnector / RDPConnector — so they don't have to
 // switch on protocol strings.
 type Registry struct {
-	mu     sync.RWMutex
+	mu      sync.RWMutex
 	byProto map[Protocol]Connector
 }
 

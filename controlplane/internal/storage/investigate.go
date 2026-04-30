@@ -15,16 +15,16 @@ import (
 
 // SavedSearch mirrors a row in the saved_searches table.
 type SavedSearch struct {
-	ID           uuid.UUID       `json:"id"`
-	TenantID     uuid.UUID       `json:"tenant_id"`
-	OwnerUserID  uuid.UUID       `json:"owner_user_id"`
-	Name         string          `json:"name"`
-	Query        string          `json:"query"`
-	EntityType   string          `json:"entity_type,omitempty"`
-	Filters      json.RawMessage `json:"filters,omitempty"`
-	Shared       bool            `json:"shared"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID          uuid.UUID       `json:"id"`
+	TenantID    uuid.UUID       `json:"tenant_id"`
+	OwnerUserID uuid.UUID       `json:"owner_user_id"`
+	Name        string          `json:"name"`
+	Query       string          `json:"query"`
+	EntityType  string          `json:"entity_type,omitempty"`
+	Filters     json.RawMessage `json:"filters,omitempty"`
+	Shared      bool            `json:"shared"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // EntityTag mirrors a row in the entity_tags table.
@@ -67,14 +67,14 @@ type AssetCIDR struct {
 // rows from security_events / alerts / audit_logs / session_recordings /
 // entity_actions so the UI can show a single time-ordered feed.
 type LifecycleItem struct {
-	Timestamp  time.Time      `json:"ts"`
-	Source     string         `json:"source"` // event|alert|audit|session|remediation|action
-	Severity   string         `json:"severity,omitempty"`
-	Actor      string         `json:"actor,omitempty"`
-	Target     string         `json:"target,omitempty"`
-	Summary    string         `json:"summary,omitempty"`
-	RawID      string         `json:"raw_id,omitempty"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
+	Timestamp time.Time      `json:"ts"`
+	Source    string         `json:"source"` // event|alert|audit|session|remediation|action
+	Severity  string         `json:"severity,omitempty"`
+	Actor     string         `json:"actor,omitempty"`
+	Target    string         `json:"target,omitempty"`
+	Summary   string         `json:"summary,omitempty"`
+	RawID     string         `json:"raw_id,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // EntitySummary returns counts + first/last-seen for an entity. The
@@ -314,9 +314,9 @@ func (s *Store) RecordEntityAction(ctx context.Context, a EntityAction) (*Entity
 		          COALESCE(reason,''), ttl_seconds, expires_at, created_by, created_at
 	`, a.ID, a.TenantID, a.EntityType, a.EntityID, a.Action, a.Reason, ttl, expires, a.CreatedBy)
 	var (
-		out      EntityAction
-		ttlScan  sql.NullInt64
-		expScan  sql.NullTime
+		out     EntityAction
+		ttlScan sql.NullInt64
+		expScan sql.NullTime
 	)
 	if err := row.Scan(
 		&out.ID, &out.TenantID, &out.EntityType, &out.EntityID, &out.Action,
@@ -656,7 +656,7 @@ func (s *Store) EntitySummary(ctx context.Context, tenantID uuid.UUID, entityTyp
 
 	for _, q := range queries {
 		var (
-			c             int
+			c               int
 			firstNT, lastNT sql.NullTime
 		)
 		if err := s.db.QueryRowContext(ctx, q.query, q.args...).Scan(&c, &firstNT, &lastNT); err != nil {

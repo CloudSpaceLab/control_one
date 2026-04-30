@@ -76,11 +76,11 @@ RETURNING (xmax = 0) AS first_sighting, exec_count;`
 // (tenant, dst_ip, dst_port). Returned by GetConnectionDurationBaseline;
 // nil means no baseline yet (insufficient samples).
 type ConnectionDurationBaseline struct {
-	P50MS        int64
-	P95MS        int64
-	P99MS        int64
-	SampleCount  int64
-	UpdatedAt    time.Time
+	P50MS       int64
+	P95MS       int64
+	P99MS       int64
+	SampleCount int64
+	UpdatedAt   time.Time
 }
 
 // GetConnectionDurationBaseline looks up a baseline. Returns nil + nil
@@ -106,12 +106,12 @@ WHERE tenant_id = $1 AND dst_ip = $2::inet AND dst_port = $3;`
 // (tenant, process_name, dst_port). Used by the F.4 detector at
 // conn.close ingest.
 type ConnectionBytesBaseline struct {
-	P95BytesIn     int64
-	P95BytesOut    int64
-	P95PacketsIn   int64
-	P95PacketsOut  int64
-	SampleCount    int64
-	UpdatedAt      time.Time
+	P95BytesIn    int64
+	P95BytesOut   int64
+	P95PacketsIn  int64
+	P95PacketsOut int64
+	SampleCount   int64
+	UpdatedAt     time.Time
 }
 
 // GetConnectionBytesBaseline looks up a baseline. nil + nil = no row.

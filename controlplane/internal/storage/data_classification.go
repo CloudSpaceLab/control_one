@@ -24,20 +24,20 @@ type DataClassificationRule struct {
 
 // ColumnClassification stores the result of scanning a single DB column.
 type ColumnClassification struct {
-	ID              uuid.UUID
-	TenantID        uuid.UUID
-	NodeID          uuid.UUID
-	DatabaseName    string
-	SchemaName      string
-	TableName       string
-	ColumnName      string
-	PIIType         *string
-	Encrypted       *bool
-	EncryptionKind  *string
-	MinValueLength  *int
-	MaxValueLength  *int
-	SampleCount     *int
-	LastScannedAt   *time.Time
+	ID             uuid.UUID
+	TenantID       uuid.UUID
+	NodeID         uuid.UUID
+	DatabaseName   string
+	SchemaName     string
+	TableName      string
+	ColumnName     string
+	PIIType        *string
+	Encrypted      *bool
+	EncryptionKind *string
+	MinValueLength *int
+	MaxValueLength *int
+	SampleCount    *int
+	LastScannedAt  *time.Time
 }
 
 // PIIFinding represents a detected PII issue linked to a column classification.

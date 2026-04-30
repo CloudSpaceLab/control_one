@@ -15,7 +15,7 @@ type ConnectionRow struct {
 	CorrelationID  string
 	StartedAt      time.Time
 	EndedAt        time.Time
-	DurationMS    int64
+	DurationMS     int64
 	Direction      string
 	PID            int64
 	ProcessName    string
@@ -127,20 +127,20 @@ func scanConnectionRow(s rowScanner) (ConnectionRow, error) {
 
 // CorrelationEvent is one entry in the unified timeline.
 type CorrelationEvent struct {
-	TS         time.Time
-	EventType  string
-	Severity   string
-	Message    string
-	PID        int64
-	Process    string
-	Path       string
-	BytesIn    int64
-	BytesOut   int64
-	SrcIP      string
-	DstIP      string
-	DstPort    int
-	NodeID     string
-	ConnID     string
+	TS        time.Time
+	EventType string
+	Severity  string
+	Message   string
+	PID       int64
+	Process   string
+	Path      string
+	BytesIn   int64
+	BytesOut  int64
+	SrcIP     string
+	DstIP     string
+	DstPort   int
+	NodeID    string
+	ConnID    string
 }
 
 // ListEventsByCorrelation returns every event sharing the same
@@ -243,14 +243,14 @@ func (c *Client) TopTalkers(ctx context.Context, tenantID string, since time.Tim
 // FleetSnapshotRow rolls one node's hot vitals into a single row for the
 // dashboard topology grid.
 type FleetSnapshotRow struct {
-	NodeID         string
-	ConnsActive    int64
-	BytesOut24h    int64
-	BytesIn24h     int64
-	ThreatHits24h  int64
-	OpenAlerts     int64
-	LastEventAt    time.Time
-	SeverityMax    string
+	NodeID        string
+	ConnsActive   int64
+	BytesOut24h   int64
+	BytesIn24h    int64
+	ThreatHits24h int64
+	OpenAlerts    int64
+	LastEventAt   time.Time
+	SeverityMax   string
 }
 
 // FleetHealthSnapshot returns one row per node summarising the last 24h.

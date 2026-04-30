@@ -27,22 +27,22 @@ import (
 // `ldap://` or `ldaps://` form. BindDN + BindPassword are the service
 // account used to search for user DNs.
 type LDAPConfig struct {
-	Enabled       bool              `mapstructure:"enabled"`
-	URL           string            `mapstructure:"url"`
-	StartTLS      bool              `mapstructure:"start_tls"`
-	SkipVerify    bool              `mapstructure:"skip_verify"`
-	BindDN        string            `mapstructure:"bind_dn"`
-	BindPassword  string            `mapstructure:"bind_password"`
-	UserBaseDN    string            `mapstructure:"user_base_dn"`
-	UserFilter    string            `mapstructure:"user_filter"`     // default: (|(mail=%s)(uid=%s))
-	GroupBaseDN   string            `mapstructure:"group_base_dn"`
-	GroupFilter   string            `mapstructure:"group_filter"`    // default: (member=%s)
-	GroupAttr     string            `mapstructure:"group_attr"`      // default: cn
-	EmailAttr     string            `mapstructure:"email_attr"`      // default: mail
-	NameAttr      string            `mapstructure:"name_attr"`       // default: displayName
-	GroupRoleMap  map[string]string `mapstructure:"group_role_map"`  // ldap_group_name -> control_one_role
-	DefaultRole   string            `mapstructure:"default_role"`    // when no group matches; default "viewer"
-	Timeout       time.Duration     `mapstructure:"timeout"`
+	Enabled      bool              `mapstructure:"enabled"`
+	URL          string            `mapstructure:"url"`
+	StartTLS     bool              `mapstructure:"start_tls"`
+	SkipVerify   bool              `mapstructure:"skip_verify"`
+	BindDN       string            `mapstructure:"bind_dn"`
+	BindPassword string            `mapstructure:"bind_password"`
+	UserBaseDN   string            `mapstructure:"user_base_dn"`
+	UserFilter   string            `mapstructure:"user_filter"` // default: (|(mail=%s)(uid=%s))
+	GroupBaseDN  string            `mapstructure:"group_base_dn"`
+	GroupFilter  string            `mapstructure:"group_filter"`   // default: (member=%s)
+	GroupAttr    string            `mapstructure:"group_attr"`     // default: cn
+	EmailAttr    string            `mapstructure:"email_attr"`     // default: mail
+	NameAttr     string            `mapstructure:"name_attr"`      // default: displayName
+	GroupRoleMap map[string]string `mapstructure:"group_role_map"` // ldap_group_name -> control_one_role
+	DefaultRole  string            `mapstructure:"default_role"`   // when no group matches; default "viewer"
+	Timeout      time.Duration     `mapstructure:"timeout"`
 }
 
 // LDAPProvider authenticates users against an LDAP directory. Stateless +
@@ -100,11 +100,11 @@ type LDAPUser struct {
 }
 
 // Authenticate runs the full bind-on-login flow:
-//   1. service-bind with BindDN/BindPassword
-//   2. search UserBaseDN for the supplied login (email or uid)
-//   3. re-bind as the user's DN with supplied password
-//   4. search GroupBaseDN for memberships
-//   5. map groups → Control One roles via GroupRoleMap
+//  1. service-bind with BindDN/BindPassword
+//  2. search UserBaseDN for the supplied login (email or uid)
+//  3. re-bind as the user's DN with supplied password
+//  4. search GroupBaseDN for memberships
+//  5. map groups → Control One roles via GroupRoleMap
 func (p *LDAPProvider) Authenticate(ctx context.Context, login, password string) (*LDAPUser, error) {
 	if password == "" {
 		return nil, errors.New("password required")

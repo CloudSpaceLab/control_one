@@ -22,22 +22,22 @@ import (
 // URL serving line-delimited or Spamhaus-format text.
 
 type threatFeedResponse struct {
-	ID                  string  `json:"id"`
-	TenantID            string  `json:"tenant_id"`
-	Name                string  `json:"name"`
-	FeedType            string  `json:"feed_type"`
-	URL                 *string `json:"url,omitempty"`
-	HasAPIKey           bool    `json:"has_api_key"`
-	ScoreFloor          int     `json:"score_floor"`
-	RefreshSeconds      int     `json:"refresh_seconds"`
-	Category            *string `json:"category,omitempty"`
-	Enabled             bool    `json:"enabled"`
-	LastStatus          *string `json:"last_status,omitempty"`
-	LastError           *string `json:"last_error,omitempty"`
-	LastIndicatorCount  int     `json:"last_indicator_count"`
-	LastRefreshedAt     *string `json:"last_refreshed_at,omitempty"`
-	CreatedAt           string  `json:"created_at"`
-	UpdatedAt           string  `json:"updated_at"`
+	ID                 string  `json:"id"`
+	TenantID           string  `json:"tenant_id"`
+	Name               string  `json:"name"`
+	FeedType           string  `json:"feed_type"`
+	URL                *string `json:"url,omitempty"`
+	HasAPIKey          bool    `json:"has_api_key"`
+	ScoreFloor         int     `json:"score_floor"`
+	RefreshSeconds     int     `json:"refresh_seconds"`
+	Category           *string `json:"category,omitempty"`
+	Enabled            bool    `json:"enabled"`
+	LastStatus         *string `json:"last_status,omitempty"`
+	LastError          *string `json:"last_error,omitempty"`
+	LastIndicatorCount int     `json:"last_indicator_count"`
+	LastRefreshedAt    *string `json:"last_refreshed_at,omitempty"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 func newThreatFeedResponse(f storage.ThreatFeed) threatFeedResponse {
