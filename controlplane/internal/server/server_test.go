@@ -1325,6 +1325,8 @@ func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.
 }
 
 func (f *fakeStore) UpdateTenant(_ context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i, tenant := range f.tenants {
 		if tenant.ID == id {
 			f.tenants[i].Name = name
@@ -1336,6 +1338,8 @@ func (f *fakeStore) UpdateTenant(_ context.Context, id uuid.UUID, name string) (
 }
 
 func (f *fakeStore) DeleteTenant(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i, tenant := range f.tenants {
 		if tenant.ID == id {
 			f.tenants = append(f.tenants[:i], f.tenants[i+1:]...)
@@ -1623,6 +1627,8 @@ func (f *fakeStore) DeleteNode(_ context.Context, id uuid.UUID) error {
 }
 
 func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if tenant.ID == uuid.Nil {
 		tenant.ID = uuid.New()
 	}
@@ -1635,6 +1641,8 @@ func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*st
 }
 
 func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset int) ([]storage.Tenant, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	prefix = strings.ToLower(strings.TrimSpace(prefix))
 	var filtered []storage.Tenant
 	for _, tenant := range f.tenants {
@@ -1691,6 +1699,8 @@ func (f *fakeStore) ListJobs(_ context.Context, tenantID uuid.UUID, jobType stri
 }
 
 func (f *fakeStore) GetTenant(_ context.Context, id uuid.UUID) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, t := range f.tenants {
 		if t.ID == id {
 			copy := t
@@ -1700,9 +1710,14 @@ func (f *fakeStore) GetTenant(_ context.Context, id uuid.UUID) (*storage.Tenant,
 	return nil, nil
 }
 
-func (f *fakeStore) EnsureTenant(ctx context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
-	if t, _ := f.GetTenant(ctx, id); t != nil {
-		return t, nil
+func (f *fakeStore) EnsureTenant(_ context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.tenants {
+		if t.ID == id {
+			copy := t
+			return &copy, nil
+		}
 	}
 	tenant := storage.Tenant{ID: id, Name: name, CreatedAt: time.Now()}
 	f.tenants = append(f.tenants, tenant)
