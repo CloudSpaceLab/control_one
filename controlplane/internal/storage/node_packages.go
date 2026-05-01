@@ -65,7 +65,7 @@ func (s *Store) ReplaceNodePackages(ctx context.Context, nodeID uuid.UUID, packa
 		if perr != nil {
 			return fmt.Errorf("prepare insert: %w", perr)
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 		for _, p := range packages {
 			if _, err := stmt.ExecContext(ctx, nodeID, p.Name, p.Version, p.Source, p.Arch, p.InstalledAt); err != nil {
 				return fmt.Errorf("insert package %s/%s: %w", p.Name, p.Version, err)
@@ -93,7 +93,7 @@ func (s *Store) ListNodePackages(ctx context.Context, nodeID uuid.UUID) ([]NodeP
 	if err != nil {
 		return nil, fmt.Errorf("list node packages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []NodePackage
 	for rows.Next() {
