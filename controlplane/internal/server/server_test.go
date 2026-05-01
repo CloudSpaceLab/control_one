@@ -81,6 +81,10 @@ func TestPingEndpointAuthentication(t *testing.T) {
 func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
 	t.Parallel()
 
+	// Synthetic fallback was removed in PR 1 (Compliance Foundation). When a
+	// node has no policies assigned, the scan job runs cleanly and emits its
+	// completion audit log but persists no results — the UI surfaces that as
+	// no_policies_assigned. This test asserts that contract.
 	logger := zap.NewNop()
 	tenantID := uuid.New()
 	jobID := uuid.New()
@@ -133,9 +137,8 @@ func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
 		t.Fatalf("compliance scan handler not registered")
 	}
 
-	results := store.complianceResults[jobID]
-	if len(results) == 0 {
-		t.Fatalf("expected compliance results persisted")
+	if len(store.complianceResults[jobID]) != 0 {
+		t.Fatalf("expected zero persisted results when node has no policies, got %d", len(store.complianceResults[jobID]))
 	}
 
 	if len(store.auditLogs) == 0 || store.auditLogs[len(store.auditLogs)-1].Action != "compliance.scan.completed" {
@@ -698,31 +701,27 @@ func TestComplianceEvaluateEndpoint(t *testing.T) {
 		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Synthetic fallback was removed in PR 1: when no store / no policies are
+	// assigned, the endpoint returns empty results plus no_policies_assigned
+	// metadata so the UI can render an empty state instead of fabricated zeros.
 	var resp struct {
 		Results []struct {
-			RuleID    string `json:"rule_id"`
-			Passed    bool   `json:"passed"`
-			Severity  string `json:"severity"`
-			Details   string `json:"details"`
-			CheckedAt string `json:"checked_at"`
+			RuleID string `json:"rule_id"`
 		} `json:"results"`
+		Metadata map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	expectedResults := len(ruleSets) + len(certifications)
-	if len(resp.Results) != expectedResults {
-		t.Fatalf("expected %d results, got %d", expectedResults, len(resp.Results))
+	if len(resp.Results) != 0 {
+		t.Fatalf("expected zero results without policies, got %d", len(resp.Results))
 	}
-	if resp.Results[0].Passed {
-		t.Fatalf("expected first rule to fail based on policies, got passed result")
+	if resp.Metadata == nil || resp.Metadata["no_policies_assigned"] != true {
+		t.Fatalf("expected no_policies_assigned metadata, got %+v", resp.Metadata)
 	}
-	if resp.Results[0].Severity != "high" {
-		t.Fatalf("expected first rule severity high, got %s", resp.Results[0].Severity)
-	}
-	if resp.Results[0].CheckedAt == "" || !strings.Contains(resp.Results[0].Details, nodeID.String()) {
-		t.Fatalf("expected checked_at and details to reference node")
-	}
+	_ = ruleSets
+	_ = certifications
+	_ = nodeID
 
 	t.Run("invalid payload rejected", func(t *testing.T) {
 		rec := call([]byte(`{"region":"us","rulesets":["cis"]}`))
@@ -3841,6 +3840,20 @@ func (f *fakeStore) GetAuditReport(_ context.Context, _ uuid.UUID) (*storage.Aud
 }
 func (f *fakeStore) UpdateAuditReportStatus(_ context.Context, _ uuid.UUID, _ string, _ *string, _ *time.Time) error {
 	return nil
+}
+
+// Framework control mapping + coverage stubs (PR 1 Compliance Foundation).
+func (f *fakeStore) ListControlMappings(_ context.Context, _ string) ([]storage.ControlMappingRow, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetControlCoverage(_ context.Context, _ uuid.UUID, _ string, _, _ time.Time) ([]storage.ControlCoverage, error) {
+	return nil, nil
+}
+func (f *fakeStore) CountResultsForReport(_ context.Context, _ uuid.UUID, _ string, _, _ time.Time) (int, int, error) {
+	return 0, 0, nil
+}
+func (f *fakeStore) GetPerNodeMatrix(_ context.Context, _ uuid.UUID, _ string, _, _ time.Time, _ int) ([]storage.NodeControlRow, error) {
+	return nil, nil
 }
 
 // ComplianceReview stubs

@@ -350,6 +350,10 @@ type Store interface {
 	ListAuditReports(context.Context, uuid.UUID, int, int) ([]storage.AuditReport, int, error)
 	GetAuditReport(context.Context, uuid.UUID) (*storage.AuditReport, error)
 	UpdateAuditReportStatus(context.Context, uuid.UUID, string, *string, *time.Time) error
+	ListControlMappings(context.Context, string) ([]storage.ControlMappingRow, error)
+	GetControlCoverage(context.Context, uuid.UUID, string, time.Time, time.Time) ([]storage.ControlCoverage, error)
+	CountResultsForReport(context.Context, uuid.UUID, string, time.Time, time.Time) (int, int, error)
+	GetPerNodeMatrix(context.Context, uuid.UUID, string, time.Time, time.Time, int) ([]storage.NodeControlRow, error)
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -846,6 +850,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/telemetry/logs", s.handleTelemetryLogs)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/nodes/", s.handleTelemetryNodeSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/compliance/trends", s.handleComplianceTrends)
+	s.baseRouter.HandleFunc("/api/v1/compliance/control-posture", s.handleComplianceControlPosture)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts", s.handleRemediationScriptsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts/", s.handleRemediationScriptSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)

@@ -1,0 +1,32 @@
+Control One — Compliance Audit Report
+Organisation: Acme Bank
+Framework:    HIPAA
+Period:       2026-04-01 — 2026-05-01
+Generated:    2026-05-01 09:30 UTC
+
+Executive Summary
+  Controls Passed:  4
+  Controls Failed:  1
+  Open Findings:    1
+  Evidence Items:   1
+
+Control Status
+  [PASS] 164.308(a)(1)  nodes 3/3  evidence 1  Security Management Process
+  [PARTIAL] 164.312(a)(1)  nodes 2/3  evidence 0  Access Control
+  [PASS] 164.312(b)     nodes 3/3  evidence 1  Audit Controls
+  [FAIL] 164.312(d)     nodes 0/3  evidence 0  Person or Entity Authentication
+  [NO_COVERAGE] 164.310(a)     nodes 0/0  evidence 0  Facility Access Controls
+
+Gap Analysis (controls without automated coverage)
+  - 164.310(a) — Facility Access Controls
+
+Evidence Inventory
+  - Audit log retention policy (policy-document) [164.312(b)] uploaded 2026-04-28
+
+Per-Node Compliance Matrix (top 5 rows)
+  node-a                         164.308(a)(1)  PASS
+  node-a                         164.312(d)     FAIL
+  node-b                         164.312(a)(1)  FAIL
+  node-b                         164.312(d)     FAIL
+  node-c                         164.312(d)     FAIL
+
