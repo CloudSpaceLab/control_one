@@ -282,9 +282,11 @@ func TestClustersListIsTenantScoped(t *testing.T) {
 
 	// Seed two tenants: ours, and a second that must be filtered out.
 	otherTenant := uuid.New()
+	env.store.mu.Lock()
 	env.store.tenants = append(env.store.tenants, storage.Tenant{
 		ID: otherTenant, Name: "other", CreatedAt: time.Now(),
 	})
+	env.store.mu.Unlock()
 	env.store.clusters = map[uuid.UUID]*storage.Cluster{}
 	myClusterID := uuid.New()
 	theirClusterID := uuid.New()

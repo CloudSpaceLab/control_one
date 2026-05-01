@@ -7,6 +7,7 @@ import {
   Key,
   Lock,
   Network,
+  Plus,
   Server,
   ShieldCheck,
   Sparkles,
@@ -51,7 +52,7 @@ type Mode = 'single' | 'hypervisor';
 
 export function Onboard(): JSX.Element {
   const client = useApiClient();
-  const { currentTenantId, tenants } = useTenant();
+  const { currentTenantId, tenants, refresh: refreshTenants } = useTenant();
   const [mode, setMode] = useState<Mode>('single');
 
   const [protocol, setProtocol] = useState<OnboardingProtocol>('ssh');
@@ -71,6 +72,8 @@ export function Onboard(): JSX.Element {
   const [enrolTenantId, setEnrolTenantId] = useState<string | null>(currentTenantId ?? null);
   const [groupTouched, setGroupTouched] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [creatingTenant, setCreatingTenant] = useState(false);
+  const [newTenantName, setNewTenantName] = useState('');
 
   useEffect(() => {
     if (!enrolTenantId && currentTenantId) setEnrolTenantId(currentTenantId);
@@ -159,6 +162,19 @@ export function Onboard(): JSX.Element {
       toast.success(`Enrolment started: ${r.job_id.slice(0, 8)}…`);
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Enrolment failed'),
+  });
+
+  const createTenant = useMutation({
+    mutationFn: () => client.createTenant({ name: newTenantName.trim() }),
+    onSuccess: async (t) => {
+      await refreshTenants();
+      setEnrolTenantId(t.id);
+      setNewTenantName('');
+      setCreatingTenant(false);
+      toast.success(`Tenant "${t.name}" created`);
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : 'Failed to create tenant'),
   });
 
   const submitTest = (e: React.FormEvent) => {
@@ -439,16 +455,77 @@ export function Onboard(): JSX.Element {
                   </p>
                 </Field>
                 <div className="flex flex-col gap-1.5">
-                  <SelectField
-                    label="Tenant"
-                    value={enrolTenantId ?? ''}
-                    onChange={(e) => setEnrolTenantId(e.target.value || null)}
-                  >
-                    <option value="">Select tenant…</option>
-                    {tenants.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </SelectField>
+                  {creatingTenant ? (
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="onboard-new-tenant">New tenant</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="onboard-new-tenant"
+                          autoFocus
+                          placeholder="e.g. Production"
+                          value={newTenantName}
+                          onChange={(e) => setNewTenantName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (newTenantName.trim() && !createTenant.isPending) {
+                                createTenant.mutate();
+                              }
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setCreatingTenant(false);
+                              setNewTenantName('');
+                            }
+                          }}
+                          disabled={createTenant.isPending}
+                        />
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          loading={createTenant.isPending}
+                          disabled={!newTenantName.trim() || createTenant.isPending}
+                          onClick={() => createTenant.mutate()}
+                        >
+                          Create
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={createTenant.isPending}
+                          onClick={() => {
+                            setCreatingTenant(false);
+                            setNewTenantName('');
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-end gap-2">
+                      <SelectField
+                        label="Tenant"
+                        value={enrolTenantId ?? ''}
+                        onChange={(e) => setEnrolTenantId(e.target.value || null)}
+                        wrapperClassName="flex-1"
+                      >
+                        <option value="">Select tenant…</option>
+                        {tenants.map((t) => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </SelectField>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCreatingTenant(true)}
+                      >
+                        <Plus className="h-4 w-4" /> New tenant
+                      </Button>
+                    </div>
+                  )}
                   <p className="text-[0.65rem] text-text-muted">
                     Defaults to the active tenant. Single-server enrolment scopes the new node here.
                   </p>
