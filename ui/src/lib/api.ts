@@ -952,6 +952,10 @@ export interface ComplianceEvaluateResult {
 
 export interface ComplianceEvaluateResponse {
   results: ComplianceEvaluateResult[];
+  metadata?: {
+    no_policies_assigned?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface AuditLog {
@@ -2608,6 +2612,20 @@ export class APIClient {
     );
   }
 
+  async getControlPosture(params: {
+    framework: string;
+    tenant_id: string;
+    period_start?: string;
+    period_end?: string;
+  }): Promise<ControlPostureResponse> {
+    const search = new URLSearchParams();
+    search.set('framework', params.framework);
+    search.set('tenant_id', params.tenant_id);
+    if (params.period_start) search.set('period_start', params.period_start);
+    if (params.period_end) search.set('period_end', params.period_end);
+    return this.request<ControlPostureResponse>(`/api/v1/compliance/control-posture?${search.toString()}`);
+  }
+
   async createAuditReport(payload: CreateAuditReportPayload): Promise<AuditReport> {
     return this.request<AuditReport>('/api/v1/compliance/reports', {
       method: 'POST',
@@ -3289,6 +3307,29 @@ export interface FrameworkControl {
   control_id: string;
   title: string;
   description: string;
+  applicability?: string;
+}
+
+export interface ControlCoverage {
+  framework: string;
+  control_id: string;
+  title: string;
+  applicability?: string;
+  status: 'PASS' | 'PARTIAL' | 'FAIL' | 'NO_COVERAGE';
+  nodes_checked: number;
+  nodes_passing: number;
+  nodes_failing: number;
+  evidence_count: number;
+  last_checked_at?: string;
+}
+
+export interface ControlPostureResponse {
+  framework: string;
+  tenant_id: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  coverage: ControlCoverage[];
 }
 
 export interface CreateAuditReportPayload {

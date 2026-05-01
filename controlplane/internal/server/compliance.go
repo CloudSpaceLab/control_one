@@ -50,7 +50,8 @@ func (r complianceEvaluateRequest) validate() error {
 }
 
 type complianceEvaluateResponse struct {
-	Results []compliance.Result `json:"results"`
+	Results  []compliance.Result `json:"results"`
+	Metadata map[string]any      `json:"metadata,omitempty"`
 }
 
 func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request) {
@@ -84,46 +85,53 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	resp := complianceEvaluateResponse{Results: results}
+	// evaluateComplianceReal returns nil results only when the node has no
+	// matching policies; the UI uses no_policies_assigned to render an empty
+	// state instead of fabricated zeros.
+	if len(results) == 0 {
+		resp.Metadata = map[string]any{"no_policies_assigned": true}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(complianceEvaluateResponse{Results: results}); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Warn("encode compliance evaluate response", zap.Error(err))
 	}
 }
 
-// evaluateComplianceReal performs policy-based evaluation if policies are assigned,
-// falling back to synthetic results otherwise.
+// evaluateComplianceReal performs policy-based evaluation when the node's
+// tenant has policies assigned. When no policies are matched, it returns nil
+// results (no synthetic fallback) — callers infer no_policies_assigned from
+// len(results) == 0 and surface that to the user instead of fabricating data.
 func (s *Server) evaluateComplianceReal(ctx context.Context, req complianceEvaluateRequest) ([]compliance.Result, error) {
 	nodeID, _ := uuid.Parse(req.NodeID)
 
-	// Try policy-based evaluation if store is available
-	if s.store != nil {
-		node, err := s.store.GetNode(ctx, nodeID)
-		if err != nil {
-			s.logger.Warn("get node for compliance eval", zap.Error(err))
-		}
-
-		var tenantID uuid.UUID
-		if node != nil {
-			tenantID = node.TenantID
-		}
-
-		if tenantID != uuid.Nil {
-			policies, err := s.store.GetEffectivePolicies(ctx, tenantID, nodeID)
-			if err != nil {
-				s.logger.Warn("get effective policies", zap.Error(err))
-			}
-
-			if len(policies) > 0 {
-				return s.evaluateWithPolicies(ctx, req, policies, node)
-			}
-		}
+	if s.store == nil {
+		return nil, nil
 	}
 
-	// Fallback to synthetic
-	if req.UseRealScan {
-		return evaluateComplianceWithRealScanners(req), nil
+	node, err := s.store.GetNode(ctx, nodeID)
+	if err != nil {
+		s.logger.Warn("get node for compliance eval", zap.Error(err))
 	}
-	return synthesizeComplianceResults(req), nil
+
+	var tenantID uuid.UUID
+	if node != nil {
+		tenantID = node.TenantID
+	}
+	if tenantID == uuid.Nil {
+		return nil, nil
+	}
+
+	policies, err := s.store.GetEffectivePolicies(ctx, tenantID, nodeID)
+	if err != nil {
+		s.logger.Warn("get effective policies", zap.Error(err))
+	}
+	if len(policies) == 0 {
+		return nil, nil
+	}
+
+	return s.evaluateWithPolicies(ctx, req, policies, node)
 }
 
 func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluateRequest, policies []storage.PolicyWithVersion, node *storage.Node) ([]compliance.Result, error) {
@@ -263,102 +271,6 @@ func (s *Server) handleFirstScanHook(ctx context.Context, nodeID uuid.UUID) {
 		return
 	}
 	s.maybeActivatePendingNode(ctx, node)
-}
-
-func evaluateComplianceWithRealScanners(req complianceEvaluateRequest) []compliance.Result {
-	now := time.Now().UTC()
-	var results []compliance.Result
-
-	for _, ruleSet := range req.RuleSets {
-		ruleID := fmt.Sprintf("%s-rule", strings.ToLower(ruleSet))
-
-		passed := true
-		severity := "low"
-		details := fmt.Sprintf("Real scanner evaluation for %s on node %s", ruleSet, req.NodeID)
-		remediation := ""
-
-		if rule, ok := req.Policies[ruleID]; ok {
-			if strings.Contains(strings.ToLower(rule), "fail") || strings.Contains(strings.ToLower(rule), "error") {
-				passed = false
-				severity = "high"
-				remediation = fmt.Sprintf("Remediate failing controls in %s", ruleSet)
-			} else if strings.Contains(strings.ToLower(rule), "warn") {
-				passed = false
-				severity = "medium"
-				remediation = fmt.Sprintf("Address warnings in %s", ruleSet)
-			}
-		}
-
-		results = append(results, compliance.Result{
-			RuleID:      ruleID,
-			Passed:      passed,
-			Severity:    severity,
-			Details:     details,
-			CheckedAt:   now,
-			Remediation: remediation,
-		})
-	}
-
-	for _, cert := range req.Certifications {
-		results = append(results, compliance.Result{
-			RuleID:    fmt.Sprintf("cert-%s", strings.ToLower(cert)),
-			Passed:    true,
-			Severity:  "info",
-			Details:   fmt.Sprintf("Certification %s verified for node %s", cert, req.NodeID),
-			CheckedAt: now,
-		})
-	}
-
-	return results
-}
-
-func synthesizeComplianceResults(req complianceEvaluateRequest) []compliance.Result {
-	now := time.Now().UTC()
-	var results []compliance.Result
-
-	if len(req.RuleSets) == 0 {
-		return results
-	}
-
-	for idx, rule := range req.RuleSets {
-		ruleKey := fmt.Sprintf("policy.%s", strings.ToLower(rule))
-		value := strings.ToLower(strings.TrimSpace(req.Policies[ruleKey]))
-
-		passed := true
-		severity := "low"
-		remediation := ""
-
-		if strings.Contains(value, "fail") {
-			passed = false
-			severity = "high"
-			remediation = fmt.Sprintf("Review policy %s and remediate failing controls", rule)
-		} else if strings.Contains(value, "warn") {
-			passed = false
-			severity = "medium"
-			remediation = fmt.Sprintf("Address warnings for policy %s", rule)
-		}
-
-		results = append(results, compliance.Result{
-			RuleID:      fmt.Sprintf("%s-%d", rule, idx+1),
-			Passed:      passed,
-			Severity:    severity,
-			Details:     fmt.Sprintf("Evaluated %s for node %s in %s", rule, req.NodeID, req.Region),
-			CheckedAt:   now,
-			Remediation: remediation,
-		})
-	}
-
-	for _, cert := range req.Certifications {
-		results = append(results, compliance.Result{
-			RuleID:    fmt.Sprintf("cert-%s", strings.ToLower(cert)),
-			Passed:    true,
-			Severity:  "info",
-			Details:   fmt.Sprintf("Certification %s checkpoint acknowledged", cert),
-			CheckedAt: now,
-		})
-	}
-
-	return results
 }
 
 type batchScanRequest struct {
