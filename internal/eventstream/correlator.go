@@ -10,10 +10,10 @@ import (
 // Correlator stamps a shared correlation_id onto events that belong to the
 // same logical "thing happening" on the host:
 //
-//   * proc.exec lands within ±2s of conn.open from the same PID → same id
-//   * file.* with same PID and within an active conn window → same id
-//   * db.query with the same conn_id → same id
-//   * log.spike with a matched _PID inside the conn window → same id
+//   - proc.exec lands within ±2s of conn.open from the same PID → same id
+//   - file.* with same PID and within an active conn window → same id
+//   - db.query with the same conn_id → same id
+//   - log.spike with a matched _PID inside the conn window → same id
 //
 // The correlator runs on the agent before events leave the box so the
 // controlplane gets a ready-to-JOIN event stream without server-side
@@ -30,10 +30,10 @@ type Correlator struct {
 
 // correlation tracks one ongoing causal cluster.
 type correlation struct {
-	id       string
+	id        string
 	startedAt time.Time
 	expiresAt time.Time
-	conns    map[string]struct{} // conn_ids belonging to this cluster
+	conns     map[string]struct{} // conn_ids belonging to this cluster
 }
 
 // NewCorrelator returns a correlator with the given join window.

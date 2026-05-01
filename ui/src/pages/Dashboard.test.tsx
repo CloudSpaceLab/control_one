@@ -16,6 +16,7 @@ const overview: DashboardOverview = {
   remediations_applied_24h: 2,
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function stubClient(): any {
   return {
     getDashboardOverview: vi.fn().mockResolvedValue(overview),
@@ -25,7 +26,9 @@ function stubClient(): any {
 
 describe('Dashboard', () => {
   beforeEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useApiClientModule, 'useApiClient') as any).mockReturnValue(stubClient());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useTenantsModule, 'useTenants') as any).mockReturnValue({
       data: [{ id: 'tenant-1', name: 't', created_at: '2024-01-01', updated_at: '2024-01-01' }],
       pagination: { total: 1, count: 1, limit: 1, offset: 0, nextOffset: null, prevOffset: null },

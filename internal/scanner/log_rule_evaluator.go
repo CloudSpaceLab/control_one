@@ -8,35 +8,35 @@ import (
 
 // LogRule mirrors the control-plane log_monitoring_rules row.
 type LogRule struct {
-	ID             string
-	Name           string
-	Source         string
-	Pattern        string
-	Severity       string
-	WindowSeconds  int
-	Threshold      int
-	compiled       *regexp.Regexp
-	compileErr     error
+	ID            string
+	Name          string
+	Source        string
+	Pattern       string
+	Severity      string
+	WindowSeconds int
+	Threshold     int
+	compiled      *regexp.Regexp
+	compileErr    error
 }
 
 // LogTrigger is emitted when a rule's threshold is exceeded within the window.
 type LogTrigger struct {
-	RuleID    string
-	Severity  string
-	Hits      int
-	Window    time.Duration
-	FiredAt   time.Time
-	Evidence  []string
+	RuleID   string
+	Severity string
+	Hits     int
+	Window   time.Duration
+	FiredAt  time.Time
+	Evidence []string
 }
 
 // LogRuleEvaluator holds sliding-window counters per rule and returns triggers
 // when thresholds are exceeded. It is safe for concurrent use.
 type LogRuleEvaluator struct {
-	mu      sync.Mutex
-	rules   []LogRule
-	hits    map[string][]time.Time
+	mu       sync.Mutex
+	rules    []LogRule
+	hits     map[string][]time.Time
 	evidence map[string][]string
-	now     func() time.Time
+	now      func() time.Time
 }
 
 // NewLogRuleEvaluator compiles the patterns up front. Rules with invalid

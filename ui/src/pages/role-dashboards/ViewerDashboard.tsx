@@ -40,15 +40,15 @@ export interface ViewerDashboardProps {
   readonly?: boolean;
 }
 
-export function ViewerDashboard({ readonly: _readonly = false }: ViewerDashboardProps): JSX.Element {
+export function ViewerDashboard({ readonly: _readonly }: ViewerDashboardProps): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [period, setPeriod] = useState('30d');
   const days = PERIOD_DAYS[period] ?? 30;
 
   const overviewQ = useQuery<DashboardOverview>({
-    queryKey: ['dashboard.overview', currentTenantId],
-    queryFn: () => client.getDashboardOverview(currentTenantId ?? undefined),
+    queryKey: ['dashboard.overview', currentTenantId, period],
+    queryFn: () => client.getDashboardOverview(currentTenantId ?? undefined, period === 'qtd' ? '30d' : period),
     refetchInterval: 60_000,
   });
   const riskQ = useQuery<RiskScore>({
@@ -212,6 +212,7 @@ export function ViewerDashboard({ readonly: _readonly = false }: ViewerDashboard
           <KpiTile
             label="COMPLIANCE COVERAGE"
             value={`${compliancePct.toFixed(0)}%`}
+            delta={overviewQ.data?.compliance_pass_delta?.delta_pct}
             tone={compliancePct >= 95 ? 'healthy' : compliancePct >= 80 ? 'warning' : 'critical'}
             hint={
               overviewQ.data
@@ -222,6 +223,41 @@ export function ViewerDashboard({ readonly: _readonly = false }: ViewerDashboard
           />
         </DashboardGridItem>
 
+        <DashboardGridItem span={{ base: 12, lg: 5 }}>
+          <Panel padding="md" eyebrow="SECURITY EVENTS" title="Severity breakdown" toneAccent="critical">
+            {overviewQ.data ? (
+              <Chart
+                kind="doughnut"
+                height={200}
+                ariaLabel="Security event severity distribution"
+                data={{
+                  labels: ['Critical', 'High', 'Medium', 'Low'],
+                  datasets: [
+                    {
+                      data: [
+                        overviewQ.data.security_event_counts.critical,
+                        overviewQ.data.security_event_counts.high,
+                        overviewQ.data.security_event_counts.medium,
+                        overviewQ.data.security_event_counts.low,
+                      ],
+                      backgroundColor: [
+                        'rgba(239,68,68,0.85)',
+                        'rgba(245,158,11,0.85)',
+                        'rgba(99,102,241,0.75)',
+                        'rgba(100,116,139,0.65)',
+                      ],
+                      borderWidth: 0,
+                    },
+                  ],
+                }}
+              />
+            ) : (
+              <div className="grid h-[200px] place-items-center text-sm text-text-muted">
+                {overviewQ.isLoading ? 'Loading…' : 'No events in period.'}
+              </div>
+            )}
+          </Panel>
+        </DashboardGridItem>
         <DashboardGridItem span={{ base: 12, lg: 7 }}>
           <Panel
             padding="md"

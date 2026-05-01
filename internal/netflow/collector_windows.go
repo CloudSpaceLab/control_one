@@ -114,14 +114,14 @@ func (w *winBackend) event(kind string, c winNetConn, now time.Time) ConnectionE
 	src := net.ParseIP(c.LocalAddress)
 	dst := net.ParseIP(c.RemoteAddress)
 	ev := ConnectionEvent{
-		Kind:     kind,
-		PID:      c.OwningProcess,
-		SrcIP:    src,
-		SrcPort:  uint16(c.LocalPort),
-		DstIP:    dst,
-		DstPort:  uint16(c.RemotePort),
-		Protocol: "tcp",
-		State:    c.State,
+		Kind:      kind,
+		PID:       c.OwningProcess,
+		SrcIP:     src,
+		SrcPort:   uint16(c.LocalPort),
+		DstIP:     dst,
+		DstPort:   uint16(c.RemotePort),
+		Protocol:  "tcp",
+		State:     c.State,
 		StartedAt: now,
 	}
 	if kind == "close" {

@@ -29,8 +29,11 @@ import type {
   ComplianceEvaluateResult,
 } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
+import { ComplianceEvidence } from './ComplianceEvidence';
+import { Frameworks } from './Frameworks';
+import { AuditReports } from './AuditReports';
 
-type Tab = 'posture' | 'policies';
+type Tab = 'posture' | 'policies' | 'evidence' | 'frameworks' | 'reports';
 
 // ── Templates for common compliance rule types ────────────────────────────────
 const RULE_TYPES = [
@@ -145,12 +148,24 @@ export function Compliance(): JSX.Element {
         <TabsList>
           <TabsTrigger value="posture">Posture</TabsTrigger>
           <TabsTrigger value="policies">Policies</TabsTrigger>
+          <TabsTrigger value="evidence">Evidence</TabsTrigger>
+          <TabsTrigger value="frameworks">Frameworks</TabsTrigger>
+          <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
         <TabsContent value="posture" className="mt-5">
           <PostureTab />
         </TabsContent>
         <TabsContent value="policies" className="mt-5">
           <PoliciesTab />
+        </TabsContent>
+        <TabsContent value="evidence" className="mt-5">
+          <ComplianceEvidence />
+        </TabsContent>
+        <TabsContent value="frameworks" className="mt-5">
+          <Frameworks />
+        </TabsContent>
+        <TabsContent value="reports" className="mt-5">
+          <AuditReports />
         </TabsContent>
       </Tabs>
     </div>

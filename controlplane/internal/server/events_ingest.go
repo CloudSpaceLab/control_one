@@ -62,9 +62,9 @@ var allowedEventTypes = map[string]bool{
 	"conn.state_change": true,
 	"conn.summary":      true,
 	// Process lifecycle
-	"proc.exec":   true,
-	"proc.exit":   true,
-	"proc.usage":  true,
+	"proc.exec":  true,
+	"proc.exit":  true,
+	"proc.usage": true,
 	// File access
 	"file.open":          true,
 	"file.read.summary":  true,
@@ -82,15 +82,15 @@ var allowedEventTypes = map[string]bool{
 	"log.spike":    true,
 	"rule.trigger": true,
 	// Behavioural anomaly detectors (Phase F)
-	"anomaly.new_destination":     true,
-	"anomaly.long_connection":     true,
-	"anomaly.high_bytes_out":      true,
-	"anomaly.fast_bulk_transfer":  true,
-	"anomaly.packet_scan":         true,
-	"anomaly.new_executable":      true,
-	"anomaly.executable_dropped":  true,
-	"anomaly.new_db_query":        true,
-	"anomaly.db_query_high_rows":  true,
+	"anomaly.new_destination":    true,
+	"anomaly.long_connection":    true,
+	"anomaly.high_bytes_out":     true,
+	"anomaly.fast_bulk_transfer": true,
+	"anomaly.packet_scan":        true,
+	"anomaly.new_executable":     true,
+	"anomaly.executable_dropped": true,
+	"anomaly.new_db_query":       true,
+	"anomaly.db_query_high_rows": true,
 	// Long-running DB query (Phase G)
 	"db.query.long_running": true,
 	// Compatibility shims for older event flavours
@@ -148,10 +148,10 @@ func (r *rateLimiterRegistry) allow(key string, n int) (bool, time.Duration) {
 // handleEventsIngest accepts a gzip + ndjson batch from an authenticated
 // agent, journals it, then fans out to Doris + rollups + eventbus.
 //
-//   POST /api/v1/events/ingest
-//   Content-Encoding: gzip
-//   Content-Type:     application/x-ndjson
-//   Body: one IngestedEvent JSON per line
+//	POST /api/v1/events/ingest
+//	Content-Encoding: gzip
+//	Content-Type:     application/x-ndjson
+//	Body: one IngestedEvent JSON per line
 //
 // Auth: the request must be the "agent" principal (mTLS). Other roles get a
 // 403 — humans don't post events.
@@ -190,8 +190,8 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const (
-		maxCompressed   = 1 << 20    // 1 MiB
-		maxDecompressed = 5 << 20    // 5 MiB
+		maxCompressed   = 1 << 20 // 1 MiB
+		maxDecompressed = 5 << 20 // 5 MiB
 		maxRows         = 5_000
 	)
 
@@ -293,10 +293,10 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"batch_id":      batchID.String(),
-		"rows":          len(events),
-		"status":        finalStatus,
-		"doris_status":  dorisStatus,
+		"batch_id":     batchID.String(),
+		"rows":         len(events),
+		"status":       finalStatus,
+		"doris_status": dorisStatus,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

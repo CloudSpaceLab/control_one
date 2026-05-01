@@ -261,6 +261,7 @@ export function Secrets(): JSX.Element {
         </div>
       ),
     },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [isSyncing]);
 
   const syncColumns = useMemo<ColumnDef<SyncRow>[]>(() => [

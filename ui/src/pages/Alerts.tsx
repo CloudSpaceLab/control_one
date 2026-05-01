@@ -5,6 +5,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ConfirmModal } from '../components/ConfirmModal';
 import {
+  Chart,
   DataTable,
   EmptyState,
   EntityChip,
@@ -319,6 +320,68 @@ export function Alerts(): JSX.Element {
             <KpiTile label="CRITICAL" value={counts.critical} tone={counts.critical > 0 ? 'critical' : 'healthy'} />
             <KpiTile label="HIGH" value={counts.high} tone={counts.high > 0 ? 'degraded' : 'healthy'} />
           </div>
+
+          {alerts.length > 0 && (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Panel padding="md" eyebrow="ALERT VOLUME" title="Opened per day (last 7 days)" toneAccent="critical">
+                <Chart
+                  kind="bar"
+                  height={160}
+                  ariaLabel="Alert volume by day"
+                  data={(() => {
+                    const buckets: Record<string, number> = {};
+                    const now = Date.now();
+                    for (let i = 6; i >= 0; i--) {
+                      const d = new Date(now - i * 86_400_000);
+                      buckets[d.toISOString().slice(5, 10)] = 0;
+                    }
+                    for (const a of alerts) {
+                      const k = (a.opened_at ?? '').slice(5, 10);
+                      if (k in buckets) buckets[k] = (buckets[k] ?? 0) + 1;
+                    }
+                    return {
+                      labels: Object.keys(buckets),
+                      datasets: [{
+                        label: 'Alerts',
+                        data: Object.values(buckets),
+                        backgroundColor: 'rgba(239,68,68,0.65)',
+                        borderColor: 'rgba(239,68,68,1)',
+                        borderWidth: 1,
+                      }],
+                    };
+                  })()}
+                />
+              </Panel>
+              <Panel padding="md" eyebrow="SEVERITY MIX" title="Distribution" toneAccent="warning">
+                <Chart
+                  kind="doughnut"
+                  height={160}
+                  ariaLabel="Alert severity distribution"
+                  data={{
+                    labels: ['Critical', 'High', 'Medium', 'Low', 'Info'],
+                    datasets: [{
+                      data: (() => {
+                        const c = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+                        for (const a of alerts) {
+                          const s = (a.severity ?? 'info').toLowerCase() as keyof typeof c;
+                          if (s in c) c[s]++;
+                        }
+                        return [c.critical, c.high, c.medium, c.low, c.info];
+                      })(),
+                      backgroundColor: [
+                        'rgba(239,68,68,0.85)',
+                        'rgba(245,158,11,0.85)',
+                        'rgba(99,102,241,0.75)',
+                        'rgba(100,116,139,0.65)',
+                        'rgba(148,163,184,0.55)',
+                      ],
+                      borderWidth: 0,
+                    }],
+                  }}
+                />
+              </Panel>
+            </div>
+          )}
 
           <Panel padding="md" eyebrow="FILTERS" title="Refine">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">

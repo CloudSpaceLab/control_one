@@ -247,6 +247,7 @@ export function Users(): JSX.Element {
         </Button>
       ),
     },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [users, selectedUserIds, roleMap]);
 
   return (

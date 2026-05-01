@@ -327,16 +327,16 @@ type ipGeoBlock struct {
 }
 
 type ipEnrichResponse struct {
-	Address         string                `json:"addr"`
-	Classification  []ClassificationChip  `json:"classification"`
-	Geo             ipGeoBlock            `json:"geo"`
+	Address         string                  `json:"addr"`
+	Classification  []ClassificationChip    `json:"classification"`
+	Geo             ipGeoBlock              `json:"geo"`
 	ThreatFeeds     []ipintel.ThreatFeedHit `json:"threat_feeds"`
-	ReputationScore int                   `json:"reputation_score"`
-	UsageType       string                `json:"usage_type,omitempty"`
-	IsTor           bool                  `json:"is_tor,omitempty"`
-	TotalReports    int                   `json:"total_reports,omitempty"`
-	LastReportedAt  string                `json:"last_reported_at,omitempty"`
-	Source          string                `json:"source,omitempty"`
+	ReputationScore int                     `json:"reputation_score"`
+	UsageType       string                  `json:"usage_type,omitempty"`
+	IsTor           bool                    `json:"is_tor,omitempty"`
+	TotalReports    int                     `json:"total_reports,omitempty"`
+	LastReportedAt  string                  `json:"last_reported_at,omitempty"`
+	Source          string                  `json:"source,omitempty"`
 }
 
 func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr string) {
@@ -416,8 +416,8 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 		return 25
 	}(); resp.ReputationScore >= cutoff && resp.ReputationScore > 0 {
 		resp.Classification = append(resp.Classification, ClassificationChip{
-			Label: fmt.Sprintf("ABUSE %d/100", resp.ReputationScore),
-			Severity:  severityForScore(resp.ReputationScore),
+			Label:    fmt.Sprintf("ABUSE %d/100", resp.ReputationScore),
+			Severity: severityForScore(resp.ReputationScore),
 		})
 	}
 

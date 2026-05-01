@@ -107,9 +107,9 @@ func (s *Service) AbuseScoreCutoff() int {
 // ─── singleflight (collapse concurrent lookups for the same IP) ──────
 
 type sfCall struct {
-	wg    sync.WaitGroup
-	val   *Enrichment
-	err   error
+	wg  sync.WaitGroup
+	val *Enrichment
+	err error
 }
 
 type singleflight struct {

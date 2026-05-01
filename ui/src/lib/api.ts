@@ -131,6 +131,25 @@ export interface FindingAging {
   total_open: number;
 }
 
+export interface PeriodDelta {
+  current: number;
+  previous: number;
+  delta_pct: number;
+}
+
+export interface SecurityEventSeriesPoint {
+  ts: string;
+  critical: number;
+  high: number;
+  total: number;
+}
+
+export interface ComplianceSeriesPoint {
+  ts: string;
+  pass_rate: number;
+  total: number;
+}
+
 export interface DashboardOverview {
   tenant_id?: string;
   generated_at: string;
@@ -140,6 +159,15 @@ export interface DashboardOverview {
   compliance_summary: ComplianceSnapshot;
   rule_trigger_counts_24h: Record<string, number>;
   remediations_applied_24h: number;
+  // Period-comparison fields (populated when ?period= is supplied)
+  period?: string;
+  security_event_delta?: PeriodDelta;
+  rule_trigger_delta?: PeriodDelta;
+  remediation_delta?: PeriodDelta;
+  compliance_pass_rate?: number;
+  compliance_pass_delta?: PeriodDelta;
+  security_event_series?: SecurityEventSeriesPoint[];
+  compliance_series?: ComplianceSeriesPoint[];
 }
 
 // History + framework series
@@ -1986,11 +2014,10 @@ export class APIClient {
     });
   }
 
-  async getDashboardOverview(tenantId?: string): Promise<DashboardOverview> {
+  async getDashboardOverview(tenantId?: string, period?: string): Promise<DashboardOverview> {
     const search = new URLSearchParams();
-    if (tenantId) {
-      search.set('tenant_id', tenantId);
-    }
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (period) search.set('period', period);
     const qs = search.toString();
     const path = `/api/v1/dashboard/overview${qs ? `?${qs}` : ''}`;
     return this.request<DashboardOverview>(path);
@@ -2683,11 +2710,11 @@ export class APIClient {
   }
 
   // WebAuthn enrollment
-  async beginWebAuthnEnroll(): Promise<{ challenge: any; user: any }> {
-    return this.request<{ challenge: any; user: any }>('/api/v1/mfa/webauthn/enroll/begin', { method: 'POST' });
+  async beginWebAuthnEnroll(): Promise<{ challenge: unknown; user: unknown }> {
+    return this.request<{ challenge: unknown; user: unknown }>('/api/v1/mfa/webauthn/enroll/begin', { method: 'POST' });
   }
 
-  async finishWebAuthnEnroll(credential: any): Promise<{ factor_id: string; verified: boolean }> {
+  async finishWebAuthnEnroll(credential: unknown): Promise<{ factor_id: string; verified: boolean }> {
     return this.request<{ factor_id: string; verified: boolean }>('/api/v1/mfa/webauthn/enroll/finish', {
       method: 'POST',
       body: JSON.stringify(credential),
@@ -2695,12 +2722,12 @@ export class APIClient {
   }
 
   // ── Trust Center admin ───────────────────────────────────────────────
-  async listSubprocessors(tenantId: string): Promise<any[]> {
-    return this.request<any[]>(`/api/v1/trust/subprocessors?tenant_id=${encodeURIComponent(tenantId)}`);
+  async listSubprocessors(tenantId: string): Promise<unknown[]> {
+    return this.request<unknown[]>(`/api/v1/trust/subprocessors?tenant_id=${encodeURIComponent(tenantId)}`);
   }
 
-  async createSubprocessor(tenantId: string, data: any): Promise<any> {
-    return this.request<any>('/api/v1/trust/subprocessors', {
+  async createSubprocessor(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('/api/v1/trust/subprocessors', {
       method: 'POST',
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
@@ -2710,12 +2737,12 @@ export class APIClient {
     await this.request<void>(`/api/v1/trust/subprocessors/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  async listCertifications(tenantId: string): Promise<any[]> {
-    return this.request<any[]>(`/api/v1/trust/certifications?tenant_id=${encodeURIComponent(tenantId)}`);
+  async listCertifications(tenantId: string): Promise<unknown[]> {
+    return this.request<unknown[]>(`/api/v1/trust/certifications?tenant_id=${encodeURIComponent(tenantId)}`);
   }
 
-  async createCertification(tenantId: string, data: any): Promise<any> {
-    return this.request<any>('/api/v1/trust/certifications', {
+  async createCertification(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('/api/v1/trust/certifications', {
       method: 'POST',
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
@@ -2725,12 +2752,12 @@ export class APIClient {
     await this.request<void>(`/api/v1/trust/certifications/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  async listFAQItems(tenantId: string): Promise<any[]> {
-    return this.request<any[]>(`/api/v1/trust/faq?tenant_id=${encodeURIComponent(tenantId)}`);
+  async listFAQItems(tenantId: string): Promise<unknown[]> {
+    return this.request<unknown[]>(`/api/v1/trust/faq?tenant_id=${encodeURIComponent(tenantId)}`);
   }
 
-  async createFAQItem(tenantId: string, data: any): Promise<any> {
-    return this.request<any>('/api/v1/trust/faq', {
+  async createFAQItem(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('/api/v1/trust/faq', {
       method: 'POST',
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
@@ -2740,12 +2767,12 @@ export class APIClient {
     await this.request<void>(`/api/v1/trust/faq/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  async listIncidents(tenantId: string): Promise<any[]> {
-    return this.request<any[]>(`/api/v1/trust/incidents?tenant_id=${encodeURIComponent(tenantId)}`);
+  async listIncidents(tenantId: string): Promise<unknown[]> {
+    return this.request<unknown[]>(`/api/v1/trust/incidents?tenant_id=${encodeURIComponent(tenantId)}`);
   }
 
-  async createIncident(tenantId: string, data: any): Promise<any> {
-    return this.request<any>('/api/v1/trust/incidents', {
+  async createIncident(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('/api/v1/trust/incidents', {
       method: 'POST',
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });

@@ -25,7 +25,6 @@ const Compliance = lazy(() => import('./pages/Compliance').then((m) => ({ defaul
 const Rules = lazy(() => import('./pages/Rules').then((m) => ({ default: m.Rules })));
 const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
 const Access = lazy(() => import('./pages/Access').then((m) => ({ default: m.Access })));
-const Recommendations = lazy(() => import('./pages/Recommendations').then((m) => ({ default: m.Recommendations })));
 const Reports = lazy(() => import('./pages/Reports').then((m) => ({ default: m.Reports })));
 const ThreatFeeds = lazy(() => import('./pages/ThreatFeeds').then((m) => ({ default: m.ThreatFeeds })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
@@ -41,9 +40,6 @@ const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m
 const Onboard = lazy(() => import('./pages/Onboard').then((m) => ({ default: m.Onboard })));
 const Behavioral = lazy(() => import('./pages/Behavioral').then((m) => ({ default: m.Behavioral })));
 const DataSecurity = lazy(() => import('./pages/DataSecurity').then((m) => ({ default: m.DataSecurity })));
-const ComplianceEvidence = lazy(() => import('./pages/ComplianceEvidence').then((m) => ({ default: m.ComplianceEvidence })));
-const AuditReports = lazy(() => import('./pages/AuditReports').then((m) => ({ default: m.AuditReports })));
-const Frameworks = lazy(() => import('./pages/Frameworks').then((m) => ({ default: m.Frameworks })));
 const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ default: m.TrustCenter })));
 
 function PageFallback(): JSX.Element {
@@ -104,7 +100,7 @@ export function App(): JSX.Element {
                 <Route path="rules/builder" element={<Navigate to="/rules" replace />} />
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="access" element={<Access />} />
-                <Route path="recommendations" element={<Recommendations />} />
+                <Route path="recommendations" element={<Navigate to="/rules?tab=drafts" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="threat-feeds" element={<ThreatFeeds />} />
                 <Route path="sessions" element={<Sessions />} />
@@ -119,9 +115,9 @@ export function App(): JSX.Element {
                 <Route path="settings" element={<Settings />} />
                 <Route path="behavioral" element={<Behavioral />} />
                 <Route path="data-security" element={<DataSecurity />} />
-                <Route path="compliance-evidence" element={<ComplianceEvidence />} />
-                <Route path="audit-reports" element={<AuditReports />} />
-                <Route path="frameworks" element={<Frameworks />} />
+                <Route path="compliance-evidence" element={<Navigate to="/compliance?tab=evidence" replace />} />
+                <Route path="audit-reports" element={<Navigate to="/audit?tab=reports" replace />} />
+                <Route path="frameworks" element={<Navigate to="/compliance?tab=frameworks" replace />} />
               </Routes>
             </Suspense>
           }

@@ -21,7 +21,7 @@ func init() {
 	})
 }
 
-func (stubBackend) Name() string                                              { return "fileaccess-stub" }
+func (stubBackend) Name() string { return "fileaccess-stub" }
 func (stubBackend) Run(ctx context.Context, _ chan<- FileEvent) error {
 	<-ctx.Done()
 	return nil

@@ -140,21 +140,21 @@ func (p *abuseIPDBProvider) Name() string { return "abuseipdb" }
 
 type abuseIPDBResponse struct {
 	Data struct {
-		IPAddress            string `json:"ipAddress"`
-		IsPublic             bool   `json:"isPublic"`
-		IPVersion            int    `json:"ipVersion"`
-		IsWhitelisted        bool   `json:"isWhitelisted"`
-		AbuseConfidenceScore int    `json:"abuseConfidenceScore"`
-		CountryCode          string `json:"countryCode"`
-		CountryName          string `json:"countryName"`
-		UsageType            string `json:"usageType"`
-		ISP                  string `json:"isp"`
-		Domain               string `json:"domain"`
+		IPAddress            string   `json:"ipAddress"`
+		IsPublic             bool     `json:"isPublic"`
+		IPVersion            int      `json:"ipVersion"`
+		IsWhitelisted        bool     `json:"isWhitelisted"`
+		AbuseConfidenceScore int      `json:"abuseConfidenceScore"`
+		CountryCode          string   `json:"countryCode"`
+		CountryName          string   `json:"countryName"`
+		UsageType            string   `json:"usageType"`
+		ISP                  string   `json:"isp"`
+		Domain               string   `json:"domain"`
 		Hostnames            []string `json:"hostnames"`
-		IsTor                bool   `json:"isTor"`
-		TotalReports         int    `json:"totalReports"`
-		NumDistinctUsers     int    `json:"numDistinctUsers"`
-		LastReportedAt       string `json:"lastReportedAt"`
+		IsTor                bool     `json:"isTor"`
+		TotalReports         int      `json:"totalReports"`
+		NumDistinctUsers     int      `json:"numDistinctUsers"`
+		LastReportedAt       string   `json:"lastReportedAt"`
 	} `json:"data"`
 	Errors []struct {
 		Detail string `json:"detail"`

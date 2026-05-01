@@ -11,10 +11,10 @@ import (
 )
 
 type fakeSource struct {
-	mu       sync.Mutex
-	batches  [][]LogRecord
-	cursor   time.Time
-	exhaust  int32
+	mu      sync.Mutex
+	batches [][]LogRecord
+	cursor  time.Time
+	exhaust int32
 }
 
 func (f *fakeSource) Fetch(_ context.Context, cursor time.Time, _ int) ([]LogRecord, time.Time, error) {
@@ -34,8 +34,8 @@ func (f *fakeSource) Fetch(_ context.Context, cursor time.Time, _ int) ([]LogRec
 }
 
 type captureSink struct {
-	mu   sync.Mutex
-	got  [][]LogRecord
+	mu  sync.Mutex
+	got [][]LogRecord
 }
 
 func (c *captureSink) Name() string { return "capture" }

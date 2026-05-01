@@ -210,6 +210,7 @@ export function Tenants(): JSX.Element {
         </Button>
       ),
     },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [selectedTenantId, rows]);
 
   return (

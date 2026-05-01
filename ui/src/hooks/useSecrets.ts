@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useApiClient } from './useApiClient';
 import { SecretGroup, SecretSync, ListSecretGroupsParams, ListSecretSyncsParams } from '../lib/api';
 
@@ -9,7 +9,7 @@ export function useSecretGroups(params: ListSecretGroupsParams = {}) {
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ total: 0, count: 0, limit: 50, offset: 0 });
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -21,11 +21,11 @@ export function useSecretGroups(params: ListSecretGroupsParams = {}) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, params]);
 
   useEffect(() => {
     reload();
-  }, [params.tenant_id, params.limit, params.offset]);
+  }, [reload]);
 
   return { data, loading, error, pagination, reload };
 }
@@ -37,7 +37,7 @@ export function useSecretSyncs(groupId: string | null, params: ListSecretSyncsPa
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ total: 0, count: 0, limit: 50, offset: 0 });
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     if (!groupId) {
       setData([]);
       setLoading(false);
@@ -54,11 +54,11 @@ export function useSecretSyncs(groupId: string | null, params: ListSecretSyncsPa
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, groupId, params]);
 
   useEffect(() => {
     reload();
-  }, [groupId, params.limit, params.offset]);
+  }, [reload]);
 
   return { data, loading, error, pagination, reload };
 }

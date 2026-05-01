@@ -13,21 +13,21 @@ import (
 
 // Rule mirrors the control plane command_acl row the agent cares about.
 type Rule struct {
-	ID             string
-	Name           string
-	Role           string
-	NodeLabels     map[string]string
-	AllowCommands  []string // literal or regex with /.../ wrapper
-	DenyCommands   []string
-	compiledAllow  []*regexp.Regexp
-	compiledDeny   []*regexp.Regexp
+	ID            string
+	Name          string
+	Role          string
+	NodeLabels    map[string]string
+	AllowCommands []string // literal or regex with /.../ wrapper
+	DenyCommands  []string
+	compiledAllow []*regexp.Regexp
+	compiledDeny  []*regexp.Regexp
 }
 
 // Decision describes the outcome of evaluating a command against the ACL set.
 type Decision struct {
-	Allowed  bool
-	RuleID   string
-	Reason   string
+	Allowed bool
+	RuleID  string
+	Reason  string
 }
 
 // Enforcer holds the current rules and answers Evaluate.
@@ -60,11 +60,11 @@ func (e *Enforcer) ReplaceRules(rules []Rule) {
 
 // Evaluate returns a Decision for a given role/command. Semantics:
 //
-//	1. Iterate all rules whose role and node_label_selector match.
-//	2. If any rule's deny list matches, the command is blocked (deny-first).
-//	3. If any rule's allow list matches, the command is permitted.
-//	4. Default-permit when no rule references the command — this mirrors sudo
-//	   behavior and avoids locking operators out when ACLs are sparse.
+//  1. Iterate all rules whose role and node_label_selector match.
+//  2. If any rule's deny list matches, the command is blocked (deny-first).
+//  3. If any rule's allow list matches, the command is permitted.
+//  4. Default-permit when no rule references the command — this mirrors sudo
+//     behavior and avoids locking operators out when ACLs are sparse.
 func (e *Enforcer) Evaluate(role, command string) Decision {
 	if command == "" {
 		return Decision{Allowed: true, Reason: "empty"}

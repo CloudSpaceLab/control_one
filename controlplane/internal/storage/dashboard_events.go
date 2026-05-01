@@ -98,6 +98,7 @@ type SecurityEventFilter struct {
 	NodeID   uuid.UUID
 	Severity string
 	Since    *time.Time
+	Until    *time.Time
 }
 
 type SecurityEventCounts struct {
@@ -129,6 +130,11 @@ func (s *Store) CountSecurityEvents(ctx context.Context, f SecurityEventFilter) 
 	if f.Since != nil {
 		where = append(where, fmt.Sprintf("fired_at >= $%d", idx))
 		args = append(args, *f.Since)
+		idx++
+	}
+	if f.Until != nil {
+		where = append(where, fmt.Sprintf("fired_at < $%d", idx))
+		args = append(args, *f.Until)
 		idx++
 	}
 	q := `
@@ -401,4 +407,90 @@ func (s *Store) CountRuleTriggersSince(ctx context.Context, tenantID uuid.UUID, 
 		out[k] = n
 	}
 	return out, rows.Err()
+}
+
+// CountRuleTriggersBetween counts rule triggers in the half-open window [since, until).
+func (s *Store) CountRuleTriggersBetween(ctx context.Context, tenantID uuid.UUID, since, until time.Time) (map[string]int, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	where := []string{"triggered_at >= $1", "triggered_at < $2"}
+	args := []any{since, until}
+	idx := 3
+	if tenantID != uuid.Nil {
+		where = append(where, fmt.Sprintf("tenant_id = $%d", idx))
+		args = append(args, tenantID)
+	}
+	q := `SELECT rule_type, COUNT(*) FROM rule_trigger_log WHERE ` + strings.Join(where, " AND ") + ` GROUP BY rule_type`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return nil, err
+		}
+		out[k] = n
+	}
+	return out, rows.Err()
+}
+
+// SecurityEventPoint is one time-bucket of security event counts.
+type SecurityEventPoint struct {
+	Timestamp time.Time
+	Critical  int
+	High      int
+	Total     int
+}
+
+// GetSecurityEventSeries returns event counts bucketed by hour (for 24h) or
+// day (for 7d/30d). bucket must be "hour" or "day".
+func (s *Store) GetSecurityEventSeries(ctx context.Context, tenantID uuid.UUID, since time.Time, bucket string) ([]SecurityEventPoint, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if bucket != "hour" && bucket != "day" {
+		bucket = "day"
+	}
+
+	query := fmt.Sprintf(`
+		WITH buckets AS (
+			SELECT generate_series(
+				DATE_TRUNC('%s', $1::timestamptz),
+				DATE_TRUNC('%s', NOW()),
+				INTERVAL '1 %s'
+			) AS bucket
+		)
+		SELECT
+			b.bucket,
+			COUNT(e.id) FILTER (WHERE e.severity = 'critical') AS critical,
+			COUNT(e.id) FILTER (WHERE e.severity = 'high')     AS high,
+			COUNT(e.id)                                         AS total
+		FROM buckets b
+		LEFT JOIN security_events e
+			ON DATE_TRUNC('%s', e.fired_at) = b.bucket
+			AND e.tenant_id = $2
+		GROUP BY b.bucket
+		ORDER BY b.bucket ASC
+	`, bucket, bucket, bucket, bucket)
+
+	rows, err := s.db.QueryContext(ctx, query, since, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query security event series: %w", err)
+	}
+	defer rows.Close()
+
+	var points []SecurityEventPoint
+	for rows.Next() {
+		var p SecurityEventPoint
+		if err := rows.Scan(&p.Timestamp, &p.Critical, &p.High, &p.Total); err != nil {
+			return nil, fmt.Errorf("scan security event point: %w", err)
+		}
+		points = append(points, p)
+	}
+	return points, rows.Err()
 }

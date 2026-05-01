@@ -17,10 +17,10 @@ func TestFilterEmitsExternal(t *testing.T) {
 func TestFilterSummariesInternal(t *testing.T) {
 	f := NewFilter(DefaultFilterConfig())
 	ev := ConnectionEvent{
-		SrcIP:   net.ParseIP("10.0.0.5"),
-		DstIP:   net.ParseIP("10.0.0.7"),
-		DstPort: 5432,
-		PID:     42,
+		SrcIP:     net.ParseIP("10.0.0.5"),
+		DstIP:     net.ParseIP("10.0.0.7"),
+		DstPort:   5432,
+		PID:       42,
 		StartedAt: time.Now().UTC(),
 	}
 	if got := f.Decide(&ev); got != FilterSummary {

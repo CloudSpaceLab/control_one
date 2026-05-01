@@ -227,11 +227,14 @@ type Store interface {
 	CreateSecurityEvent(context.Context, storage.CreateSecurityEventParams) (*storage.SecurityEvent, error)
 	ListSecurityEvents(context.Context, storage.SecurityEventFilter, int, int) ([]storage.SecurityEvent, int, error)
 	CountSecurityEvents(context.Context, storage.SecurityEventFilter) (storage.SecurityEventCounts, error)
+	GetSecurityEventSeries(context.Context, uuid.UUID, time.Time, string) ([]storage.SecurityEventPoint, error)
 	CreateHealthIncident(context.Context, storage.CreateHealthIncidentParams) (*storage.HealthIncident, error)
 	ResolveHealthIncident(context.Context, uuid.UUID) error
 	CountOpenHealthIncidents(context.Context, uuid.UUID) (storage.SecurityEventCounts, error)
 	CreateRuleTrigger(context.Context, storage.CreateRuleTriggerParams) (*storage.RuleTrigger, error)
 	CountRuleTriggersSince(context.Context, uuid.UUID, time.Time) (map[string]int, error)
+	CountRuleTriggersBetween(context.Context, uuid.UUID, time.Time, time.Time) (map[string]int, error)
+	CountRemediationsSince(context.Context, uuid.UUID, time.Time, time.Time) (int, error)
 	// Alerts.
 	CreateAlert(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
 	GetAlert(context.Context, uuid.UUID) (*storage.Alert, error)

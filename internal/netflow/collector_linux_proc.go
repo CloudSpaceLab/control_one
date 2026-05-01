@@ -79,20 +79,20 @@ func (p *procBackend) Run(ctx context.Context, out chan<- ConnectionEvent) error
 }
 
 type procSockKey struct {
-	proto      string
-	srcIP      string
-	srcPort    uint16
-	dstIP      string
-	dstPort    uint16
+	proto   string
+	srcIP   string
+	srcPort uint16
+	dstIP   string
+	dstPort uint16
 }
 
 type procSockState struct {
-	state      string
-	inode      uint64
-	pid        int
-	user       string
-	process    string
-	startedAt  time.Time
+	state     string
+	inode     uint64
+	pid       int
+	user      string
+	process   string
+	startedAt time.Time
 }
 
 // snapshot reads /proc/net for tcp + tcp6 + udp + udp6 and resolves PIDs.

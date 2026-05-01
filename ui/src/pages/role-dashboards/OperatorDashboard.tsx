@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Plus, ShieldAlert, Workflow } from 'lucide-react';
-import { useState } from 'react';
+import { CheckCircle2, Plus, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
+  Chart,
+  CommandSection,
   DataTable,
   DEFAULT_TIME_RANGES,
   EmptyState,
@@ -19,7 +21,14 @@ import { useApiClient } from '@/hooks/useApiClient';
 import { useLiveSubscribe } from '@/hooks/useLiveSubscribe';
 import { useOnboardingState } from '@/hooks/useOnboardingState';
 import { useTenant } from '@/providers/TenantProvider';
-import type { Alert, DashboardOverview } from '@/lib/api';
+import type {
+  Alert,
+  DashboardOverview,
+  MTTDMetrics,
+  MTTRMetrics,
+  RiskScore,
+  SecurityEventSeriesPoint,
+} from '@/lib/api';
 import type { StateTone } from '@/components/kit';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -31,21 +40,101 @@ const SEVERITY_TONE: Record<string, StateTone> = {
   info: 'info',
 };
 
+const PERIOD_DAYS: Record<string, number> = { '24h': 1, '7d': 7, '30d': 30 };
+
+function riskTone(score?: number): StateTone | 'brand' {
+  if (score == null) return 'brand';
+  if (score >= 80) return 'healthy';
+  if (score >= 60) return 'warning';
+  return 'critical';
+}
+
+function complianceTone(pct?: number): StateTone | 'brand' {
+  if (pct == null) return 'brand';
+  if (pct >= 95) return 'healthy';
+  if (pct >= 80) return 'warning';
+  return 'critical';
+}
+
+function formatMinutes(min: number): string {
+  if (!isFinite(min) || min <= 0) return '—';
+  if (min < 1) return `${(min * 60).toFixed(0)}s`;
+  if (min < 60) return `${min.toFixed(0)}m`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function relTime(ts?: string): string {
+  if (!ts) return '—';
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return `${Math.round(diff / 86_400_000)}d ago`;
+}
+
+function secSeriesSparkline(
+  series: SecurityEventSeriesPoint[] | undefined,
+  field: 'critical' | 'high' | 'total',
+): number[] {
+  if (!series || series.length === 0) return [];
+  return series.map((p) => p[field]);
+}
+
 export function OperatorDashboard(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [period, setPeriod] = useState('24h');
+  const days = PERIOD_DAYS[period] ?? 1;
+
+  // Last-refreshed counter
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [sinceLabel, setSinceLabel] = useState('just now');
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const tickLabel = () => {
+    const diff = Date.now() - lastRefreshed.getTime();
+    if (diff < 60_000) setSinceLabel(`${Math.round(diff / 1_000)}s ago`);
+    else setSinceLabel(`${Math.round(diff / 60_000)}m ago`);
+  };
+
+  useEffect(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(tickLabel, 5_000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [lastRefreshed]);
 
   const overviewQ = useQuery<DashboardOverview>({
-    queryKey: ['dashboard.overview', currentTenantId],
-    queryFn: () => client.getDashboardOverview(currentTenantId ?? undefined),
+    queryKey: ['dashboard.overview', currentTenantId, period],
+    queryFn: () => client.getDashboardOverview(currentTenantId ?? undefined, period),
     refetchInterval: 30_000,
   });
+
+  useEffect(() => {
+    if (overviewQ.dataUpdatedAt) setLastRefreshed(new Date(overviewQ.dataUpdatedAt));
+  }, [overviewQ.dataUpdatedAt]);
 
   const alertsQ = useQuery({
     queryKey: ['alerts.open', currentTenantId],
     queryFn: () => client.listAlerts({ tenantId: currentTenantId ?? undefined, state: 'open', limit: 50, offset: 0 }),
     refetchInterval: 30_000,
+  });
+
+  const riskQ = useQuery<RiskScore>({
+    queryKey: ['risk-score', currentTenantId],
+    queryFn: () => client.getRiskScore(currentTenantId ?? undefined),
+    refetchInterval: 60_000,
+  });
+
+  const mttdQ = useQuery<MTTDMetrics>({
+    queryKey: ['mttd', currentTenantId, days],
+    queryFn: () => client.getMTTDMetrics(currentTenantId ?? undefined, 'critical', days),
+  });
+
+  const mttrQ = useQuery<MTTRMetrics>({
+    queryKey: ['mttr', currentTenantId, days],
+    queryFn: () => client.getMTTRMetrics(currentTenantId ?? undefined, 'critical', days),
   });
 
   const live = useLiveSubscribe(currentTenantId ?? undefined, [
@@ -55,18 +144,29 @@ export function OperatorDashboard(): JSX.Element {
     { topic: 'health.incident', invalidate: [['dashboard.overview']] },
   ]);
 
-  const totalRuleTriggers = Object.values(overviewQ.data?.rule_trigger_counts_24h ?? {}).reduce(
-    (a, b) => a + b,
-    0,
-  );
-  const ruleBreakdown = Object.entries(overviewQ.data?.rule_trigger_counts_24h ?? {})
+  const ov = overviewQ.data;
+  const loading = overviewQ.isLoading;
+
+  const totalRuleTriggers = Object.values(ov?.rule_trigger_counts_24h ?? {}).reduce((a, b) => a + b, 0);
+  const ruleBreakdown = Object.entries(ov?.rule_trigger_counts_24h ?? {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 6);
 
   const allClear =
-    !overviewQ.isLoading &&
-    (overviewQ.data?.security_event_counts.critical ?? 0) === 0 &&
+    !loading &&
+    (ov?.security_event_counts.critical ?? 0) === 0 &&
     (alertsQ.data?.data.length ?? 0) === 0;
+
+  // Build sparklines from series
+  const critSpark = secSeriesSparkline(ov?.security_event_series, 'critical');
+  const highSpark = secSeriesSparkline(ov?.security_event_series, 'high');
+  const totalSpark = secSeriesSparkline(ov?.security_event_series, 'total');
+
+  // Chart data for security events stacked bar
+  const chartLabels = (ov?.security_event_series ?? []).map((p) =>
+    period === '24h' ? p.ts.slice(11, 16) : p.ts.slice(5, 10),
+  );
+  const hasChartData = (ov?.security_event_series?.length ?? 0) > 1;
 
   const alertColumns: ColumnDef<Alert>[] = [
     {
@@ -113,7 +213,7 @@ export function OperatorDashboard(): JSX.Element {
         <SectionHeader
           eyebrow="WELCOME · OPERATOR ONBOARDING"
           title="Onboard your first server to start running rules"
-          description="Operator deck unlocks once you've added a host and enabled at least one rule. Use the checklist below."
+          description="Operator deck unlocks once you've added a host and enabled at least one rule."
         />
         <OnboardingChecklist steps={onboarding.steps} />
       </div>
@@ -126,16 +226,21 @@ export function OperatorDashboard(): JSX.Element {
         <OnboardingChecklist
           eyebrow="GET STARTED"
           title="Finish wiring up your fleet"
-          description="A handful of required steps remain — finish them to unlock realtime detection and remediation."
+          description="A handful of required steps remain."
           steps={onboarding.steps}
         />
       )}
+
       <SectionHeader
-        eyebrow="OPERATIONS DECK"
-        title="What needs your attention"
-        description="Open queues, firing rules, and remediations across the fleet."
+        eyebrow="COMMAND CENTER"
+        title="Operations"
+        description="Security, compliance, and response posture across the fleet."
         actions={
           <>
+            <span className="flex items-center gap-1.5 text-xs text-text-muted">
+              <RefreshCw className="h-3 w-3" />
+              {sinceLabel}
+            </span>
             <TimeRangePills value={period} options={DEFAULT_TIME_RANGES} onChange={setPeriod} />
             <Button asChild variant="primary" shimmer>
               <Link to="/rules">
@@ -150,55 +255,167 @@ export function OperatorDashboard(): JSX.Element {
         <Panel tone="glow" padding="md" toneAccent="healthy" eyebrow="ALL CLEAR" title="No critical alerts">
           <div className="flex items-center gap-3 text-sm text-text-secondary">
             <CheckCircle2 className="h-5 w-5 text-state-healthy" />
-            All operator queues are empty. Sit tight; live stream is{' '}
+            All operator queues are empty. Live stream is{' '}
             <span className="font-mono text-state-healthy">{live.state}</span>.
           </div>
         </Panel>
       )}
 
-      <DashboardGrid>
-        <DashboardGridItem span={{ base: 6, md: 3 }}>
-          <KpiTile
-            label="OPEN ALERTS"
-            value={alertsQ.data?.data.length ?? '—'}
-            tone="critical"
-            icon={<ShieldAlert />}
-            hint={`crit ${overviewQ.data?.security_event_counts.critical ?? 0} · high ${overviewQ.data?.security_event_counts.high ?? 0}`}
-            loading={alertsQ.isLoading}
-          />
-        </DashboardGridItem>
-        <DashboardGridItem span={{ base: 6, md: 3 }}>
-          <KpiTile
-            label="HEALTH INCIDENTS"
-            value={overviewQ.data?.health_incident_counts.total ?? '—'}
-            tone={
-              (overviewQ.data?.health_incident_counts.critical ?? 0) > 0 ? 'critical' :
-              (overviewQ.data?.health_incident_counts.high ?? 0) > 0 ? 'warning' : 'healthy'
-            }
-            hint={`crit ${overviewQ.data?.health_incident_counts.critical ?? 0} · high ${overviewQ.data?.health_incident_counts.high ?? 0}`}
-            loading={overviewQ.isLoading}
-          />
-        </DashboardGridItem>
-        <DashboardGridItem span={{ base: 6, md: 3 }}>
-          <KpiTile
-            label="RULES FIRING (24H)"
-            value={totalRuleTriggers}
-            tone="warning"
-            hint={`${ruleBreakdown.length} active rules`}
-            loading={overviewQ.isLoading}
-          />
-        </DashboardGridItem>
-        <DashboardGridItem span={{ base: 6, md: 3 }}>
-          <KpiTile
-            label="REMEDIATIONS (24H)"
-            value={overviewQ.data?.remediations_applied_24h ?? '—'}
-            tone="healthy"
-            icon={<Workflow />}
-            hint="Safety gates active"
-            loading={overviewQ.isLoading}
-          />
-        </DashboardGridItem>
+      {/* ── SECURITY ─────────────────────────────── */}
+      <CommandSection label="SECURITY" tone="critical">
+        <KpiTile
+          label="CRITICAL EVENTS"
+          value={ov?.security_event_delta?.current ?? ov?.security_event_counts.critical ?? '—'}
+          delta={ov?.security_event_delta?.delta_pct}
+          invertDelta
+          sparkline={critSpark.length > 1 ? critSpark : undefined}
+          tone="critical"
+          loading={loading}
+        />
+        <KpiTile
+          label="HIGH EVENTS"
+          value={ov?.security_event_counts.high ?? '—'}
+          invertDelta
+          sparkline={highSpark.length > 1 ? highSpark : undefined}
+          tone="degraded"
+          loading={loading}
+        />
+        <KpiTile
+          label="RULE TRIGGERS"
+          value={ov?.rule_trigger_delta?.current ?? totalRuleTriggers}
+          delta={ov?.rule_trigger_delta?.delta_pct}
+          invertDelta
+          sparkline={totalSpark.length > 1 ? totalSpark : undefined}
+          tone="warning"
+          loading={loading}
+        />
+        <KpiTile
+          label="REMEDIATIONS"
+          value={ov?.remediation_delta?.current ?? ov?.remediations_applied_24h ?? '—'}
+          delta={ov?.remediation_delta?.delta_pct}
+          tone="healthy"
+          loading={loading}
+        />
+      </CommandSection>
 
+      {hasChartData && (
+        <Panel padding="md" eyebrow={`SECURITY EVENTS · ${period.toUpperCase()}`} title="Event volume" toneAccent="critical">
+          <Chart
+            kind="bar"
+            height={180}
+            ariaLabel="Security events over time"
+            data={{
+              labels: chartLabels,
+              datasets: [
+                {
+                  label: 'Critical',
+                  data: (ov?.security_event_series ?? []).map((p) => p.critical),
+                  backgroundColor: 'rgba(239,68,68,0.75)',
+                  borderColor: 'rgba(239,68,68,1)',
+                  borderWidth: 1,
+                },
+                {
+                  label: 'High',
+                  data: (ov?.security_event_series ?? []).map((p) => p.high),
+                  backgroundColor: 'rgba(245,158,11,0.65)',
+                  borderColor: 'rgba(245,158,11,1)',
+                  borderWidth: 1,
+                },
+                {
+                  label: 'Other',
+                  data: (ov?.security_event_series ?? []).map((p) => Math.max(0, p.total - p.critical - p.high)),
+                  backgroundColor: 'rgba(99,102,241,0.45)',
+                  borderColor: 'rgba(99,102,241,0.8)',
+                  borderWidth: 1,
+                },
+              ],
+            }}
+            options={{ scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }}
+          />
+        </Panel>
+      )}
+
+      {/* ── COMPLIANCE & POSTURE ─────────────────── */}
+      <CommandSection label="COMPLIANCE & POSTURE" tone="warning">
+        <KpiTile
+          label="PASS RATE"
+          value={ov?.compliance_pass_rate != null ? `${ov.compliance_pass_rate.toFixed(1)}%` : '—'}
+          delta={ov?.compliance_pass_delta?.delta_pct}
+          sparkline={
+            (ov?.compliance_series ?? []).length > 1
+              ? ov!.compliance_series!.map((p) => p.pass_rate)
+              : undefined
+          }
+          tone={complianceTone(ov?.compliance_pass_rate)}
+          loading={loading}
+        />
+        <KpiTile
+          label="FAILED CONTROLS"
+          value={ov?.compliance_summary.failed ?? '—'}
+          invertDelta
+          tone="warning"
+          loading={loading}
+        />
+        <KpiTile
+          label="HEALTH INCIDENTS"
+          value={ov?.health_incident_counts.total ?? '—'}
+          invertDelta
+          tone={
+            (ov?.health_incident_counts.critical ?? 0) > 0
+              ? 'critical'
+              : (ov?.health_incident_counts.high ?? 0) > 0
+              ? 'warning'
+              : 'healthy'
+          }
+          hint={`crit ${ov?.health_incident_counts.critical ?? 0} · high ${ov?.health_incident_counts.high ?? 0}`}
+          loading={loading}
+        />
+        <KpiTile
+          label="RISK SCORE"
+          value={riskQ.data?.score ?? '—'}
+          delta={riskQ.data?.trend_delta}
+          tone={riskTone(riskQ.data?.score)}
+          hint={riskQ.data ? `${riskQ.data.percent.toFixed(0)}%` : undefined}
+          loading={riskQ.isLoading}
+        />
+      </CommandSection>
+
+      {/* ── RESPONSE ────────────────────────────── */}
+      <CommandSection label="RESPONSE" tone="brand">
+        <KpiTile
+          label="OPEN ALERTS"
+          value={alertsQ.data?.data.length ?? '—'}
+          invertDelta
+          tone="critical"
+          loading={alertsQ.isLoading}
+        />
+        <KpiTile
+          label={`MTTD · CRITICAL`}
+          value={mttdQ.data ? formatMinutes(mttdQ.data.mean_minutes) : '—'}
+          invertDelta
+          tone={mttdQ.data && mttdQ.data.mean_minutes < 15 ? 'healthy' : 'warning'}
+          hint={mttdQ.data ? `p95 ${formatMinutes(mttdQ.data.p95_minutes)}` : undefined}
+          loading={mttdQ.isLoading}
+        />
+        <KpiTile
+          label={`MTTR · CRITICAL`}
+          value={mttrQ.data ? formatMinutes(mttrQ.data.mean_minutes) : '—'}
+          invertDelta
+          tone={mttrQ.data && mttrQ.data.mean_minutes < 240 ? 'healthy' : 'warning'}
+          hint={mttrQ.data ? `p95 ${formatMinutes(mttrQ.data.p95_minutes)}` : undefined}
+          loading={mttrQ.isLoading}
+        />
+        <KpiTile
+          label="NODES ONLINE"
+          value={ov?.node_counts.healthy ?? '—'}
+          tone="healthy"
+          hint={`${ov?.node_counts.offline ?? 0} offline`}
+          loading={loading}
+        />
+      </CommandSection>
+
+      {/* ── Alert queue + rule activity ─────────── */}
+      <DashboardGrid>
         <DashboardGridItem span={{ base: 12, lg: 8 }}>
           <Panel padding="md" eyebrow="ALERT QUEUE" title="Open alerts" toneAccent="critical">
             <DataTable
@@ -212,7 +429,7 @@ export function OperatorDashboard(): JSX.Element {
                   tone="success"
                   icon={<CheckCircle2 />}
                   title="No open alerts"
-                  description="Operator deck is clear. Live stream stays on."
+                  description="Operator deck is clear."
                 />
               }
             />
@@ -240,14 +457,4 @@ export function OperatorDashboard(): JSX.Element {
       </DashboardGrid>
     </div>
   );
-}
-
-function relTime(ts?: string): string {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  const diff = Date.now() - d.getTime();
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
-  return `${Math.round(diff / 86_400_000)}d ago`;
 }

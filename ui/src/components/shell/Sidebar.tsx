@@ -36,6 +36,12 @@ interface NavGroup {
 
 const NAV_GROUPS: NavGroup[] = [
   {
+    label: 'Overview',
+    items: [
+      { to: '/', label: 'Dashboard', icon: Activity },
+    ],
+  },
+  {
     label: 'Investigate',
     items: [
       { to: '/investigate', label: 'Search & lifecycle', icon: Search },
@@ -43,58 +49,51 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Visibility',
+    label: 'Security',
     items: [
-      { to: '/', label: 'Dashboard', icon: Activity },
       { to: '/alerts', label: 'Alerts', icon: AlertTriangle },
-      { to: '/reports', label: 'Reports', icon: FileText },
+      { to: '/rules', label: 'Rules', icon: ShieldAlert, roles: ['admin', 'operator'] },
+      { to: '/threat-feeds', label: 'Threat intelligence', icon: Network, roles: ['admin', 'operator'] },
+      { to: '/connections', label: 'Connections', icon: Network },
     ],
   },
   {
-    label: 'Posture',
+    label: 'Compliance',
     items: [
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
-      { to: '/audit', label: 'Audit log', icon: FileText },
-      { to: '/telemetry', label: 'Telemetry', icon: Activity },
+      { to: '/audit', label: 'Audit', icon: FileText },
+      { to: '/behavioral', label: 'Behavioral', icon: Activity },
+      { to: '/data-security', label: 'Data security', icon: KeyRound },
     ],
   },
   {
-    label: 'Detect & respond',
+    label: 'Analytics',
     items: [
-      { to: '/rules', label: 'Rules', icon: ShieldAlert, roles: ['admin', 'operator'] },
-      { to: '/threat-feeds', label: 'Threat sources', icon: Network, roles: ['admin', 'operator'] },
-      { to: '/connections', label: 'Connections', icon: Network },
+      { to: '/telemetry', label: 'Telemetry', icon: Activity },
+      { to: '/reports', label: 'Reports', icon: FileText },
       { to: '/dashboards', label: 'Custom dashboards', icon: Layers },
-      { to: '/recommendations', label: 'Recommendations', icon: ShieldAlert },
     ],
   },
   {
     label: 'Access',
     items: [
-      { to: '/access', label: 'Just-in-time access', icon: KeyRound },
+      { to: '/access', label: 'Just-in-time', icon: KeyRound },
       { to: '/sessions', label: 'Session replay', icon: Terminal },
       { to: '/users', label: 'Users', icon: UserIcon, roles: ['admin'] },
-      { to: '/roles', label: 'Roles & permissions', icon: UserIcon, roles: ['admin'] },
+      { to: '/roles', label: 'Roles', icon: UserIcon, roles: ['admin'] },
     ],
   },
   {
     label: 'Infrastructure',
     items: [
       { to: '/nodes', label: 'Nodes', icon: Server },
-      { to: '/fleet-enroll', label: 'Fleet enrol', icon: Server, roles: ['admin', 'operator'] },
       { to: '/hypervisors', label: 'Hypervisors', icon: Boxes, roles: ['admin'] },
       { to: '/templates', label: 'Templates', icon: FileText, roles: ['admin', 'operator'] },
-    ],
-  },
-  {
-    label: 'Automation',
-    items: [
       { to: '/jobs', label: 'Jobs', icon: Workflow },
-      { to: '/offline-bundle', label: 'Offline bundle', icon: FileText, roles: ['admin', 'operator'] },
     ],
   },
   {
-    label: 'Configuration',
+    label: 'Administration',
     items: [
       { to: '/tenants', label: 'Tenants', icon: Building2, roles: ['admin'] },
       { to: '/secrets', label: 'Secrets', icon: KeyRound, roles: ['admin'] },

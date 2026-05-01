@@ -16,15 +16,15 @@ import (
 // tenant and is owned by a single user; shared=true grants read access to
 // any user in the same tenant with dashboards.read.
 type CustomDashboard struct {
-	ID          uuid.UUID       `json:"id"`
-	TenantID    uuid.UUID       `json:"tenant_id"`
-	OwnerID     uuid.UUID       `json:"owner_id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Layout      json.RawMessage `json:"layout"`
-	Shared      bool            `json:"shared"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID          uuid.UUID         `json:"id"`
+	TenantID    uuid.UUID         `json:"tenant_id"`
+	OwnerID     uuid.UUID         `json:"owner_id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Layout      json.RawMessage   `json:"layout"`
+	Shared      bool              `json:"shared"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 	Widgets     []DashboardWidget `json:"widgets,omitempty"`
 }
 

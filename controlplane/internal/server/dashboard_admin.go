@@ -15,14 +15,14 @@ import (
 // runtime stubs. Wire these to the prometheus registry, NATS lag probe, and
 // queue length once those probes are exposed in-process.
 type adminSelfHealthResponse struct {
-	APIP95Ms      float64 `json:"api_p95_ms"`
-	NATSLagMs     float64 `json:"nats_lag_ms"`
-	DBP95Ms       float64 `json:"db_p95_ms"`
-	QueueDepth    int     `json:"queue_depth"`
-	Status        string  `json:"status"` // "ok" | "degraded" | "down"
-	GoroutineNum  int     `json:"goroutine_num"`
-	HeapMB        uint64  `json:"heap_mb"`
-	GeneratedAt   string  `json:"generated_at"`
+	APIP95Ms     float64 `json:"api_p95_ms"`
+	NATSLagMs    float64 `json:"nats_lag_ms"`
+	DBP95Ms      float64 `json:"db_p95_ms"`
+	QueueDepth   int     `json:"queue_depth"`
+	Status       string  `json:"status"` // "ok" | "degraded" | "down"
+	GoroutineNum int     `json:"goroutine_num"`
+	HeapMB       uint64  `json:"heap_mb"`
+	GeneratedAt  string  `json:"generated_at"`
 }
 
 func (s *Server) handleAdminSelfHealth(w http.ResponseWriter, r *http.Request) {
@@ -58,9 +58,9 @@ func (s *Server) handleAdminSelfHealth(w http.ResponseWriter, r *http.Request) {
 
 // ingestThroughputPoint is a single bucket on the throughput series.
 type ingestThroughputPoint struct {
-	Timestamp     string  `json:"ts"`
-	EventsPerSec  float64 `json:"events_per_sec"`
-	BytesPerSec   float64 `json:"bytes_per_sec"`
+	Timestamp    string  `json:"ts"`
+	EventsPerSec float64 `json:"events_per_sec"`
+	BytesPerSec  float64 `json:"bytes_per_sec"`
 }
 
 type ingestThroughputTotals struct {
@@ -235,11 +235,11 @@ func (s *Server) handleAdminSLO(w http.ResponseWriter, r *http.Request) {
 }
 
 type capacityResponse struct {
-	DiskUsed              int64  `json:"disk_used"`
-	DiskTotal             int64  `json:"disk_total"`
-	DorisStatus           string `json:"doris_status"`
-	PostgresStatus        string `json:"postgres_status"`
-	RetentionDaysRemaining int   `json:"retention_days_remaining"`
+	DiskUsed               int64  `json:"disk_used"`
+	DiskTotal              int64  `json:"disk_total"`
+	DorisStatus            string `json:"doris_status"`
+	PostgresStatus         string `json:"postgres_status"`
+	RetentionDaysRemaining int    `json:"retention_days_remaining"`
 }
 
 func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
@@ -266,4 +266,3 @@ func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
-

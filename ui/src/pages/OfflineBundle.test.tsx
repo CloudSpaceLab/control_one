@@ -5,6 +5,7 @@ import { ReactNode } from 'react';
 import { OfflineBundle } from './OfflineBundle';
 import * as useApiClientModule from '../hooks/useApiClient';
 import * as useToastModule from '../providers/ToastProvider';
+import * as useTenantModule from '../providers/TenantProvider';
 import type { APIClient, EnrollmentToken } from '../lib/api';
 
 // Minimal ToastProvider stub — real provider pulls createContext whose value
@@ -72,6 +73,17 @@ describe('OfflineBundle', () => {
       showToast: showToastMock,
       dismissToast: vi.fn(),
     });
+
+    vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
+      currentTenantId: 'tenant-a',
+      tenants: [{ id: 'tenant-a', name: 'Tenant A', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }],
+      currentTenant: { id: 'tenant-a', name: 'Tenant A', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+      loading: false,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(undefined),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
 
     const api = makeApiClientStub();
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(api as unknown as APIClient);
