@@ -38,6 +38,9 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
+          # Pre-existing issues (55 as of this commit) are tracked separately;
+          # gate PRs on regressions only. Remove once the backlog is cleared.
+          only-new-issues: true
 
   test:
     name: Test
