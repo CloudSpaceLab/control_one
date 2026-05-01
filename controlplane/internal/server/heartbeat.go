@@ -64,10 +64,10 @@ type heartbeatPackage struct {
 // heartbeatFirewallState mirrors the agent-side payload. Translated into
 // storage.NodeFirewallState before persisting.
 type heartbeatFirewallState struct {
-	Type    string                  `json:"type"`
-	Enabled bool                    `json:"enabled"`
-	Rules   []storage.FirewallRule  `json:"rules,omitempty"`
-	Zones   []storage.FirewallZone  `json:"zones,omitempty"`
+	Type    string                 `json:"type"`
+	Enabled bool                   `json:"enabled"`
+	Rules   []storage.FirewallRule `json:"rules,omitempty"`
+	Zones   []storage.FirewallZone `json:"zones,omitempty"`
 }
 
 type heartbeatResponse struct {
@@ -251,11 +251,11 @@ func (s *Server) processHeartbeatInventory(ctx context.Context, nodeID uuid.UUID
 			return true // ask for a fresh resend on the next heartbeat
 		}
 		sync := storage.NodeInventorySync{
-			NodeID:        nodeID,
-			PackageHash:   body.PackageHash,
-			PackageCount:  body.PackageCount,
-			LastFullSync:  time.Now().UTC(),
-			LastSeenAt:    time.Now().UTC(),
+			NodeID:       nodeID,
+			PackageHash:  body.PackageHash,
+			PackageCount: body.PackageCount,
+			LastFullSync: time.Now().UTC(),
+			LastSeenAt:   time.Now().UTC(),
 		}
 		if body.KernelVersion != "" {
 			k := body.KernelVersion

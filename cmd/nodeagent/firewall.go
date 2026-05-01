@@ -9,7 +9,7 @@ import (
 // FirewallState is the snapshot the agent reports each heartbeat. Always sent
 // in full (the payload is small) so the server can flip rules in real time.
 type FirewallState struct {
-	Type    string         `json:"type"`              // ufw | firewalld | iptables | nftables | windows_defender_firewall | none
+	Type    string         `json:"type"` // ufw | firewalld | iptables | nftables | windows_defender_firewall | none
 	Enabled bool           `json:"enabled"`
 	Rules   []FirewallRule `json:"rules,omitempty"`
 	Zones   []FirewallZone `json:"zones,omitempty"`

@@ -16,7 +16,7 @@ import (
 type PackageInfo struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
-	Source      string `json:"source"`            // apt | dpkg | rpm | winget | other
+	Source      string `json:"source"` // apt | dpkg | rpm | winget | other
 	Arch        string `json:"arch,omitempty"`
 	InstalledAt string `json:"installed_at,omitempty"` // RFC3339; empty when unknown
 }

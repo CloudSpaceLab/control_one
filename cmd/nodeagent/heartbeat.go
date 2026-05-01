@@ -75,13 +75,13 @@ const fullInventoryInterval = 24 * time.Hour
 // cache is in-memory only — agent restart triggers a fresh full sync, which
 // is intentional (server reconciles via hash comparison).
 type inventoryCache struct {
-	mu             sync.Mutex
-	hash           string
-	count          int
-	kernel         string
-	osVersion      string
-	lastFullSync   time.Time
-	forceNext      bool // server set full_inventory_requested on the previous ack
+	mu           sync.Mutex
+	hash         string
+	count        int
+	kernel       string
+	osVersion    string
+	lastFullSync time.Time
+	forceNext    bool // server set full_inventory_requested on the previous ack
 }
 
 // agentInventoryCache is the singleton — heartbeat.go is the only consumer.

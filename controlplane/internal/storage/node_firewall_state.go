@@ -98,10 +98,10 @@ func (s *Store) GetNodeFirewallState(ctx context.Context, nodeID uuid.UUID) (*No
 		return nil, errors.New("store database not initialized")
 	}
 	var (
-		st         NodeFirewallState
-		rulesJSON  []byte
-		zonesJSON  []byte
-		rawJSON    []byte
+		st        NodeFirewallState
+		rulesJSON []byte
+		zonesJSON []byte
+		rawJSON   []byte
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT node_id, firewall_type, enabled, rules, zones, raw, observed_at
