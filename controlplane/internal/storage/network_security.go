@@ -14,23 +14,23 @@ import (
 // specific node. One entity_action (the operator intent) fans out to N rows,
 // one per affected node. Status moves: pending → applied | failed | removed.
 type NodeFirewallRule struct {
-	ID              uuid.UUID
-	EntityActionID  uuid.UUID
-	NodeID          uuid.UUID
-	TenantID        uuid.UUID
-	Action          string  // block | allow
-	Direction       string  // in | out
-	Protocol        *string // tcp | udp | icmp | nil=any
-	Port            *int    // 0/nil = any
-	Source          *string // IP/CIDR being blocked
-	Dest            *string
-	Tag             string // c1-{entity_action_id}
-	Status          string // pending | applied | failed | removed
-	Error           *string
-	JobID           *uuid.UUID
-	RequestedAt     time.Time
-	AppliedAt       *time.Time
-	RemovedAt       *time.Time
+	ID             uuid.UUID
+	EntityActionID uuid.UUID
+	NodeID         uuid.UUID
+	TenantID       uuid.UUID
+	Action         string  // block | allow
+	Direction      string  // in | out
+	Protocol       *string // tcp | udp | icmp | nil=any
+	Port           *int    // 0/nil = any
+	Source         *string // IP/CIDR being blocked
+	Dest           *string
+	Tag            string // c1-{entity_action_id}
+	Status         string // pending | applied | failed | removed
+	Error          *string
+	JobID          *uuid.UUID
+	RequestedAt    time.Time
+	AppliedAt      *time.Time
+	RemovedAt      *time.Time
 }
 
 // ActiveBlock is the rolled-up view of one entity_action across all the nodes

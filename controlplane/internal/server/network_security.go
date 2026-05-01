@@ -32,18 +32,18 @@ const (
 // effective rule fields in the job payload for log/audit purposes and so
 // the executor can run from the job alone if needed.
 type firewallJobPayload struct {
-	NodeFirewallRuleID string  `json:"node_firewall_rule_id"`
-	NodeID             string  `json:"node_id"`
-	EntityActionID     string  `json:"entity_action_id"`
-	Action             string  `json:"action"`
-	Direction          string  `json:"direction"`
-	Source             string  `json:"source,omitempty"`
-	Dest               string  `json:"dest,omitempty"`
-	Port               int     `json:"port,omitempty"`
-	Protocol           string  `json:"protocol,omitempty"`
-	Tag                string  `json:"tag"`
-	TTLSeconds         *int    `json:"ttl_seconds,omitempty"`
-	Reason             string  `json:"reason,omitempty"`
+	NodeFirewallRuleID string `json:"node_firewall_rule_id"`
+	NodeID             string `json:"node_id"`
+	EntityActionID     string `json:"entity_action_id"`
+	Action             string `json:"action"`
+	Direction          string `json:"direction"`
+	Source             string `json:"source,omitempty"`
+	Dest               string `json:"dest,omitempty"`
+	Port               int    `json:"port,omitempty"`
+	Protocol           string `json:"protocol,omitempty"`
+	Tag                string `json:"tag"`
+	TTLSeconds         *int   `json:"ttl_seconds,omitempty"`
+	Reason             string `json:"reason,omitempty"`
 }
 
 func decodeFirewallPayload(raw json.RawMessage) (any, error) {
