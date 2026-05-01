@@ -39,16 +39,46 @@ const (
 // using a client cert whose CN matches the node id.
 type heartbeatRequest struct {
 	AgentVersion string `json:"agent_version"`
+
+	// Inventory + firewall snapshot fields. Optional. Old agents send none of
+	// these; new agents send firewall every heartbeat and os_packages only
+	// when the hash changed, 24h elapsed, or the server requested a full
+	// inventory on the previous response.
+	OSPackages    []heartbeatPackage      `json:"os_packages,omitempty"`
+	PackageHash   string                  `json:"package_hash,omitempty"`
+	PackageCount  int                     `json:"package_count,omitempty"`
+	KernelVersion string                  `json:"kernel_version,omitempty"`
+	OSVersion     string                  `json:"os_version,omitempty"`
+	FirewallState *heartbeatFirewallState `json:"firewall_state,omitempty"`
+}
+
+// heartbeatPackage is the per-package payload entry the agent sends.
+type heartbeatPackage struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Source      string `json:"source"`
+	Arch        string `json:"arch,omitempty"`
+	InstalledAt string `json:"installed_at,omitempty"`
+}
+
+// heartbeatFirewallState mirrors the agent-side payload. Translated into
+// storage.NodeFirewallState before persisting.
+type heartbeatFirewallState struct {
+	Type    string                  `json:"type"`
+	Enabled bool                    `json:"enabled"`
+	Rules   []storage.FirewallRule  `json:"rules,omitempty"`
+	Zones   []storage.FirewallZone  `json:"zones,omitempty"`
 }
 
 type heartbeatResponse struct {
-	NodeID         string                      `json:"node_id"`
-	State          string                      `json:"state"`
-	LastSeenAt     string                      `json:"last_seen_at"`
-	Activated      bool                        `json:"activated"`
-	Reason         *string                     `json:"reason,omitempty"`
-	EventFilters   *storage.TenantEventFilters `json:"event_filters,omitempty"`
-	PendingActions []string                    `json:"pending_actions,omitempty"`
+	NodeID                 string                      `json:"node_id"`
+	State                  string                      `json:"state"`
+	LastSeenAt             string                      `json:"last_seen_at"`
+	Activated              bool                        `json:"activated"`
+	Reason                 *string                     `json:"reason,omitempty"`
+	EventFilters           *storage.TenantEventFilters `json:"event_filters,omitempty"`
+	PendingActions         []string                    `json:"pending_actions,omitempty"`
+	FullInventoryRequested bool                        `json:"full_inventory_requested,omitempty"`
 }
 
 // handleNodeHeartbeat is the mTLS endpoint the agent hits every heartbeat
@@ -95,11 +125,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		return
 	}
 
-	// Body is optional but if provided must decode cleanly.
+	// Body is optional but if provided must decode. We deliberately do NOT
+	// use DisallowUnknownFields here — newer agents may send fields older
+	// servers don't know about, and rolling deployments need that to be
+	// tolerated rather than rejected with 400.
 	var body heartbeatRequest
 	if r.ContentLength > 0 {
 		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&body); err != nil {
 			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
 			return
@@ -124,6 +156,9 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		}
 	}
 
+	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
+	s.processHeartbeatFirewall(r.Context(), nodeID, body)
+
 	activated, resultState := s.maybeActivatePendingNode(r.Context(), node)
 
 	lastSeen := time.Now().UTC().Format(time.RFC3339)
@@ -132,10 +167,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 
 	resp := heartbeatResponse{
-		NodeID:     node.ID.String(),
-		State:      resultState,
-		LastSeenAt: lastSeen,
-		Activated:  activated,
+		NodeID:                 node.ID.String(),
+		State:                  resultState,
+		LastSeenAt:             lastSeen,
+		Activated:              activated,
+		FullInventoryRequested: fullInventoryRequested,
 	}
 	// Deliver tenant capture-filter policy back to the agent so collectors
 	// hot-reload without a restart. Storage layer returns defaults when no
@@ -166,6 +202,113 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		_ = s.store.UpdateJobStatus(r.Context(), pendingJob.ID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// fullInventoryRefreshInterval bounds how stale the server's package
+// inventory may be before we ask the agent for a fresh full sync. Mirrors
+// the agent-side cap so neither side drifts independently.
+const fullInventoryRefreshInterval = 24 * time.Hour
+
+// processHeartbeatInventory persists package inventory updates and returns
+// true when the response should signal full_inventory_requested. The agent
+// sends:
+//   - body.OSPackages populated (full sync) — server replaces the table and
+//     records the new hash
+//   - body.PackageHash only (delta) — server compares to stored hash; if it
+//     matches, just touches last_seen_at; if it doesn't match (or no record),
+//     returns true so the agent resends a full list next heartbeat.
+//
+// If the agent didn't send any inventory fields (old agent or unsupported
+// platform), this is a no-op.
+func (s *Server) processHeartbeatInventory(ctx context.Context, nodeID uuid.UUID, body heartbeatRequest) bool {
+	if body.PackageHash == "" {
+		return false
+	}
+
+	// Full sync path.
+	if len(body.OSPackages) > 0 {
+		pkgs := make([]storage.NodePackage, 0, len(body.OSPackages))
+		for _, p := range body.OSPackages {
+			np := storage.NodePackage{
+				NodeID:  nodeID,
+				Name:    p.Name,
+				Version: p.Version,
+				Source:  p.Source,
+			}
+			if p.Arch != "" {
+				arch := p.Arch
+				np.Arch = &arch
+			}
+			if p.InstalledAt != "" {
+				if t, err := time.Parse(time.RFC3339, p.InstalledAt); err == nil {
+					np.InstalledAt = &t
+				}
+			}
+			pkgs = append(pkgs, np)
+		}
+		if err := s.store.ReplaceNodePackages(ctx, nodeID, pkgs); err != nil {
+			s.logger.Warn("replace node packages", zap.Error(err), zap.String("node_id", nodeID.String()))
+			return true // ask for a fresh resend on the next heartbeat
+		}
+		sync := storage.NodeInventorySync{
+			NodeID:        nodeID,
+			PackageHash:   body.PackageHash,
+			PackageCount:  body.PackageCount,
+			LastFullSync:  time.Now().UTC(),
+			LastSeenAt:    time.Now().UTC(),
+		}
+		if body.KernelVersion != "" {
+			k := body.KernelVersion
+			sync.KernelVersion = &k
+		}
+		if body.OSVersion != "" {
+			o := body.OSVersion
+			sync.OSVersion = &o
+		}
+		if err := s.store.UpsertNodeInventorySync(ctx, sync); err != nil {
+			s.logger.Warn("upsert node inventory sync", zap.Error(err))
+		}
+		return false
+	}
+
+	// Hash-only delta path.
+	rows, err := s.store.TouchNodeInventorySync(ctx, nodeID, body.PackageHash)
+	if err != nil {
+		s.logger.Warn("touch node inventory sync", zap.Error(err))
+		return true
+	}
+	if rows == 0 {
+		// Either no record exists or the hash diverged. Either way, ask for
+		// a full resend on the next heartbeat.
+		return true
+	}
+
+	// Hash matched. Cap server-side staleness at fullInventoryRefreshInterval.
+	if existing, gerr := s.store.GetNodeInventorySync(ctx, nodeID); gerr == nil && existing != nil {
+		if time.Since(existing.LastFullSync) >= fullInventoryRefreshInterval {
+			return true
+		}
+	}
+	return false
+}
+
+// processHeartbeatFirewall persists the firewall snapshot in full each time.
+// No delta logic — payload is small and changes are operationally significant.
+func (s *Server) processHeartbeatFirewall(ctx context.Context, nodeID uuid.UUID, body heartbeatRequest) {
+	if body.FirewallState == nil {
+		return
+	}
+	st := storage.NodeFirewallState{
+		NodeID:       nodeID,
+		FirewallType: body.FirewallState.Type,
+		Enabled:      body.FirewallState.Enabled,
+		Rules:        body.FirewallState.Rules,
+		Zones:        body.FirewallState.Zones,
+		ObservedAt:   time.Now().UTC(),
+	}
+	if err := s.store.UpsertNodeFirewallState(ctx, st); err != nil {
+		s.logger.Warn("upsert node firewall state", zap.Error(err), zap.String("node_id", nodeID.String()))
+	}
 }
 
 // maybeActivatePendingNode encapsulates the "is the enrollment gate closed?"
