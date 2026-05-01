@@ -27,9 +27,8 @@ const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Ale
 const Access = lazy(() => import('./pages/Access').then((m) => ({ default: m.Access })));
 const Recommendations = lazy(() => import('./pages/Recommendations').then((m) => ({ default: m.Recommendations })));
 const Reports = lazy(() => import('./pages/Reports').then((m) => ({ default: m.Reports })));
-const ThreatFeeds = lazy(() => import('./pages/ThreatFeeds').then((m) => ({ default: m.ThreatFeeds })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
-const Connections = lazy(() => import('./pages/Connections').then((m) => ({ default: m.Connections })));
+const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
 const Dashboards = lazy(() => import('./pages/Dashboards').then((m) => ({ default: m.Dashboards })));
 const Roles = lazy(() => import('./pages/Roles').then((m) => ({ default: m.Roles })));
 const Audit = lazy(() => import('./pages/Audit').then((m) => ({ default: m.Audit })));
@@ -106,9 +105,13 @@ export function App(): JSX.Element {
                 <Route path="access" element={<Access />} />
                 <Route path="recommendations" element={<Recommendations />} />
                 <Route path="reports" element={<Reports />} />
-                <Route path="threat-feeds" element={<ThreatFeeds />} />
+                {/* Network Security (PR 3) — consolidated tab surface. */}
+                <Route path="security/network" element={<NetworkSecurity />} />
+                {/* Legacy routes redirect to the consolidated page, mapping their
+                    landing tab. Query params from the old URL drop here. */}
+                <Route path="threat-feeds" element={<Navigate to="/security/network?tab=threats" replace />} />
+                <Route path="connections" element={<Navigate to="/security/network?tab=connections" replace />} />
                 <Route path="sessions" element={<Sessions />} />
-                <Route path="connections" element={<Connections />} />
                 <Route path="dashboards" element={<Dashboards />} />
                 <Route path="roles" element={<Roles />} />
                 <Route path="audit" element={<Audit />} />

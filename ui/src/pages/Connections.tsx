@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
-import { SectionHeader } from '../components/kit';
+import { SectionHeader, IpActionMenu } from '../components/kit';
 import { Badge } from '../components/Badge';
 import { EmptyState } from '../components/EmptyState';
 import EventTimeline from '../components/EventTimeline';
@@ -134,13 +134,19 @@ export function Connections(): JSX.Element {
                   {r.pid ? <small style={{ color: 'var(--text-secondary)' }}> · pid {r.pid}</small> : null}
                 </td>
                 <td>{r.user_name ?? '—'}</td>
-                <td>
-                  {r.src_ip ?? '—'}
-                  {r.src_port ? `:${r.src_port}` : ''}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    {r.src_ip ?? '—'}
+                    {r.src_port ? `:${r.src_port}` : ''}
+                    {r.src_ip ? <IpActionMenu ip={r.src_ip} /> : null}
+                  </span>
                 </td>
-                <td>
-                  {r.dst_ip ?? '—'}
-                  {r.dst_port ? `:${r.dst_port}` : ''}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    {r.dst_ip ?? '—'}
+                    {r.dst_port ? `:${r.dst_port}` : ''}
+                    {r.dst_ip ? <IpActionMenu ip={r.dst_ip} /> : null}
+                  </span>
                 </td>
                 <td>{formatBytes(r.bytes_out ?? 0)}</td>
                 <td>{formatDuration(r.duration_ms)}</td>

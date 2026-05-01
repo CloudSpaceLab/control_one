@@ -3879,6 +3879,35 @@ func (f *fakeStore) GetNodeFirewallState(_ context.Context, _ uuid.UUID) (*stora
 	return nil, nil
 }
 
+// Network security stubs (PR 3)
+func (f *fakeStore) CreateNodeFirewallRule(_ context.Context, _ storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) SetNodeFirewallRuleJobID(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeFirewallRuleApplied(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeFirewallRuleFailed(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeFirewallRuleRemoved(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) ListPendingNodeFirewallRules(_ context.Context, _ uuid.UUID) ([]storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListNodeFirewallRulesForEntityAction(_ context.Context, _ uuid.UUID) ([]storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListActiveBlocks(_ context.Context, _ uuid.UUID, _, _ int, _ bool) ([]storage.ActiveBlock, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetNodeFirewallRuleByJobID(_ context.Context, _ uuid.UUID) (*storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+
 // ComplianceReview stubs
 func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
 	return nil, 0, nil

@@ -363,6 +363,16 @@ type Store interface {
 	TouchNodeInventorySync(context.Context, uuid.UUID, string) (int64, error)
 	UpsertNodeFirewallState(context.Context, storage.NodeFirewallState) error
 	GetNodeFirewallState(context.Context, uuid.UUID) (*storage.NodeFirewallState, error)
+	// Network security — operator-driven IP blocks fanned out to per-node rules (PR 3).
+	CreateNodeFirewallRule(context.Context, storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error)
+	SetNodeFirewallRuleJobID(context.Context, uuid.UUID, uuid.UUID) error
+	MarkNodeFirewallRuleApplied(context.Context, uuid.UUID) error
+	MarkNodeFirewallRuleFailed(context.Context, uuid.UUID, string) error
+	MarkNodeFirewallRuleRemoved(context.Context, uuid.UUID) error
+	ListPendingNodeFirewallRules(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
+	ListNodeFirewallRulesForEntityAction(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
+	ListActiveBlocks(context.Context, uuid.UUID, int, int, bool) ([]storage.ActiveBlock, error)
+	GetNodeFirewallRuleByJobID(context.Context, uuid.UUID) (*storage.NodeFirewallRule, error)
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -958,6 +968,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/entities/", s.handleEntitySubroutes)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches", s.handleSavedSearchesCollection)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches/", s.handleSavedSearchSubroute)
+	// Network security — operator-driven IP block enforcement (PR 3).
+	s.baseRouter.HandleFunc("/api/v1/network/active-blocks", s.handleListActiveBlocks)
+	s.baseRouter.HandleFunc("/api/v1/network/blocks/", s.handleNetworkBlocksSubroute)
 	// Data classification / DLP (Sprint 2).
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules", s.handleDLPRulesCollection)
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules/", s.handleDLPRulesResource)

@@ -2165,11 +2165,38 @@ export class APIClient {
   async entityAction(
     type: string,
     id: string,
-    payload: { action: 'block' | 'allow' | 'quarantine'; reason?: string; ttl?: string },
-  ): Promise<{ status: string; audit_id?: string }> {
-    return this.request<{ status: string; audit_id?: string }>(
+    payload: {
+      action: 'block' | 'allow' | 'quarantine';
+      reason?: string;
+      ttl?: number;
+      scope?: 'fleet' | 'affected';
+    },
+  ): Promise<EntityActionResponse> {
+    return this.request<EntityActionResponse>(
       `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions`,
       { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async listActiveBlocks(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+    includeRemoved?: boolean;
+  }): Promise<{ blocks: ActiveBlock[]; generated_at: string }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    if (params.includeRemoved) search.set('include_removed', 'true');
+    return this.request<{ blocks: ActiveBlock[]; generated_at: string }>(
+      `/api/v1/network/active-blocks?${search.toString()}`,
+    );
+  }
+
+  async listBlockNodes(entityActionId: string): Promise<{ rules: NodeFirewallRule[] }> {
+    return this.request<{ rules: NodeFirewallRule[] }>(
+      `/api/v1/network/blocks/${encodeURIComponent(entityActionId)}/nodes`,
     );
   }
 
@@ -2920,6 +2947,60 @@ export interface ListConnectionsParams {
   since?: string;
   until?: string;
   limit?: number;
+}
+
+// ── Network Security (PR 3) ────────────────────────────────────────────────
+
+export interface EntityActionResponse {
+  id: string;
+  tenant_id: string;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  reason?: string;
+  ttl_seconds?: number;
+  expires_at?: string;
+  created_by?: string;
+  created_at: string;
+  nodes_dispatched: number;
+  node_ids?: string[];
+  scope?: 'affected' | 'fleet';
+}
+
+export interface ActiveBlock {
+  EntityActionID: string;
+  TenantID: string;
+  EntityType: string;
+  EntityID: string;
+  Action: string;
+  Reason?: string;
+  ExpiresAt?: string;
+  CreatedAt: string;
+  TotalNodes: number;
+  NodesApplied: number;
+  NodesFailed: number;
+  NodesPending: number;
+  NodesRemoved: number;
+}
+
+export interface NodeFirewallRule {
+  ID: string;
+  EntityActionID: string;
+  NodeID: string;
+  TenantID: string;
+  Action: string;
+  Direction: string;
+  Protocol?: string;
+  Port?: number;
+  Source?: string;
+  Dest?: string;
+  Tag: string;
+  Status: 'pending' | 'applied' | 'failed' | 'removed';
+  Error?: string;
+  JobID?: string;
+  RequestedAt: string;
+  AppliedAt?: string;
+  RemovedAt?: string;
 }
 
 export interface ConnectionRow {

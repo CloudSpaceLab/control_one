@@ -17,4 +17,5 @@ export { OnboardingChecklist, type OnboardingChecklistProps, type OnboardingStep
 export { SelectField, SELECT_CLASS, type SelectFieldProps } from './SelectField';
 export { ExpandableCode, type ExpandableCodeProps } from './ExpandableCode';
 export { FileUploadButton, type FileUploadButtonProps } from './FileUploadButton';
+export { IpActionMenu, type IpActionMenuProps } from './IpActionMenu';
 export { TONE_COLOR, TONE_CLASS, type StateTone, type EntityType } from './types';

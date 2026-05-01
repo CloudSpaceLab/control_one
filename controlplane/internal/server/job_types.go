@@ -46,4 +46,18 @@ func init() {
 		RequiresTenant: false,
 		Validate:       nil,
 	})
+	// Firewall jobs (PR 3) — control-plane validates payload shape; the actual
+	// dispatch + lifecycle is heartbeat-driven, not worker-loop-driven.
+	registerJobDefinition(JobTypeFirewallRuleAdd, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeFirewallPayload(payload)
+		},
+	})
+	registerJobDefinition(JobTypeFirewallRuleDelete, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeFirewallPayload(payload)
+		},
+	})
 }
