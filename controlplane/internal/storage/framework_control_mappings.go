@@ -55,7 +55,7 @@ func (s *Store) ListControlMappings(ctx context.Context, framework string) ([]Co
 	if err != nil {
 		return nil, fmt.Errorf("list control mappings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ControlMappingRow
 	for rows.Next() {
@@ -133,7 +133,7 @@ func (s *Store) GetControlCoverage(ctx context.Context, tenantID uuid.UUID, fram
 	if err != nil {
 		return nil, fmt.Errorf("get control coverage: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ControlCoverage
 	for rows.Next() {
@@ -253,7 +253,7 @@ func (s *Store) GetPerNodeMatrix(ctx context.Context, tenantID uuid.UUID, framew
 	if err != nil {
 		return nil, fmt.Errorf("get per-node matrix: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []NodeControlRow
 	for rows.Next() {
