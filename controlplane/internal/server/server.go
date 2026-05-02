@@ -373,6 +373,9 @@ type Store interface {
 	ListNodeFirewallRulesForEntityAction(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
 	ListActiveBlocks(context.Context, uuid.UUID, int, int, bool) ([]storage.ActiveBlock, error)
 	GetNodeFirewallRuleByJobID(context.Context, uuid.UUID) (*storage.NodeFirewallRule, error)
+	// Agent self-update rollout (PR 4a).
+	GetAgentRolloutState(context.Context, uuid.UUID) (*storage.AgentRolloutState, error)
+	UpsertAgentRolloutState(context.Context, uuid.UUID, storage.AgentRolloutUpdate) (*storage.AgentRolloutState, error)
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -894,6 +897,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/agent/binary/manifest", s.handleAgentBinaryManifest)
 	s.baseRouter.HandleFunc("/api/v1/agent/public-key", s.handleAgentPublicKey)
+	s.baseRouter.HandleFunc("/api/v1/agent-rollout", s.handleAgentRollout)
 	s.baseRouter.HandleFunc("/api/v1/agent/bundle", s.handleAgentBundle)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)

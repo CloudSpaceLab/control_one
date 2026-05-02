@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -22,22 +25,200 @@ type SelfUpdater interface {
 	TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger)
 }
 
-// DefaultSelfUpdater is the production implementation.
+// DefaultSelfUpdater is the production implementation. nodeID + dataDir are
+// captured at construction so the heartbeat dispatch can stay parameterless;
+// TriggerUpdate uses them to (a) pass node_id on the manifest fetch so the
+// server stamps per-tenant rollout fields, and (b) read/write the persisted
+// current_release_seq under the agent state directory.
 type DefaultSelfUpdater struct {
-	// onceGuard prevents concurrent update attempts (e.g. if two heartbeats
+	nodeID  string
+	dataDir string
+
+	// inFlight prevents concurrent update attempts (e.g. if two heartbeats
 	// arrive before the first update completes). Protected by the channel.
 	inFlight chan struct{}
 }
 
-func NewDefaultSelfUpdater() *DefaultSelfUpdater {
-	return &DefaultSelfUpdater{inFlight: make(chan struct{}, 1)}
+func NewDefaultSelfUpdater(nodeID, dataDir string) *DefaultSelfUpdater {
+	return &DefaultSelfUpdater{
+		nodeID:   nodeID,
+		dataDir:  dataDir,
+		inFlight: make(chan struct{}, 1),
+	}
 }
 
-// TriggerUpdate downloads the latest binary from the control plane, verifies
-// its checksum against the manifest, atomically replaces the running binary,
-// then terminates this process so the service manager restarts it fresh.
+// updateManifest mirrors the server's binaryManifest. The PR 4a fields
+// (release_seq, rollout_pct, target_version, paused) are advisory: the agent
+// gates self-update on them but still verifies sha256 the same way as before.
+type updateManifest struct {
+	SHA256        string `json:"sha256"`
+	ReleaseSeq    int    `json:"release_seq"`
+	RolloutPct    int    `json:"rollout_pct"`
+	TargetVersion string `json:"target_version"`
+	Paused        bool   `json:"paused"`
+}
+
+// rolloutBucket maps a node id to a stable bucket in [0, 100). The agent
+// proceeds with a self-update only when bucket < manifest.rollout_pct, which
+// gives operators fraction-based wave control without per-node coordination.
+//
+// CRC32 over the lowercased node id is overkill cryptographically but it's
+// cheap, deterministic across restarts, and uniformly distributed for UUID
+// inputs — exactly what we need. The result is stable for the lifetime of
+// the node id.
+func rolloutBucket(nodeID string) int {
+	if nodeID == "" {
+		// No id → bucket 100 → never inside any rollout wave. Fail-closed.
+		return 100
+	}
+	h := crc32.ChecksumIEEE([]byte(strings.ToLower(strings.TrimSpace(nodeID))))
+	return int(h % 100)
+}
+
+// shouldUpdate is the pure-logic gate. It returns the reason for a rejection
+// (empty string when the update should proceed). Extracted so it's testable
+// without mocking the HTTP path.
+//
+// Reject reasons in priority order:
+//  1. paused        — operator emergency brake
+//  2. release_seq=0 — rollout not configured (no row in agent_rollout_state)
+//  3. downgrade     — release_seq <= current_release_seq
+//  4. outside-wave  — bucket >= rollout_pct
+func shouldUpdate(m updateManifest, currentReleaseSeq int, bucket int) string {
+	if m.Paused {
+		return "rollout paused by operator"
+	}
+	if m.ReleaseSeq <= 0 {
+		return "no rollout configured (release_seq=0)"
+	}
+	if m.ReleaseSeq <= currentReleaseSeq {
+		return fmt.Sprintf("downgrade refused (manifest seq %d <= current %d)", m.ReleaseSeq, currentReleaseSeq)
+	}
+	if bucket >= m.RolloutPct {
+		return fmt.Sprintf("outside current rollout wave (bucket %d >= %d%%)", bucket, m.RolloutPct)
+	}
+	return ""
+}
+
+// loadAgentState reads the entire state.json into a map so unknown fields
+// round-trip when we write back. Returns an empty map on any error so
+// callers can still proceed (write will create the file).
+func loadAgentState(dataDir string) map[string]any {
+	if dataDir == "" {
+		return map[string]any{}
+	}
+	path := filepath.Join(dataDir, "state.json")
+	data, err := os.ReadFile(path) // #nosec G304 — admin-supplied dir.
+	if err != nil {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil || m == nil {
+		return map[string]any{}
+	}
+	return m
+}
+
+// saveAgentState atomically writes state.json. Uses a temp-then-rename so
+// readers never see a half-written file.
+func saveAgentState(dataDir string, state map[string]any) error {
+	if dataDir == "" {
+		return fmt.Errorf("data dir not configured")
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("ensure data dir: %w", err)
+	}
+	body, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal state: %w", err)
+	}
+	tmp, err := os.CreateTemp(dataDir, "state-*.json")
+	if err != nil {
+		return fmt.Errorf("create temp state: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp state: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp state: %w", err)
+	}
+	finalPath := filepath.Join(dataDir, "state.json")
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename state: %w", err)
+	}
+	return nil
+}
+
+// currentReleaseSeqFromState extracts the persisted current_release_seq.
+// Returns 0 when the field is absent or unparseable — the agent treats that
+// as "no prior release recorded", letting the first ever rollout proceed.
+func currentReleaseSeqFromState(state map[string]any) int {
+	switch v := state["current_release_seq"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return int(i)
+		}
+	}
+	return 0
+}
+
+// savePrevBinary copies the running executable to <exe>.prev. Used as an
+// operator escape hatch — `nodeagent rollback` swaps it back if a self-update
+// produces a misbehaving binary. We deliberately do not chase the symlink
+// in /proc/self/exe — os.Executable returns the resolved path on Linux.
+//
+// On Windows the running .exe can't be opened for write while the process
+// owns it; the copy itself is fine (read-only open), it's only the rename
+// step in TriggerUpdate that needs special care there. For PR 4a we accept
+// that Windows in-use rename is still a known gap (#6 in the wiki) — the
+// .prev file lands either way.
+func savePrevBinary(exe string) error {
+	src, err := os.Open(exe) // #nosec G304 — exe is os.Executable() result.
+	if err != nil {
+		return fmt.Errorf("open running exe: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	prevPath := exe + ".prev"
+	dst, err := os.OpenFile(prevPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		return fmt.Errorf("open .prev: %w", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(prevPath)
+		return fmt.Errorf("copy to .prev: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(prevPath)
+		return fmt.Errorf("close .prev: %w", err)
+	}
+	return nil
+}
+
+// TriggerUpdate downloads the latest binary from the control plane, gates
+// the update on the manifest's per-tenant rollout fields + the agent's
+// stable bucket + persisted current_release_seq, verifies the SHA-256,
+// saves the running binary as <exe>.prev for operator-driven rollback,
+// atomically replaces the executable, then exits so the service manager
+// restarts with the new binary.
 func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger) {
-	// Enforce single-flight.
+	// Single-flight guard.
 	select {
 	case u.inFlight <- struct{}{}:
 		defer func() { <-u.inFlight }()
@@ -46,14 +227,18 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		return
 	}
 
-	log.Info("starting agent self-update")
+	log.Info("starting agent self-update", zap.String("node_id", u.nodeID))
 
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
 
-	// Fetch the manifest to get the expected SHA256.
-	manifestResp, err := client.Do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v1/agent/binary/manifest?os=%s&arch=%s", osName, arch), nil)
+	// Manifest URL includes node_id so the server resolves per-tenant
+	// rollout state. Older servers ignore the param.
+	manifestURL := fmt.Sprintf("/api/v1/agent/binary/manifest?os=%s&arch=%s", osName, arch)
+	if u.nodeID != "" {
+		manifestURL += "&node_id=" + u.nodeID
+	}
+	manifestResp, err := client.Do(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
 		log.Error("fetch update manifest", zap.Error(err))
 		return
@@ -64,22 +249,44 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		return
 	}
 
-	var manifest struct {
-		SHA256 string `json:"sha256"`
-	}
+	var manifest updateManifest
 	if err := json.NewDecoder(manifestResp.Body).Decode(&manifest); err != nil {
 		log.Error("decode update manifest", zap.Error(err))
 		return
 	}
 
-	// Download the binary into a temp file alongside the current executable.
+	// Gate via the rollout policy + downgrade prevention before touching disk.
+	state := loadAgentState(u.dataDir)
+	currentSeq := currentReleaseSeqFromState(state)
+	bucket := rolloutBucket(u.nodeID)
+	if reason := shouldUpdate(manifest, currentSeq, bucket); reason != "" {
+		log.Info("self-update skipped",
+			zap.String("reason", reason),
+			zap.Int("manifest_seq", manifest.ReleaseSeq),
+			zap.Int("current_seq", currentSeq),
+			zap.Int("bucket", bucket),
+			zap.Int("rollout_pct", manifest.RolloutPct),
+			zap.Bool("paused", manifest.Paused),
+		)
+		return
+	}
+	log.Info("self-update approved by rollout gate",
+		zap.Int("bucket", bucket),
+		zap.Int("rollout_pct", manifest.RolloutPct),
+		zap.Int("manifest_seq", manifest.ReleaseSeq),
+		zap.String("target_version", manifest.TargetVersion),
+	)
+
+	// Resolve the running executable.
 	exe, err := os.Executable()
 	if err != nil {
 		log.Error("resolve executable path", zap.Error(err))
 		return
 	}
 
-	tmp, err := os.CreateTemp("", "controlone-agent-update-*")
+	// Temp file lives next to the running exe so the final rename is on
+	// the same filesystem (rename(2) is atomic only within an FS).
+	tmp, err := os.CreateTemp(filepath.Dir(exe), "controlone-agent-update-*")
 	if err != nil {
 		log.Error("create temp file for update", zap.Error(err))
 		return
@@ -125,14 +332,31 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		return
 	}
 
-	// Atomic replace: rename(2) is atomic on the same filesystem.
+	// Save current binary as <exe>.prev before swapping. Operator escape
+	// hatch via `nodeagent rollback`. Failure here is non-fatal — we log
+	// and proceed; the worst case is no automatic fallback.
+	if err := savePrevBinary(exe); err != nil {
+		log.Warn("save .prev binary", zap.Error(err))
+	}
+
+	// Atomic replace.
 	if err := os.Rename(tmpPath, exe); err != nil {
 		log.Error("replace binary", zap.Error(err))
 		return
 	}
 
+	// Persist new release_seq so subsequent manifests at the same seq are
+	// recognised as "already applied" and downgrades fail their gate.
+	state["current_release_seq"] = manifest.ReleaseSeq
+	if err := saveAgentState(u.dataDir, state); err != nil {
+		log.Warn("persist current_release_seq",
+			zap.Int("release_seq", manifest.ReleaseSeq),
+			zap.Error(err))
+	}
+
 	log.Info("agent binary replaced; exiting so service manager can restart with new binary",
-		zap.String("path", exe))
+		zap.String("path", exe),
+		zap.Int("release_seq", manifest.ReleaseSeq))
 
 	// Exit cleanly — systemd/OpenRC/SCM will restart us because we're
 	// configured with Restart=on-success (or equivalent).
