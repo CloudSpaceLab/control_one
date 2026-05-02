@@ -45,6 +45,9 @@ const ComplianceEvidence = lazy(() => import('./pages/ComplianceEvidence').then(
 const AuditReports = lazy(() => import('./pages/AuditReports').then((m) => ({ default: m.AuditReports })));
 const Frameworks = lazy(() => import('./pages/Frameworks').then((m) => ({ default: m.Frameworks })));
 const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ default: m.TrustCenter })));
+const WhistleblowerIntake = lazy(() => import('./pages/WhistleblowerIntake').then((m) => ({ default: m.WhistleblowerIntake })));
+const WhistleblowerStatus = lazy(() => import('./pages/WhistleblowerStatus').then((m) => ({ default: m.WhistleblowerStatus })));
+const Misconduct = lazy(() => import('./pages/Misconduct').then((m) => ({ default: m.Misconduct })));
 
 function PageFallback(): JSX.Element {
   return (
@@ -75,6 +78,25 @@ export function App(): JSX.Element {
         element={
           <Suspense fallback={<PageFallback />}>
             <TrustCenter />
+          </Suspense>
+        }
+      />
+      {/* Public misconduct intake (UC7) - no authentication required.
+          Mirrors the trust-center pattern; rate limits + PoW are enforced
+          server-side. */}
+      <Route
+        path="/intake"
+        element={
+          <Suspense fallback={<PageFallback />}>
+            <WhistleblowerIntake />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/intake-status"
+        element={
+          <Suspense fallback={<PageFallback />}>
+            <WhistleblowerStatus />
           </Suspense>
         }
       />
@@ -128,6 +150,7 @@ export function App(): JSX.Element {
                 <Route path="compliance-evidence" element={<ComplianceEvidence />} />
                 <Route path="audit-reports" element={<AuditReports />} />
                 <Route path="frameworks" element={<Frameworks />} />
+                <Route path="misconduct" element={<Misconduct />} />
               </Routes>
             </Suspense>
           }

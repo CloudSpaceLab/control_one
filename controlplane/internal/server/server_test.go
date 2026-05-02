@@ -1233,6 +1233,12 @@ type fakeStore struct {
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+
+	// UC7 — misconduct & whistleblowing.
+	misconductCases   map[uuid.UUID]*storage.MisconductCase
+	whistleblowerSubs []storage.WhistleblowerSubmission
+	caseEvidenceLinks map[uuid.UUID][]storage.CaseEvidenceLink
+	riskSignals       map[uuid.UUID][]storage.RiskSignal
 }
 
 type stubQueue struct{}
@@ -3977,4 +3983,261 @@ func (f *fakeStore) UpsertNodeHealthScore(_ context.Context, _ storage.UpsertNod
 }
 func (f *fakeStore) ListAtRiskNodes(_ context.Context, _ uuid.UUID, _ int) ([]storage.AtRiskNodeRow, error) {
 	return nil, nil
+}
+
+// Misconduct & whistleblowing stubs (UC7). The fakeStore keeps an in-memory
+// map of cases + submissions + signals so handler tests can round-trip
+// without a real database.
+func (f *fakeStore) ensureMisconductMaps() {
+	if f.misconductCases == nil {
+		f.misconductCases = map[uuid.UUID]*storage.MisconductCase{}
+	}
+	if f.whistleblowerSubs == nil {
+		f.whistleblowerSubs = []storage.WhistleblowerSubmission{}
+	}
+	if f.caseEvidenceLinks == nil {
+		f.caseEvidenceLinks = map[uuid.UUID][]storage.CaseEvidenceLink{}
+	}
+	if f.riskSignals == nil {
+		f.riskSignals = map[uuid.UUID][]storage.RiskSignal{}
+	}
+}
+
+func (f *fakeStore) CreateMisconductCase(_ context.Context, p storage.CreateMisconductCaseParams) (*storage.MisconductCase, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	now := time.Now()
+	c := &storage.MisconductCase{
+		ID:            uuid.New(),
+		TenantID:      p.TenantID,
+		Status:        "open",
+		OpenedAt:      now,
+		OpenedBy:      p.OpenedBy,
+		Summary:       p.Summary,
+		SubjectUserID: p.SubjectUserID,
+		SubjectLabel:  p.SubjectLabel,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	f.misconductCases[c.ID] = c
+	return c, nil
+}
+
+func (f *fakeStore) GetMisconductCase(_ context.Context, id uuid.UUID) (*storage.MisconductCase, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	if c, ok := f.misconductCases[id]; ok {
+		copy := *c
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListMisconductCases(_ context.Context, filter storage.MisconductCaseFilter, limit, offset int) ([]storage.MisconductCase, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	out := []storage.MisconductCase{}
+	for _, c := range f.misconductCases {
+		if c.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.Status != "" && c.Status != filter.Status {
+			continue
+		}
+		out = append(out, *c)
+	}
+	total := len(out)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return out[offset:end], total, nil
+}
+
+func (f *fakeStore) UpdateMisconductCase(_ context.Context, id uuid.UUID, p storage.UpdateMisconductCaseParams) (*storage.MisconductCase, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	c, ok := f.misconductCases[id]
+	if !ok {
+		return nil, nil
+	}
+	if p.Status != "" {
+		c.Status = p.Status
+	}
+	if p.Summary != nil {
+		c.Summary = *p.Summary
+	}
+	if p.RiskScore != nil {
+		c.RiskScore = *p.RiskScore
+	}
+	if p.SubjectUserID != nil {
+		v := *p.SubjectUserID
+		c.SubjectUserID = &v
+	}
+	if p.SubjectLabel != nil {
+		v := *p.SubjectLabel
+		c.SubjectLabel = &v
+	}
+	c.UpdatedAt = time.Now()
+	copy := *c
+	return &copy, nil
+}
+
+func (f *fakeStore) SetMisconductCaseRiskScore(_ context.Context, id uuid.UUID, score int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	if c, ok := f.misconductCases[id]; ok {
+		c.RiskScore = score
+		c.UpdatedAt = time.Now()
+	}
+	return nil
+}
+
+func (f *fakeStore) CreateWhistleblowerSubmission(_ context.Context, p storage.CreateWhistleblowerSubmissionParams) (*storage.WhistleblowerSubmission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	ws := storage.WhistleblowerSubmission{
+		ID:             uuid.New(),
+		TokenHash:      p.TokenHash,
+		SubmittedAt:    time.Now(),
+		BodyEncrypted:  p.BodyEncrypted,
+		BodyNonce:      p.BodyNonce,
+		RetentionUntil: p.RetentionUntil,
+		Status:         "received",
+	}
+	f.whistleblowerSubs = append(f.whistleblowerSubs, ws)
+	return &ws, nil
+}
+
+func (f *fakeStore) GetWhistleblowerSubmission(_ context.Context, id uuid.UUID) (*storage.WhistleblowerSubmission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	for i := range f.whistleblowerSubs {
+		if f.whistleblowerSubs[i].ID == id {
+			ws := f.whistleblowerSubs[i]
+			return &ws, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListAllWhistleblowerSubmissions(_ context.Context) ([]storage.WhistleblowerSubmission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	out := make([]storage.WhistleblowerSubmission, len(f.whistleblowerSubs))
+	copy(out, f.whistleblowerSubs)
+	return out, nil
+}
+
+func (f *fakeStore) SweepWhistleblowerSubmissions(_ context.Context, now time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	kept := f.whistleblowerSubs[:0]
+	var deleted int64
+	for _, ws := range f.whistleblowerSubs {
+		if ws.RetentionUntil.Before(now) {
+			deleted++
+			continue
+		}
+		kept = append(kept, ws)
+	}
+	f.whistleblowerSubs = kept
+	return deleted, nil
+}
+
+func (f *fakeStore) AttachCaseEvidence(_ context.Context, caseID, evidenceID uuid.UUID) (*storage.CaseEvidenceLink, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	link := storage.CaseEvidenceLink{CaseID: caseID, EvidenceID: evidenceID, AttachedAt: time.Now()}
+	f.caseEvidenceLinks[caseID] = append(f.caseEvidenceLinks[caseID], link)
+	return &link, nil
+}
+
+func (f *fakeStore) ListCaseEvidence(_ context.Context, caseID uuid.UUID) ([]storage.CaseEvidenceLink, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	links := f.caseEvidenceLinks[caseID]
+	out := make([]storage.CaseEvidenceLink, len(links))
+	copy(out, links)
+	return out, nil
+}
+
+func (f *fakeStore) CreateRiskSignal(_ context.Context, p storage.CreateRiskSignalParams) (*storage.RiskSignal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	occurred := p.OccurredAt
+	if occurred.IsZero() {
+		occurred = time.Now()
+	}
+	rs := storage.RiskSignal{
+		ID:         uuid.New(),
+		CaseID:     p.CaseID,
+		SignalType: p.SignalType,
+		Severity:   p.Severity,
+		SourceID:   p.SourceID,
+		OccurredAt: occurred,
+		Weight:     p.Weight,
+	}
+	if p.SourceTable != "" {
+		v := p.SourceTable
+		rs.SourceTable = &v
+	}
+	f.riskSignals[p.CaseID] = append(f.riskSignals[p.CaseID], rs)
+	return &rs, nil
+}
+
+func (f *fakeStore) ListRiskSignals(_ context.Context, caseID uuid.UUID) ([]storage.RiskSignal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	signals := f.riskSignals[caseID]
+	out := make([]storage.RiskSignal, len(signals))
+	copy(out, signals)
+	return out, nil
+}
+
+func (f *fakeStore) DeleteRiskSignalsForCase(_ context.Context, caseID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	delete(f.riskSignals, caseID)
+	return nil
+}
+
+func (f *fakeStore) CountAuditLogsForActor(_ context.Context, actorID uuid.UUID, _ time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, log := range f.auditLogs {
+		if log.ActorID == actorID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeStore) CountSecurityEventsBySeverity(_ context.Context, _ uuid.UUID, _ time.Time) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (f *fakeStore) CountFailedComplianceForTenant(_ context.Context, _ uuid.UUID, _ time.Time) (int, error) {
+	return 0, nil
 }

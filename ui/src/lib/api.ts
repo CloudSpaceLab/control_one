@@ -3011,6 +3011,161 @@ export class APIClient {
   async deleteComplianceReview(id: string): Promise<void> {
     await this.request<void>(`/api/v1/compliance/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
+
+  // ---- Misconduct & whistleblowing (UC7) -----------------------------
+  // Investigator-gated case CRUD. The public submit + status endpoints are
+  // exported as standalone functions below (they bypass the bearer-token
+  // header so they work on the unauthenticated /intake routes).
+
+  async listMisconductCases(params: {
+    tenantId: string;
+    status?: 'open' | 'investigating' | 'closed';
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: MisconductCase[]; pagination: { total: number; limit: number; offset: number } }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.status) search.set('status', params.status);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    return this.request(`/api/v1/misconduct/cases?${search.toString()}`);
+  }
+
+  async createMisconductCase(payload: CreateMisconductCasePayload): Promise<MisconductCase> {
+    return this.request<MisconductCase>('/api/v1/misconduct/cases', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getMisconductCase(id: string): Promise<MisconductCase> {
+    return this.request<MisconductCase>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}`);
+  }
+
+  async updateMisconductCase(id: string, payload: UpdateMisconductCasePayload): Promise<MisconductCase> {
+    return this.request<MisconductCase>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listCaseSignals(id: string): Promise<{ data: RiskSignal[] }> {
+    return this.request(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/signals`);
+  }
+
+  async listCaseEvidence(id: string): Promise<{ data: CaseEvidenceLink[] }> {
+    return this.request(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`);
+  }
+
+  async attachCaseEvidence(id: string, evidenceId: string): Promise<CaseEvidenceLink> {
+    return this.request<CaseEvidenceLink>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`, {
+      method: 'POST',
+      body: JSON.stringify({ evidence_id: evidenceId }),
+    });
+  }
+}
+
+// ---- Public misconduct intake helpers (no auth) ----------------------
+//
+// These mirror the trust-center pattern (see TrustCenter.tsx — uses raw
+// fetch instead of the APIClient because the bearer token would be
+// undefined on the /intake routes anyway and we don't want to leak any
+// session token to a public surface).
+
+export interface MisconductChallenge {
+  challenge: string;
+  difficulty: number;
+}
+
+export interface MisconductSubmitResponse {
+  token: string;
+  message: string;
+}
+
+export interface MisconductStatusResponse {
+  status: 'received' | 'under_review' | 'closed' | 'unknown';
+}
+
+export async function fetchMisconductChallenge(): Promise<MisconductChallenge> {
+  const r = await fetch('/api/v1/misconduct/challenge');
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function submitWhistleblowerReport(payload: {
+  description: string;
+  approximate_date: string;
+  subject_role: string;
+  challenge: string;
+  nonce: string;
+}): Promise<MisconductSubmitResponse> {
+  const r = await fetch('/api/v1/misconduct/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new APIError(text || `HTTP ${r.status}`, r.status);
+  }
+  return r.json();
+}
+
+export async function fetchIntakeStatus(token: string): Promise<MisconductStatusResponse> {
+  const r = await fetch('/api/v1/misconduct/intake-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  if (!r.ok) throw new APIError(`HTTP ${r.status}`, r.status);
+  return r.json();
+}
+
+// ---- Misconduct types (UC7) -----------------------------------------
+
+export interface MisconductCase {
+  id: string;
+  tenant_id: string;
+  status: 'open' | 'investigating' | 'closed';
+  opened_at: string;
+  opened_by?: string;
+  summary: string;
+  risk_score: number;
+  subject_user_id?: string;
+  subject_label?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMisconductCasePayload {
+  tenant_id: string;
+  summary: string;
+  subject_user_id?: string;
+  subject_label?: string;
+}
+
+export interface UpdateMisconductCasePayload {
+  status?: 'open' | 'investigating' | 'closed';
+  summary?: string;
+  subject_user_id?: string;
+  subject_label?: string;
+}
+
+export interface RiskSignal {
+  id: string;
+  case_id: string;
+  signal_type: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  source_id?: string;
+  source_table?: string;
+  occurred_at: string;
+  weight: number;
+}
+
+export interface CaseEvidenceLink {
+  case_id: string;
+  evidence_id: string;
+  attached_at: string;
 }
 
 // ---- Connection / forensic types -------------------------------------
