@@ -206,6 +206,16 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeHealthPredict]; !exists {
 		s.jobHandlers[JobTypeHealthPredict] = s.handleHealthPredictJob
 	}
+
+	// Misconduct & whistleblowing (UC7). The score handler recomputes a
+	// per-case risk_score; the retention sweep deletes whistleblower
+	// submissions past their 90-day deadline.
+	if _, exists := s.jobHandlers[JobTypeMisconductScore]; !exists {
+		s.jobHandlers[JobTypeMisconductScore] = s.handleMisconductScoreJob
+	}
+	if _, exists := s.jobHandlers[JobTypeMisconductRetentionSweep]; !exists {
+		s.jobHandlers[JobTypeMisconductRetentionSweep] = s.handleMisconductRetentionSweepJob
+	}
 }
 
 type provisionPayload struct {

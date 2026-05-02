@@ -93,6 +93,12 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 			"/api/v1/agent/public-key":      {},
 			// Trust Center public endpoint (no auth required).
 			"/api/v1/trust": {},
+			// Misconduct & whistleblowing (UC7) public surface — anonymous
+			// intake + status polling + PoW challenge issuance. The handlers
+			// enforce per-IP and global rate limits plus a SHA-256 PoW check.
+			"/api/v1/misconduct/submit":        {},
+			"/api/v1/misconduct/intake-status": {},
+			"/api/v1/misconduct/challenge":     {},
 		},
 	}
 }

@@ -54,6 +54,12 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Posture',
     items: [
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
+      {
+        to: '/misconduct',
+        label: 'Misconduct & whistleblowing',
+        icon: ShieldAlert,
+        roles: ['investigator', 'admin'],
+      },
       { to: '/audit', label: 'Audit log', icon: FileText },
       { to: '/telemetry', label: 'Telemetry', icon: Activity },
     ],

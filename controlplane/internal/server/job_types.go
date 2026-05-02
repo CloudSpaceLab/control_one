@@ -82,4 +82,16 @@ func init() {
 			return decodeHealthJobPayload(payload)
 		},
 	})
+	// Misconduct & whistleblowing (UC7). Score is per-case (case_id in
+	// payload, no tenant requirement at the registration tier — the case
+	// row carries the tenant). Retention sweep is server-internal and
+	// has no payload.
+	registerJobDefinition(JobTypeMisconductScore, jobDefinition{
+		RequiresTenant: false,
+		Validate:       nil,
+	})
+	registerJobDefinition(JobTypeMisconductRetentionSweep, jobDefinition{
+		RequiresTenant: false,
+		Validate:       nil,
+	})
 }

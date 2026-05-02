@@ -413,6 +413,24 @@ type Store interface {
 	DeleteIncidentReport(context.Context, string) error
 	GetTrustCenterData(context.Context, string) (*storage.TrustCenterData, error)
 	GetTenantByName(context.Context, string) (*storage.Tenant, error)
+	// Misconduct & whistleblowing (UC7).
+	CreateMisconductCase(context.Context, storage.CreateMisconductCaseParams) (*storage.MisconductCase, error)
+	GetMisconductCase(context.Context, uuid.UUID) (*storage.MisconductCase, error)
+	ListMisconductCases(context.Context, storage.MisconductCaseFilter, int, int) ([]storage.MisconductCase, int, error)
+	UpdateMisconductCase(context.Context, uuid.UUID, storage.UpdateMisconductCaseParams) (*storage.MisconductCase, error)
+	SetMisconductCaseRiskScore(context.Context, uuid.UUID, int) error
+	CreateWhistleblowerSubmission(context.Context, storage.CreateWhistleblowerSubmissionParams) (*storage.WhistleblowerSubmission, error)
+	GetWhistleblowerSubmission(context.Context, uuid.UUID) (*storage.WhistleblowerSubmission, error)
+	ListAllWhistleblowerSubmissions(context.Context) ([]storage.WhistleblowerSubmission, error)
+	SweepWhistleblowerSubmissions(context.Context, time.Time) (int64, error)
+	AttachCaseEvidence(context.Context, uuid.UUID, uuid.UUID) (*storage.CaseEvidenceLink, error)
+	ListCaseEvidence(context.Context, uuid.UUID) ([]storage.CaseEvidenceLink, error)
+	CreateRiskSignal(context.Context, storage.CreateRiskSignalParams) (*storage.RiskSignal, error)
+	ListRiskSignals(context.Context, uuid.UUID) ([]storage.RiskSignal, error)
+	DeleteRiskSignalsForCase(context.Context, uuid.UUID) error
+	CountAuditLogsForActor(context.Context, uuid.UUID, time.Time) (int, error)
+	CountSecurityEventsBySeverity(context.Context, uuid.UUID, time.Time) (map[string]int, error)
+	CountFailedComplianceForTenant(context.Context, uuid.UUID, time.Time) (int, error)
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -754,6 +772,11 @@ type Server struct {
 	connectRegistryOnce     sync.Once
 	connectRegistryInst     *connect.Registry
 	connectRegistryOverride *connect.Registry
+
+	// Misconduct & whistleblowing (UC7) — process-local rate limiter +
+	// PoW challenge store. Lazily initialised on first /intake call.
+	misconductOnce   sync.Once
+	whistleblowerLim *whistleblowerLimiter
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -1021,6 +1044,14 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/trust/faq/{id}", s.handleFAQResource)
 	s.baseRouter.HandleFunc("/api/v1/trust/incidents", s.handleIncidentsCollection)
 	s.baseRouter.HandleFunc("/api/v1/trust/incidents/{id}", s.handleIncidentResource)
+	// Misconduct & whistleblowing (UC7). The submit + intake-status + challenge
+	// endpoints are public (auth middleware skips them); cases are gated by
+	// roleInvestigator|roleAdmin inside the handler.
+	s.baseRouter.HandleFunc("/api/v1/misconduct/submit", s.handleWhistleblowerSubmit)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/intake-status", s.handleIntakeStatus)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/challenge", s.handleWhistleblowerChallenge)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/cases", s.handleMisconductCasesCollection)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/cases/", s.handleMisconductCaseSubroutes)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
