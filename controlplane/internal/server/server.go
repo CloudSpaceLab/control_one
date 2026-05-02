@@ -388,6 +388,10 @@ type Store interface {
 	ListPendingNodePatchStates(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
 	ListNodePatchStatesForDeployment(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
 	GetNodePatchStateByJobID(context.Context, uuid.UUID) (*storage.NodePatchState, error)
+	// Predictive server downtime — Use Case 5.
+	GetNodeHealthScore(context.Context, uuid.UUID) (*storage.NodeHealthScore, error)
+	UpsertNodeHealthScore(context.Context, storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error)
+	ListAtRiskNodes(context.Context, uuid.UUID, int) ([]storage.AtRiskNodeRow, error)
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -927,6 +931,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/rules/log/", s.handleLogRuleSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/security-events", s.handleSecurityEventsCollection)
 	s.baseRouter.HandleFunc("/api/v1/health-incidents", s.handleHealthIncidentsCollection)
+	// Predictive server downtime — Use Case 5 (PR 31).
+	s.baseRouter.HandleFunc("/api/v1/health/at-risk", s.handleAtRiskFleet)
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
 	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
@@ -1771,6 +1777,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 
 	if len(segments) == 2 && segments[1] == "update-agent" {
 		s.handleNodeAgentUpdate(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "health" {
+		s.handleNodeHealth(w, r, nodeID)
 		return
 	}
 

@@ -3967,3 +3967,14 @@ func (f *fakeStore) CompleteComplianceReview(_ context.Context, _ uuid.UUID, _ u
 func (f *fakeStore) DeleteComplianceReview(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
+
+// Predictive server downtime stubs (Use Case 5 / PR 31)
+func (f *fakeStore) GetNodeHealthScore(_ context.Context, _ uuid.UUID) (*storage.NodeHealthScore, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertNodeHealthScore(_ context.Context, _ storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListAtRiskNodes(_ context.Context, _ uuid.UUID, _ int) ([]storage.AtRiskNodeRow, error) {
+	return nil, nil
+}

@@ -196,6 +196,16 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypePatchDeployDirect]; !exists {
 		s.jobHandlers[JobTypePatchDeployDirect] = s.handlePatchDeployJob
 	}
+
+	// Predictive server downtime jobs (Use Case 5). The scheduler enqueues
+	// these hourly; both walk every tenant and write back into
+	// behavioral_baselines / node_health_scores.
+	if _, exists := s.jobHandlers[JobTypeHealthBaselines]; !exists {
+		s.jobHandlers[JobTypeHealthBaselines] = s.handleHealthBaselinesJob
+	}
+	if _, exists := s.jobHandlers[JobTypeHealthPredict]; !exists {
+		s.jobHandlers[JobTypeHealthPredict] = s.handleHealthPredictJob
+	}
 }
 
 type provisionPayload struct {
