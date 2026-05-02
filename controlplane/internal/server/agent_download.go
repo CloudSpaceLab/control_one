@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 	"sync"
 	"text/template"
 
@@ -419,6 +421,13 @@ func sanitizeBase64(raw string) string {
 }
 
 // binaryManifest is the JSON payload returned by /api/v1/agent/binary/manifest.
+//
+// PR 4a fields (release_seq, rollout_pct, target_version) are advisory: the
+// agent reads them to gate self-update by stable rollout bucket and reject
+// downgrades. When agent_rollout_state has no row for the calling tenant —
+// the default — release_seq is 0 and rollout_pct is 0, which means the
+// agent treats every update as "outside the wave" and skips. Operators
+// must explicitly set rollout_pct > 0 to begin a rollout.
 type binaryManifest struct {
 	OS                   string `json:"os"`
 	Arch                 string `json:"arch"`
@@ -426,6 +435,10 @@ type binaryManifest struct {
 	Signature            string `json:"signature,omitempty"`
 	SizeBytes            int64  `json:"size_bytes"`
 	PublicKeyFingerprint string `json:"public_key_fingerprint,omitempty"`
+	ReleaseSeq           int    `json:"release_seq,omitempty"`
+	RolloutPct           int    `json:"rollout_pct,omitempty"`
+	TargetVersion        string `json:"target_version,omitempty"`
+	Paused               bool   `json:"paused,omitempty"`
 }
 
 // binaryMetadata caches hash/signature/size for a single binary file.
@@ -667,6 +680,23 @@ func (s *Server) handleAgentBinaryManifest(w http.ResponseWriter, r *http.Reques
 	}
 	if mat.havePublicKey {
 		manifest.PublicKeyFingerprint = mat.fingerprint
+	}
+
+	// PR 4a: agent passes ?node_id=<id> so the server can resolve tenant
+	// and stamp release_seq + rollout_pct. Missing/invalid node_id leaves
+	// the rollout fields zero, which the agent treats as "outside the
+	// wave" and skips — fail-closed behaviour.
+	if nidStr := strings.TrimSpace(r.URL.Query().Get("node_id")); nidStr != "" {
+		if nid, err := uuid.Parse(nidStr); err == nil {
+			if node, err := s.store.GetNode(r.Context(), nid); err == nil && node != nil {
+				if state, err := s.store.GetAgentRolloutState(r.Context(), node.TenantID); err == nil && state != nil {
+					manifest.ReleaseSeq = state.TargetReleaseSeq
+					manifest.RolloutPct = state.RolloutPct
+					manifest.TargetVersion = state.TargetVersion
+					manifest.Paused = state.Paused
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

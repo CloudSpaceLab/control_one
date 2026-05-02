@@ -71,6 +71,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "rollback":
+			if err := runRollback(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 
@@ -516,7 +522,7 @@ func main() {
 	// to the telemetry table; this one drives the node state machine.
 	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
 		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr),
-		NewDefaultSelfUpdater())
+		NewDefaultSelfUpdater(state.NodeID, filepath.Dir(cfg.StateFile)))
 
 	// DLP scanner - periodically scan for PII based on rules from control plane
 	if cfg.DLP.Enabled && cfg.Intervals.DLP > 0 {

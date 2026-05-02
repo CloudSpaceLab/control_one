@@ -3908,6 +3908,14 @@ func (f *fakeStore) GetNodeFirewallRuleByJobID(_ context.Context, _ uuid.UUID) (
 	return nil, nil
 }
 
+// Agent self-update rollout stubs (PR 4a)
+func (f *fakeStore) GetAgentRolloutState(_ context.Context, _ uuid.UUID) (*storage.AgentRolloutState, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertAgentRolloutState(_ context.Context, _ uuid.UUID, _ storage.AgentRolloutUpdate) (*storage.AgentRolloutState, error) {
+	return nil, nil
+}
+
 // ComplianceReview stubs
 func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
 	return nil, 0, nil
