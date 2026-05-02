@@ -1192,6 +1192,38 @@ export interface PaginatedResponse<T> {
   pagination: PaginationMeta;
 }
 
+// Predictive server downtime — Use Case 5 (PR 31).
+// risk_level is one of: low | medium | high | critical | calibrating.
+// "calibrating" means the predict job hasn't seen enough samples yet
+// (<24 per metric); the UI must surface "Calibrating (N/24 samples)"
+// rather than render fake zeros.
+export type NodeHealthRiskLevel = 'low' | 'medium' | 'high' | 'critical' | 'calibrating';
+
+export interface NodeHealthScore {
+  node_id: string;
+  score: number;
+  risk_level: NodeHealthRiskLevel;
+  components: Record<string, unknown>;
+  computed_at?: string;
+}
+
+export interface AtRiskNode {
+  node_id: string;
+  tenant_id: string;
+  hostname: string;
+  score: number;
+  risk_level: NodeHealthRiskLevel;
+  components: Record<string, unknown>;
+  computed_at: string;
+}
+
+export interface AtRiskFleetResponse {
+  data: AtRiskNode[];
+  total_count: number;
+  critical: number;
+  high: number;
+}
+
 async function safeErrorMessage(response: Response): Promise<string | undefined> {
   try {
     const data = await response.json();
@@ -1476,6 +1508,20 @@ export class APIClient {
   async deleteNode(nodeId: string): Promise<void> {
     const encoded = encodeURIComponent(nodeId);
     await this.request<void>(`/api/v1/nodes/${encoded}`, { method: 'DELETE' });
+  }
+
+  async getNodeHealth(nodeId: string): Promise<NodeHealthScore> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request<NodeHealthScore>(`/api/v1/nodes/${encoded}/health`);
+  }
+
+  async listAtRiskNodes(tenantId?: string): Promise<AtRiskFleetResponse> {
+    const search = new URLSearchParams();
+    if (tenantId) {
+      search.set('tenant_id', tenantId);
+    }
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<AtRiskFleetResponse>(`/api/v1/health/at-risk${suffix}`);
   }
 
   async listUsers(params: ListUsersParams = {}): Promise<PaginatedResponse<User>> {

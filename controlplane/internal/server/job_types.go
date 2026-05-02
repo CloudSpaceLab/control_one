@@ -67,4 +67,19 @@ func init() {
 			return decodePatchPayload(payload)
 		},
 	})
+	// Predictive server downtime jobs (Use Case 5). Both are scheduler-
+	// driven hourly passes that operate fleet-wide; tenant scope is
+	// derived inside the job, not from the job row.
+	registerJobDefinition(JobTypeHealthBaselines, jobDefinition{
+		RequiresTenant: false,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeHealthJobPayload(payload)
+		},
+	})
+	registerJobDefinition(JobTypeHealthPredict, jobDefinition{
+		RequiresTenant: false,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeHealthJobPayload(payload)
+		},
+	})
 }
