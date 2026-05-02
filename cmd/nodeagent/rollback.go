@@ -55,7 +55,7 @@ func runRollback(args []string) error {
 	if err := swapPrev(exe, prevPath); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "rolled back %s from %s (%d bytes)\n", exe, prevPath, info.Size())
+	_, _ = fmt.Fprintf(os.Stdout, "rolled back %s from %s (%d bytes)\n", exe, prevPath, info.Size())
 	return nil
 }
 
