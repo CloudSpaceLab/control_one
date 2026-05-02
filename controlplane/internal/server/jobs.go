@@ -184,6 +184,14 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeComplianceReportGenerate]; !exists {
 		s.jobHandlers[JobTypeComplianceReportGenerate] = s.handleComplianceReportGenerate
 	}
+
+	// Firewall jobs (PR 3) — handlers are no-ops; lifecycle is heartbeat-driven.
+	if _, exists := s.jobHandlers[JobTypeFirewallRuleAdd]; !exists {
+		s.jobHandlers[JobTypeFirewallRuleAdd] = s.handleFirewallRuleJob
+	}
+	if _, exists := s.jobHandlers[JobTypeFirewallRuleDelete]; !exists {
+		s.jobHandlers[JobTypeFirewallRuleDelete] = s.handleFirewallRuleJob
+	}
 }
 
 type provisionPayload struct {

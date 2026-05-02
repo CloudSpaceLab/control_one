@@ -62,8 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Detect & respond',
     items: [
       { to: '/rules', label: 'Rules', icon: ShieldAlert, roles: ['admin', 'operator'] },
-      { to: '/threat-feeds', label: 'Threat sources', icon: Network, roles: ['admin', 'operator'] },
-      { to: '/connections', label: 'Connections', icon: Network },
+      { to: '/security/network', label: 'Network security', icon: Network },
       { to: '/dashboards', label: 'Custom dashboards', icon: Layers },
       { to: '/recommendations', label: 'Recommendations', icon: ShieldAlert },
     ],

@@ -795,6 +795,21 @@ type entityActionPayload struct {
 	Action string `json:"action"`
 	Reason string `json:"reason"`
 	TTL    int    `json:"ttl"`
+	// Scope controls how widely a block/allow is enforced when entity_type=ip:
+	//   - "" or "affected" (default): nodes that have seen traffic to/from the
+	//     IP in the last 7 days, per process_connections in Doris.
+	//   - "fleet": every enrolled node in the tenant.
+	// Other entity types ignore this field.
+	Scope string `json:"scope,omitempty"`
+}
+
+// entityActionResponse extends the stored EntityAction row with the rolled-up
+// fan-out result for ip blocks. Counts are zero for non-ip entity types.
+type entityActionResponse struct {
+	*storage.EntityAction
+	NodesDispatched int      `json:"nodes_dispatched"`
+	NodeIDs         []string `json:"node_ids,omitempty"`
+	Scope           string   `json:"scope,omitempty"`
 }
 
 func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, entityType, entityID string) {
@@ -860,10 +875,94 @@ func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, ent
 		map[string]any{
 			"reason": ea.Reason,
 			"ttl":    ea.TTLSeconds,
+			"scope":  p.Scope,
 		},
 	)
 
-	writeJSON(w, http.StatusCreated, row)
+	// Enforcement fan-out: only IP blocks/allows actually push firewall jobs.
+	// Other entity types (process, file, host, …) and quarantine remain
+	// audit-only — no node enforcement defined for them yet.
+	resp := entityActionResponse{EntityAction: row, Scope: p.Scope}
+	if entityType == "ip" && (action == "block" || action == "allow") {
+		nodes, scope, ferr := s.fanOutFirewallAction(r.Context(), tenantID, row, entityID, p.Scope, p.TTL)
+		if ferr != nil {
+			s.logger.Warn("fan out firewall action", zap.Error(ferr), zap.String("entity_id", entityID))
+			// Don't fail the request — the entity_action is recorded; surface
+			// the partial state via the response so the operator can retry.
+		}
+		resp.NodesDispatched = len(nodes)
+		resp.Scope = scope
+		for _, n := range nodes {
+			resp.NodeIDs = append(resp.NodeIDs, n.String())
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// fanOutFirewallAction resolves the affected nodes for an IP entity_action
+// and dispatches a firewall.rule_add (block) or firewall.rule_delete (allow)
+// per node. Returns the list of node UUIDs that received a dispatch and the
+// effective scope used (may differ from the requested scope when affected
+// returns nothing and we fall back to fleet).
+func (s *Server) fanOutFirewallAction(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	row *storage.EntityAction,
+	ip, requestedScope string,
+	ttlSeconds int,
+) ([]uuid.UUID, string, error) {
+	if row == nil {
+		return nil, "", errors.New("nil entity action row")
+	}
+	scope := strings.ToLower(strings.TrimSpace(requestedScope))
+	if scope != "fleet" && scope != "affected" {
+		scope = "affected"
+	}
+
+	var nodes []uuid.UUID
+	if scope == "affected" {
+		affected, err := s.resolveAffectedNodesForIP(ctx, tenantID.String(), ip)
+		if err != nil {
+			return nil, scope, fmt.Errorf("resolve affected nodes: %w", err)
+		}
+		nodes = affected
+		// If no historical hits and the operator didn't ask for fleet scope
+		// explicitly, surface as a no-op rather than silently expanding to
+		// the whole fleet (operators rarely want that by accident).
+		if len(nodes) == 0 {
+			return nil, scope, nil
+		}
+	} else {
+		// scope == "fleet"
+		all, _, err := s.store.ListNodes(ctx, tenantID, "", 1000, 0)
+		if err != nil {
+			return nil, scope, fmt.Errorf("list nodes: %w", err)
+		}
+		for i := range all {
+			nodes = append(nodes, all[i].ID)
+		}
+	}
+
+	var ttl *int
+	if ttlSeconds > 0 {
+		t := ttlSeconds
+		ttl = &t
+	}
+	dispatched := make([]uuid.UUID, 0, len(nodes))
+	action := row.Action
+	for _, nid := range nodes {
+		if _, _, err := s.dispatchFirewallRule(ctx, tenantID, row.ID, nid, action, ip, row.Reason, ttl); err != nil {
+			s.logger.Warn("dispatch firewall rule",
+				zap.Error(err),
+				zap.String("node_id", nid.String()),
+				zap.String("ip", ip),
+			)
+			continue
+		}
+		dispatched = append(dispatched, nid)
+	}
+	return dispatched, scope, nil
 }
 
 // ===== Helpers =====

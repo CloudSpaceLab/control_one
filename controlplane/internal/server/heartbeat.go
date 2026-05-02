@@ -50,6 +50,21 @@ type heartbeatRequest struct {
 	KernelVersion string                  `json:"kernel_version,omitempty"`
 	OSVersion     string                  `json:"os_version,omitempty"`
 	FirewallState *heartbeatFirewallState `json:"firewall_state,omitempty"`
+
+	// CompletedActions reports the outcome of pending_actions the agent
+	// processed since the last heartbeat. Only firewall.* actions use it
+	// today; agent_update has its own retirement path.
+	CompletedActions []heartbeatCompletedAction `json:"completed_actions,omitempty"`
+}
+
+// heartbeatCompletedAction is one row in completed_actions[]. Status is
+// one of "succeeded" | "failed". For failed, Error is the agent-side
+// reason; surfaces back to the operator UI.
+type heartbeatCompletedAction struct {
+	Action string `json:"action"`
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 // heartbeatPackage is the per-package payload entry the agent sends.
@@ -158,6 +173,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
+	s.processHeartbeatCompletedActions(r.Context(), nodeID, body.CompletedActions)
 
 	activated, resultState := s.maybeActivatePendingNode(r.Context(), node)
 
@@ -196,12 +212,77 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 	// Check for queued self-update and signal the agent.
 	if pendingJob, jerr := s.store.GetPendingAgentUpdateJob(r.Context(), nodeID); jerr == nil && pendingJob != nil {
-		resp.PendingActions = []string{"agent_update"}
+		resp.PendingActions = append(resp.PendingActions, "agent_update")
 		// Transition job to running so it won't appear again on the next heartbeat
 		// until the agent confirms completion (or the job times out).
 		_ = s.store.UpdateJobStatus(r.Context(), pendingJob.ID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
 	}
+	// Append pending firewall actions (PR 3). Each is encoded as
+	// "<job_type>:<job_id>" so the agent can dispatch in one switch and so
+	// completed_actions[] echo back the same job_id.
+	if pending, ferr := s.store.ListPendingNodeFirewallRules(r.Context(), nodeID); ferr == nil {
+		for _, rule := range pending {
+			if rule.JobID == nil {
+				continue
+			}
+			actionType := JobTypeFirewallRuleAdd
+			if rule.Action == "allow" {
+				actionType = JobTypeFirewallRuleDelete
+			}
+			resp.PendingActions = append(resp.PendingActions, actionType+":"+rule.JobID.String())
+			// Mark the job Running so the worker view reflects in-flight state.
+			_ = s.store.UpdateJobStatus(r.Context(), *rule.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
+		}
+	} else if !errors.Is(ferr, sql.ErrNoRows) {
+		s.logger.Warn("list pending firewall rules", zap.Error(ferr))
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// processHeartbeatCompletedActions reads agent-reported outcomes for actions
+// dispatched on previous heartbeats. Currently only firewall.rule_add /
+// firewall.rule_delete use this — agent_update has its own retirement path.
+func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UUID, completed []heartbeatCompletedAction) {
+	if len(completed) == 0 {
+		return
+	}
+	for _, c := range completed {
+		jobID, err := uuid.Parse(strings.TrimSpace(c.JobID))
+		if err != nil {
+			s.logger.Warn("completed_action with invalid job_id", zap.String("job_id", c.JobID))
+			continue
+		}
+		switch c.Action {
+		case JobTypeFirewallRuleAdd, JobTypeFirewallRuleDelete:
+			rule, rerr := s.store.GetNodeFirewallRuleByJobID(ctx, jobID)
+			if rerr != nil {
+				s.logger.Warn("get firewall rule by job id", zap.Error(rerr))
+				continue
+			}
+			if rule == nil {
+				continue
+			}
+			if c.Status == "succeeded" {
+				// Apply or remove — record in the same row.
+				if c.Action == JobTypeFirewallRuleDelete {
+					_ = s.store.MarkNodeFirewallRuleRemoved(ctx, rule.ID)
+				} else {
+					_ = s.store.MarkNodeFirewallRuleApplied(ctx, rule.ID)
+				}
+				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported success", nil)
+			} else {
+				errMsg := strings.TrimSpace(c.Error)
+				if errMsg == "" {
+					errMsg = "agent reported failure"
+				}
+				_ = s.store.MarkNodeFirewallRuleFailed(ctx, rule.ID, errMsg)
+				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg})
+			}
+		default:
+			// Ignore unknown actions (forward-compat with future action types).
+			continue
+		}
+	}
 }
 
 // fullInventoryRefreshInterval bounds how stale the server's package

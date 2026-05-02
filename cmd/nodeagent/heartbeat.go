@@ -37,6 +37,20 @@ type heartbeatPayload struct {
 
 	// Firewall snapshot — small, sent in full each heartbeat.
 	FirewallState *FirewallState `json:"firewall_state,omitempty"`
+
+	// CompletedActions reports the outcome of pending_actions the agent
+	// executed since the previous heartbeat. Drained from completedActionQueue
+	// in enrichHeartbeatPayload. Empty in steady-state.
+	CompletedActions []completedAction `json:"completed_actions,omitempty"`
+}
+
+// completedAction matches the server-side heartbeatCompletedAction shape.
+// Status is "succeeded" | "failed".
+type completedAction struct {
+	Action string `json:"action"`
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 // heartbeatAckResponse mirrors the server's heartbeatResponse. The agent
@@ -186,9 +200,16 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 
 	// Dispatch pending actions instructed by the control plane.
 	for _, action := range ack.PendingActions {
-		if action == "agent_update" && selfUpdater != nil {
+		switch {
+		case action == "agent_update" && selfUpdater != nil:
 			log.Info("control plane requested agent self-update")
 			go selfUpdater.TriggerUpdate(ctx, client, log)
+		case strings.HasPrefix(action, "firewall.rule_add:"),
+			strings.HasPrefix(action, "firewall.rule_delete:"):
+			// Run synchronously — completion gets reported on the *next*
+			// heartbeat, so we want the result available before this call
+			// returns. The actual exec lives in firewall_exec.go.
+			executeFirewallAction(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {
@@ -210,6 +231,12 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 	// Firewall is always sent in full — it's small and changes meaningfully.
 	st := collectFirewall()
 	payload.FirewallState = &st
+
+	// Drain any completed firewall actions accumulated since the last
+	// heartbeat. The server uses these to flip node_firewall_rules.status.
+	if drained := drainCompletedActions(); len(drained) > 0 {
+		payload.CompletedActions = drained
+	}
 
 	pkgs, hash, err := collectInventory()
 	if err != nil {
