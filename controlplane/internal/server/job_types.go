@@ -105,4 +105,51 @@ func init() {
 		RequiresTenant: true,
 		Validate:       nil,
 	})
+	// Patch management — Wave C completion (proxy / airgapped / inventory).
+	registerJobDefinition(JobTypePatchDeployProxy, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodePatchPayload(payload)
+		},
+	})
+	registerJobDefinition(JobTypePatchDeployAirgapped, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodePatchPayload(payload)
+		},
+	})
+	registerJobDefinition(JobTypePatchInventoryScan, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodePatchInventoryPayload(payload)
+		},
+	})
+	// Maintenance window orchestration (server-internal).
+	registerJobDefinition(JobTypePatchOpenWindow, jobDefinition{
+		RequiresTenant: true,
+		Validate:       nil,
+	})
+	registerJobDefinition(JobTypePatchCloseWindow, jobDefinition{
+		RequiresTenant: true,
+		Validate:       nil,
+	})
+	// Squid lifecycle (heartbeat-driven on the agent side).
+	registerJobDefinition(JobTypeSquidInstall, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeSquidPayload(payload)
+		},
+	})
+	registerJobDefinition(JobTypeSquidReconfigure, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeSquidPayload(payload)
+		},
+	})
+	registerJobDefinition(JobTypeSquidConfigureClient, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodeSquidPayload(payload)
+		},
+	})
 }

@@ -392,6 +392,22 @@ type Store interface {
 	GetNodeHealthScore(context.Context, uuid.UUID) (*storage.NodeHealthScore, error)
 	UpsertNodeHealthScore(context.Context, storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error)
 	ListAtRiskNodes(context.Context, uuid.UUID, int) ([]storage.AtRiskNodeRow, error)
+	// Patch management — Wave C (proxy / airgapped / Squid / windows).
+	GetNodePatchConfig(context.Context, uuid.UUID) (*storage.NodePatchConfig, error)
+	UpsertNodePatchConfig(context.Context, storage.NodePatchConfig) (*storage.NodePatchConfig, error)
+	CreateMaintenanceWindow(context.Context, storage.MaintenanceWindow) (*storage.MaintenanceWindow, error)
+	GetMaintenanceWindow(context.Context, uuid.UUID) (*storage.MaintenanceWindow, error)
+	ListMaintenanceWindows(context.Context, uuid.UUID) ([]storage.MaintenanceWindow, error)
+	MarkMaintenanceWindowOpen(context.Context, uuid.UUID, *uuid.UUID) error
+	MarkMaintenanceWindowClosing(context.Context, uuid.UUID) error
+	MarkMaintenanceWindowClosed(context.Context, uuid.UUID) error
+	MarkMaintenanceWindowAborted(context.Context, uuid.UUID) error
+	ForceCloseMaintenanceWindow(context.Context, uuid.UUID) error
+	CreateSquidProxy(context.Context, storage.SquidProxy) (*storage.SquidProxy, error)
+	GetSquidProxy(context.Context, uuid.UUID) (*storage.SquidProxy, error)
+	ListSquidProxies(context.Context, uuid.UUID) ([]storage.SquidProxy, error)
+	UpdateSquidProxyStatus(context.Context, uuid.UUID, string, string) error
+	UpdateSquidProxyWhitelist(context.Context, uuid.UUID, []string) error
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -1044,6 +1060,13 @@ func (s *Server) registerRoutes() {
 	// Patch management — fleet OS package patching (PR 4).
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments", s.handlePatchDeployments)
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments/", s.handlePatchDeploymentSubroute)
+	// Patch management completion — Wave C: per-node config, maintenance
+	// windows, Squid proxies.
+	s.baseRouter.HandleFunc("/api/v1/patch/config", s.handlePatchConfig)
+	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows", s.handleMaintenanceWindowsCollection)
+	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows/", s.handleMaintenanceWindowSubroute)
+	s.baseRouter.HandleFunc("/api/v1/patch/proxies", s.handleSquidProxiesCollection)
+	s.baseRouter.HandleFunc("/api/v1/patch/proxies/", s.handleSquidProxySubroute)
 	// Data classification / DLP (Sprint 2).
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules", s.handleDLPRulesCollection)
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules/", s.handleDLPRulesResource)

@@ -2259,10 +2259,22 @@ export class APIClient {
   async createPatchDeployment(payload: {
     tenant_id: string;
     node_ids?: string[];
-    mode?: 'direct';
+    mode?: 'direct' | 'proxy' | 'airgapped' | 'auto';
     reason?: string;
-  }): Promise<{ deployment: PatchDeployment; node_count: number }> {
-    return this.request<{ deployment: PatchDeployment; node_count: number }>(
+  }): Promise<{
+    deployment: PatchDeployment;
+    node_count: number;
+    succeeded?: string[];
+    failed?: { node_id: string; error: string }[];
+    gate_blocked?: { node_id: string; reason: string }[];
+  }> {
+    return this.request<{
+      deployment: PatchDeployment;
+      node_count: number;
+      succeeded?: string[];
+      failed?: { node_id: string; error: string }[];
+      gate_blocked?: { node_id: string; reason: string }[];
+    }>(
       '/api/v1/patch/deployments',
       { method: 'POST', body: JSON.stringify(payload) },
     );
@@ -2271,6 +2283,111 @@ export class APIClient {
   async listPatchDeploymentNodes(deploymentId: string): Promise<{ rows: NodePatchState[] }> {
     return this.request<{ rows: NodePatchState[] }>(
       `/api/v1/patch/deployments/${encodeURIComponent(deploymentId)}/nodes`,
+    );
+  }
+
+  // ── Patch config (per-node mode) ───────────────────────────────────────
+  async getNodePatchConfig(nodeId: string): Promise<NodePatchConfig> {
+    return this.request<NodePatchConfig>(
+      `/api/v1/patch/config?node_id=${encodeURIComponent(nodeId)}`,
+    );
+  }
+
+  async upsertNodePatchConfig(payload: {
+    node_id: string;
+    mode: 'direct' | 'proxy' | 'airgapped';
+    proxy_id?: string;
+    window_id?: string;
+  }): Promise<NodePatchConfig> {
+    return this.request<NodePatchConfig>('/api/v1/patch/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ── Maintenance windows ────────────────────────────────────────────────
+  async listMaintenanceWindows(tenantId: string): Promise<{ windows: MaintenanceWindow[] }> {
+    return this.request<{ windows: MaintenanceWindow[] }>(
+      `/api/v1/patch/maintenance-windows?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createMaintenanceWindow(payload: {
+    tenant_id: string;
+    name: string;
+    node_ids: string[];
+    opens_at: string;
+    closes_at: string;
+    allow_repos: string[];
+  }): Promise<MaintenanceWindow> {
+    return this.request<MaintenanceWindow>('/api/v1/patch/maintenance-windows', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async openMaintenanceWindow(id: string): Promise<{ status: string; action: string }> {
+    return this.request<{ status: string; action: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/open`,
+      { method: 'POST' },
+    );
+  }
+
+  async closeMaintenanceWindow(id: string): Promise<{ status: string; action: string }> {
+    return this.request<{ status: string; action: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/close`,
+      { method: 'POST' },
+    );
+  }
+
+  async forceCloseMaintenanceWindow(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/force-close`,
+      { method: 'POST' },
+    );
+  }
+
+  // ── Squid proxies ──────────────────────────────────────────────────────
+  async listSquidProxies(tenantId: string): Promise<{ proxies: SquidProxy[] }> {
+    return this.request<{ proxies: SquidProxy[] }>(
+      `/api/v1/patch/proxies?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createSquidProxy(payload: {
+    tenant_id: string;
+    host: string;
+    port?: number;
+    whitelist: string[];
+  }): Promise<SquidProxy> {
+    return this.request<SquidProxy>('/api/v1/patch/proxies', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async installSquidProxy(id: string, nodeId: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/api/v1/patch/proxies/${encodeURIComponent(id)}/install`,
+      { method: 'POST', body: JSON.stringify({ node_id: nodeId }) },
+    );
+  }
+
+  async reconfigureSquidProxy(
+    id: string,
+    nodeId: string,
+    whitelist: string[],
+  ): Promise<{ status: string; validate: string }> {
+    return this.request<{ status: string; validate: string }>(
+      `/api/v1/patch/proxies/${encodeURIComponent(id)}/reconfigure`,
+      { method: 'POST', body: JSON.stringify({ node_id: nodeId, whitelist }) },
+    );
+  }
+
+  async removeSquidProxy(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/api/v1/patch/proxies/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
     );
   }
 
@@ -3349,6 +3466,44 @@ export interface NodePatchState {
   JobID?: string;
   RequestedAt: string;
   AppliedAt?: string;
+}
+
+// ── Patch Management — Wave C (proxy / airgapped / Squid / windows) ──────
+
+export interface NodePatchConfig {
+  NodeID: string;
+  Mode: 'direct' | 'proxy' | 'airgapped';
+  ProxyID?: string;
+  WindowID?: string;
+  UpdatedAt: string;
+}
+
+export interface MaintenanceWindow {
+  ID: string;
+  TenantID: string;
+  Name: string;
+  NodeIDs: string[];
+  OpensAt: string;
+  ClosesAt: string;
+  AllowRepos: string[];
+  Status: 'scheduled' | 'open' | 'closing' | 'closed' | 'aborted';
+  OpenedBy?: string;
+  ForceClosedAt?: string;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
+export interface SquidProxy {
+  ID: string;
+  TenantID: string;
+  Host: string;
+  Port: number;
+  Status: 'installing' | 'healthy' | 'degraded' | 'removing' | 'removed';
+  Whitelist: string[];
+  LastValidatedAt?: string;
+  LastError?: string;
+  CreatedAt: string;
+  UpdatedAt: string;
 }
 
 export interface ConnectionRow {

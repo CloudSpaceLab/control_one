@@ -1,0 +1,56 @@
+{
+  "ubuntu": {
+    "22.04": [
+      "archive.ubuntu.com",
+      "security.ubuntu.com",
+      "esm.ubuntu.com",
+      "ports.ubuntu.com",
+      "changelogs.ubuntu.com"
+    ],
+    "24.04": [
+      "archive.ubuntu.com",
+      "security.ubuntu.com",
+      "esm.ubuntu.com",
+      "ports.ubuntu.com",
+      "changelogs.ubuntu.com"
+    ]
+  },
+  "debian": {
+    "12": [
+      "deb.debian.org",
+      "security.debian.org",
+      "ftp.debian.org",
+      "archive.debian.org"
+    ]
+  },
+  "rhel": {
+    "8": [
+      "cdn.redhat.com",
+      "subscription.rhsm.redhat.com",
+      "cdn-public.redhat.com",
+      "rhui.amazonaws.com"
+    ],
+    "9": [
+      "cdn.redhat.com",
+      "subscription.rhsm.redhat.com",
+      "cdn-public.redhat.com",
+      "rhui.amazonaws.com"
+    ]
+  },
+  "windows": {
+    "server-2019": [
+      "windowsupdate.microsoft.com",
+      "update.microsoft.com",
+      "download.windowsupdate.com",
+      "ctldl.windowsupdate.com",
+      "wustat.windows.com"
+    ],
+    "server-2022": [
+      "windowsupdate.microsoft.com",
+      "update.microsoft.com",
+      "download.windowsupdate.com",
+      "ctldl.windowsupdate.com",
+      "wustat.windows.com"
+    ]
+  }
+}
