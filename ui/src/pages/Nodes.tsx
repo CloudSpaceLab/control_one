@@ -1,5 +1,6 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { SectionHeader, Panel, KpiTile, EmptyState, DataTable, SelectField, StatusTag } from '../components/kit';
+import type { StateTone } from '../components/kit/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -9,9 +10,15 @@ import { useNodes } from '../hooks/useNodes';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
-import type { RegisterNodePayload, UpdateNodePayload } from '../lib/api';
+import type {
+  AtRiskFleetResponse,
+  NodeHealthRiskLevel,
+  NodeHealthScore,
+  RegisterNodePayload,
+  UpdateNodePayload,
+} from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Info, RefreshCw, Server } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Info, RefreshCw, Server } from 'lucide-react';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -22,6 +29,99 @@ function formatDate(value?: string): string {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+// Map a predictive risk_level → StatusTag tone. We deliberately use the
+// kit's narrow StateTone palette (no "brand"); calibrating maps to
+// "unknown" because we explicitly do not yet know the node's health.
+function riskTone(risk: NodeHealthRiskLevel): StateTone {
+  switch (risk) {
+    case 'critical':
+      return 'critical';
+    case 'high':
+      return 'degraded';
+    case 'medium':
+      return 'warning';
+    case 'low':
+      return 'healthy';
+    case 'calibrating':
+    default:
+      return 'unknown';
+  }
+}
+
+function riskLabel(risk: NodeHealthRiskLevel, score: number, calibratingSamples?: number): string {
+  if (risk === 'calibrating') {
+    const n = typeof calibratingSamples === 'number' ? calibratingSamples : 0;
+    return `Calibrating (${n}/24 samples)`;
+  }
+  return `${risk.charAt(0).toUpperCase()}${risk.slice(1)} · ${score}`;
+}
+
+// HealthGauge renders a small SVG arc gauge for a 0..100 score. Pure
+// presentational — color follows the same risk-tone mapping above.
+function HealthGauge({ score, risk }: { score: number; risk: NodeHealthRiskLevel }): JSX.Element {
+  const radius = 48;
+  const circumference = Math.PI * radius;
+  const clamped = Math.max(0, Math.min(100, score));
+  const offset = circumference * (1 - clamped / 100);
+  const strokeColor =
+    risk === 'critical'
+      ? 'var(--state-critical, #ef4444)'
+      : risk === 'high'
+        ? 'var(--state-degraded, #f97316)'
+        : risk === 'medium'
+          ? 'var(--state-warning, #eab308)'
+          : risk === 'low'
+            ? 'var(--state-healthy, #22c55e)'
+            : 'var(--text-muted, #6b7280)';
+  return (
+    <svg width={120} height={70} viewBox="0 0 120 70" aria-label={`Health score ${clamped}`}>
+      <path
+        d={`M 12 60 A ${radius} ${radius} 0 0 1 108 60`}
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity={0.15}
+        strokeWidth={10}
+        strokeLinecap="round"
+      />
+      <path
+        d={`M 12 60 A ${radius} ${radius} 0 0 1 108 60`}
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth={10}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+      />
+      <text
+        x={60}
+        y={56}
+        textAnchor="middle"
+        className="font-display fill-current text-foreground"
+        style={{ fontSize: '1.25rem', fontWeight: 600 }}
+      >
+        {risk === 'calibrating' ? '—' : clamped}
+      </text>
+    </svg>
+  );
+}
+
+// componentBreakdownEntries pulls the per-signal penalties out of the
+// nested `breakdown` map the server emits. Falls back to top-level
+// numeric entries for older schemas.
+function componentBreakdownEntries(components: Record<string, unknown>): Array<{ key: string; penalty: number }> {
+  const breakdown = components['breakdown'];
+  if (breakdown && typeof breakdown === 'object') {
+    return Object.entries(breakdown as Record<string, unknown>)
+      .filter(([, v]) => typeof v === 'number')
+      .map(([key, v]) => ({ key, penalty: v as number }))
+      .sort((a, b) => a.penalty - b.penalty);
+  }
+  return Object.entries(components)
+    .filter(([, v]) => typeof v === 'number')
+    .map(([key, v]) => ({ key, penalty: v as number }))
+    .sort((a, b) => a.penalty - b.penalty);
 }
 
 export function Nodes(): JSX.Element {
@@ -65,6 +165,78 @@ export function Nodes(): JSX.Element {
   const [deleting, setDeleting] = useState(false);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
+
+  // Predictive server downtime — Use Case 5 (PR 31).
+  const [healthScores, setHealthScores] = useState<Record<string, NodeHealthScore | null>>({});
+  const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
+  const [atRiskCollapsed, setAtRiskCollapsed] = useState(false);
+  const [detailHealth, setDetailHealth] = useState<NodeHealthScore | null>(null);
+
+  // Load at-risk fleet roll-up whenever the tenant filter changes.
+  useEffect(() => {
+    let cancelled = false;
+    const tenantParam = selectedTenant ?? undefined;
+    api
+      .listAtRiskNodes(tenantParam)
+      .then((resp) => {
+        if (!cancelled) {
+          setAtRiskFleet(resp);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAtRiskFleet(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, selectedTenant, nodes]);
+
+  // Bulk-fetch per-node scores for the visible page. We tolerate per-row
+  // errors silently — the row simply renders as "unknown".
+  useEffect(() => {
+    let cancelled = false;
+    const ids = nodes.map((n) => n.id);
+    Promise.all(
+      ids.map((id) =>
+        api
+          .getNodeHealth(id)
+          .then((score) => [id, score] as const)
+          .catch(() => [id, null] as const),
+      ),
+    ).then((entries) => {
+      if (cancelled) return;
+      const next: Record<string, NodeHealthScore | null> = {};
+      for (const [id, score] of entries) {
+        next[id] = score;
+      }
+      setHealthScores(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, nodes]);
+
+  // Load the slide-over health detail whenever a node is selected.
+  useEffect(() => {
+    if (!selectedNodeId) {
+      setDetailHealth(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getNodeHealth(selectedNodeId)
+      .then((score) => {
+        if (!cancelled) setDetailHealth(score);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailHealth(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, selectedNodeId]);
 
   const tenantOptions = useMemo(() => tenants, [tenants]);
   const tenantNames = useMemo(() => {
@@ -273,6 +445,25 @@ export function Nodes(): JSX.Element {
       },
     },
     {
+      id: 'health',
+      header: 'Health',
+      cell: ({ row }) => {
+        const score = healthScores[row.original.id];
+        if (!score) {
+          return <span className="text-text-muted">—</span>;
+        }
+        const cal =
+          typeof score.components?.['calibrating_samples'] === 'number'
+            ? (score.components['calibrating_samples'] as number)
+            : undefined;
+        return (
+          <StatusTag tone={riskTone(score.risk_level)}>
+            {riskLabel(score.risk_level, score.score, cal)}
+          </StatusTag>
+        );
+      },
+    },
+    {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
@@ -320,6 +511,64 @@ export function Nodes(): JSX.Element {
           hint="matching filters"
         />
       </div>
+
+      {/* At-Risk Fleet roll-up — Use Case 5. Hide when zero risky nodes
+          to keep the page calm. Collapsible because the list can grow
+          large in noisy fleets. */}
+      {atRiskFleet && atRiskFleet.total_count > 0 ? (
+        <Panel
+          padding="md"
+          eyebrow="PREDICTIVE · AT-RISK FLEET"
+          title={`${atRiskFleet.total_count} node${atRiskFleet.total_count === 1 ? '' : 's'} at risk`}
+          toneAccent="brand"
+          actions={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setAtRiskCollapsed((c) => !c)}
+            >
+              {atRiskCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+              {atRiskCollapsed ? 'Expand' : 'Collapse'}
+            </Button>
+          }
+        >
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <StatusTag tone="critical" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
+              {atRiskFleet.critical} critical
+            </StatusTag>
+            <StatusTag tone="degraded">{atRiskFleet.high} high</StatusTag>
+          </div>
+          {!atRiskCollapsed ? (
+            <ul className="mt-3 flex flex-col gap-1.5">
+              {atRiskFleet.data.map((row) => (
+                <li
+                  key={row.node_id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-2 px-3 py-2"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium text-foreground">{row.hostname}</span>
+                    <code className="font-mono text-[0.65rem] text-text-muted">{row.node_id}</code>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <StatusTag tone={riskTone(row.risk_level)}>
+                      {riskLabel(row.risk_level, row.score)}
+                    </StatusTag>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openNodeDetails(row.node_id)}
+                    >
+                      View
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Panel>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* LEFT: Register form */}
@@ -532,6 +781,79 @@ export function Nodes(): JSX.Element {
               ✕
             </Button>
           </header>
+
+          <hr className="border-border-subtle" />
+
+          {/* Predictive health — Use Case 5. Renders the arc gauge + a
+              horizontal breakdown of per-signal penalties when scored.
+              For "calibrating", we show "Calibrating (N/24 samples)" and
+              never fake a numeric score. */}
+          {detailHealth ? (
+            <div className="flex flex-col gap-3">
+              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+                Predictive health
+              </p>
+              <div className="flex items-center gap-4">
+                <HealthGauge score={detailHealth.score} risk={detailHealth.risk_level} />
+                <div className="flex flex-col gap-1">
+                  <StatusTag tone={riskTone(detailHealth.risk_level)}>
+                    {riskLabel(
+                      detailHealth.risk_level,
+                      detailHealth.score,
+                      typeof detailHealth.components?.['calibrating_samples'] === 'number'
+                        ? (detailHealth.components['calibrating_samples'] as number)
+                        : undefined,
+                    )}
+                  </StatusTag>
+                  {detailHealth.computed_at ? (
+                    <span className="text-xs text-text-muted">
+                      Updated {formatDate(detailHealth.computed_at)}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              {detailHealth.risk_level === 'calibrating' ? (
+                <EmptyState
+                  title="Calibrating health score"
+                  description={`Need ${24 - (typeof detailHealth.components?.['calibrating_samples'] === 'number' ? (detailHealth.components['calibrating_samples'] as number) : 0)} more samples before we can score this node.`}
+                />
+              ) : (
+                (() => {
+                  const entries = componentBreakdownEntries(detailHealth.components);
+                  if (entries.length === 0) {
+                    return (
+                      <p className="text-sm text-text-secondary">
+                        No penalties applied — node is operating within all baselines.
+                      </p>
+                    );
+                  }
+                  const maxAbs = Math.max(...entries.map((e) => Math.abs(e.penalty)));
+                  return (
+                    <ul className="flex flex-col gap-1.5">
+                      {entries.map(({ key, penalty }) => {
+                        const widthPct = maxAbs > 0 ? (Math.abs(penalty) / maxAbs) * 100 : 0;
+                        return (
+                          <li key={key} className="flex flex-col gap-0.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-mono text-text-secondary">{key}</span>
+                              <span className="font-medium text-state-critical">{penalty}</span>
+                            </div>
+                            <div className="h-1.5 w-full rounded-full bg-surface-2">
+                              <div
+                                className="h-full rounded-full bg-state-critical/70"
+                                style={{ width: `${widthPct}%` }}
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  );
+                })()
+              )}
+            </div>
+          ) : null}
 
           <hr className="border-border-subtle" />
 

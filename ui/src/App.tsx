@@ -29,6 +29,7 @@ const Recommendations = lazy(() => import('./pages/Recommendations').then((m) =>
 const Reports = lazy(() => import('./pages/Reports').then((m) => ({ default: m.Reports })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
 const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
+const PatchManagement = lazy(() => import('./pages/PatchManagement').then((m) => ({ default: m.PatchManagement })));
 const Dashboards = lazy(() => import('./pages/Dashboards').then((m) => ({ default: m.Dashboards })));
 const Roles = lazy(() => import('./pages/Roles').then((m) => ({ default: m.Roles })));
 const Audit = lazy(() => import('./pages/Audit').then((m) => ({ default: m.Audit })));
@@ -44,6 +45,10 @@ const ComplianceEvidence = lazy(() => import('./pages/ComplianceEvidence').then(
 const AuditReports = lazy(() => import('./pages/AuditReports').then((m) => ({ default: m.AuditReports })));
 const Frameworks = lazy(() => import('./pages/Frameworks').then((m) => ({ default: m.Frameworks })));
 const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ default: m.TrustCenter })));
+const WhistleblowerIntake = lazy(() => import('./pages/WhistleblowerIntake').then((m) => ({ default: m.WhistleblowerIntake })));
+const WhistleblowerStatus = lazy(() => import('./pages/WhistleblowerStatus').then((m) => ({ default: m.WhistleblowerStatus })));
+const Misconduct = lazy(() => import('./pages/Misconduct').then((m) => ({ default: m.Misconduct })));
+const FinacleProfiles = lazy(() => import('./pages/FinacleProfiles').then((m) => ({ default: m.FinacleProfiles })));
 
 function PageFallback(): JSX.Element {
   return (
@@ -77,6 +82,25 @@ export function App(): JSX.Element {
           </Suspense>
         }
       />
+      {/* Public misconduct intake (UC7) - no authentication required.
+          Mirrors the trust-center pattern; rate limits + PoW are enforced
+          server-side. */}
+      <Route
+        path="/intake"
+        element={
+          <Suspense fallback={<PageFallback />}>
+            <WhistleblowerIntake />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/intake-status"
+        element={
+          <Suspense fallback={<PageFallback />}>
+            <WhistleblowerStatus />
+          </Suspense>
+        }
+      />
       <Route
         path="/"
         element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace />}
@@ -107,6 +131,8 @@ export function App(): JSX.Element {
                 <Route path="reports" element={<Reports />} />
                 {/* Network Security (PR 3) — consolidated tab surface. */}
                 <Route path="security/network" element={<NetworkSecurity />} />
+                {/* Patch Management (PR 4) */}
+                <Route path="infrastructure/patch" element={<PatchManagement />} />
                 {/* Legacy routes redirect to the consolidated page, mapping their
                     landing tab. Query params from the old URL drop here. */}
                 <Route path="threat-feeds" element={<Navigate to="/security/network?tab=threats" replace />} />
@@ -125,6 +151,8 @@ export function App(): JSX.Element {
                 <Route path="compliance-evidence" element={<ComplianceEvidence />} />
                 <Route path="audit-reports" element={<AuditReports />} />
                 <Route path="frameworks" element={<Frameworks />} />
+                <Route path="misconduct" element={<Misconduct />} />
+                <Route path="access/finacle" element={<FinacleProfiles />} />
               </Routes>
             </Suspense>
           }

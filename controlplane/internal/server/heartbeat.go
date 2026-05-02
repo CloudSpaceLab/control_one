@@ -65,6 +65,10 @@ type heartbeatCompletedAction struct {
 	JobID  string `json:"job_id"`
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
+	// Action-specific metadata. Populated by the agent for actions where
+	// summary data matters (e.g. patch.deploy_direct: packages_upgraded,
+	// log_tail). Empty for actions that need no payload back.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // heartbeatPackage is the per-package payload entry the agent sends.
@@ -236,6 +240,19 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	} else if !errors.Is(ferr, sql.ErrNoRows) {
 		s.logger.Warn("list pending firewall rules", zap.Error(ferr))
 	}
+	// Append pending patch actions (PR 4). Same encoding as firewall.* —
+	// "patch.deploy_direct:<job_id>".
+	if pending, perr := s.store.ListPendingNodePatchStates(r.Context(), nodeID); perr == nil {
+		for _, ps := range pending {
+			if ps.JobID == nil {
+				continue
+			}
+			resp.PendingActions = append(resp.PendingActions, JobTypePatchDeployDirect+":"+ps.JobID.String())
+			_ = s.store.UpdateJobStatus(r.Context(), *ps.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
+		}
+	} else if !errors.Is(perr, sql.ErrNoRows) {
+		s.logger.Warn("list pending patch states", zap.Error(perr))
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -278,11 +295,87 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 				_ = s.store.MarkNodeFirewallRuleFailed(ctx, rule.ID, errMsg)
 				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg})
 			}
+		case JobTypePatchDeployDirect:
+			ps, perr := s.store.GetNodePatchStateByJobID(ctx, jobID)
+			if perr != nil {
+				s.logger.Warn("get patch state by job id", zap.Error(perr))
+				continue
+			}
+			if ps == nil {
+				continue
+			}
+			logTail, _ := c.Metadata["log_tail"].(string)
+			pkgsUpgraded := metadataInt(c.Metadata, "packages_upgraded")
+			if c.Status == "succeeded" {
+				_ = s.store.MarkNodePatchApplied(ctx, ps.ID, pkgsUpgraded, logTail)
+				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported success", map[string]any{
+					"packages_upgraded": pkgsUpgraded,
+				})
+			} else {
+				errMsg := strings.TrimSpace(c.Error)
+				if errMsg == "" {
+					errMsg = "agent reported failure"
+				}
+				_ = s.store.MarkNodePatchFailed(ctx, ps.ID, errMsg, logTail)
+				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg})
+			}
+			// Roll up the parent deployment if every node has finished.
+			s.maybeRollupPatchDeployment(ctx, ps.DeploymentID)
 		default:
 			// Ignore unknown actions (forward-compat with future action types).
 			continue
 		}
 	}
+}
+
+// metadataInt is a tiny helper for plucking JSON-decoded numbers out of a
+// map[string]any. agent-reported metadata is encoded by encoding/json so
+// numeric fields land as float64.
+func metadataInt(m map[string]any, key string) int {
+	if v, ok := m[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		case int64:
+			return int(n)
+		}
+	}
+	return 0
+}
+
+// maybeRollupPatchDeployment flips a deployment to completed/partial/failed
+// once every node has reported. Safe to call on every node completion —
+// it's a no-op while pendings remain.
+func (s *Server) maybeRollupPatchDeployment(ctx context.Context, deploymentID uuid.UUID) {
+	rows, err := s.store.ListNodePatchStatesForDeployment(ctx, deploymentID)
+	if err != nil {
+		s.logger.Warn("rollup patch deployment", zap.Error(err))
+		return
+	}
+	pending, applied, failed := 0, 0, 0
+	for _, r := range rows {
+		switch r.Status {
+		case "pending":
+			pending++
+		case "applied":
+			applied++
+		case "failed":
+			failed++
+		}
+	}
+	if pending > 0 {
+		return
+	}
+	status := "completed"
+	switch {
+	case applied == 0 && failed > 0:
+		status = "failed"
+	case failed > 0:
+		status = "partial"
+	}
+	_ = s.store.UpdatePatchDeploymentStatus(ctx, deploymentID, status, true)
 }
 
 // fullInventoryRefreshInterval bounds how stale the server's package

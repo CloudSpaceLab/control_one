@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, feat/agent-use-case-expansion]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, feat/agent-use-case-expansion]
 
 env:
   GO_VERSION: "1.25"

@@ -192,6 +192,97 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeFirewallRuleDelete]; !exists {
 		s.jobHandlers[JobTypeFirewallRuleDelete] = s.handleFirewallRuleJob
 	}
+	// Patch deployment (PR 4) — same heartbeat-driven pattern as firewall.*
+	if _, exists := s.jobHandlers[JobTypePatchDeployDirect]; !exists {
+		s.jobHandlers[JobTypePatchDeployDirect] = s.handlePatchDeployJob
+	}
+
+	// Predictive server downtime jobs (Use Case 5). The scheduler enqueues
+	// these hourly; both walk every tenant and write back into
+	// behavioral_baselines / node_health_scores.
+	if _, exists := s.jobHandlers[JobTypeHealthBaselines]; !exists {
+		s.jobHandlers[JobTypeHealthBaselines] = s.handleHealthBaselinesJob
+	}
+	if _, exists := s.jobHandlers[JobTypeHealthPredict]; !exists {
+		s.jobHandlers[JobTypeHealthPredict] = s.handleHealthPredictJob
+	}
+
+	// Misconduct & whistleblowing (UC7). The score handler recomputes a
+	// per-case risk_score; the retention sweep deletes whistleblower
+	// submissions past their 90-day deadline.
+	if _, exists := s.jobHandlers[JobTypeMisconductScore]; !exists {
+		s.jobHandlers[JobTypeMisconductScore] = s.handleMisconductScoreJob
+	}
+	if _, exists := s.jobHandlers[JobTypeMisconductRetentionSweep]; !exists {
+		s.jobHandlers[JobTypeMisconductRetentionSweep] = s.handleMisconductRetentionSweepJob
+	}
+
+	// Finacle integration handlers (UC6). The sync handler executes inline;
+	// the shift_rotate handler is built per-job because its payload carries
+	// the shift_id + direction it must operate on.
+	if _, exists := s.jobHandlers[JobTypeFinacleSync]; !exists {
+		s.jobHandlers[JobTypeFinacleSync] = s.handleFinacleSyncJob
+	}
+	if _, exists := s.jobHandlers[JobTypeFinacleShiftRotate]; !exists {
+		s.jobHandlers[JobTypeFinacleShiftRotate] = s.handleFinacleShiftRotateJob
+	}
+
+	// Patch management — Wave C completion handlers.
+	if _, exists := s.jobHandlers[JobTypePatchDeployProxy]; !exists {
+		s.jobHandlers[JobTypePatchDeployProxy] = s.handlePatchHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchDeployAirgapped]; !exists {
+		s.jobHandlers[JobTypePatchDeployAirgapped] = s.handlePatchHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchInventoryScan]; !exists {
+		s.jobHandlers[JobTypePatchInventoryScan] = s.handlePatchHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchOpenWindow]; !exists {
+		s.jobHandlers[JobTypePatchOpenWindow] = s.handlePatchWindowJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchCloseWindow]; !exists {
+		s.jobHandlers[JobTypePatchCloseWindow] = s.handlePatchWindowJob
+	}
+	if _, exists := s.jobHandlers[JobTypeSquidInstall]; !exists {
+		s.jobHandlers[JobTypeSquidInstall] = s.handleSquidHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypeSquidReconfigure]; !exists {
+		s.jobHandlers[JobTypeSquidReconfigure] = s.handleSquidHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypeSquidConfigureClient]; !exists {
+		s.jobHandlers[JobTypeSquidConfigureClient] = s.handleSquidHeartbeatJob
+	}
+}
+
+// handleFinacleShiftRotateJob is the worker entry point for finacle.shift_rotate
+// jobs created via the createJobs API. (Internal enqueueFinacleShiftRotateJob
+// builds a closure directly; this path covers admin curl/API invocations.)
+func (s *Server) handleFinacleShiftRotateJob(ctx context.Context, job *storage.Job) error {
+	if job == nil {
+		return errors.New("nil job")
+	}
+	var payload struct {
+		TenantID  string `json:"tenant_id"`
+		ShiftID   string `json:"shift_id"`
+		Direction string `json:"direction"`
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return fmt.Errorf("decode finacle.shift_rotate payload: %w", err)
+	}
+	tenantID, err := uuid.Parse(strings.TrimSpace(payload.TenantID))
+	if err != nil {
+		return fmt.Errorf("tenant_id must be UUID: %w", err)
+	}
+	shiftID, err := uuid.Parse(strings.TrimSpace(payload.ShiftID))
+	if err != nil {
+		return fmt.Errorf("shift_id must be UUID: %w", err)
+	}
+	direction := strings.ToLower(strings.TrimSpace(payload.Direction))
+	if direction != "enable" && direction != "disable" {
+		return fmt.Errorf("direction must be enable or disable")
+	}
+	exec := s.buildFinacleShiftRotateExecution(job.ID, tenantID, shiftID, direction)
+	return exec(ctx)
 }
 
 type provisionPayload struct {
