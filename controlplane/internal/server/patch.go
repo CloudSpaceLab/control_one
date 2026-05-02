@@ -469,13 +469,6 @@ func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, ra
 	return out, nil
 }
 
-// dispatchPatchToNode preserves the original direct-mode entrypoint for
-// callers that don't need per-node mode lookup. New code should prefer
-// dispatchPatchModeToNode which routes to proxy / airgapped variants.
-func (s *Server) dispatchPatchToNode(ctx context.Context, tenantID, deploymentID, nodeID uuid.UUID, mode string) (*storage.NodePatchState, error) {
-	return s.dispatchPatchModeToNode(ctx, tenantID, deploymentID, nodeID, mode, nil, nil)
-}
-
 // dispatchPatchModeToNode chooses the job type based on the resolved per-node
 // mode and embeds the proxy URL or airgapped staged path in the payload as
 // needed. Returns the created NodePatchState row.
