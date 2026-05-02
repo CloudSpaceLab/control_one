@@ -498,7 +498,7 @@ func (s *Server) dispatchPatchModeToNode(
 		return nil, errors.New("create node patch state returned nil")
 	}
 
-	jobType := JobTypePatchDeployDirect
+	var jobType string
 	payload := patchJobPayload{
 		NodePatchStateID: state.ID.String(),
 		NodeID:           nodeID.String(),
