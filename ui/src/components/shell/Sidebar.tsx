@@ -83,6 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/fleet-enroll', label: 'Fleet enrol', icon: Server, roles: ['admin', 'operator'] },
       { to: '/hypervisors', label: 'Hypervisors', icon: Boxes, roles: ['admin'] },
       { to: '/templates', label: 'Templates', icon: FileText, roles: ['admin', 'operator'] },
+      { to: '/infrastructure/patch', label: 'Patch management', icon: ShieldAlert, roles: ['admin', 'operator'] },
     ],
   },
   {

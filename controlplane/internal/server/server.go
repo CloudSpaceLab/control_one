@@ -376,6 +376,18 @@ type Store interface {
 	// Agent self-update rollout (PR 4a).
 	GetAgentRolloutState(context.Context, uuid.UUID) (*storage.AgentRolloutState, error)
 	UpsertAgentRolloutState(context.Context, uuid.UUID, storage.AgentRolloutUpdate) (*storage.AgentRolloutState, error)
+	// Patch management — fleet OS package patching (PR 4).
+	CreatePatchDeployment(context.Context, storage.PatchDeployment) (*storage.PatchDeployment, error)
+	ListPatchDeployments(context.Context, uuid.UUID, int, int) ([]storage.PatchDeployment, error)
+	GetPatchDeployment(context.Context, uuid.UUID) (*storage.PatchDeployment, error)
+	UpdatePatchDeploymentStatus(context.Context, uuid.UUID, string, bool) error
+	CreateNodePatchState(context.Context, storage.NodePatchState) (*storage.NodePatchState, error)
+	SetNodePatchStateJobID(context.Context, uuid.UUID, uuid.UUID) error
+	MarkNodePatchApplied(context.Context, uuid.UUID, int, string) error
+	MarkNodePatchFailed(context.Context, uuid.UUID, string, string) error
+	ListPendingNodePatchStates(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
+	ListNodePatchStatesForDeployment(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
+	GetNodePatchStateByJobID(context.Context, uuid.UUID) (*storage.NodePatchState, error)
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -975,6 +987,9 @@ func (s *Server) registerRoutes() {
 	// Network security — operator-driven IP block enforcement (PR 3).
 	s.baseRouter.HandleFunc("/api/v1/network/active-blocks", s.handleListActiveBlocks)
 	s.baseRouter.HandleFunc("/api/v1/network/blocks/", s.handleNetworkBlocksSubroute)
+	// Patch management — fleet OS package patching (PR 4).
+	s.baseRouter.HandleFunc("/api/v1/patch/deployments", s.handlePatchDeployments)
+	s.baseRouter.HandleFunc("/api/v1/patch/deployments/", s.handlePatchDeploymentSubroute)
 	// Data classification / DLP (Sprint 2).
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules", s.handleDLPRulesCollection)
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules/", s.handleDLPRulesResource)

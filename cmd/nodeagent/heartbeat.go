@@ -47,10 +47,11 @@ type heartbeatPayload struct {
 // completedAction matches the server-side heartbeatCompletedAction shape.
 // Status is "succeeded" | "failed".
 type completedAction struct {
-	Action string `json:"action"`
-	JobID  string `json:"job_id"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Action   string         `json:"action"`
+	JobID    string         `json:"job_id"`
+	Status   string         `json:"status"`
+	Error    string         `json:"error,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // heartbeatAckResponse mirrors the server's heartbeatResponse. The agent
@@ -210,6 +211,10 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// heartbeat, so we want the result available before this call
 			// returns. The actual exec lives in firewall_exec.go.
 			executeFirewallAction(ctx, client, log, action)
+		case strings.HasPrefix(action, "patch.deploy_direct:"):
+			// Patch runs are slow (apt-get upgrade can take minutes), so
+			// we dispatch async and let the next heartbeat drain results.
+			go executePatchAction(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {
