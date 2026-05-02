@@ -350,10 +350,19 @@ type Store interface {
 	ListAuditReports(context.Context, uuid.UUID, int, int) ([]storage.AuditReport, int, error)
 	GetAuditReport(context.Context, uuid.UUID) (*storage.AuditReport, error)
 	UpdateAuditReportStatus(context.Context, uuid.UUID, string, *string, *time.Time) error
+	// Compliance framework control mappings + coverage (PR 1).
 	ListControlMappings(context.Context, string) ([]storage.ControlMappingRow, error)
 	GetControlCoverage(context.Context, uuid.UUID, string, time.Time, time.Time) ([]storage.ControlCoverage, error)
 	CountResultsForReport(context.Context, uuid.UUID, string, time.Time, time.Time) (int, int, error)
 	GetPerNodeMatrix(context.Context, uuid.UUID, string, time.Time, time.Time, int) ([]storage.NodeControlRow, error)
+	// Heartbeat-driven inventory + firewall state (PR 2).
+	ReplaceNodePackages(context.Context, uuid.UUID, []storage.NodePackage) error
+	ListNodePackages(context.Context, uuid.UUID) ([]storage.NodePackage, error)
+	GetNodeInventorySync(context.Context, uuid.UUID) (*storage.NodeInventorySync, error)
+	UpsertNodeInventorySync(context.Context, storage.NodeInventorySync) error
+	TouchNodeInventorySync(context.Context, uuid.UUID, string) (int64, error)
+	UpsertNodeFirewallState(context.Context, storage.NodeFirewallState) error
+	GetNodeFirewallState(context.Context, uuid.UUID) (*storage.NodeFirewallState, error)
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)

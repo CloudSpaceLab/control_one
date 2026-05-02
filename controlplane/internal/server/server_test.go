@@ -3856,6 +3856,29 @@ func (f *fakeStore) GetPerNodeMatrix(_ context.Context, _ uuid.UUID, _ string, _
 	return nil, nil
 }
 
+// Heartbeat inventory + firewall stubs (PR 2).
+func (f *fakeStore) ReplaceNodePackages(_ context.Context, _ uuid.UUID, _ []storage.NodePackage) error {
+	return nil
+}
+func (f *fakeStore) ListNodePackages(_ context.Context, _ uuid.UUID) ([]storage.NodePackage, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetNodeInventorySync(_ context.Context, _ uuid.UUID) (*storage.NodeInventorySync, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertNodeInventorySync(_ context.Context, _ storage.NodeInventorySync) error {
+	return nil
+}
+func (f *fakeStore) TouchNodeInventorySync(_ context.Context, _ uuid.UUID, _ string) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) UpsertNodeFirewallState(_ context.Context, _ storage.NodeFirewallState) error {
+	return nil
+}
+func (f *fakeStore) GetNodeFirewallState(_ context.Context, _ uuid.UUID) (*storage.NodeFirewallState, error) {
+	return nil, nil
+}
+
 // ComplianceReview stubs
 func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
 	return nil, 0, nil
