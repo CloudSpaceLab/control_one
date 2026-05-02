@@ -3916,6 +3916,41 @@ func (f *fakeStore) UpsertAgentRolloutState(_ context.Context, _ uuid.UUID, _ st
 	return nil, nil
 }
 
+// Patch management stubs (PR 4)
+func (f *fakeStore) CreatePatchDeployment(_ context.Context, _ storage.PatchDeployment) (*storage.PatchDeployment, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListPatchDeployments(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.PatchDeployment, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetPatchDeployment(_ context.Context, _ uuid.UUID) (*storage.PatchDeployment, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdatePatchDeploymentStatus(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
+	return nil
+}
+func (f *fakeStore) CreateNodePatchState(_ context.Context, _ storage.NodePatchState) (*storage.NodePatchState, error) {
+	return nil, nil
+}
+func (f *fakeStore) SetNodePatchStateJobID(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodePatchApplied(_ context.Context, _ uuid.UUID, _ int, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodePatchFailed(_ context.Context, _ uuid.UUID, _ string, _ string) error {
+	return nil
+}
+func (f *fakeStore) ListPendingNodePatchStates(_ context.Context, _ uuid.UUID) ([]storage.NodePatchState, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListNodePatchStatesForDeployment(_ context.Context, _ uuid.UUID) ([]storage.NodePatchState, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetNodePatchStateByJobID(_ context.Context, _ uuid.UUID) (*storage.NodePatchState, error) {
+	return nil, nil
+}
+
 // ComplianceReview stubs
 func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
 	return nil, 0, nil

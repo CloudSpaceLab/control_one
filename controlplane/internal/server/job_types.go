@@ -60,4 +60,11 @@ func init() {
 			return decodeFirewallPayload(payload)
 		},
 	})
+	// Patch management (PR 4) — heartbeat-driven lifecycle, same as firewall.*
+	registerJobDefinition(JobTypePatchDeployDirect, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodePatchPayload(payload)
+		},
+	})
 }

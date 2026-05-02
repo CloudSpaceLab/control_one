@@ -29,6 +29,7 @@ const Recommendations = lazy(() => import('./pages/Recommendations').then((m) =>
 const Reports = lazy(() => import('./pages/Reports').then((m) => ({ default: m.Reports })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
 const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
+const PatchManagement = lazy(() => import('./pages/PatchManagement').then((m) => ({ default: m.PatchManagement })));
 const Dashboards = lazy(() => import('./pages/Dashboards').then((m) => ({ default: m.Dashboards })));
 const Roles = lazy(() => import('./pages/Roles').then((m) => ({ default: m.Roles })));
 const Audit = lazy(() => import('./pages/Audit').then((m) => ({ default: m.Audit })));
@@ -107,6 +108,8 @@ export function App(): JSX.Element {
                 <Route path="reports" element={<Reports />} />
                 {/* Network Security (PR 3) — consolidated tab surface. */}
                 <Route path="security/network" element={<NetworkSecurity />} />
+                {/* Patch Management (PR 4) */}
+                <Route path="infrastructure/patch" element={<PatchManagement />} />
                 {/* Legacy routes redirect to the consolidated page, mapping their
                     landing tab. Query params from the old URL drop here. */}
                 <Route path="threat-feeds" element={<Navigate to="/security/network?tab=threats" replace />} />

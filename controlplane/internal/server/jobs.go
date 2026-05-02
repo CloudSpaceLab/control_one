@@ -192,6 +192,10 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeFirewallRuleDelete]; !exists {
 		s.jobHandlers[JobTypeFirewallRuleDelete] = s.handleFirewallRuleJob
 	}
+	// Patch deployment (PR 4) — same heartbeat-driven pattern as firewall.*
+	if _, exists := s.jobHandlers[JobTypePatchDeployDirect]; !exists {
+		s.jobHandlers[JobTypePatchDeployDirect] = s.handlePatchDeployJob
+	}
 }
 
 type provisionPayload struct {

@@ -2200,6 +2200,34 @@ export class APIClient {
     );
   }
 
+  async listPatchDeployments(params: { tenantId: string; limit?: number; offset?: number }): Promise<{ deployments: PatchDeployment[]; generated_at: string }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return this.request<{ deployments: PatchDeployment[]; generated_at: string }>(
+      `/api/v1/patch/deployments?${search.toString()}`,
+    );
+  }
+
+  async createPatchDeployment(payload: {
+    tenant_id: string;
+    node_ids?: string[];
+    mode?: 'direct';
+    reason?: string;
+  }): Promise<{ deployment: PatchDeployment; node_count: number }> {
+    return this.request<{ deployment: PatchDeployment; node_count: number }>(
+      '/api/v1/patch/deployments',
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async listPatchDeploymentNodes(deploymentId: string): Promise<{ rows: NodePatchState[] }> {
+    return this.request<{ rows: NodePatchState[] }>(
+      `/api/v1/patch/deployments/${encodeURIComponent(deploymentId)}/nodes`,
+    );
+  }
+
   // ── Onboarding wizard ──────────────────────────────────────────────────
   async listOnboardingProtocols(): Promise<{ protocols: OnboardingProtocol[] }> {
     return this.request<{ protocols: OnboardingProtocol[] }>('/api/v1/onboarding/protocols');
@@ -3001,6 +3029,38 @@ export interface NodeFirewallRule {
   RequestedAt: string;
   AppliedAt?: string;
   RemovedAt?: string;
+}
+
+// ── Patch Management (PR 4) ────────────────────────────────────────────────
+
+export interface PatchDeployment {
+  ID: string;
+  TenantID: string;
+  Mode: 'direct' | 'proxy' | 'airgapped';
+  Status: 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed';
+  TargetNodeCount: number;
+  RequestedBy?: string;
+  RequestedAt: string;
+  StartedAt?: string;
+  FinishedAt?: string;
+  Summary?: Record<string, unknown>;
+  nodes_pending?: number;
+  nodes_applied?: number;
+  nodes_failed?: number;
+}
+
+export interface NodePatchState {
+  ID: string;
+  DeploymentID: string;
+  NodeID: string;
+  TenantID: string;
+  Status: 'pending' | 'applied' | 'failed';
+  PackagesUpgraded?: number;
+  LogTail?: string;
+  Error?: string;
+  JobID?: string;
+  RequestedAt: string;
+  AppliedAt?: string;
 }
 
 export interface ConnectionRow {
