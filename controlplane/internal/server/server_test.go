@@ -4241,3 +4241,51 @@ func (f *fakeStore) CountSecurityEventsBySeverity(_ context.Context, _ uuid.UUID
 func (f *fakeStore) CountFailedComplianceForTenant(_ context.Context, _ uuid.UUID, _ time.Time) (int, error) {
 	return 0, nil
 }
+
+// Finacle integration stubs (UC6). Behaviour-bearing tests live in
+// finacle_test.go and use a dedicated wrapping store.
+func (f *fakeStore) CreateFinacleConnection(_ context.Context, _ storage.CreateFinacleConnectionParams) (*storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetFinacleConnection(_ context.Context, _ uuid.UUID) (*storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListFinacleConnections(_ context.Context, _ uuid.UUID) ([]storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateFinacleConnection(_ context.Context, _ uuid.UUID, _ storage.UpdateFinacleConnectionParams) (*storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteFinacleConnection(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CreateFinacleShiftConfig(_ context.Context, _ storage.CreateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetFinacleShiftConfig(_ context.Context, _ uuid.UUID) (*storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListFinacleShiftConfigs(_ context.Context, _ uuid.UUID) ([]storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateFinacleShiftConfig(_ context.Context, _ uuid.UUID, _ storage.UpdateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteFinacleShiftConfig(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) UpsertFinacleProfile(_ context.Context, _ storage.UpsertFinacleProfileParams) (*storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateFinacleProfile(_ context.Context, _ uuid.UUID, _ storage.UpdateFinacleProfileParams) (*storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetFinacleProfile(_ context.Context, _ uuid.UUID) (*storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListFinacleProfiles(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.FinacleProfile, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) ListFinacleProfilesByShift(_ context.Context, _ uuid.UUID) ([]storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) MarkFinacleProfileRotated(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeStore) DeleteFinacleProfile(_ context.Context, _ uuid.UUID) error { return nil }

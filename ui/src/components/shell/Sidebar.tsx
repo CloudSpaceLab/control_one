@@ -78,6 +78,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/access', label: 'Just-in-time access', icon: KeyRound },
       { to: '/sessions', label: 'Session replay', icon: Terminal },
+      { to: '/access/finacle', label: 'Finacle profiles', icon: Building2, roles: ['admin', 'operator'] },
       { to: '/users', label: 'Users', icon: UserIcon, roles: ['admin'] },
       { to: '/roles', label: 'Roles & permissions', icon: UserIcon, roles: ['admin'] },
     ],

@@ -94,4 +94,15 @@ func init() {
 		RequiresTenant: false,
 		Validate:       nil,
 	})
+	// Finacle integration jobs (UC6). Both are tenant-scoped; the sync job
+	// payload only carries connection_id while the rotate job payload carries
+	// tenant_id + shift_id + direction.
+	registerJobDefinition(JobTypeFinacleSync, jobDefinition{
+		RequiresTenant: true,
+		Validate:       nil,
+	})
+	registerJobDefinition(JobTypeFinacleShiftRotate, jobDefinition{
+		RequiresTenant: true,
+		Validate:       nil,
+	})
 }
