@@ -16,13 +16,28 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 )
 
-// patchActionDetail mirrors the server-side patchJobPayload. We only need
-// the ids — the actual upgrade command is OS-determined here.
+// Patch job type strings — duplicated agent-side so the dispatcher can
+// branch without importing the controlplane server package.
+const (
+	patchJobDirect    = "patch.deploy_direct"
+	patchJobProxy     = "patch.deploy_proxy"
+	patchJobAirgapped = "patch.deploy_airgapped"
+	patchJobInventory = "patch.inventory_scan"
+)
+
+// patchActionDetail mirrors the server-side patchJobPayload. The id fields
+// drive heartbeat correlation; ProxyURL / StagedRepoPath are mode-specific.
 type patchActionDetail struct {
 	NodePatchStateID string `json:"node_patch_state_id"`
 	NodeID           string `json:"node_id"`
 	DeploymentID     string `json:"deployment_id"`
 	Mode             string `json:"mode"`
+
+	// Proxy mode.
+	ProxyURL string `json:"proxy_url,omitempty"`
+
+	// Airgapped mode — pre-staged repository sources file.
+	StagedRepoPath string `json:"staged_repo_path,omitempty"`
 }
 
 // patchTimeout caps a single agent-side upgrade run. Bigger fleets see
@@ -55,14 +70,36 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		return
 	}
 
-	cmdName, args, label, ok := patchCommandForOS()
+	// Inventory scan — read-only, separate code path.
+	if jobType == patchJobInventory {
+		executePatchInventory(ctx, log, jobType, jobID)
+		return
+	}
+
+	// Resolve the effective job-type from detail.Mode so we route correctly
+	// even when the controlplane heartbeat encoded everything as
+	// patch.deploy_direct (back-compat with the PR #30 dispatch path).
+	effectiveJobType := jobType
+	switch detail.Mode {
+	case "proxy":
+		effectiveJobType = patchJobProxy
+	case "airgapped":
+		effectiveJobType = patchJobAirgapped
+	case "direct":
+		effectiveJobType = patchJobDirect
+	}
+
+	cmdName, args, env, label, ok := patchCommandForJob(effectiveJobType, detail)
 	if !ok {
-		log.Warn("no patch command for platform", zap.String("os", runtime.GOOS))
+		log.Warn("no patch command for platform / mode",
+			zap.String("os", runtime.GOOS),
+			zap.String("job_type", jobType),
+		)
 		enqueueCompletedAction(completedAction{
 			Action: jobType,
 			JobID:  jobID,
 			Status: "failed",
-			Error:  fmt.Sprintf("no patch command available for %s", runtime.GOOS),
+			Error:  fmt.Sprintf("no patch command available for %s/%s", runtime.GOOS, jobType),
 		})
 		return
 	}
@@ -73,9 +110,13 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 	log.Info("running patch deployment",
 		zap.String("job_id", jobID),
 		zap.String("deployment_id", detail.DeploymentID),
+		zap.String("mode", detail.Mode),
 		zap.String("command", label),
 	)
-	cmd := exec.CommandContext(execCtx, cmdName, args...) // #nosec G204 — args are static per-OS.
+	cmd := exec.CommandContext(execCtx, cmdName, args...) // #nosec G204 — args are static per-OS / mode.
+	if len(env) > 0 {
+		cmd.Env = append(cmd.Environ(), env...)
+	}
 	output, runErr := cmd.CombinedOutput()
 	logTail := tailString(string(output), 4096)
 
@@ -113,45 +154,186 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 	})
 }
 
-// patchCommandForOS picks the right package manager invocation per OS.
-// Returns (binary, args, human-readable-label, ok). ok=false when the
-// platform isn't supported (the caller reports failure rather than
-// silently no-op'ing — operators want to see "macOS not supported" in the
-// UI rather than a phantom success).
+// patchCommandForJob picks the package manager invocation appropriate for
+// the (job type, OS) pair. Returns (binary, args, env, label, ok). Env is a
+// list of "KEY=VALUE" appended to cmd.Env to inject HTTP_PROXY/HTTPS_PROXY in
+// proxy mode. ok=false signals the platform isn't supported.
 //
-// On Linux we prefer apt-get when available, fall back to dnf/yum. We do
-// NOT chain the two; if /usr/bin/apt-get exists, that's the package
-// manager — same node won't have both as primary. A fancier detector
-// (read /etc/os-release) is overkill for the MVP.
-func patchCommandForOS() (cmd string, args []string, label string, ok bool) {
+// Direct  — apt-get / dnf / yum / winget upgrade in place.
+// Proxy   — same commands, but HTTP_PROXY/HTTPS_PROXY exported from
+//
+//	detail.ProxyURL so apt/dnf route through the managed Squid.
+//
+// Airgapped — apt-get only: -o Dir::Etc::SourceList=<staged> reads from a
+//
+//	pre-staged repo file dropped on the node by the bundle. Other
+//	OSes are not supported in this mode (operators must use proxy).
+func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, args []string, env []string, label string, ok bool) {
+	switch jobType {
+	case patchJobAirgapped:
+		// Airgapped is Linux/apt only for this iteration. dnf/yum airgapped
+		// flows can be added later by extending this branch.
+		if runtime.GOOS != "linux" {
+			return "", nil, nil, "", false
+		}
+		if _, err := exec.LookPath("apt-get"); err != nil {
+			return "", nil, nil, "", false
+		}
+		staged := detail.StagedRepoPath
+		if strings.TrimSpace(staged) == "" {
+			return "", nil, nil, "", false
+		}
+		return "/bin/sh", []string{"-c", fmt.Sprintf(
+			"apt-get -o Dir::Etc::SourceList=%s update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::SourceList=%s -y -qq -o Dpkg::Options::=--force-confold upgrade",
+			staged, staged,
+		)}, nil, "apt-get airgapped (staged: " + staged + ")", true
+
+	case patchJobProxy:
+		// Proxy mode: pass HTTP_PROXY/HTTPS_PROXY env to the package manager.
+		// Falls back to direct if no proxy URL (server side should reject this).
+		if detail.ProxyURL == "" {
+			return "", nil, nil, "", false
+		}
+		envProxy := []string{
+			"http_proxy=" + detail.ProxyURL,
+			"https_proxy=" + detail.ProxyURL,
+			"HTTP_PROXY=" + detail.ProxyURL,
+			"HTTPS_PROXY=" + detail.ProxyURL,
+		}
+		// Reuse the direct command tables but with proxy env injected.
+		base, baseArgs, _, baseLabel, baseOK := patchCommandForJob(patchJobDirect, detail)
+		if !baseOK {
+			return "", nil, nil, "", false
+		}
+		return base, baseArgs, envProxy, baseLabel + " (via proxy " + detail.ProxyURL + ")", true
+
+	default: // patchJobDirect or anything else falls back to direct.
+		switch runtime.GOOS {
+		case "linux":
+			if _, err := exec.LookPath("apt-get"); err == nil {
+				return "/bin/sh", []string{"-c",
+					"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade",
+				}, nil, "apt-get update + upgrade", true
+			}
+			if _, err := exec.LookPath("dnf"); err == nil {
+				return "dnf", []string{"-y", "--quiet", "upgrade"}, nil, "dnf -y upgrade", true
+			}
+			if _, err := exec.LookPath("yum"); err == nil {
+				return "yum", []string{"-y", "--quiet", "update"}, nil, "yum -y update", true
+			}
+			return "", nil, nil, "", false
+		case "windows":
+			if _, err := exec.LookPath("winget"); err == nil {
+				return "winget", []string{
+					"upgrade", "--all",
+					"--silent",
+					"--accept-source-agreements",
+					"--accept-package-agreements",
+					"--disable-interactivity",
+				}, nil, "winget upgrade --all", true
+			}
+			return "", nil, nil, "", false
+		default:
+			return "", nil, nil, "", false
+		}
+	}
+}
+
+// executePatchInventory runs the read-only enumeration of available
+// upgrades. Output is reported back via completed_actions metadata under the
+// "upgradable" key; the controlplane stores the count + delta.
+func executePatchInventory(ctx context.Context, log *zap.Logger, jobType, jobID string) {
+	var (
+		cmdName string
+		args    []string
+		label   string
+	)
 	switch runtime.GOOS {
 	case "linux":
-		if _, err := exec.LookPath("apt-get"); err == nil {
-			return "/bin/sh", []string{"-c",
-				"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade",
-			}, "apt-get update + upgrade", true
+		if _, err := exec.LookPath("apt"); err == nil {
+			cmdName = "apt"
+			args = []string{"list", "--upgradable"}
+			label = "apt list --upgradable"
+		} else if _, err := exec.LookPath("dnf"); err == nil {
+			cmdName = "dnf"
+			args = []string{"--quiet", "check-update"}
+			label = "dnf check-update"
+		} else if _, err := exec.LookPath("yum"); err == nil {
+			cmdName = "yum"
+			args = []string{"--quiet", "check-update"}
+			label = "yum check-update"
 		}
-		if _, err := exec.LookPath("dnf"); err == nil {
-			return "dnf", []string{"-y", "--quiet", "upgrade"}, "dnf -y upgrade", true
-		}
-		if _, err := exec.LookPath("yum"); err == nil {
-			return "yum", []string{"-y", "--quiet", "update"}, "yum -y update", true
-		}
-		return "", nil, "", false
 	case "windows":
 		if _, err := exec.LookPath("winget"); err == nil {
-			return "winget", []string{
-				"upgrade", "--all",
-				"--silent",
-				"--accept-source-agreements",
-				"--accept-package-agreements",
-				"--disable-interactivity",
-			}, "winget upgrade --all", true
+			cmdName = "winget"
+			args = []string{"upgrade"}
+			label = "winget upgrade"
 		}
-		return "", nil, "", false
-	default:
-		return "", nil, "", false
 	}
+	if cmdName == "" {
+		enqueueCompletedAction(completedAction{
+			Action: jobType,
+			JobID:  jobID,
+			Status: "failed",
+			Error:  fmt.Sprintf("no inventory command for %s", runtime.GOOS),
+		})
+		return
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	log.Info("running patch inventory scan", zap.String("command", label))
+	cmd := exec.CommandContext(execCtx, cmdName, args...) // #nosec G204 — args static per OS.
+	output, runErr := cmd.CombinedOutput()
+	upgradable := countUpgradableLines(string(output))
+	if runErr != nil && runErr.Error() != "exit status 100" {
+		// dnf/yum exits 100 when updates are available — treat that as success.
+		enqueueCompletedAction(completedAction{
+			Action: jobType,
+			JobID:  jobID,
+			Status: "failed",
+			Error:  runErr.Error(),
+			Metadata: map[string]any{
+				"log_tail":   tailString(string(output), 4096),
+				"upgradable": upgradable,
+			},
+		})
+		return
+	}
+	enqueueCompletedAction(completedAction{
+		Action: jobType,
+		JobID:  jobID,
+		Status: "succeeded",
+		Metadata: map[string]any{
+			"upgradable": upgradable,
+			"log_tail":   tailString(string(output), 4096),
+		},
+	})
+}
+
+// countUpgradableLines parses the output of an inventory scan to extract a
+// rough count of upgradable packages.
+func countUpgradableLines(out string) int {
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Listing") || strings.HasPrefix(line, "WARNING") {
+			continue
+		}
+		if strings.Contains(line, "/") || strings.HasPrefix(line, "Last metadata") {
+			continue
+		}
+		// apt: "package/codename version arch [upgradable from: ...]"
+		if strings.Contains(line, "[upgradable") {
+			count++
+			continue
+		}
+		// dnf/yum: "name.arch version repo"
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && strings.Contains(fields[0], ".") {
+			count++
+		}
+	}
+	return count
 }
 
 // countUpgradedPackages parses package-manager output to extract a rough

@@ -226,6 +226,32 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeFinacleShiftRotate]; !exists {
 		s.jobHandlers[JobTypeFinacleShiftRotate] = s.handleFinacleShiftRotateJob
 	}
+
+	// Patch management — Wave C completion handlers.
+	if _, exists := s.jobHandlers[JobTypePatchDeployProxy]; !exists {
+		s.jobHandlers[JobTypePatchDeployProxy] = s.handlePatchHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchDeployAirgapped]; !exists {
+		s.jobHandlers[JobTypePatchDeployAirgapped] = s.handlePatchHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchInventoryScan]; !exists {
+		s.jobHandlers[JobTypePatchInventoryScan] = s.handlePatchHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchOpenWindow]; !exists {
+		s.jobHandlers[JobTypePatchOpenWindow] = s.handlePatchWindowJob
+	}
+	if _, exists := s.jobHandlers[JobTypePatchCloseWindow]; !exists {
+		s.jobHandlers[JobTypePatchCloseWindow] = s.handlePatchWindowJob
+	}
+	if _, exists := s.jobHandlers[JobTypeSquidInstall]; !exists {
+		s.jobHandlers[JobTypeSquidInstall] = s.handleSquidHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypeSquidReconfigure]; !exists {
+		s.jobHandlers[JobTypeSquidReconfigure] = s.handleSquidHeartbeatJob
+	}
+	if _, exists := s.jobHandlers[JobTypeSquidConfigureClient]; !exists {
+		s.jobHandlers[JobTypeSquidConfigureClient] = s.handleSquidHeartbeatJob
+	}
 }
 
 // handleFinacleShiftRotateJob is the worker entry point for finacle.shift_rotate

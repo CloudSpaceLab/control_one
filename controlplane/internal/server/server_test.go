@@ -3957,6 +3957,45 @@ func (f *fakeStore) GetNodePatchStateByJobID(_ context.Context, _ uuid.UUID) (*s
 	return nil, nil
 }
 
+// Patch management — Wave C stubs.
+func (f *fakeStore) GetNodePatchConfig(_ context.Context, _ uuid.UUID) (*storage.NodePatchConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertNodePatchConfig(_ context.Context, in storage.NodePatchConfig) (*storage.NodePatchConfig, error) {
+	return &in, nil
+}
+func (f *fakeStore) CreateMaintenanceWindow(_ context.Context, in storage.MaintenanceWindow) (*storage.MaintenanceWindow, error) {
+	return &in, nil
+}
+func (f *fakeStore) GetMaintenanceWindow(_ context.Context, _ uuid.UUID) (*storage.MaintenanceWindow, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListMaintenanceWindows(_ context.Context, _ uuid.UUID) ([]storage.MaintenanceWindow, error) {
+	return nil, nil
+}
+func (f *fakeStore) MarkMaintenanceWindowOpen(_ context.Context, _ uuid.UUID, _ *uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkMaintenanceWindowClosing(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) MarkMaintenanceWindowClosed(_ context.Context, _ uuid.UUID) error  { return nil }
+func (f *fakeStore) MarkMaintenanceWindowAborted(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) ForceCloseMaintenanceWindow(_ context.Context, _ uuid.UUID) error  { return nil }
+func (f *fakeStore) CreateSquidProxy(_ context.Context, in storage.SquidProxy) (*storage.SquidProxy, error) {
+	return &in, nil
+}
+func (f *fakeStore) GetSquidProxy(_ context.Context, _ uuid.UUID) (*storage.SquidProxy, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListSquidProxies(_ context.Context, _ uuid.UUID) ([]storage.SquidProxy, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateSquidProxyStatus(_ context.Context, _ uuid.UUID, _ string, _ string) error {
+	return nil
+}
+func (f *fakeStore) UpdateSquidProxyWhitelist(_ context.Context, _ uuid.UUID, _ []string) error {
+	return nil
+}
+
 // ComplianceReview stubs
 func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
 	return nil, 0, nil

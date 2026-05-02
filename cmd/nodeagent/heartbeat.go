@@ -211,10 +211,19 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// heartbeat, so we want the result available before this call
 			// returns. The actual exec lives in firewall_exec.go.
 			executeFirewallAction(ctx, client, log, action)
-		case strings.HasPrefix(action, "patch.deploy_direct:"):
+		case strings.HasPrefix(action, "patch.deploy_direct:"),
+			strings.HasPrefix(action, "patch.deploy_proxy:"),
+			strings.HasPrefix(action, "patch.deploy_airgapped:"),
+			strings.HasPrefix(action, "patch.inventory_scan:"):
 			// Patch runs are slow (apt-get upgrade can take minutes), so
 			// we dispatch async and let the next heartbeat drain results.
 			go executePatchAction(ctx, client, log, action)
+		case strings.HasPrefix(action, "squid.install:"),
+			strings.HasPrefix(action, "squid.reconfigure:"),
+			strings.HasPrefix(action, "squid.configure_client:"):
+			// Squid actions are short-lived but still go async to avoid
+			// blocking the heartbeat path on slow apt-get installs.
+			go executeSquidAction(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {
