@@ -48,6 +48,7 @@ const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ defa
 const WhistleblowerIntake = lazy(() => import('./pages/WhistleblowerIntake').then((m) => ({ default: m.WhistleblowerIntake })));
 const WhistleblowerStatus = lazy(() => import('./pages/WhistleblowerStatus').then((m) => ({ default: m.WhistleblowerStatus })));
 const Misconduct = lazy(() => import('./pages/Misconduct').then((m) => ({ default: m.Misconduct })));
+const FinacleProfiles = lazy(() => import('./pages/FinacleProfiles').then((m) => ({ default: m.FinacleProfiles })));
 
 function PageFallback(): JSX.Element {
   return (
@@ -151,6 +152,7 @@ export function App(): JSX.Element {
                 <Route path="audit-reports" element={<AuditReports />} />
                 <Route path="frameworks" element={<Frameworks />} />
                 <Route path="misconduct" element={<Misconduct />} />
+                <Route path="access/finacle" element={<FinacleProfiles />} />
               </Routes>
             </Suspense>
           }

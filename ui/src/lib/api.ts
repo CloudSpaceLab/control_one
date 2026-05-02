@@ -3063,6 +3063,93 @@ export class APIClient {
       body: JSON.stringify({ evidence_id: evidenceId }),
     });
   }
+
+  // ── Finacle integration (UC6) ────────────────────────────────────────────
+  async listFinacleConnections(tenantId: string): Promise<{ connections: FinacleConnection[] }> {
+    return this.request<{ connections: FinacleConnection[] }>(
+      `/api/v1/finacle/connections?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createFinacleConnection(payload: CreateFinacleConnectionPayload): Promise<FinacleConnection> {
+    return this.request<FinacleConnection>('/api/v1/finacle/connections', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateFinacleConnection(id: string, payload: UpdateFinacleConnectionPayload): Promise<FinacleConnection> {
+    return this.request<FinacleConnection>(`/api/v1/finacle/connections/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteFinacleConnection(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/finacle/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async testFinacleConnection(id: string): Promise<FinacleConnectionTestResult> {
+    return this.request<FinacleConnectionTestResult>(
+      `/api/v1/finacle/connections/${encodeURIComponent(id)}/test`,
+      { method: 'POST' },
+    );
+  }
+
+  async listFinacleShiftConfigs(tenantId: string): Promise<{ configs: FinacleShiftConfig[] }> {
+    return this.request<{ configs: FinacleShiftConfig[] }>(
+      `/api/v1/finacle/shift-configs?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createFinacleShiftConfig(payload: CreateFinacleShiftConfigPayload): Promise<FinacleShiftConfig> {
+    return this.request<FinacleShiftConfig>('/api/v1/finacle/shift-configs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateFinacleShiftConfig(id: string, payload: UpdateFinacleShiftConfigPayload): Promise<FinacleShiftConfig> {
+    return this.request<FinacleShiftConfig>(`/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteFinacleShiftConfig(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listFinacleProfiles(
+    tenantId: string,
+    params: { limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<FinacleProfile>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    const response = await this.request<RawPaginatedResponse<FinacleProfile>>(
+      `/api/v1/finacle/profiles?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async updateFinacleProfile(id: string, payload: UpdateFinacleProfilePayload): Promise<FinacleProfile> {
+    return this.request<FinacleProfile>(`/api/v1/finacle/profiles/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async triggerFinacleShiftRotate(payload: FinacleShiftRotatePayload): Promise<FinacleShiftRotateResponse> {
+    return this.request<FinacleShiftRotateResponse>('/api/v1/finacle/shift-rotate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
 }
 
 // ---- Public misconduct intake helpers (no auth) ----------------------
@@ -3700,4 +3787,101 @@ export interface CreateComplianceReviewPayload {
   scheduled_for?: string;
   recurrence?: string;
   notes?: string;
+}
+
+// ── Finacle integration (UC6) ────────────────────────────────────────────────
+export type FinacleAuthMethod = 'oauth2_client_credentials' | 'basic';
+
+export type FinacleShiftModel = '3_shift' | '2_shift' | 'branch_hours' | 'always_on';
+
+export interface FinacleConnection {
+  id: string;
+  tenant_id: string;
+  host: string;
+  auth_method: FinacleAuthMethod;
+  credential_ref?: string;
+  last_sync_at?: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFinacleConnectionPayload {
+  tenant_id: string;
+  host: string;
+  auth_method: FinacleAuthMethod;
+  credential_ref?: string;
+}
+
+export interface UpdateFinacleConnectionPayload {
+  host?: string;
+  auth_method?: FinacleAuthMethod;
+  credential_ref?: string;
+}
+
+export interface FinacleConnectionTestResult {
+  status: 'ok' | 'failed';
+  message?: string;
+  connection: FinacleConnection;
+}
+
+export interface FinacleShiftBand {
+  name: string;
+  start: string; // "HH:MM"
+  end: string;   // "HH:MM"
+}
+
+export interface FinacleShiftConfig {
+  id: string;
+  tenant_id: string;
+  branch_id?: string;
+  model: FinacleShiftModel;
+  shifts: FinacleShiftBand[];
+  grace_minutes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFinacleShiftConfigPayload {
+  tenant_id: string;
+  branch_id?: string;
+  model: FinacleShiftModel;
+  shifts: FinacleShiftBand[];
+  grace_minutes: number;
+}
+
+export interface UpdateFinacleShiftConfigPayload {
+  branch_id?: string;
+  model?: FinacleShiftModel;
+  shifts?: FinacleShiftBand[];
+  grace_minutes?: number;
+}
+
+export interface FinacleProfile {
+  id: string;
+  tenant_id: string;
+  finacle_uid: string;
+  branch_id?: string;
+  role?: string;
+  shift_id?: string;
+  status: string;
+  last_rotated_at?: string;
+}
+
+export interface UpdateFinacleProfilePayload {
+  branch_id?: string;
+  role?: string;
+  shift_id?: string;
+  status?: string;
+}
+
+export interface FinacleShiftRotatePayload {
+  tenant_id: string;
+  shift_id: string;
+  direction: 'enable' | 'disable';
+}
+
+export interface FinacleShiftRotateResponse {
+  approval_path_job_id?: string;
+  rotate_job_id?: string;
 }

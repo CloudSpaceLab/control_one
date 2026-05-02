@@ -216,6 +216,47 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeMisconductRetentionSweep]; !exists {
 		s.jobHandlers[JobTypeMisconductRetentionSweep] = s.handleMisconductRetentionSweepJob
 	}
+
+	// Finacle integration handlers (UC6). The sync handler executes inline;
+	// the shift_rotate handler is built per-job because its payload carries
+	// the shift_id + direction it must operate on.
+	if _, exists := s.jobHandlers[JobTypeFinacleSync]; !exists {
+		s.jobHandlers[JobTypeFinacleSync] = s.handleFinacleSyncJob
+	}
+	if _, exists := s.jobHandlers[JobTypeFinacleShiftRotate]; !exists {
+		s.jobHandlers[JobTypeFinacleShiftRotate] = s.handleFinacleShiftRotateJob
+	}
+}
+
+// handleFinacleShiftRotateJob is the worker entry point for finacle.shift_rotate
+// jobs created via the createJobs API. (Internal enqueueFinacleShiftRotateJob
+// builds a closure directly; this path covers admin curl/API invocations.)
+func (s *Server) handleFinacleShiftRotateJob(ctx context.Context, job *storage.Job) error {
+	if job == nil {
+		return errors.New("nil job")
+	}
+	var payload struct {
+		TenantID  string `json:"tenant_id"`
+		ShiftID   string `json:"shift_id"`
+		Direction string `json:"direction"`
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return fmt.Errorf("decode finacle.shift_rotate payload: %w", err)
+	}
+	tenantID, err := uuid.Parse(strings.TrimSpace(payload.TenantID))
+	if err != nil {
+		return fmt.Errorf("tenant_id must be UUID: %w", err)
+	}
+	shiftID, err := uuid.Parse(strings.TrimSpace(payload.ShiftID))
+	if err != nil {
+		return fmt.Errorf("shift_id must be UUID: %w", err)
+	}
+	direction := strings.ToLower(strings.TrimSpace(payload.Direction))
+	if direction != "enable" && direction != "disable" {
+		return fmt.Errorf("direction must be enable or disable")
+	}
+	exec := s.buildFinacleShiftRotateExecution(job.ID, tenantID, shiftID, direction)
+	return exec(ctx)
 }
 
 type provisionPayload struct {

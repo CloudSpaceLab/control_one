@@ -431,6 +431,25 @@ type Store interface {
 	CountAuditLogsForActor(context.Context, uuid.UUID, time.Time) (int, error)
 	CountSecurityEventsBySeverity(context.Context, uuid.UUID, time.Time) (map[string]int, error)
 	CountFailedComplianceForTenant(context.Context, uuid.UUID, time.Time) (int, error)
+	// Finacle integration (UC6): per-tenant connections, shift configs, and
+	// branched profiles. ListFinacleProfilesByShift drives the rotate worker.
+	CreateFinacleConnection(context.Context, storage.CreateFinacleConnectionParams) (*storage.FinacleConnection, error)
+	GetFinacleConnection(context.Context, uuid.UUID) (*storage.FinacleConnection, error)
+	ListFinacleConnections(context.Context, uuid.UUID) ([]storage.FinacleConnection, error)
+	UpdateFinacleConnection(context.Context, uuid.UUID, storage.UpdateFinacleConnectionParams) (*storage.FinacleConnection, error)
+	DeleteFinacleConnection(context.Context, uuid.UUID) error
+	CreateFinacleShiftConfig(context.Context, storage.CreateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error)
+	GetFinacleShiftConfig(context.Context, uuid.UUID) (*storage.FinacleShiftConfig, error)
+	ListFinacleShiftConfigs(context.Context, uuid.UUID) ([]storage.FinacleShiftConfig, error)
+	UpdateFinacleShiftConfig(context.Context, uuid.UUID, storage.UpdateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error)
+	DeleteFinacleShiftConfig(context.Context, uuid.UUID) error
+	UpsertFinacleProfile(context.Context, storage.UpsertFinacleProfileParams) (*storage.FinacleProfile, error)
+	UpdateFinacleProfile(context.Context, uuid.UUID, storage.UpdateFinacleProfileParams) (*storage.FinacleProfile, error)
+	GetFinacleProfile(context.Context, uuid.UUID) (*storage.FinacleProfile, error)
+	ListFinacleProfiles(context.Context, uuid.UUID, int, int) ([]storage.FinacleProfile, int, error)
+	ListFinacleProfilesByShift(context.Context, uuid.UUID) ([]storage.FinacleProfile, error)
+	MarkFinacleProfileRotated(context.Context, uuid.UUID, string) error
+	DeleteFinacleProfile(context.Context, uuid.UUID) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -777,6 +796,12 @@ type Server struct {
 	// PoW challenge store. Lazily initialised on first /intake call.
 	misconductOnce   sync.Once
 	whistleblowerLim *whistleblowerLimiter
+
+	// finacleClient drives the outbound Finacle connector for sync + shift
+	// rotation. Tests inject a fake; production wires a real client at boot.
+	// nil ⇒ stubFinacleClient, which always returns errFinacleUnconfigured
+	// (handlers convert that into 503-style messages).
+	finacleClient finacleClient
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -1052,6 +1077,14 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/misconduct/challenge", s.handleWhistleblowerChallenge)
 	s.baseRouter.HandleFunc("/api/v1/misconduct/cases", s.handleMisconductCasesCollection)
 	s.baseRouter.HandleFunc("/api/v1/misconduct/cases/", s.handleMisconductCaseSubroutes)
+	// Finacle integration (UC6).
+	s.baseRouter.HandleFunc("/api/v1/finacle/connections", s.handleFinacleConnections)
+	s.baseRouter.HandleFunc("/api/v1/finacle/connections/", s.handleFinacleConnectionSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/finacle/shift-configs", s.handleFinacleShiftConfigs)
+	s.baseRouter.HandleFunc("/api/v1/finacle/shift-configs/", s.handleFinacleShiftConfigSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/finacle/profiles", s.handleFinacleProfiles)
+	s.baseRouter.HandleFunc("/api/v1/finacle/profiles/", s.handleFinacleProfileSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/finacle/shift-rotate", s.handleFinacleShiftRotate)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
