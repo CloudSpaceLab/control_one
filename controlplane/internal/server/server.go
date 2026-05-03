@@ -353,6 +353,64 @@ type Store interface {
 	ListAuditReports(context.Context, uuid.UUID, int, int) ([]storage.AuditReport, int, error)
 	GetAuditReport(context.Context, uuid.UUID) (*storage.AuditReport, error)
 	UpdateAuditReportStatus(context.Context, uuid.UUID, string, *string, *time.Time) error
+	// Compliance framework control mappings + coverage (PR 1).
+	ListControlMappings(context.Context, string) ([]storage.ControlMappingRow, error)
+	GetControlCoverage(context.Context, uuid.UUID, string, time.Time, time.Time) ([]storage.ControlCoverage, error)
+	CountResultsForReport(context.Context, uuid.UUID, string, time.Time, time.Time) (int, int, error)
+	GetPerNodeMatrix(context.Context, uuid.UUID, string, time.Time, time.Time, int) ([]storage.NodeControlRow, error)
+	// Heartbeat-driven inventory + firewall state (PR 2).
+	ReplaceNodePackages(context.Context, uuid.UUID, []storage.NodePackage) error
+	ListNodePackages(context.Context, uuid.UUID) ([]storage.NodePackage, error)
+	GetNodeInventorySync(context.Context, uuid.UUID) (*storage.NodeInventorySync, error)
+	UpsertNodeInventorySync(context.Context, storage.NodeInventorySync) error
+	TouchNodeInventorySync(context.Context, uuid.UUID, string) (int64, error)
+	UpsertNodeFirewallState(context.Context, storage.NodeFirewallState) error
+	GetNodeFirewallState(context.Context, uuid.UUID) (*storage.NodeFirewallState, error)
+	// Network security — operator-driven IP blocks fanned out to per-node rules (PR 3).
+	CreateNodeFirewallRule(context.Context, storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error)
+	SetNodeFirewallRuleJobID(context.Context, uuid.UUID, uuid.UUID) error
+	MarkNodeFirewallRuleApplied(context.Context, uuid.UUID) error
+	MarkNodeFirewallRuleFailed(context.Context, uuid.UUID, string) error
+	MarkNodeFirewallRuleRemoved(context.Context, uuid.UUID) error
+	ListPendingNodeFirewallRules(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
+	ListNodeFirewallRulesForEntityAction(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
+	ListActiveBlocks(context.Context, uuid.UUID, int, int, bool) ([]storage.ActiveBlock, error)
+	GetNodeFirewallRuleByJobID(context.Context, uuid.UUID) (*storage.NodeFirewallRule, error)
+	// Agent self-update rollout (PR 4a).
+	GetAgentRolloutState(context.Context, uuid.UUID) (*storage.AgentRolloutState, error)
+	UpsertAgentRolloutState(context.Context, uuid.UUID, storage.AgentRolloutUpdate) (*storage.AgentRolloutState, error)
+	// Patch management — fleet OS package patching (PR 4).
+	CreatePatchDeployment(context.Context, storage.PatchDeployment) (*storage.PatchDeployment, error)
+	ListPatchDeployments(context.Context, uuid.UUID, int, int) ([]storage.PatchDeployment, error)
+	GetPatchDeployment(context.Context, uuid.UUID) (*storage.PatchDeployment, error)
+	UpdatePatchDeploymentStatus(context.Context, uuid.UUID, string, bool) error
+	CreateNodePatchState(context.Context, storage.NodePatchState) (*storage.NodePatchState, error)
+	SetNodePatchStateJobID(context.Context, uuid.UUID, uuid.UUID) error
+	MarkNodePatchApplied(context.Context, uuid.UUID, int, string) error
+	MarkNodePatchFailed(context.Context, uuid.UUID, string, string) error
+	ListPendingNodePatchStates(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
+	ListNodePatchStatesForDeployment(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
+	GetNodePatchStateByJobID(context.Context, uuid.UUID) (*storage.NodePatchState, error)
+	// Predictive server downtime — Use Case 5.
+	GetNodeHealthScore(context.Context, uuid.UUID) (*storage.NodeHealthScore, error)
+	UpsertNodeHealthScore(context.Context, storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error)
+	ListAtRiskNodes(context.Context, uuid.UUID, int) ([]storage.AtRiskNodeRow, error)
+	// Patch management — Wave C (proxy / airgapped / Squid / windows).
+	GetNodePatchConfig(context.Context, uuid.UUID) (*storage.NodePatchConfig, error)
+	UpsertNodePatchConfig(context.Context, storage.NodePatchConfig) (*storage.NodePatchConfig, error)
+	CreateMaintenanceWindow(context.Context, storage.MaintenanceWindow) (*storage.MaintenanceWindow, error)
+	GetMaintenanceWindow(context.Context, uuid.UUID) (*storage.MaintenanceWindow, error)
+	ListMaintenanceWindows(context.Context, uuid.UUID) ([]storage.MaintenanceWindow, error)
+	MarkMaintenanceWindowOpen(context.Context, uuid.UUID, *uuid.UUID) error
+	MarkMaintenanceWindowClosing(context.Context, uuid.UUID) error
+	MarkMaintenanceWindowClosed(context.Context, uuid.UUID) error
+	MarkMaintenanceWindowAborted(context.Context, uuid.UUID) error
+	ForceCloseMaintenanceWindow(context.Context, uuid.UUID) error
+	CreateSquidProxy(context.Context, storage.SquidProxy) (*storage.SquidProxy, error)
+	GetSquidProxy(context.Context, uuid.UUID) (*storage.SquidProxy, error)
+	ListSquidProxies(context.Context, uuid.UUID) ([]storage.SquidProxy, error)
+	UpdateSquidProxyStatus(context.Context, uuid.UUID, string, string) error
+	UpdateSquidProxyWhitelist(context.Context, uuid.UUID, []string) error
 	// Compliance reviews.
 	ListComplianceReviews(context.Context, uuid.UUID, int, int) ([]storage.ComplianceReview, int, error)
 	CreateComplianceReview(context.Context, *storage.ComplianceReview) (*storage.ComplianceReview, error)
@@ -374,6 +432,43 @@ type Store interface {
 	DeleteIncidentReport(context.Context, string) error
 	GetTrustCenterData(context.Context, string) (*storage.TrustCenterData, error)
 	GetTenantByName(context.Context, string) (*storage.Tenant, error)
+	// Misconduct & whistleblowing (UC7).
+	CreateMisconductCase(context.Context, storage.CreateMisconductCaseParams) (*storage.MisconductCase, error)
+	GetMisconductCase(context.Context, uuid.UUID) (*storage.MisconductCase, error)
+	ListMisconductCases(context.Context, storage.MisconductCaseFilter, int, int) ([]storage.MisconductCase, int, error)
+	UpdateMisconductCase(context.Context, uuid.UUID, storage.UpdateMisconductCaseParams) (*storage.MisconductCase, error)
+	SetMisconductCaseRiskScore(context.Context, uuid.UUID, int) error
+	CreateWhistleblowerSubmission(context.Context, storage.CreateWhistleblowerSubmissionParams) (*storage.WhistleblowerSubmission, error)
+	GetWhistleblowerSubmission(context.Context, uuid.UUID) (*storage.WhistleblowerSubmission, error)
+	ListAllWhistleblowerSubmissions(context.Context) ([]storage.WhistleblowerSubmission, error)
+	SweepWhistleblowerSubmissions(context.Context, time.Time) (int64, error)
+	AttachCaseEvidence(context.Context, uuid.UUID, uuid.UUID) (*storage.CaseEvidenceLink, error)
+	ListCaseEvidence(context.Context, uuid.UUID) ([]storage.CaseEvidenceLink, error)
+	CreateRiskSignal(context.Context, storage.CreateRiskSignalParams) (*storage.RiskSignal, error)
+	ListRiskSignals(context.Context, uuid.UUID) ([]storage.RiskSignal, error)
+	DeleteRiskSignalsForCase(context.Context, uuid.UUID) error
+	CountAuditLogsForActor(context.Context, uuid.UUID, time.Time) (int, error)
+	CountSecurityEventsBySeverity(context.Context, uuid.UUID, time.Time) (map[string]int, error)
+	CountFailedComplianceForTenant(context.Context, uuid.UUID, time.Time) (int, error)
+	// Finacle integration (UC6): per-tenant connections, shift configs, and
+	// branched profiles. ListFinacleProfilesByShift drives the rotate worker.
+	CreateFinacleConnection(context.Context, storage.CreateFinacleConnectionParams) (*storage.FinacleConnection, error)
+	GetFinacleConnection(context.Context, uuid.UUID) (*storage.FinacleConnection, error)
+	ListFinacleConnections(context.Context, uuid.UUID) ([]storage.FinacleConnection, error)
+	UpdateFinacleConnection(context.Context, uuid.UUID, storage.UpdateFinacleConnectionParams) (*storage.FinacleConnection, error)
+	DeleteFinacleConnection(context.Context, uuid.UUID) error
+	CreateFinacleShiftConfig(context.Context, storage.CreateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error)
+	GetFinacleShiftConfig(context.Context, uuid.UUID) (*storage.FinacleShiftConfig, error)
+	ListFinacleShiftConfigs(context.Context, uuid.UUID) ([]storage.FinacleShiftConfig, error)
+	UpdateFinacleShiftConfig(context.Context, uuid.UUID, storage.UpdateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error)
+	DeleteFinacleShiftConfig(context.Context, uuid.UUID) error
+	UpsertFinacleProfile(context.Context, storage.UpsertFinacleProfileParams) (*storage.FinacleProfile, error)
+	UpdateFinacleProfile(context.Context, uuid.UUID, storage.UpdateFinacleProfileParams) (*storage.FinacleProfile, error)
+	GetFinacleProfile(context.Context, uuid.UUID) (*storage.FinacleProfile, error)
+	ListFinacleProfiles(context.Context, uuid.UUID, int, int) ([]storage.FinacleProfile, int, error)
+	ListFinacleProfilesByShift(context.Context, uuid.UUID) ([]storage.FinacleProfile, error)
+	MarkFinacleProfileRotated(context.Context, uuid.UUID, string) error
+	DeleteFinacleProfile(context.Context, uuid.UUID) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -715,6 +810,17 @@ type Server struct {
 	connectRegistryOnce     sync.Once
 	connectRegistryInst     *connect.Registry
 	connectRegistryOverride *connect.Registry
+
+	// Misconduct & whistleblowing (UC7) — process-local rate limiter +
+	// PoW challenge store. Lazily initialised on first /intake call.
+	misconductOnce   sync.Once
+	whistleblowerLim *whistleblowerLimiter
+
+	// finacleClient drives the outbound Finacle connector for sync + shift
+	// rotation. Tests inject a fake; production wires a real client at boot.
+	// nil ⇒ stubFinacleClient, which always returns errFinacleUnconfigured
+	// (handlers convert that into 503-style messages).
+	finacleClient finacleClient
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -849,6 +955,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/telemetry/logs", s.handleTelemetryLogs)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/nodes/", s.handleTelemetryNodeSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/compliance/trends", s.handleComplianceTrends)
+	s.baseRouter.HandleFunc("/api/v1/compliance/control-posture", s.handleComplianceControlPosture)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts", s.handleRemediationScriptsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts/", s.handleRemediationScriptSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)
@@ -873,6 +980,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/agent/binary/manifest", s.handleAgentBinaryManifest)
 	s.baseRouter.HandleFunc("/api/v1/agent/public-key", s.handleAgentPublicKey)
+	s.baseRouter.HandleFunc("/api/v1/agent-rollout", s.handleAgentRollout)
 	s.baseRouter.HandleFunc("/api/v1/agent/bundle", s.handleAgentBundle)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
@@ -890,6 +998,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/rules/log/", s.handleLogRuleSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/security-events", s.handleSecurityEventsCollection)
 	s.baseRouter.HandleFunc("/api/v1/health-incidents", s.handleHealthIncidentsCollection)
+	// Predictive server downtime — Use Case 5 (PR 31).
+	s.baseRouter.HandleFunc("/api/v1/health/at-risk", s.handleAtRiskFleet)
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
 	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
@@ -947,6 +1057,19 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/entities/", s.handleEntitySubroutes)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches", s.handleSavedSearchesCollection)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches/", s.handleSavedSearchSubroute)
+	// Network security — operator-driven IP block enforcement (PR 3).
+	s.baseRouter.HandleFunc("/api/v1/network/active-blocks", s.handleListActiveBlocks)
+	s.baseRouter.HandleFunc("/api/v1/network/blocks/", s.handleNetworkBlocksSubroute)
+	// Patch management — fleet OS package patching (PR 4).
+	s.baseRouter.HandleFunc("/api/v1/patch/deployments", s.handlePatchDeployments)
+	s.baseRouter.HandleFunc("/api/v1/patch/deployments/", s.handlePatchDeploymentSubroute)
+	// Patch management completion — Wave C: per-node config, maintenance
+	// windows, Squid proxies.
+	s.baseRouter.HandleFunc("/api/v1/patch/config", s.handlePatchConfig)
+	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows", s.handleMaintenanceWindowsCollection)
+	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows/", s.handleMaintenanceWindowSubroute)
+	s.baseRouter.HandleFunc("/api/v1/patch/proxies", s.handleSquidProxiesCollection)
+	s.baseRouter.HandleFunc("/api/v1/patch/proxies/", s.handleSquidProxySubroute)
 	// Data classification / DLP (Sprint 2).
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules", s.handleDLPRulesCollection)
 	s.baseRouter.HandleFunc("/api/v1/dlp/rules/", s.handleDLPRulesResource)
@@ -972,6 +1095,22 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/trust/faq/{id}", s.handleFAQResource)
 	s.baseRouter.HandleFunc("/api/v1/trust/incidents", s.handleIncidentsCollection)
 	s.baseRouter.HandleFunc("/api/v1/trust/incidents/{id}", s.handleIncidentResource)
+	// Misconduct & whistleblowing (UC7). The submit + intake-status + challenge
+	// endpoints are public (auth middleware skips them); cases are gated by
+	// roleInvestigator|roleAdmin inside the handler.
+	s.baseRouter.HandleFunc("/api/v1/misconduct/submit", s.handleWhistleblowerSubmit)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/intake-status", s.handleIntakeStatus)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/challenge", s.handleWhistleblowerChallenge)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/cases", s.handleMisconductCasesCollection)
+	s.baseRouter.HandleFunc("/api/v1/misconduct/cases/", s.handleMisconductCaseSubroutes)
+	// Finacle integration (UC6).
+	s.baseRouter.HandleFunc("/api/v1/finacle/connections", s.handleFinacleConnections)
+	s.baseRouter.HandleFunc("/api/v1/finacle/connections/", s.handleFinacleConnectionSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/finacle/shift-configs", s.handleFinacleShiftConfigs)
+	s.baseRouter.HandleFunc("/api/v1/finacle/shift-configs/", s.handleFinacleShiftConfigSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/finacle/profiles", s.handleFinacleProfiles)
+	s.baseRouter.HandleFunc("/api/v1/finacle/profiles/", s.handleFinacleProfileSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/finacle/shift-rotate", s.handleFinacleShiftRotate)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -1728,6 +1867,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 
 	if len(segments) == 2 && segments[1] == "update-agent" {
 		s.handleNodeAgentUpdate(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "health" {
+		s.handleNodeHealth(w, r, nodeID)
 		return
 	}
 

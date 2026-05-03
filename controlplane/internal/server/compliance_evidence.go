@@ -488,37 +488,95 @@ func (s *Server) handleDownloadAuditReport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Gather evidence for this framework+tenant
-	evidence, _, _ := s.store.ListComplianceEvidence(r.Context(), report.TenantID, report.Framework, "", 1000, 0)
-
-	controls := compliance.FrameworkControls[report.Framework]
-
-	data := pdfreport.ReportData{
-		TenantName:   report.TenantID.String(), // tenant name not easily available; use ID
-		Framework:    report.Framework,
-		PeriodStart:  report.PeriodStart,
-		PeriodEnd:    report.PeriodEnd,
-		GeneratedAt:  time.Now().UTC(),
-		Controls:     controls,
-		EvidenceList: evidence,
+	tenantName := report.TenantID.String()
+	if tenant, terr := s.store.GetTenant(r.Context(), report.TenantID); terr == nil && tenant != nil {
+		tenantName = tenant.Name
+	} else if terr != nil {
+		s.logger.Sugar().Warnw("get tenant for audit report", "error", terr)
 	}
 
-	html, err := pdfreport.GenerateHTML(r.Context(), data)
-	if err != nil {
-		s.logger.Sugar().Errorw("generate audit report html", "error", err)
+	coverage, cerr := s.store.GetControlCoverage(r.Context(), report.TenantID, report.Framework, report.PeriodStart, report.PeriodEnd)
+	if cerr != nil {
+		s.logger.Sugar().Warnw("get control coverage", "error", cerr)
+	}
+	passed, failed, perr := s.store.CountResultsForReport(r.Context(), report.TenantID, report.Framework, report.PeriodStart, report.PeriodEnd)
+	if perr != nil {
+		s.logger.Sugar().Warnw("count results for report", "error", perr)
+	}
+	matrix, merr := s.store.GetPerNodeMatrix(r.Context(), report.TenantID, report.Framework, report.PeriodStart, report.PeriodEnd, 500)
+	if merr != nil {
+		s.logger.Sugar().Warnw("get per-node matrix", "error", merr)
+	}
+
+	// Hydrate Title from the Go-side framework catalog so the report shows
+	// human-readable names instead of bare control IDs.
+	titles := make(map[string]string)
+	for _, c := range compliance.FrameworkControls[report.Framework] {
+		titles[c.ControlID] = c.Title
+	}
+	for i := range coverage {
+		if t, ok := titles[coverage[i].ControlID]; ok && coverage[i].Title == "" {
+			coverage[i].Title = t
+		}
+	}
+
+	gap := make([]storage.ControlCoverage, 0)
+	for _, c := range coverage {
+		if c.Status == "NO_COVERAGE" {
+			gap = append(gap, c)
+		}
+	}
+
+	evidence, _, _ := s.store.ListComplianceEvidence(r.Context(), report.TenantID, report.Framework, "", 1000, 0)
+
+	data := pdfreport.ReportData{
+		TenantName:     tenantName,
+		Framework:      report.Framework,
+		PeriodStart:    report.PeriodStart,
+		PeriodEnd:      report.PeriodEnd,
+		GeneratedAt:    time.Now().UTC(),
+		Controls:       compliance.FrameworkControls[report.Framework],
+		EvidenceList:   evidence,
+		OpenFindings:   failed,
+		TotalPassed:    passed,
+		TotalFailed:    failed,
+		ControlSummary: coverage,
+		PerNodeMatrix:  matrix,
+		GapAnalysis:    gap,
+	}
+
+	textOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("text_only")), "1") ||
+		strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("text_only")), "true")
+
+	var (
+		body        []byte
+		genErr      error
+		contentType string
+		ext         string
+	)
+	if textOnly {
+		body, genErr = pdfreport.GenerateText(r.Context(), data)
+		contentType = "text/plain; charset=utf-8"
+		ext = "txt"
+	} else {
+		body, genErr = pdfreport.GenerateHTML(r.Context(), data)
+		contentType = "text/html; charset=utf-8"
+		ext = "html"
+	}
+	if genErr != nil {
+		s.logger.Sugar().Errorw("generate audit report", "error", genErr, "text_only", textOnly)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	// Mark the report as ready
 	now := time.Now().UTC()
 	_ = s.store.UpdateAuditReportStatus(r.Context(), id, "ready", nil, &now)
 
-	filename := fmt.Sprintf("compliance-report-%s-%s.html", report.Framework, report.PeriodEnd.Format("2006-01-02"))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	filename := fmt.Sprintf("compliance-report-%s-%s.%s", report.Framework, report.PeriodEnd.Format("2006-01-02"), ext)
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(html)
+	_, _ = w.Write(body)
 }
 
 // ── Reviews collection: GET + POST ───────────────────────────────────────────

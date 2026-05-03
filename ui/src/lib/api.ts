@@ -980,6 +980,10 @@ export interface ComplianceEvaluateResult {
 
 export interface ComplianceEvaluateResponse {
   results: ComplianceEvaluateResult[];
+  metadata?: {
+    no_policies_assigned?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface AuditLog {
@@ -1214,6 +1218,38 @@ interface RawPaginatedResponse<T> {
 export interface PaginatedResponse<T> {
   data: T[];
   pagination: PaginationMeta;
+}
+
+// Predictive server downtime — Use Case 5 (PR 31).
+// risk_level is one of: low | medium | high | critical | calibrating.
+// "calibrating" means the predict job hasn't seen enough samples yet
+// (<24 per metric); the UI must surface "Calibrating (N/24 samples)"
+// rather than render fake zeros.
+export type NodeHealthRiskLevel = 'low' | 'medium' | 'high' | 'critical' | 'calibrating';
+
+export interface NodeHealthScore {
+  node_id: string;
+  score: number;
+  risk_level: NodeHealthRiskLevel;
+  components: Record<string, unknown>;
+  computed_at?: string;
+}
+
+export interface AtRiskNode {
+  node_id: string;
+  tenant_id: string;
+  hostname: string;
+  score: number;
+  risk_level: NodeHealthRiskLevel;
+  components: Record<string, unknown>;
+  computed_at: string;
+}
+
+export interface AtRiskFleetResponse {
+  data: AtRiskNode[];
+  total_count: number;
+  critical: number;
+  high: number;
 }
 
 async function safeErrorMessage(response: Response): Promise<string | undefined> {
@@ -1500,6 +1536,20 @@ export class APIClient {
   async deleteNode(nodeId: string): Promise<void> {
     const encoded = encodeURIComponent(nodeId);
     await this.request<void>(`/api/v1/nodes/${encoded}`, { method: 'DELETE' });
+  }
+
+  async getNodeHealth(nodeId: string): Promise<NodeHealthScore> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request<NodeHealthScore>(`/api/v1/nodes/${encoded}/health`);
+  }
+
+  async listAtRiskNodes(tenantId?: string): Promise<AtRiskFleetResponse> {
+    const search = new URLSearchParams();
+    if (tenantId) {
+      search.set('tenant_id', tenantId);
+    }
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<AtRiskFleetResponse>(`/api/v1/health/at-risk${suffix}`);
   }
 
   async listUsers(params: ListUsersParams = {}): Promise<PaginatedResponse<User>> {
@@ -2188,11 +2238,183 @@ export class APIClient {
   async entityAction(
     type: string,
     id: string,
-    payload: { action: 'block' | 'allow' | 'quarantine'; reason?: string; ttl?: string },
-  ): Promise<{ status: string; audit_id?: string }> {
-    return this.request<{ status: string; audit_id?: string }>(
+    payload: {
+      action: 'block' | 'allow' | 'quarantine';
+      reason?: string;
+      ttl?: number;
+      scope?: 'fleet' | 'affected';
+    },
+  ): Promise<EntityActionResponse> {
+    return this.request<EntityActionResponse>(
       `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions`,
       { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async listActiveBlocks(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+    includeRemoved?: boolean;
+  }): Promise<{ blocks: ActiveBlock[]; generated_at: string }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    if (params.includeRemoved) search.set('include_removed', 'true');
+    return this.request<{ blocks: ActiveBlock[]; generated_at: string }>(
+      `/api/v1/network/active-blocks?${search.toString()}`,
+    );
+  }
+
+  async listBlockNodes(entityActionId: string): Promise<{ rules: NodeFirewallRule[] }> {
+    return this.request<{ rules: NodeFirewallRule[] }>(
+      `/api/v1/network/blocks/${encodeURIComponent(entityActionId)}/nodes`,
+    );
+  }
+
+  async listPatchDeployments(params: { tenantId: string; limit?: number; offset?: number }): Promise<{ deployments: PatchDeployment[]; generated_at: string }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return this.request<{ deployments: PatchDeployment[]; generated_at: string }>(
+      `/api/v1/patch/deployments?${search.toString()}`,
+    );
+  }
+
+  async createPatchDeployment(payload: {
+    tenant_id: string;
+    node_ids?: string[];
+    mode?: 'direct' | 'proxy' | 'airgapped' | 'auto';
+    reason?: string;
+  }): Promise<{
+    deployment: PatchDeployment;
+    node_count: number;
+    succeeded?: string[];
+    failed?: { node_id: string; error: string }[];
+    gate_blocked?: { node_id: string; reason: string }[];
+  }> {
+    return this.request<{
+      deployment: PatchDeployment;
+      node_count: number;
+      succeeded?: string[];
+      failed?: { node_id: string; error: string }[];
+      gate_blocked?: { node_id: string; reason: string }[];
+    }>(
+      '/api/v1/patch/deployments',
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async listPatchDeploymentNodes(deploymentId: string): Promise<{ rows: NodePatchState[] }> {
+    return this.request<{ rows: NodePatchState[] }>(
+      `/api/v1/patch/deployments/${encodeURIComponent(deploymentId)}/nodes`,
+    );
+  }
+
+  // ── Patch config (per-node mode) ───────────────────────────────────────
+  async getNodePatchConfig(nodeId: string): Promise<NodePatchConfig> {
+    return this.request<NodePatchConfig>(
+      `/api/v1/patch/config?node_id=${encodeURIComponent(nodeId)}`,
+    );
+  }
+
+  async upsertNodePatchConfig(payload: {
+    node_id: string;
+    mode: 'direct' | 'proxy' | 'airgapped';
+    proxy_id?: string;
+    window_id?: string;
+  }): Promise<NodePatchConfig> {
+    return this.request<NodePatchConfig>('/api/v1/patch/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ── Maintenance windows ────────────────────────────────────────────────
+  async listMaintenanceWindows(tenantId: string): Promise<{ windows: MaintenanceWindow[] }> {
+    return this.request<{ windows: MaintenanceWindow[] }>(
+      `/api/v1/patch/maintenance-windows?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createMaintenanceWindow(payload: {
+    tenant_id: string;
+    name: string;
+    node_ids: string[];
+    opens_at: string;
+    closes_at: string;
+    allow_repos: string[];
+  }): Promise<MaintenanceWindow> {
+    return this.request<MaintenanceWindow>('/api/v1/patch/maintenance-windows', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async openMaintenanceWindow(id: string): Promise<{ status: string; action: string }> {
+    return this.request<{ status: string; action: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/open`,
+      { method: 'POST' },
+    );
+  }
+
+  async closeMaintenanceWindow(id: string): Promise<{ status: string; action: string }> {
+    return this.request<{ status: string; action: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/close`,
+      { method: 'POST' },
+    );
+  }
+
+  async forceCloseMaintenanceWindow(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/force-close`,
+      { method: 'POST' },
+    );
+  }
+
+  // ── Squid proxies ──────────────────────────────────────────────────────
+  async listSquidProxies(tenantId: string): Promise<{ proxies: SquidProxy[] }> {
+    return this.request<{ proxies: SquidProxy[] }>(
+      `/api/v1/patch/proxies?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createSquidProxy(payload: {
+    tenant_id: string;
+    host: string;
+    port?: number;
+    whitelist: string[];
+  }): Promise<SquidProxy> {
+    return this.request<SquidProxy>('/api/v1/patch/proxies', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async installSquidProxy(id: string, nodeId: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/api/v1/patch/proxies/${encodeURIComponent(id)}/install`,
+      { method: 'POST', body: JSON.stringify({ node_id: nodeId }) },
+    );
+  }
+
+  async reconfigureSquidProxy(
+    id: string,
+    nodeId: string,
+    whitelist: string[],
+  ): Promise<{ status: string; validate: string }> {
+    return this.request<{ status: string; validate: string }>(
+      `/api/v1/patch/proxies/${encodeURIComponent(id)}/reconfigure`,
+      { method: 'POST', body: JSON.stringify({ node_id: nodeId, whitelist }) },
+    );
+  }
+
+  async removeSquidProxy(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      `/api/v1/patch/proxies/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
     );
   }
 
@@ -2635,6 +2857,20 @@ export class APIClient {
     );
   }
 
+  async getControlPosture(params: {
+    framework: string;
+    tenant_id: string;
+    period_start?: string;
+    period_end?: string;
+  }): Promise<ControlPostureResponse> {
+    const search = new URLSearchParams();
+    search.set('framework', params.framework);
+    search.set('tenant_id', params.tenant_id);
+    if (params.period_start) search.set('period_start', params.period_start);
+    if (params.period_end) search.set('period_end', params.period_end);
+    return this.request<ControlPostureResponse>(`/api/v1/compliance/control-posture?${search.toString()}`);
+  }
+
   async createAuditReport(payload: CreateAuditReportPayload): Promise<AuditReport> {
     return this.request<AuditReport>('/api/v1/compliance/reports', {
       method: 'POST',
@@ -2919,6 +3155,248 @@ export class APIClient {
   async deleteComplianceReview(id: string): Promise<void> {
     await this.request<void>(`/api/v1/compliance/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
+
+  // ---- Misconduct & whistleblowing (UC7) -----------------------------
+  // Investigator-gated case CRUD. The public submit + status endpoints are
+  // exported as standalone functions below (they bypass the bearer-token
+  // header so they work on the unauthenticated /intake routes).
+
+  async listMisconductCases(params: {
+    tenantId: string;
+    status?: 'open' | 'investigating' | 'closed';
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: MisconductCase[]; pagination: { total: number; limit: number; offset: number } }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.status) search.set('status', params.status);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    return this.request(`/api/v1/misconduct/cases?${search.toString()}`);
+  }
+
+  async createMisconductCase(payload: CreateMisconductCasePayload): Promise<MisconductCase> {
+    return this.request<MisconductCase>('/api/v1/misconduct/cases', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getMisconductCase(id: string): Promise<MisconductCase> {
+    return this.request<MisconductCase>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}`);
+  }
+
+  async updateMisconductCase(id: string, payload: UpdateMisconductCasePayload): Promise<MisconductCase> {
+    return this.request<MisconductCase>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listCaseSignals(id: string): Promise<{ data: RiskSignal[] }> {
+    return this.request(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/signals`);
+  }
+
+  async listCaseEvidence(id: string): Promise<{ data: CaseEvidenceLink[] }> {
+    return this.request(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`);
+  }
+
+  async attachCaseEvidence(id: string, evidenceId: string): Promise<CaseEvidenceLink> {
+    return this.request<CaseEvidenceLink>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`, {
+      method: 'POST',
+      body: JSON.stringify({ evidence_id: evidenceId }),
+    });
+  }
+
+  // ── Finacle integration (UC6) ────────────────────────────────────────────
+  async listFinacleConnections(tenantId: string): Promise<{ connections: FinacleConnection[] }> {
+    return this.request<{ connections: FinacleConnection[] }>(
+      `/api/v1/finacle/connections?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createFinacleConnection(payload: CreateFinacleConnectionPayload): Promise<FinacleConnection> {
+    return this.request<FinacleConnection>('/api/v1/finacle/connections', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateFinacleConnection(id: string, payload: UpdateFinacleConnectionPayload): Promise<FinacleConnection> {
+    return this.request<FinacleConnection>(`/api/v1/finacle/connections/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteFinacleConnection(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/finacle/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async testFinacleConnection(id: string): Promise<FinacleConnectionTestResult> {
+    return this.request<FinacleConnectionTestResult>(
+      `/api/v1/finacle/connections/${encodeURIComponent(id)}/test`,
+      { method: 'POST' },
+    );
+  }
+
+  async listFinacleShiftConfigs(tenantId: string): Promise<{ configs: FinacleShiftConfig[] }> {
+    return this.request<{ configs: FinacleShiftConfig[] }>(
+      `/api/v1/finacle/shift-configs?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createFinacleShiftConfig(payload: CreateFinacleShiftConfigPayload): Promise<FinacleShiftConfig> {
+    return this.request<FinacleShiftConfig>('/api/v1/finacle/shift-configs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateFinacleShiftConfig(id: string, payload: UpdateFinacleShiftConfigPayload): Promise<FinacleShiftConfig> {
+    return this.request<FinacleShiftConfig>(`/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteFinacleShiftConfig(id: string): Promise<void> {
+    await this.request<void>(`/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async listFinacleProfiles(
+    tenantId: string,
+    params: { limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<FinacleProfile>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    const response = await this.request<RawPaginatedResponse<FinacleProfile>>(
+      `/api/v1/finacle/profiles?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async updateFinacleProfile(id: string, payload: UpdateFinacleProfilePayload): Promise<FinacleProfile> {
+    return this.request<FinacleProfile>(`/api/v1/finacle/profiles/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async triggerFinacleShiftRotate(payload: FinacleShiftRotatePayload): Promise<FinacleShiftRotateResponse> {
+    return this.request<FinacleShiftRotateResponse>('/api/v1/finacle/shift-rotate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+}
+
+// ---- Public misconduct intake helpers (no auth) ----------------------
+//
+// These mirror the trust-center pattern (see TrustCenter.tsx — uses raw
+// fetch instead of the APIClient because the bearer token would be
+// undefined on the /intake routes anyway and we don't want to leak any
+// session token to a public surface).
+
+export interface MisconductChallenge {
+  challenge: string;
+  difficulty: number;
+}
+
+export interface MisconductSubmitResponse {
+  token: string;
+  message: string;
+}
+
+export interface MisconductStatusResponse {
+  status: 'received' | 'under_review' | 'closed' | 'unknown';
+}
+
+export async function fetchMisconductChallenge(): Promise<MisconductChallenge> {
+  const r = await fetch('/api/v1/misconduct/challenge');
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function submitWhistleblowerReport(payload: {
+  description: string;
+  approximate_date: string;
+  subject_role: string;
+  challenge: string;
+  nonce: string;
+}): Promise<MisconductSubmitResponse> {
+  const r = await fetch('/api/v1/misconduct/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new APIError(text || `HTTP ${r.status}`, r.status);
+  }
+  return r.json();
+}
+
+export async function fetchIntakeStatus(token: string): Promise<MisconductStatusResponse> {
+  const r = await fetch('/api/v1/misconduct/intake-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  if (!r.ok) throw new APIError(`HTTP ${r.status}`, r.status);
+  return r.json();
+}
+
+// ---- Misconduct types (UC7) -----------------------------------------
+
+export interface MisconductCase {
+  id: string;
+  tenant_id: string;
+  status: 'open' | 'investigating' | 'closed';
+  opened_at: string;
+  opened_by?: string;
+  summary: string;
+  risk_score: number;
+  subject_user_id?: string;
+  subject_label?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMisconductCasePayload {
+  tenant_id: string;
+  summary: string;
+  subject_user_id?: string;
+  subject_label?: string;
+}
+
+export interface UpdateMisconductCasePayload {
+  status?: 'open' | 'investigating' | 'closed';
+  summary?: string;
+  subject_user_id?: string;
+  subject_label?: string;
+}
+
+export interface RiskSignal {
+  id: string;
+  case_id: string;
+  signal_type: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  source_id?: string;
+  source_table?: string;
+  occurred_at: string;
+  weight: number;
+}
+
+export interface CaseEvidenceLink {
+  case_id: string;
+  evidence_id: string;
+  attached_at: string;
 }
 
 // ---- Connection / forensic types -------------------------------------
@@ -2929,6 +3407,130 @@ export interface ListConnectionsParams {
   since?: string;
   until?: string;
   limit?: number;
+}
+
+// ── Network Security (PR 3) ────────────────────────────────────────────────
+
+export interface EntityActionResponse {
+  id: string;
+  tenant_id: string;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  reason?: string;
+  ttl_seconds?: number;
+  expires_at?: string;
+  created_by?: string;
+  created_at: string;
+  nodes_dispatched: number;
+  node_ids?: string[];
+  scope?: 'affected' | 'fleet';
+}
+
+export interface ActiveBlock {
+  EntityActionID: string;
+  TenantID: string;
+  EntityType: string;
+  EntityID: string;
+  Action: string;
+  Reason?: string;
+  ExpiresAt?: string;
+  CreatedAt: string;
+  TotalNodes: number;
+  NodesApplied: number;
+  NodesFailed: number;
+  NodesPending: number;
+  NodesRemoved: number;
+}
+
+export interface NodeFirewallRule {
+  ID: string;
+  EntityActionID: string;
+  NodeID: string;
+  TenantID: string;
+  Action: string;
+  Direction: string;
+  Protocol?: string;
+  Port?: number;
+  Source?: string;
+  Dest?: string;
+  Tag: string;
+  Status: 'pending' | 'applied' | 'failed' | 'removed';
+  Error?: string;
+  JobID?: string;
+  RequestedAt: string;
+  AppliedAt?: string;
+  RemovedAt?: string;
+}
+
+// ── Patch Management (PR 4) ────────────────────────────────────────────────
+
+export interface PatchDeployment {
+  ID: string;
+  TenantID: string;
+  Mode: 'direct' | 'proxy' | 'airgapped';
+  Status: 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed';
+  TargetNodeCount: number;
+  RequestedBy?: string;
+  RequestedAt: string;
+  StartedAt?: string;
+  FinishedAt?: string;
+  Summary?: Record<string, unknown>;
+  nodes_pending?: number;
+  nodes_applied?: number;
+  nodes_failed?: number;
+}
+
+export interface NodePatchState {
+  ID: string;
+  DeploymentID: string;
+  NodeID: string;
+  TenantID: string;
+  Status: 'pending' | 'applied' | 'failed';
+  PackagesUpgraded?: number;
+  LogTail?: string;
+  Error?: string;
+  JobID?: string;
+  RequestedAt: string;
+  AppliedAt?: string;
+}
+
+// ── Patch Management — Wave C (proxy / airgapped / Squid / windows) ──────
+
+export interface NodePatchConfig {
+  NodeID: string;
+  Mode: 'direct' | 'proxy' | 'airgapped';
+  ProxyID?: string;
+  WindowID?: string;
+  UpdatedAt: string;
+}
+
+export interface MaintenanceWindow {
+  ID: string;
+  TenantID: string;
+  Name: string;
+  NodeIDs: string[];
+  OpensAt: string;
+  ClosesAt: string;
+  AllowRepos: string[];
+  Status: 'scheduled' | 'open' | 'closing' | 'closed' | 'aborted';
+  OpenedBy?: string;
+  ForceClosedAt?: string;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
+export interface SquidProxy {
+  ID: string;
+  TenantID: string;
+  Host: string;
+  Port: number;
+  Status: 'installing' | 'healthy' | 'degraded' | 'removing' | 'removed';
+  Whitelist: string[];
+  LastValidatedAt?: string;
+  LastError?: string;
+  CreatedAt: string;
+  UpdatedAt: string;
 }
 
 export interface ConnectionRow {
@@ -3316,6 +3918,29 @@ export interface FrameworkControl {
   control_id: string;
   title: string;
   description: string;
+  applicability?: string;
+}
+
+export interface ControlCoverage {
+  framework: string;
+  control_id: string;
+  title: string;
+  applicability?: string;
+  status: 'PASS' | 'PARTIAL' | 'FAIL' | 'NO_COVERAGE';
+  nodes_checked: number;
+  nodes_passing: number;
+  nodes_failing: number;
+  evidence_count: number;
+  last_checked_at?: string;
+}
+
+export interface ControlPostureResponse {
+  framework: string;
+  tenant_id: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  coverage: ControlCoverage[];
 }
 
 export interface CreateAuditReportPayload {
@@ -3344,4 +3969,101 @@ export interface CreateComplianceReviewPayload {
   scheduled_for?: string;
   recurrence?: string;
   notes?: string;
+}
+
+// ── Finacle integration (UC6) ────────────────────────────────────────────────
+export type FinacleAuthMethod = 'oauth2_client_credentials' | 'basic';
+
+export type FinacleShiftModel = '3_shift' | '2_shift' | 'branch_hours' | 'always_on';
+
+export interface FinacleConnection {
+  id: string;
+  tenant_id: string;
+  host: string;
+  auth_method: FinacleAuthMethod;
+  credential_ref?: string;
+  last_sync_at?: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFinacleConnectionPayload {
+  tenant_id: string;
+  host: string;
+  auth_method: FinacleAuthMethod;
+  credential_ref?: string;
+}
+
+export interface UpdateFinacleConnectionPayload {
+  host?: string;
+  auth_method?: FinacleAuthMethod;
+  credential_ref?: string;
+}
+
+export interface FinacleConnectionTestResult {
+  status: 'ok' | 'failed';
+  message?: string;
+  connection: FinacleConnection;
+}
+
+export interface FinacleShiftBand {
+  name: string;
+  start: string; // "HH:MM"
+  end: string;   // "HH:MM"
+}
+
+export interface FinacleShiftConfig {
+  id: string;
+  tenant_id: string;
+  branch_id?: string;
+  model: FinacleShiftModel;
+  shifts: FinacleShiftBand[];
+  grace_minutes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFinacleShiftConfigPayload {
+  tenant_id: string;
+  branch_id?: string;
+  model: FinacleShiftModel;
+  shifts: FinacleShiftBand[];
+  grace_minutes: number;
+}
+
+export interface UpdateFinacleShiftConfigPayload {
+  branch_id?: string;
+  model?: FinacleShiftModel;
+  shifts?: FinacleShiftBand[];
+  grace_minutes?: number;
+}
+
+export interface FinacleProfile {
+  id: string;
+  tenant_id: string;
+  finacle_uid: string;
+  branch_id?: string;
+  role?: string;
+  shift_id?: string;
+  status: string;
+  last_rotated_at?: string;
+}
+
+export interface UpdateFinacleProfilePayload {
+  branch_id?: string;
+  role?: string;
+  shift_id?: string;
+  status?: string;
+}
+
+export interface FinacleShiftRotatePayload {
+  tenant_id: string;
+  shift_id: string;
+  direction: 'enable' | 'disable';
+}
+
+export interface FinacleShiftRotateResponse {
+  approval_path_job_id?: string;
+  rotate_job_id?: string;
 }

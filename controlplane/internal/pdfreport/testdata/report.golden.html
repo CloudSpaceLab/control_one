@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Compliance Audit Report — HIPAA</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #1a1a2e; background: #fff; }
+  .page { max-width: 960px; margin: 0 auto; padding: 40px 48px; }
+  .header { border-bottom: 3px solid #1e40af; padding-bottom: 20px; margin-bottom: 32px; }
+  .header-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .logo-area h1 { font-size: 22px; font-weight: 700; color: #1e40af; }
+  .logo-area p { font-size: 12px; color: #64748b; margin-top: 4px; }
+  .header-meta { text-align: right; font-size: 12px; color: #64748b; line-height: 1.8; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; background: #dbeafe; color: #1d4ed8; margin-top: 6px; }
+  .section-title { font-size: 14px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.05em; margin: 28px 0 12px; border-left: 4px solid #1e40af; padding-left: 10px; }
+  .kpi-row { display: flex; gap: 16px; margin-bottom: 24px; }
+  .kpi { flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; }
+  .kpi .num { font-size: 28px; font-weight: 700; }
+  .kpi .lbl { font-size: 11px; color: #64748b; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .kpi.pass .num { color: #16a34a; }
+  .kpi.fail .num { color: #dc2626; }
+  .kpi.open .num { color: #d97706; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  th { background: #f1f5f9; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; padding: 8px 12px; border: 1px solid #e2e8f0; }
+  td { padding: 8px 12px; border: 1px solid #e2e8f0; vertical-align: top; font-size: 12px; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 9999px; font-size: 10px; font-weight: 600; }
+  .tag-blue { background: #dbeafe; color: #1d4ed8; }
+  .tag-green { background: #dcfce7; color: #15803d; }
+  .tag-amber { background: #fef3c7; color: #b45309; }
+  .tag-red { background: #fee2e2; color: #b91c1c; }
+  .tag-gray { background: #f1f5f9; color: #475569; }
+  .status-bar { display: flex; height: 28px; width: 100%; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+  .status-bar .seg { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 600; min-width: 0; }
+  .status-bar .seg.pass { background: #16a34a; }
+  .status-bar .seg.partial { background: #f59e0b; }
+  .status-bar .seg.fail { background: #dc2626; }
+  .status-bar .seg.nocov { background: #94a3b8; }
+  .status-bar-legend { display: flex; gap: 16px; font-size: 11px; color: #475569; margin-bottom: 24px; }
+  .status-bar-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .gap-banner { border: 1px solid #fde68a; background: #fffbeb; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 12px; color: #78350f; }
+  .gap-banner h3 { font-size: 13px; margin-bottom: 6px; color: #92400e; }
+  .gap-banner ul { padding-left: 20px; }
+  .matrix th, .matrix td { font-size: 10px; padding: 4px 8px; }
+  .matrix .ok { color: #16a34a; font-weight: 700; }
+  .matrix .no { color: #dc2626; font-weight: 700; }
+  .footer { margin-top: 48px; border-top: 1px solid #e2e8f0; padding-top: 16px; font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; }
+  @media print {
+    body { font-size: 11px; }
+    .page { padding: 20px; }
+    table { page-break-inside: auto; }
+    tr { page-break-inside: avoid; }
+    .section-title { page-break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div class="header-top">
+      <div class="logo-area">
+        <h1>Control One</h1>
+        <p>Compliance Audit Report</p>
+      </div>
+      <div class="header-meta">
+        <div><strong>Organisation:</strong> Acme Bank</div>
+        <div><strong>Framework:</strong> HIPAA</div>
+        <div><strong>Period:</strong> 2026-04-01 &ndash; 2026-05-01</div>
+        <div><strong>Generated:</strong> 2026-05-01 09:30 UTC</div>
+        <div><span class="badge">CONFIDENTIAL</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Executive Summary</div>
+  <div class="kpi-row">
+    <div class="kpi pass">
+      <div class="num">4</div>
+      <div class="lbl">Controls Passed</div>
+    </div>
+    <div class="kpi fail">
+      <div class="num">1</div>
+      <div class="lbl">Controls Failed</div>
+    </div>
+    <div class="kpi open">
+      <div class="num">1</div>
+      <div class="lbl">Open Findings</div>
+    </div>
+    <div class="kpi">
+      <div class="num">1</div>
+      <div class="lbl">Evidence Items</div>
+    </div>
+  </div>
+
+  
+  <div class="status-bar">
+    <div class="seg pass" style="width:40%">40%</div><div class="seg partial" style="width:20%">20%</div><div class="seg fail" style="width:20%">20%</div><div class="seg nocov" style="width:20%">20%</div>
+  </div>
+  <div class="status-bar-legend">
+    <span><span class="dot" style="background:#16a34a"></span>Pass (2)</span>
+    <span><span class="dot" style="background:#f59e0b"></span>Partial (1)</span>
+    <span><span class="dot" style="background:#dc2626"></span>Fail (1)</span>
+    <span><span class="dot" style="background:#94a3b8"></span>No coverage (1)</span>
+  </div>
+  
+
+  
+  <div class="gap-banner">
+    <h3>Gap Analysis — 1 control(s) without automated coverage</h3>
+    <p>The controls below have no policy mapped or no scan results within the reporting period. Add evidence or assign a policy to close these gaps.</p>
+    <ul>
+      
+      <li><strong>164.310(a)</strong> — Facility Access Controls</li>
+      
+    </ul>
+  </div>
+  
+
+  
+  <div class="section-title">Control Status</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:120px">Control ID</th>
+        <th>Title</th>
+        <th style="width:90px">Status</th>
+        <th style="width:90px">Nodes</th>
+        <th style="width:80px">Evidence</th>
+        <th style="width:110px">Last Checked</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.308(a)(1)</span></td>
+        <td>Security Management Process</td>
+        <td><span class="tag tag-green">PASS</span></td>
+        <td>3/3</td>
+        <td>1</td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.312(a)(1)</span></td>
+        <td>Access Control</td>
+        <td><span class="tag tag-amber">PARTIAL</span></td>
+        <td>2/3</td>
+        <td>0</td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.312(b)</span></td>
+        <td>Audit Controls</td>
+        <td><span class="tag tag-green">PASS</span></td>
+        <td>3/3</td>
+        <td>1</td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.312(d)</span></td>
+        <td>Person or Entity Authentication</td>
+        <td><span class="tag tag-red">FAIL</span></td>
+        <td>0/3</td>
+        <td>0</td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.310(a)</span></td>
+        <td>Facility Access Controls</td>
+        <td><span class="tag tag-gray">NO_COVERAGE</span></td>
+        <td>0/0</td>
+        <td>0</td>
+        <td>—</td>
+      </tr>
+      
+    </tbody>
+  </table>
+
+  
+  
+  
+  
+  <div class="section-title">Failed Controls — Detail</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:120px">Control ID</th>
+        <th>Title</th>
+        <th>Failing Nodes</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.312(a)(1)</span></td>
+        <td>Access Control</td>
+        <td>node-b</td>
+      </tr>
+      
+      <tr>
+        <td><span class="tag tag-blue">164.312(d)</span></td>
+        <td>Person or Entity Authentication</td>
+        <td>node-a, node-b, node-c</td>
+      </tr>
+      
+    </tbody>
+  </table>
+  
+  
+
+  
+  <div class="section-title">Evidence Inventory</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Type</th>
+        <th>Control Ref</th>
+        <th>Uploaded</th>
+        <th>Expires</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+      <tr>
+        <td>Audit log retention policy</td>
+        <td><span class="tag tag-gray">policy-document</span></td>
+        <td>164.312(b)</td>
+        <td>2026-04-28</td>
+        <td>&mdash;</td>
+      </tr>
+      
+    </tbody>
+  </table>
+  
+
+  
+  <div class="section-title">Per-Node Compliance Matrix</div>
+  <table class="matrix">
+    <thead>
+      <tr>
+        <th>Node</th>
+        <th>Control</th>
+        <th>Status</th>
+        <th>Last Checked</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+      <tr>
+        <td>node-a</td>
+        <td><span class="tag tag-blue">164.308(a)(1)</span></td>
+        <td><span class="ok">&#x2713; PASS</span></td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td>node-a</td>
+        <td><span class="tag tag-blue">164.312(d)</span></td>
+        <td><span class="no">&#x2717; FAIL</span></td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td>node-b</td>
+        <td><span class="tag tag-blue">164.312(a)(1)</span></td>
+        <td><span class="no">&#x2717; FAIL</span></td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td>node-b</td>
+        <td><span class="tag tag-blue">164.312(d)</span></td>
+        <td><span class="no">&#x2717; FAIL</span></td>
+        <td>2026-05-01</td>
+      </tr>
+      
+      <tr>
+        <td>node-c</td>
+        <td><span class="tag tag-blue">164.312(d)</span></td>
+        <td><span class="no">&#x2717; FAIL</span></td>
+        <td>2026-05-01</td>
+      </tr>
+      
+    </tbody>
+  </table>
+  
+
+  <div class="footer">
+    <span>Control One &mdash; Compliance Platform</span>
+    <span>Generated 2026-05-01 09:30:00 UTC</span>
+  </div>
+</div>
+</body>
+</html>

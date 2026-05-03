@@ -17,7 +17,8 @@ import {
   type StateTone,
 } from '../components/kit';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
-import { useComplianceResults, useComplianceSummary, useComplianceTrends } from '../hooks/useCompliance';
+import { useComplianceResults, useComplianceSummary, useComplianceTrends, useControlPosture } from '../hooks/useCompliance';
+import { ControlPosturePanel } from '../components/compliance/ControlPosturePanel';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useApiClient } from '../hooks/useApiClient';
@@ -184,9 +185,15 @@ function PostureTab(): JSX.Element {
   const [availableFrameworks, setAvailableFrameworks] = useState<string[]>([]);
   const [limit] = useState(50);
   const [offset, setOffset] = useState(0);
+  const [postureFramework, setPostureFramework] = useState<string>('SOC2');
 
   const { data: tenants } = useTenants();
   const { data: nodes } = useNodes({ tenantId: selectedTenant, limit: 1000 });
+
+  const { data: postureData, loading: postureLoading, error: postureError } = useControlPosture({
+    framework: postureFramework,
+    tenant_id: selectedTenant,
+  });
 
   useEffect(() => {
     client.listComplianceFrameworks()
@@ -388,6 +395,15 @@ function PostureTab(): JSX.Element {
         </Panel>
       )}
 
+      <ControlPosturePanel
+        framework={postureFramework}
+        onFrameworkChange={setPostureFramework}
+        posture={postureData}
+        loading={postureLoading}
+        error={postureError}
+        tenantSelected={Boolean(selectedTenant)}
+      />
+
       <Panel padding="sm" tone="inset" eyebrow={`RESULTS · ${results.length} of ${pagination.total}`} title="Compliance results">
         <DataTable
           columns={columns} rows={results} rowKey={(r) => r.id}
@@ -571,7 +587,11 @@ function PoliciesTab(): JSX.Element {
         use_real_scan: true,
       });
       setEvalResults(res.results);
-      showToast(`Evaluation complete — ${res.results.length} result(s)`, 'success');
+      if (res.metadata?.no_policies_assigned) {
+        showToast('No policies assigned to this node — assign policies before scanning.', 'error');
+      } else {
+        showToast(`Evaluation complete — ${res.results.length} result(s)`, 'success');
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Evaluation failed', 'error');
     } finally {
@@ -630,7 +650,15 @@ function PoliciesTab(): JSX.Element {
           </Button>
         </div>
 
-        {evalResults !== null && (
+        {evalResults !== null && evalResults.length === 0 && (
+          <div className="mt-3">
+            <EmptyState
+              title="No policies assigned to this node"
+              description="Assign CIS-mapped or custom policies to this node before running an evaluation. Until policies are assigned, scans return no results — synthetic placeholders are no longer fabricated."
+            />
+          </div>
+        )}
+        {evalResults !== null && evalResults.length > 0 && (
           <div className="mt-3 flex flex-col gap-2">
             <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
               Results ({evalResults.length})

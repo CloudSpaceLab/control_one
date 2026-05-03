@@ -81,6 +81,10 @@ func TestPingEndpointAuthentication(t *testing.T) {
 func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
 	t.Parallel()
 
+	// Synthetic fallback was removed in PR 1 (Compliance Foundation). When a
+	// node has no policies assigned, the scan job runs cleanly and emits its
+	// completion audit log but persists no results — the UI surfaces that as
+	// no_policies_assigned. This test asserts that contract.
 	logger := zap.NewNop()
 	tenantID := uuid.New()
 	jobID := uuid.New()
@@ -133,9 +137,8 @@ func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
 		t.Fatalf("compliance scan handler not registered")
 	}
 
-	results := store.complianceResults[jobID]
-	if len(results) == 0 {
-		t.Fatalf("expected compliance results persisted")
+	if len(store.complianceResults[jobID]) != 0 {
+		t.Fatalf("expected zero persisted results when node has no policies, got %d", len(store.complianceResults[jobID]))
 	}
 
 	if len(store.auditLogs) == 0 || store.auditLogs[len(store.auditLogs)-1].Action != "compliance.scan.completed" {
@@ -698,31 +701,27 @@ func TestComplianceEvaluateEndpoint(t *testing.T) {
 		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Synthetic fallback was removed in PR 1: when no store / no policies are
+	// assigned, the endpoint returns empty results plus no_policies_assigned
+	// metadata so the UI can render an empty state instead of fabricated zeros.
 	var resp struct {
 		Results []struct {
-			RuleID    string `json:"rule_id"`
-			Passed    bool   `json:"passed"`
-			Severity  string `json:"severity"`
-			Details   string `json:"details"`
-			CheckedAt string `json:"checked_at"`
+			RuleID string `json:"rule_id"`
 		} `json:"results"`
+		Metadata map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	expectedResults := len(ruleSets) + len(certifications)
-	if len(resp.Results) != expectedResults {
-		t.Fatalf("expected %d results, got %d", expectedResults, len(resp.Results))
+	if len(resp.Results) != 0 {
+		t.Fatalf("expected zero results without policies, got %d", len(resp.Results))
 	}
-	if resp.Results[0].Passed {
-		t.Fatalf("expected first rule to fail based on policies, got passed result")
+	if resp.Metadata == nil || resp.Metadata["no_policies_assigned"] != true {
+		t.Fatalf("expected no_policies_assigned metadata, got %+v", resp.Metadata)
 	}
-	if resp.Results[0].Severity != "high" {
-		t.Fatalf("expected first rule severity high, got %s", resp.Results[0].Severity)
-	}
-	if resp.Results[0].CheckedAt == "" || !strings.Contains(resp.Results[0].Details, nodeID.String()) {
-		t.Fatalf("expected checked_at and details to reference node")
-	}
+	_ = ruleSets
+	_ = certifications
+	_ = nodeID
 
 	t.Run("invalid payload rejected", func(t *testing.T) {
 		rec := call([]byte(`{"region":"us","rulesets":["cis"]}`))
@@ -1234,6 +1233,12 @@ type fakeStore struct {
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+
+	// UC7 — misconduct & whistleblowing.
+	misconductCases   map[uuid.UUID]*storage.MisconductCase
+	whistleblowerSubs []storage.WhistleblowerSubmission
+	caseEvidenceLinks map[uuid.UUID][]storage.CaseEvidenceLink
+	riskSignals       map[uuid.UUID][]storage.RiskSignal
 }
 
 type stubQueue struct{}
@@ -1325,6 +1330,8 @@ func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.
 }
 
 func (f *fakeStore) UpdateTenant(_ context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i, tenant := range f.tenants {
 		if tenant.ID == id {
 			f.tenants[i].Name = name
@@ -1336,6 +1343,8 @@ func (f *fakeStore) UpdateTenant(_ context.Context, id uuid.UUID, name string) (
 }
 
 func (f *fakeStore) DeleteTenant(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i, tenant := range f.tenants {
 		if tenant.ID == id {
 			f.tenants = append(f.tenants[:i], f.tenants[i+1:]...)
@@ -1623,6 +1632,8 @@ func (f *fakeStore) DeleteNode(_ context.Context, id uuid.UUID) error {
 }
 
 func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if tenant.ID == uuid.Nil {
 		tenant.ID = uuid.New()
 	}
@@ -1635,6 +1646,8 @@ func (f *fakeStore) CreateTenant(_ context.Context, tenant *storage.Tenant) (*st
 }
 
 func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset int) ([]storage.Tenant, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	prefix = strings.ToLower(strings.TrimSpace(prefix))
 	var filtered []storage.Tenant
 	for _, tenant := range f.tenants {
@@ -1691,6 +1704,8 @@ func (f *fakeStore) ListJobs(_ context.Context, tenantID uuid.UUID, jobType stri
 }
 
 func (f *fakeStore) GetTenant(_ context.Context, id uuid.UUID) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, t := range f.tenants {
 		if t.ID == id {
 			copy := t
@@ -1700,9 +1715,14 @@ func (f *fakeStore) GetTenant(_ context.Context, id uuid.UUID) (*storage.Tenant,
 	return nil, nil
 }
 
-func (f *fakeStore) EnsureTenant(ctx context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
-	if t, _ := f.GetTenant(ctx, id); t != nil {
-		return t, nil
+func (f *fakeStore) EnsureTenant(_ context.Context, id uuid.UUID, name string) (*storage.Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.tenants {
+		if t.ID == id {
+			copy := t
+			return &copy, nil
+		}
 	}
 	tenant := storage.Tenant{ID: id, Name: name, CreatedAt: time.Now()}
 	f.tenants = append(f.tenants, tenant)
@@ -3828,6 +3848,154 @@ func (f *fakeStore) UpdateAuditReportStatus(_ context.Context, _ uuid.UUID, _ st
 	return nil
 }
 
+// Framework control mapping + coverage stubs (PR 1 Compliance Foundation).
+func (f *fakeStore) ListControlMappings(_ context.Context, _ string) ([]storage.ControlMappingRow, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetControlCoverage(_ context.Context, _ uuid.UUID, _ string, _, _ time.Time) ([]storage.ControlCoverage, error) {
+	return nil, nil
+}
+func (f *fakeStore) CountResultsForReport(_ context.Context, _ uuid.UUID, _ string, _, _ time.Time) (int, int, error) {
+	return 0, 0, nil
+}
+func (f *fakeStore) GetPerNodeMatrix(_ context.Context, _ uuid.UUID, _ string, _, _ time.Time, _ int) ([]storage.NodeControlRow, error) {
+	return nil, nil
+}
+
+// Heartbeat inventory + firewall stubs (PR 2).
+func (f *fakeStore) ReplaceNodePackages(_ context.Context, _ uuid.UUID, _ []storage.NodePackage) error {
+	return nil
+}
+func (f *fakeStore) ListNodePackages(_ context.Context, _ uuid.UUID) ([]storage.NodePackage, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetNodeInventorySync(_ context.Context, _ uuid.UUID) (*storage.NodeInventorySync, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertNodeInventorySync(_ context.Context, _ storage.NodeInventorySync) error {
+	return nil
+}
+func (f *fakeStore) TouchNodeInventorySync(_ context.Context, _ uuid.UUID, _ string) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) UpsertNodeFirewallState(_ context.Context, _ storage.NodeFirewallState) error {
+	return nil
+}
+func (f *fakeStore) GetNodeFirewallState(_ context.Context, _ uuid.UUID) (*storage.NodeFirewallState, error) {
+	return nil, nil
+}
+
+// Network security stubs (PR 3)
+func (f *fakeStore) CreateNodeFirewallRule(_ context.Context, _ storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) SetNodeFirewallRuleJobID(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeFirewallRuleApplied(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeFirewallRuleFailed(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeFirewallRuleRemoved(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) ListPendingNodeFirewallRules(_ context.Context, _ uuid.UUID) ([]storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListNodeFirewallRulesForEntityAction(_ context.Context, _ uuid.UUID) ([]storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListActiveBlocks(_ context.Context, _ uuid.UUID, _, _ int, _ bool) ([]storage.ActiveBlock, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetNodeFirewallRuleByJobID(_ context.Context, _ uuid.UUID) (*storage.NodeFirewallRule, error) {
+	return nil, nil
+}
+
+// Agent self-update rollout stubs (PR 4a)
+func (f *fakeStore) GetAgentRolloutState(_ context.Context, _ uuid.UUID) (*storage.AgentRolloutState, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertAgentRolloutState(_ context.Context, _ uuid.UUID, _ storage.AgentRolloutUpdate) (*storage.AgentRolloutState, error) {
+	return nil, nil
+}
+
+// Patch management stubs (PR 4)
+func (f *fakeStore) CreatePatchDeployment(_ context.Context, _ storage.PatchDeployment) (*storage.PatchDeployment, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListPatchDeployments(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.PatchDeployment, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetPatchDeployment(_ context.Context, _ uuid.UUID) (*storage.PatchDeployment, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdatePatchDeploymentStatus(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
+	return nil
+}
+func (f *fakeStore) CreateNodePatchState(_ context.Context, _ storage.NodePatchState) (*storage.NodePatchState, error) {
+	return nil, nil
+}
+func (f *fakeStore) SetNodePatchStateJobID(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodePatchApplied(_ context.Context, _ uuid.UUID, _ int, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodePatchFailed(_ context.Context, _ uuid.UUID, _ string, _ string) error {
+	return nil
+}
+func (f *fakeStore) ListPendingNodePatchStates(_ context.Context, _ uuid.UUID) ([]storage.NodePatchState, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListNodePatchStatesForDeployment(_ context.Context, _ uuid.UUID) ([]storage.NodePatchState, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetNodePatchStateByJobID(_ context.Context, _ uuid.UUID) (*storage.NodePatchState, error) {
+	return nil, nil
+}
+
+// Patch management — Wave C stubs.
+func (f *fakeStore) GetNodePatchConfig(_ context.Context, _ uuid.UUID) (*storage.NodePatchConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertNodePatchConfig(_ context.Context, in storage.NodePatchConfig) (*storage.NodePatchConfig, error) {
+	return &in, nil
+}
+func (f *fakeStore) CreateMaintenanceWindow(_ context.Context, in storage.MaintenanceWindow) (*storage.MaintenanceWindow, error) {
+	return &in, nil
+}
+func (f *fakeStore) GetMaintenanceWindow(_ context.Context, _ uuid.UUID) (*storage.MaintenanceWindow, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListMaintenanceWindows(_ context.Context, _ uuid.UUID) ([]storage.MaintenanceWindow, error) {
+	return nil, nil
+}
+func (f *fakeStore) MarkMaintenanceWindowOpen(_ context.Context, _ uuid.UUID, _ *uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkMaintenanceWindowClosing(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) MarkMaintenanceWindowClosed(_ context.Context, _ uuid.UUID) error  { return nil }
+func (f *fakeStore) MarkMaintenanceWindowAborted(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) ForceCloseMaintenanceWindow(_ context.Context, _ uuid.UUID) error  { return nil }
+func (f *fakeStore) CreateSquidProxy(_ context.Context, in storage.SquidProxy) (*storage.SquidProxy, error) {
+	return &in, nil
+}
+func (f *fakeStore) GetSquidProxy(_ context.Context, _ uuid.UUID) (*storage.SquidProxy, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListSquidProxies(_ context.Context, _ uuid.UUID) ([]storage.SquidProxy, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateSquidProxyStatus(_ context.Context, _ uuid.UUID, _ string, _ string) error {
+	return nil
+}
+func (f *fakeStore) UpdateSquidProxyWhitelist(_ context.Context, _ uuid.UUID, _ []string) error {
+	return nil
+}
+
 // ComplianceReview stubs
 func (f *fakeStore) ListComplianceReviews(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.ComplianceReview, int, error) {
 	return nil, 0, nil
@@ -3844,3 +4012,319 @@ func (f *fakeStore) CompleteComplianceReview(_ context.Context, _ uuid.UUID, _ u
 func (f *fakeStore) DeleteComplianceReview(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
+
+// Predictive server downtime stubs (Use Case 5 / PR 31)
+func (f *fakeStore) GetNodeHealthScore(_ context.Context, _ uuid.UUID) (*storage.NodeHealthScore, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertNodeHealthScore(_ context.Context, _ storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListAtRiskNodes(_ context.Context, _ uuid.UUID, _ int) ([]storage.AtRiskNodeRow, error) {
+	return nil, nil
+}
+
+// Misconduct & whistleblowing stubs (UC7). The fakeStore keeps an in-memory
+// map of cases + submissions + signals so handler tests can round-trip
+// without a real database.
+func (f *fakeStore) ensureMisconductMaps() {
+	if f.misconductCases == nil {
+		f.misconductCases = map[uuid.UUID]*storage.MisconductCase{}
+	}
+	if f.whistleblowerSubs == nil {
+		f.whistleblowerSubs = []storage.WhistleblowerSubmission{}
+	}
+	if f.caseEvidenceLinks == nil {
+		f.caseEvidenceLinks = map[uuid.UUID][]storage.CaseEvidenceLink{}
+	}
+	if f.riskSignals == nil {
+		f.riskSignals = map[uuid.UUID][]storage.RiskSignal{}
+	}
+}
+
+func (f *fakeStore) CreateMisconductCase(_ context.Context, p storage.CreateMisconductCaseParams) (*storage.MisconductCase, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	now := time.Now()
+	c := &storage.MisconductCase{
+		ID:            uuid.New(),
+		TenantID:      p.TenantID,
+		Status:        "open",
+		OpenedAt:      now,
+		OpenedBy:      p.OpenedBy,
+		Summary:       p.Summary,
+		SubjectUserID: p.SubjectUserID,
+		SubjectLabel:  p.SubjectLabel,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	f.misconductCases[c.ID] = c
+	return c, nil
+}
+
+func (f *fakeStore) GetMisconductCase(_ context.Context, id uuid.UUID) (*storage.MisconductCase, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	if c, ok := f.misconductCases[id]; ok {
+		copy := *c
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListMisconductCases(_ context.Context, filter storage.MisconductCaseFilter, limit, offset int) ([]storage.MisconductCase, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	out := []storage.MisconductCase{}
+	for _, c := range f.misconductCases {
+		if c.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.Status != "" && c.Status != filter.Status {
+			continue
+		}
+		out = append(out, *c)
+	}
+	total := len(out)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return out[offset:end], total, nil
+}
+
+func (f *fakeStore) UpdateMisconductCase(_ context.Context, id uuid.UUID, p storage.UpdateMisconductCaseParams) (*storage.MisconductCase, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	c, ok := f.misconductCases[id]
+	if !ok {
+		return nil, nil
+	}
+	if p.Status != "" {
+		c.Status = p.Status
+	}
+	if p.Summary != nil {
+		c.Summary = *p.Summary
+	}
+	if p.RiskScore != nil {
+		c.RiskScore = *p.RiskScore
+	}
+	if p.SubjectUserID != nil {
+		v := *p.SubjectUserID
+		c.SubjectUserID = &v
+	}
+	if p.SubjectLabel != nil {
+		v := *p.SubjectLabel
+		c.SubjectLabel = &v
+	}
+	c.UpdatedAt = time.Now()
+	copy := *c
+	return &copy, nil
+}
+
+func (f *fakeStore) SetMisconductCaseRiskScore(_ context.Context, id uuid.UUID, score int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	if c, ok := f.misconductCases[id]; ok {
+		c.RiskScore = score
+		c.UpdatedAt = time.Now()
+	}
+	return nil
+}
+
+func (f *fakeStore) CreateWhistleblowerSubmission(_ context.Context, p storage.CreateWhistleblowerSubmissionParams) (*storage.WhistleblowerSubmission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	ws := storage.WhistleblowerSubmission{
+		ID:             uuid.New(),
+		TokenHash:      p.TokenHash,
+		SubmittedAt:    time.Now(),
+		BodyEncrypted:  p.BodyEncrypted,
+		BodyNonce:      p.BodyNonce,
+		RetentionUntil: p.RetentionUntil,
+		Status:         "received",
+	}
+	f.whistleblowerSubs = append(f.whistleblowerSubs, ws)
+	return &ws, nil
+}
+
+func (f *fakeStore) GetWhistleblowerSubmission(_ context.Context, id uuid.UUID) (*storage.WhistleblowerSubmission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	for i := range f.whistleblowerSubs {
+		if f.whistleblowerSubs[i].ID == id {
+			ws := f.whistleblowerSubs[i]
+			return &ws, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListAllWhistleblowerSubmissions(_ context.Context) ([]storage.WhistleblowerSubmission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	out := make([]storage.WhistleblowerSubmission, len(f.whistleblowerSubs))
+	copy(out, f.whistleblowerSubs)
+	return out, nil
+}
+
+func (f *fakeStore) SweepWhistleblowerSubmissions(_ context.Context, now time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	kept := f.whistleblowerSubs[:0]
+	var deleted int64
+	for _, ws := range f.whistleblowerSubs {
+		if ws.RetentionUntil.Before(now) {
+			deleted++
+			continue
+		}
+		kept = append(kept, ws)
+	}
+	f.whistleblowerSubs = kept
+	return deleted, nil
+}
+
+func (f *fakeStore) AttachCaseEvidence(_ context.Context, caseID, evidenceID uuid.UUID) (*storage.CaseEvidenceLink, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	link := storage.CaseEvidenceLink{CaseID: caseID, EvidenceID: evidenceID, AttachedAt: time.Now()}
+	f.caseEvidenceLinks[caseID] = append(f.caseEvidenceLinks[caseID], link)
+	return &link, nil
+}
+
+func (f *fakeStore) ListCaseEvidence(_ context.Context, caseID uuid.UUID) ([]storage.CaseEvidenceLink, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	links := f.caseEvidenceLinks[caseID]
+	out := make([]storage.CaseEvidenceLink, len(links))
+	copy(out, links)
+	return out, nil
+}
+
+func (f *fakeStore) CreateRiskSignal(_ context.Context, p storage.CreateRiskSignalParams) (*storage.RiskSignal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	occurred := p.OccurredAt
+	if occurred.IsZero() {
+		occurred = time.Now()
+	}
+	rs := storage.RiskSignal{
+		ID:         uuid.New(),
+		CaseID:     p.CaseID,
+		SignalType: p.SignalType,
+		Severity:   p.Severity,
+		SourceID:   p.SourceID,
+		OccurredAt: occurred,
+		Weight:     p.Weight,
+	}
+	if p.SourceTable != "" {
+		v := p.SourceTable
+		rs.SourceTable = &v
+	}
+	f.riskSignals[p.CaseID] = append(f.riskSignals[p.CaseID], rs)
+	return &rs, nil
+}
+
+func (f *fakeStore) ListRiskSignals(_ context.Context, caseID uuid.UUID) ([]storage.RiskSignal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	signals := f.riskSignals[caseID]
+	out := make([]storage.RiskSignal, len(signals))
+	copy(out, signals)
+	return out, nil
+}
+
+func (f *fakeStore) DeleteRiskSignalsForCase(_ context.Context, caseID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureMisconductMaps()
+	delete(f.riskSignals, caseID)
+	return nil
+}
+
+func (f *fakeStore) CountAuditLogsForActor(_ context.Context, actorID uuid.UUID, _ time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, log := range f.auditLogs {
+		if log.ActorID == actorID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeStore) CountSecurityEventsBySeverity(_ context.Context, _ uuid.UUID, _ time.Time) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (f *fakeStore) CountFailedComplianceForTenant(_ context.Context, _ uuid.UUID, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+// Finacle integration stubs (UC6). Behaviour-bearing tests live in
+// finacle_test.go and use a dedicated wrapping store.
+func (f *fakeStore) CreateFinacleConnection(_ context.Context, _ storage.CreateFinacleConnectionParams) (*storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetFinacleConnection(_ context.Context, _ uuid.UUID) (*storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListFinacleConnections(_ context.Context, _ uuid.UUID) ([]storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateFinacleConnection(_ context.Context, _ uuid.UUID, _ storage.UpdateFinacleConnectionParams) (*storage.FinacleConnection, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteFinacleConnection(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CreateFinacleShiftConfig(_ context.Context, _ storage.CreateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetFinacleShiftConfig(_ context.Context, _ uuid.UUID) (*storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListFinacleShiftConfigs(_ context.Context, _ uuid.UUID) ([]storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateFinacleShiftConfig(_ context.Context, _ uuid.UUID, _ storage.UpdateFinacleShiftConfigParams) (*storage.FinacleShiftConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteFinacleShiftConfig(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) UpsertFinacleProfile(_ context.Context, _ storage.UpsertFinacleProfileParams) (*storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateFinacleProfile(_ context.Context, _ uuid.UUID, _ storage.UpdateFinacleProfileParams) (*storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetFinacleProfile(_ context.Context, _ uuid.UUID) (*storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListFinacleProfiles(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.FinacleProfile, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) ListFinacleProfilesByShift(_ context.Context, _ uuid.UUID) ([]storage.FinacleProfile, error) {
+	return nil, nil
+}
+func (f *fakeStore) MarkFinacleProfileRotated(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeStore) DeleteFinacleProfile(_ context.Context, _ uuid.UUID) error { return nil }

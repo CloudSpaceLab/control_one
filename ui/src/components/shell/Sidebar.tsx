@@ -61,7 +61,13 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Compliance',
     items: [
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
-      { to: '/audit', label: 'Audit', icon: FileText },
+      {
+        to: '/misconduct',
+        label: 'Misconduct & whistleblowing',
+        icon: ShieldAlert,
+        roles: ['investigator', 'admin'],
+      },
+      { to: '/audit', label: 'Audit log', icon: FileText },
       { to: '/behavioral', label: 'Behavioral', icon: Activity },
       { to: '/data-security', label: 'Data security', icon: KeyRound },
     ],
@@ -69,6 +75,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Analytics',
     items: [
+      { to: '/security/network', label: 'Network security', icon: Network },
+      { to: '/rules', label: 'Rules', icon: ShieldAlert, roles: ['admin', 'operator'] },
       { to: '/telemetry', label: 'Telemetry', icon: Activity },
       { to: '/reports', label: 'Reports', icon: FileText },
       { to: '/dashboards', label: 'Custom dashboards', icon: Layers },
@@ -79,6 +87,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/access', label: 'Just-in-time', icon: KeyRound },
       { to: '/sessions', label: 'Session replay', icon: Terminal },
+      { to: '/access/finacle', label: 'Finacle profiles', icon: Building2, roles: ['admin', 'operator'] },
       { to: '/users', label: 'Users', icon: UserIcon, roles: ['admin'] },
       { to: '/roles', label: 'Roles', icon: UserIcon, roles: ['admin'] },
     ],
@@ -89,6 +98,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/nodes', label: 'Nodes', icon: Server },
       { to: '/hypervisors', label: 'Hypervisors', icon: Boxes, roles: ['admin'] },
       { to: '/templates', label: 'Templates', icon: FileText, roles: ['admin', 'operator'] },
+      { to: '/infrastructure/patch', label: 'Patch management', icon: ShieldAlert, roles: ['admin', 'operator'] },
       { to: '/jobs', label: 'Jobs', icon: Workflow },
     ],
   },

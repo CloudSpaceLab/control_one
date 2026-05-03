@@ -3,6 +3,7 @@ import {
   ComplianceResult,
   ComplianceSummary,
   ComplianceTrend,
+  ControlPostureResponse,
   ListComplianceResultsParams,
   ComplianceTrendsParams,
   PaginatedResponse,
@@ -215,3 +216,71 @@ export function useComplianceTrends(params: ComplianceTrendsParams = {}): UseCom
   };
 }
 
+
+
+interface ControlPostureState {
+  data: ControlPostureResponse | null;
+  loading: boolean;
+  error: string | null;
+}
+
+export interface UseControlPostureParams {
+  framework?: string;
+  tenant_id?: string;
+  period_start?: string;
+  period_end?: string;
+}
+
+export interface UseControlPostureResult extends ControlPostureState {
+  reload: () => void;
+}
+
+// useControlPosture loads per-control coverage roll-ups for a tenant + framework.
+// Returns null data until both framework and tenant_id are provided. Empty
+// coverage (NO_COVERAGE for every control) is rendered by the consumer rather
+// than treated as an error here — it's a normal state for new tenants.
+export function useControlPosture(params: UseControlPostureParams): UseControlPostureResult {
+  const api = useApiClient();
+  const handleError = useApiErrorHandler('Failed to load control posture');
+  const [state, setState] = useState<ControlPostureState>({ data: null, loading: false, error: null });
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const normalized = useMemo(
+    () => ({
+      framework: params.framework,
+      tenant_id: params.tenant_id,
+      period_start: params.period_start,
+      period_end: params.period_end,
+    }),
+    [params.framework, params.tenant_id, params.period_start, params.period_end],
+  );
+
+  useEffect(() => {
+    if (!normalized.framework || !normalized.tenant_id) {
+      setState({ data: null, loading: false, error: null });
+      return;
+    }
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    api
+      .getControlPosture({
+        framework: normalized.framework,
+        tenant_id: normalized.tenant_id,
+        period_start: normalized.period_start,
+        period_end: normalized.period_end,
+      })
+      .then((response) => {
+        if (cancelled) return;
+        setState({ data: response, loading: false, error: null });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setState({ data: null, loading: false, error: handleError(error) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, normalized, reloadToken, handleError]);
+
+  return { ...state, reload: () => setReloadToken((t) => t + 1) };
+}
