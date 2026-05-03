@@ -173,7 +173,11 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
                 {rows.map((r) => {
                   const isSelected = selected.has(r.conn_id);
                   const node = r.node_id ? nodesById.get(r.node_id) : null;
-                  const peer = r.src_ip === ip || `${r.src_ip}` === ip ? `${r.dst_ip ?? ''}:${r.dst_port ?? ''}` : `${r.src_ip ?? ''}:${r.src_port ?? ''}`;
+                  // Show whichever endpoint is the *other* side of the
+                  // connection from the IP we're investigating.
+                  const peer = r.src_ip === ip
+                    ? `${r.dst_ip ?? ''}:${r.dst_port ?? ''}`
+                    : `${r.src_ip ?? ''}:${r.src_port ?? ''}`;
                   return (
                     <tr
                       key={r.conn_id}

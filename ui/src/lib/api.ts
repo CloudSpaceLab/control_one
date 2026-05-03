@@ -1235,6 +1235,23 @@ export interface NodeHealthScore {
   computed_at?: string;
 }
 
+export interface AIConfigResponse {
+  tenant_id: string;
+  provider: string;
+  model: string;
+  base_url: string;
+  has_api_key: boolean;
+  updated_at?: string;
+}
+
+export interface AIConfigPut {
+  provider: string;
+  model: string;
+  base_url: string;
+  /** Empty preserves the previously stored key. */
+  api_key: string;
+}
+
 export interface NodeService {
   id: string;
   node_id: string;
@@ -1563,6 +1580,31 @@ export class APIClient {
   async listNodeServices(nodeId: string): Promise<{ data: NodeService[] }> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<{ data: NodeService[] }>(`/api/v1/nodes/${encoded}/services`);
+  }
+
+  async getAIConfig(tenantId: string): Promise<AIConfigResponse> {
+    return this.request<AIConfigResponse>(`/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async updateAIConfig(tenantId: string, payload: AIConfigPut): Promise<void> {
+    await this.request<void>(`/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async testAIConfig(tenantId: string): Promise<{ ok: boolean; reply?: string; error?: string }> {
+    return this.request<{ ok: boolean; reply?: string; error?: string }>(
+      `/api/v1/ai/test?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST' },
+    );
+  }
+
+  async askAI(tenantId: string, question: string): Promise<{ answer: string; citations?: string[] }> {
+    return this.request<{ answer: string; citations?: string[] }>(
+      `/api/v1/ai/ask?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST', body: JSON.stringify({ question }) },
+    );
   }
 
   async getKnowledgeGraphMarkdown(tenantId: string): Promise<string> {

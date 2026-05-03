@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -227,7 +228,12 @@ func writeMarkdown(w http.ResponseWriter, body string) {
 }
 
 func (s *Server) buildKnowledgeGraph(r *http.Request, tenantID uuid.UUID) (string, error) {
-	tenant, err := s.store.GetTenant(r.Context(), tenantID)
+	ctx := r.Context()
+	return s.buildKnowledgeGraphCtx(ctx, tenantID)
+}
+
+func (s *Server) buildKnowledgeGraphCtx(ctx context.Context, tenantID uuid.UUID) (string, error) {
+	tenant, err := s.store.GetTenant(ctx, tenantID)
 	if err != nil {
 		return "", fmt.Errorf("get tenant: %w", err)
 	}
@@ -235,12 +241,12 @@ func (s *Server) buildKnowledgeGraph(r *http.Request, tenantID uuid.UUID) (strin
 		return "", fmt.Errorf("tenant not found")
 	}
 
-	nodes, _, err := s.store.ListNodes(r.Context(), tenantID, "", 1000, 0)
+	nodes, _, err := s.store.ListNodes(ctx, tenantID, "", 1000, 0)
 	if err != nil {
 		return "", fmt.Errorf("list nodes: %w", err)
 	}
 
-	services, err := s.store.ListNodeServicesForTenant(r.Context(), tenantID)
+	services, err := s.store.ListNodeServicesForTenant(ctx, tenantID)
 	if err != nil {
 		return "", fmt.Errorf("list services: %w", err)
 	}
@@ -328,13 +334,24 @@ func serviceURL(svc storage.NodeService, n storage.Node) string {
 	if svc.ProbeStatus == nil {
 		return ""
 	}
-	scheme := "http"
-	if svc.Port == 443 || svc.Port == 8443 || strings.Contains(strings.ToLower(svc.ServiceKind), "https") {
-		scheme = "https"
+	// listen_addr tells us whether the service is reachable off-host.
+	// Loopback-only binds were probed locally by the agent; surfacing a
+	// public URL for them would lie. Operators only see clickable URLs
+	// for services that are actually exposed.
+	bind := svc.ListenAddr
+	if bind == "127.0.0.1" || bind == "::1" || strings.HasPrefix(bind, "127.") {
+		return ""
 	}
 	host := n.PublicIP.String
 	if host == "" {
 		host = nodeDisplayName(n)
+	}
+	if host == "" {
+		return ""
+	}
+	scheme := "http"
+	if svc.Port == 443 || svc.Port == 8443 || strings.Contains(strings.ToLower(svc.ServiceKind), "https") {
+		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%d/", scheme, host, svc.Port)
 }

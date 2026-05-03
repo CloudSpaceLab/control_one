@@ -1,16 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Cpu,
-  HardDrive,
-  KeyRound,
-  MemoryStick,
-  RefreshCw,
-  Server,
-  Trash2,
-} from 'lucide-react';
+import { ArrowLeft, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
 import {
   Alert,
   Eyebrow,
@@ -794,5 +784,3 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-// Re-export icons so unused-import lint stays quiet on the few we keep for future use.
-export const _icons = { Server, AlertTriangle, Cpu, MemoryStick, HardDrive };

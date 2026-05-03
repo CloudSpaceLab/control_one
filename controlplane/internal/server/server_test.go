@@ -4352,3 +4352,11 @@ func (f *fakeStore) CountRuleTriggersBetween(_ context.Context, _ uuid.UUID, _ t
 func (f *fakeStore) GetSecurityEventSeries(_ context.Context, _ uuid.UUID, _ time.Time, _ string) ([]storage.SecurityEventPoint, error) {
 	return nil, nil
 }
+
+// Ask CISO LLM config (Phase 2).
+func (f *fakeStore) GetAIConfig(_ context.Context, _ uuid.UUID) (*storage.AIConfig, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpsertAIConfig(_ context.Context, _ storage.AIConfig) error {
+	return nil
+}

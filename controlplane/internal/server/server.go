@@ -370,6 +370,9 @@ type Store interface {
 	ReplaceNodeServices(context.Context, uuid.UUID, uuid.UUID, []storage.NodeService) error
 	ListNodeServicesForNode(context.Context, uuid.UUID) ([]storage.NodeService, error)
 	ListNodeServicesForTenant(context.Context, uuid.UUID) ([]storage.NodeService, error)
+	// Ask CISO LLM config (Phase 2). Feature-gated by FEATURE_AI_ASK.
+	GetAIConfig(context.Context, uuid.UUID) (*storage.AIConfig, error)
+	UpsertAIConfig(context.Context, storage.AIConfig) error
 	// Network security — operator-driven IP blocks fanned out to per-node rules (PR 3).
 	CreateNodeFirewallRule(context.Context, storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error)
 	SetNodeFirewallRuleJobID(context.Context, uuid.UUID, uuid.UUID) error
@@ -936,6 +939,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
 	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
+	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
+	s.baseRouter.HandleFunc("/api/v1/ai/test", s.handleAITest)
+	s.baseRouter.HandleFunc("/api/v1/ai/ask", s.handleAIAsk)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
