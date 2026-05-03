@@ -17,6 +17,7 @@ const SavedSearches = lazy(() => import('./pages/investigate/Saved').then((m) =>
 
 const Tenants = lazy(() => import('./pages/Tenants').then((m) => ({ default: m.Tenants })));
 const Nodes = lazy(() => import('./pages/Nodes').then((m) => ({ default: m.Nodes })));
+const NodeDetail = lazy(() => import('./pages/NodeDetail').then((m) => ({ default: m.NodeDetail })));
 const FleetEnroll = lazy(() => import('./pages/FleetEnroll').then((m) => ({ default: m.FleetEnroll })));
 const Hypervisors = lazy(() => import('./pages/Hypervisors').then((m) => ({ default: m.Hypervisors })));
 const Jobs = lazy(() => import('./pages/Jobs').then((m) => ({ default: m.Jobs })));
@@ -114,6 +115,7 @@ export function App(): JSX.Element {
                 <Route path="investigate/:type/:id" element={<EntityDetail />} />
                 <Route path="tenants" element={<Tenants />} />
                 <Route path="nodes" element={<Nodes />} />
+                <Route path="nodes/:id" element={<NodeDetail />} />
                 <Route path="fleet-enroll" element={<FleetEnroll />} />
                 <Route path="hypervisors" element={<Hypervisors />} />
                 <Route path="jobs" element={<Jobs />} />

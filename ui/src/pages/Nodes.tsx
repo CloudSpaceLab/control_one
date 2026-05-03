@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { SectionHeader, Panel, KpiTile, EmptyState, DataTable, SelectField, StatusTag } from '../components/kit';
 import type { StateTone } from '../components/kit/types';
 import { Button } from '@/components/ui/button';
@@ -126,6 +127,7 @@ function componentBreakdownEntries(components: Record<string, unknown>): Array<{
 
 export function Nodes(): JSX.Element {
   const api = useApiClient();
+  const navigate = useNavigate();
   const { data: tenants, reload: reloadTenants } = useTenants();
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [hostnameFilter, setHostnameFilter] = useState('');
@@ -472,9 +474,9 @@ export function Nodes(): JSX.Element {
             type="button"
             variant="secondary"
             size="sm"
-            onClick={() => openNodeDetails(row.original.id)}
+            onClick={() => navigate(`/nodes/${row.original.id}`)}
           >
-            {selectedNodeId === row.original.id ? 'Hide' : 'View'}
+            Open
           </Button>
           <Button
             type="button"
