@@ -3569,6 +3569,7 @@ export interface SquidProxy {
 
 export interface ConnectionRow {
   conn_id: string;
+  node_id?: string;
   correlation_id?: string;
   bastion_session_id?: string;
   started_at: string;
