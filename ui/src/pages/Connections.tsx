@@ -1,59 +1,76 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useApiClient } from '../hooks/useApiClient';
-import { SectionHeader, IpActionMenu } from '../components/kit';
-import { Badge } from '../components/Badge';
-import { EmptyState } from '../components/EmptyState';
-import EventTimeline from '../components/EventTimeline';
-import StatusDot from '../components/glyphs/StatusDot';
-import { useTenant } from '../providers/TenantProvider';
-import type { ConnectionDetail, ConnectionRow } from '../lib/api';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowRight } from 'lucide-react';
+import {
+  Alert,
+  DataTable,
+  EmptyState,
+  IpActionMenu,
+  KpiTile,
+  SectionHeader,
+  StatusDot,
+} from '@/components/kit';
+import { Badge } from '@/components/Badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ConnectionDetailSheet } from '@/components/investigate/ConnectionDetailSheet';
+import { entityRoute } from '@/lib/entity';
+import { formatBytes, formatDuration, formatTs, isIpv4 } from '@/lib/format';
+import { useApiClient } from '@/hooks/useApiClient';
+import { useTenant } from '@/providers/TenantProvider';
+import type { ConnectionRow } from '@/lib/api';
+import type { ColumnDef } from '@tanstack/react-table';
 
-// Connections — full lifecycle table the user asked for. src/dst, pid,
-// process, started/finished, duration, bytes_out, threat_match. Click a
-// row → forensic timeline panel keyed by correlation_id.
+// Connections — full lifecycle table. Click a row → forensic timeline sheet
+// keyed by correlation_id. When the user types a complete IP and submits
+// (Enter / Investigate IP →), we redirect to the canonical IP investigate
+// page (cross-node aggregate view + side-by-side compare).
 export function Connections(): JSX.Element {
   const client = useApiClient();
+  const navigate = useNavigate();
   const { currentTenantId } = useTenant();
+
   const [rows, setRows] = useState<ConnectionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<{ ip?: string; threatOnly: boolean }>({ threatOnly: false });
-  const [selected, setSelected] = useState<ConnectionDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [ipInput, setIpInput] = useState('');
+  const [appliedIp, setAppliedIp] = useState('');
+  const [threatOnly, setThreatOnly] = useState(false);
+  const [openConnId, setOpenConnId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    // Backend requires both tenant_id and ip — skip auto-load until ip is entered
-    if (!filter.ip) return;
+    if (!appliedIp) return;
     setLoading(true);
     try {
-      const resp = await client.listConnections({ tenantId: currentTenantId ?? undefined, ip: filter.ip, limit: 100 });
-      setRows(filter.threatOnly ? resp.filter((r) => r.threat_match) : resp);
+      const resp = await client.listConnections({
+        tenantId: currentTenantId ?? undefined,
+        ip: appliedIp,
+        limit: 200,
+      });
+      setRows(threatOnly ? resp.filter((r) => r.threat_match) : resp);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'load failed');
     } finally {
       setLoading(false);
     }
-  }, [client, currentTenantId, filter.ip, filter.threatOnly]);
+  }, [client, currentTenantId, appliedIp, threatOnly]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  const openDetail = useCallback(
-    async (row: ConnectionRow) => {
-      setDetailLoading(true);
-      try {
-        const detail = await client.getConnectionDetail(row.conn_id);
-        setSelected(detail);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'load failed');
-      } finally {
-        setDetailLoading(false);
-      }
-    },
-    [client],
-  );
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const value = ipInput.trim();
+    if (isIpv4(value)) {
+      // Canonical IP investigate page handles cross-node aggregation, compare,
+      // and lifecycle drill-in — funnel users there instead of duplicating.
+      navigate(entityRoute('ip', value));
+      return;
+    }
+    setAppliedIp(value);
+  };
 
   const totals = useMemo(
     () => ({
@@ -64,234 +81,182 @@ export function Connections(): JSX.Element {
     [rows],
   );
 
+  const columns = useMemo<ColumnDef<ConnectionRow>[]>(
+    () => [
+      {
+        header: 'Started',
+        accessorKey: 'started_at',
+        cell: ({ row }) => (
+          <span className="font-mono text-xs text-text-secondary tabular-nums">
+            {formatTs(row.original.started_at)}
+          </span>
+        ),
+      },
+      {
+        header: 'Process',
+        accessorKey: 'process_name',
+        cell: ({ row }) => (
+          <span>
+            {row.original.process_name ?? '—'}
+            {row.original.pid && (
+              <span className="ml-1 font-mono text-[0.7rem] text-text-muted">
+                pid {row.original.pid}
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        header: 'User',
+        accessorKey: 'user_name',
+        cell: ({ row }) => row.original.user_name ?? '—',
+      },
+      {
+        header: 'Source',
+        accessorKey: 'src_ip',
+        cell: ({ row }) => (
+          <span
+            className="inline-flex items-center gap-1 font-mono text-xs"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {row.original.src_ip ?? '—'}
+            {row.original.src_port ? `:${row.original.src_port}` : ''}
+            {row.original.src_ip && <IpActionMenu ip={row.original.src_ip} />}
+          </span>
+        ),
+      },
+      {
+        header: 'Destination',
+        accessorKey: 'dst_ip',
+        cell: ({ row }) => (
+          <span
+            className="inline-flex items-center gap-1 font-mono text-xs"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {row.original.dst_ip ?? '—'}
+            {row.original.dst_port ? `:${row.original.dst_port}` : ''}
+            {row.original.dst_ip && <IpActionMenu ip={row.original.dst_ip} />}
+          </span>
+        ),
+      },
+      {
+        header: 'Bytes out',
+        accessorKey: 'bytes_out',
+        cell: ({ row }) => (
+          <span className="font-mono text-xs tabular-nums">
+            {formatBytes(row.original.bytes_out ?? 0)}
+          </span>
+        ),
+      },
+      {
+        header: 'Duration',
+        accessorKey: 'duration_ms',
+        cell: ({ row }) => (
+          <span className="font-mono text-xs tabular-nums text-text-secondary">
+            {formatDuration(row.original.duration_ms)}
+          </span>
+        ),
+      },
+      {
+        header: 'Threat',
+        accessorKey: 'threat_match',
+        cell: ({ row }) =>
+          row.original.threat_match ? (
+            <Badge variant="critical">{row.original.threat_feed ?? 'match'}</Badge>
+          ) : (
+            <StatusDot tone="healthy" size="xs" label="clean" />
+          ),
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="DETECT & RESPOND · NETWORK FORENSICS"
         title="Connections"
-        description="Every external connection on every node — process, user, bytes in/out, duration. Click a row to see files touched, DB queries, and log events that share its correlation window."
+        description="Every external connection across every node — process, user, bytes, duration, threat. Click a row to see correlated files, queries, and log events; type an IP to pivot to the cross-node investigate view."
       />
-      <div className="flex items-center gap-2">
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={handleSubmit}
+        role="search"
+        aria-label="Filter connections"
+      >
+        <Input
+          type="search"
+          placeholder="IP address (8.8.8.8) — Enter to investigate cross-node"
+          value={ipInput}
+          onChange={(e) => setIpInput(e.target.value)}
+          className="max-w-md"
+        />
+        <label className="inline-flex select-none items-center gap-2 text-sm text-text-secondary">
           <input
-            type="search"
-            placeholder="Filter by IP…"
-            value={filter.ip ?? ''}
-            onChange={(e) => setFilter((f) => ({ ...f, ip: e.target.value || undefined }))}
-            className="search-input"
+            type="checkbox"
+            checked={threatOnly}
+            onChange={(e) => setThreatOnly(e.target.checked)}
+            className="accent-brand-500"
           />
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <input
-              type="checkbox"
-              checked={filter.threatOnly}
-              onChange={(e) => setFilter((f) => ({ ...f, threatOnly: e.target.checked }))}
-            />
-            Threat-match only
-          </label>
-          <button type="button" className="secondary-button" onClick={refresh} disabled={loading}>
-            {loading ? 'Loading…' : 'Refresh'}
-          </button>
-        </div>
+          Threat-match only
+        </label>
+        <Button type="submit" variant="secondary" size="md">
+          {isIpv4(ipInput.trim()) ? (
+            <>
+              Investigate IP <ArrowRight className="h-4 w-4" />
+            </>
+          ) : (
+            'Refresh'
+          )}
+        </Button>
+      </form>
+
+      {error && <Alert variant="critical">{error}</Alert>}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile
+          label="Total bytes out"
+          value={formatBytes(totals.bytesOut)}
+          tone="warning"
+        />
+        <KpiTile
+          label="Total bytes in"
+          value={formatBytes(totals.bytesIn)}
+          tone="healthy"
+        />
+        <KpiTile
+          label="Threat hits"
+          value={String(totals.threatHits)}
+          tone={totals.threatHits > 0 ? 'critical' : 'healthy'}
+        />
       </div>
 
-      {error ? <p className="error-banner">{error}</p> : null}
-
-      <div className="card-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 16 }}>
-        <Stat label="Total bytes out" value={formatBytes(totals.bytesOut)} state="warning" />
-        <Stat label="Total bytes in" value={formatBytes(totals.bytesIn)} state="healthy" />
-        <Stat label="Threat hits" value={String(totals.threatHits)} state={totals.threatHits > 0 ? 'critical' : 'healthy'} />
-      </div>
-
-      {rows.length === 0 && !loading ? (
+      {rows.length === 0 && !loading && !appliedIp ? (
         <EmptyState
-          title={filter.ip ? 'No connections found' : 'Enter an IP address to search'}
-          description={
-            filter.ip
-              ? 'No connections match the current filter in this window.'
-              : 'Type a source or destination IP in the filter above, then click Refresh to load connections.'
-          }
+          title="Enter an IP to load connections"
+          description="Type a source or destination IP and press Enter — you'll be sent to the cross-node investigate view, with side-by-side compare for any two lifecycles."
+        />
+      ) : rows.length === 0 && !loading ? (
+        <EmptyState
+          title="No connections found"
+          description="Nothing matches the current filter in this window."
         />
       ) : (
-        <table className="data-table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th>Started</th>
-              <th>Process</th>
-              <th>User</th>
-              <th>Source</th>
-              <th>Destination</th>
-              <th>Bytes out</th>
-              <th>Duration</th>
-              <th>Threat</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.conn_id} onClick={() => openDetail(r)} style={{ cursor: 'pointer' }}>
-                <td>{formatTs(r.started_at)}</td>
-                <td>
-                  {r.process_name ?? '—'}
-                  {r.pid ? <small style={{ color: 'var(--text-secondary)' }}> · pid {r.pid}</small> : null}
-                </td>
-                <td>{r.user_name ?? '—'}</td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    {r.src_ip ?? '—'}
-                    {r.src_port ? `:${r.src_port}` : ''}
-                    {r.src_ip ? <IpActionMenu ip={r.src_ip} /> : null}
-                  </span>
-                </td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    {r.dst_ip ?? '—'}
-                    {r.dst_port ? `:${r.dst_port}` : ''}
-                    {r.dst_ip ? <IpActionMenu ip={r.dst_ip} /> : null}
-                  </span>
-                </td>
-                <td>{formatBytes(r.bytes_out ?? 0)}</td>
-                <td>{formatDuration(r.duration_ms)}</td>
-                <td>
-                  {r.threat_match ? (
-                    <Badge variant="critical">{r.threat_feed ?? 'match'}</Badge>
-                  ) : (
-                    <StatusDot state="healthy" title="clean" />
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {selected ? (
-        <DetailPanel
-          detail={selected}
-          loading={detailLoading}
-          onClose={() => setSelected(null)}
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.conn_id}
+          loading={loading}
+          onRowClick={(r) => setOpenConnId(r.conn_id)}
+          sticky
         />
-      ) : null}
-    </div>
-  );
-}
-
-function Stat({ label, value, state }: { label: string; value: string; state: 'healthy' | 'warning' | 'critical' }) {
-  return (
-    <div className="card" style={{ padding: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <StatusDot state={state} />
-        <small style={{ color: 'var(--text-secondary)' }}>{label}</small>
-      </div>
-      <div style={{ fontSize: 22, fontWeight: 600 }}>{value}</div>
-    </div>
-  );
-}
-
-function DetailPanel({
-  detail,
-  loading,
-  onClose,
-}: {
-  detail: ConnectionDetail;
-  loading: boolean;
-  onClose: () => void;
-}) {
-  const c = detail.connection;
-  return (
-    <aside
-      style={{
-        position: 'fixed',
-        right: 0,
-        top: 0,
-        bottom: 0,
-        width: 'min(540px, 90vw)',
-        background: 'var(--bg-secondary)',
-        borderLeft: '1px solid var(--border-color)',
-        boxShadow: `0 0 24px var(--shadow)`,
-        padding: 24,
-        overflow: 'auto',
-        zIndex: 100,
-        animation: `slide-in var(--motion-med) var(--ease-out)`,
-      }}
-    >
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
-        <div>
-          <p className="eyebrow">Connection</p>
-          <h3 style={{ marginTop: 4, wordBreak: 'break-all' }}>{c.conn_id}</h3>
-        </div>
-        <button type="button" className="secondary-button" onClick={onClose}>
-          Close
-        </button>
-      </header>
-
-      <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13, marginTop: 16 }}>
-        <dt>Process</dt>
-        <dd>{c.process_name ?? '—'} · pid {c.pid ?? '—'}</dd>
-        <dt>User</dt>
-        <dd>{c.user_name ?? '—'}</dd>
-        <dt>Source</dt>
-        <dd>{c.src_ip}:{c.src_port}</dd>
-        <dt>Destination</dt>
-        <dd>{c.dst_ip}:{c.dst_port} ({c.protocol ?? 'tcp'})</dd>
-        <dt>Started</dt>
-        <dd>{formatTs(c.started_at)}</dd>
-        <dt>Ended</dt>
-        <dd>{c.ended_at ? formatTs(c.ended_at) : '— still active'}</dd>
-        <dt>Duration</dt>
-        <dd>{formatDuration(c.duration_ms)}</dd>
-        <dt>Bytes in / out</dt>
-        <dd>
-          {formatBytes(c.bytes_in ?? 0)} / <strong>{formatBytes(c.bytes_out ?? 0)}</strong>
-        </dd>
-        {c.threat_match ? (
-          <>
-            <dt>Threat</dt>
-            <dd>
-              <Badge variant="critical">{c.threat_feed ?? 'match'} · score {c.threat_score ?? 0}</Badge>
-            </dd>
-          </>
-        ) : null}
-        {c.bastion_session_id ? (
-          <>
-            <dt>Bastion session</dt>
-            <dd style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{c.bastion_session_id}</dd>
-          </>
-        ) : null}
-      </dl>
-
-      <h4 style={{ marginTop: 24 }}>Forensic timeline</h4>
-      {loading ? (
-        <p style={{ color: 'var(--text-secondary)' }}>Loading correlated events…</p>
-      ) : (
-        <EventTimeline events={detail.events ?? []} />
       )}
 
-      <style>{`@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }`}</style>
-    </aside>
+      <ConnectionDetailSheet
+        connId={openConnId}
+        onClose={() => setOpenConnId(null)}
+      />
+    </div>
   );
-}
-
-function formatTs(iso?: string): string {
-  if (!iso) return '—';
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
-function formatBytes(n: number): string {
-  if (!n) return '0 B';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function formatDuration(ms?: number): string {
-  if (!ms) return '—';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
-  return `${Math.floor(ms / 3_600_000)}h ${Math.floor((ms % 3_600_000) / 60_000)}m`;
 }
