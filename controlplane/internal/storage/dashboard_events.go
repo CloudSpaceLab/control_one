@@ -135,7 +135,6 @@ func (s *Store) CountSecurityEvents(ctx context.Context, f SecurityEventFilter) 
 	if f.Until != nil {
 		where = append(where, fmt.Sprintf("fired_at < $%d", idx))
 		args = append(args, *f.Until)
-		idx++
 	}
 	q := `
 		SELECT
@@ -482,7 +481,7 @@ func (s *Store) GetSecurityEventSeries(ctx context.Context, tenantID uuid.UUID, 
 	if err != nil {
 		return nil, fmt.Errorf("query security event series: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var points []SecurityEventPoint
 	for rows.Next() {

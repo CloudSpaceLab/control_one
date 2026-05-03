@@ -32,6 +32,7 @@ import {
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
+import { OnboardAIPanel } from '../components/settings/OnboardAIPanel';
 import { toast } from 'sonner';
 import type {
   ConnectionProbe,
@@ -217,6 +218,8 @@ export function Onboard(): JSX.Element {
         title="Add servers to Control One"
         description="Single host or pull a fleet from a hypervisor — both reuse the existing fleet-enrol job pipeline so onboarding stays consistent across paths."
       />
+
+      <OnboardAIPanel />
 
       <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
         <TabsList>
