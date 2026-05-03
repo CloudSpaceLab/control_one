@@ -1235,6 +1235,23 @@ export interface NodeHealthScore {
   computed_at?: string;
 }
 
+export interface NodeService {
+  id: string;
+  node_id: string;
+  tenant_id: string;
+  pid: number;
+  process: string;
+  binary_path: string;
+  listen_addr: string;
+  port: number;
+  service_kind: string;
+  probe_status?: number | null;
+  probe_server?: string | null;
+  probe_title?: string | null;
+  probe_content_type?: string | null;
+  observed_at: string;
+}
+
 export interface AtRiskNode {
   node_id: string;
   tenant_id: string;
@@ -1541,6 +1558,23 @@ export class APIClient {
   async getNodeHealth(nodeId: string): Promise<NodeHealthScore> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<NodeHealthScore>(`/api/v1/nodes/${encoded}/health`);
+  }
+
+  async listNodeServices(nodeId: string): Promise<{ data: NodeService[] }> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request<{ data: NodeService[] }>(`/api/v1/nodes/${encoded}/services`);
+  }
+
+  async getKnowledgeGraphMarkdown(tenantId: string): Promise<string> {
+    const encoded = encodeURIComponent(tenantId);
+    const resp = await fetch(`${this.baseUrl}/api/v1/knowledge-graph/${encoded}.md`, {
+      headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+      credentials: 'include',
+    });
+    if (!resp.ok) {
+      throw new Error(`knowledge graph fetch failed: ${resp.status}`);
+    }
+    return resp.text();
   }
 
   async listAtRiskNodes(tenantId?: string): Promise<AtRiskFleetResponse> {

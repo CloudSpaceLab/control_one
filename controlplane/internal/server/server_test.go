@@ -4328,3 +4328,27 @@ func (f *fakeStore) MarkFinacleProfileRotated(_ context.Context, _ uuid.UUID, _ 
 	return nil
 }
 func (f *fakeStore) DeleteFinacleProfile(_ context.Context, _ uuid.UUID) error { return nil }
+
+// Pre-existing dashboard metric (test was missing this method).
+func (f *fakeStore) CountRemediationsSince(_ context.Context, _ uuid.UUID, _ time.Time, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+// Listening-services inventory (Phase 1 of /round-up knowledge graph).
+func (f *fakeStore) ReplaceNodeServices(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []storage.NodeService) error {
+	return nil
+}
+func (f *fakeStore) ListNodeServicesForNode(_ context.Context, _ uuid.UUID) ([]storage.NodeService, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListNodeServicesForTenant(_ context.Context, _ uuid.UUID) ([]storage.NodeService, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) CountRuleTriggersBetween(_ context.Context, _ uuid.UUID, _ time.Time, _ time.Time) (map[string]int, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetSecurityEventSeries(_ context.Context, _ uuid.UUID, _ time.Time, _ string) ([]storage.SecurityEventPoint, error) {
+	return nil, nil
+}

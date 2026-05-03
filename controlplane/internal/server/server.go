@@ -366,6 +366,10 @@ type Store interface {
 	TouchNodeInventorySync(context.Context, uuid.UUID, string) (int64, error)
 	UpsertNodeFirewallState(context.Context, storage.NodeFirewallState) error
 	GetNodeFirewallState(context.Context, uuid.UUID) (*storage.NodeFirewallState, error)
+	// Listening-services inventory (Phase 1 of /round-up knowledge graph).
+	ReplaceNodeServices(context.Context, uuid.UUID, uuid.UUID, []storage.NodeService) error
+	ListNodeServicesForNode(context.Context, uuid.UUID) ([]storage.NodeService, error)
+	ListNodeServicesForTenant(context.Context, uuid.UUID) ([]storage.NodeService, error)
 	// Network security — operator-driven IP blocks fanned out to per-node rules (PR 3).
 	CreateNodeFirewallRule(context.Context, storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error)
 	SetNodeFirewallRuleJobID(context.Context, uuid.UUID, uuid.UUID) error
@@ -931,6 +935,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/dashboards/", s.handleDashboardSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
+	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
@@ -1872,6 +1877,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 
 	if len(segments) == 2 && segments[1] == "health" {
 		s.handleNodeHealth(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "services" {
+		s.handleNodeServices(w, r, nodeID)
 		return
 	}
 
