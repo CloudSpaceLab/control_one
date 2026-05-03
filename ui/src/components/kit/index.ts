@@ -19,4 +19,6 @@ export { ExpandableCode, type ExpandableCodeProps } from './ExpandableCode';
 export { FileUploadButton, type FileUploadButtonProps } from './FileUploadButton';
 export { CommandSection, type CommandSectionProps } from './CommandSection';
 export { IpActionMenu, type IpActionMenuProps } from './IpActionMenu';
+export { Alert, type AlertProps, type AlertVariant } from './Alert';
+export { Loader, type LoaderProps } from './Loader';
 export { TONE_COLOR, TONE_CLASS, type StateTone, type EntityType } from './types';
