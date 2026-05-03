@@ -28,12 +28,12 @@ func aiAskEnabled() bool {
 // ── /api/v1/ai/config ─────────────────────────────────────────────────────
 
 type aiConfigResponse struct {
-	TenantID    string `json:"tenant_id"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
-	BaseURL     string `json:"base_url"`
-	HasAPIKey   bool   `json:"has_api_key"`
-	UpdatedAt   string `json:"updated_at,omitempty"`
+	TenantID  string `json:"tenant_id"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	BaseURL   string `json:"base_url"`
+	HasAPIKey bool   `json:"has_api_key"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 type aiConfigPutRequest struct {

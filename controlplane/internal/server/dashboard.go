@@ -45,14 +45,14 @@ type dashboardOverviewResponse struct {
 	RuleTriggerCounts24h  map[string]int      `json:"rule_trigger_counts_24h"`
 	RemediationsApplied24 int                 `json:"remediations_applied_24h"`
 	// Period-comparison fields (populated when ?period= is supplied).
-	Period               string                 `json:"period,omitempty"`
-	SecurityEventDelta   *periodDelta           `json:"security_event_delta,omitempty"`
-	RuleTriggerDelta     *periodDelta           `json:"rule_trigger_delta,omitempty"`
-	RemediationDelta     *periodDelta           `json:"remediation_delta,omitempty"`
-	CompliancePassRate   float64                `json:"compliance_pass_rate,omitempty"`
-	CompliancePassDelta  *periodDelta           `json:"compliance_pass_delta,omitempty"`
-	SecurityEventSeries  []secEventPoint        `json:"security_event_series,omitempty"`
-	ComplianceSeries     []complianceTrendPoint `json:"compliance_series,omitempty"`
+	Period              string                 `json:"period,omitempty"`
+	SecurityEventDelta  *periodDelta           `json:"security_event_delta,omitempty"`
+	RuleTriggerDelta    *periodDelta           `json:"rule_trigger_delta,omitempty"`
+	RemediationDelta    *periodDelta           `json:"remediation_delta,omitempty"`
+	CompliancePassRate  float64                `json:"compliance_pass_rate,omitempty"`
+	CompliancePassDelta *periodDelta           `json:"compliance_pass_delta,omitempty"`
+	SecurityEventSeries []secEventPoint        `json:"security_event_series,omitempty"`
+	ComplianceSeries    []complianceTrendPoint `json:"compliance_series,omitempty"`
 }
 
 // periodWindow returns the current and previous half-open time windows for
