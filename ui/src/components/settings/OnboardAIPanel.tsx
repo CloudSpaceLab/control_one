@@ -119,7 +119,7 @@ export function OnboardAIPanel(): JSX.Element | null {
     >
       <p className="text-sm text-text-secondary">
         Drop in an Anthropic key now and operators can ask questions
-        grounded in this tenant's knowledge graph the moment the first node
+        grounded in this tenant&apos;s knowledge graph the moment the first node
         reports in. The key is stored per-tenant; you can update or rotate
         it later from Settings → AI.
       </p>

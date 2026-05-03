@@ -38,7 +38,7 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const query = useConnectionsByIp({ tenantId: currentTenantId ?? undefined, ip, since });
-  const rows = query.data ?? [];
+  const rows = useMemo(() => query.data ?? [], [query.data]);
 
   const { data: allNodes } = useNodes({ tenantId: currentTenantId ?? undefined, limit: 500, offset: 0 });
   const nodesById = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);

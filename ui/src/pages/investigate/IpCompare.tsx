@@ -84,6 +84,10 @@ function DiffStrip({ a, b }: { a: ConnectionDetail; b: ConnectionDetail }) {
   const ca = a.connection;
   const cb = b.connection;
 
+  // a and b reference the connection objects we already memoise via
+  // react-query; rebuilding cells whenever either one changes identity is
+  // the intent — the rule's "missing primitive deps" warning is a false
+  // positive when the parent objects are themselves the cache keys.
   const cells = useMemo(
     () => [
       {
@@ -122,6 +126,7 @@ function DiffStrip({ a, b }: { a: ConnectionDetail; b: ConnectionDetail }) {
         cmp: (x: string, y: string) => (x === y ? 0 : x === 'clean' ? -1 : 1),
       },
     ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [a, b],
   );
 

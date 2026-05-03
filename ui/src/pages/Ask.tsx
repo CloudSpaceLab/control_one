@@ -148,7 +148,7 @@ export function Ask(): JSX.Element {
       <p className="text-xs text-text-muted">
         <Sparkles className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
         Ctrl/⌘+Enter sends. The model sees the per-tenant knowledge_graph.md
-        as grounded context (cached 5 min); it does not see raw events or
+        as grounded context (cached 5 min); it does not see raw events or
         secrets.
       </p>
     </div>

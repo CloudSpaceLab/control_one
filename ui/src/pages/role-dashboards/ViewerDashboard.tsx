@@ -40,7 +40,8 @@ export interface ViewerDashboardProps {
   readonly?: boolean;
 }
 
-export function ViewerDashboard({ readonly: _readonly }: ViewerDashboardProps): JSX.Element {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function ViewerDashboard(_props: ViewerDashboardProps): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [period, setPeriod] = useState('30d');
