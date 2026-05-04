@@ -252,6 +252,11 @@ type AgentConfig struct {
 	BinaryDir            string `mapstructure:"binary_dir"`
 	SigningKeyPath       string `mapstructure:"signing_key_path"`
 	SigningPublicKeyPath string `mapstructure:"signing_public_key_path"`
+	// AllowAnonymousBinary lets the operator opt-in to legacy unauthenticated
+	// `/api/v1/agent/binary{,/manifest}` access. Default is false (token
+	// required) — keeping older bootstrap paths working is the only reason to
+	// flip this on, and it should be paired with a network-level allow-list.
+	AllowAnonymousBinary bool `mapstructure:"allow_anonymous_binary"`
 }
 
 // RegistrationConfig controls node bootstrap handshake behavior.
