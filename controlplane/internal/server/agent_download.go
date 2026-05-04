@@ -245,8 +245,8 @@ if [[ -n "$CA_CERT_FILE" ]]; then
     CURL_OPTS+=(--cacert "$CA_CERT_FILE")
 fi
 
-BINARY_URL="${CONTROL_PLANE_URL}/api/v1/agent/binary?os=${OS}&arch=${ARCH}"
-MANIFEST_URL="${CONTROL_PLANE_URL}/api/v1/agent/binary/manifest?os=${OS}&arch=${ARCH}"
+BINARY_URL="${CONTROL_PLANE_URL}/api/v1/agent/binary?os=${OS}&arch=${ARCH}&token=${TOKEN}"
+MANIFEST_URL="${CONTROL_PLANE_URL}/api/v1/agent/binary/manifest?os=${OS}&arch=${ARCH}&token=${TOKEN}"
 BINARY_PATH="${TMP_DIR}/controlone-agent"
 MANIFEST_PATH="${TMP_DIR}/manifest.json"
 
@@ -292,9 +292,10 @@ $SUDO install -m 0755 "$BINARY_PATH" "${INSTALL_DIR}/controlone-agent"
 ok "Installed to ${INSTALL_DIR}/controlone-agent."
 
 ENROLL_ARGS=("--join" "$CONTROL_PLANE_URL" "--token" "$TOKEN")
-[[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE")
 [[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service")
-[[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" ]] && ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM")
+# NOTE: --ca-cert and --init-system are not yet recognized by the agent CLI;
+# CA trust is handled by the system store (install_custom_ca above) and init
+# detection is done by the agent at runtime (cmd/nodeagent/service_linux.go).
 
 info "Enrolling agent..."
 $SUDO "${INSTALL_DIR}/controlone-agent" "${ENROLL_ARGS[@]}" || fatal "Enrollment failed."
@@ -368,8 +369,8 @@ $BinaryPath  = Join-Path $TmpDir 'controlone-agent.exe'
 $ManifestPath = Join-Path $TmpDir 'manifest.json'
 
 try {
-    $BinaryURL   = "$ControlPlaneURL/api/v1/agent/binary?os=windows&arch=$Arch"
-    $ManifestURL = "$ControlPlaneURL/api/v1/agent/binary/manifest?os=windows&arch=$Arch"
+    $BinaryURL   = "$ControlPlaneURL/api/v1/agent/binary?os=windows&arch=$Arch&token=$Token"
+    $ManifestURL = "$ControlPlaneURL/api/v1/agent/binary/manifest?os=windows&arch=$Arch&token=$Token"
 
     Write-Host '[INFO] Fetching binary manifest...'
     try {
