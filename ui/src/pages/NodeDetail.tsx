@@ -37,6 +37,63 @@ import type {
 import type { StateTone } from '@/components/kit/types';
 import { formatTs } from '@/lib/format';
 
+// agentLooksDead returns the reason the agent is not reporting, or null
+// when the node is healthy. Used to gate the AgentRepairBanner so we
+// don't nag operators on healthy nodes.
+function agentLooksDead(node: import('@/lib/api').Node): { reason: string; tone: 'warning' | 'critical' } | null {
+  if (node.state === 'enrollment_failed') {
+    return { reason: 'Enrollment failed — the agent never completed its first call-home.', tone: 'critical' };
+  }
+  if (node.state === 'enrollment_pending' && !node.last_seen_at) {
+    return { reason: 'Enrollment is pending — the agent has been registered but has never reported in.', tone: 'warning' };
+  }
+  if (node.state === 'retired') return null;
+  if (!node.last_seen_at) {
+    return { reason: 'Agent has never reported in.', tone: 'critical' };
+  }
+  // 10× the default 60s heartbeat interval = 10 min stale. Anything older
+  // means the agent process is gone, the host is offline, or routing
+  // broke. Either way, the operator should know.
+  const lastSeen = new Date(node.last_seen_at).getTime();
+  if (!Number.isFinite(lastSeen)) return null;
+  const stale = Date.now() - lastSeen;
+  if (stale > 10 * 60 * 1000) {
+    const minutes = Math.round(stale / 60_000);
+    return {
+      reason: `Agent has not reported in for ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+      tone: stale > 60 * 60 * 1000 ? 'critical' : 'warning',
+    };
+  }
+  return null;
+}
+
+function AgentRepairBanner({
+  node,
+  onRepair,
+}: {
+  node: import('@/lib/api').Node;
+  onRepair: () => void;
+}): JSX.Element | null {
+  const dead = agentLooksDead(node);
+  if (!dead) return null;
+  return (
+    <Alert
+      variant={dead.tone}
+      title="Agent is not checking in"
+      actions={
+        <Button variant="secondary" size="sm" onClick={onRepair}>
+          Repair agent →
+        </Button>
+      }
+    >
+      {dead.reason}{' '}
+      Telemetry, knowledge-graph and recommendations stay empty until the
+      agent reconnects. Use Settings → Repair agent to generate a fresh
+      install command an operator pastes on the host.
+    </Alert>
+  );
+}
+
 function riskTone(risk?: NodeHealthRiskLevel): StateTone {
   switch (risk) {
     case 'critical':
@@ -148,6 +205,8 @@ export function NodeDetail(): JSX.Element {
           </div>
         </div>
       </div>
+
+      <AgentRepairBanner node={node} onRepair={() => setTab('settings')} />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
         <TabsList>
@@ -528,19 +587,19 @@ function SettingsTab({
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <Panel padding="md" eyebrow="RE-ENROLL" title="Update settings on a drifted node">
+      <Panel padding="md" eyebrow="REPAIR / RE-ENROLL" title="Bring a drifted or dead agent back online">
         <p className="text-sm text-text-secondary">
-          Useful when a node is offline because its config drifted. Update settings
-          here — the agent picks them up on the next check-in. If the node can&apos;t
-          reach controlplane, regenerate an enrollment bundle and re-run the
-          installer on the host.
+          Two paths depending on what's wrong: update the node's metadata if the
+          agent is alive but reporting stale config, or regenerate a fresh
+          install command if the agent is dead / never enrolled / can't reach
+          controlplane.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button variant="primary" size="md" onClick={() => setShowUpdate(true)}>
+          <Button variant="secondary" size="md" onClick={() => setShowUpdate(true)}>
             Update settings…
           </Button>
-          <Button variant="secondary" size="md" onClick={() => setShowRegen(true)}>
-            <KeyRound className="h-4 w-4" /> Regenerate enrollment bundle
+          <Button variant="primary" size="md" onClick={() => setShowRegen(true)}>
+            <KeyRound className="h-4 w-4" /> Repair agent…
           </Button>
         </div>
       </Panel>
@@ -729,36 +788,69 @@ function RegenerateBundleDialog({
     }
   };
 
+  // Build the operator-facing one-liner from the live token. The install
+  // script on the controlplane handles agent download + systemd unit + first
+  // call-home, so this is everything an operator needs to run on the host.
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const installCmd = token?.token
+    ? `curl -fsSL '${origin}/api/v1/agent/install-script?token=${encodeURIComponent(token.token)}&platform=linux' | sudo bash`
+    : '';
+
+  const copy = async (label: string, value: string) => {
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    showToast(`${label} copied`, 'success');
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Regenerate enrollment bundle</DialogTitle>
+          <DialogTitle>Repair / re-enroll this agent</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-text-secondary">
-          Issues a one-shot enrollment token for this node so an operator can re-run
-          the installer on the host. The token is scoped to the same tenant ({' '}
-          <span className="font-mono text-xs">{node.tenant_id}</span>) and labeled
-          with this node id.
+          Issues a fresh one-shot enrollment token (24h TTL) scoped to tenant{' '}
+          <span className="font-mono text-xs">{node.tenant_id}</span> and labeled
+          with this node id, then renders a copy-paste install command. Run it on
+          the host as root — the installer handles agent download, systemd unit,
+          and first call-home.
         </p>
         {token ? (
-          <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
-            <Eyebrow>Bootstrap token</Eyebrow>
-            <code className="break-all font-mono text-xs text-foreground">
-              {token.token ?? '(redacted by server)'}
-            </code>
-            <p className="text-xs text-text-muted">Expires {formatTs(token.expires_at)}.</p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() =>
-                navigator.clipboard.writeText(token.token ?? '').then(() =>
-                  showToast('Token copied', 'success'),
-                )
-              }
-            >
-              Copy token
-            </Button>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
+              <div className="flex items-center justify-between">
+                <Eyebrow>Run this on the host</Eyebrow>
+                <Button variant="secondary" size="sm" onClick={() => copy('Install command', installCmd)}>
+                  Copy command
+                </Button>
+              </div>
+              <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed text-text-secondary">
+                <code>{installCmd}</code>
+              </pre>
+              <p className="text-xs text-text-muted">
+                Idempotent — safe to re-run. The installer reuses the same node id
+                via the labeled token.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
+              <div className="flex items-center justify-between">
+                <Eyebrow>Bootstrap token</Eyebrow>
+                <Button variant="ghost" size="sm" onClick={() => copy('Token', token.token ?? '')}>
+                  Copy token
+                </Button>
+              </div>
+              <code className="break-all font-mono text-[0.7rem] text-text-muted">
+                {token.token ?? '(redacted by server)'}
+              </code>
+              <p className="text-xs text-text-muted">Expires {formatTs(token.expires_at)}.</p>
+            </div>
+
+            <DialogFooter>
+              <Button variant="primary" onClick={() => onOpenChange(false)}>
+                Done
+              </Button>
+            </DialogFooter>
           </div>
         ) : (
           <DialogFooter>
@@ -766,7 +858,7 @@ function RegenerateBundleDialog({
               Cancel
             </Button>
             <Button variant="primary" disabled={busy} onClick={generate}>
-              {busy ? 'Generating…' : 'Generate token'}
+              {busy ? 'Generating…' : 'Generate install command'}
             </Button>
           </DialogFooter>
         )}
