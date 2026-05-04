@@ -11,21 +11,28 @@
 }
 .co-palette {
   width: min(640px, calc(100vw - 2rem));
-  background: var(--surface, #0f0f12);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-surface-2, #111118);
+  border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-panel);
   overflow: hidden;
 }
 .co-palette__input {
   width: 100%;
   padding: 0.95rem 1rem;
   background: transparent;
-  color: var(--text, #f0f0f5);
+  color: var(--text-primary);
   border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border-subtle);
   font-size: 0.95rem;
   outline: none;
+  transition: border-color 120ms ease;
+}
+.co-palette__input::placeholder {
+  color: var(--text-muted);
+}
+.co-palette__input:focus {
+  border-bottom-color: var(--border-strong);
 }
 .co-palette__list {
   max-height: 56vh;
@@ -36,7 +43,7 @@
   padding: 0.55rem 1rem 0.2rem;
   font-size: 0.7rem;
   letter-spacing: 0.06em;
-  color: var(--text-muted, #b9b9c2);
+  color: var(--text-muted);
   text-transform: uppercase;
 }
 .co-palette__item {
@@ -47,37 +54,38 @@
   background: transparent;
   border: none;
   text-align: left;
-  color: var(--text, #f0f0f5);
+  color: var(--text-primary);
   padding: 0.6rem 1rem;
   font-size: 0.9rem;
   cursor: pointer;
+  transition: background 80ms ease;
 }
 .co-palette__item--active,
 .co-palette__item:hover {
-  background: rgba(120, 130, 255, 0.12);
+  background: var(--row-hover);
 }
 .co-palette__item small {
-  color: var(--text-muted, #b9b9c2);
+  color: var(--text-muted);
   font-size: 0.75rem;
   margin-left: 1rem;
 }
 .co-palette__empty {
   padding: 1rem;
-  color: var(--text-muted, #b9b9c2);
+  color: var(--text-muted);
   text-align: center;
 }
 .co-palette__footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--border-subtle);
   padding: 0.55rem 1rem;
   font-size: 0.72rem;
-  color: var(--text-muted, #b9b9c2);
+  color: var(--text-muted);
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
 .co-palette__footer kbd {
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 0.7rem;

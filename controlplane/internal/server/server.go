@@ -56,6 +56,7 @@ type Store interface {
 	FindNodesByPublicIP(context.Context, string) ([]storage.Node, error)
 	GetNode(context.Context, uuid.UUID) (*storage.Node, error)
 	SetNodeState(context.Context, uuid.UUID, string) error
+	ResetNodeForReenrollment(context.Context, uuid.UUID) error
 	TouchNodeHeartbeat(context.Context, uuid.UUID) (*storage.Node, error)
 	MarkNodeFirstScan(context.Context, uuid.UUID) (*storage.Node, error)
 	UpdateNodeLabels(context.Context, uuid.UUID, map[string]any) error

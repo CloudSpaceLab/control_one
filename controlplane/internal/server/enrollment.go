@@ -63,9 +63,9 @@ type enrollResponse struct {
 }
 
 type enrollTLS struct {
-	CertPEM   string `json:"cert_pem"`
-	KeyPEM    string `json:"key_pem"`
-	CACertPEM string `json:"ca_cert_pem"`
+	CertPEM   string `json:"client_cert"`
+	KeyPEM    string `json:"client_key"`
+	CACertPEM string `json:"ca_cert"`
 }
 
 type enrollConfig struct {
@@ -386,6 +386,16 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		if needsUpdate {
 			if _, updErr := s.store.UpdateNode(r.Context(), existing); updErr != nil {
 				s.logger.Warn("update node on re-enrollment", zap.Error(updErr))
+			}
+		}
+
+		// Reset nodes that previously failed enrollment (or were retired) so
+		// the state machine can run again from scratch on the next heartbeat +
+		// first-scan cycle. Active and enrollment_pending nodes are left alone.
+		if existing.State == storage.NodeStateEnrollmentFailed || existing.State == storage.NodeStateRetired {
+			if resetErr := s.store.ResetNodeForReenrollment(r.Context(), existing.ID); resetErr != nil {
+				s.logger.Warn("reset node for re-enrollment", zap.Error(resetErr),
+					zap.String("node_id", existing.ID.String()))
 			}
 		}
 

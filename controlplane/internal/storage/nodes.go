@@ -99,6 +99,38 @@ func (s *Store) SetNodeState(ctx context.Context, id uuid.UUID, state string) er
 	return nil
 }
 
+// ResetNodeForReenrollment atomically resets a node to enrollment_pending and
+// clears last_seen_at + first_scan_at so the enrollment gate runs from scratch.
+// Called when an existing node in enrollment_failed or retired state re-enrolls.
+func (s *Store) ResetNodeForReenrollment(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return errors.New("node id is required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET state         = $2,
+		    last_seen_at  = NULL,
+		    first_scan_at = NULL,
+		    updated_at    = $3
+		WHERE id = $1
+	`, id, NodeStateEnrollmentPending, s.clock())
+	if err != nil {
+		return fmt.Errorf("reset node for re-enrollment: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("reset node for re-enrollment rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // TouchNodeHeartbeat bumps nodes.last_seen_at to now. Called from the heartbeat
 // endpoint. Returns the refreshed node so callers can inspect state/first_scan_at
 // atomically without a second query — the mTLS heartbeat handler uses that

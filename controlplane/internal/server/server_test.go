@@ -3391,6 +3391,21 @@ func (f *fakeStore) SetNodeState(_ context.Context, id uuid.UUID, state string) 
 	return sql.ErrNoRows
 }
 
+func (f *fakeStore) ResetNodeForReenrollment(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].State = storage.NodeStateEnrollmentPending
+			f.nodes[i].LastSeenAt = nil
+			f.nodes[i].FirstScanAt = nil
+			f.nodes[i].UpdatedAt = time.Now()
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
 func (f *fakeStore) TouchNodeHeartbeat(_ context.Context, id uuid.UUID) (*storage.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

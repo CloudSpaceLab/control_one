@@ -301,6 +301,51 @@ func TestEnrollLandsNewNodesInEnrollmentPending(t *testing.T) {
 	}
 }
 
+// TestReenrollmentResetsFailedState verifies that re-enrolling a node that
+// previously timed out (enrollment_failed) resets it to enrollment_pending so
+// the heartbeat + first-scan gate can run again from scratch.
+func TestReenrollmentResetsFailedState(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, _ := setupEnrollmentServer(t)
+	t.Cleanup(func() { srv.stopEnrollmentReaper() })
+
+	// 1. First enrollment — node lands in enrollment_pending.
+	rec := enroll(t, srv, map[string]any{
+		"token":      rawToken,
+		"hostname":   "re-enroll-host",
+		"machine_id": "re-enroll-machine",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("first enroll: status = %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+
+	// 2. Simulate reaper timing out the node.
+	store := srv.store.(*fakeStore)
+	store.mu.Lock()
+	store.nodes[0].State = storage.NodeStateEnrollmentFailed
+	store.nodes[0].LastSeenAt = nil
+	store.nodes[0].FirstScanAt = nil
+	store.mu.Unlock()
+
+	// 3. Re-enroll with same machine_id — must return 200 (existing node path).
+	rec2 := enroll(t, srv, map[string]any{
+		"token":      rawToken,
+		"hostname":   "re-enroll-host",
+		"machine_id": "re-enroll-machine",
+	})
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("re-enroll: status = %d (%s), want 200", rec2.Code, rec2.Body.String())
+	}
+
+	// 4. State must be reset to enrollment_pending so the state machine can fire.
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.nodes[0].State != storage.NodeStateEnrollmentPending {
+		t.Fatalf("after re-enroll: state = %q, want enrollment_pending", store.nodes[0].State)
+	}
+}
+
 // TestEnrollReaperFlipsStalePending exercises the full loop at the server
 // level: enrollment creates a pending row, the reaper sees it's stale (we
 // backdate its created_at), and flips it to enrollment_failed.
