@@ -1,0 +1,14 @@
+# Pre-built binary variant — no go build on server (avoids OOM on small VPS).
+# Binaries must be cross-compiled locally and placed in deploy/prebuilt/ before
+# running docker build.
+FROM alpine:3.21 AS certs
+RUN apk add --no-cache ca-certificates
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY prebuilt/controlplane    /usr/local/bin/controlplane
+COPY prebuilt/bootstrap-admin /usr/local/bin/bootstrap-admin
+USER nonroot:nonroot
+EXPOSE 8443 9090
+ENTRYPOINT ["/usr/local/bin/controlplane"]
+CMD ["--config", "/etc/control-one/controlplane.yaml"]
