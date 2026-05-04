@@ -27,13 +27,14 @@ import type {
   PortRule,
 } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
+import { Recommendations } from './Recommendations';
 
 // Lazy-load the visual builder so its drag/drop state machine doesn't slow
 // the initial page render for operators who only want to author rules in the
 // flat form.
 const RuleBuilder = lazy(() => import('./RuleBuilder').then((m) => ({ default: m.RuleBuilder })));
 
-type Tab = 'port' | 'log' | 'builder' | 'templates';
+type Tab = 'port' | 'log' | 'builder' | 'templates' | 'drafts';
 
 function severityTone(severity: string): StateTone {
   const s = severity.toLowerCase();
@@ -149,6 +150,9 @@ export function Rules(): JSX.Element {
             <Library className="h-3.5 w-3.5" />
             Templates
           </TabsTrigger>
+          <TabsTrigger value="drafts">
+            AI Drafts
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="port" className="mt-4">
@@ -239,6 +243,9 @@ export function Rules(): JSX.Element {
               />
             )}
           </div>
+        </TabsContent>
+        <TabsContent value="drafts" className="mt-4">
+          <Recommendations />
         </TabsContent>
       </Tabs>
 

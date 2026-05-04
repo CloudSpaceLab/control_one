@@ -17,7 +17,7 @@ import {
   type RemediationVelocity,
   type FindingAging,
 } from '../components/executive';
-import { KpiTile, Panel } from '../components/kit';
+import { Alert, Eyebrow, KpiTile, Panel } from '../components/kit';
 import { Button } from '../components/ui/button';
 
 const REFRESH_TOPICS = [
@@ -128,14 +128,12 @@ export function Dashboard(): JSX.Element {
   );
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       {/* Executive Risk Dashboard */}
       <div className="flex flex-col gap-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-              Executive Risk Dashboard
-            </p>
+            <Eyebrow>Executive Risk Dashboard</Eyebrow>
             <h2 className="mt-0.5 font-display text-xl font-semibold text-foreground">
               Security Posture at a Glance
             </h2>
@@ -154,17 +152,17 @@ export function Dashboard(): JSX.Element {
           </Button>
         </div>
 
-        {/* Error State */}
         {error && (
-          <div className="rounded-lg border border-state-critical/30 bg-state-critical/10 px-4 py-3 text-sm text-state-critical flex items-center gap-3">
-            <svg className="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-            </svg>
-            <span className="flex-1">{error}</span>
-            <Button variant="ghost" size="sm" onClick={() => { refresh(); refreshExecutiveMetrics(); }}>
-              Retry
-            </Button>
-          </div>
+          <Alert
+            variant="critical"
+            actions={
+              <Button variant="ghost" size="sm" onClick={() => { refresh(); refreshExecutiveMetrics(); }}>
+                Retry
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
         )}
 
         {/* Executive Metrics Grid */}
@@ -217,9 +215,7 @@ export function Dashboard(): JSX.Element {
       {/* Operational Section */}
       <div className="flex flex-col gap-4">
         <div>
-          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-            Operational Details
-          </p>
+          <Eyebrow>Operational Details</Eyebrow>
           <h3 className="mt-0.5 font-display text-lg font-semibold text-foreground">
             Infrastructure Overview
           </h3>
@@ -370,7 +366,7 @@ function FleetTopologyCard({ onNodeClick }: { onNodeClick: (n: TopologyNode) => 
     <Panel padding="md">
       <header className="flex items-center justify-between gap-3">
         <div>
-          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Fleet topology</p>
+          <Eyebrow>Fleet topology</Eyebrow>
           <h3 className="mt-0.5 font-display text-base font-semibold text-foreground">
             {totals.nodes} nodes · live
           </h3>

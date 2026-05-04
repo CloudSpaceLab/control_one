@@ -14,9 +14,13 @@ const InvestigateHome = lazy(() => import('./pages/investigate').then((m) => ({ 
 const SearchResults = lazy(() => import('./pages/investigate/SearchResults').then((m) => ({ default: m.SearchResults })));
 const EntityDetail = lazy(() => import('./pages/investigate/EntityDetail').then((m) => ({ default: m.EntityDetail })));
 const SavedSearches = lazy(() => import('./pages/investigate/Saved').then((m) => ({ default: m.SavedSearches })));
+const KnowledgeGraph = lazy(() => import('./pages/investigate/KnowledgeGraph').then((m) => ({ default: m.KnowledgeGraph })));
+const IpCompare = lazy(() => import('./pages/investigate/IpCompare').then((m) => ({ default: m.IpCompare })));
+const Ask = lazy(() => import('./pages/Ask').then((m) => ({ default: m.Ask })));
 
 const Tenants = lazy(() => import('./pages/Tenants').then((m) => ({ default: m.Tenants })));
 const Nodes = lazy(() => import('./pages/Nodes').then((m) => ({ default: m.Nodes })));
+const NodeDetail = lazy(() => import('./pages/NodeDetail').then((m) => ({ default: m.NodeDetail })));
 const FleetEnroll = lazy(() => import('./pages/FleetEnroll').then((m) => ({ default: m.FleetEnroll })));
 const Hypervisors = lazy(() => import('./pages/Hypervisors').then((m) => ({ default: m.Hypervisors })));
 const Jobs = lazy(() => import('./pages/Jobs').then((m) => ({ default: m.Jobs })));
@@ -25,7 +29,6 @@ const Compliance = lazy(() => import('./pages/Compliance').then((m) => ({ defaul
 const Rules = lazy(() => import('./pages/Rules').then((m) => ({ default: m.Rules })));
 const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
 const Access = lazy(() => import('./pages/Access').then((m) => ({ default: m.Access })));
-const Recommendations = lazy(() => import('./pages/Recommendations').then((m) => ({ default: m.Recommendations })));
 const Reports = lazy(() => import('./pages/Reports').then((m) => ({ default: m.Reports })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
 const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
@@ -41,9 +44,6 @@ const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m
 const Onboard = lazy(() => import('./pages/Onboard').then((m) => ({ default: m.Onboard })));
 const Behavioral = lazy(() => import('./pages/Behavioral').then((m) => ({ default: m.Behavioral })));
 const DataSecurity = lazy(() => import('./pages/DataSecurity').then((m) => ({ default: m.DataSecurity })));
-const ComplianceEvidence = lazy(() => import('./pages/ComplianceEvidence').then((m) => ({ default: m.ComplianceEvidence })));
-const AuditReports = lazy(() => import('./pages/AuditReports').then((m) => ({ default: m.AuditReports })));
-const Frameworks = lazy(() => import('./pages/Frameworks').then((m) => ({ default: m.Frameworks })));
 const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ default: m.TrustCenter })));
 const WhistleblowerIntake = lazy(() => import('./pages/WhistleblowerIntake').then((m) => ({ default: m.WhistleblowerIntake })));
 const WhistleblowerStatus = lazy(() => import('./pages/WhistleblowerStatus').then((m) => ({ default: m.WhistleblowerStatus })));
@@ -115,9 +115,13 @@ export function App(): JSX.Element {
                 <Route path="search" element={<SearchResults />} />
                 <Route path="investigate" element={<InvestigateHome />} />
                 <Route path="investigate/saved" element={<SavedSearches />} />
+                <Route path="investigate/knowledge-graph" element={<KnowledgeGraph />} />
                 <Route path="investigate/:type/:id" element={<EntityDetail />} />
+                <Route path="investigate/ip/:id/compare" element={<IpCompare />} />
+                <Route path="ask" element={<Ask />} />
                 <Route path="tenants" element={<Tenants />} />
                 <Route path="nodes" element={<Nodes />} />
+                <Route path="nodes/:id" element={<NodeDetail />} />
                 <Route path="fleet-enroll" element={<FleetEnroll />} />
                 <Route path="hypervisors" element={<Hypervisors />} />
                 <Route path="jobs" element={<Jobs />} />
@@ -127,7 +131,7 @@ export function App(): JSX.Element {
                 <Route path="rules/builder" element={<Navigate to="/rules" replace />} />
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="access" element={<Access />} />
-                <Route path="recommendations" element={<Recommendations />} />
+                <Route path="recommendations" element={<Navigate to="/rules?tab=drafts" replace />} />
                 <Route path="reports" element={<Reports />} />
                 {/* Network Security (PR 3) — consolidated tab surface. */}
                 <Route path="security/network" element={<NetworkSecurity />} />
@@ -148,9 +152,9 @@ export function App(): JSX.Element {
                 <Route path="settings" element={<Settings />} />
                 <Route path="behavioral" element={<Behavioral />} />
                 <Route path="data-security" element={<DataSecurity />} />
-                <Route path="compliance-evidence" element={<ComplianceEvidence />} />
-                <Route path="audit-reports" element={<AuditReports />} />
-                <Route path="frameworks" element={<Frameworks />} />
+                <Route path="compliance-evidence" element={<Navigate to="/compliance?tab=evidence" replace />} />
+                <Route path="audit-reports" element={<Navigate to="/audit?tab=reports" replace />} />
+                <Route path="frameworks" element={<Navigate to="/compliance?tab=frameworks" replace />} />
                 <Route path="misconduct" element={<Misconduct />} />
                 <Route path="access/finacle" element={<FinacleProfiles />} />
               </Routes>

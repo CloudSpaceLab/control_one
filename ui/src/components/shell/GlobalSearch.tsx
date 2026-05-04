@@ -35,13 +35,14 @@ const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string 
   { label: 'Investigate', route: '/investigate', icon: <Search />, group: 'Pages' },
   { label: 'Saved searches', route: '/investigate/saved', icon: <FileText />, group: 'Pages' },
   { label: 'Rules', route: '/rules', icon: <ShieldAlert />, group: 'Pages' },
-  { label: 'Threat feeds', route: '/threat-feeds', icon: <Network />, group: 'Pages' },
+  { label: 'Network security', route: '/security/network', icon: <Network />, group: 'Pages' },
   { label: 'Compliance', route: '/compliance', icon: <FileText />, group: 'Pages' },
   { label: 'Audit log', route: '/audit', icon: <FileText />, group: 'Pages' },
   { label: 'Telemetry', route: '/telemetry', icon: <Activity />, group: 'Pages' },
   { label: 'Recommendations', route: '/recommendations', icon: <ShieldAlert />, group: 'Pages' },
-  { label: 'Connections', route: '/connections', icon: <Network />, group: 'Pages' },
   { label: 'Sessions', route: '/sessions', icon: <Terminal />, group: 'Pages' },
+  { label: 'Knowledge graph', route: '/investigate/knowledge-graph', icon: <Search />, group: 'Pages' },
+  { label: 'Patch management', route: '/infrastructure/patch', icon: <ShieldAlert />, group: 'Pages' },
   { label: 'Just-in-time access', route: '/access', icon: <UserIcon />, group: 'Pages' },
   { label: 'Nodes', route: '/nodes', icon: <Server />, group: 'Pages' },
   { label: 'Fleet enrol', route: '/fleet-enroll', icon: <Server />, group: 'Pages' },
@@ -56,6 +57,9 @@ const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string 
 ];
 
 const QUICK_NAV_ROUTES = ['/', '/alerts', '/rules', '/nodes', '/settings', '/investigate'];
+
+// Discoverability prompts shown under the empty state.
+const EXAMPLE_QUERIES = ['8.8.8.8', '139.162.40.237', 'admin@', 'sshd'];
 
 const ENTITY_ICON: Record<EntityType, ReactNode> = {
   ip: <Network />,
@@ -131,9 +135,13 @@ export function GlobalSearch({ trigger }: { trigger?: ReactNode }) {
       {triggerNode}
       <CommandDialog open={open} onOpenChange={setOpen}>
         <CommandInput
-          placeholder="Search IP, hash, user, hostname, file, or pages…"
+          placeholder="Paste an IP, hash, hostname, user, or ask…"
           value={query}
           onValueChange={setQuery}
+          onPaste={(e) => {
+            const text = e.clipboardData.getData('text').trim();
+            if (text) setQuery(text);
+          }}
         />
         <CommandList>
           <CommandEmpty>
@@ -143,15 +151,55 @@ export function GlobalSearch({ trigger }: { trigger?: ReactNode }) {
                 <span className="text-xs text-text-muted">Press ↵ to search across all data</span>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-1 py-2">
+              <div className="flex flex-col items-center gap-2 py-3">
                 <Search className="h-8 w-8 text-text-muted opacity-40" />
-                <span className="text-sm text-text-secondary">Search IPs, hashes, hostnames, users…</span>
-                <span className="text-xs text-text-muted">or navigate to any page</span>
+                <span className="text-sm text-text-secondary">Paste an IP, hash, hostname, user…</span>
+                <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                  <span className="text-[0.65rem] uppercase tracking-wider text-text-muted">Try</span>
+                  {EXAMPLE_QUERIES.map((ex) => (
+                    <button
+                      key={ex}
+                      type="button"
+                      className="rounded-full border border-border-subtle bg-surface px-2 py-0.5 font-mono text-[0.65rem] text-text-secondary transition-colors hover:border-border-strong hover:bg-hover hover:text-foreground"
+                      onClick={() => setQuery(ex)}
+                    >
+                      {ex}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </CommandEmpty>
 
-          {detection.type !== 'unknown' && query.trim().length > 1 && (
+          {detection.type === 'ip' && query.trim().length > 1 && (
+            <>
+              <CommandGroup heading="IP address detected">
+                <CommandItem
+                  value={`__ip-investigate-${query}`}
+                  onSelect={() =>
+                    onPick(entityRoute('ip', query.trim()), query.trim())
+                  }
+                  className="my-0.5 border border-brand-500/40 bg-brand-500/5"
+                >
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-brand-500/15 text-brand-400 [&_svg]:h-4 [&_svg]:w-4">
+                    {ENTITY_ICON.ip}
+                  </span>
+                  <div className="flex min-w-0 flex-col">
+                    <span className="text-sm font-semibold text-foreground">
+                      Investigate this IP across all nodes →
+                    </span>
+                    <span className="font-mono text-xs text-text-muted truncate">
+                      {query.trim()} · all connection lifecycles · last 7d
+                    </span>
+                  </div>
+                  <CommandShortcut>↵</CommandShortcut>
+                </CommandItem>
+              </CommandGroup>
+              <CommandSeparator />
+            </>
+          )}
+
+          {detection.type !== 'unknown' && detection.type !== 'ip' && query.trim().length > 1 && (
             <>
               <CommandGroup heading="Investigate">
                 <CommandItem

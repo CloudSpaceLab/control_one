@@ -1,0 +1,177 @@
+name: deploy
+
+# Auto-deploy controlplane + console to the production VPS.
+# Mirrors deploy/deploy_controlplane.py — cross-compiles Go binaries on the
+# runner, builds the UI on the runner, ships both as prebuilt artefacts to
+# /opt/control-one/deploy/ on the server, then runs docker build + docker
+# compose up over SSH. Never runs `go build` on the server (small VPS,
+# cgo/Go toolchain OOMs are a known incident — see deploy_controlplane.py).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy (defaults to main)'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GO_VERSION: '1.25.7'
+      NODE_VERSION: '20'
+      DEPLOY_DIR: /opt/control-one/deploy
+      DEPLOY_AGENT_DIR: /opt/control-one/deploy/agent-binaries
+      DEPLOY_PREBUILT_DIR: /opt/control-one/deploy/prebuilt
+      DEPLOY_UI_DIR: /opt/control-one/deploy/ui-dist
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Cross-compile Go binaries (linux/amd64)
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o dist/controlplane    ./controlplane/cmd/controlplane
+          go build -trimpath -ldflags='-s -w' -o dist/bootstrap-admin ./controlplane/cmd/bootstrap-admin
+          go build -trimpath -ldflags='-s -w' -o dist/controlone-agent-linux-amd64 ./cmd/nodeagent
+          ls -lh dist/
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        working-directory: ui
+        env:
+          # Same-origin: APIClient defaults to '' so '/api/...' resolves to
+          # the same host the UI was loaded from. nginx-edge proxies it to
+          # the controlplane container. Setting VITE_API_URL here would
+          # double-prefix '/api/api/...'.
+          VITE_API_URL: ''
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          ls -lh dist/
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Trust SSH host
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Ensure remote directories
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
+            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx'
+          "
+
+      - name: Upload Go binaries
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          scp -P "${SSH_PORT:-22}" \
+            dist/controlplane \
+            dist/bootstrap-admin \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_PREBUILT_DIR/"
+          scp -P "${SSH_PORT:-22}" \
+            dist/controlone-agent-linux-amd64 \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_AGENT_DIR/"
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
+            chmod +x '$DEPLOY_PREBUILT_DIR/controlplane' '$DEPLOY_PREBUILT_DIR/bootstrap-admin' '$DEPLOY_AGENT_DIR/controlone-agent-linux-amd64'
+          "
+
+      - name: Upload UI dist + Dockerfiles + nginx config
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          # tarball UI dist for one-shot transfer
+          tar -C ui -czf ui-dist.tar.gz dist
+          scp -P "${SSH_PORT:-22}" ui-dist.tar.gz \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/ui-dist.tar.gz"
+          scp -P "${SSH_PORT:-22}" \
+            deploy/Dockerfile.controlplane.prebuilt \
+            deploy/Dockerfile.console.prebuilt \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/"
+          scp -P "${SSH_PORT:-22}" \
+            deploy/nginx/console.conf \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/nginx/console.conf"
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
+            set -e
+            rm -rf '$DEPLOY_UI_DIR'
+            mkdir -p '$DEPLOY_UI_DIR'
+            tar -C '$DEPLOY_UI_DIR' --strip-components=1 -xzf '$DEPLOY_DIR/ui-dist.tar.gz'
+            rm '$DEPLOY_DIR/ui-dist.tar.gz'
+          "
+
+      - name: Build images and restart services
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
+            set -e
+            cd '$DEPLOY_DIR'
+            docker build -t controlone/controlplane:latest \
+              -f Dockerfile.controlplane.prebuilt .
+            docker build -t controlone/console:latest \
+              -f Dockerfile.console.prebuilt .
+            docker compose up -d --force-recreate --no-deps controlplane console
+          "
+
+      - name: Smoke check
+        env:
+          HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL || 'https://control-one.cloudspacetechs.com/healthz' }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 10 "$HEALTHCHECK_URL"; then
+              echo "✓ healthz OK"
+              exit 0
+            fi
+            echo "... attempt $i: waiting 10s for controlplane to come up"
+            sleep 10
+          done
+          echo "✗ healthz never returned 200"
+          exit 1

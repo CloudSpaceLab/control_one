@@ -12,6 +12,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
+import { AISettingsTab } from '../components/settings/AISettingsTab';
 import { KeyRound, Shield, Trash2 } from 'lucide-react';
 
 function formatDate(value?: string): string {
@@ -41,7 +42,7 @@ const AVAILABLE_EVENTS = [
 
 export function Settings(): JSX.Element {
   const api = useApiClient();
-  const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center'>('webhooks');
+  const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai'>('webhooks');
 
   // MFA state
   const [mfaFactors, setMfaFactors] = useState<MFAFactor[]>([]);
@@ -291,13 +292,14 @@ export function Settings(): JSX.Element {
         description="Webhook endpoints and platform integrations."
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center')}>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai')}>
         <TabsList>
           <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="system">System health</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="trust-center">Trust Center</TabsTrigger>
+          <TabsTrigger value="ai">AI</TabsTrigger>
         </TabsList>
 
         <TabsContent value="webhooks" className="mt-4 flex flex-col gap-4">
@@ -804,6 +806,10 @@ export function Settings(): JSX.Element {
               description="Use the Trust Center API endpoints to manage incident reports."
             />
           </Panel>
+        </TabsContent>
+
+        <TabsContent value="ai" className="mt-4">
+          <AISettingsTab />
         </TabsContent>
       </Tabs>
     </div>

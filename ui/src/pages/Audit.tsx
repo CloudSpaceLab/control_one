@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Download, FileText, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import {
+  Chart,
   DataTable,
   EmptyState,
   EntityChip,
@@ -13,6 +14,7 @@ import {
   StatusTag,
   type StateTone,
 } from '../components/kit';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { useAuditLogs } from '../hooks/useAuditLogs';
@@ -20,6 +22,7 @@ import { useTenants } from '../hooks/useTenants';
 import { classifyValue } from '../lib/entity';
 import type { AuditLog } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
+import { AuditReports } from './AuditReports';
 
 function formatDate(value?: string): string {
   if (!value) return '—';
@@ -72,6 +75,7 @@ function exportToCSV(logs: AuditLog[]): void {
 }
 
 export function Audit(): JSX.Element {
+  const [tab, setTab] = useState<'logs' | 'reports'>('logs');
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>();
   const [actorTypeFilter, setActorTypeFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('');
@@ -184,6 +188,21 @@ export function Audit(): JSX.Element {
   const userCount = logs.filter((l) => l.actor_type === 'user').length;
   const systemCount = logs.filter((l) => l.actor_type === 'system').length;
 
+  const actionBarData = useMemo(() => {
+    const counts: Record<string, number> = {};
+    logs.forEach((l) => { counts[l.action] = (counts[l.action] ?? 0) + 1; });
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    return {
+      labels: sorted.map(([k]) => k),
+      datasets: [{
+        label: 'Events',
+        data: sorted.map(([, v]) => v),
+        backgroundColor: 'var(--state-info)',
+        borderRadius: 4,
+      }],
+    };
+  }, [logs]);
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
@@ -202,111 +221,142 @@ export function Audit(): JSX.Element {
         }
       />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiTile label="TOTAL EVENTS" value={pagination.total.toLocaleString()} tone="brand" />
-        <KpiTile label="USER ACTIONS" value={userCount} tone="healthy" />
-        <KpiTile label="SYSTEM EVENTS" value={systemCount} tone="info" />
-      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'logs' | 'reports')}>
+        <TabsList>
+          <TabsTrigger value="logs">Audit Log</TabsTrigger>
+          <TabsTrigger value="reports">Reports</TabsTrigger>
+        </TabsList>
 
-      <Panel padding="md" eyebrow="FILTERS" title="Refine">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <FilterSelect
-            label="Tenant"
-            value={selectedTenant ?? ''}
-            onChange={(v) => { setSelectedTenant(v || undefined); setOffset(0); }}
-            options={[
-              { label: 'All tenants', value: '' },
-              ...tenants.map((t) => ({ label: t.name, value: t.id })),
-            ]}
-          />
-          <FilterSelect
-            label="Actor type"
-            value={actorTypeFilter}
-            onChange={(v) => { setActorTypeFilter(v); setOffset(0); }}
-            options={[
-              { label: 'All types', value: '' },
-              { label: 'User', value: 'user' },
-              { label: 'System', value: 'system' },
-            ]}
-          />
-          <FilterSelect
-            label="Action"
-            value={actionFilter}
-            onChange={(v) => { setActionFilter(v); setOffset(0); }}
-            options={[
-              { label: 'All actions', value: '' },
-              ...uniqueActions.map((a) => ({ label: a, value: a })),
-            ]}
-          />
-          <FilterSelect
-            label="Resource"
-            value={resourceTypeFilter}
-            onChange={(v) => { setResourceTypeFilter(v); setOffset(0); }}
-            options={[
-              { label: 'All resources', value: '' },
-              ...uniqueResourceTypes.map((t) => ({ label: t, value: t })),
-            ]}
-          />
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audit-search">Search</Label>
-            <Input
-              id="audit-search"
-              placeholder="action, resource id…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+        <TabsContent value="logs" className="mt-4 flex flex-col gap-5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <KpiTile label="TOTAL EVENTS" value={pagination.total.toLocaleString()} tone="brand" />
+            <KpiTile label="USER ACTIONS" value={userCount} tone="healthy" />
+            <KpiTile label="SYSTEM EVENTS" value={systemCount} tone="info" />
           </div>
-        </div>
-      </Panel>
 
-      {error && (
-        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
-          <p className="text-sm text-state-critical">{error}</p>
-        </Panel>
-      )}
+          {logs.length > 0 && (
+            <Panel padding="md" eyebrow="ANALYTICS" title="Top actions by volume">
+              <Chart
+                kind="bar"
+                height={180}
+                data={actionBarData}
+                options={{
+                  indexAxis: 'y' as const,
+                  plugins: { legend: { display: false } },
+                  scales: {
+                    x: { grid: { color: 'var(--border-subtle)' } },
+                    y: { ticks: { font: { size: 10, family: 'monospace' } } },
+                  },
+                }}
+              />
+            </Panel>
+          )}
 
-      <Panel
-        padding="sm"
-        tone="inset"
-        eyebrow={`AUDIT LOG · ${filtered.length} of ${pagination.total}`}
-        title="Entries"
-      >
-        <DataTable
-          columns={columns}
-          rows={filtered}
-          rowKey={(r) => r.id}
-          loading={loading}
-          compact
-          empty={
-            <EmptyState
-              icon={<FileText />}
-              title="No audit entries"
-              description="No events match the current filters."
+          <Panel padding="md" eyebrow="FILTERS" title="Refine">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              <FilterSelect
+                label="Tenant"
+                value={selectedTenant ?? ''}
+                onChange={(v) => { setSelectedTenant(v || undefined); setOffset(0); }}
+                options={[
+                  { label: 'All tenants', value: '' },
+                  ...tenants.map((t) => ({ label: t.name, value: t.id })),
+                ]}
+              />
+              <FilterSelect
+                label="Actor type"
+                value={actorTypeFilter}
+                onChange={(v) => { setActorTypeFilter(v); setOffset(0); }}
+                options={[
+                  { label: 'All types', value: '' },
+                  { label: 'User', value: 'user' },
+                  { label: 'System', value: 'system' },
+                ]}
+              />
+              <FilterSelect
+                label="Action"
+                value={actionFilter}
+                onChange={(v) => { setActionFilter(v); setOffset(0); }}
+                options={[
+                  { label: 'All actions', value: '' },
+                  ...uniqueActions.map((a) => ({ label: a, value: a })),
+                ]}
+              />
+              <FilterSelect
+                label="Resource"
+                value={resourceTypeFilter}
+                onChange={(v) => { setResourceTypeFilter(v); setOffset(0); }}
+                options={[
+                  { label: 'All resources', value: '' },
+                  ...uniqueResourceTypes.map((t) => ({ label: t, value: t })),
+                ]}
+              />
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="audit-search">Search</Label>
+                <Input
+                  id="audit-search"
+                  placeholder="action, resource id…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+            </div>
+          </Panel>
+
+          {error && (
+            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
+              <p className="text-sm text-state-critical">{error}</p>
+            </Panel>
+          )}
+
+          <Panel
+            padding="sm"
+            tone="inset"
+            eyebrow={`AUDIT LOG · ${filtered.length} of ${pagination.total}`}
+            title="Entries"
+          >
+            <DataTable
+              columns={columns}
+              rows={filtered}
+              rowKey={(r) => r.id}
+              loading={loading}
+              compact
+              empty={
+                <EmptyState
+                  icon={<FileText />}
+                  title="No audit entries"
+                  description="No events match the current filters."
+                />
+              }
             />
-          }
-        />
-        <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setOffset(Math.max(0, offset - limit))}
-            disabled={offset === 0 || loading}
-          >
-            Previous
-          </Button>
-          <span className="font-mono text-xs text-text-muted">
-            Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setOffset(offset + limit)}
-            disabled={offset + limit >= pagination.total || loading}
-          >
-            Next
-          </Button>
-        </div>
-      </Panel>
+            <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setOffset(Math.max(0, offset - limit))}
+                disabled={offset === 0 || loading}
+              >
+                Previous
+              </Button>
+              <span className="font-mono text-xs text-text-muted">
+                Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setOffset(offset + limit)}
+                disabled={offset + limit >= pagination.total || loading}
+              >
+                Next
+              </Button>
+            </div>
+          </Panel>
+        </TabsContent>
+
+        <TabsContent value="reports" className="mt-4">
+          <AuditReports />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

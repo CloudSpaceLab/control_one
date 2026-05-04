@@ -1,0 +1,11 @@
+# Pre-built console variant — UI is built on the CI runner (npm ci + npm run
+# build) and shipped as ui-dist/ alongside the Dockerfile. The image just
+# stages the static assets behind nginx; no node toolchain runs on the server.
+# Mirrors Dockerfile.controlplane.prebuilt's "no heavy compile on the VPS"
+# stance.
+
+FROM nginx:1.27-alpine
+RUN rm -rf /usr/share/nginx/html/*
+COPY ui-dist/ /usr/share/nginx/html/
+COPY nginx/console.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

@@ -8,6 +8,7 @@ import {
   EntityHeader,
   InvestigateTimeline,
   IpEnrichmentCard,
+  IpLifecyclePanel,
   RelatedEntities,
 } from '@/components/investigate';
 import { useApiClient } from '@/hooks/useApiClient';
@@ -32,7 +33,7 @@ export function EntityDetail(): JSX.Element {
   const client = useApiClient();
   const { isAdmin, isOperator } = useRolePick();
   const canMutate = isAdmin || isOperator;
-  const [tab, setTab] = useState('timeline');
+  const [tab, setTab] = useState(type === 'ip' ? 'connections' : 'timeline');
   const [cursor, setCursor] = useState<string | undefined>();
   const [accumulated, setAccumulated] = useState<LifecycleItem[]>([]);
 
@@ -117,9 +118,17 @@ export function EntityDetail(): JSX.Element {
           <Panel padding="md" eyebrow="LIFECYCLE" title="Timeline" toneAccent="brand">
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList>
+                {safeType === 'ip' && (
+                  <TabsTrigger value="connections">Connections</TabsTrigger>
+                )}
                 <TabsTrigger value="timeline">Timeline</TabsTrigger>
                 <TabsTrigger value="raw">Raw events</TabsTrigger>
               </TabsList>
+              {safeType === 'ip' && (
+                <TabsContent value="connections">
+                  <IpLifecyclePanel ip={id} />
+                </TabsContent>
+              )}
               <TabsContent value="timeline">
                 <InvestigateTimeline
                   items={accumulated}

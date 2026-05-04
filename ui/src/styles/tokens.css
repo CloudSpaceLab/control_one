@@ -59,6 +59,13 @@
   --z-modal: 80;
   --z-toast: 90;
 
+  /* Sidebar / page-shell layout */
+  --rail-width: 48px;
+  --rail-width-expanded: 256px;
+  --sidebar-pinned-width: 240px;
+  --page-gutter: 1.5rem;
+  --page-max-width: 1440px;
+
   color-scheme: dark light;
   font-family: var(--font-body);
   min-height: 100%;

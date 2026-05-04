@@ -22,8 +22,21 @@ export function InvestigateHome(): JSX.Element {
   const handleSearch = () => {
     const q = query.trim();
     if (!q) return;
+    const detection = classifyValue(q);
+    if (detection.type === 'ip') {
+      // Cross-node aggregate IP investigate is the canonical surface for IPs.
+      navigate(entityRoute('ip', q));
+      return;
+    }
+    if (detection.type !== 'unknown') {
+      navigate(entityRoute(detection.type as EntityType, q));
+      return;
+    }
     navigate(`/search?q=${encodeURIComponent(q)}`);
   };
+
+  const detection = classifyValue(query.trim());
+  const showIpCta = detection.type === 'ip' && query.trim().length > 0;
 
   const savedQ = useQuery({
     queryKey: ['saved-searches'],
@@ -65,9 +78,15 @@ export function InvestigateHome(): JSX.Element {
             />
           </div>
           <Button variant="primary" className="h-12 px-5" onClick={handleSearch}>
-            Search
+            {showIpCta ? 'Investigate IP →' : 'Search'}
           </Button>
         </div>
+        {showIpCta && (
+          <p className="mt-3 text-sm text-brand-400">
+            <Network className="mr-1 inline h-4 w-4 align-text-bottom" />
+            IP detected — opens the cross-node lifecycle view with side-by-side compare.
+          </p>
+        )}
         <p className="mt-3 text-xs text-text-muted">
           Tip: paste an IP, SHA256, email, hostname or process name. Press <kbd className="rounded border border-border-subtle bg-surface px-1 font-mono text-[0.65rem]">Ctrl/⌘+K</kbd> from anywhere for quick nav.
         </p>

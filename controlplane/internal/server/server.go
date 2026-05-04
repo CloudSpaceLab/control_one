@@ -227,11 +227,14 @@ type Store interface {
 	CreateSecurityEvent(context.Context, storage.CreateSecurityEventParams) (*storage.SecurityEvent, error)
 	ListSecurityEvents(context.Context, storage.SecurityEventFilter, int, int) ([]storage.SecurityEvent, int, error)
 	CountSecurityEvents(context.Context, storage.SecurityEventFilter) (storage.SecurityEventCounts, error)
+	GetSecurityEventSeries(context.Context, uuid.UUID, time.Time, string) ([]storage.SecurityEventPoint, error)
 	CreateHealthIncident(context.Context, storage.CreateHealthIncidentParams) (*storage.HealthIncident, error)
 	ResolveHealthIncident(context.Context, uuid.UUID) error
 	CountOpenHealthIncidents(context.Context, uuid.UUID) (storage.SecurityEventCounts, error)
 	CreateRuleTrigger(context.Context, storage.CreateRuleTriggerParams) (*storage.RuleTrigger, error)
 	CountRuleTriggersSince(context.Context, uuid.UUID, time.Time) (map[string]int, error)
+	CountRuleTriggersBetween(context.Context, uuid.UUID, time.Time, time.Time) (map[string]int, error)
+	CountRemediationsSince(context.Context, uuid.UUID, time.Time, time.Time) (int, error)
 	// Alerts.
 	CreateAlert(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
 	GetAlert(context.Context, uuid.UUID) (*storage.Alert, error)
@@ -363,6 +366,13 @@ type Store interface {
 	TouchNodeInventorySync(context.Context, uuid.UUID, string) (int64, error)
 	UpsertNodeFirewallState(context.Context, storage.NodeFirewallState) error
 	GetNodeFirewallState(context.Context, uuid.UUID) (*storage.NodeFirewallState, error)
+	// Listening-services inventory (Phase 1 of /round-up knowledge graph).
+	ReplaceNodeServices(context.Context, uuid.UUID, uuid.UUID, []storage.NodeService) error
+	ListNodeServicesForNode(context.Context, uuid.UUID) ([]storage.NodeService, error)
+	ListNodeServicesForTenant(context.Context, uuid.UUID) ([]storage.NodeService, error)
+	// Ask CISO LLM config (Phase 2). Feature-gated by FEATURE_AI_ASK.
+	GetAIConfig(context.Context, uuid.UUID) (*storage.AIConfig, error)
+	UpsertAIConfig(context.Context, storage.AIConfig) error
 	// Network security — operator-driven IP blocks fanned out to per-node rules (PR 3).
 	CreateNodeFirewallRule(context.Context, storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error)
 	SetNodeFirewallRuleJobID(context.Context, uuid.UUID, uuid.UUID) error
@@ -928,6 +938,10 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/dashboards/", s.handleDashboardSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
+	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
+	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
+	s.baseRouter.HandleFunc("/api/v1/ai/test", s.handleAITest)
+	s.baseRouter.HandleFunc("/api/v1/ai/ask", s.handleAIAsk)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
@@ -1869,6 +1883,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 
 	if len(segments) == 2 && segments[1] == "health" {
 		s.handleNodeHealth(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "services" {
+		s.handleNodeServices(w, r, nodeID)
 		return
 	}
 

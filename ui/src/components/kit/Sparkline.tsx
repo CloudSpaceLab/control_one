@@ -8,6 +8,9 @@ export interface SparklineProps {
   height?: number;
   ariaLabel: string;
   fill?: boolean;
+  loading?: boolean;
+  /** Shown when data is empty (and not loading). */
+  emptyLabel?: string;
   className?: string;
 }
 
@@ -22,6 +25,8 @@ export function Sparkline({
   height = 28,
   ariaLabel,
   fill = true,
+  loading,
+  emptyLabel = 'No data',
   className,
 }: SparklineProps) {
   const { d, fillD } = useMemo(() => {
@@ -41,7 +46,35 @@ export function Sparkline({
     return { d: path, fillD: fillPath };
   }, [data, height]);
 
-  if (!data.length) return null;
+  if (loading) {
+    return (
+      <div
+        role="img"
+        aria-label={`${ariaLabel} (loading)`}
+        className={cn(
+          'w-full animate-pulse rounded-sm bg-text-muted/15',
+          className,
+        )}
+        style={{ height }}
+      />
+    );
+  }
+
+  if (!data.length) {
+    return (
+      <div
+        role="img"
+        aria-label={ariaLabel}
+        className={cn(
+          'flex w-full items-center justify-center border-b border-dashed border-border-subtle text-[0.65rem] text-text-muted',
+          className,
+        )}
+        style={{ height }}
+      >
+        {emptyLabel}
+      </div>
+    );
+  }
 
   const stroke = tone === 'brand' || tone === 'accent' ? NON_STATE_COLOR[tone] : TONE_COLOR[tone];
 

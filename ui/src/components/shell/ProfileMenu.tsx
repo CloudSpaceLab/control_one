@@ -1,4 +1,4 @@
-import { LogOut, Settings, User as UserIcon } from 'lucide-react';
+import { Building2, KeyRound, LogOut, Rocket, Settings, User as UserIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/providers/AuthProvider';
 import { useRolePick } from '@/hooks/useRolePick';
@@ -47,6 +47,28 @@ export function ProfileMenu() {
           <Link to="/settings">
             <Settings className="h-4 w-4" />
             Settings
+          </Link>
+        </DropdownMenuItem>
+        {(role === 'admin') && (
+          <>
+            <DropdownMenuItem asChild>
+              <Link to="/tenants">
+                <Building2 className="h-4 w-4" />
+                Tenants
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/secrets">
+                <KeyRound className="h-4 w-4" />
+                Secrets
+              </Link>
+            </DropdownMenuItem>
+          </>
+        )}
+        <DropdownMenuItem asChild>
+          <Link to="/onboard">
+            <Rocket className="h-4 w-4" />
+            Onboarding
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>

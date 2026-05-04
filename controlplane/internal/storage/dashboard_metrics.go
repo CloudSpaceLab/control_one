@@ -672,3 +672,24 @@ func (s *Store) GetComplianceByFramework(ctx context.Context, tenantID uuid.UUID
 	}
 	return summaries, nil
 }
+
+// CountRemediationsSince returns the number of compliance results that were
+// successfully remediated in the half-open window [since, until).
+func (s *Store) CountRemediationsSince(ctx context.Context, tenantID uuid.UUID, since, until time.Time) (int, error) {
+	if s.db == nil {
+		return 0, errors.New("store database not initialized")
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM compliance_results
+		WHERE tenant_id = $1
+			AND passed = false
+			AND remediated_at >= $2
+			AND remediated_at < $3
+	`, tenantID, since, until).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count remediations: %w", err)
+	}
+	return n, nil
+}

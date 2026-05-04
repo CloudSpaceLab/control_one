@@ -131,6 +131,25 @@ export interface FindingAging {
   total_open: number;
 }
 
+export interface PeriodDelta {
+  current: number;
+  previous: number;
+  delta_pct: number;
+}
+
+export interface SecurityEventSeriesPoint {
+  ts: string;
+  critical: number;
+  high: number;
+  total: number;
+}
+
+export interface ComplianceSeriesPoint {
+  ts: string;
+  pass_rate: number;
+  total: number;
+}
+
 export interface DashboardOverview {
   tenant_id?: string;
   generated_at: string;
@@ -140,6 +159,15 @@ export interface DashboardOverview {
   compliance_summary: ComplianceSnapshot;
   rule_trigger_counts_24h: Record<string, number>;
   remediations_applied_24h: number;
+  // Period-comparison fields (populated when ?period= is supplied)
+  period?: string;
+  security_event_delta?: PeriodDelta;
+  rule_trigger_delta?: PeriodDelta;
+  remediation_delta?: PeriodDelta;
+  compliance_pass_rate?: number;
+  compliance_pass_delta?: PeriodDelta;
+  security_event_series?: SecurityEventSeriesPoint[];
+  compliance_series?: ComplianceSeriesPoint[];
 }
 
 // History + framework series
@@ -1207,6 +1235,40 @@ export interface NodeHealthScore {
   computed_at?: string;
 }
 
+export interface AIConfigResponse {
+  tenant_id: string;
+  provider: string;
+  model: string;
+  base_url: string;
+  has_api_key: boolean;
+  updated_at?: string;
+}
+
+export interface AIConfigPut {
+  provider: string;
+  model: string;
+  base_url: string;
+  /** Empty preserves the previously stored key. */
+  api_key: string;
+}
+
+export interface NodeService {
+  id: string;
+  node_id: string;
+  tenant_id: string;
+  pid: number;
+  process: string;
+  binary_path: string;
+  listen_addr: string;
+  port: number;
+  service_kind: string;
+  probe_status?: number | null;
+  probe_server?: string | null;
+  probe_title?: string | null;
+  probe_content_type?: string | null;
+  observed_at: string;
+}
+
 export interface AtRiskNode {
   node_id: string;
   tenant_id: string;
@@ -1513,6 +1575,48 @@ export class APIClient {
   async getNodeHealth(nodeId: string): Promise<NodeHealthScore> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<NodeHealthScore>(`/api/v1/nodes/${encoded}/health`);
+  }
+
+  async listNodeServices(nodeId: string): Promise<{ data: NodeService[] }> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request<{ data: NodeService[] }>(`/api/v1/nodes/${encoded}/services`);
+  }
+
+  async getAIConfig(tenantId: string): Promise<AIConfigResponse> {
+    return this.request<AIConfigResponse>(`/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async updateAIConfig(tenantId: string, payload: AIConfigPut): Promise<void> {
+    await this.request<void>(`/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async testAIConfig(tenantId: string): Promise<{ ok: boolean; reply?: string; error?: string }> {
+    return this.request<{ ok: boolean; reply?: string; error?: string }>(
+      `/api/v1/ai/test?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST' },
+    );
+  }
+
+  async askAI(tenantId: string, question: string): Promise<{ answer: string; citations?: string[] }> {
+    return this.request<{ answer: string; citations?: string[] }>(
+      `/api/v1/ai/ask?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST', body: JSON.stringify({ question }) },
+    );
+  }
+
+  async getKnowledgeGraphMarkdown(tenantId: string): Promise<string> {
+    const encoded = encodeURIComponent(tenantId);
+    const resp = await fetch(`${this.baseUrl}/api/v1/knowledge-graph/${encoded}.md`, {
+      headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+      credentials: 'include',
+    });
+    if (!resp.ok) {
+      throw new Error(`knowledge graph fetch failed: ${resp.status}`);
+    }
+    return resp.text();
   }
 
   async listAtRiskNodes(tenantId?: string): Promise<AtRiskFleetResponse> {
@@ -2036,11 +2140,10 @@ export class APIClient {
     });
   }
 
-  async getDashboardOverview(tenantId?: string): Promise<DashboardOverview> {
+  async getDashboardOverview(tenantId?: string, period?: string): Promise<DashboardOverview> {
     const search = new URLSearchParams();
-    if (tenantId) {
-      search.set('tenant_id', tenantId);
-    }
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (period) search.set('period', period);
     const qs = search.toString();
     const path = `/api/v1/dashboard/overview${qs ? `?${qs}` : ''}`;
     return this.request<DashboardOverview>(path);
@@ -3508,6 +3611,7 @@ export interface SquidProxy {
 
 export interface ConnectionRow {
   conn_id: string;
+  node_id?: string;
   correlation_id?: string;
   bastion_session_id?: string;
   started_at: string;
