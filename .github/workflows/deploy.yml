@@ -161,17 +161,50 @@ jobs:
             docker compose up -d --force-recreate --no-deps controlplane console
           "
 
-      - name: Smoke check
+      - name: Smoke check (server-side, bypasses Cloudflare)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          # Hit /healthz on the controlplane container directly via SSH so
+          # Cloudflare's bot-protection on the public hostname can't 403 the
+          # GitHub-runner IP and block what is otherwise a healthy deploy.
+          # We spin up a transient curl image on the same docker network as
+          # the controlplane container — distroless has no shell, so we
+          # cannot `docker exec` into the controlplane image directly.
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" '
+            set -e
+            net=$(docker inspect deploy-controlplane-1 --format "{{range \$k,\$_ := .NetworkSettings.Networks}}{{\$k}}{{end}}")
+            for i in 1 2 3 4 5 6; do
+              if docker run --rm --network "$net" curlimages/curl:8.10.1 \
+                   -fsS --max-time 5 http://controlplane:8443/healthz 2>/dev/null; then
+                echo
+                echo "✓ controlplane /healthz OK"
+                exit 0
+              fi
+              echo "... attempt $i: waiting 5s"
+              sleep 5
+            done
+            echo "✗ /healthz never returned 200"
+            docker logs deploy-controlplane-1 --tail 30 || true
+            exit 1
+          '
+
+      - name: Public smoke check (best-effort, warns on Cloudflare 403)
         env:
           HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL || 'https://control-one.cloudspacetechs.com/healthz' }}
+        continue-on-error: true
         run: |
-          for i in 1 2 3 4 5; do
-            if curl -fsS --max-time 10 "$HEALTHCHECK_URL"; then
-              echo "✓ healthz OK"
-              exit 0
-            fi
-            echo "... attempt $i: waiting 10s for controlplane to come up"
-            sleep 10
-          done
-          echo "✗ healthz never returned 200"
-          exit 1
+          # Public check uses a real-browser UA so Cloudflare doesn't block
+          # the runner IP. continue-on-error: an external 403 here never
+          # fails a deploy that the in-network check already verified.
+          status=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 10 \
+            -A 'Mozilla/5.0 (deploy-smoke-check)' \
+            "$HEALTHCHECK_URL" || echo "000")
+          if [ "$status" = "200" ]; then
+            echo "✓ public healthz returned 200"
+          else
+            echo "⚠ public healthz returned $status (likely Cloudflare bot block on runner IP — server-side check already verified the deploy)"
+          fi
