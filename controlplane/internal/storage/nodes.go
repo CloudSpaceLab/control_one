@@ -131,6 +131,44 @@ func (s *Store) ResetNodeForReenrollment(ctx context.Context, id uuid.UUID) erro
 	return nil
 }
 
+// SetNodeAuthToken sets (or replaces) the per-node authentication token.
+// Called during enrollment and re-enrollment. The token is a random hex string
+// that agents send as "Authorization: Bearer <token>" instead of mTLS cert CN.
+func (s *Store) SetNodeAuthToken(ctx context.Context, id uuid.UUID, token string) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE nodes SET auth_token = $2, updated_at = $3 WHERE id = $1
+	`, id, token, s.clock())
+	return err
+}
+
+// ValidateNodeToken looks up a node by its auth_token and returns the node if
+// found and not retired. Returns nil (no error) when the token is unknown.
+func (s *Store) ValidateNodeToken(ctx context.Context, token string) (*Node, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if token == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, hostname, state
+		FROM nodes
+		WHERE auth_token = $1 AND state != $2
+		LIMIT 1
+	`, token, NodeStateRetired)
+	var n Node
+	if err := row.Scan(&n.ID, &n.TenantID, &n.Hostname, &n.State); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("validate node token: %w", err)
+	}
+	return &n, nil
+}
+
 // TouchNodeHeartbeat bumps nodes.last_seen_at to now. Called from the heartbeat
 // endpoint. Returns the refreshed node so callers can inspect state/first_scan_at
 // atomically without a second query — the mTLS heartbeat handler uses that
@@ -238,15 +276,11 @@ func (s *Store) UpdateNodeLabels(ctx context.Context, id uuid.UUID, labels map[s
 }
 
 // ListEnrollmentPendingNodesOlderThan returns nodes still stuck in
-// enrollment_pending whose created_at is older than `cutoff`. This is the
-// reaper query: the worker dispatcher scans this set every minute and flips
-// survivors to enrollment_failed. time.Time is passed directly because we
-// want caller-supplied clock injection in tests.
-//
-// A node whose last_seen_at is more recent than the cutoff is excluded —
-// the agent IS checking in, the row is stuck on the activation gate (most
-// likely awaiting first_scan_at). Reaping those would undo the resurrection
-// in maybeActivatePendingNode and produce flapping state.
+// enrollment_pending whose updated_at is older than `cutoff`. Using
+// updated_at (not created_at) so that re-enrolled nodes — which have a stale
+// created_at from their original enrollment — get a fresh 10-minute window
+// after ResetNodeForReenrollment stamps updated_at = now. time.Time is passed
+// directly because we want caller-supplied clock injection in tests.
 func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff time.Time) ([]Node, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
@@ -257,10 +291,8 @@ func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff 
 		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
-		WHERE state = $1
-		  AND created_at < $2
-		  AND (last_seen_at IS NULL OR last_seen_at < $2)
-		ORDER BY created_at ASC
+		WHERE state = $1 AND updated_at < $2
+		ORDER BY updated_at ASC
 	`, NodeStateEnrollmentPending, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("list pending nodes: %w", err)

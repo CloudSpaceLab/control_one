@@ -24,9 +24,10 @@ type enrollRequest struct {
 }
 
 type enrollResponse struct {
-	NodeID   string `json:"node_id"`
-	TenantID string `json:"tenant_id"`
-	TLS      struct {
+	NodeID    string `json:"node_id"`
+	TenantID  string `json:"tenant_id"`
+	NodeToken string `json:"node_token,omitempty"` // bearer token for agent auth
+	TLS       struct {
 		ClientCert string `json:"client_cert"`
 		ClientKey  string `json:"client_key"`
 		CACert     string `json:"ca_cert"`
@@ -143,6 +144,7 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 
 api_url: "%s"
 node_name: "%s"
+node_token: "%s"
 state_file: "%s"
 policy_dir: "%s"
 log_dir: "%s"
@@ -174,7 +176,7 @@ wizard:
   emit_summary: true
 `,
 		joinURL, enrollResp.NodeID, time.Now().UTC().Format(time.RFC3339),
-		joinURL, hostname,
+		joinURL, hostname, enrollResp.NodeToken,
 		// All on-disk paths run through filepath.ToSlash because the YAML
 		// template uses double-quoted strings, where a Windows-style
 		// "C:\Users\..." would be parsed as escape sequences (\U expects

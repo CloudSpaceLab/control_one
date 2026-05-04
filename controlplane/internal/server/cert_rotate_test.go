@@ -177,7 +177,8 @@ func TestRotateCertIssuesAndUpdatesHistory(t *testing.T) {
 	if resp.CertPEM == "" || resp.KeyPEM == "" {
 		t.Fatalf("expected cert + key PEMs in response")
 	}
-	// Cert is CA-signed and its CN should match node hostname.
+	// Cert is CA-signed and its CN should match the node UUID (not hostname)
+	// so the heartbeat handler can validate principal.Name == nodeID.
 	block, _ := pem.Decode([]byte(resp.CertPEM))
 	if block == nil {
 		t.Fatalf("response cert not PEM-encoded")
@@ -186,8 +187,8 @@ func TestRotateCertIssuesAndUpdatesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse response cert: %v", err)
 	}
-	if cert.Subject.CommonName != "rotate-host" {
-		t.Fatalf("subject CN = %q, want rotate-host", cert.Subject.CommonName)
+	if cert.Subject.CommonName != nodeID.String() {
+		t.Fatalf("subject CN = %q, want %s", cert.Subject.CommonName, nodeID.String())
 	}
 
 	// fakeStore should have exactly one history row with the response's serial.

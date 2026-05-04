@@ -40,7 +40,12 @@ func NewClient(baseURL, certFile, keyFile, caFile, token string) (*Client, error
 		if err != nil {
 			return nil, fmt.Errorf("read ca cert: %w", err)
 		}
-		pool := x509.NewCertPool()
+		// Start from system pool so public CAs remain trusted alongside the
+		// custom enrollment CA (which signed the agent's client cert).
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			pool = x509.NewCertPool()
+		}
 		if ok := pool.AppendCertsFromPEM(caf); !ok {
 			return nil, fmt.Errorf("append ca cert failed")
 		}

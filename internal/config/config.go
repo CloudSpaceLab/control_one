@@ -15,6 +15,7 @@ import (
 type Config struct {
 	APIURL         string `mapstructure:"api_url"`
 	BootstrapToken string `mapstructure:"bootstrap_token"`
+	NodeToken      string `mapstructure:"node_token"` // per-node bearer token issued at enrollment
 	NodeName       string `mapstructure:"node_name"`
 	StateFile      string `mapstructure:"state_file"`
 	PolicyDir      string `mapstructure:"policy_dir"`

@@ -145,6 +145,10 @@ func (f *fakeIdentityStore) ValidateSessionToken(_ context.Context, token string
 	return nil, nil, nil
 }
 
+func (f *fakeIdentityStore) ValidateNodeToken(_ context.Context, token string) (*storage.Node, error) {
+	return nil, nil
+}
+
 func TestMiddlewareRejectsOpaqueBearerWhenOIDCDisabled(t *testing.T) {
 	store := &fakeIdentityStore{}
 	cfg := config.AuthConfig{

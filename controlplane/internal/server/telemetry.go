@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -454,6 +455,36 @@ func (s *Server) handleTelemetryNodeSubroutes(w http.ResponseWriter, r *http.Req
 	}
 
 	http.NotFound(w, r)
+}
+
+// handleLegacyHeartbeat accepts POST /api/v1/heartbeat from agent telemetry
+// service. The payload is acknowledged but not persisted — node liveness is
+// tracked via POST /api/v1/nodes/:id/heartbeat which drives the state machine.
+func (s *Server) handleLegacyHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	// Drain body so the connection is reusable.
+	_, _ = io.Copy(io.Discard, r.Body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+// handleLegacyTelemetry accepts POST /api/v1/telemetry from agent telemetry
+// service. The payload is acknowledged but not currently persisted.
+func (s *Server) handleLegacyTelemetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	_, _ = io.Copy(io.Discard, r.Body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
 func newTelemetryMetricResponse(m storage.TelemetryMetric) telemetryMetricResponse {

@@ -82,8 +82,10 @@ func (s *Server) generateCASignedClientCert(caCertFile, caKeyFile, hostname, nod
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
+			// CN must match the node UUID so the server's heartbeat handler can
+			// validate principal.Name == nodeID without any CA lookup.
 			CommonName:   nodeID,
-			Organization: []string{"Control One Agent: " + hostname},
+			Organization: []string{"Control One Agent"},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),
@@ -123,8 +125,10 @@ func generateSelfSignedClientCert(hostname, nodeID string) (certPEM, keyPEM, caC
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
+			// CN must match the node UUID — used by the heartbeat handler for
+			// identity validation via X-SSL-Client-S-DN (nginx optional_no_ca).
 			CommonName:   nodeID,
-			Organization: []string{"Control One Agent: " + hostname},
+			Organization: []string{"Control One Agent"},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),

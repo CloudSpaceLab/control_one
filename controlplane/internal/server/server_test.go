@@ -3410,6 +3410,30 @@ func (f *fakeStore) ResetNodeForReenrollment(_ context.Context, id uuid.UUID) er
 	return sql.ErrNoRows
 }
 
+func (f *fakeStore) SetNodeAuthToken(_ context.Context, id uuid.UUID, token string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].AuthToken = sql.NullString{String: token, Valid: token != ""}
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
+func (f *fakeStore) ValidateNodeToken(_ context.Context, token string) (*storage.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, node := range f.nodes {
+		if node.AuthToken.Valid && node.AuthToken.String == token && node.State != storage.NodeStateRetired {
+			n := node
+			return &n, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeStore) TouchNodeHeartbeat(_ context.Context, id uuid.UUID) (*storage.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

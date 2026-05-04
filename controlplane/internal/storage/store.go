@@ -1112,6 +1112,7 @@ type Node struct {
 	AgentVersion  sql.NullString
 	CertSerial    sql.NullString
 	CertRotatedAt sql.NullTime
+	AuthToken     sql.NullString
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -1501,9 +1502,9 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 
 	query := `
         INSERT INTO nodes (id, tenant_id, hostname, os, arch, public_ip, machine_id, state,
-                           last_seen_at, first_scan_at, labels,
+                           last_seen_at, first_scan_at, labels, auth_token,
                            created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `
 
 	_, err := s.db.ExecContext(
@@ -1520,6 +1521,7 @@ func (s *Store) CreateNode(ctx context.Context, node *Node) (*Node, error) {
 		nullableTime(node.LastSeenAt),
 		nullableTime(node.FirstScanAt),
 		labelsBytes,
+		node.AuthToken,
 		node.CreatedAt,
 		node.UpdatedAt,
 	)

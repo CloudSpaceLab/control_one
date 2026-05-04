@@ -126,7 +126,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := api.NewClient(cfg.APIURL, cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.CACertFile, cfg.BootstrapToken)
+	// Prefer per-node token (issued at enrollment) over bootstrap token.
+	// Node token works through any TLS-terminating proxy without mTLS.
+	agentToken := cfg.NodeToken
+	if agentToken == "" {
+		agentToken = cfg.BootstrapToken
+	}
+	client, err := api.NewClient(cfg.APIURL, cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.CACertFile, agentToken)
 	if err != nil {
 		log.Fatal("api client init failed", zap.Error(err))
 	}

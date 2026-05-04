@@ -142,7 +142,7 @@ command -v curl >/dev/null 2>&1 || fatal "curl is required."
 
 # ─── Install custom root CA if supplied ────────────────────────────
 install_custom_ca() {
-    [[ -z "$CA_CERT_B64" ]] && return
+    [[ -z "$CA_CERT_B64" ]] && return || true
     local decoded="${TMP_DIR}/controlone-ca.pem"
     if ! printf '%s' "$CA_CERT_B64" | base64 -d > "$decoded" 2>/dev/null; then
         fatal "Failed to decode --ca-cert (expect base64-encoded PEM)."
@@ -239,6 +239,7 @@ repair_agent_state() {
             warn "Removed ${wiped} empty cert file(s); fresh certs will be issued on enrollment."
         fi
     fi
+    return 0
 }
 
 repair_agent_state
@@ -299,9 +300,9 @@ $SUDO install -m 0755 "$BINARY_PATH" "${INSTALL_DIR}/controlone-agent"
 ok "Installed to ${INSTALL_DIR}/controlone-agent."
 
 ENROLL_ARGS=("--join" "$CONTROL_PLANE_URL" "--token" "$TOKEN")
-[[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE")
-[[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service")
-[[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" ]] && ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM")
+[[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE") || true
+[[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service") || true
+[[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" ]] && ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM") || true
 
 info "Enrolling agent..."
 $SUDO "${INSTALL_DIR}/controlone-agent" "${ENROLL_ARGS[@]}" || fatal "Enrollment failed."

@@ -68,6 +68,9 @@ type IdentityStore interface {
 	// Returns nil + nil + nil when no row matches; returns the session +
 	// user + nil on a valid hit; bumps last_used_at as a side-effect.
 	ValidateSessionToken(ctx context.Context, token string) (*storage.Session, *storage.LocalUser, error)
+	// ValidateNodeToken resolves a per-node Bearer token issued at enrollment.
+	// Returns nil + nil when no node matches (token unknown or node retired).
+	ValidateNodeToken(ctx context.Context, token string) (*storage.Node, error)
 }
 
 // NewMiddleware creates an auth middleware with optional client TLS enforcement.
@@ -155,6 +158,18 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 		token := strings.TrimSpace(authz[7:])
 		if token != "" {
+			// 0. Check node auth token (agents enrolled with token-based auth).
+			// Checked first: node tokens are 64-char hex, distinct from session UUIDs.
+			if m.store != nil {
+				if node, err := m.store.ValidateNodeToken(r.Context(), token); err == nil && node != nil {
+					return &Principal{
+						Type:    "agent",
+						Name:    node.ID.String(),
+						Subject: node.ID.String(),
+						Roles:   []string{"agent"},
+					}, nil
+				}
+			}
 			// 1. Try login session token first — local + LDAP users.
 			if m.store != nil {
 				if sess, u, err := m.store.ValidateSessionToken(r.Context(), token); err == nil && sess != nil && u != nil {

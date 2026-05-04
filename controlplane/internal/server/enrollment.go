@@ -57,11 +57,12 @@ type enrollRequest struct {
 }
 
 type enrollResponse struct {
-	NodeID   string       `json:"node_id"`
-	TenantID string       `json:"tenant_id"`
-	TLS      enrollTLS    `json:"tls"`
-	Config   enrollConfig `json:"config"`
-	Policy   enrollPolicy `json:"policy,omitempty"`
+	NodeID    string       `json:"node_id"`
+	TenantID  string       `json:"tenant_id"`
+	NodeToken string       `json:"node_token,omitempty"` // bearer token for agent auth
+	TLS       enrollTLS    `json:"tls"`
+	Config    enrollConfig `json:"config"`
+	Policy    enrollPolicy `json:"policy,omitempty"`
 }
 
 type enrollTLS struct {
@@ -439,9 +440,14 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
+		reNodeToken := generateNodeAuthToken()
+		if err := s.store.SetNodeAuthToken(r.Context(), existing.ID, reNodeToken); err != nil {
+			s.logger.Warn("set node auth token (re-enrollment)", zap.Error(err))
+		}
 		writeJSON(w, http.StatusOK, enrollResponse{
-			NodeID:   existing.ID.String(),
-			TenantID: tenant.ID.String(),
+			NodeID:    existing.ID.String(),
+			TenantID:  tenant.ID.String(),
+			NodeToken: reNodeToken,
 			TLS: enrollTLS{
 				CertPEM:   string(certPEM),
 				KeyPEM:    string(keyPEM),
@@ -496,9 +502,17 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate per-node auth token (used as Bearer token — no mTLS required).
+	nodeToken := generateNodeAuthToken()
+	if err := s.store.SetNodeAuthToken(r.Context(), created.ID, nodeToken); err != nil {
+		s.logger.Warn("set node auth token", zap.Error(err))
+		// non-fatal: node can still use mTLS
+	}
+
 	resp := enrollResponse{
-		NodeID:   created.ID.String(),
-		TenantID: tenant.ID.String(),
+		NodeID:    created.ID.String(),
+		TenantID:  tenant.ID.String(),
+		NodeToken: nodeToken,
 		TLS: enrollTLS{
 			CertPEM:   string(certPEM),
 			KeyPEM:    string(keyPEM),
@@ -557,4 +571,15 @@ func newEnrollmentTokenResponse(t storage.EnrollmentToken, rawToken string) enro
 		resp.Capabilities = []string{}
 	}
 	return resp
+}
+
+// generateNodeAuthToken returns a random 32-byte hex token for per-node Bearer auth.
+func generateNodeAuthToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// fallback: use sha256 of a UUID — not cryptographically ideal but never nil
+		sum := sha256.Sum256([]byte(uuid.New().String()))
+		return hex.EncodeToString(sum[:])
+	}
+	return hex.EncodeToString(b)
 }
