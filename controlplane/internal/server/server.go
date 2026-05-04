@@ -129,6 +129,7 @@ type Store interface {
 	ListSecretGroups(context.Context, uuid.UUID, int, int) ([]storage.SecretGroup, int, error)
 	GetSecretGroup(context.Context, uuid.UUID) (*storage.SecretGroup, error)
 	CreateSecretGroup(context.Context, storage.CreateSecretGroupParams) (*storage.SecretGroup, error)
+	UpdateSecretGroupSyncStatus(context.Context, uuid.UUID, string, error) error
 	ListSecretSyncs(context.Context, uuid.UUID, int, int) ([]storage.SecretSync, int, error)
 	ListEntitlements(context.Context, storage.EntitlementFilter, int, int) ([]storage.AccessEntitlement, int, error)
 	GetEntitlement(context.Context, uuid.UUID) (*storage.AccessEntitlement, error)

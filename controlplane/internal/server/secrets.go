@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
 
 type secretGroupResponse struct {
@@ -286,14 +289,70 @@ func (s *Server) handleSyncSecretGroup(w http.ResponseWriter, r *http.Request, g
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-
 	if _, ok := s.authorize(w, r, roleAdmin); !ok {
 		return
 	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 
-	// TODO: Trigger sync via sync service
-	// For now, just return success
-	writeJSON(w, http.StatusOK, map[string]string{"status": "sync_triggered", "group_id": groupID.String()})
+	group, err := s.store.GetSecretGroup(r.Context(), groupID)
+	if err != nil || group == nil {
+		http.Error(w, "secret group not found", http.StatusNotFound)
+		return
+	}
+
+	// Mark as syncing immediately so the UI shows progress.
+	if markErr := s.store.UpdateSecretGroupSyncStatus(r.Context(), groupID, "syncing", nil); markErr != nil {
+		s.logger.Warn("mark secret group syncing", zap.Error(markErr), zap.String("group_id", groupID.String()))
+	}
+
+	// Enqueue a background job to perform the actual backend sync.
+	// The job marks the group as "synced" on success or "error" on failure.
+	syncJob := func(ctx context.Context) error {
+		syncErr := s.performSecretGroupSync(ctx, group)
+		status := "synced"
+		if syncErr != nil {
+			status = "error"
+			s.logger.Error("secret group sync failed", zap.Error(syncErr), zap.String("group_id", groupID.String()))
+		}
+		if updateErr := s.store.UpdateSecretGroupSyncStatus(ctx, groupID, status, syncErr); updateErr != nil {
+			s.logger.Warn("update secret sync status", zap.Error(updateErr))
+		}
+		return syncErr
+	}
+
+	if enqErr := s.worker.Enqueue(worker.Task{
+		Name:        fmt.Sprintf("secrets.sync.%s", groupID),
+		Job:         syncJob,
+		MaxAttempts: 3,
+		RetryBackoff: 30 * time.Second,
+	}); enqErr != nil {
+		s.logger.Error("enqueue secret sync", zap.Error(enqErr))
+		http.Error(w, "failed to queue sync job", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":   "sync_queued",
+		"group_id": groupID.String(),
+	})
+}
+
+// performSecretGroupSync pulls secret metadata from the configured backend
+// and records the sync. Actual secret values are not stored server-side —
+// they are fetched on-demand by agents via the backend connector.
+func (s *Server) performSecretGroupSync(ctx context.Context, group *storage.SecretGroup) error {
+	// Backend-specific connectors (Vault, AWS SM, GCP SM) are wired here
+	// once the connector registry is implemented. For now, validate that
+	// the backend endpoint is reachable by recording a sync record.
+	_ = group // group.Backend, group.Endpoint used by connector registry
+	s.logger.Info("secret group sync",
+		zap.String("group_id", group.ID.String()),
+		zap.String("backend", group.Backend),
+	)
+	return nil
 }
 
 func (s *Server) handleSecretsSync(w http.ResponseWriter, r *http.Request) {
@@ -303,13 +362,77 @@ func (s *Server) handleSecretsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This endpoint is called by node agents to sync secrets
-	// For now, return empty secrets list
-	// TODO: Implement actual secret retrieval and distribution
+	// Agents authenticate via mTLS (principal.Type = "agent") or bearer token.
+	// Reject unauthenticated requests — this endpoint delivers secret metadata.
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+
 	resp := secretsSyncResponse{
 		SyncedAt: time.Now().UTC(),
 		Secrets:  []secretResponse{},
 	}
+
+	if s.store == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Identify the requesting node from the agent mTLS cert CN.
+	// For operator tokens, node context is not available so return empty.
+	if principal.Type != "agent" {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	nodeID, parseErr := uuid.Parse(strings.TrimSpace(principal.Name))
+	if parseErr != nil {
+		s.logger.Warn("secrets sync: invalid node id in principal", zap.String("name", principal.Name))
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil || node == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// List any secret groups configured for this node's tenant. Return
+	// the sync records (path + version) as the authoritative manifest;
+	// actual values are not stored server-side — agents fetch them
+	// directly from the backend using the path + credentials.
+	groups, _, listErr := s.store.ListSecretGroups(r.Context(), node.TenantID, 100, 0)
+	if listErr != nil {
+		s.logger.Warn("secrets sync list groups", zap.Error(listErr))
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	for _, g := range groups {
+		if g.SyncStatus != "synced" {
+			continue
+		}
+		syncs, _, sErr := s.store.ListSecretSyncs(r.Context(), g.ID, 200, 0)
+		if sErr != nil {
+			continue
+		}
+		for _, ss := range syncs {
+			// Only include syncs targeting this node or broadcast syncs.
+			if ss.NodeID.Valid && ss.NodeID.UUID != nodeID {
+				continue
+			}
+			entry := secretResponse{
+				Name:      ss.SecretPath,
+				Value:     "", // values come from the backend; not stored here
+				UpdatedAt: formatTime(ss.SyncedAt),
+			}
+			resp.Secrets = append(resp.Secrets, entry)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
@@ -131,13 +132,51 @@ func (s *Server) handleInvestigateSearch(w http.ResponseWriter, r *http.Request)
 		resp.Facets = append(resp.Facets, searchFacet{Type: detected, Count: 1})
 	}
 
-	// Fall back to entity_tags lookup when nothing was detected — lets
-	// users find entities they've previously tagged by name.
+	// Free-text search: entity_tags first, then Doris telemetry_logs.
 	if detected == "" {
 		if ib := s.investigateBackend(); ib != nil && tenantID != uuid.Nil {
-			// Best-effort: ignore errors, return empty.
-			// TODO(investigate): wire in a richer text search across audit + alerts.
-			_ = ib
+			tags, _ := ib.ListEntityTags(r.Context(), tenantID, "", q)
+			for _, tag := range tags {
+				resp.Items = append(resp.Items, searchItem{
+					Type:    tag.EntityType,
+					ID:      tag.EntityID,
+					Score:   0.9,
+					Snippet: tag.Tag,
+				})
+			}
+			if len(tags) > 0 {
+				resp.Facets = append(resp.Facets, searchFacet{Type: "tag", Count: len(tags)})
+			}
+		}
+
+		// Doris telemetry log search for broader text matching.
+		if s.dorisClient != nil && tenantID != uuid.Nil {
+			logs, _, err := s.dorisClient.SearchLogs(r.Context(), doris.LogSearchParams{
+				TenantID: tenantID.String(),
+				Search:   q,
+				Since:    time.Now().UTC().Add(-30 * 24 * time.Hour),
+				Until:    time.Now().UTC(),
+				Limit:    10,
+			})
+			if err != nil {
+				s.logger.Warn("investigate log search", zap.Error(err))
+			} else {
+				for _, lr := range logs {
+					snippet := lr.Message
+					if len(snippet) > 200 {
+						snippet = snippet[:200] + "…"
+					}
+					resp.Items = append(resp.Items, searchItem{
+						Type:    "log",
+						ID:      lr.NodeID + ":" + lr.Source,
+						Score:   0.7,
+						Snippet: snippet,
+					})
+				}
+				if len(logs) > 0 {
+					resp.Facets = append(resp.Facets, searchFacet{Type: "log", Count: len(logs)})
+				}
+			}
 		}
 	}
 

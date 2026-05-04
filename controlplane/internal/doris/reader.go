@@ -135,6 +135,48 @@ func (c *Client) CountUnique(ctx context.Context, tenantID, dimension, dimValue 
 	return n, err
 }
 
+// ThroughputBucket is one time bucket in a log ingest throughput series.
+type ThroughputBucket struct {
+	Timestamp time.Time
+	Events    int64
+}
+
+// LogThroughputSeries returns bucketed log ingest counts from telemetry_logs.
+// bucketDur controls bucket width; minimum 1 minute, clamped to 1 minute if smaller.
+func (c *Client) LogThroughputSeries(ctx context.Context, tenantID string, since, until time.Time, bucketDur time.Duration) ([]ThroughputBucket, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("doris client unavailable")
+	}
+	if bucketDur < time.Minute {
+		bucketDur = time.Minute
+	}
+	bucketSec := int64(bucketDur.Seconds())
+	q := fmt.Sprintf(`
+		SELECT FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(timestamp) / %d) * %d) AS bucket_ts,
+		       COUNT(*) AS cnt
+		FROM telemetry_logs
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+		GROUP BY bucket_ts
+		ORDER BY bucket_ts
+	`, bucketSec, bucketSec)
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+	rows, err := c.db.QueryContext(qctx, q, tenantID, since, until)
+	if err != nil {
+		return nil, fmt.Errorf("throughput series: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []ThroughputBucket{}
+	for rows.Next() {
+		var b ThroughputBucket
+		if err := rows.Scan(&b.Timestamp, &b.Events); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // EventCounts is the per-severity breakdown returned by CountSecurityEvents.
 type EventCounts struct {
 	Critical int64

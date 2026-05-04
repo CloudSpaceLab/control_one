@@ -2181,6 +2181,10 @@ func (f *fakeStore) ListSecretSyncs(_ context.Context, groupID uuid.UUID, limit,
 	return nil, 0, nil
 }
 
+func (f *fakeStore) UpdateSecretGroupSyncStatus(_ context.Context, id uuid.UUID, status string, syncErr error) error {
+	return nil
+}
+
 func (f *fakeStore) ListEntitlements(_ context.Context, filter storage.EntitlementFilter, limit, offset int) ([]storage.AccessEntitlement, int, error) {
 	return nil, 0, nil
 }
