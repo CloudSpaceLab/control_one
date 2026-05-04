@@ -7,11 +7,17 @@
 --   * dynamic_partition.start picks per-table retention; raise via ALTER if
 --     the customer needs a longer evidence window.
 
+-- Doris requires DUPLICATE KEY columns to be an ordered prefix of the
+-- schema. Every table below puts (event_date, tenant_id, <time>, ...)
+-- first; node_id and the rest of the payload follow. Re-ordering after
+-- the original draft because Doris errored with
+-- `KeyColumns[2] (...) is ts, but corresponding column is node_id`.
+
 CREATE TABLE IF NOT EXISTS events (
   event_date         DATE          NOT NULL,
   tenant_id          VARCHAR(36)   NOT NULL,
-  node_id            VARCHAR(36),
   ts                 DATETIME(3)   NOT NULL,
+  node_id            VARCHAR(36),
   event_type         VARCHAR(32)   NOT NULL,
   severity           VARCHAR(16),
   correlation_id     VARCHAR(36),
@@ -52,11 +58,11 @@ PROPERTIES (
 CREATE TABLE IF NOT EXISTS process_connections (
   event_date         DATE          NOT NULL,
   tenant_id          VARCHAR(36)   NOT NULL,
-  node_id            VARCHAR(36),
+  started_at         DATETIME(3)   NOT NULL,
   conn_id            VARCHAR(36)   NOT NULL,
+  node_id            VARCHAR(36),
   correlation_id     VARCHAR(36),
   bastion_session_id VARCHAR(36),
-  started_at         DATETIME(3)   NOT NULL,
   ended_at           DATETIME(3),
   last_data_at       DATETIME(3),
   duration_ms        BIGINT,
@@ -98,9 +104,9 @@ PROPERTIES (
 CREATE TABLE IF NOT EXISTS process_lineage (
   event_date     DATE          NOT NULL,
   tenant_id      VARCHAR(36)   NOT NULL,
-  node_id        VARCHAR(36),
   observed_at    DATETIME(3)   NOT NULL,
   pid            BIGINT,
+  node_id        VARCHAR(36),
   ppid           BIGINT,
   process_name   VARCHAR(128),
   cmdline        VARCHAR(2048),
@@ -127,11 +133,11 @@ PROPERTIES (
 CREATE TABLE IF NOT EXISTS file_accesses (
   event_date     DATE          NOT NULL,
   tenant_id      VARCHAR(36)   NOT NULL,
-  node_id        VARCHAR(36),
   ts             DATETIME(3)   NOT NULL,
+  pid            BIGINT,
+  node_id        VARCHAR(36),
   correlation_id VARCHAR(36),
   conn_id        VARCHAR(36),
-  pid            BIGINT,
   process_name   VARCHAR(128),
   user_name      VARCHAR(64),
   path           VARCHAR(1024),
@@ -157,11 +163,11 @@ PROPERTIES (
 CREATE TABLE IF NOT EXISTS db_queries (
   event_date     DATE          NOT NULL,
   tenant_id      VARCHAR(36)   NOT NULL,
-  node_id        VARCHAR(36),
   ts             DATETIME(3)   NOT NULL,
+  pid            BIGINT,
+  node_id        VARCHAR(36),
   correlation_id VARCHAR(36),
   conn_id        VARCHAR(36),
-  pid            BIGINT,
   engine         VARCHAR(16),
   database_name  VARCHAR(128),
   user_name      VARCHAR(64),

@@ -37,9 +37,17 @@ export function NodeStatusBadge() {
       />
     );
   }
-  if (!data) return null;
-
-  const { totals } = data;
+  // The fleet endpoint can fall back to postgres when Doris is degraded;
+  // when neither is wired the response can omit `totals` entirely. Default
+  // to all-zeros so the badge renders 0/0 instead of crashing the shell.
+  const totals = data?.totals ?? {
+    nodes: 0,
+    healthy: 0,
+    warning: 0,
+    degraded: 0,
+    critical: 0,
+    unknown: 0,
+  };
   const online = totals.healthy + totals.warning;
   const tone = pickTone(totals);
   const tooltip = `${totals.healthy} healthy · ${totals.warning} warning · ${totals.degraded} degraded · ${totals.critical} critical · ${totals.unknown} unknown`;
