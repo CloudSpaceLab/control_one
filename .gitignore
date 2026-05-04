@@ -42,3 +42,18 @@ postgres-data/
 /ui/dist/
 /ui/.vite/
 /ui/coverage/
+
+# Deploy artefacts that contain secrets or are operator-machine-specific.
+# The auto-deploy workflow (.github/workflows/deploy.yml) only needs the
+# prebuilt Dockerfiles + nginx config; everything else stays local.
+/deploy/seed_passwords.sql
+/deploy/controlplane.yaml
+/deploy/controlplane.yaml.tmpl
+/deploy/.env*
+/deploy/fix_migration_0061.py
+/deploy/diagnose_output.txt
+diagnose_output.txt
+completion-plan.md
+.claude/
+.windsurf/
+scripts/test_login.spec.ts
