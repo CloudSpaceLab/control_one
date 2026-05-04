@@ -27,14 +27,21 @@ import (
 //	--binary <path>           path to the binary to verify
 //	--signature <b64|flag>    base64-encoded ed25519 signature over sha256(binary)
 //	--signature-file <path>   alternative: read signature from file
-//	--public-key <path>       alternative to --public-key-url: local PEM file
+//	--public-key <path>       path to a local PEM-encoded ed25519 public key
+//	--public-key-file <path>  alias for --public-key (preferred name; matches
+//	                          self-update pinning convention)
 //	--public-key-url <url>    fetch PEM public key from the control plane
+//
+// Exactly one of --public-key / --public-key-file / --public-key-url must be
+// provided. When both --public-key and --public-key-file are set the values
+// must match; conflicting paths are a usage error.
 func runVerifyBinary(args []string) error {
 	fs := flag.NewFlagSet("verify-binary", flag.ContinueOnError)
 	binaryPath := fs.String("binary", "", "path to the binary to verify")
 	signature := fs.String("signature", "", "base64 ed25519 signature")
 	signatureFile := fs.String("signature-file", "", "path to a file containing the base64 signature")
 	publicKeyFile := fs.String("public-key", "", "path to a local PEM-encoded ed25519 public key")
+	publicKeyFileAlias := fs.String("public-key-file", "", "alias for --public-key (preferred name)")
 	publicKeyURL := fs.String("public-key-url", "", "URL to fetch the PEM-encoded public key from")
 
 	if err := fs.Parse(args); err != nil {
@@ -43,6 +50,14 @@ func runVerifyBinary(args []string) error {
 
 	if strings.TrimSpace(*binaryPath) == "" {
 		return errors.New("--binary is required")
+	}
+
+	// Resolve the local public-key path from either spelling. Both being set
+	// is fine when they agree (e.g. wrappers that pass both for compatibility);
+	// disagreeing values are a usage error rather than a silent winner.
+	localKeyPath, err := pickPublicKeyPath(*publicKeyFile, *publicKeyFileAlias)
+	if err != nil {
+		return err
 	}
 
 	sigB64, err := readSignature(*signature, *signatureFile)
@@ -58,7 +73,7 @@ func runVerifyBinary(args []string) error {
 		return fmt.Errorf("signature has unexpected length %d (want %d)", len(sigBytes), ed25519.SignatureSize)
 	}
 
-	pub, err := loadVerifyPublicKey(*publicKeyFile, *publicKeyURL)
+	pub, err := loadVerifyPublicKey(localKeyPath, *publicKeyURL)
 	if err != nil {
 		return err
 	}
@@ -80,6 +95,25 @@ func runVerifyBinary(args []string) error {
 	}
 	fmt.Println("ok: signature verified")
 	return nil
+}
+
+// pickPublicKeyPath resolves the local public-key path from the two flag
+// spellings (`--public-key` and `--public-key-file`). They are aliases; we
+// accept either, both (when equal), or neither. Conflicting values are a
+// usage error rather than picking a silent winner.
+func pickPublicKeyPath(primary, alias string) (string, error) {
+	p := strings.TrimSpace(primary)
+	a := strings.TrimSpace(alias)
+	switch {
+	case p != "" && a != "" && p != a:
+		return "", errors.New("--public-key and --public-key-file conflict; pass only one")
+	case p != "":
+		return p, nil
+	case a != "":
+		return a, nil
+	default:
+		return "", nil
+	}
 }
 
 func readSignature(inline, path string) (string, error) {
@@ -121,7 +155,7 @@ func loadVerifyPublicKey(localFile, remoteURL string) (ed25519.PublicKey, error)
 			return nil, fmt.Errorf("read public key body: %w", err)
 		}
 	default:
-		return nil, errors.New("--public-key or --public-key-url is required")
+		return nil, errors.New("--public-key (or --public-key-file) or --public-key-url is required")
 	}
 
 	block, _ := pem.Decode(pemBytes)
