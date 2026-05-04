@@ -16,12 +16,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/google/uuid"
 	"sync"
 	"text/template"
+	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
 // --- Bash installer template ---------------------------------------------
@@ -606,10 +608,109 @@ func (s *Server) binaryMetadataFor(path string) (binaryMetadata, error) {
 
 // --- HTTP handlers ------------------------------------------------------
 
+// genericTokenRejection is returned to clients on every token validation
+// failure (missing, malformed, revoked, expired, exhausted). We deliberately
+// do NOT distinguish between these cases at the wire level so an attacker
+// probing the endpoint can't tell whether a token exists vs. is revoked vs.
+// is expired. The structured log line carries the precise reason for ops.
+const genericTokenRejection = "invalid or expired enrollment token"
+
+// setNoStore stamps no-cache headers on the response. The install script and
+// agent binary endpoints are gated by single-use(-ish) enrollment tokens, so
+// any cached response would let a downstream proxy hand the same script to a
+// later requester after the token has been revoked. Apply this BEFORE writing
+// any body, including error responses.
+func setNoStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+}
+
+// hashTokenForLog returns a short SHA-256 prefix of the raw token so we can
+// correlate failed-validation log lines without writing the live secret to
+// disk. Empty tokens get a sentinel so dashboards can group them.
+func hashTokenForLog(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "(empty)"
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// requireEnrollmentToken validates the `token` query parameter against the
+// enrollment_tokens store. On any failure it writes Cache-Control: no-store +
+// the generic 401 response and returns false; callers MUST short-circuit.
+//
+// This is the same validation chain the public /api/v1/enroll handler uses
+// (sha256 → GetEnrollmentTokenByHash → revoked/expired/max_nodes checks),
+// extracted so the install-script and binary endpoints can call it before
+// rendering a script with a control-plane URL baked in or serving the binary.
+func (s *Server) requireEnrollmentToken(w http.ResponseWriter, r *http.Request) (*storage.EnrollmentToken, bool) {
+	setNoStore(w)
+
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return nil, false
+	}
+
+	raw := strings.TrimSpace(r.URL.Query().Get("token"))
+	if raw == "" {
+		http.Error(w, "token required", http.StatusUnauthorized)
+		return nil, false
+	}
+
+	h := sha256.Sum256([]byte(raw))
+	tokenHash := hex.EncodeToString(h[:])
+
+	token, err := s.store.GetEnrollmentTokenByHash(r.Context(), tokenHash)
+	if err != nil {
+		s.logger.Error("lookup enrollment token", zap.Error(err),
+			zap.String("token_hash_prefix", hashTokenForLog(raw)),
+			zap.String("remote_ip", clientIP(r)))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, false
+	}
+
+	logReject := func(reason string) {
+		s.logger.Warn("agent endpoint token rejected",
+			zap.String("reason", reason),
+			zap.String("path", r.URL.Path),
+			zap.String("token_hash_prefix", hashTokenForLog(raw)),
+			zap.String("remote_ip", clientIP(r)))
+	}
+
+	if token == nil {
+		logReject("not_found")
+		http.Error(w, genericTokenRejection, http.StatusUnauthorized)
+		return nil, false
+	}
+	if token.RevokedAt.Valid {
+		logReject("revoked")
+		http.Error(w, genericTokenRejection, http.StatusUnauthorized)
+		return nil, false
+	}
+	if time.Now().After(token.ExpiresAt) {
+		logReject("expired")
+		http.Error(w, genericTokenRejection, http.StatusUnauthorized)
+		return nil, false
+	}
+	if token.MaxNodes > 0 && token.NodesEnrolled >= token.MaxNodes {
+		logReject("max_nodes_exhausted")
+		http.Error(w, genericTokenRejection, http.StatusUnauthorized)
+		return nil, false
+	}
+
+	return token, true
+}
+
 func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, ok := s.requireEnrollmentToken(w, r); !ok {
 		return
 	}
 
@@ -668,6 +769,19 @@ func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The bash/PowerShell installer template re-exports the operator-supplied
+	// token and the script then fetches /api/v1/agent/binary. Requiring the
+	// token here closes the same enumeration surface the install-script
+	// endpoint did. Operators who must support legacy unauthenticated bootstrap
+	// can flip s.cfg.Agent.AllowAnonymousBinary, but the default is enforce.
+	if !s.cfg.Agent.AllowAnonymousBinary {
+		if _, ok := s.requireEnrollmentToken(w, r); !ok {
+			return
+		}
+	} else {
+		setNoStore(w)
+	}
+
 	osParam, archParam, ok := parseOSArch(w, r)
 	if !ok {
 		return
@@ -700,6 +814,17 @@ func (s *Server) handleAgentBinaryManifest(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Same model as handleAgentBinary: the installer template fetches this
+	// after the operator has already passed the token. See AllowAnonymousBinary
+	// rationale on the binary handler above.
+	if !s.cfg.Agent.AllowAnonymousBinary {
+		if _, ok := s.requireEnrollmentToken(w, r); !ok {
+			return
+		}
+	} else {
+		setNoStore(w)
 	}
 
 	osParam, archParam, ok := parseOSArch(w, r)
