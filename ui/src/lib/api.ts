@@ -1577,6 +1577,23 @@ export class APIClient {
     return this.request<NodeHealthScore>(`/api/v1/nodes/${encoded}/health`);
   }
 
+  async repairNodeViaSSH(
+    nodeId: string,
+    payload: {
+      ssh_user: string;
+      ssh_key?: string; // base64-encoded PEM
+      ssh_password?: string;
+      host_override?: string;
+      port?: number;
+    },
+  ): Promise<{ job_id: string; host: string; port: number; expire_at: string; message: string }> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request(`/api/v1/nodes/${encoded}/repair`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listNodeServices(nodeId: string): Promise<{ data: NodeService[] }> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<{ data: NodeService[] }>(`/api/v1/nodes/${encoded}/services`);
