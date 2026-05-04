@@ -4,7 +4,7 @@ GO_PACKAGES := ./...
 DOCKER_COMPOSE_FILE := docker-compose.dev.yml
 CONTROL_ONE_CONFIG ?= controlplane/config/controlplane.example.yaml
 
-.PHONY: help go-test go-lint go-fmt go-run controlplane nodeagent ui-install ui-build ui-test docker-up docker-down docker-logs
+.PHONY: help go-test go-lint go-fmt go-run controlplane controlone-agent ui-install ui-build ui-test docker-up docker-down docker-logs
 
 help:
 	@echo "Control One developer targets"

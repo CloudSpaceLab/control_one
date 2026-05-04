@@ -3,7 +3,7 @@ set -euo pipefail
 
 # build_offline_bundle.sh — produce a self-contained tarball that installs the
 # Control One stack on a fully air-gapped host. The bundle contains:
-#   - controlplane + nodeagent binaries for linux/amd64
+#   - controlplane + controlone-agent binaries for linux/amd64
 #   - docker-compose.yaml wiring Postgres + Redis
 #   - example controlplane.yaml with placeholders
 #   - initial TLS scaffolding under certs/
@@ -40,7 +40,7 @@ mkdir -p "${stage}/bin" "${stage}/config" "${stage}/certs" "${stage}/migrations"
 
 echo ">> Building linux/amd64 binaries..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "${stage}/bin/controlplane" ./controlplane/cmd/controlplane
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "${stage}/bin/nodeagent" ./cmd/nodeagent
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "${stage}/bin/controlone-agent" ./cmd/nodeagent
 
 echo ">> Copying migrations..."
 cp -r "${root_dir}/controlplane/internal/migrate/sql/" "${stage}/migrations/sql"
