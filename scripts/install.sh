@@ -1,46 +1,21 @@
 #!/usr/bin/env bash
+# Deprecated: use scripts/install-agent.sh --local <binary> instead.
+#
+# This wrapper preserves the legacy "drop the binary in cwd and run install.sh"
+# UX while routing all the actual work through install-agent.sh, which has
+# proper distro/init detection, idempotency, signature verify, and the unified
+# exit-code contract. See install-agent.sh --help for the full surface.
 set -euo pipefail
 
-# Local on-host installer for the Control One agent. Use this when you've
-# already fetched the agent binary into the current directory (e.g. from an
-# offline bundle or a hand-copied build artifact). For network installs that
-# fetch from a control plane, use scripts/install-agent.sh instead.
+echo "Note: scripts/install.sh is deprecated; forwarding to install-agent.sh --local ./controlone-agent" >&2
 
-INSTALL_DIR="/usr/local/bin"
-BIN_PATH="$INSTALL_DIR/controlone-agent"
-CONFIG_DEST="/etc/control-one/nodeagent.yaml"
-SERVICE_FILE="/etc/systemd/system/controlone-agent.service"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-TMP_DIR="$(mktemp -d)"
-cleanup() {
-  rm -rf "$TMP_DIR"
-}
-trap cleanup EXIT
-
-mkdir -p "$INSTALL_DIR" /var/lib/control-one/nodeagent /var/log/control-one/nodeagent
-
-if [[ -f controlone-agent ]]; then
-  cp controlone-agent "$BIN_PATH"
-else
-  echo "controlone-agent binary not found in current directory" >&2
-  exit 1
+# The legacy install.sh expected ./controlone-agent in the current working
+# directory. Preserve that contract.
+if [[ ! -f "./controlone-agent" ]]; then
+    echo "controlone-agent binary not found in current directory" >&2
+    exit 1
 fi
 
-chmod 0755 "$BIN_PATH"
-
-if [[ -f configs/example-config.yaml ]]; then
-  mkdir -p "$(dirname "$CONFIG_DEST")"
-  cp configs/example-config.yaml "$CONFIG_DEST"
-  chmod 0640 "$CONFIG_DEST"
-fi
-
-if [[ -f build/controlone-agent.service ]]; then
-  cp build/controlone-agent.service "$SERVICE_FILE"
-  systemctl daemon-reload
-  systemctl enable controlone-agent.service
-  systemctl restart controlone-agent.service
-else
-  echo "systemd unit file not found; skipping service setup" >&2
-fi
-
-echo "Control One agent installed."
+exec "$SCRIPT_DIR/install-agent.sh" --local "./controlone-agent" "$@"
