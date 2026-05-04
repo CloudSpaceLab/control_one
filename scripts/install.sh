@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="/opt/control-one/nodeagent"
-BIN_PATH="$INSTALL_DIR/nodeagent"
+# Local on-host installer for the Control One agent. Use this when you've
+# already fetched the agent binary into the current directory (e.g. from an
+# offline bundle or a hand-copied build artifact). For network installs that
+# fetch from a control plane, use scripts/install-agent.sh instead.
+
+INSTALL_DIR="/usr/local/bin"
+BIN_PATH="$INSTALL_DIR/controlone-agent"
 CONFIG_DEST="/etc/control-one/nodeagent.yaml"
-SERVICE_FILE="/etc/systemd/system/control-one-nodeagent.service"
+SERVICE_FILE="/etc/systemd/system/controlone-agent.service"
 
 TMP_DIR="$(mktemp -d)"
 cleanup() {
@@ -14,14 +19,14 @@ trap cleanup EXIT
 
 mkdir -p "$INSTALL_DIR" /var/lib/control-one/nodeagent /var/log/control-one/nodeagent
 
-if [[ -f nodeagent ]]; then
-  cp nodeagent "$BIN_PATH"
+if [[ -f controlone-agent ]]; then
+  cp controlone-agent "$BIN_PATH"
 else
-  echo "nodeagent binary not found in current directory" >&2
+  echo "controlone-agent binary not found in current directory" >&2
   exit 1
 fi
 
-chmod 0750 "$BIN_PATH"
+chmod 0755 "$BIN_PATH"
 
 if [[ -f configs/example-config.yaml ]]; then
   mkdir -p "$(dirname "$CONFIG_DEST")"
@@ -29,13 +34,13 @@ if [[ -f configs/example-config.yaml ]]; then
   chmod 0640 "$CONFIG_DEST"
 fi
 
-if [[ -f build/nodeagent.service ]]; then
-  cp build/nodeagent.service "$SERVICE_FILE"
+if [[ -f build/controlone-agent.service ]]; then
+  cp build/controlone-agent.service "$SERVICE_FILE"
   systemctl daemon-reload
-  systemctl enable control-one-nodeagent.service
-  systemctl restart control-one-nodeagent.service
+  systemctl enable controlone-agent.service
+  systemctl restart controlone-agent.service
 else
   echo "systemd unit file not found; skipping service setup" >&2
 fi
 
-echo "Control One node agent installed."
+echo "Control One agent installed."

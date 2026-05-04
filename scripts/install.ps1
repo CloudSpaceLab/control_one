@@ -13,9 +13,9 @@ if (-not (Test-Path (Split-Path $ConfigPath))) {
     New-Item -ItemType Directory -Path (Split-Path $ConfigPath) | Out-Null
 }
 
-$binarySource = Join-Path $PSScriptRoot 'nodeagent.exe'
+$binarySource = Join-Path $PSScriptRoot 'controlone-agent.exe'
 if (-not (Test-Path $binarySource)) {
-    Write-Error "nodeagent.exe not found alongside script."
+    Write-Error "controlone-agent.exe not found alongside script."
 }
 
 Copy-Item $binarySource -Destination $InstallDir -Force
@@ -25,7 +25,7 @@ if (Test-Path $configSource) {
     Copy-Item $configSource -Destination $ConfigPath -Force
 }
 
-$serviceName = 'ControlOneNodeAgent'
+$serviceName = 'ControlOneAgent'
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 
 if ($existingService) {
@@ -33,7 +33,7 @@ if ($existingService) {
     sc.exe delete $serviceName | Out-Null
 }
 
-New-Service -Name $serviceName -BinaryPathName "`"$InstallDir\nodeagent.exe`" -config `"$ConfigPath`"" -Description "Control One Node Agent" -DisplayName "Control One Node Agent" -StartupType Automatic
+New-Service -Name $serviceName -BinaryPathName "`"$InstallDir\controlone-agent.exe`" --config `"$ConfigPath`"" -Description "Control One Agent" -DisplayName "Control One Agent" -StartupType Automatic
 Start-Service -Name $serviceName
 
-Write-Output "Control One Node Agent installed as Windows service."
+Write-Output "Control One Agent installed as Windows service."

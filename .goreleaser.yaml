@@ -1,43 +1,58 @@
+version: 2
+
 project_name: control-one-nodeagent
 
-goos:
-  - linux
-  - windows
-  - darwin
+# NOTE: The Go source package path is ./cmd/nodeagent (kept for module-history
+# stability), but the produced binary is now `controlone-agent`. This matches
+# the runtime systemd unit written by cmd/nodeagent/service_linux.go and the
+# `controlone-agent-<os>-<arch>` filename convention expected by the control
+# plane (see controlplane/internal/server/agent_download.go:resolveBinaryPath).
 
 builds:
   - id: nodeagent
     main: ./cmd/nodeagent
-    binary: nodeagent
+    binary: controlone-agent
     flags:
       - -trimpath
     ldflags:
       - -s -w
     env:
       - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
     goarch:
       - amd64
       - arm64
-    mod_timestamp: '{{ .CommitDate }}'
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    # Per-build post hook stages a flat-named copy in dist/agent-binaries/
+    # for the control plane's BinaryDir. The control plane serves these to
+    # enrolling nodes via /api/v1/agent/binary?os=&arch= and looks up files
+    # named `controlone-agent-<os>-<arch>` (no .exe suffix; the control plane
+    # is OS-agnostic at this layer). See
+    # controlplane/internal/server/agent_download.go:resolveBinaryPath.
     hooks:
-      pre: []
+      post:
+        - cmd: bash -c 'mkdir -p dist/agent-binaries && cp "{{ .Path }}" "dist/agent-binaries/controlone-agent-{{ .Os }}-{{ .Arch }}"'
 
 archives:
   - id: nodeagent-archive
-    builds:
+    ids:
       - nodeagent
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ['zip']
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
     files:
       - license*
       - README.md
-      - configs/example-config.yaml=config/nodeagent.yaml
+      - src: configs/example-config.yaml
+        dst: config/nodeagent.yaml
       - scripts/install.sh
       - scripts/install.ps1
 
-checksums:
+checksum:
   name_template: '{{ .ProjectName }}_checksums.txt'
 
 release:
@@ -62,6 +77,4 @@ dockers:
     dockerfile: build/docker/Dockerfile
     use: buildx
     goos: linux
-    goarch:
-      - amd64
-      - arm64
+    goarch: amd64

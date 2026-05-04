@@ -269,10 +269,10 @@ BUILD_DIR="$OUTPUT_DIR/bin"
 mkdir -p "$BUILD_DIR"
 
 go build -o "$BUILD_DIR/controlplane" ./controlplane/cmd/controlplane
-go build -o "$BUILD_DIR/nodeagent" ./cmd/nodeagent
+go build -o "$BUILD_DIR/controlone-agent" ./cmd/nodeagent
 
 append_summary "Compiled controlplane binary: $BUILD_DIR/controlplane"
-append_summary "Compiled nodeagent binary: $BUILD_DIR/nodeagent"
+append_summary "Compiled controlone-agent binary: $BUILD_DIR/controlone-agent"
 
 cat >"$OUTPUT_DIR/README.md" <<EOF
 # Control One Wizard Output
@@ -285,7 +285,7 @@ This bundle was generated on $(date -u) using \
 - \
 	t	the Control Plane binary: \
   bin/controlplane
-- `bin/nodeagent`: Node agent binary with bootstrap wizard support.
+- `bin/controlone-agent`: Control One agent binary with bootstrap wizard support.
 - `$CONFIG_NAME`: Suggested Control Plane configuration.
 - `certs/`: Self-signed TLS assets (replace with production certificates).
 - `wizard-summary.txt`: Recap of automated steps.
