@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ConfirmModal } from '@/components/ConfirmModal';
+import { RepairAgentDialog } from '@/components/nodes/RepairAgentDialog';
 import {
   Dialog,
   DialogContent,
@@ -29,7 +30,6 @@ import { useNode } from '@/hooks/useNode';
 import { useToast } from '@/providers/ToastProvider';
 import type {
   AgentUpdateResponse,
-  EnrollmentToken,
   NodeHealthRiskLevel,
   TelemetryMetric,
   UpdateNodePayload,
@@ -589,9 +589,9 @@ function SettingsTab({
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <Panel padding="md" eyebrow="REPAIR / RE-ENROLL" title="Bring a drifted or dead agent back online">
         <p className="text-sm text-text-secondary">
-          Two paths depending on what's wrong: update the node's metadata if the
+          Two paths depending on what&apos;s wrong: update the node&apos;s metadata if the
           agent is alive but reporting stale config, or regenerate a fresh
-          install command if the agent is dead / never enrolled / can't reach
+          install command if the agent is dead / never enrolled / can&apos;t reach
           controlplane.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -646,7 +646,7 @@ function SettingsTab({
         onSaved={onChanged}
       />
 
-      <RegenerateBundleDialog
+      <RepairAgentDialog
         open={showRegen}
         node={node}
         onOpenChange={setShowRegen}
@@ -752,120 +752,6 @@ function UpdateSettingsDialog({
   );
 }
 
-function RegenerateBundleDialog({
-  open,
-  node,
-  onOpenChange,
-}: {
-  open: boolean;
-  node: import('@/lib/api').Node;
-  onOpenChange: (b: boolean) => void;
-}) {
-  const api = useApiClient();
-  const { showToast } = useToast();
-  const [busy, setBusy] = useState(false);
-  const [token, setToken] = useState<EnrollmentToken | null>(null);
-
-  useEffect(() => {
-    if (!open) setToken(null);
-  }, [open]);
-
-  const generate = async () => {
-    setBusy(true);
-    try {
-      const issued = await api.createEnrollmentToken({
-        name: `re-enroll · ${node.hostname}`,
-        tenant_id: node.tenant_id,
-        max_nodes: 1,
-        ttl: '24h',
-        labels: { node_id: node.id, hostname: node.hostname },
-      });
-      setToken(issued);
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'token generation failed', 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Build the operator-facing one-liner from the live token. The install
-  // script on the controlplane handles agent download + systemd unit + first
-  // call-home, so this is everything an operator needs to run on the host.
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const installCmd = token?.token
-    ? `curl -fsSL '${origin}/api/v1/agent/install-script?token=${encodeURIComponent(token.token)}&platform=linux' | sudo bash`
-    : '';
-
-  const copy = async (label: string, value: string) => {
-    if (!value) return;
-    await navigator.clipboard.writeText(value);
-    showToast(`${label} copied`, 'success');
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Repair / re-enroll this agent</DialogTitle>
-        </DialogHeader>
-        <p className="text-sm text-text-secondary">
-          Issues a fresh one-shot enrollment token (24h TTL) scoped to tenant{' '}
-          <span className="font-mono text-xs">{node.tenant_id}</span> and labeled
-          with this node id, then renders a copy-paste install command. Run it on
-          the host as root — the installer handles agent download, systemd unit,
-          and first call-home.
-        </p>
-        {token ? (
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
-              <div className="flex items-center justify-between">
-                <Eyebrow>Run this on the host</Eyebrow>
-                <Button variant="secondary" size="sm" onClick={() => copy('Install command', installCmd)}>
-                  Copy command
-                </Button>
-              </div>
-              <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed text-text-secondary">
-                <code>{installCmd}</code>
-              </pre>
-              <p className="text-xs text-text-muted">
-                Idempotent — safe to re-run. The installer reuses the same node id
-                via the labeled token.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
-              <div className="flex items-center justify-between">
-                <Eyebrow>Bootstrap token</Eyebrow>
-                <Button variant="ghost" size="sm" onClick={() => copy('Token', token.token ?? '')}>
-                  Copy token
-                </Button>
-              </div>
-              <code className="break-all font-mono text-[0.7rem] text-text-muted">
-                {token.token ?? '(redacted by server)'}
-              </code>
-              <p className="text-xs text-text-muted">Expires {formatTs(token.expires_at)}.</p>
-            </div>
-
-            <DialogFooter>
-              <Button variant="primary" onClick={() => onOpenChange(false)}>
-                Done
-              </Button>
-            </DialogFooter>
-          </div>
-        ) : (
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" disabled={busy} onClick={generate}>
-              {busy ? 'Generating…' : 'Generate install command'}
-            </Button>
-          </DialogFooter>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
