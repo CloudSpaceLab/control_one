@@ -1,11 +1,11 @@
 [Unit]
-Description=Control One Node Agent
+Description=Control One Agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/control-one/nodeagent/nodeagent -config /etc/control-one/nodeagent.yaml
+ExecStart=/usr/local/bin/controlone-agent --config /etc/control-one/nodeagent.yaml
 Restart=on-failure
 RestartSec=5
 User=root
