@@ -164,9 +164,44 @@ The control plane enforces role-based access control (RBAC) for all HTTPS endpoi
 
 Reference `controlplane/internal/server/server_test.go` for RBAC integration tests covering viewer vs. admin paths.
 
-## Installation Scripts
-- **Linux/Unix**: `scripts/install.sh` deploys binary, config, and systemd unit (`build/nodeagent.service`).
-- **Windows**: `scripts/install.ps1` installs the agent under `Program Files` and registers a Windows service.
+## Install the agent
+
+On any Linux server (root or sudo required):
+
+```bash
+curl -fsSL "https://<your-control-plane>/api/v1/agent/install-script?token=$ENROLLMENT_TOKEN" | sudo bash
+```
+
+Generate the enrollment token from the admin API:
+
+```bash
+curl -X POST https://<your-control-plane>/api/v1/enrollment-tokens \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"new-host","tenant_id":"<tid>","max_nodes":1,"ttl":"1h"}'
+```
+
+What gets installed:
+
+- Binary at `/usr/local/bin/controlone-agent`
+- Config at `/etc/control-one/nodeagent.yaml`
+- Systemd unit `controlone-agent.service` (enabled and started)
+- State at `/var/lib/control-one/nodeagent`
+
+Air-gapped install (binary already on disk):
+
+```bash
+sudo bash scripts/install-agent.sh --local /path/to/controlone-agent --token $TOKEN --url https://cp
+```
+
+Re-running the installer is idempotent; pass `--force` to reinstall. The
+installer verifies the downloaded binary against the manifest's sha256 and the
+ed25519 signature served at `/api/v1/agent/public-key` before placing it on
+disk; structured exit codes (10 download / 20 verify / 30 enroll / 40 service)
+make automation around it scriptable. See `scripts/install-agent.sh --help`
+for the full flag list.
+
+**Windows**: PowerShell installer at `scripts/install.ps1`.
 
 ## Configuration
 Sample node-agent file: `configs/example-config.yaml`

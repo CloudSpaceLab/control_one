@@ -73,3 +73,29 @@ registration:
   bootstrap_tokens:
     - "CHANGE_ME_TOKEN"
   default_tenant_id: ""
+
+agent:
+  # Directory the control plane serves agent binaries from. Files inside must
+  # be named `controlone-agent-<os>-<arch>` (e.g. controlone-agent-linux-amd64),
+  # matching the resolution in agent_download.go:resolveBinaryPath. The control
+  # plane streams the matching file in response to /api/v1/agent/binary.
+  binary_dir: ""
+
+  # ed25519 private-key path used to sign the per-binary manifest. The signature
+  # is exposed via /api/v1/agent/binary/manifest and verified by the agent
+  # (self-update path) and the installer (`controlone-agent verify-binary`).
+  # Generate with: openssl genpkey -algorithm ed25519 -out signing.key
+  signing_key_path: ""
+
+  # ed25519 public-key path. Served verbatim from /api/v1/agent/public-key and
+  # also pinned by the agent at enrollment time so subsequent self-updates can
+  # verify against a key that doesn't depend on the control plane being honest
+  # at update time. Must match signing_key_path.
+  signing_public_key_path: ""
+
+  # When true, /api/v1/agent/binary and /api/v1/agent/binary/manifest skip the
+  # enrollment-token check. Default: false (token required). Flip on only for
+  # legacy bootstrap paths that cannot mint a token, and pair with a network
+  # allow-list. /api/v1/agent/install-script always requires a valid token
+  # regardless of this flag.
+  allow_anonymous_binary: false
