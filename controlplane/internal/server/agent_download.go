@@ -189,6 +189,55 @@ trap cleanup EXIT
 
 install_custom_ca
 
+# ─── Pre-flight: heal broken state before installing ────────────────
+# Idempotent — safe to run on both fresh and existing hosts.
+repair_agent_state() {
+    # Stop any running agent so the binary can be atomically replaced and cert
+    # files are not held open by a live process during re-enrollment.
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet controlone-agent 2>/dev/null; then
+            info "Stopping existing agent service..."
+            $SUDO systemctl stop controlone-agent 2>/dev/null || true
+        fi
+    elif command -v rc-service >/dev/null 2>&1; then
+        $SUDO rc-service controlone-agent stop 2>/dev/null || true
+    fi
+
+    # The agent's default plugin_dir is /opt/control-one/nodeagent/plugins.
+    # If a previous install left the agent binary at /opt/control-one/nodeagent
+    # (a file), os.MkdirAll panics with "not a directory" on every startup.
+    # Detect any path component that is a regular file where a directory is needed.
+    local -a conflict_paths=(
+        "/opt/control-one/nodeagent"
+    )
+    for p in "${conflict_paths[@]}"; do
+        if [[ -e "$p" ]] && [[ ! -d "$p" ]]; then
+            warn "Path conflict: ${p} is a file but the agent needs it as a directory. Relocating..."
+            $SUDO mv "$p" "${p}.bak.$(date +%s)" 2>/dev/null || $SUDO rm -f "$p" || true
+            ok "Cleared conflicting path: ${p}"
+        fi
+    done
+
+    # Remove 0-byte cert files. They were written during a failed enrollment
+    # (e.g. server/agent JSON tag mismatch). os.WriteFile overwrites them on
+    # re-enrollment but tls.LoadX509KeyPair will fatal if they are still empty
+    # at next boot before re-enrollment completes.
+    local cert_dir="/var/lib/control-one/nodeagent/certs"
+    if [[ -d "$cert_dir" ]]; then
+        local wiped=0
+        for f in "${cert_dir}"/*.crt "${cert_dir}"/*.key; do
+            [[ -e "$f" ]] || continue
+            if [[ ! -s "$f" ]]; then
+                $SUDO rm -f "$f"
+                wiped=$((wiped + 1))
+            fi
+        done
+        [[ $wiped -gt 0 ]] && warn "Removed ${wiped} empty cert file(s); fresh certs will be issued on enrollment."
+    fi
+}
+
+repair_agent_state
+
 CURL_OPTS=(-fsSL)
 if [[ -n "$CA_CERT_FILE" ]]; then
     CURL_OPTS+=(--cacert "$CA_CERT_FILE")

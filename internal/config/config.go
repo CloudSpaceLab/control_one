@@ -351,6 +351,19 @@ func (c *Config) EnsureDirectories() error {
 			continue
 		}
 		if err := os.MkdirAll(dir, 0o750); err != nil {
+			// Diagnose the common case where a path component is a regular
+			// file (e.g. an old binary left at /opt/control-one/nodeagent
+			// blocks creation of /opt/control-one/nodeagent/plugins).
+			// Re-running the install/repair script fixes this automatically.
+			for p := dir; p != "/" && p != "."; p = filepath.Dir(p) {
+				if fi, statErr := os.Stat(p); statErr == nil && !fi.IsDir() {
+					return fmt.Errorf(
+						"create dir %s: path component %q is a file, not a directory — "+
+							"re-run the install/repair script to fix this automatically: %w",
+						dir, p, err,
+					)
+				}
+			}
 			return fmt.Errorf("create dir %s: %w", dir, err)
 		}
 	}
