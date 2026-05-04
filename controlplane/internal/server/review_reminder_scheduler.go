@@ -102,10 +102,31 @@ func (rrs *ReviewReminderScheduler) sendReminder(ctx context.Context, review *st
 		zap.Time("scheduled_for", *review.ScheduledFor),
 	)
 
-	// TODO: Integrate with notification system (email, Slack, etc.)
-	// For now, we log the reminder and could store it in an audit log
+	// Record audit trail.
 	rrs.server.recordAudit(ctx, rrs.server.systemActor(), tenant.ID, "compliance.review.reminder", "compliance_review", review.ID.String(), map[string]any{
 		"review_type":   review.ReviewType,
 		"scheduled_for": review.ScheduledFor,
 	})
+
+	// Dispatch to any registered webhooks subscribed to this event type.
+	payload := map[string]any{
+		"event":         "compliance.review.reminder",
+		"tenant_id":     tenant.ID.String(),
+		"tenant_name":   tenant.Name,
+		"review_id":     review.ID.String(),
+		"review_type":   review.ReviewType,
+		"scheduled_for": review.ScheduledFor,
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+	}
+	if rrs.server.store != nil {
+		webhooks, err := rrs.server.store.ListWebhooksByEvent(ctx, tenant.ID, "compliance.review.reminder")
+		if err != nil {
+			rrs.logger.Warn("list webhooks for review reminder", zap.Error(err))
+		} else {
+			for _, wh := range webhooks {
+				wh := wh
+				go rrs.server.deliverAndRecordCompliance(ctx, &wh, "compliance.review.reminder", payload)
+			}
+		}
+	}
 }
