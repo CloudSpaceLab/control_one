@@ -465,10 +465,10 @@ ok "Installed to ${INSTALL_DIR}/controlone-agent."
 
 # ─── Enroll ─────────────────────────────────────────────────────────
 ENROLL_ARGS=("--join" "$CONTROL_PLANE_URL" "--token" "$TOKEN")
-[[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE")
 [[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service")
-[[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" && "$INIT_SYSTEM" != "unknown" ]] && \
-    ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM")
+# NOTE: --ca-cert and --init-system are not yet recognized by the agent CLI;
+# CA trust is handled by the system store (install_custom_ca) and init
+# detection runs inside the agent at start (cmd/nodeagent/service_linux.go).
 
 info "Enrolling agent with control plane..."
 if [[ "$DRY_RUN" == "true" ]]; then
