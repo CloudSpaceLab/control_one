@@ -177,6 +177,86 @@ func (c *Client) LogThroughputSeries(ctx context.Context, tenantID string, since
 	return out, rows.Err()
 }
 
+// RelatedEntity is one result row from RelatedEntities.
+type RelatedEntity struct {
+	Type          string
+	ID            string
+	CoOccurrences int64
+}
+
+// RelatedEntities returns entities active in the same tenant window as
+// entityID. For node-type entities it excludes the queried node; for IP-type
+// it also surfaces other IPs from the same events.
+func (c *Client) RelatedEntities(ctx context.Context, tenantID, entityType, entityID string, since, until time.Time, limit int) ([]RelatedEntity, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("doris client unavailable")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+
+	out := []RelatedEntity{}
+
+	// Co-active nodes: most-active nodes in the same tenant/window.
+	nodeQ := `
+		SELECT node_id, COUNT(*) AS cnt
+		FROM security_events
+		WHERE tenant_id = ?
+		  AND fired_at >= ? AND fired_at <= ?
+		  AND node_id IS NOT NULL AND node_id != ''
+		  AND node_id != ?
+		GROUP BY node_id
+		ORDER BY cnt DESC
+		LIMIT ?
+	`
+	nodeRows, err := c.db.QueryContext(qctx, nodeQ, tenantID, since, until, entityID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("related entities nodes: %w", err)
+	}
+	defer func() { _ = nodeRows.Close() }()
+	for nodeRows.Next() {
+		var r RelatedEntity
+		r.Type = "node"
+		if err := nodeRows.Scan(&r.ID, &r.CoOccurrences); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := nodeRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// For IP-type entities: find other IPs co-appearing in the same events.
+	if entityType == "ip" && len(out) < limit {
+		remaining := limit - len(out)
+		// src_ip side
+		srcQ := `
+			SELECT dst_ip, COUNT(*) AS cnt
+			FROM security_events
+			WHERE tenant_id = ? AND fired_at >= ? AND fired_at <= ?
+			  AND src_ip = ? AND dst_ip IS NOT NULL AND dst_ip != ''
+			GROUP BY dst_ip ORDER BY cnt DESC LIMIT ?
+		`
+		ipRows, ipErr := c.db.QueryContext(qctx, srcQ, tenantID, since, until, entityID, remaining)
+		if ipErr == nil {
+			defer func() { _ = ipRows.Close() }()
+			for ipRows.Next() {
+				var r RelatedEntity
+				r.Type = "ip"
+				if err := ipRows.Scan(&r.ID, &r.CoOccurrences); err != nil {
+					break
+				}
+				out = append(out, r)
+			}
+		}
+	}
+
+	return out, nil
+}
+
 // EventCounts is the per-severity breakdown returned by CountSecurityEvents.
 type EventCounts struct {
 	Critical int64

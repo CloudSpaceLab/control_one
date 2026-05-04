@@ -346,8 +346,34 @@ func (s *Server) handleEntityRelated(w http.ResponseWriter, r *http.Request, ent
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	// TODO(investigate): compute true co-occurrences from Doris event store.
-	writeJSON(w, http.StatusOK, relatedResponse{Related: []relatedItem{}})
+	tenantID := tenantFromQuery(r)
+
+	related := []relatedItem{}
+	if s.dorisClient != nil && tenantID != uuid.Nil {
+		now := time.Now().UTC()
+		entities, err := s.dorisClient.RelatedEntities(
+			r.Context(), tenantID.String(), entityType, entityID,
+			now.Add(-24*time.Hour), now, 10,
+		)
+		if err != nil {
+			s.logger.Warn("entity related query", zap.Error(err))
+		}
+		for _, e := range entities {
+			score := 0.5
+			if e.CoOccurrences > 10 {
+				score = 0.9
+			} else if e.CoOccurrences > 3 {
+				score = 0.7
+			}
+			related = append(related, relatedItem{
+				Type:          e.Type,
+				ID:            e.ID,
+				Score:         score,
+				CoOccurrences: int(e.CoOccurrences),
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, relatedResponse{Related: related})
 }
 
 // ===== IP enrich =====
