@@ -18,7 +18,7 @@
 .co-empty__title {
   margin: 0.25rem 0 0.5rem;
   font-size: 1rem;
-  color: var(--text, #f0f0f5);
+  color: var(--text-primary);
 }
 .co-empty__desc {
   margin: 0 0 1rem;

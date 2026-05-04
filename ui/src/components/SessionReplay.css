@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  background: var(--surface, #0f0f12);
+  background: var(--bg-surface);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 1rem;
@@ -50,7 +50,7 @@
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(0, 0, 0, 0.2);
-  color: var(--text, #f0f0f5);
+  color: var(--text-primary);
   font-size: 0.85rem;
 }
 .session-replay__commands {
@@ -68,7 +68,7 @@
   width: 100%;
   background: transparent;
   border: none;
-  color: var(--text, #f0f0f5);
+  color: var(--text-primary);
   text-align: left;
   padding: 0.5rem 0.55rem;
   border-radius: 6px;
