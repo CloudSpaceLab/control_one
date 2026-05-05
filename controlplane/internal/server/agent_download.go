@@ -232,7 +232,12 @@ repair_agent_state() {
                 wiped=$((wiped + 1))
             fi
         done
-        [[ $wiped -gt 0 ]] && warn "Removed ${wiped} empty cert file(s); fresh certs will be issued on enrollment."
+        # NOTE: a one-liner test && action would propagate the test exit-1
+        # under set -e when wiped=0, killing the whole installer. Use an
+        # explicit if so the conditional cannot leak a non-zero status.
+        if [[ $wiped -gt 0 ]]; then
+            warn "Removed ${wiped} empty cert file(s); fresh certs will be issued on enrollment."
+        fi
     fi
 }
 
@@ -258,8 +263,12 @@ fi
 info "Downloading agent binary..."
 HTTP_CODE=$(curl "${CURL_OPTS[@]}" -w "%{http_code}" -o "$BINARY_PATH" "$BINARY_URL" 2>/dev/null) || true
 
-[[ ! -f "$BINARY_PATH" ]] || [[ ! -s "$BINARY_PATH" ]] && fatal "Download failed (HTTP ${HTTP_CODE:-???})."
-[[ "${HTTP_CODE}" != "200" ]] && fatal "Unexpected HTTP ${HTTP_CODE}."
+if [[ ! -f "$BINARY_PATH" ]] || [[ ! -s "$BINARY_PATH" ]]; then
+    fatal "Download failed (HTTP ${HTTP_CODE:-???})."
+fi
+if [[ "${HTTP_CODE}" != "200" ]]; then
+    fatal "Unexpected HTTP ${HTTP_CODE}."
+fi
 
 ok "Binary downloaded."
 
