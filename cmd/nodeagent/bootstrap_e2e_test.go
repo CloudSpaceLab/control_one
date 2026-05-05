@@ -4,8 +4,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -196,5 +198,73 @@ func TestJoinYAMLContainsPolicySection(t *testing.T) {
 	}
 	if !strings.Contains(string(src), "policy:\n  public_key_file:") {
 		t.Error("join.go template no longer emits an explicit policy.public_key_file line")
+	}
+}
+
+// TestRunJoinEmitsParseableYAML drives runJoin end-to-end against an
+// httptest enrollment server and asserts that the generated nodeagent.yaml
+// loads cleanly via config.Load. Catches the Windows-path bug where raw
+// backslashes in double-quoted YAML strings get parsed as escape sequences
+// (\U expects 8 hex digits) and panic the loader. Was a real production
+// crash on the demo run; this guards against regressions.
+func TestRunJoinEmitsParseableYAML(t *testing.T) {
+	// Stub installServiceFn so the test never touches the OS service manager.
+	origInstall := installServiceFn
+	installServiceFn = func(string) error { return nil }
+	defer func() { installServiceFn = origInstall }()
+
+	// Fake enrollment server — returns the minimum the agent needs to
+	// finish its yaml + state writes without actually issuing a cert.
+	enrollSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/enroll" {
+			http.NotFound(w, r)
+			return
+		}
+		body := map[string]any{
+			"node_id":   "11111111-1111-1111-1111-111111111111",
+			"tenant_id": "22222222-2222-2222-2222-222222222222",
+			"tls": map[string]string{
+				"client_cert": "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+				"client_key":  "-----BEGIN EC PRIVATE KEY-----\nfake\n-----END EC PRIVATE KEY-----\n",
+				"ca_cert":     "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+			},
+			"config": map[string]any{
+				"intervals": map[string]int{"heartbeat": 60},
+			},
+			"policy": map[string]string{}, // empty PEM — server with no key configured
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer enrollSrv.Close()
+
+	// Use a tempdir at the path most likely to expose the bug — Windows-style
+	// drive-letter root with backslashes. On non-Windows this is just a
+	// normal absolute path with no backslashes, but the assertion still
+	// holds (yaml must parse).
+	dataDir := t.TempDir()
+	configDir := t.TempDir()
+
+	if err := runJoin(enrollSrv.URL, "fake-token", "test-node", configDir, dataDir, false, false); err != nil {
+		t.Fatalf("runJoin: %v", err)
+	}
+
+	cfgPath := filepath.Join(configDir, "nodeagent.yaml")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		raw, _ := os.ReadFile(cfgPath)
+		t.Fatalf("config.Load on generated yaml: %v\n--- yaml ---\n%s", err, raw)
+	}
+
+	// Sanity: parsed values match what runJoin should have emitted.
+	if cfg.APIURL != enrollSrv.URL {
+		t.Errorf("api_url = %q, want %q", cfg.APIURL, enrollSrv.URL)
+	}
+	if cfg.Policy.PublicKeyFile != "" {
+		t.Errorf("policy.public_key_file = %q, want empty (server returned no PEM)", cfg.Policy.PublicKeyFile)
+	}
+	if !strings.Contains(cfg.PolicyDir, dataDir[:1]) && !strings.Contains(filepath.ToSlash(cfg.PolicyDir), filepath.ToSlash(dataDir)[:1]) {
+		t.Errorf("policy_dir = %q, expected to be rooted under dataDir %q", cfg.PolicyDir, dataDir)
 	}
 }
