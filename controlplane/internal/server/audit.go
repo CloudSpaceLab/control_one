@@ -163,6 +163,10 @@ func (s *Server) recordAudit(ctx context.Context, principal *auth.Principal, ten
 	}
 
 	if s.auditAsync {
+		// The handler returns before the goroutine runs, which cancels
+		// r.Context() and would kill the DB write with "context canceled".
+		// Detach cancellation but keep the values (auth, request id, ...).
+		ctx = context.WithoutCancel(ctx)
 		go record()
 	} else {
 		record()
