@@ -487,17 +487,13 @@ func (s *Server) processHeartbeatFirewall(ctx context.Context, nodeID uuid.UUID,
 
 // maybeActivatePendingNode encapsulates the "is the enrollment gate closed?"
 // logic shared by the heartbeat handler and the compliance first-scan hook.
-// If `node.State == enrollment_pending` and both last_seen_at + first_scan_at
-// are non-nil, it transitions the node to active and emits the
-// enrollment.completed webhook. Returns (activated, effectiveState). The
-// effective state is what the caller should report back.
-//
-// Also handles resurrection from enrollment_failed: the reaper marks nodes
-// failed when no heartbeat arrives within enrollmentPendingTimeout, but if
-// a heartbeat is landing right now the failure was a transient blip — flip
-// back to enrollment_pending (or directly to active when first_scan_at is
-// already set) so the agent doesn't stay stuck behind a stale terminal
-// state.
+// If `node.State == enrollment_pending` and last_seen_at is non-nil, it
+// transitions the node to active and emits the enrollment.completed webhook.
+// first_scan_at is no longer required for activation: nodes that have no
+// compliance rule sets configured would never set first_scan_at and would be
+// permanently stuck in enrollment_pending. A successful heartbeat is
+// sufficient proof that the agent is enrolled and communicating.
+// Returns (activated, effectiveState).
 func (s *Server) maybeActivatePendingNode(ctx context.Context, node *storage.Node) (bool, string) {
 	if node == nil {
 		return false, ""
@@ -542,7 +538,7 @@ func (s *Server) maybeActivatePendingNode(ctx context.Context, node *storage.Nod
 	if node.State != storage.NodeStateEnrollmentPending {
 		return false, node.State
 	}
-	if node.LastSeenAt == nil || node.FirstScanAt == nil {
+	if node.LastSeenAt == nil {
 		return false, node.State
 	}
 
@@ -552,12 +548,14 @@ func (s *Server) maybeActivatePendingNode(ctx context.Context, node *storage.Nod
 	}
 
 	payload := map[string]any{
-		"node_id":       node.ID.String(),
-		"tenant_id":     node.TenantID.String(),
-		"hostname":      node.Hostname,
-		"first_scan_at": node.FirstScanAt.UTC().Format(time.RFC3339),
-		"last_seen_at":  node.LastSeenAt.UTC().Format(time.RFC3339),
-		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		"node_id":      node.ID.String(),
+		"tenant_id":    node.TenantID.String(),
+		"hostname":     node.Hostname,
+		"last_seen_at": node.LastSeenAt.UTC().Format(time.RFC3339),
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+	}
+	if node.FirstScanAt != nil {
+		payload["first_scan_at"] = node.FirstScanAt.UTC().Format(time.RFC3339)
 	}
 	go s.emitEnrollmentWebhook(context.Background(), node.TenantID, EventEnrollmentCompleted, payload)
 

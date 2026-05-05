@@ -43,8 +43,11 @@ func buildHeartbeatServer(t *testing.T, store *fakeStore) *Server {
 }
 
 // TestHeartbeatBumpsLastSeen covers the happy path: a pending node without a
-// first_scan gets a last_seen_at bump but stays pending.
-func TestHeartbeatBumpsLastSeen(t *testing.T) {
+// TestHeartbeatActivatesOnFirstBeat verifies that a pending node with no prior
+// heartbeat transitions to active on its first successful heartbeat.
+// first_scan_at is no longer required — nodes with no compliance rule sets
+// would never set it and would be stuck enrollment_pending forever.
+func TestHeartbeatActivatesOnFirstBeat(t *testing.T) {
 	t.Parallel()
 
 	tenantID := uuid.New()
@@ -73,11 +76,11 @@ func TestHeartbeatBumpsLastSeen(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Activated {
-		t.Fatalf("node should not activate without first_scan; got activated=true")
+	if !resp.Activated {
+		t.Fatalf("node should activate on first heartbeat; got activated=false, state=%s", resp.State)
 	}
-	if resp.State != storage.NodeStateEnrollmentPending {
-		t.Fatalf("state = %s, want enrollment_pending", resp.State)
+	if resp.State != storage.NodeStateActive {
+		t.Fatalf("state = %s, want active", resp.State)
 	}
 	if store.nodes[0].LastSeenAt == nil {
 		t.Fatalf("last_seen_at was not stamped")
