@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ type enrollResponse struct {
 	TenantID string       `json:"tenant_id"`
 	TLS      enrollTLS    `json:"tls"`
 	Config   enrollConfig `json:"config"`
+	Policy   enrollPolicy `json:"policy,omitempty"`
 }
 
 type enrollTLS struct {
@@ -70,6 +72,37 @@ type enrollTLS struct {
 
 type enrollConfig struct {
 	Intervals map[string]int64 `json:"intervals"`
+}
+
+// enrollPolicy ships the policy public key (PEM-encoded) so the agent can
+// verify signed policy bundles. Empty when the server isn't configured with
+// a policy signing key — in that case the agent skips signature verification.
+type enrollPolicy struct {
+	PublicKeyPEM string `json:"public_key_pem,omitempty"`
+}
+
+// policyPublicKeyPEM returns the PEM-encoded ed25519 public key the server
+// uses to sign policy bundles, loaded from cfg.Policy.PublicKeyFile. Returns
+// nil when no path is configured or the file can't be read — the missing
+// case is logged once at WARN and treated as "policy signing not configured."
+// Cached after first call so we don't re-read on every enrollment.
+func (s *Server) policyPublicKeyPEM() []byte {
+	s.policyKeyOnce.Do(func() {
+		path := strings.TrimSpace(s.cfg.Policy.PublicKeyFile)
+		if path == "" {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			s.logger.Warn("policy public key not loaded; enrolling agents will skip signature verification",
+				zap.String("path", path),
+				zap.Error(err),
+			)
+			return
+		}
+		s.policyKeyPEM = data
+	})
+	return s.policyKeyPEM
 }
 
 // --- Token CRUD handlers ---
@@ -417,6 +450,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			Config: enrollConfig{
 				Intervals: defaultNodeIntervals(),
 			},
+			Policy: enrollPolicy{
+				PublicKeyPEM: string(s.policyPublicKeyPEM()),
+			},
 		})
 		return
 	}
@@ -470,6 +506,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		},
 		Config: enrollConfig{
 			Intervals: defaultNodeIntervals(),
+		},
+		Policy: enrollPolicy{
+			PublicKeyPEM: string(s.policyPublicKeyPEM()),
 		},
 	}
 	writeJSON(w, http.StatusCreated, resp)

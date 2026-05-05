@@ -779,6 +779,13 @@ type Server struct {
 	agentSigningOnce        sync.Once
 	agentSigning            *agentSigningMaterial
 
+	// policyKeyOnce + policyKeyPEM cache the policy public key shipped to
+	// agents in the enrollment response. Loaded at most once per process —
+	// missing-file warnings surface on the first enrollment that needed it.
+	// See enrollment.go's policyPublicKeyPEM().
+	policyKeyOnce sync.Once
+	policyKeyPEM  []byte
+
 	// enrollmentReaper drives the background loop that flips nodes stuck in
 	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
 	enrollmentReaper enrollmentReaperState
