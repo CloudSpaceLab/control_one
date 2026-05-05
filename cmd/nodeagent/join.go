@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/CloudSpaceLab/control_one/internal/util"
@@ -31,6 +32,9 @@ type enrollResponse struct {
 		CACert     string `json:"ca_cert"`
 	} `json:"tls"`
 	Config enrollConfig `json:"config"`
+	Policy struct {
+		PublicKeyPEM string `json:"public_key_pem"`
+	} `json:"policy"`
 }
 
 type enrollConfig struct {
@@ -92,9 +96,10 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 	// 3. Create directories
 	certDir := filepath.Join(dataDir, "certs")
 	policyDir := filepath.Join(dataDir, "policies")
+	keyDir := filepath.Join(dataDir, "keys")
 	logDir := "/var/log/control-one/nodeagent"
 
-	for _, dir := range []string{certDir, policyDir, logDir, configDir, filepath.Dir(filepath.Join(dataDir, "state.json"))} {
+	for _, dir := range []string{certDir, policyDir, keyDir, logDir, configDir, filepath.Dir(filepath.Join(dataDir, "state.json"))} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
 			return fmt.Errorf("create dir %s: %w", dir, err)
 		}
@@ -109,6 +114,19 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 	}
 	if err := os.WriteFile(filepath.Join(certDir, "ca.crt"), []byte(enrollResp.TLS.CACert), 0640); err != nil {
 		return fmt.Errorf("write CA cert: %w", err)
+	}
+
+	// 4b. Write policy public key (when the server is configured with one).
+	// The empty case is normal — the server hasn't enabled policy signing yet
+	// — and we still emit a `policy.public_key_file: ""` line below so the
+	// agent's config-default doesn't take over and point at a path no one
+	// created.
+	policyKeyPath := ""
+	if pem := strings.TrimSpace(enrollResp.Policy.PublicKeyPEM); pem != "" {
+		policyKeyPath = filepath.Join(keyDir, "policy_pub.pem")
+		if err := os.WriteFile(policyKeyPath, []byte(pem+"\n"), 0644); err != nil {
+			return fmt.Errorf("write policy public key: %w", err)
+		}
 	}
 
 	// 5. Generate nodeagent.yaml config
@@ -134,6 +152,9 @@ tls:
   key_file: "%s"
   ca_cert_file: "%s"
 
+policy:
+  public_key_file: "%s"
+
 intervals:
   heartbeat: %ds
   policy_sync: %ds
@@ -154,11 +175,17 @@ wizard:
 `,
 		joinURL, enrollResp.NodeID, time.Now().UTC().Format(time.RFC3339),
 		joinURL, hostname,
-		filepath.Join(dataDir, "state.json"),
-		policyDir, logDir,
-		filepath.Join(certDir, "client.crt"),
-		filepath.Join(certDir, "client.key"),
-		filepath.Join(certDir, "ca.crt"),
+		// All on-disk paths run through filepath.ToSlash because the YAML
+		// template uses double-quoted strings, where a Windows-style
+		// "C:\Users\..." would be parsed as escape sequences (\U expects
+		// 8 hex digits and panics the YAML loader). Forward slashes are
+		// accepted as path separators by Go's os/filepath on Windows.
+		filepath.ToSlash(filepath.Join(dataDir, "state.json")),
+		filepath.ToSlash(policyDir), filepath.ToSlash(logDir),
+		filepath.ToSlash(filepath.Join(certDir, "client.crt")),
+		filepath.ToSlash(filepath.Join(certDir, "client.key")),
+		filepath.ToSlash(filepath.Join(certDir, "ca.crt")),
+		filepath.ToSlash(policyKeyPath),
 		heartbeat, policySync, scan, telemetry,
 	)
 
