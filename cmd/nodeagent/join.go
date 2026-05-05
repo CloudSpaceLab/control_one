@@ -175,12 +175,17 @@ wizard:
 `,
 		joinURL, enrollResp.NodeID, time.Now().UTC().Format(time.RFC3339),
 		joinURL, hostname,
-		filepath.Join(dataDir, "state.json"),
-		policyDir, logDir,
-		filepath.Join(certDir, "client.crt"),
-		filepath.Join(certDir, "client.key"),
-		filepath.Join(certDir, "ca.crt"),
-		policyKeyPath,
+		// All on-disk paths run through filepath.ToSlash because the YAML
+		// template uses double-quoted strings, where a Windows-style
+		// "C:\Users\..." would be parsed as escape sequences (\U expects
+		// 8 hex digits and panics the YAML loader). Forward slashes are
+		// accepted as path separators by Go's os/filepath on Windows.
+		filepath.ToSlash(filepath.Join(dataDir, "state.json")),
+		filepath.ToSlash(policyDir), filepath.ToSlash(logDir),
+		filepath.ToSlash(filepath.Join(certDir, "client.crt")),
+		filepath.ToSlash(filepath.Join(certDir, "client.key")),
+		filepath.ToSlash(filepath.Join(certDir, "ca.crt")),
+		filepath.ToSlash(policyKeyPath),
 		heartbeat, policySync, scan, telemetry,
 	)
 
