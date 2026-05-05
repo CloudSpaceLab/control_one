@@ -491,10 +491,54 @@ func (s *Server) processHeartbeatFirewall(ctx context.Context, nodeID uuid.UUID,
 // are non-nil, it transitions the node to active and emits the
 // enrollment.completed webhook. Returns (activated, effectiveState). The
 // effective state is what the caller should report back.
+//
+// Also handles resurrection from enrollment_failed: the reaper marks nodes
+// failed when no heartbeat arrives within enrollmentPendingTimeout, but if
+// a heartbeat is landing right now the failure was a transient blip — flip
+// back to enrollment_pending (or directly to active when first_scan_at is
+// already set) so the agent doesn't stay stuck behind a stale terminal
+// state.
 func (s *Server) maybeActivatePendingNode(ctx context.Context, node *storage.Node) (bool, string) {
 	if node == nil {
 		return false, ""
 	}
+
+	if node.State == storage.NodeStateEnrollmentFailed && node.LastSeenAt != nil {
+		// Heartbeat just landed (TouchNodeHeartbeat ran before we got here),
+		// so the agent is demonstrably alive. Revive — to active when the
+		// first compliance scan also already ran, otherwise back to pending.
+		target := storage.NodeStateEnrollmentPending
+		if node.FirstScanAt != nil {
+			target = storage.NodeStateActive
+		}
+		if err := s.store.SetNodeState(ctx, node.ID, target); err != nil {
+			s.logger.Error("resurrect failed node",
+				zap.Error(err),
+				zap.String("node_id", node.ID.String()),
+				zap.String("target", target),
+			)
+			return false, node.State
+		}
+		s.logger.Info("node resurrected from enrollment_failed via heartbeat",
+			zap.String("node_id", node.ID.String()),
+			zap.String("target", target),
+		)
+		if target == storage.NodeStateActive {
+			payload := map[string]any{
+				"node_id":       node.ID.String(),
+				"tenant_id":     node.TenantID.String(),
+				"hostname":      node.Hostname,
+				"first_scan_at": node.FirstScanAt.UTC().Format(time.RFC3339),
+				"last_seen_at":  node.LastSeenAt.UTC().Format(time.RFC3339),
+				"timestamp":     time.Now().UTC().Format(time.RFC3339),
+				"resurrected":   true,
+			}
+			go s.emitEnrollmentWebhook(context.Background(), node.TenantID, EventEnrollmentCompleted, payload)
+			return true, target
+		}
+		return false, target
+	}
+
 	if node.State != storage.NodeStateEnrollmentPending {
 		return false, node.State
 	}

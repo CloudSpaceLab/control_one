@@ -779,6 +779,13 @@ type Server struct {
 	agentSigningOnce        sync.Once
 	agentSigning            *agentSigningMaterial
 
+	// policyKeyOnce + policyKeyPEM cache the policy public key shipped to
+	// agents in the enrollment response. Loaded at most once per process —
+	// missing-file warnings surface on the first enrollment that needed it.
+	// See enrollment.go's policyPublicKeyPEM().
+	policyKeyOnce sync.Once
+	policyKeyPEM  []byte
+
 	// enrollmentReaper drives the background loop that flips nodes stuck in
 	// enrollment_pending to enrollment_failed after enrollmentPendingTimeout.
 	enrollmentReaper enrollmentReaperState
@@ -964,6 +971,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/results", s.handleComplianceResults)
 	s.baseRouter.HandleFunc("/api/v1/compliance/summary", s.handleComplianceSummary)
 	s.baseRouter.HandleFunc("/api/v1/compliance/export", s.handleComplianceExport)
+	s.baseRouter.HandleFunc("/api/v1/telemetry", s.handleTelemetryIngest)
+	s.baseRouter.HandleFunc("/api/v1/heartbeat", s.handleAgentLivenessHeartbeat)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/metrics", s.handleTelemetryMetrics)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/logs", s.handleTelemetryLogs)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/nodes/", s.handleTelemetryNodeSubroutes)
@@ -2526,10 +2535,12 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 	}
 
-	if s.cfg.TLS.RequireClientTLS {
-		if s.cfg.TLS.ClientCAFile == "" {
-			return nil, fmt.Errorf("client TLS required but client_ca_file missing")
-		}
+	// Three modes:
+	//  • RequireClientTLS=true                       → require + verify client cert
+	//  • RequireClientTLS=false + ClientCAFile set   → verify if given (mixed clients:
+	//    UI uses bearer/cookie, agent presents a cert)
+	//  • RequireClientTLS=false + no ClientCAFile    → don't request a client cert
+	if s.cfg.TLS.ClientCAFile != "" {
 		caPEM, err := os.ReadFile(s.cfg.TLS.ClientCAFile)
 		if err != nil {
 			return nil, fmt.Errorf("read client ca: %w", err)
@@ -2539,7 +2550,13 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 			return nil, fmt.Errorf("append client ca certs failed")
 		}
 		tlsCfg.ClientCAs = pool
-		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+		if s.cfg.TLS.RequireClientTLS {
+			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+		} else {
+			tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven
+		}
+	} else if s.cfg.TLS.RequireClientTLS {
+		return nil, fmt.Errorf("client TLS required but client_ca_file missing")
 	}
 
 	return tlsCfg, nil

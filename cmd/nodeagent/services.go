@@ -1,0 +1,230 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/CloudSpaceLab/control_one/internal/api"
+)
+
+// ServiceInfo is one listening TCP service the agent observed locally. It
+// mirrors the controlplane's nodeServiceItem JSON shape — keep them in sync.
+// Probe fields are reserved for a future opt-in localhost HTTP probe and
+// stay nil today.
+type ServiceInfo struct {
+	PID              int     `json:"pid"`
+	Process          string  `json:"process"`
+	BinaryPath       string  `json:"binary_path,omitempty"`
+	ListenAddr       string  `json:"listen_addr"`
+	Port             int     `json:"port"`
+	ServiceKind      string  `json:"service_kind"`
+	ProbeStatus      *int    `json:"probe_status,omitempty"`
+	ProbeServer      *string `json:"probe_server,omitempty"`
+	ProbeTitle       *string `json:"probe_title,omitempty"`
+	ProbeContentType *string `json:"probe_content_type,omitempty"`
+}
+
+// servicesPayload is the request body for POST /api/v1/nodes/<id>/services.
+// Empty Services means "no listeners" — the server clears the table for this
+// node, so the absence of a service is itself a signal.
+type servicesPayload struct {
+	Services []ServiceInfo `json:"services"`
+}
+
+// collectServices returns every listening TCP service on the host. It never
+// returns an error: a probe failure on one platform is not a reason to skip
+// the cycle entirely. Empty result is a legitimate value (no listeners).
+// The actual enumeration lives in the build-tagged services_<os>.go files.
+func collectServices(log *zap.Logger) []ServiceInfo {
+	raw, err := collectPlatformServices()
+	if err != nil {
+		log.Debug("service collection partial failure", zap.Error(err))
+	}
+	return dedupeAndAnnotate(raw)
+}
+
+// dedupeAndAnnotate collapses duplicate (pid, port, listen_addr) entries
+// (each socket family produces a row on Linux), assigns service_kind via the
+// process-name heuristic, and orders by port for stable diffs server-side.
+func dedupeAndAnnotate(in []ServiceInfo) []ServiceInfo {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]int, len(in))
+	out := make([]ServiceInfo, 0, len(in))
+	for _, svc := range in {
+		key := fmt.Sprintf("%d|%s|%d", svc.PID, svc.ListenAddr, svc.Port)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = len(out)
+		if svc.ServiceKind == "" {
+			svc.ServiceKind = serviceKindFor(svc.Process, svc.BinaryPath, svc.Port)
+		}
+		out = append(out, svc)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Port != out[j].Port {
+			return out[i].Port < out[j].Port
+		}
+		return out[i].ListenAddr < out[j].ListenAddr
+	})
+	return out
+}
+
+// serviceKindFor maps the observed process to a coarse fingerprint the
+// knowledge-graph uses for grouping. The match is intentionally loose — the
+// process name alone is the strongest signal, and a stray match here only
+// affects how the row is *labelled* in the graph, not whether it appears.
+func serviceKindFor(process, binaryPath string, port int) string {
+	name := strings.ToLower(strings.TrimSpace(process))
+	if name == "" && binaryPath != "" {
+		name = strings.ToLower(filepath.Base(binaryPath))
+	}
+	switch {
+	case strings.Contains(name, "nginx"):
+		return "nginx"
+	case strings.Contains(name, "apache"), strings.Contains(name, "httpd"):
+		return "apache"
+	case strings.Contains(name, "caddy"):
+		return "caddy"
+	case strings.Contains(name, "envoy"):
+		return "envoy"
+	case strings.Contains(name, "haproxy"):
+		return "haproxy"
+	case strings.Contains(name, "postgres"):
+		return "postgres"
+	case strings.Contains(name, "mysqld"), strings.Contains(name, "mariadb"):
+		return "mysql"
+	case strings.Contains(name, "mongod"):
+		return "mongodb"
+	case strings.Contains(name, "redis"):
+		return "redis"
+	case strings.Contains(name, "memcached"):
+		return "memcached"
+	case strings.Contains(name, "rabbitmq"), strings.Contains(name, "beam.smp"):
+		return "rabbitmq"
+	case strings.Contains(name, "kafka"):
+		return "kafka"
+	case strings.Contains(name, "elastic"):
+		return "elasticsearch"
+	case strings.Contains(name, "sshd"):
+		return "ssh"
+	case strings.Contains(name, "docker"):
+		return "docker"
+	case strings.Contains(name, "containerd"):
+		return "containerd"
+	case strings.Contains(name, "kubelet"):
+		return "kubernetes"
+	case strings.Contains(name, "systemd-resolved"), strings.Contains(name, "named"), strings.Contains(name, "dnsmasq"):
+		return "dns"
+	case strings.Contains(name, "node"), strings.Contains(name, "python"), strings.Contains(name, "java"):
+		// Generic interpreter — fall back to common port hints so the
+		// graph still groups dev servers usefully.
+		switch port {
+		case 80, 8080, 8000, 3000, 5000:
+			return "http-app"
+		case 443, 8443:
+			return "https-app"
+		}
+		return "app"
+	}
+	switch port {
+	case 22:
+		return "ssh"
+	case 53:
+		return "dns"
+	case 80, 8080:
+		return "http"
+	case 443, 8443:
+		return "https"
+	case 3306:
+		return "mysql"
+	case 5432:
+		return "postgres"
+	case 6379:
+		return "redis"
+	case 27017:
+		return "mongodb"
+	}
+	return "unknown"
+}
+
+// startServiceCollector launches the periodic listening-service scan loop.
+// It is independent of the heartbeat: a failure here must not block liveness
+// signalling, and a slow scan must not delay the next heartbeat.
+func startServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration) {
+	if client == nil || nodeID == "" {
+		log.Warn("service collector not started: missing client or node id")
+		return
+	}
+	if interval <= 0 {
+		interval = 10 * time.Minute
+	}
+	go runServiceCollector(ctx, client, log, nodeID, interval)
+}
+
+func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration) {
+	logger := log.Named("services")
+	logger.Info("starting service collector",
+		zap.String("node_id", nodeID),
+		zap.Duration("interval", interval),
+	)
+
+	// Stagger the first run so heartbeat + telemetry + services don't all
+	// fire at second 0 after enrollment.
+	first := time.NewTimer(15 * time.Second)
+	defer first.Stop()
+
+	tick := func() {
+		services := collectServices(logger)
+		if err := postServices(ctx, client, logger, nodeID, services); err != nil {
+			logger.Debug("post services failed", zap.Error(err))
+			return
+		}
+		logger.Debug("services posted", zap.Int("count", len(services)))
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("service collector stopped")
+			return
+		case <-first.C:
+			tick()
+		case <-ticker.C:
+			tick()
+		}
+	}
+}
+
+func postServices(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, services []ServiceInfo) error {
+	body, err := json.Marshal(servicesPayload{Services: services})
+	if err != nil {
+		return fmt.Errorf("marshal services: %w", err)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	resp, err := client.Do(callCtx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/services", body)
+	if err != nil {
+		return fmt.Errorf("post services: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("services status %d: %s", resp.StatusCode, string(snippet))
+	}
+	return nil
+}

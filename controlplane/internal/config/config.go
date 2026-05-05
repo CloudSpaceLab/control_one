@@ -27,6 +27,19 @@ type Config struct {
 	Bastion       BastionConfig       `mapstructure:"bastion"`
 	LDAP          LDAPConfig          `mapstructure:"ldap"`
 	IPIntel       IPIntelConfig       `mapstructure:"ipintel"`
+	Policy        PolicyConfig        `mapstructure:"policy"`
+}
+
+// PolicyConfig points the control plane at the public half of the ed25519
+// key used to sign policy bundles. When set, the file's PEM contents are
+// shipped to enrolling agents so they can verify signed policies; when
+// unset, enrolling agents skip signature verification entirely. Today's
+// server doesn't sign policies — this exists so the wiring is in place
+// when it does, and so the agent's auto-generated nodeagent.yaml can be
+// emitted with an explicit (possibly empty) policy block instead of
+// inheriting the agent-side default that points at a path nothing creates.
+type PolicyConfig struct {
+	PublicKeyFile string `mapstructure:"public_key_file"`
 }
 
 // IPIntelConfig governs the IP enrichment pipeline that backs Investigate

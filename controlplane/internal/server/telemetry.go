@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -34,6 +37,163 @@ type telemetryLogResponse struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 	Timestamp  string            `json:"timestamp"`
 	CreatedAt  string            `json:"created_at"`
+}
+
+// agentMetricsIngestRequest is the body shape posted by the agent's
+// telemetry.SendMetrics every metricsInterval (default 60s):
+//
+//	{"node_id": "...", "timestamp": "RFC3339Nano", "metrics": {"cpu_usage_percent": 12.3, ...}}
+//
+// Each metric becomes one row in telemetry_metrics. Tenant + node_id are
+// resolved from the mTLS agent principal — the body's node_id is informational.
+type agentMetricsIngestRequest struct {
+	NodeID    string         `json:"node_id"`
+	Timestamp string         `json:"timestamp"`
+	Metrics   map[string]any `json:"metrics"`
+}
+
+// metricUnits maps the well-known agent metric names emitted by
+// internal/util/sysinfo.go (CollectHostMetrics) to a unit string. Anything
+// unmapped is stored with no unit — the read endpoint just round-trips it.
+var metricUnits = map[string]string{
+	"cpu_usage_percent":   "percent",
+	"memory_used_percent": "percent",
+	"memory_total_bytes":  "bytes",
+	"disk_usage_percent":  "percent",
+	"load1":               "",
+	"load5":               "",
+	"load15":              "",
+}
+
+// handleTelemetryIngest accepts agent-emitted host metrics (CPU, memory,
+// disk, load averages) and persists them into telemetry_metrics.
+//
+//	POST /api/v1/telemetry
+//
+// Auth: agent mTLS principal required (same shape as /api/v1/events/ingest).
+func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal == nil || principal.Type != "agent" {
+		http.Error(w, "agent principal required", http.StatusForbidden)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	tenantID, nodeID, err := s.tenantNodeForAgent(r.Context(), principal)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // 64 KiB is plenty for one host's gauges
+	defer func() { _ = r.Body.Close() }()
+
+	var body agentMetricsIngestRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	ts := time.Now().UTC()
+	if strings.TrimSpace(body.Timestamp) != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, body.Timestamp); err == nil {
+			ts = parsed
+		} else if parsed, err := time.Parse(time.RFC3339, body.Timestamp); err == nil {
+			ts = parsed
+		}
+	}
+
+	rows := make([]storage.CreateTelemetryMetricParams, 0, len(body.Metrics))
+	for name, raw := range body.Metrics {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		val, ok := metricToFloat(raw)
+		if !ok {
+			// Skip values we can't coerce; the agent might add string-typed
+			// metrics later and we don't want one bad row to drop the batch.
+			continue
+		}
+		row := storage.CreateTelemetryMetricParams{
+			TenantID:    tenantID,
+			NodeID:      nodeID,
+			MetricName:  name,
+			MetricValue: val,
+			Timestamp:   ts,
+		}
+		if unit, known := metricUnits[name]; known && unit != "" {
+			u := unit
+			row.MetricUnit = &u
+		}
+		rows = append(rows, row)
+	}
+
+	if len(rows) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if err := s.store.CreateTelemetryMetrics(r.Context(), rows); err != nil {
+		s.logger.Error("ingest telemetry metrics",
+			zap.Error(err),
+			zap.String("node_id", nodeID.String()),
+			zap.Int("rows", len(rows)),
+		)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleAgentLivenessHeartbeat is a 200-noop on POST /api/v1/heartbeat. The
+// agent's telemetry layer (internal/telemetry/telemetry.go SendHeartbeat)
+// posts here every metricsInterval as a redundant liveness ping; the real
+// liveness signal comes from POST /api/v1/nodes/{id}/heartbeat. Without
+// this stub the redundant call generates a 404-per-minute log line per
+// node. Method-only check; auth is handled by the wrap-around middleware.
+func (s *Server) handleAgentLivenessHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// metricToFloat coerces a JSON-decoded value (already float64 from
+// encoding/json) into a float64. Bools coerce to 0/1 for forward compat.
+func metricToFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case bool:
+		if n {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, false
+	}
 }
 
 func (s *Server) handleTelemetryMetrics(w http.ResponseWriter, r *http.Request) {
