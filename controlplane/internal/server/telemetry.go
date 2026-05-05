@@ -58,9 +58,11 @@ type agentMetricsIngestRequest struct {
 // unmapped is stored with no unit — the read endpoint just round-trips it.
 var metricUnits = map[string]string{
 	"cpu_usage_percent":   "percent",
+	"cpu_count":           "",
 	"memory_used_percent": "percent",
 	"memory_total_bytes":  "bytes",
 	"disk_usage_percent":  "percent",
+	"disk_total_bytes":    "bytes",
 	"load1":               "",
 	"load5":               "",
 	"load15":              "",

@@ -164,6 +164,10 @@ export function NodeDetail(): JSX.Element {
   const memLatest = latestValue(telemetry, 'memory_used_percent');
   const diskLatest = latestValue(telemetry, 'disk_usage_percent');
 
+  const cpuCount = latestValue(telemetry, 'cpu_count');
+  const memTotal = latestValue(telemetry, 'memory_total_bytes');
+  const diskTotal = latestValue(telemetry, 'disk_total_bytes');
+
   const calibratingSamples =
     health?.risk_level === 'calibrating'
       ? (health.components as { calibrating_samples?: number })?.calibrating_samples
@@ -227,6 +231,9 @@ export function NodeDetail(): JSX.Element {
             cpuLatest={cpuLatest}
             memLatest={memLatest}
             diskLatest={diskLatest}
+            cpuCount={cpuCount}
+            memTotal={memTotal}
+            diskTotal={diskTotal}
             telemetryLoading={loading}
           />
         </TabsContent>
@@ -260,10 +267,20 @@ interface OverviewProps {
   cpuLatest: number | null;
   memLatest: number | null;
   diskLatest: number | null;
+  cpuCount: number | null;
+  memTotal: number | null;
+  diskTotal: number | null;
   telemetryLoading: boolean;
 }
 
-function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskLatest, telemetryLoading }: OverviewProps) {
+function fmtBytes(bytes: number): string {
+  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`;
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${bytes} B`;
+}
+
+function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskLatest, cpuCount, memTotal, diskTotal, telemetryLoading }: OverviewProps) {
   const calibratingSamples =
     health?.risk_level === 'calibrating'
       ? (health.components as { calibrating_samples?: number })?.calibrating_samples
@@ -299,6 +316,9 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
           <Vital label="State" value={String(node.state)} />
           <Vital label="First scan" value={formatTs(node.first_scan_at)} />
           <Vital label="Last seen" value={formatTs(node.last_seen_at)} />
+          <Vital label="CPU cores" value={cpuCount != null ? String(Math.round(cpuCount)) : '—'} />
+          <Vital label="Total RAM" value={memTotal != null ? fmtBytes(memTotal) : '—'} />
+          <Vital label="Disk size" value={diskTotal != null ? fmtBytes(diskTotal) : '—'} />
         </dl>
       </Panel>
 

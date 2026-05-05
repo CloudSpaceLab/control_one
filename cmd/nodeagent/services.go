@@ -52,21 +52,34 @@ func collectServices(log *zap.Logger) []ServiceInfo {
 	return dedupeAndAnnotate(raw)
 }
 
-// dedupeAndAnnotate collapses duplicate (pid, port, listen_addr) entries
-// (each socket family produces a row on Linux), assigns service_kind via the
-// process-name heuristic, and orders by port for stable diffs server-side.
+// normalizeAddr collapses all wildcard listen addresses (0.0.0.0, ::, [::])
+// to "*" so that IPv4 and IPv6 dual-stack listeners on the same port are
+// treated as one logical binding.
+func normalizeAddr(addr string) string {
+	switch strings.TrimSpace(addr) {
+	case "0.0.0.0", "::", "[::]", "":
+		return "*"
+	}
+	return addr
+}
+
+// dedupeAndAnnotate collapses duplicate port+address entries. Two entries are
+// considered the same service when they share a normalized listen address and
+// port — PID is intentionally excluded so master/worker process families
+// (e.g. nginx, gunicorn) don't produce duplicate rows. Assigns service_kind
+// via the process-name heuristic and orders by port for stable diffs.
 func dedupeAndAnnotate(in []ServiceInfo) []ServiceInfo {
 	if len(in) == 0 {
 		return nil
 	}
-	seen := make(map[string]int, len(in))
+	seen := make(map[string]bool, len(in))
 	out := make([]ServiceInfo, 0, len(in))
 	for _, svc := range in {
-		key := fmt.Sprintf("%d|%s|%d", svc.PID, svc.ListenAddr, svc.Port)
-		if _, dup := seen[key]; dup {
+		key := fmt.Sprintf("%s|%d", normalizeAddr(svc.ListenAddr), svc.Port)
+		if seen[key] {
 			continue
 		}
-		seen[key] = len(out)
+		seen[key] = true
 		if svc.ServiceKind == "" {
 			svc.ServiceKind = serviceKindFor(svc.Process, svc.BinaryPath, svc.Port)
 		}
@@ -87,10 +100,16 @@ func dedupeAndAnnotate(in []ServiceInfo) []ServiceInfo {
 // affects how the row is *labelled* in the graph, not whether it appears.
 func serviceKindFor(process, binaryPath string, port int) string {
 	name := strings.ToLower(strings.TrimSpace(process))
-	if name == "" && binaryPath != "" {
-		name = strings.ToLower(filepath.Base(binaryPath))
+	bin := ""
+	if binaryPath != "" {
+		bin = strings.ToLower(filepath.Base(binaryPath))
 	}
+	if name == "" {
+		name = bin
+	}
+
 	switch {
+	// Web servers / proxies
 	case strings.Contains(name, "nginx"):
 		return "nginx"
 	case strings.Contains(name, "apache"), strings.Contains(name, "httpd"):
@@ -101,6 +120,10 @@ func serviceKindFor(process, binaryPath string, port int) string {
 		return "envoy"
 	case strings.Contains(name, "haproxy"):
 		return "haproxy"
+	case strings.Contains(name, "traefik"):
+		return "traefik"
+
+	// Databases
 	case strings.Contains(name, "postgres"):
 		return "postgres"
 	case strings.Contains(name, "mysqld"), strings.Contains(name, "mariadb"):
@@ -111,12 +134,26 @@ func serviceKindFor(process, binaryPath string, port int) string {
 		return "redis"
 	case strings.Contains(name, "memcached"):
 		return "memcached"
+	case strings.Contains(name, "clickhouse"):
+		return "clickhouse"
+	case strings.Contains(name, "cassandra"):
+		return "cassandra"
+
+	// Message brokers
 	case strings.Contains(name, "rabbitmq"), strings.Contains(name, "beam.smp"):
 		return "rabbitmq"
 	case strings.Contains(name, "kafka"):
 		return "kafka"
+	case strings.Contains(name, "nats"):
+		return "nats"
+
+	// Search
 	case strings.Contains(name, "elastic"):
 		return "elasticsearch"
+	case strings.Contains(name, "opensearch"):
+		return "opensearch"
+
+	// Infrastructure
 	case strings.Contains(name, "sshd"):
 		return "ssh"
 	case strings.Contains(name, "docker"):
@@ -127,17 +164,72 @@ func serviceKindFor(process, binaryPath string, port int) string {
 		return "kubernetes"
 	case strings.Contains(name, "systemd-resolved"), strings.Contains(name, "named"), strings.Contains(name, "dnsmasq"):
 		return "dns"
-	case strings.Contains(name, "node"), strings.Contains(name, "python"), strings.Contains(name, "java"):
-		// Generic interpreter — fall back to common port hints so the
-		// graph still groups dev servers usefully.
+
+	// Node.js / Next.js
+	case strings.Contains(name, "next-server"), strings.Contains(bin, "next-server"),
+		strings.Contains(name, "next") && (port == 3000 || port == 3001):
+		return "nextjs"
+	case strings.Contains(name, "node"), strings.Contains(name, "bun"):
 		switch port {
-		case 80, 8080, 8000, 3000, 5000:
-			return "http-app"
+		case 3000, 3001, 4000:
+			return "nodejs"
+		case 80, 8080, 8000, 5000:
+			return "nodejs"
 		case 443, 8443:
-			return "https-app"
+			return "nodejs"
 		}
-		return "app"
+		return "nodejs"
+
+	// PHP
+	case strings.Contains(name, "php-fpm"), strings.Contains(name, "php"):
+		return "php"
+
+	// Ruby web servers
+	case strings.Contains(name, "puma"):
+		return "puma"
+	case strings.Contains(name, "unicorn"):
+		return "unicorn"
+	case strings.Contains(name, "passenger"):
+		return "passenger"
+
+	// Python web servers
+	case strings.Contains(name, "gunicorn"):
+		return "gunicorn"
+	case strings.Contains(name, "uvicorn"):
+		return "uvicorn"
+	case strings.Contains(name, "daphne"), strings.Contains(name, "hypercorn"):
+		return "python-asgi"
+	case strings.Contains(name, "python"), strings.Contains(name, "python3"):
+		switch port {
+		case 80, 8080, 8000, 5000:
+			return "python-app"
+		case 443, 8443:
+			return "python-app"
+		}
+		return "python-app"
+
+	// JVM
+	case strings.Contains(name, "java"):
+		switch port {
+		case 8080, 8443, 8000:
+			return "java-app"
+		case 9200, 9300:
+			return "elasticsearch"
+		case 2181:
+			return "zookeeper"
+		}
+		return "java-app"
+
+	// .NET
+	case strings.Contains(name, "dotnet"):
+		return "dotnet"
+
+	// Goravel / Go apps — binary path heuristic
+	case strings.Contains(name, "goravel"):
+		return "goravel"
 	}
+
+	// Port-based fallback
 	switch port {
 	case 22:
 		return "ssh"
@@ -155,6 +247,22 @@ func serviceKindFor(process, binaryPath string, port int) string {
 		return "redis"
 	case 27017:
 		return "mongodb"
+	case 9200, 9300:
+		return "elasticsearch"
+	case 5672, 15672:
+		return "rabbitmq"
+	case 9092:
+		return "kafka"
+	case 4222:
+		return "nats"
+	case 2375, 2376:
+		return "docker"
+	case 6443:
+		return "kubernetes"
+	case 2181:
+		return "zookeeper"
+	case 8123, 9000:
+		return "clickhouse"
 	}
 	return "unknown"
 }

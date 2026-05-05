@@ -778,6 +778,7 @@ type Server struct {
 	complianceScheduler     *ComplianceScheduler
 	retentionScheduler      *RetentionScheduler
 	reviewReminderScheduler *ReviewReminderScheduler
+	healthScheduler         *HealthScheduler
 	agentSigningOnce        sync.Once
 	agentSigning            *agentSigningMaterial
 
@@ -2405,6 +2406,17 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		}
 	}
 
+	// Health scheduler — hourly EWMA baselines + predictive scoring.
+	// Runs unconditionally when the store is available; no config gate.
+	if store != nil {
+		health := NewHealthScheduler(s)
+		if err := health.Start("@hourly"); err != nil {
+			logger.Error("start health scheduler", zap.Error(err))
+		} else {
+			s.healthScheduler = health
+		}
+	}
+
 	// Bastion proxy — opt-in. When enabled the proxy listens on
 	// cfg.Bastion.ListenAddr, authenticates operators via tenant-CA-signed
 	// SSH certs, dials the target node via the existing mTLS tunnel
@@ -2471,6 +2483,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	if s.retentionScheduler != nil {
 		s.retentionScheduler.Stop()
+	}
+	if s.healthScheduler != nil {
+		s.healthScheduler.Stop()
 	}
 	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

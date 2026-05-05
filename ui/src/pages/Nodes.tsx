@@ -1,416 +1,666 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { SectionHeader, Panel, KpiTile, EmptyState, DataTable, SelectField, StatusTag } from '../components/kit';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Server, AlertTriangle, RefreshCw, LayoutGrid, List,
+  Activity, Shield, ChevronRight, Globe,
+} from 'lucide-react';
+import { SectionHeader, Panel, KpiTile, StatusTag, EmptyState, DataTable, LiveBadge } from '../components/kit';
 import type { StateTone } from '../components/kit/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
+import { useFleetSummary } from '../hooks/useFleetSummary';
 import { useApiClient } from '../hooks/useApiClient';
-import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import type {
   AtRiskFleetResponse,
   NodeHealthRiskLevel,
   NodeHealthScore,
-  RegisterNodePayload,
-  UpdateNodePayload,
+  NodeSummary,
 } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
-import { AlertTriangle, ChevronDown, ChevronUp, Info, RefreshCw, Server } from 'lucide-react';
 
-function formatDate(value?: string): string {
-  if (!value) {
-    return '—';
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
+// ── Region types ───────────────────────────────────────────────────────────
+
+type RegionKey = 'na' | 'sa' | 'eu' | 'afme' | 'apac' | 'oce' | 'unknown';
+
+interface RegionMeta {
+  label: string;
+  x: number;
+  y: number;
 }
 
-// Map a predictive risk_level → StatusTag tone. We deliberately use the
-// kit's narrow StateTone palette (no "brand"); calibrating maps to
-// "unknown" because we explicitly do not yet know the node's health.
-function riskTone(risk: NodeHealthRiskLevel): StateTone {
+const REGIONS: Record<RegionKey, RegionMeta> = {
+  na:      { label: 'N. America',   x: 220, y: 155 },
+  sa:      { label: 'S. America',   x: 318, y: 345 },
+  eu:      { label: 'Europe',       x: 494, y: 108 },
+  afme:    { label: 'Africa / ME',  x: 535, y: 295 },
+  apac:    { label: 'Asia Pacific', x: 742, y: 160 },
+  oce:     { label: 'Oceania',      x: 822, y: 375 },
+  unknown: { label: 'Unknown',      x: 950, y: 460 },
+};
+
+// ── Region inference ───────────────────────────────────────────────────────
+
+function normalizeRegionLabel(v: string): RegionKey {
+  const s = v.toLowerCase();
+  if (/\b(us|na|north.?am|canada|canad|us-.+|nyc|dal|atl|sfo|lax|chicago)\b/.test(s)) return 'na';
+  if (/\b(sa|south.?am|brazil|latam|latin|sao)\b/.test(s)) return 'sa';
+  if (/\b(eu|europe|uk|gb|de|fr|nl|ams|lon|fra|dub|ldn|ber|par|ire)\b/.test(s)) return 'eu';
+  if (/\b(af|africa|me|middle.?east|uae|dxb|jed|riyadh|cairo)\b/.test(s)) return 'afme';
+  if (/\b(ap|asia|apac|jp|sg|hk|tok|sin|seoul|mumbai|india|china|bay|bom|del)\b/.test(s)) return 'apac';
+  if (/\b(au|nz|oceania|sydney|melbourne|auckland|syd|mel)\b/.test(s)) return 'oce';
+  return 'unknown';
+}
+
+function guessRegion(node: NodeSummary): RegionKey {
+  for (const key of ['region', 'datacenter', 'location', 'site', 'dc']) {
+    const val = node.labels?.[key];
+    if (typeof val === 'string') return normalizeRegionLabel(val);
+  }
+
+  const ip = node.public_ip;
+  if (!ip) return 'unknown';
+  const parts = ip.split('.');
+  if (parts.length !== 4) return 'unknown';
+  const [a, b] = parts.map(Number);
+
+  if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return 'unknown';
+
+  // Linode/Akamai
+  if (a === 139 && b === 162) return 'eu'; // London
+  if (a === 45 && (b === 33 || b === 56)) return 'na';
+  if (a === 173 && b === 255) return 'na';
+  if (a === 50 && b === 116) return 'na';
+  if (a === 66 && b === 228) return 'na';
+
+  // DigitalOcean
+  if (a === 165 && (b === 227 || b === 232)) return 'na';
+  if (a === 162 && b === 243) return 'na';
+  if (a === 188 && b === 166) return 'eu';
+  if (a === 178 && b === 62) return 'eu';
+  if (a === 128 && b === 199) return 'apac';
+
+  // AWS common
+  if ([3, 13, 18, 34, 44, 52, 54].includes(a)) return 'na';
+  // Azure / GCP EU
+  if (a === 20 || a === 40) return 'eu';
+  if (a === 35) return 'na';
+
+  // Rough first-octet heuristics (last resort)
+  if (a >= 1 && a <= 60) return 'apac';
+  if (a >= 61 && a <= 80) return 'apac';
+  if (a >= 81 && a <= 100) return 'eu';
+  if (a >= 101 && a <= 130) return 'na';
+  if (a >= 131 && a <= 165) return 'na';
+  if (a >= 166 && a <= 180) return 'eu';
+  if (a >= 181 && a <= 220) return 'sa';
+
+  return 'unknown';
+}
+
+// ── Health helpers ─────────────────────────────────────────────────────────
+
+type NodeState = 'healthy' | 'warning' | 'degraded' | 'critical' | 'unknown';
+
+const STATE_COLOR: Record<NodeState, string> = {
+  healthy:  '#22c55e',
+  warning:  '#eab308',
+  degraded: '#f97316',
+  critical: '#ef4444',
+  unknown:  '#6b7280',
+};
+
+const STATE_TONE: Record<NodeState, StateTone> = {
+  healthy:  'healthy',
+  warning:  'warning',
+  degraded: 'degraded',
+  critical: 'critical',
+  unknown:  'unknown',
+};
+
+function riskToState(risk: NodeHealthRiskLevel): NodeState {
   switch (risk) {
-    case 'critical':
-      return 'critical';
-    case 'high':
-      return 'degraded';
-    case 'medium':
-      return 'warning';
-    case 'low':
-      return 'healthy';
-    case 'calibrating':
-    default:
-      return 'unknown';
+    case 'critical':    return 'critical';
+    case 'high':        return 'degraded';
+    case 'medium':      return 'warning';
+    case 'low':         return 'healthy';
+    case 'calibrating': return 'unknown';
+    default:            return 'unknown';
   }
 }
 
-function riskLabel(risk: NodeHealthRiskLevel, score: number, calibratingSamples?: number): string {
-  if (risk === 'calibrating') {
-    const n = typeof calibratingSamples === 'number' ? calibratingSamples : 0;
-    return `Calibrating (${n}/24 samples)`;
-  }
-  return `${risk.charAt(0).toUpperCase()}${risk.slice(1)} · ${score}`;
+function riskTone(risk: NodeHealthRiskLevel): StateTone {
+  return STATE_TONE[riskToState(risk)];
 }
 
-// HealthGauge renders a small SVG arc gauge for a 0..100 score. Pure
-// presentational — color follows the same risk-tone mapping above.
-function HealthGauge({ score, risk }: { score: number; risk: NodeHealthRiskLevel }): JSX.Element {
-  const radius = 48;
-  const circumference = Math.PI * radius;
-  const clamped = Math.max(0, Math.min(100, score));
-  const offset = circumference * (1 - clamped / 100);
-  const strokeColor =
-    risk === 'critical'
-      ? 'var(--state-critical, #ef4444)'
-      : risk === 'high'
-        ? 'var(--state-degraded, #f97316)'
-        : risk === 'medium'
-          ? 'var(--state-warning, #eab308)'
-          : risk === 'low'
-            ? 'var(--state-healthy, #22c55e)'
-            : 'var(--text-muted, #6b7280)';
+function isOnline(node: NodeSummary): boolean {
+  if (!node.last_seen_at) return false;
+  return Date.now() - new Date(node.last_seen_at).getTime() < 5 * 60 * 1000;
+}
+
+function worstState(states: NodeState[]): NodeState {
+  const order: NodeState[] = ['critical', 'degraded', 'warning', 'unknown', 'healthy'];
+  for (const s of order) {
+    if (states.includes(s)) return s;
+  }
+  return 'unknown';
+}
+
+function formatLastSeen(val?: string): string {
+  if (!val) return 'never';
+  const ago = Date.now() - new Date(val).getTime();
+  if (ago < 60_000) return 'just now';
+  if (ago < 3_600_000) return `${Math.floor(ago / 60_000)}m ago`;
+  if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h ago`;
+  return `${Math.floor(ago / 86_400_000)}d ago`;
+}
+
+// ── Pulsing health dot ─────────────────────────────────────────────────────
+
+function PulsingDot({ state, size = 10 }: { state: NodeState; size?: number }) {
+  const color = STATE_COLOR[state];
+  const shouldPulse = state === 'critical' || state === 'degraded';
   return (
-    <svg width={120} height={70} viewBox="0 0 120 70" aria-label={`Health score ${clamped}`}>
-      <path
-        d={`M 12 60 A ${radius} ${radius} 0 0 1 108 60`}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity={0.15}
-        strokeWidth={10}
-        strokeLinecap="round"
+    <span className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
+      {shouldPulse && (
+        <motion.span
+          className="absolute rounded-full"
+          style={{ backgroundColor: color, width: size, height: size, opacity: 0.6 }}
+          animate={{ scale: [1, 2.2, 1], opacity: [0.6, 0, 0] }}
+          transition={{ duration: state === 'critical' ? 1.2 : 2, repeat: Infinity, ease: 'easeOut' }}
+        />
+      )}
+      <span
+        className="relative rounded-full"
+        style={{ backgroundColor: color, width: size, height: size }}
       />
-      <path
-        d={`M 12 60 A ${radius} ${radius} 0 0 1 108 60`}
-        fill="none"
-        stroke={strokeColor}
-        strokeWidth={10}
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-      />
-      <text
-        x={60}
-        y={56}
-        textAnchor="middle"
-        className="font-display fill-current text-foreground"
-        style={{ fontSize: '1.25rem', fontWeight: 600 }}
-      >
-        {risk === 'calibrating' ? '—' : clamped}
-      </text>
-    </svg>
+    </span>
   );
 }
 
-// componentBreakdownEntries pulls the per-signal penalties out of the
-// nested `breakdown` map the server emits. Falls back to top-level
-// numeric entries for older schemas.
-function componentBreakdownEntries(components: Record<string, unknown>): Array<{ key: string; penalty: number }> {
-  const breakdown = components['breakdown'];
-  if (breakdown && typeof breakdown === 'object') {
-    return Object.entries(breakdown as Record<string, unknown>)
-      .filter(([, v]) => typeof v === 'number')
-      .map(([key, v]) => ({ key, penalty: v as number }))
-      .sort((a, b) => a.penalty - b.penalty);
-  }
-  return Object.entries(components)
-    .filter(([, v]) => typeof v === 'number')
-    .map(([key, v]) => ({ key, penalty: v as number }))
-    .sort((a, b) => a.penalty - b.penalty);
+// ── World Map SVG ──────────────────────────────────────────────────────────
+
+interface WorldMapProps {
+  regionData: Record<RegionKey, { count: number; state: NodeState }>;
+  activeRegion: RegionKey | null;
+  onRegionClick: (region: RegionKey | null) => void;
 }
+
+const CONTINENTS = [
+  // North America
+  { d: 'M 35,80 L 80,45 L 240,40 L 280,48 L 360,112 L 320,128 L 285,155 L 278,182 L 262,206 L 268,228 L 220,198 L 178,165 L 158,120 L 128,88 L 62,88 Z' },
+  // Greenland
+  { d: 'M 332,40 L 398,28 L 418,50 L 402,75 L 355,82 L 330,62 Z' },
+  // South America
+  { d: 'M 268,230 L 294,226 L 298,242 L 415,262 L 405,315 L 360,346 L 314,410 L 296,386 L 275,330 L 282,285 L 270,250 Z' },
+  // Europe
+  { d: 'M 435,58 L 518,46 L 558,64 L 568,100 L 556,140 L 518,160 L 462,155 L 432,122 L 422,88 Z' },
+  // Africa
+  { d: 'M 438,165 L 562,160 L 600,210 L 602,368 L 560,430 L 496,440 L 434,396 L 410,328 L 416,248 Z' },
+  // Middle East peninsula
+  { d: 'M 562,155 L 618,148 L 650,180 L 638,230 L 608,242 L 580,218 L 568,190 Z' },
+  // Asia mainland
+  { d: 'M 558,46 L 882,36 L 922,68 L 912,128 L 890,218 L 852,270 L 778,270 L 708,248 L 648,232 L 618,200 L 600,165 L 570,148 L 558,100 Z' },
+  // Indian subcontinent
+  { d: 'M 618,200 L 685,198 L 712,260 L 695,312 L 660,322 L 622,272 Z' },
+  // SE Asia (Indochina)
+  { d: 'M 725,238 L 790,232 L 815,268 L 798,302 L 760,300 L 728,272 Z' },
+  // Indonesia (simplified)
+  { d: 'M 748,312 L 825,308 L 848,325 L 832,342 L 762,345 L 745,328 Z' },
+  // Japan
+  { d: 'M 862,118 L 880,106 L 892,125 L 880,150 L 862,158 L 850,140 Z' },
+  // Australia
+  { d: 'M 752,312 L 878,300 L 912,358 L 898,420 L 830,440 L 760,422 L 735,378 Z' },
+  // New Zealand
+  { d: 'M 902,398 L 920,382 L 930,402 L 920,428 L 900,422 Z' },
+];
+
+function WorldMap({ regionData, activeRegion, onRegionClick }: WorldMapProps) {
+  const [hovered, setHovered] = useState<RegionKey | null>(null);
+
+  const entries = (Object.entries(regionData) as [RegionKey, { count: number; state: NodeState }][])
+    .filter(([, v]) => v.count > 0);
+
+  return (
+    <div className="relative w-full overflow-hidden rounded-lg bg-[#0a0f1a] border border-border-subtle">
+      <svg
+        viewBox="0 0 1000 480"
+        preserveAspectRatio="xMidYMid meet"
+        className="w-full"
+        aria-label="Fleet world map"
+      >
+        {/* Subtle grid lines */}
+        <defs>
+          <pattern id="grid" width="100" height="80" patternUnits="userSpaceOnUse">
+            <path d="M 100 0 L 0 0 0 80" fill="none" stroke="#1e293b" strokeWidth="0.5" opacity="0.6" />
+          </pattern>
+        </defs>
+        <rect width="1000" height="480" fill="url(#grid)" />
+
+        {/* Continent shapes */}
+        {CONTINENTS.map((c, i) => (
+          <path
+            key={i}
+            d={c.d}
+            fill="#1e2d3d"
+            stroke="#2d4057"
+            strokeWidth="1"
+          />
+        ))}
+
+        {/* Region indicators */}
+        {entries.map(([key, { count, state }]) => {
+          const meta = REGIONS[key];
+          const color = STATE_COLOR[state];
+          const isActive = activeRegion === key;
+          const isHov = hovered === key;
+          const radius = Math.max(18, Math.min(36, 12 + count * 3));
+
+          return (
+            <g
+              key={key}
+              transform={`translate(${meta.x},${meta.y})`}
+              onClick={() => onRegionClick(isActive ? null : key)}
+              onMouseEnter={() => setHovered(key)}
+              onMouseLeave={() => setHovered(null)}
+              style={{ cursor: 'pointer' }}
+            >
+              {/* Outer pulse ring */}
+              {(state === 'critical' || state === 'degraded') && (
+                <motion.circle
+                  r={radius + 4}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="1.5"
+                  initial={{ scale: 0.8, opacity: 0.7 }}
+                  animate={{ scale: [0.9, 1.6], opacity: [0.7, 0] }}
+                  transition={{ duration: state === 'critical' ? 1.2 : 2, repeat: Infinity, ease: 'easeOut' }}
+                />
+              )}
+
+              {/* Selection ring */}
+              {(isActive || isHov) && (
+                <circle
+                  r={radius + 8}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="1.5"
+                  opacity="0.5"
+                />
+              )}
+
+              {/* Main dot */}
+              <circle
+                r={radius}
+                fill={color}
+                fillOpacity="0.18"
+                stroke={color}
+                strokeWidth="1.5"
+              />
+
+              {/* Count label */}
+              <text
+                textAnchor="middle"
+                dominantBaseline="central"
+                fill={color}
+                fontSize={count > 99 ? 11 : 13}
+                fontWeight="700"
+                fontFamily="monospace"
+              >
+                {count}
+              </text>
+
+              {/* Region label below */}
+              {(isActive || isHov) && (
+                <text
+                  y={radius + 14}
+                  textAnchor="middle"
+                  fill="#cbd5e1"
+                  fontSize="10"
+                  fontWeight="600"
+                >
+                  {meta.label}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Inactive regions (empty) — subtle label only on hover */}
+        {entries.length === 0 && (
+          <text x="500" y="240" textAnchor="middle" fill="#475569" fontSize="14">
+            No nodes online
+          </text>
+        )}
+      </svg>
+
+      {/* Legend */}
+      <div className="absolute bottom-3 right-3 flex items-center gap-3 rounded-md border border-border-subtle bg-black/60 px-3 py-1.5 backdrop-blur-sm">
+        {(['healthy', 'warning', 'critical'] as NodeState[]).map((s) => (
+          <span key={s} className="flex items-center gap-1.5 text-[10px] text-text-muted capitalize">
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATE_COLOR[s] }} />
+            {s}
+          </span>
+        ))}
+        <span className="flex items-center gap-1.5 text-[10px] text-text-muted">
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATE_COLOR.unknown }} />
+          offline
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── Node card ──────────────────────────────────────────────────────────────
+
+interface NodeCardProps {
+  node: NodeSummary;
+  health: NodeHealthScore | null | undefined;
+  tenantName: string;
+  onClick: () => void;
+}
+
+function NodeCard({ node, health, tenantName, onClick }: NodeCardProps) {
+  const state: NodeState = health
+    ? riskToState(health.risk_level)
+    : isOnline(node)
+    ? 'healthy'
+    : 'unknown';
+
+  return (
+    <motion.button
+      type="button"
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      onClick={onClick}
+      className="group flex flex-col gap-3 rounded-lg border border-border-subtle bg-elevated p-4 text-left transition-all hover:border-border-strong hover:-translate-y-0.5 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <PulsingDot state={state} size={8} />
+          <span className="font-medium text-foreground truncate text-sm">{node.hostname}</span>
+        </div>
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
+
+      {/* Meta */}
+      <div className="flex flex-col gap-1">
+        {node.public_ip && (
+          <code className="font-mono text-[0.65rem] text-text-muted">{node.public_ip}</code>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {node.os && (
+            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wider text-text-secondary">
+              {node.os}
+            </span>
+          )}
+          {node.arch && (
+            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wider text-text-muted">
+              {node.arch}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[0.6rem] text-text-muted truncate">{tenantName}</span>
+        <StatusTag tone={STATE_TONE[state]}>
+          {health ? (health.risk_level === 'calibrating' ? 'calibrating' : `${health.risk_level} · ${health.score}`) : state}
+        </StatusTag>
+      </div>
+
+      {/* Last seen */}
+      <div className="flex items-center justify-between text-[0.6rem] text-text-muted -mt-1">
+        <span className="flex items-center gap-1">
+          <Activity className="h-2.5 w-2.5" />
+          {formatLastSeen(node.last_seen_at)}
+        </span>
+        {node.agent_version && (
+          <span className="font-mono">{node.agent_version}</span>
+        )}
+      </div>
+    </motion.button>
+  );
+}
+
+// ── Fleet group (tenant) row ───────────────────────────────────────────────
+
+interface TenantGroupRowProps {
+  tenantId: string;
+  tenantName: string;
+  nodes: NodeSummary[];
+  healthMap: Record<string, NodeHealthScore | null>;
+  activeRegion: RegionKey | null;
+  onNodeClick: (nodeId: string) => void;
+}
+
+function TenantGroupRow({ tenantName, nodes, healthMap, onNodeClick }: TenantGroupRowProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  const states = nodes.map((n) => {
+    const h = healthMap[n.id];
+    return h ? riskToState(h.risk_level) : isOnline(n) ? 'healthy' : ('unknown' as NodeState);
+  });
+
+  const worst = worstState(states);
+  const onlineCount = nodes.filter(isOnline).length;
+  const critCount = states.filter((s) => s === 'critical' || s === 'degraded').length;
+
+  const barSegments: { state: NodeState; count: number }[] = (['critical', 'degraded', 'warning', 'healthy', 'unknown'] as NodeState[])
+    .map((s) => ({ state: s, count: states.filter((x) => x === s).length }))
+    .filter((x) => x.count > 0);
+
+  return (
+    <div className="flex flex-col gap-0">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        className="flex items-center gap-4 rounded-lg border border-border-subtle bg-elevated px-4 py-3 text-left transition-all hover:border-border-strong hover:bg-surface-2 focus:outline-none"
+      >
+        {/* Tenant info */}
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <PulsingDot state={worst} size={9} />
+          <span className="font-medium text-foreground truncate">{tenantName}</span>
+        </div>
+
+        {/* Stats */}
+        <div className="flex items-center gap-4 shrink-0">
+          <span className="text-xs text-text-muted">
+            <span className="font-mono font-semibold text-foreground">{onlineCount}</span>
+            <span className="text-text-muted">/{nodes.length}</span>
+            <span className="ml-1 text-text-muted">online</span>
+          </span>
+
+          {critCount > 0 && (
+            <StatusTag tone="critical" icon={<AlertTriangle className="h-3 w-3" />}>
+              {critCount} at risk
+            </StatusTag>
+          )}
+
+          {/* Health bar */}
+          <div className="hidden sm:flex h-2 w-24 overflow-hidden rounded-full bg-surface-2">
+            {barSegments.map(({ state, count }) => (
+              <div
+                key={state}
+                className="h-full transition-all"
+                style={{
+                  width: `${(count / nodes.length) * 100}%`,
+                  backgroundColor: STATE_COLOR[state],
+                }}
+              />
+            ))}
+          </div>
+
+          <ChevronRight
+            className={`h-4 w-4 text-text-muted transition-transform ${expanded ? 'rotate-90' : ''}`}
+          />
+        </div>
+      </button>
+
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {nodes.map((node) => (
+                <NodeCard
+                  key={node.id}
+                  node={node}
+                  health={healthMap[node.id]}
+                  tenantName={tenantName}
+                  onClick={() => onNodeClick(node.id)}
+                />
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────
+
+type ViewMode = 'overview' | 'table';
 
 export function Nodes(): JSX.Element {
   const api = useApiClient();
   const navigate = useNavigate();
-  const { data: tenants, reload: reloadTenants } = useTenants();
-  const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
-  const [hostnameFilter, setHostnameFilter] = useState('');
-  const [limit] = useState(12);
-  const [offset, setOffset] = useState(0);
-
-  const { data: nodes, loading, error, pagination, reload: reloadNodes } = useNodes({
-    tenantId: selectedTenant,
-    hostnamePrefix: hostnameFilter.trim() || undefined,
-    limit,
-    offset,
-  });
-
-  // Registration form state — simplified: only token + tenant required.
-  // OS, architecture, IP, and hostname are auto-reported by the agent.
-  const [formTenantId, setFormTenantId] = useState('');
-  const [formTenantName, setFormTenantName] = useState('');
-  const [hostnameHint, setHostnameHint] = useState('');
-  const [bootstrapToken, setBootstrapToken] = useState('');
-  const {
-    error: formError,
-    success: formSuccess,
-    showError,
-    showSuccess,
-    reset: resetFeedback,
-  } = useFormFeedback();
   const { showToast } = useToast();
-  const [registering, setRegistering] = useState(false);
 
-  // Detail panel state
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [detailHostname, setDetailHostname] = useState('');
-  const [detailOs, setDetailOs] = useState('');
-  const [detailArch, setDetailArch] = useState('');
-  const [detailPublicIp, setDetailPublicIp] = useState('');
-  const [updating, setUpdating] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [view, setView] = useState<ViewMode>('overview');
+  const [activeRegion, setActiveRegion] = useState<RegionKey | null>(null);
+  const [hostnameFilter, setHostnameFilter] = useState('');
+  const [healthMap, setHealthMap] = useState<Record<string, NodeHealthScore | null>>({});
+  const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
 
-  // Predictive server downtime — Use Case 5 (PR 31).
-  const [healthScores, setHealthScores] = useState<Record<string, NodeHealthScore | null>>({});
-  const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
-  const [atRiskCollapsed, setAtRiskCollapsed] = useState(false);
-  const [detailHealth, setDetailHealth] = useState<NodeHealthScore | null>(null);
+  // Fetch all nodes with a generous limit for the overview
+  const { data: nodes, loading, error, pagination, reload } = useNodes({ limit: 500 });
+  const { data: fleetSnap, loading: snapLoading } = useFleetSummary({ intervalMs: 30_000 });
+  const { data: tenants } = useTenants();
 
-  // Load at-risk fleet roll-up whenever the tenant filter changes.
+  const tenantNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of tenants) m.set(t.id, t.name);
+    return m;
+  }, [tenants]);
+
+  // Bulk-fetch per-node health scores
   useEffect(() => {
     let cancelled = false;
-    const tenantParam = selectedTenant ?? undefined;
-    api
-      .listAtRiskNodes(tenantParam)
-      .then((resp) => {
-        if (!cancelled) {
-          setAtRiskFleet(resp);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setAtRiskFleet(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, selectedTenant, nodes]);
+    if (nodes.length === 0) return;
 
-  // Bulk-fetch per-node scores for the visible page. We tolerate per-row
-  // errors silently — the row simply renders as "unknown".
-  useEffect(() => {
-    let cancelled = false;
-    const ids = nodes.map((n) => n.id);
     Promise.all(
-      ids.map((id) =>
-        api
-          .getNodeHealth(id)
-          .then((score) => [id, score] as const)
-          .catch(() => [id, null] as const),
+      nodes.map((n) =>
+        api.getNodeHealth(n.id)
+          .then((score) => [n.id, score] as const)
+          .catch(() => [n.id, null] as const),
       ),
     ).then((entries) => {
       if (cancelled) return;
       const next: Record<string, NodeHealthScore | null> = {};
-      for (const [id, score] of entries) {
-        next[id] = score;
-      }
-      setHealthScores(next);
+      for (const [id, score] of entries) next[id] = score;
+      setHealthMap(next);
     });
-    return () => {
-      cancelled = true;
-    };
+
+    return () => { cancelled = true; };
   }, [api, nodes]);
 
-  // Load the slide-over health detail whenever a node is selected.
+  // At-risk fleet
   useEffect(() => {
-    if (!selectedNodeId) {
-      setDetailHealth(null);
-      return;
-    }
     let cancelled = false;
-    api
-      .getNodeHealth(selectedNodeId)
-      .then((score) => {
-        if (!cancelled) setDetailHealth(score);
-      })
-      .catch(() => {
-        if (!cancelled) setDetailHealth(null);
-      });
-    return () => {
-      cancelled = true;
+    api.listAtRiskNodes(undefined).then((r) => {
+      if (!cancelled) setAtRiskFleet(r);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [api, nodes.length]);
+
+  // Region grouping
+  const regionData = useMemo((): Record<RegionKey, { count: number; state: NodeState }> => {
+    const groups: Record<RegionKey, { nodes: NodeSummary[]; states: NodeState[] }> = {
+      na: { nodes: [], states: [] }, sa: { nodes: [], states: [] },
+      eu: { nodes: [], states: [] }, afme: { nodes: [], states: [] },
+      apac: { nodes: [], states: [] }, oce: { nodes: [], states: [] },
+      unknown: { nodes: [], states: [] },
     };
-  }, [api, selectedNodeId]);
 
-  const tenantOptions = useMemo(() => tenants, [tenants]);
-  const tenantNames = useMemo(() => {
-    const entries = new Map<string, string>();
-    for (const tenant of tenants) {
-      entries.set(tenant.id, tenant.name);
-    }
-    return entries;
-  }, [tenants]);
-
-  const selectedNode = useMemo(
-    () => nodes.find((node) => node.id === selectedNodeId) ?? null,
-    [nodes, selectedNodeId],
-  );
-
-  const summary = useMemo(() => {
-    return {
-      total: pagination.total,
-      filtered: nodes.length,
-    };
-  }, [pagination.total, nodes.length]);
-
-  const handleRegisterNode = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmedToken = bootstrapToken.trim();
-    const trimmedTenantName = formTenantName.trim();
-
-    if (!trimmedToken) {
-      showError('Bootstrap token is required');
-      return;
-    }
-    if (!formTenantId && !trimmedTenantName) {
-      showError('Select an existing tenant or provide a new tenant name');
-      return;
+    for (const node of nodes) {
+      const region = guessRegion(node);
+      const h = healthMap[node.id];
+      const state: NodeState = h
+        ? riskToState(h.risk_level)
+        : isOnline(node) ? 'healthy' : 'unknown';
+      groups[region].nodes.push(node);
+      groups[region].states.push(state);
     }
 
-    setRegistering(true);
-    resetFeedback();
+    const result = {} as Record<RegionKey, { count: number; state: NodeState }>;
+    for (const [key, g] of Object.entries(groups) as [RegionKey, typeof groups[RegionKey]][]) {
+      result[key] = { count: g.nodes.length, state: worstState(g.states) };
+    }
+    return result;
+  }, [nodes, healthMap]);
 
-    try {
-      const payload: RegisterNodePayload = {
-        bootstrap_token: trimmedToken,
-      };
-      if (formTenantId) {
-        payload.tenant_id = formTenantId;
-      } else if (trimmedTenantName) {
-        payload.tenant_name = trimmedTenantName;
-      }
-      if (hostnameHint.trim()) {
-        payload.hostname = hostnameHint.trim();
-      }
+  // Tenant grouping
+  const tenantGroups = useMemo(() => {
+    const groups = new Map<string, NodeSummary[]>();
+    for (const node of nodes) {
+      const list = groups.get(node.tenant_id) ?? [];
+      list.push(node);
+      groups.set(node.tenant_id, list);
+    }
+    return groups;
+  }, [nodes]);
 
-      const response = await api.registerNode(payload);
-      const successMessage = `Node ${response.node_id} registered for tenant ${response.tenant_id}.`;
-      showSuccess(successMessage);
-      showToast(successMessage, 'success');
-      setHostnameHint('');
-      setBootstrapToken('');
-      setFormTenantName('');
-      setSelectedTenant(response.tenant_id);
-      setFormTenantId(response.tenant_id);
-      reloadNodes();
-      reloadTenants();
-    } catch (err) {
-      if (err instanceof Error) {
-        showError(err.message);
-        showToast(err.message, 'error');
-      } else {
-        const fallback = 'Failed to register node';
-        showError(fallback);
-        showToast(fallback, 'error');
-      }
-    } finally {
-      setRegistering(false);
+  // Filtered nodes for region / hostname
+  const filteredNodes = useMemo(() => {
+    let result = nodes;
+    if (activeRegion) result = result.filter((n) => guessRegion(n) === activeRegion);
+    if (hostnameFilter.trim()) {
+      const q = hostnameFilter.trim().toLowerCase();
+      result = result.filter((n) => n.hostname.toLowerCase().includes(q));
     }
-  };
+    return result;
+  }, [nodes, activeRegion, hostnameFilter]);
 
-  const openNodeDetails = (nodeId: string) => {
-    setSelectedNodeId((current) => (current === nodeId ? null : nodeId));
-    const node = nodes.find((n) => n.id === nodeId);
-    setDetailHostname(node?.hostname ?? '');
-    setDetailOs(node?.os ?? '');
-    setDetailArch(node?.arch ?? '');
-    setDetailPublicIp(node?.public_ip ?? '');
-  };
+  // Filtered tenant groups (respects activeRegion + hostnameFilter)
+  const filteredTenantGroups = useMemo(() => {
+    const groups = new Map<string, NodeSummary[]>();
+    for (const node of filteredNodes) {
+      const list = groups.get(node.tenant_id) ?? [];
+      list.push(node);
+      groups.set(node.tenant_id, list);
+    }
+    return groups;
+  }, [filteredNodes]);
 
-  const handleUpdateNode = async () => {
-    if (!selectedNode) {
-      return;
-    }
-    const payload: UpdateNodePayload = {};
-    const trimmedHostname = detailHostname.trim();
-    const trimmedOs = detailOs.trim();
-    const trimmedArch = detailArch.trim();
-    const trimmedPublicIp = detailPublicIp.trim();
-
-    if (trimmedHostname && trimmedHostname !== selectedNode.hostname) {
-      payload.hostname = trimmedHostname;
-    }
-    if (trimmedOs !== (selectedNode.os ?? '')) {
-      payload.os = trimmedOs;
-    }
-    if (trimmedArch !== (selectedNode.arch ?? '')) {
-      payload.arch = trimmedArch;
-    }
-    if (trimmedPublicIp !== (selectedNode.public_ip ?? '')) {
-      payload.public_ip = trimmedPublicIp;
-    }
-
-    if (
-      !payload.hostname &&
-      payload.os === undefined &&
-      payload.arch === undefined &&
-      payload.public_ip === undefined
-    ) {
-      showToast('No changes to save.', 'info');
-      return;
-    }
-
-    setUpdating(true);
-    try {
-      await api.updateNode(selectedNode.id, payload);
-      showToast('Node updated.', 'success');
-      await reloadNodes();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to update node.';
-      showToast(message, 'error');
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleDeleteNode = async () => {
-    if (!selectedNode) {
-      return;
-    }
-    const confirmed = window.confirm(`Delete node "${selectedNode.hostname}"?`);
-    if (!confirmed) {
-      return;
-    }
-    setDeleting(true);
-    try {
-      await api.deleteNode(selectedNode.id);
-      showToast('Node deleted.', 'success');
-      setSelectedNodeId(null);
-      await reloadNodes();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete node.';
-      showToast(message, 'error');
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const handleAgentUpdate = async () => {
-    if (!agentUpdateNodeId) return;
-    setAgentUpdating(true);
-    try {
-      await api.updateAgent(agentUpdateNodeId);
-      showToast('Agent update queued. Will apply on next heartbeat.', 'success');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to queue agent update.';
-      showToast(message, 'error');
-    } finally {
-      setAgentUpdating(false);
-      setAgentUpdateNodeId(null);
-    }
-  };
-
+  // Table columns
   type NodeRow = (typeof nodes)[number];
-
-  const nodeColumns: ColumnDef<NodeRow>[] = [
+  const tableColumns: ColumnDef<NodeRow>[] = [
+    {
+      header: 'Status',
+      id: 'status',
+      cell: ({ row }) => {
+        const h = healthMap[row.original.id];
+        const state: NodeState = h ? riskToState(h.risk_level) : isOnline(row.original) ? 'healthy' : 'unknown';
+        return <PulsingDot state={state} size={8} />;
+      },
+    },
     {
       header: 'Hostname',
       accessorKey: 'hostname',
@@ -419,11 +669,15 @@ export function Nodes(): JSX.Element {
     {
       header: 'Tenant',
       accessorKey: 'tenant_id',
-      cell: ({ row }) => (
-        <span className="text-text-secondary">
-          {tenantNames.get(row.original.tenant_id) ?? row.original.tenant_id}
-        </span>
-      ),
+      cell: ({ row }) => <span className="text-text-secondary">{tenantNames.get(row.original.tenant_id) ?? row.original.tenant_id}</span>,
+    },
+    {
+      header: 'Region',
+      id: 'region',
+      cell: ({ row }) => {
+        const r = guessRegion(row.original);
+        return <span className="text-text-muted text-xs">{REGIONS[r].label}</span>;
+      },
     },
     {
       header: 'OS',
@@ -433,58 +687,31 @@ export function Nodes(): JSX.Element {
     {
       header: 'Public IP',
       accessorKey: 'public_ip',
-      cell: ({ row }) => (
-        <code className="font-mono text-xs text-text-secondary">{row.original.public_ip ?? '—'}</code>
-      ),
+      cell: ({ row }) => <code className="font-mono text-xs text-text-secondary">{row.original.public_ip ?? '—'}</code>,
     },
     {
-      header: 'Agent version',
-      accessorKey: 'agent_version',
-      cell: ({ row }) => {
-        const v = row.original.agent_version;
-        if (!v) return <span className="text-text-muted">—</span>;
-        return <StatusTag tone="healthy">{v}</StatusTag>;
-      },
-    },
-    {
-      id: 'health',
       header: 'Health',
+      id: 'health',
       cell: ({ row }) => {
-        const score = healthScores[row.original.id];
-        if (!score) {
-          return <span className="text-text-muted">—</span>;
-        }
-        const cal =
-          typeof score.components?.['calibrating_samples'] === 'number'
-            ? (score.components['calibrating_samples'] as number)
-            : undefined;
-        return (
-          <StatusTag tone={riskTone(score.risk_level)}>
-            {riskLabel(score.risk_level, score.score, cal)}
-          </StatusTag>
-        );
+        const h = healthMap[row.original.id];
+        if (!h) return <span className="text-text-muted">—</span>;
+        return <StatusTag tone={riskTone(h.risk_level)}>{h.risk_level} · {h.score}</StatusTag>;
       },
+    },
+    {
+      header: 'Last seen',
+      id: 'last_seen',
+      cell: ({ row }) => <span className="text-xs text-text-muted">{formatLastSeen(row.original.last_seen_at)}</span>,
     },
     {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <div className="flex items-center gap-1.5">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => navigate(`/nodes/${row.original.id}`)}
-          >
+        <div className="flex items-center gap-1">
+          <Button type="button" variant="secondary" size="sm" onClick={() => navigate(`/nodes/${row.original.id}`)}>
             Open
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            title="Queue agent self-update"
-            onClick={() => setAgentUpdateNodeId(row.original.id)}
-          >
+          <Button type="button" variant="ghost" size="sm" title="Queue agent update" onClick={() => setAgentUpdateNodeId(row.original.id)}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -492,267 +719,240 @@ export function Nodes(): JSX.Element {
     },
   ];
 
+  const handleAgentUpdate = async () => {
+    if (!agentUpdateNodeId) return;
+    setAgentUpdating(true);
+    try {
+      await api.updateAgent(agentUpdateNodeId);
+      showToast('Agent update queued.', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to queue agent update.', 'error');
+    } finally {
+      setAgentUpdating(false);
+      setAgentUpdateNodeId(null);
+    }
+  };
+
+  const totals = fleetSnap?.totals;
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="INFRASTRUCTURE · NODES"
-        title="Nodes"
-        description="Connected agents reporting into the control plane."
+        eyebrow="INFRASTRUCTURE · FLEET"
+        title="Fleet Overview"
+        description={`${pagination.total} agent${pagination.total === 1 ? '' : 's'} across ${tenantGroups.size} group${tenantGroups.size === 1 ? '' : 's'}`}
+        actions={
+          <div className="flex items-center gap-2">
+            <LiveBadge />
+            <Button type="button" variant="ghost" size="sm" onClick={reload} disabled={loading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+        }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+      {/* KPI tiles */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <KpiTile
           label="Total nodes"
-          value={summary.total}
+          value={pagination.total}
           tone="brand"
-          hint={selectedTenant ? 'Filtered by tenant' : 'All tenants'}
+          icon={<Server />}
+          loading={loading}
         />
         <KpiTile
-          label="Visible"
-          value={summary.filtered}
-          hint="matching filters"
+          label="Healthy"
+          value={totals?.healthy ?? '—'}
+          tone="healthy"
+          loading={snapLoading}
+        />
+        <KpiTile
+          label="Warning"
+          value={totals?.warning ?? '—'}
+          tone="warning"
+          loading={snapLoading}
+        />
+        <KpiTile
+          label="Degraded"
+          value={totals ? (totals.degraded + totals.critical) : '—'}
+          tone="critical"
+          icon={<AlertTriangle />}
+          loading={snapLoading}
+        />
+        <KpiTile
+          label="At risk"
+          value={atRiskFleet?.total_count ?? '—'}
+          tone={atRiskFleet && atRiskFleet.total_count > 0 ? 'critical' : 'unknown'}
+          icon={<Shield />}
         />
       </div>
 
-      {/* At-Risk Fleet roll-up — Use Case 5. Hide when zero risky nodes
-          to keep the page calm. Collapsible because the list can grow
-          large in noisy fleets. */}
-      {atRiskFleet && atRiskFleet.total_count > 0 ? (
-        <Panel
-          padding="md"
-          eyebrow="PREDICTIVE · AT-RISK FLEET"
-          title={`${atRiskFleet.total_count} node${atRiskFleet.total_count === 1 ? '' : 's'} at risk`}
-          toneAccent="brand"
-          actions={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => setAtRiskCollapsed((c) => !c)}
-            >
-              {atRiskCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-              {atRiskCollapsed ? 'Expand' : 'Collapse'}
-            </Button>
-          }
-        >
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <StatusTag tone="critical" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
-              {atRiskFleet.critical} critical
-            </StatusTag>
-            <StatusTag tone="degraded">{atRiskFleet.high} high</StatusTag>
+      {/* At-risk alert banner */}
+      {atRiskFleet && atRiskFleet.total_count > 0 && (
+        <Panel padding="md" eyebrow="PREDICTIVE · AT-RISK FLEET" toneAccent="critical">
+          <div className="flex flex-wrap items-center gap-3">
+            <PulsingDot state="critical" size={10} />
+            <span className="font-medium text-foreground">
+              {atRiskFleet.total_count} node{atRiskFleet.total_count === 1 ? '' : 's'} require attention
+            </span>
+            <div className="flex items-center gap-2">
+              {atRiskFleet.critical > 0 && (
+                <StatusTag tone="critical" icon={<AlertTriangle className="h-3 w-3" />}>
+                  {atRiskFleet.critical} critical
+                </StatusTag>
+              )}
+              {atRiskFleet.high > 0 && (
+                <StatusTag tone="degraded">{atRiskFleet.high} high</StatusTag>
+              )}
+            </div>
           </div>
-          {!atRiskCollapsed ? (
-            <ul className="mt-3 flex flex-col gap-1.5">
-              {atRiskFleet.data.map((row) => (
-                <li
-                  key={row.node_id}
-                  className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-2 px-3 py-2"
-                >
-                  <div className="flex flex-col">
-                    <span className="font-medium text-foreground">{row.hostname}</span>
-                    <code className="font-mono text-[0.65rem] text-text-muted">{row.node_id}</code>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <StatusTag tone={riskTone(row.risk_level)}>
-                      {riskLabel(row.risk_level, row.score)}
-                    </StatusTag>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openNodeDetails(row.node_id)}
-                    >
-                      View
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          <div className="flex flex-wrap gap-2 mt-1">
+            {atRiskFleet.data.map((n) => (
+              <button
+                key={n.node_id}
+                type="button"
+                onClick={() => navigate(`/nodes/${n.node_id}`)}
+                className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-2 px-3 py-1.5 text-sm hover:border-state-critical/40 transition-colors"
+              >
+                <PulsingDot state={riskToState(n.risk_level)} size={7} />
+                <span className="font-medium text-foreground">{n.hostname}</span>
+                <StatusTag tone={riskTone(n.risk_level)}>{n.risk_level} · {n.score}</StatusTag>
+              </button>
+            ))}
+          </div>
         </Panel>
-      ) : null}
+      )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* LEFT: Register form */}
-        <Panel padding="md" eyebrow="REGISTER" title="Register node" toneAccent="brand">
-          {/* Info banner */}
-          <div className="flex items-start gap-2 rounded-md border border-brand-500/20 bg-brand-500/5 px-3 py-2.5 text-sm text-text-secondary">
-            <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-400" />
-            <span>
-              The Control One agent self-registers and automatically reports its hostname, OS,
-              architecture, and IP address on first connection. Only a bootstrap token is required
-              to create the node slot.
+      {/* World map */}
+      <Panel padding="md" eyebrow="GLOBAL DISTRIBUTION" toneAccent="brand"
+        actions={
+          <div className="flex items-center gap-1.5">
+            {activeRegion && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRegion(null)}>
+                Clear filter
+              </Button>
+            )}
+            <span className="text-xs text-text-muted">
+              {activeRegion ? `Showing ${REGIONS[activeRegion].label}` : 'Click region to filter'}
             </span>
           </div>
+        }
+      >
+        <WorldMap
+          regionData={regionData}
+          activeRegion={activeRegion}
+          onRegionClick={setActiveRegion}
+        />
+        {/* Region chips */}
+        <div className="flex flex-wrap gap-2 pt-1">
+          {(Object.entries(regionData) as [RegionKey, { count: number; state: NodeState }][])
+            .filter(([, v]) => v.count > 0)
+            .sort(([, a], [, b]) => b.count - a.count)
+            .map(([key, { count, state }]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveRegion(activeRegion === key ? null : key)}
+                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+                  activeRegion === key
+                    ? 'border-brand-500/50 bg-brand-500/10 text-brand-300'
+                    : 'border-border-subtle bg-surface-2 text-text-secondary hover:border-border-strong'
+                }`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: STATE_COLOR[state] }} />
+                {REGIONS[key].label}
+                <span className="font-mono text-text-muted">{count}</span>
+              </button>
+            ))}
+        </div>
+      </Panel>
 
-          <form onSubmit={handleRegisterNode} className="flex flex-col gap-3">
-            <SelectField
-              id="register-tenant"
-              label="Existing tenant"
-              value={formTenantId}
-              onChange={(event) => setFormTenantId(event.target.value)}
-              disabled={registering}
-            >
-              <option value="">— Select tenant —</option>
-              {tenantOptions.map((tenant) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </SelectField>
-            <p className="text-xs text-text-muted -mt-2">
-              Or provide a new tenant name below to auto-create one.
-            </p>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="new-tenant-name">New tenant name</Label>
-              <Input
-                id="new-tenant-name"
-                type="text"
-                placeholder="e.g. Edge Cluster"
-                value={formTenantName}
-                onChange={(event) => setFormTenantName(event.target.value)}
-                disabled={registering}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="bootstrap-token">Bootstrap token</Label>
-              <Input
-                id="bootstrap-token"
-                type="text"
-                value={bootstrapToken}
-                onChange={(event) => setBootstrapToken(event.target.value)}
-                placeholder="control-one-bootstrap-token"
-                disabled={registering}
-                required
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="hostname-hint">
-                Hostname hint{' '}
-                <span className="text-text-muted font-normal">(optional)</span>
-              </Label>
-              <Input
-                id="hostname-hint"
-                type="text"
-                value={hostnameHint}
-                onChange={(event) => setHostnameHint(event.target.value)}
-                placeholder="node-01.example.com"
-                disabled={registering}
-              />
-              <p className="text-xs text-text-muted">
-                Leave blank — the agent will self-report its real hostname on first connect.
-              </p>
-            </div>
-
-            {formError ? (
-              <p className="text-sm text-state-critical" role="alert">
-                {formError}
-              </p>
-            ) : null}
-            {formSuccess ? (
-              <p className="text-sm text-state-healthy" role="status">
-                {formSuccess}
-              </p>
-            ) : null}
-
-            <div className="flex items-center gap-2 pt-2">
-              <Button type="submit" variant="primary" disabled={registering}>
-                {registering ? 'Registering…' : 'Register node'}
+      {/* Fleet groups + nodes */}
+      <Panel
+        padding="md"
+        eyebrow="FLEET GROUPS"
+        toneAccent="brand"
+        actions={
+          <div className="flex items-center gap-2">
+            <Input
+              type="search"
+              placeholder="Filter hostname…"
+              value={hostnameFilter}
+              onChange={(e) => setHostnameFilter(e.target.value)}
+              className="h-8 w-48 text-sm"
+            />
+            <div className="flex rounded-md border border-border-subtle overflow-hidden">
+              <Button
+                type="button"
+                variant={view === 'overview' ? 'primary' : 'ghost'}
+                size="sm"
+                onClick={() => setView('overview')}
+                className="rounded-none border-0"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant={view === 'table' ? 'primary' : 'ghost'}
+                size="sm"
+                onClick={() => setView('table')}
+                className="rounded-none border-0 border-l border-border-subtle"
+              >
+                <List className="h-3.5 w-3.5" />
               </Button>
             </div>
-          </form>
-        </Panel>
+          </div>
+        }
+      >
+        {error && (
+          <p className="text-sm text-state-critical" role="alert">Failed to load nodes: {error}</p>
+        )}
 
-        {/* RIGHT: Node list */}
-        <Panel
-          padding="md"
-          eyebrow="NODES"
-          title="Registered nodes"
-          actions={
-            <Button type="button" variant="secondary" size="sm" onClick={reloadNodes} disabled={loading}>
-              {loading ? 'Refreshing…' : 'Refresh'}
-            </Button>
-          }
-        >
-          {/* Filter row */}
-          <div className="flex flex-wrap items-center gap-3">
-            <SelectField
-              id="tenant-filter"
-              value={selectedTenant ?? ''}
-              onChange={(event) => {
-                const value = event.target.value;
-                setSelectedTenant(value === '' ? undefined : value);
-                setOffset(0);
-              }}
-            >
-              <option value="">All tenants</option>
-              {tenantOptions.map((tenant) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </SelectField>
-            <Input
-              id="hostname-filter"
-              type="search"
-              placeholder="Search hostname…"
-              value={hostnameFilter}
-              onChange={(event) => {
-                setHostnameFilter(event.target.value);
-                setOffset(0);
-              }}
-              className="h-9 flex-1"
+        {view === 'overview' ? (
+          filteredTenantGroups.size === 0 ? (
+            <EmptyState
+              title="No nodes"
+              description={activeRegion ? `No nodes in ${REGIONS[activeRegion].label}` : 'No nodes match filters'}
+              icon={<Globe />}
             />
-          </div>
-
-          {error ? (
-            <p className="text-sm text-state-critical" role="alert">
-              Failed to load nodes: {error}
-            </p>
-          ) : null}
-
-          <DataTable
-            columns={nodeColumns}
-            rows={nodes}
-            loading={loading}
-            rowKey={(row) => row.id}
-            empty={
-              <EmptyState
-                title="No nodes"
-                description="No nodes match the current filters."
-                icon={<Server />}
-              />
-            }
-          />
-
-          <div className="flex items-center justify-between gap-4 pt-2 text-sm text-text-muted">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
-              onClick={() => setOffset(pagination.prevOffset ?? 0)}
-            >
-              ← Previous
-            </Button>
-            <span>
-              Showing {nodes.length} of {pagination.total}
-            </span>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
-              onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
-            >
-              Next →
-            </Button>
-          </div>
-        </Panel>
-      </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {[...filteredTenantGroups.entries()]
+                .sort(([, a], [, b]) => b.length - a.length)
+                .map(([tenantId, tenantNodes]) => (
+                  <TenantGroupRow
+                    key={tenantId}
+                    tenantId={tenantId}
+                    tenantName={tenantNames.get(tenantId) ?? tenantId}
+                    nodes={tenantNodes}
+                    healthMap={healthMap}
+                    activeRegion={activeRegion}
+                    onNodeClick={(id) => navigate(`/nodes/${id}`)}
+                  />
+                ))}
+            </div>
+          )
+        ) : (
+          <>
+            <DataTable
+              columns={tableColumns}
+              rows={filteredNodes}
+              loading={loading}
+              rowKey={(row) => row.id}
+              empty={
+                <EmptyState
+                  title="No nodes"
+                  description="No nodes match current filters."
+                  icon={<Server />}
+                />
+              }
+            />
+            <div className="text-xs text-text-muted pt-1">
+              Showing {filteredNodes.length} of {pagination.total} nodes
+            </div>
+          </>
+        )}
+      </Panel>
 
       <ConfirmModal
         open={agentUpdateNodeId !== null}
@@ -762,196 +962,6 @@ export function Nodes(): JSX.Element {
         onConfirm={handleAgentUpdate}
         onCancel={() => setAgentUpdateNodeId(null)}
       />
-
-      {/* Node detail aside panel */}
-      {selectedNode ? (
-        <>
-          {/* Backdrop overlay */}
-          <div
-            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-            onClick={() => setSelectedNodeId(null)}
-          />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(560px,90vw)] flex-col gap-5 overflow-y-auto border-l border-border-subtle bg-surface p-6 shadow-2xl">
-          <header className="flex items-start justify-between gap-4">
-            <div>
-              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">NODE</p>
-              <h3 className="mt-0.5 font-display text-lg font-semibold text-foreground">
-                {selectedNode.hostname}
-              </h3>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => setSelectedNodeId(null)}>
-              ✕
-            </Button>
-          </header>
-
-          <hr className="border-border-subtle" />
-
-          {/* Predictive health — Use Case 5. Renders the arc gauge + a
-              horizontal breakdown of per-signal penalties when scored.
-              For "calibrating", we show "Calibrating (N/24 samples)" and
-              never fake a numeric score. */}
-          {detailHealth ? (
-            <div className="flex flex-col gap-3">
-              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-                Predictive health
-              </p>
-              <div className="flex items-center gap-4">
-                <HealthGauge score={detailHealth.score} risk={detailHealth.risk_level} />
-                <div className="flex flex-col gap-1">
-                  <StatusTag tone={riskTone(detailHealth.risk_level)}>
-                    {riskLabel(
-                      detailHealth.risk_level,
-                      detailHealth.score,
-                      typeof detailHealth.components?.['calibrating_samples'] === 'number'
-                        ? (detailHealth.components['calibrating_samples'] as number)
-                        : undefined,
-                    )}
-                  </StatusTag>
-                  {detailHealth.computed_at ? (
-                    <span className="text-xs text-text-muted">
-                      Updated {formatDate(detailHealth.computed_at)}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-
-              {detailHealth.risk_level === 'calibrating' ? (
-                <EmptyState
-                  title="Calibrating health score"
-                  description={`Need ${24 - (typeof detailHealth.components?.['calibrating_samples'] === 'number' ? (detailHealth.components['calibrating_samples'] as number) : 0)} more samples before we can score this node.`}
-                />
-              ) : (
-                (() => {
-                  const entries = componentBreakdownEntries(detailHealth.components);
-                  if (entries.length === 0) {
-                    return (
-                      <p className="text-sm text-text-secondary">
-                        No penalties applied — node is operating within all baselines.
-                      </p>
-                    );
-                  }
-                  const maxAbs = Math.max(...entries.map((e) => Math.abs(e.penalty)));
-                  return (
-                    <ul className="flex flex-col gap-1.5">
-                      {entries.map(({ key, penalty }) => {
-                        const widthPct = maxAbs > 0 ? (Math.abs(penalty) / maxAbs) * 100 : 0;
-                        return (
-                          <li key={key} className="flex flex-col gap-0.5">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-mono text-text-secondary">{key}</span>
-                              <span className="font-medium text-state-critical">{penalty}</span>
-                            </div>
-                            <div className="h-1.5 w-full rounded-full bg-surface-2">
-                              <div
-                                className="h-full rounded-full bg-state-critical/70"
-                                style={{ width: `${widthPct}%` }}
-                              />
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  );
-                })()
-              )}
-            </div>
-          ) : null}
-
-          <hr className="border-border-subtle" />
-
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Hostname</dt>
-              <dd className="text-foreground">{selectedNode.hostname}</dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Node ID</dt>
-              <dd>
-                <code className="font-mono text-xs text-text-secondary">{selectedNode.id}</code>
-              </dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Tenant</dt>
-              <dd className="text-foreground">
-                {tenantNames.get(selectedNode.tenant_id) ?? selectedNode.tenant_id}
-              </dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Created</dt>
-              <dd className="text-foreground">{formatDate(selectedNode.created_at)}</dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Updated</dt>
-              <dd className="text-foreground">{formatDate(selectedNode.updated_at)}</dd>
-            </div>
-          </dl>
-
-          <hr className="border-border-subtle" />
-
-          {/* Override fields — agent-reported values can be corrected manually */}
-          <div>
-            <p className="mb-3 font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-              Override agent-reported values
-            </p>
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="detail-hostname">Hostname</Label>
-                <Input
-                  id="detail-hostname"
-                  type="text"
-                  value={detailHostname}
-                  onChange={(event) => setDetailHostname(event.target.value)}
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="detail-os">Operating system</Label>
-                  <Input
-                    id="detail-os"
-                    type="text"
-                    value={detailOs}
-                    onChange={(event) => setDetailOs(event.target.value)}
-                    placeholder="Ubuntu 24.04"
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="detail-arch">Architecture</Label>
-                  <Input
-                    id="detail-arch"
-                    type="text"
-                    value={detailArch}
-                    onChange={(event) => setDetailArch(event.target.value)}
-                    placeholder="x86_64"
-                  />
-                </div>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="detail-ip">Public IP</Label>
-                <Input
-                  id="detail-ip"
-                  type="text"
-                  value={detailPublicIp}
-                  onChange={(event) => setDetailPublicIp(event.target.value)}
-                  placeholder="203.0.113.10"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 pt-2">
-            <Button type="button" variant="primary" onClick={handleUpdateNode} disabled={updating}>
-              {updating ? 'Saving…' : 'Save changes'}
-            </Button>
-            <Button type="button" variant="danger" onClick={handleDeleteNode} disabled={deleting}>
-              {deleting ? 'Deleting…' : 'Delete'}
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => setSelectedNodeId(null)}>
-              Close
-            </Button>
-          </div>
-        </aside>
-        </>
-      ) : null}
     </div>
   );
 }
