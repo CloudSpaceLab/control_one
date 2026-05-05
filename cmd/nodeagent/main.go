@@ -524,6 +524,10 @@ func main() {
 		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr),
 		NewDefaultSelfUpdater(state.NodeID, filepath.Dir(cfg.StateFile)))
 
+	// Service inventory — feeds node_services and the per-tenant knowledge
+	// graph. Independent loop: a slow ss/lsof scan must never delay liveness.
+	startServiceCollector(ctx, client, log, state.NodeID, cfg.Intervals.Services)
+
 	// DLP scanner - periodically scan for PII based on rules from control plane
 	if cfg.DLP.Enabled && cfg.Intervals.DLP > 0 {
 		dlpScanner := NewDLPScanner(client, log.Named("dlp"), state.NodeID, state.TenantID, cfg.DLP.ScanPaths)

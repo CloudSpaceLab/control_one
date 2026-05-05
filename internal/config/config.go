@@ -133,6 +133,7 @@ type Config struct {
 		Telemetry    time.Duration `mapstructure:"telemetry"`
 		Provisioning time.Duration `mapstructure:"provisioning"`
 		DLP          time.Duration `mapstructure:"dlp"`
+		Services     time.Duration `mapstructure:"services"`
 	} `mapstructure:"intervals"`
 
 	DLP struct {
@@ -478,6 +479,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intervals.telemetry", "1m")
 	v.SetDefault("intervals.provisioning", defaultProvisioningInterval.String())
 	v.SetDefault("intervals.dlp", "24h")
+	v.SetDefault("intervals.services", "10m")
 
 	v.SetDefault("dlp.enabled", false)
 	v.SetDefault("dlp.scan_paths", []string{"/var/log", "/etc", "/home"})
