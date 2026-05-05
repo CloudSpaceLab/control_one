@@ -273,7 +273,6 @@ const (
 	defaultTLSCertFile          = "/var/lib/control-one/nodeagent/certs/nodeagent.crt"
 	defaultTLSKeyFile           = "/var/lib/control-one/nodeagent/certs/nodeagent.key"
 	defaultTLSCACertFile        = "/var/lib/control-one/nodeagent/certs/ca.crt"
-	defaultPolicyPublicKeyFile  = "/var/lib/control-one/nodeagent/keys/policy_pub.pem"
 	defaultPolicyMetadataFile   = "/var/lib/control-one/nodeagent/policies/policies.meta.json"
 	defaultScannerTimeout       = 30 * time.Second
 	defaultMeshStateFile        = "/var/lib/control-one/nodeagent/mesh/state.json"
@@ -462,7 +461,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("hooks.max_concurrency", defaultHooksMaxConcurrency)
 	v.SetDefault("hooks.bootstrap_subscriptions", []map[string]any{})
 
-	v.SetDefault("policy.public_key_file", defaultPolicyPublicKeyFile)
+	// policy.public_key_file is intentionally NOT defaulted. The agent treats
+	// "no key configured" as "policy signature verification disabled" and
+	// boots normally. Defaulting to a path that nothing creates would force
+	// every fresh enrollment to fatal during startup (see
+	// cmd/nodeagent/bootstrap_e2e_test.go for the historical bug).
 	v.SetDefault("policy.metadata_file", defaultPolicyMetadataFile)
 
 	v.SetDefault("tls.cert_file", defaultTLSCertFile)
@@ -542,9 +545,9 @@ func applyFallbacks(cfg *Config) {
 	if len(cfg.SessionRecording.SessionTypes) == 0 {
 		cfg.SessionRecording.SessionTypes = []string{"terminal", "ssh"}
 	}
-	if cfg.Policy.PublicKeyFile == "" {
-		cfg.Policy.PublicKeyFile = defaultPolicyPublicKeyFile
-	}
+	// cfg.Policy.PublicKeyFile is intentionally left as-is. Empty means
+	// "policy signing not configured" — policy.NewSyncer treats that as a
+	// soft skip with sig verification disabled.
 	if cfg.Policy.MetadataFile == "" {
 		cfg.Policy.MetadataFile = defaultPolicyMetadataFile
 	}
