@@ -75,11 +75,15 @@ func (s *Server) generateCASignedClientCert(caCertFile, caKeyFile, hostname, nod
 		serial = big.NewInt(now.UnixNano())
 	}
 
+	// CN must be the node UUID — the heartbeat handler enforces
+	// strings.EqualFold(cn, nodeID.String()) so a node-A cert can't
+	// touch node-B's row. Hostname goes into the Organization for
+	// operator readability.
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   hostname,
-			Organization: []string{"Control One Agent"},
+			CommonName:   nodeID,
+			Organization: []string{"Control One Agent: " + hostname},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),
@@ -119,8 +123,8 @@ func generateSelfSignedClientCert(hostname, nodeID string) (certPEM, keyPEM, caC
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   hostname,
-			Organization: []string{"Control One Agent"},
+			CommonName:   nodeID,
+			Organization: []string{"Control One Agent: " + hostname},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),

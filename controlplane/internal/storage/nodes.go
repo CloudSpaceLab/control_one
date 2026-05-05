@@ -242,6 +242,11 @@ func (s *Store) UpdateNodeLabels(ctx context.Context, id uuid.UUID, labels map[s
 // reaper query: the worker dispatcher scans this set every minute and flips
 // survivors to enrollment_failed. time.Time is passed directly because we
 // want caller-supplied clock injection in tests.
+//
+// A node whose last_seen_at is more recent than the cutoff is excluded —
+// the agent IS checking in, the row is stuck on the activation gate (most
+// likely awaiting first_scan_at). Reaping those would undo the resurrection
+// in maybeActivatePendingNode and produce flapping state.
 func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff time.Time) ([]Node, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
@@ -252,7 +257,9 @@ func (s *Store) ListEnrollmentPendingNodesOlderThan(ctx context.Context, cutoff 
 		       last_seen_at, first_scan_at, labels, agent_version,
 		       created_at, updated_at
 		FROM nodes
-		WHERE state = $1 AND created_at < $2
+		WHERE state = $1
+		  AND created_at < $2
+		  AND (last_seen_at IS NULL OR last_seen_at < $2)
 		ORDER BY created_at ASC
 	`, NodeStateEnrollmentPending, cutoff)
 	if err != nil {

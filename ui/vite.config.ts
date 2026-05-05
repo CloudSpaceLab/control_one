@@ -39,6 +39,30 @@ export default defineConfig({
   },
   server: {
     port: 4173,
+    proxy: {
+      '/api': {
+        target: 'https://localhost:8443',
+        changeOrigin: false,
+        secure: false, // self-signed CP cert in dev
+        configure: (proxy) => {
+          // Force the upstream Host header so the CP's deriveControlPlaneURL
+          // (controlplane/internal/server/agent_download.go:828) returns a
+          // URL the remote agent host can actually reach via the reverse
+          // SSH tunnel (remote:18443 → local:8443). The X-Forwarded-Proto
+          // hint nudges deriveControlPlaneURL toward https since the CP
+          // request itself arrives over TLS.
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Host', '127.0.0.1:18443');
+            proxyReq.setHeader('X-Forwarded-Proto', 'https');
+          });
+        },
+      },
+      '/healthz': {
+        target: 'https://localhost:8443',
+        changeOrigin: false,
+        secure: false,
+      },
+    },
   },
   preview: {
     port: 4174,
