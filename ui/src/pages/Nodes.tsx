@@ -10,6 +10,7 @@ import type { StateTone } from '../components/kit/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { useTenant } from '@/providers/TenantProvider';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useFleetSummary } from '../hooks/useFleetSummary';
@@ -21,6 +22,7 @@ import type {
   NodeHealthScore,
   NodeSummary,
 } from '../lib/api';
+import { WORLD_COUNTRY_PATHS, projectGeoCoordinates } from '@/lib/worldMap';
 import type { ColumnDef } from '@tanstack/react-table';
 
 // ── Region types ───────────────────────────────────────────────────────────
@@ -29,20 +31,18 @@ type RegionKey = 'na' | 'sa' | 'eu' | 'afme' | 'apac' | 'oce' | 'unknown';
 
 interface RegionMeta {
   label: string;
-  x: number;
-  y: number;
   lat: number;
   lon: number;
 }
 
 const REGIONS: Record<RegionKey, RegionMeta> = {
-  na:      { label: 'N. America',   x: 220, y: 155, lat: 39, lon: -98 },
-  sa:      { label: 'S. America',   x: 318, y: 345, lat: -15, lon: -58 },
-  eu:      { label: 'Europe',       x: 494, y: 108, lat: 51, lon: 10 },
-  afme:    { label: 'Africa / ME',  x: 535, y: 295, lat: 6, lon: 20 },
-  apac:    { label: 'Asia Pacific', x: 742, y: 160, lat: 28, lon: 104 },
-  oce:     { label: 'Oceania',      x: 822, y: 375, lat: -25, lon: 134 },
-  unknown: { label: 'Unknown',      x: 950, y: 460, lat: -52, lon: 164 },
+  na:      { label: 'N. America',  lat: 39, lon: -98 },
+  sa:      { label: 'S. America',  lat: -15, lon: -58 },
+  eu:      { label: 'Europe',      lat: 51, lon: 10 },
+  afme:    { label: 'Africa / ME', lat: 6, lon: 20 },
+  apac:    { label: 'Asia Pacific', lat: 28, lon: 104 },
+  oce:     { label: 'Oceania',     lat: -25, lon: 134 },
+  unknown: { label: 'Unknown',     lat: -52, lon: 164 },
 };
 
 // ── Region inference ───────────────────────────────────────────────────────
@@ -187,22 +187,23 @@ function coordinatesFromIP(node: NodeSummary): { lat: number; lon: number; label
   return null;
 }
 
-function project(lon: number, lat: number): { x: number; y: number } {
-  return {
-    x: ((lon + 180) / 360) * 1000,
-    y: ((90 - lat) / 180) * 480,
-  };
+interface IPGeoPoint {
+  lat: number;
+  lon: number;
+  label: string;
 }
 
-function mapPointForNode(node: NodeSummary, state: NodeState, index: number): NodeMapPoint {
-  const coords = coordinatesFromLabels(node) ?? coordinatesFromIP(node);
+function mapPointForNode(node: NodeSummary, state: NodeState, index: number, ipGeo?: IPGeoPoint | null): NodeMapPoint {
+  const coords = coordinatesFromLabels(node)
+    ?? (ipGeo ? { ...ipGeo, precision: 'exact' as const } : null)
+    ?? coordinatesFromIP(node);
   const fallbackRegion = guessRegion(node);
   const lat = coords?.lat ?? REGIONS[fallbackRegion].lat;
   const lon = coords?.lon ?? REGIONS[fallbackRegion].lon;
-  const projected = project(lon, lat);
+  const projected = projectGeoCoordinates(lon, lat);
   const jitterAngle = index * 2.3999632297;
   const jitterRadius = coords?.precision === 'exact' ? Math.min(index % 4, 2) * 2 : 8 + (index % 5) * 3;
-
+  const label = coords?.label ?? REGIONS[fallbackRegion].label;
   return {
     node,
     state,
@@ -211,7 +212,7 @@ function mapPointForNode(node: NodeSummary, state: NodeState, index: number): No
     x: projected.x + Math.cos(jitterAngle) * jitterRadius,
     y: projected.y + Math.sin(jitterAngle) * jitterRadius,
     precision: coords?.precision ?? 'estimated',
-    label: coords?.label ?? REGIONS[fallbackRegion].label,
+    label,
   };
 }
 
@@ -303,35 +304,6 @@ interface WorldMapProps {
   onRegionClick: (region: RegionKey | null) => void;
 }
 
-const CONTINENTS = [
-  // North America
-  { d: 'M 35,80 L 80,45 L 240,40 L 280,48 L 360,112 L 320,128 L 285,155 L 278,182 L 262,206 L 268,228 L 220,198 L 178,165 L 158,120 L 128,88 L 62,88 Z' },
-  // Greenland
-  { d: 'M 332,40 L 398,28 L 418,50 L 402,75 L 355,82 L 330,62 Z' },
-  // South America
-  { d: 'M 268,230 L 294,226 L 298,242 L 415,262 L 405,315 L 360,346 L 314,410 L 296,386 L 275,330 L 282,285 L 270,250 Z' },
-  // Europe
-  { d: 'M 435,58 L 518,46 L 558,64 L 568,100 L 556,140 L 518,160 L 462,155 L 432,122 L 422,88 Z' },
-  // Africa
-  { d: 'M 438,165 L 562,160 L 600,210 L 602,368 L 560,430 L 496,440 L 434,396 L 410,328 L 416,248 Z' },
-  // Middle East peninsula
-  { d: 'M 562,155 L 618,148 L 650,180 L 638,230 L 608,242 L 580,218 L 568,190 Z' },
-  // Asia mainland
-  { d: 'M 558,46 L 882,36 L 922,68 L 912,128 L 890,218 L 852,270 L 778,270 L 708,248 L 648,232 L 618,200 L 600,165 L 570,148 L 558,100 Z' },
-  // Indian subcontinent
-  { d: 'M 618,200 L 685,198 L 712,260 L 695,312 L 660,322 L 622,272 Z' },
-  // SE Asia (Indochina)
-  { d: 'M 725,238 L 790,232 L 815,268 L 798,302 L 760,300 L 728,272 Z' },
-  // Indonesia (simplified)
-  { d: 'M 748,312 L 825,308 L 848,325 L 832,342 L 762,345 L 745,328 Z' },
-  // Japan
-  { d: 'M 862,118 L 880,106 L 892,125 L 880,150 L 862,158 L 850,140 Z' },
-  // Australia
-  { d: 'M 752,312 L 878,300 L 912,358 L 898,420 L 830,440 L 760,422 L 735,378 Z' },
-  // New Zealand
-  { d: 'M 902,398 L 920,382 L 930,402 L 920,428 L 900,422 Z' },
-];
-
 function WorldMap({ regionData, activeRegion, onRegionClick }: WorldMapProps) {
   const [hovered, setHovered] = useState<RegionKey | null>(null);
 
@@ -355,19 +327,20 @@ function WorldMap({ regionData, activeRegion, onRegionClick }: WorldMapProps) {
         <rect width="1000" height="480" fill="url(#grid)" />
 
         {/* Continent shapes */}
-        {CONTINENTS.map((c, i) => (
+        {WORLD_COUNTRY_PATHS.map((country: { id: string; d: string }) => (
           <path
-            key={i}
-            d={c.d}
+            key={country.id}
+            d={country.d}
             fill="#1e2d3d"
             stroke="#2d4057"
-            strokeWidth="1"
+            strokeWidth="0.65"
           />
         ))}
 
         {/* Region indicators */}
         {entries.map(([key, { count, state }]) => {
           const meta = REGIONS[key];
+          const projected = projectGeoCoordinates(meta.lon, meta.lat);
           const color = STATE_COLOR[state];
           const isActive = activeRegion === key;
           const isHov = hovered === key;
@@ -376,7 +349,7 @@ function WorldMap({ regionData, activeRegion, onRegionClick }: WorldMapProps) {
           return (
             <g
               key={key}
-              transform={`translate(${meta.x},${meta.y})`}
+              transform={`translate(${projected.x},${projected.y})`}
               onClick={() => onRegionClick(isActive ? null : key)}
               onMouseEnter={() => setHovered(key)}
               onMouseLeave={() => setHovered(null)}
@@ -498,8 +471,8 @@ function NodeWorldMap({
           </radialGradient>
         </defs>
         <rect width="1000" height="480" fill="url(#node-map-grid)" />
-        {CONTINENTS.map((c, i) => (
-          <path key={i} d={c.d} fill="#172235" stroke="#30445e" strokeWidth="1" />
+        {WORLD_COUNTRY_PATHS.map((country: { id: string; d: string }) => (
+          <path key={country.id} d={country.d} fill="#172235" stroke="#30445e" strokeWidth="0.7" />
         ))}
         <rect width="1000" height="480" fill="url(#node-map-vignette)" />
 
@@ -758,18 +731,20 @@ export function Nodes(): JSX.Element {
   const api = useApiClient();
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { currentTenantId } = useTenant();
 
   const [view, setView] = useState<ViewMode>('overview');
   const [activeRegion, setActiveRegion] = useState<RegionKey | null>(null);
   const [hostnameFilter, setHostnameFilter] = useState('');
   const [healthMap, setHealthMap] = useState<Record<string, NodeHealthScore | null>>({});
+  const [ipGeoMap, setIPGeoMap] = useState<Record<string, IPGeoPoint>>({});
   const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
 
   // Fetch all nodes with a generous limit for the overview
   const { data: nodes, loading, error, pagination, reload } = useNodes({ limit: 500 });
-  const { data: fleetSnap, loading: snapLoading } = useFleetSummary({ intervalMs: 30_000 });
+  const { data: fleetSnap, loading: snapLoading } = useFleetSummary({ tenantId: currentTenantId ?? undefined, intervalMs: 30_000 });
   const { data: tenants } = useTenants();
 
   const tenantNames = useMemo(() => {
@@ -862,11 +837,58 @@ export function Nodes(): JSX.Element {
       const state: NodeState = h
         ? riskToState(h.risk_level)
         : isOnline(node) ? 'healthy' : 'unknown';
-      return mapPointForNode(node, state, index);
+      return mapPointForNode(node, state, index, node.public_ip ? ipGeoMap[node.public_ip] : null);
     })
-  ), [filteredNodes, healthMap]);
+  ), [filteredNodes, healthMap, ipGeoMap]);
 
   const useNodeMap = pagination.total > 0 && pagination.total < 50;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!useNodeMap) return;
+
+    const ips = Array.from(
+      new Set(
+        filteredNodes
+          .slice(0, 49)
+          .map((node) => node.public_ip)
+          .filter((ip): ip is string => Boolean(ip)),
+      ),
+    ).filter((ip) => !ipGeoMap[ip]);
+
+    if (ips.length === 0) return;
+
+    Promise.all(
+      ips.slice(0, 24).map(async (ip) => {
+        try {
+          const enrichment = await api.enrichIp(ip);
+          const lat = enrichment.geo?.latitude;
+          const lon = enrichment.geo?.longitude;
+          if (lat == null || lon == null || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+            return [ip, null] as const;
+          }
+          const parts = [enrichment.geo?.city, enrichment.geo?.country].filter(Boolean);
+          const label = parts.join(', ') || enrichment.geo?.country_code || 'IP geolocation';
+          return [ip, { lat, lon, label }] as const;
+        } catch {
+          return [ip, null] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setIPGeoMap((prev) => {
+        const next = { ...prev };
+        for (const [ip, geo] of entries) {
+          if (geo) next[ip] = geo;
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, filteredNodes, ipGeoMap, useNodeMap]);
 
   // Filtered tenant groups (respects activeRegion + hostnameFilter)
   const filteredTenantGroups = useMemo(() => {

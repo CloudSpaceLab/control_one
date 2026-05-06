@@ -64,9 +64,9 @@ func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string
 		return nil, fmt.Errorf("marshal rows: %w", err)
 	}
 
-	// Decide whether to compress. Below ~10 KiB the round-trip cost
-	// outweighs the wire savings.
-	useGzip := opts.Compress || len(rawPayload) >= gzipThreshold
+	// Doris 2.1 rejects gzip-compressed JSON stream loads. Keep JSON payloads
+	// uncompressed until the cluster supports them; CSV can still opt in later.
+	useGzip := !strings.EqualFold(opts.Format, "json") && (opts.Compress || len(rawPayload) >= gzipThreshold)
 	body, contentEncoding, err := maybeGzip(rawPayload, useGzip)
 	if err != nil {
 		return nil, err

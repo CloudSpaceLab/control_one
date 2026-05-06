@@ -45,7 +45,7 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	q := `
+	q := withLimit(`
 		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
 		       pid, process_name, cmdline, user_name,
 		       src_ip, src_port, dst_ip, dst_port, protocol,
@@ -56,11 +56,10 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 		  AND (src_ip = ? OR dst_ip = ?)
 		  AND started_at >= ? AND started_at <= ?
 		ORDER BY started_at DESC
-		LIMIT ?
-	`
+	`, limit)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, ip, ip, since, until, limit)
+	rows, err := c.db.QueryContext(qctx, q, tenantID, ip, ip, since, until)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +87,7 @@ func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID st
 	if openOnly {
 		openClause = " AND ended_at IS NULL"
 	}
-	q := `
+	q := withLimit(`
 		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
 		       pid, process_name, cmdline, user_name,
 		       src_ip, src_port, dst_ip, dst_port, protocol,
@@ -97,13 +96,12 @@ func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID st
 		FROM process_connections
 		WHERE tenant_id = ?
 		  AND node_id = ?
-		  AND started_at >= ? AND started_at <= ?` + openClause + `
+		  AND started_at >= ? AND started_at <= ?`+openClause+`
 		ORDER BY threat_match DESC, started_at DESC
-		LIMIT ?
-	`
+	`, limit)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, nodeID, since, until, limit)
+	rows, err := c.db.QueryContext(qctx, q, tenantID, nodeID, since, until)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +251,7 @@ func (c *Client) TopTalkers(ctx context.Context, tenantID string, since time.Tim
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
-	q := `
+	q := withLimit(`
 		SELECT dst_ip,
 		       COUNT(*)                                     AS conn_count,
 		       SUM(bytes_in)                                AS bytes_in,
@@ -263,11 +261,10 @@ func (c *Client) TopTalkers(ctx context.Context, tenantID string, since time.Tim
 		WHERE tenant_id = ? AND started_at >= ?
 		GROUP BY dst_ip
 		ORDER BY conn_count DESC
-		LIMIT ?
-	`
+	`, limit)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, since, limit)
+	rows, err := c.db.QueryContext(qctx, q, tenantID, since)
 	if err != nil {
 		return nil, err
 	}

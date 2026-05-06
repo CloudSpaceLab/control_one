@@ -74,8 +74,12 @@ func (c *Client) SearchLogs(ctx context.Context, p LogSearchParams) ([]LogRow, i
 
 	whereSQL := strings.Join(where, " AND ")
 	countQ := "SELECT COUNT(*) FROM telemetry_logs WHERE " + whereSQL
-	queryQ := "SELECT timestamp, node_id, log_level, log_source, log_program, message FROM telemetry_logs WHERE " +
-		whereSQL + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+	queryQ := withLimitOffset(
+		"SELECT timestamp, node_id, log_level, log_source, log_program, message FROM telemetry_logs WHERE "+
+			whereSQL+" ORDER BY timestamp DESC",
+		p.Limit,
+		p.Offset,
+	)
 
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
@@ -85,7 +89,6 @@ func (c *Client) SearchLogs(ctx context.Context, p LogSearchParams) ([]LogRow, i
 		return nil, 0, fmt.Errorf("count logs: %w", err)
 	}
 
-	args = append(args, p.Limit, p.Offset)
 	rows, err := c.db.QueryContext(qctx, queryQ, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query logs: %w", err)
@@ -201,7 +204,7 @@ func (c *Client) RelatedEntities(ctx context.Context, tenantID, entityType, enti
 	out := []RelatedEntity{}
 
 	// Co-active nodes: most-active nodes in the same tenant/window.
-	nodeQ := `
+	nodeQ := withLimit(`
 		SELECT node_id, COUNT(*) AS cnt
 		FROM security_events
 		WHERE tenant_id = ?
@@ -210,9 +213,8 @@ func (c *Client) RelatedEntities(ctx context.Context, tenantID, entityType, enti
 		  AND node_id != ?
 		GROUP BY node_id
 		ORDER BY cnt DESC
-		LIMIT ?
-	`
-	nodeRows, err := c.db.QueryContext(qctx, nodeQ, tenantID, since, until, entityID, limit)
+	`, limit)
+	nodeRows, err := c.db.QueryContext(qctx, nodeQ, tenantID, since, until, entityID)
 	if err != nil {
 		return nil, fmt.Errorf("related entities nodes: %w", err)
 	}
@@ -233,14 +235,14 @@ func (c *Client) RelatedEntities(ctx context.Context, tenantID, entityType, enti
 	if entityType == "ip" && len(out) < limit {
 		remaining := limit - len(out)
 		// src_ip side
-		srcQ := `
+		srcQ := withLimit(`
 			SELECT dst_ip, COUNT(*) AS cnt
 			FROM security_events
 			WHERE tenant_id = ? AND fired_at >= ? AND fired_at <= ?
 			  AND src_ip = ? AND dst_ip IS NOT NULL AND dst_ip != ''
-			GROUP BY dst_ip ORDER BY cnt DESC LIMIT ?
-		`
-		ipRows, ipErr := c.db.QueryContext(qctx, srcQ, tenantID, since, until, entityID, remaining)
+			GROUP BY dst_ip ORDER BY cnt DESC
+		`, remaining)
+		ipRows, ipErr := c.db.QueryContext(qctx, srcQ, tenantID, since, until, entityID)
 		if ipErr == nil {
 			defer func() { _ = ipRows.Close() }()
 			for ipRows.Next() {

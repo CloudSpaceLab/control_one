@@ -258,7 +258,10 @@ export function Dashboard(): JSX.Element {
           />
         </div>
 
-        <FleetTopologyCard onNodeClick={(n) => navigate(`/nodes?focus=${encodeURIComponent(n.id)}`)} />
+        <FleetTopologyCard
+          tenantId={tenantId}
+          onNodeClick={(n) => navigate(`/nodes?focus=${encodeURIComponent(n.id)}`)}
+        />
 
         {/* Quick Actions */}
         <Panel padding="md" title="Quick actions">
@@ -346,8 +349,14 @@ function CountCard({
 // FleetTopologyCard — every node as a colour dot. Tap to drill in. Adapts
 // from 5 nodes to thousands without code changes; --state-* tokens drive
 // the colour and the pulse on critical so accessibility wins for free.
-function FleetTopologyCard({ onNodeClick }: { onNodeClick: (n: TopologyNode) => void }) {
-  const { data, loading, error } = useFleetSummary({ intervalMs: 30000 });
+function FleetTopologyCard({
+  tenantId,
+  onNodeClick,
+}: {
+  tenantId?: string;
+  onNodeClick: (n: TopologyNode) => void;
+}) {
+  const { data, loading, error } = useFleetSummary({ tenantId, intervalMs: 30000 });
 
   const nodes: TopologyNode[] = (data?.nodes ?? []).map((n) => ({
     id: n.node_id,

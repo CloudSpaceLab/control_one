@@ -13,11 +13,12 @@ import (
 
 func TestStreamLoadBuildsRequest(t *testing.T) {
 	var (
-		gotMethod string
-		gotPath   string
-		gotBody   []byte
-		gotAuth   string
-		mu        sync.Mutex
+		gotMethod   string
+		gotPath     string
+		gotBody     []byte
+		gotAuth     string
+		gotEncoding string
+		mu          sync.Mutex
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -25,6 +26,7 @@ func TestStreamLoadBuildsRequest(t *testing.T) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
+		gotEncoding = r.Header.Get("Content-Encoding")
 		body, _ := io.ReadAll(r.Body)
 		gotBody = body
 		_ = json.NewEncoder(w).Encode(LoadStatus{
@@ -42,7 +44,7 @@ func TestStreamLoadBuildsRequest(t *testing.T) {
 		{"tenant_id": "t1", "message": "hello"},
 		{"tenant_id": "t1", "message": "world"},
 	}
-	st, err := c.streamLoad(context.Background(), "telemetry_logs", rows, streamLoadOptions{Format: "json", Label: "test-1"})
+	st, err := c.streamLoad(context.Background(), "telemetry_logs", rows, streamLoadOptions{Format: "json", Label: "test-1", Compress: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +59,9 @@ func TestStreamLoadBuildsRequest(t *testing.T) {
 	}
 	if gotAuth == "" {
 		t.Fatal("auth header missing")
+	}
+	if gotEncoding != "" {
+		t.Fatalf("json stream loads must stay uncompressed, got Content-Encoding=%q", gotEncoding)
 	}
 	if len(gotBody) < 10 {
 		t.Fatalf("body too short: %s", string(gotBody))

@@ -20,6 +20,15 @@ export function useFleetSummary(opts: Options = {}) {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    if (!opts.tenantId) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const tick = async () => {
       try {
         const snap = await api.fleetHealthSnapshot({
