@@ -1212,6 +1212,8 @@ type fakeStore struct {
 	skipUserPersistence bool
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
+	policies            map[uuid.UUID]storage.Policy
+	policyAssignments   []storage.PolicyAssignment
 	auditLogs           []storage.AuditLog
 	clusters            map[uuid.UUID]*storage.Cluster
 	clusterMembers      map[uuid.UUID][]storage.ClusterMember
@@ -2026,6 +2028,12 @@ func (f *fakeStore) DeletePolicy(_ context.Context, id uuid.UUID) error {
 }
 
 func (f *fakeStore) GetPolicy(_ context.Context, id uuid.UUID) (*storage.Policy, error) {
+	if f.policies != nil {
+		if p, ok := f.policies[id]; ok {
+			copy := p
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -2320,14 +2328,16 @@ func (f *fakeStore) ListFleetEnrollmentResults(_ context.Context, jobID uuid.UUI
 }
 
 func (f *fakeStore) CreatePolicyAssignment(_ context.Context, params storage.CreatePolicyAssignmentParams) (*storage.PolicyAssignment, error) {
-	return &storage.PolicyAssignment{
+	assignment := storage.PolicyAssignment{
 		ID:         uuid.New(),
 		PolicyID:   params.PolicyID,
 		TenantID:   params.TenantID,
 		NodeID:     params.NodeID,
 		AssignedAt: time.Now(),
 		AssignedBy: params.AssignedBy,
-	}, nil
+	}
+	f.policyAssignments = append(f.policyAssignments, assignment)
+	return &assignment, nil
 }
 
 func (f *fakeStore) ListPolicyAssignments(_ context.Context, policyID uuid.UUID, limit, offset int) ([]storage.PolicyAssignment, int, error) {

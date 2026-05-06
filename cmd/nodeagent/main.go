@@ -84,6 +84,7 @@ func main() {
 	joinURL := flag.String("join", "", "Control plane URL to enroll with")
 	joinToken := flag.String("token", "", "Enrollment token")
 	nodeName := flag.String("name", "", "Override node hostname")
+	compliancePolicyID := flag.String("compliance-policy", "control-one-default-hardening", "Compliance policy to apply during enrollment")
 	configDirFlag := flag.String("config-dir", "/etc/control-one", "Config directory")
 	dataDirFlag := flag.String("data-dir", "/var/lib/control-one/nodeagent", "Data directory")
 	installServiceFlag := flag.Bool("install-service", false, "Install systemd service")
@@ -95,7 +96,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: --token is required with --join")
 			os.Exit(1)
 		}
-		if err := runJoin(*joinURL, *joinToken, *nodeName, *configDirFlag, *dataDirFlag, *installServiceFlag, *startAfterJoin); err != nil {
+		if err := runJoin(*joinURL, *joinToken, *nodeName, *configDirFlag, *dataDirFlag, *compliancePolicyID, *installServiceFlag, *startAfterJoin); err != nil {
 			fmt.Fprintf(os.Stderr, "join failed: %v\n", err)
 			os.Exit(1)
 		}

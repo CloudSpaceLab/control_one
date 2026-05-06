@@ -46,6 +46,7 @@ fatal() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 # ─── Baked-in values from control plane ─────────────────────────────
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-{{.CPURL}}}"
 TOKEN="${TOKEN:-{{.Token}}}"
+COMPLIANCE_POLICY_ID="${COMPLIANCE_POLICY_ID:-{{.CompliancePolicyID}}}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 NO_SERVICE="${NO_SERVICE:-false}"
 # Base64-encoded PEM of a custom root CA to trust. When present the installer
@@ -61,10 +62,11 @@ while [[ $# -gt 0 ]]; do
         --token)       TOKEN="$2"; shift 2 ;;
         --url)         CONTROL_PLANE_URL="$2"; shift 2 ;;
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+        --compliance-policy) COMPLIANCE_POLICY_ID="$2"; shift 2 ;;
         --ca-cert)     CA_CERT_B64="$2"; shift 2 ;;
         --no-service)  NO_SERVICE="true"; shift ;;
         -h|--help)
-            echo "Usage: $0 [--token TOKEN] [--url URL] [--install-dir DIR] [--ca-cert B64] [--no-service]"
+            echo "Usage: $0 [--token TOKEN] [--url URL] [--install-dir DIR] [--compliance-policy POLICY] [--ca-cert B64] [--no-service]"
             exit 0 ;;
         *) fatal "Unknown argument: $1" ;;
     esac
@@ -300,6 +302,7 @@ $SUDO install -m 0755 "$BINARY_PATH" "${INSTALL_DIR}/controlone-agent"
 ok "Installed to ${INSTALL_DIR}/controlone-agent."
 
 ENROLL_ARGS=("--join" "$CONTROL_PLANE_URL" "--token" "$TOKEN")
+[[ -n "$COMPLIANCE_POLICY_ID" ]] && ENROLL_ARGS+=("--compliance-policy" "$COMPLIANCE_POLICY_ID") || true
 [[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE") || true
 [[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service") || true
 [[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" ]] && ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM") || true
@@ -355,6 +358,7 @@ $ErrorActionPreference = 'Stop'
 
 $ControlPlaneURL = if ($env:CONTROL_PLANE_URL) { $env:CONTROL_PLANE_URL } else { '{{.CPURL}}' }
 $Token           = if ($env:TOKEN)             { $env:TOKEN }             else { '{{.Token}}' }
+$CompliancePolicyID = if ($env:COMPLIANCE_POLICY_ID) { $env:COMPLIANCE_POLICY_ID } else { '{{.CompliancePolicyID}}' }
 $InstallDir      = if ($env:INSTALL_DIR)       { $env:INSTALL_DIR }       else { "$env:ProgramFiles\ControlOne" }
 
 if ([string]::IsNullOrWhiteSpace($ControlPlaneURL)) { throw 'CONTROL_PLANE_URL is required.' }
@@ -417,7 +421,12 @@ try {
     Write-Host "[OK] Installed to $InstalledPath"
 
     Write-Host '[INFO] Enrolling agent...'
-    & $InstalledPath --join $ControlPlaneURL --token $Token --install-service
+    $EnrollArgs = @('--join', $ControlPlaneURL, '--token', $Token)
+    if (-not [string]::IsNullOrWhiteSpace($CompliancePolicyID)) {
+        $EnrollArgs += @('--compliance-policy', $CompliancePolicyID)
+    }
+    $EnrollArgs += '--install-service'
+    & $InstalledPath @EnrollArgs
     if ($LASTEXITCODE -ne 0) { throw "Enrollment failed (exit $LASTEXITCODE)" }
 
     Write-Host '[OK] Control One agent installation complete!'
@@ -455,9 +464,10 @@ var (
 )
 
 type installScriptData struct {
-	CPURL  string
-	Token  string
-	CACert string // base64-encoded PEM of a custom root CA to trust; empty for system trust store
+	CPURL              string
+	Token              string
+	CompliancePolicyID string
+	CACert             string // base64-encoded PEM of a custom root CA to trust; empty for system trust store
 }
 
 // sanitizeBase64 strips whitespace and rejects values that are not valid
@@ -631,9 +641,10 @@ func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request
 	cpURL := s.deriveControlPlaneURL(r)
 
 	data := installScriptData{
-		CPURL:  cpURL,
-		Token:  token,
-		CACert: sanitizeBase64(r.URL.Query().Get("ca_cert")),
+		CPURL:              cpURL,
+		Token:              token,
+		CompliancePolicyID: strings.TrimSpace(r.URL.Query().Get("compliance_policy_id")),
+		CACert:             sanitizeBase64(r.URL.Query().Get("ca_cert")),
 	}
 
 	var (

@@ -14,13 +14,14 @@ import (
 )
 
 type enrollRequest struct {
-	Token       string `json:"token"`
-	Hostname    string `json:"hostname"`
-	OS          string `json:"os"`
-	Arch        string `json:"arch"`
-	PublicIP    string `json:"public_ip"`
-	Fingerprint string `json:"fingerprint"`
-	MachineID   string `json:"machine_id,omitempty"`
+	Token              string `json:"token"`
+	Hostname           string `json:"hostname"`
+	OS                 string `json:"os"`
+	Arch               string `json:"arch"`
+	PublicIP           string `json:"public_ip"`
+	Fingerprint        string `json:"fingerprint"`
+	MachineID          string `json:"machine_id,omitempty"`
+	CompliancePolicyID string `json:"compliance_policy_id,omitempty"`
 }
 
 type enrollResponse struct {
@@ -46,7 +47,7 @@ type enrollConfig struct {
 	Capabilities []string          `json:"capabilities"`
 }
 
-func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService, startAgent bool) error {
+func runJoin(joinURL, token, nodeName, configDir, dataDir, compliancePolicyID string, installService, startAgent bool) error {
 	// 1. Gather system info
 	sysInfo := util.GatherSystemInfo()
 	hostname := sysInfo.Hostname
@@ -57,13 +58,14 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir string, installService
 	// 2. POST to /api/v1/enroll
 	machineID, _ := util.ReadMachineID()
 	reqBody := enrollRequest{
-		Token:       token,
-		Hostname:    hostname,
-		OS:          sysInfo.OS,
-		Arch:        sysInfo.Arch,
-		PublicIP:    sysInfo.PublicIP,
-		Fingerprint: sysInfo.Fingerprint,
-		MachineID:   machineID,
+		Token:              token,
+		Hostname:           hostname,
+		OS:                 sysInfo.OS,
+		Arch:               sysInfo.Arch,
+		PublicIP:           sysInfo.PublicIP,
+		Fingerprint:        sysInfo.Fingerprint,
+		MachineID:          machineID,
+		CompliancePolicyID: strings.TrimSpace(compliancePolicyID),
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -214,7 +216,17 @@ wizard:
 	fmt.Printf("  Certs:    %s\n", certDir)
 	fmt.Println("")
 
-	// 8. Install OS-managed service if requested. Platform dispatch is
+	if warnings := runPrimaryHardening(); len(warnings) == 0 {
+		fmt.Println("  Hardening: primary baseline applied")
+	} else {
+		fmt.Println("  Hardening: primary baseline completed with warnings")
+		for _, warning := range warnings {
+			fmt.Printf("    - %s\n", warning)
+		}
+	}
+	fmt.Println("")
+
+	// 9. Install OS-managed service if requested. Platform dispatch is
 	//    handled by the build-tagged service_*.go files — see service_linux.go
 	//    for systemd, service_darwin.go for launchd, service_windows.go for
 	//    the Windows Service Control Manager.

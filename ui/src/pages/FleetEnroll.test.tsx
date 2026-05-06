@@ -10,6 +10,7 @@ import { FleetEnroll } from './FleetEnroll';
 const startFleetEnroll = vi.fn<(payload: unknown) => Promise<FleetEnrollResponse>>();
 const getFleetEnrollStatus = vi.fn<(id: string) => Promise<FleetEnrollStatus>>();
 const getNode = vi.fn<(id: string) => Promise<NodeSummary>>();
+const listPolicies = vi.fn();
 const showToast = vi.fn();
 
 vi.mock('../hooks/useApiClient', () => ({
@@ -17,6 +18,7 @@ vi.mock('../hooks/useApiClient', () => ({
     startFleetEnroll: (payload: unknown) => startFleetEnroll(payload),
     getFleetEnrollStatus: (id: string) => getFleetEnrollStatus(id),
     getNode: (id: string) => getNode(id),
+    listPolicies: (params: unknown) => listPolicies(params),
   }),
 }));
 
@@ -40,6 +42,8 @@ describe('FleetEnroll', () => {
     startFleetEnroll.mockReset();
     getFleetEnrollStatus.mockReset();
     getNode.mockReset();
+    listPolicies.mockReset();
+    listPolicies.mockResolvedValue({ data: [], pagination: { total: 0, count: 0, limit: 100, offset: 0 } });
     showToast.mockReset();
   });
 
@@ -140,11 +144,13 @@ describe('FleetEnroll', () => {
       token: string;
       ssh_user?: string;
       ssh_key?: string;
+      compliance_policy_id?: string;
     };
     expect(payload.targets).toEqual([{ host: '10.0.0.5', user: undefined }]);
     expect(payload.token).toBe('cot_test');
     expect(payload.ssh_user).toBe('ubuntu');
     expect(payload.ssh_key).toBeTruthy();
+    expect(payload.compliance_policy_id).toBe('control-one-default-hardening');
 
     // The per-host table renders once the status poll returns results.
     await waitFor(() =>

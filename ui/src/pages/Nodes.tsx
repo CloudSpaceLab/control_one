@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Server, AlertTriangle, RefreshCw, LayoutGrid, List,
-  Activity, Shield, ChevronRight, Globe,
+  Activity, Shield, ChevronRight, Globe, MapPin,
 } from 'lucide-react';
 import { SectionHeader, Panel, KpiTile, StatusTag, EmptyState, DataTable, LiveBadge } from '../components/kit';
 import type { StateTone } from '../components/kit/types';
@@ -31,16 +31,18 @@ interface RegionMeta {
   label: string;
   x: number;
   y: number;
+  lat: number;
+  lon: number;
 }
 
 const REGIONS: Record<RegionKey, RegionMeta> = {
-  na:      { label: 'N. America',   x: 220, y: 155 },
-  sa:      { label: 'S. America',   x: 318, y: 345 },
-  eu:      { label: 'Europe',       x: 494, y: 108 },
-  afme:    { label: 'Africa / ME',  x: 535, y: 295 },
-  apac:    { label: 'Asia Pacific', x: 742, y: 160 },
-  oce:     { label: 'Oceania',      x: 822, y: 375 },
-  unknown: { label: 'Unknown',      x: 950, y: 460 },
+  na:      { label: 'N. America',   x: 220, y: 155, lat: 39, lon: -98 },
+  sa:      { label: 'S. America',   x: 318, y: 345, lat: -15, lon: -58 },
+  eu:      { label: 'Europe',       x: 494, y: 108, lat: 51, lon: 10 },
+  afme:    { label: 'Africa / ME',  x: 535, y: 295, lat: 6, lon: 20 },
+  apac:    { label: 'Asia Pacific', x: 742, y: 160, lat: 28, lon: 104 },
+  oce:     { label: 'Oceania',      x: 822, y: 375, lat: -25, lon: 134 },
+  unknown: { label: 'Unknown',      x: 950, y: 460, lat: -52, lon: 164 },
 };
 
 // ── Region inference ───────────────────────────────────────────────────────
@@ -100,6 +102,117 @@ function guessRegion(node: NodeSummary): RegionKey {
   if (a >= 181 && a <= 220) return 'sa';
 
   return 'unknown';
+}
+
+interface NodeMapPoint {
+  node: NodeSummary;
+  state: NodeState;
+  x: number;
+  y: number;
+  lat: number;
+  lon: number;
+  precision: 'exact' | 'estimated';
+  label: string;
+}
+
+function numericLabel(node: NodeSummary, keys: string[]): number | null {
+  const labels = node.labels ?? {};
+  for (const key of keys) {
+    const raw = labels[key];
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string') {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+const CITY_COORDS: Record<string, { lat: number; lon: number; label: string }> = {
+  london: { lat: 51.5072, lon: -0.1276, label: 'London' },
+  lon: { lat: 51.5072, lon: -0.1276, label: 'London' },
+  ldn: { lat: 51.5072, lon: -0.1276, label: 'London' },
+  amsterdam: { lat: 52.3676, lon: 4.9041, label: 'Amsterdam' },
+  ams: { lat: 52.3676, lon: 4.9041, label: 'Amsterdam' },
+  frankfurt: { lat: 50.1109, lon: 8.6821, label: 'Frankfurt' },
+  fra: { lat: 50.1109, lon: 8.6821, label: 'Frankfurt' },
+  newyork: { lat: 40.7128, lon: -74.006, label: 'New York' },
+  nyc: { lat: 40.7128, lon: -74.006, label: 'New York' },
+  dallas: { lat: 32.7767, lon: -96.797, label: 'Dallas' },
+  dal: { lat: 32.7767, lon: -96.797, label: 'Dallas' },
+  sfo: { lat: 37.7749, lon: -122.4194, label: 'San Francisco' },
+  lax: { lat: 34.0522, lon: -118.2437, label: 'Los Angeles' },
+  singapore: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
+  sg: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
+  sin: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
+  tokyo: { lat: 35.6762, lon: 139.6503, label: 'Tokyo' },
+  tok: { lat: 35.6762, lon: 139.6503, label: 'Tokyo' },
+  mumbai: { lat: 19.076, lon: 72.8777, label: 'Mumbai' },
+  bom: { lat: 19.076, lon: 72.8777, label: 'Mumbai' },
+  sydney: { lat: -33.8688, lon: 151.2093, label: 'Sydney' },
+  syd: { lat: -33.8688, lon: 151.2093, label: 'Sydney' },
+};
+
+function cityKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function coordinatesFromLabels(node: NodeSummary): { lat: number; lon: number; label: string; precision: 'exact' | 'estimated' } | null {
+  const lat = numericLabel(node, ['lat', 'latitude', 'geo.lat', 'geo_lat']);
+  const lon = numericLabel(node, ['lon', 'lng', 'longitude', 'geo.lon', 'geo.lng', 'geo_lon']);
+  if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+    return { lat, lon, label: 'Coordinates', precision: 'exact' };
+  }
+
+  for (const key of ['city', 'location', 'site', 'datacenter', 'region', 'dc']) {
+    const value = node.labels?.[key];
+    if (typeof value !== 'string') continue;
+    const coord = CITY_COORDS[cityKey(value)];
+    if (coord) return { ...coord, precision: 'estimated' };
+  }
+  return null;
+}
+
+function coordinatesFromIP(node: NodeSummary): { lat: number; lon: number; label: string; precision: 'estimated' } | null {
+  const ip = node.public_ip;
+  if (!ip) return null;
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return null;
+  const [a, b] = parts;
+
+  if (a === 139 && b === 162) return { ...CITY_COORDS.london, precision: 'estimated' };
+  if (a === 188 && b === 166) return { ...CITY_COORDS.amsterdam, precision: 'estimated' };
+  if (a === 178 && b === 62) return { ...CITY_COORDS.frankfurt, precision: 'estimated' };
+  if (a === 128 && b === 199) return { ...CITY_COORDS.singapore, precision: 'estimated' };
+  return null;
+}
+
+function project(lon: number, lat: number): { x: number; y: number } {
+  return {
+    x: ((lon + 180) / 360) * 1000,
+    y: ((90 - lat) / 180) * 480,
+  };
+}
+
+function mapPointForNode(node: NodeSummary, state: NodeState, index: number): NodeMapPoint {
+  const coords = coordinatesFromLabels(node) ?? coordinatesFromIP(node);
+  const fallbackRegion = guessRegion(node);
+  const lat = coords?.lat ?? REGIONS[fallbackRegion].lat;
+  const lon = coords?.lon ?? REGIONS[fallbackRegion].lon;
+  const projected = project(lon, lat);
+  const jitterAngle = index * 2.3999632297;
+  const jitterRadius = coords?.precision === 'exact' ? Math.min(index % 4, 2) * 2 : 8 + (index % 5) * 3;
+
+  return {
+    node,
+    state,
+    lat,
+    lon,
+    x: projected.x + Math.cos(jitterAngle) * jitterRadius,
+    y: projected.y + Math.sin(jitterAngle) * jitterRadius,
+    precision: coords?.precision ?? 'estimated',
+    label: coords?.label ?? REGIONS[fallbackRegion].label,
+  };
 }
 
 // ── Health helpers ─────────────────────────────────────────────────────────
@@ -356,6 +469,111 @@ function WorldMap({ regionData, activeRegion, onRegionClick }: WorldMapProps) {
 }
 
 // ── Node card ──────────────────────────────────────────────────────────────
+
+function NodeWorldMap({
+  points,
+  onNodeClick,
+}: {
+  points: NodeMapPoint[];
+  onNodeClick: (nodeId: string) => void;
+}) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const exactCount = points.filter((point) => point.precision === 'exact').length;
+
+  return (
+    <div className="relative w-full overflow-hidden rounded-lg border border-border-subtle bg-[#080d18]">
+      <svg
+        viewBox="0 0 1000 480"
+        preserveAspectRatio="xMidYMid meet"
+        className="w-full"
+        aria-label="Node-level world map"
+      >
+        <defs>
+          <pattern id="node-map-grid" width="100" height="80" patternUnits="userSpaceOnUse">
+            <path d="M 100 0 L 0 0 0 80" fill="none" stroke="#1e293b" strokeWidth="0.5" opacity="0.55" />
+          </pattern>
+          <radialGradient id="node-map-vignette" cx="50%" cy="45%" r="65%">
+            <stop offset="0%" stopColor="#101827" stopOpacity="0" />
+            <stop offset="100%" stopColor="#020617" stopOpacity="0.72" />
+          </radialGradient>
+        </defs>
+        <rect width="1000" height="480" fill="url(#node-map-grid)" />
+        {CONTINENTS.map((c, i) => (
+          <path key={i} d={c.d} fill="#172235" stroke="#30445e" strokeWidth="1" />
+        ))}
+        <rect width="1000" height="480" fill="url(#node-map-vignette)" />
+
+        {points.map((point) => {
+          const color = STATE_COLOR[point.state];
+          const active = hovered === point.node.id;
+          return (
+            <g
+              key={point.node.id}
+              transform={`translate(${point.x},${point.y})`}
+              onMouseEnter={() => setHovered(point.node.id)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => onNodeClick(point.node.id)}
+              style={{ cursor: 'pointer' }}
+            >
+              {(point.state === 'critical' || point.state === 'degraded') && (
+                <motion.circle
+                  r="12"
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="1.4"
+                  initial={{ scale: 0.8, opacity: 0.75 }}
+                  animate={{ scale: [0.8, 2.1], opacity: [0.75, 0] }}
+                  transition={{ duration: point.state === 'critical' ? 1.2 : 2, repeat: Infinity, ease: 'easeOut' }}
+                />
+              )}
+              <circle r={active ? 12 : 9} fill={color} fillOpacity="0.18" stroke={color} strokeWidth="1.5" />
+              <circle r="3.2" fill={color} />
+              {active && (
+                <g transform="translate(16,-30)">
+                  <rect width="190" height="58" rx="7" fill="#020617" fillOpacity="0.92" stroke="#334155" />
+                  <text x="10" y="20" fill="#e2e8f0" fontSize="12" fontWeight="700">
+                    {point.node.hostname}
+                  </text>
+                  <text x="10" y="37" fill="#94a3b8" fontSize="10" fontFamily="monospace">
+                    {point.node.public_ip ?? 'no public ip'}
+                  </text>
+                  <text x="10" y="51" fill="#64748b" fontSize="9">
+                    {point.label} - {point.precision}
+                  </text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+
+        {points.length === 0 && (
+          <text x="500" y="240" textAnchor="middle" fill="#475569" fontSize="14">
+            No nodes to plot
+          </text>
+        )}
+      </svg>
+
+      <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md border border-border-subtle bg-black/60 px-3 py-1.5 backdrop-blur-sm">
+        <MapPin className="h-3.5 w-3.5 text-brand-300" />
+        <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-muted">
+          {points.length} nodes - {exactCount} exact
+        </span>
+      </div>
+      <div className="absolute bottom-3 right-3 flex items-center gap-3 rounded-md border border-border-subtle bg-black/60 px-3 py-1.5 backdrop-blur-sm">
+        {(['healthy', 'warning', 'critical'] as NodeState[]).map((s) => (
+          <span key={s} className="flex items-center gap-1.5 text-[10px] text-text-muted capitalize">
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATE_COLOR[s] }} />
+            {s}
+          </span>
+        ))}
+        <span className="flex items-center gap-1.5 text-[10px] text-text-muted">
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATE_COLOR.unknown }} />
+          offline
+        </span>
+      </div>
+    </div>
+  );
+}
 
 interface NodeCardProps {
   node: NodeSummary;
@@ -638,6 +856,18 @@ export function Nodes(): JSX.Element {
     return result;
   }, [nodes, activeRegion, hostnameFilter]);
 
+  const nodeMapPoints = useMemo(() => (
+    filteredNodes.slice(0, 49).map((node, index) => {
+      const h = healthMap[node.id];
+      const state: NodeState = h
+        ? riskToState(h.risk_level)
+        : isOnline(node) ? 'healthy' : 'unknown';
+      return mapPointForNode(node, state, index);
+    })
+  ), [filteredNodes, healthMap]);
+
+  const useNodeMap = pagination.total > 0 && pagination.total < 50;
+
   // Filtered tenant groups (respects activeRegion + hostnameFilter)
   const filteredTenantGroups = useMemo(() => {
     const groups = new Map<string, NodeSummary[]>();
@@ -833,16 +1063,25 @@ export function Nodes(): JSX.Element {
               </Button>
             )}
             <span className="text-xs text-text-muted">
-              {activeRegion ? `Showing ${REGIONS[activeRegion].label}` : 'Click region to filter'}
+              {useNodeMap
+                ? 'Node markers open details'
+                : activeRegion ? `Showing ${REGIONS[activeRegion].label}` : 'Click region to filter'}
             </span>
           </div>
         }
       >
-        <WorldMap
-          regionData={regionData}
-          activeRegion={activeRegion}
-          onRegionClick={setActiveRegion}
-        />
+        {useNodeMap ? (
+          <NodeWorldMap
+            points={nodeMapPoints}
+            onNodeClick={(nodeId) => navigate(`/nodes/${nodeId}`)}
+          />
+        ) : (
+          <WorldMap
+            regionData={regionData}
+            activeRegion={activeRegion}
+            onRegionClick={setActiveRegion}
+          />
+        )}
         {/* Region chips */}
         <div className="flex flex-wrap gap-2 pt-1">
           {(Object.entries(regionData) as [RegionKey, { count: number; state: NodeState }][])

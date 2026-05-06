@@ -26,10 +26,12 @@ export function useNode(nodeId: string | null | undefined): UseNodeResult {
     setLoading(true);
     setError(null);
 
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
     Promise.all([
       api.getNode(nodeId),
       api.getNodeHealth(nodeId).catch(() => null),
-      api.getNodeTelemetryMetrics(nodeId).catch(() => ({ data: [] as TelemetryMetric[] })),
+      api.getNodeTelemetryMetrics(nodeId, { since, limit: 2000 }).catch(() => ({ data: [] as TelemetryMetric[] })),
     ])
       .then(([n, h, t]) => {
         if (cancelled) return;

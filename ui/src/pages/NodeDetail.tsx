@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, Cpu, Globe2, KeyRound, Network, RefreshCw, Server, ShieldAlert, Trash2 } from 'lucide-react';
 import {
   Alert,
   Eyebrow,
@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { RepairAgentDialog } from '@/components/nodes/RepairAgentDialog';
+import { ConnectionDetailSheet } from '@/components/investigate/ConnectionDetailSheet';
 import {
   Dialog,
   DialogContent,
@@ -35,7 +36,7 @@ import type {
   UpdateNodePayload,
 } from '@/lib/api';
 import type { StateTone } from '@/components/kit/types';
-import { formatTs } from '@/lib/format';
+import { formatBytes, formatDuration, formatTs } from '@/lib/format';
 
 // agentLooksDead returns the reason the agent is not reporting, or null
 // when the node is healthy. Used to gate the AgentRepairBanner so we
@@ -128,12 +129,25 @@ function latestValue(metrics: TelemetryMetric[], name: string): number | null {
   return series.length ? series[series.length - 1] : null;
 }
 
+function numericLabel(node: import('@/lib/api').Node, keys: string[]): number | null {
+  const labels = node.labels ?? {};
+  for (const key of keys) {
+    const raw = labels[key];
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string') {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
 export function NodeDetail(): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { node, health, telemetry, loading, error, reload } = useNode(id);
-  const [tab, setTab] = useState<'overview' | 'activity' | 'kg' | 'recommendations' | 'settings'>('overview');
+  const [tab, setTab] = useState<'overview' | 'activity' | 'connections' | 'kg' | 'recommendations' | 'settings'>('overview');
 
   if (loading && !node) {
     return (
@@ -164,9 +178,9 @@ export function NodeDetail(): JSX.Element {
   const memLatest = latestValue(telemetry, 'memory_used_percent');
   const diskLatest = latestValue(telemetry, 'disk_usage_percent');
 
-  const cpuCount = latestValue(telemetry, 'cpu_count');
-  const memTotal = latestValue(telemetry, 'memory_total_bytes');
-  const diskTotal = latestValue(telemetry, 'disk_total_bytes');
+  const cpuCount = latestValue(telemetry, 'cpu_count') ?? numericLabel(node, ['cpu_count', 'cpu_cores', 'cores']);
+  const memTotal = latestValue(telemetry, 'memory_total_bytes') ?? numericLabel(node, ['memory_total_bytes', 'total_ram_bytes', 'ram_bytes']);
+  const diskTotal = latestValue(telemetry, 'disk_total_bytes') ?? numericLabel(node, ['disk_total_bytes', 'disk_size_bytes', 'root_disk_bytes']);
 
   const calibratingSamples =
     health?.risk_level === 'calibrating'
@@ -216,6 +230,7 @@ export function NodeDetail(): JSX.Element {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="connections">Connections</TabsTrigger>
           <TabsTrigger value="kg">Knowledge graph</TabsTrigger>
           <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -239,6 +254,9 @@ export function NodeDetail(): JSX.Element {
         </TabsContent>
         <TabsContent value="activity" className="pt-4">
           <ActivityTab nodeId={node.id} tenantId={node.tenant_id} />
+        </TabsContent>
+        <TabsContent value="connections" className="pt-4">
+          <ConnectionsTab nodeId={node.id} tenantId={node.tenant_id} />
         </TabsContent>
         <TabsContent value="kg" className="pt-4">
           <KnowledgeGraphTab nodeId={node.id} />
@@ -442,6 +460,292 @@ function ActivityTab({ nodeId, tenantId }: ActivityProps) {
   );
 }
 
+function peerIp(row: import('@/lib/api').ConnectionRow): string {
+  if (row.direction === 'inbound') return row.src_ip ?? row.dst_ip ?? '';
+  if (row.direction === 'outbound') return row.dst_ip ?? row.src_ip ?? '';
+  return row.dst_ip && row.dst_ip !== '0.0.0.0' ? row.dst_ip : row.src_ip ?? '';
+}
+
+function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string }) {
+  const api = useApiClient();
+  const [rows, setRows] = useState<import('@/lib/api').ConnectionRow[]>([]);
+  const [countries, setCountries] = useState<Record<string, string>>({});
+  const [openConnId, setOpenConnId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const resp = await api.listConnections({
+        tenantId,
+        nodeId,
+        openOnly: true,
+        since,
+        limit: 250,
+      });
+      setRows(resp);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'load failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [api, nodeId, tenantId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ips = Array.from(new Set(rows.map(peerIp).filter(Boolean))).filter((ip) => !countries[ip]);
+    if (ips.length === 0) return;
+    Promise.all(
+      ips.slice(0, 25).map((ip) =>
+        api.enrichIp(ip)
+          .then((enrichment) => [ip, enrichment.geo?.country ?? enrichment.geo?.country_code ?? 'Unknown'] as const)
+          .catch(() => [ip, 'Unknown'] as const),
+      ),
+    ).then((entries) => {
+      if (cancelled) return;
+      setCountries((prev) => {
+        const next = { ...prev };
+        for (const [ip, country] of entries) next[ip] = country;
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, countries, rows]);
+
+  const totals = useMemo(() => ({
+    peers: new Set(rows.map(peerIp).filter(Boolean)).size,
+    bytes: rows.reduce((sum, row) => sum + (row.bytes_in ?? 0) + (row.bytes_out ?? 0), 0),
+    threats: rows.filter((row) => row.threat_match).length,
+  }), [rows]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile label="Open peers" value={totals.peers} tone="brand" icon={<Network />} loading={loading} />
+        <KpiTile label="Data transferred" value={formatBytes(totals.bytes)} tone="unknown" loading={loading} />
+        <KpiTile
+          label="Threat matches"
+          value={totals.threats}
+          tone={totals.threats > 0 ? 'critical' : 'healthy'}
+          icon={<ShieldAlert />}
+          loading={loading}
+        />
+      </div>
+
+      <Panel
+        padding="md"
+        eyebrow="NETWORK"
+        title="Open connections"
+        actions={
+          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
+        }
+      >
+        {err && <Alert variant="critical">{err}</Alert>}
+        {!loading && rows.length === 0 ? (
+          <p className="text-sm text-text-muted">No open connections reported for this node in the current 24h window.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="border-b border-border-subtle text-xs uppercase tracking-wider text-text-muted">
+                <tr>
+                  <th className="px-3 py-2">Peer IP</th>
+                  <th className="px-3 py-2">Country</th>
+                  <th className="px-3 py-2">Direction</th>
+                  <th className="px-3 py-2">Process</th>
+                  <th className="px-3 py-2">Port</th>
+                  <th className="px-3 py-2">Connected</th>
+                  <th className="px-3 py-2">Transferred</th>
+                  <th className="px-3 py-2">Threat</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-subtle">
+                {rows.map((row) => {
+                  const ip = peerIp(row);
+                  const port = row.direction === 'inbound' ? row.src_port : row.dst_port;
+                  const age = row.duration_ms ?? (Date.now() - new Date(row.started_at).getTime());
+                  return (
+                    <tr
+                      key={row.conn_id}
+                      className="cursor-pointer hover:bg-surface-2"
+                      onClick={() => setOpenConnId(row.conn_id)}
+                    >
+                      <td className="px-3 py-2 font-mono text-xs text-foreground">{ip || '-'}</td>
+                      <td className="px-3 py-2 text-text-secondary">{countries[ip] ?? 'Looking up...'}</td>
+                      <td className="px-3 py-2 capitalize text-text-secondary">{row.direction ?? '-'}</td>
+                      <td className="px-3 py-2">
+                        <span className="font-medium text-foreground">{row.process_name ?? '-'}</span>
+                        {row.pid ? <span className="ml-1 font-mono text-[0.7rem] text-text-muted">pid {row.pid}</span> : null}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs text-text-secondary">{port ?? '-'}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-text-secondary">{formatDuration(age)}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-text-secondary">
+                        {formatBytes((row.bytes_in ?? 0) + (row.bytes_out ?? 0))}
+                      </td>
+                      <td className="px-3 py-2">
+                        {row.threat_match ? (
+                          <StatusTag tone="critical">{row.threat_feed || 'matched'}</StatusTag>
+                        ) : (
+                          <StatusTag tone="healthy">clean</StatusTag>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      <ConnectionDetailSheet connId={openConnId} onClose={() => setOpenConnId(null)} />
+    </div>
+  );
+}
+
+function serviceTone(status?: number | null): StateTone {
+  if (status == null) return 'unknown';
+  if (status >= 200 && status < 400) return 'healthy';
+  if (status >= 400 && status < 500) return 'warning';
+  return 'critical';
+}
+
+function serviceColor(status?: number | null): string {
+  if (status == null) return '#64748b';
+  if (status >= 200 && status < 400) return '#22c55e';
+  if (status >= 400 && status < 500) return '#eab308';
+  return '#ef4444';
+}
+
+function KnowledgeGraphCanvas({
+  nodeId,
+  services,
+}: {
+  nodeId: string;
+  services: import('@/lib/api').NodeService[];
+}) {
+  const topServices = services.slice(0, 14);
+  const processNames = Array.from(new Set(topServices.map((svc) => svc.process || 'unknown')));
+  const serviceRadius = 165;
+  const processRadius = 82;
+  const servicePoints = topServices.map((svc, index) => {
+    const angle = -Math.PI / 2 + (index / Math.max(topServices.length, 1)) * Math.PI * 2;
+    return {
+      svc,
+      x: 260 + Math.cos(angle) * serviceRadius,
+      y: 180 + Math.sin(angle) * serviceRadius * 0.62,
+    };
+  });
+  const processPoints = processNames.map((process, index) => {
+    const angle = -Math.PI / 2 + (index / Math.max(processNames.length, 1)) * Math.PI * 2;
+    return {
+      process,
+      x: 260 + Math.cos(angle) * processRadius,
+      y: 180 + Math.sin(angle) * processRadius * 0.56,
+    };
+  });
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border-subtle bg-[#080d18]">
+      <svg viewBox="0 0 520 360" className="h-[360px] w-full" role="img" aria-label="Node service knowledge graph">
+        <defs>
+          <radialGradient id="kg-center" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#334155" stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#111827" stopOpacity="0.95" />
+          </radialGradient>
+        </defs>
+        <rect width="520" height="360" fill="#080d18" />
+        <g opacity="0.32">
+          <circle cx="260" cy="180" r="88" fill="none" stroke="#334155" strokeWidth="1" />
+          <circle cx="260" cy="180" r="168" fill="none" stroke="#334155" strokeWidth="1" />
+        </g>
+
+        {servicePoints.map(({ svc, x, y }) => {
+          const process = processPoints.find((p) => p.process === (svc.process || 'unknown'));
+          return process ? (
+            <line
+              key={`process-${svc.id}`}
+              x1={process.x}
+              y1={process.y}
+              x2={x}
+              y2={y}
+              stroke="#334155"
+              strokeWidth="1"
+              opacity="0.75"
+            />
+          ) : null;
+        })}
+        {processPoints.map(({ process, x, y }) => (
+          <line
+            key={`node-${process}`}
+            x1="260"
+            y1="180"
+            x2={x}
+            y2={y}
+            stroke="#475569"
+            strokeWidth="1.2"
+            opacity="0.65"
+          />
+        ))}
+
+        <g>
+          <circle cx="260" cy="180" r="42" fill="url(#kg-center)" stroke="#64748b" strokeWidth="1.5" />
+          <foreignObject x="232" y="152" width="56" height="56">
+            <div className="flex h-full items-center justify-center text-text-secondary">
+              <Server className="h-7 w-7" />
+            </div>
+          </foreignObject>
+          <text x="260" y="240" textAnchor="middle" fill="#cbd5e1" fontSize="11" fontWeight="700">
+            Node
+          </text>
+          <text x="260" y="256" textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="monospace">
+            {nodeId.slice(0, 8)}
+          </text>
+        </g>
+
+        {processPoints.map(({ process, x, y }) => (
+          <g key={process} transform={`translate(${x},${y})`}>
+            <circle r="25" fill="#111827" stroke="#64748b" strokeWidth="1.2" />
+            <foreignObject x="-12" y="-12" width="24" height="24">
+              <div className="flex h-full items-center justify-center text-text-muted">
+                <Cpu className="h-4 w-4" />
+              </div>
+            </foreignObject>
+            <text y="38" textAnchor="middle" fill="#94a3b8" fontSize="9" fontFamily="monospace">
+              {process.length > 14 ? `${process.slice(0, 13)}...` : process}
+            </text>
+          </g>
+        ))}
+
+        {servicePoints.map(({ svc, x, y }) => {
+          const color = serviceColor(svc.probe_status);
+          return (
+            <g key={svc.id} transform={`translate(${x},${y})`}>
+              <circle r="22" fill={color} fillOpacity="0.14" stroke={color} strokeWidth="1.5" />
+              <text y="4" textAnchor="middle" fill={color} fontSize="12" fontWeight="800" fontFamily="monospace">
+                {svc.port}
+              </text>
+              <text y="36" textAnchor="middle" fill="#cbd5e1" fontSize="9">
+                {svc.service_kind || 'service'}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
   const api = useApiClient();
   const [services, setServices] = useState<import('@/lib/api').NodeService[]>([]);
@@ -467,45 +771,68 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
     };
   }, [api, nodeId]);
 
+  const processCount = new Set(services.map((svc) => svc.process || 'unknown')).size;
+  const exposedCount = services.filter((svc) => {
+    const addr = svc.listen_addr || '';
+    return addr === '0.0.0.0' || addr === '::' || addr.startsWith('*');
+  }).length;
+
   return (
-    <Panel padding="md" eyebrow="KNOWLEDGE GRAPH" title="Listening services on this node">
-      {loading && <Loader label="Loading services…" />}
-      {err && <Alert variant="critical">{err}</Alert>}
-      {!loading && services.length === 0 ? (
-        <Alert variant="info" title="No services reported yet">
-          The agent-side service collector lands in a follow-up. Once it ships,
-          listening ports + service kinds + probed URLs for this node appear here
-          and contribute to the per-tenant knowledge_graph.md.
-        </Alert>
-      ) : (
-        <ul className="flex flex-col divide-y divide-border-subtle text-sm">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+      <Panel padding="md" eyebrow="KNOWLEDGE GRAPH" title="Node service graph">
+        {loading && <Loader label="Loading services..." />}
+        {err && <Alert variant="critical">{err}</Alert>}
+        {!loading && services.length === 0 ? (
+          <Alert variant="info" title="No services reported yet">
+            No listening services have been ingested for this node. Confirm the
+            agent is current and has posted its service inventory.
+          </Alert>
+        ) : (
+          <KnowledgeGraphCanvas nodeId={nodeId} services={services} />
+        )}
+      </Panel>
+
+      <Panel
+        padding="md"
+        eyebrow="SERVICE INVENTORY"
+        title={`${services.length} listener${services.length === 1 ? '' : 's'}`}
+      >
+        <div className="mb-3 grid grid-cols-3 gap-2">
+          <KpiTile label="Ports" value={services.length} tone="brand" icon={<Network />} loading={loading} />
+          <KpiTile label="Processes" value={processCount} tone="unknown" icon={<Cpu />} loading={loading} />
+          <KpiTile label="Exposed" value={exposedCount} tone={exposedCount > 0 ? 'warning' : 'healthy'} icon={<Globe2 />} loading={loading} />
+        </div>
+        <ul className="flex max-h-[420px] flex-col divide-y divide-border-subtle overflow-auto text-sm">
           {services.map((svc) => (
             <li key={svc.id} className="flex items-center gap-3 py-2">
-              <span className="font-mono text-xs tabular-nums text-text-muted w-12">
+              <span className="flex h-8 w-12 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-surface-2 font-mono text-xs tabular-nums text-text-secondary">
                 {svc.port}
               </span>
-              <span className="flex-1">
-                <span className="font-display font-semibold text-foreground">
-                  {svc.service_kind}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-display font-semibold text-foreground">
+                  {svc.service_kind || 'service'}
                 </span>
-                <span className="ml-2 font-mono text-xs text-text-muted">
-                  {svc.process}
+                <span className="block truncate font-mono text-xs text-text-muted">
+                  {svc.process || 'unknown'} on {svc.listen_addr || '*'}
                 </span>
               </span>
               {svc.probe_title && (
-                <span className="truncate text-xs text-text-secondary">{svc.probe_title}</span>
-              )}
-              {svc.probe_status != null && (
-                <span className="font-mono text-[0.7rem] text-text-muted">
-                  HTTP {svc.probe_status}
+                <span className="hidden max-w-[180px] truncate text-xs text-text-secondary lg:inline">
+                  {svc.probe_title}
                 </span>
+              )}
+              {svc.probe_status != null ? (
+                <StatusTag tone={serviceTone(svc.probe_status)}>HTTP {svc.probe_status}</StatusTag>
+              ) : (
+                <StatusTag tone="unknown">unprobed</StatusTag>
               )}
             </li>
           ))}
         </ul>
-      )}
-    </Panel>
+      </Panel>
+    </div>
   );
+
 }
 
 function RecommendationsTab({ nodeId, tenantId, health }: { nodeId: string; tenantId: string; health: import('@/lib/api').NodeHealthScore | null }) {

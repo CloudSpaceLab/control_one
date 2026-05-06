@@ -107,6 +107,43 @@ func TestEnrollCreatesNodeOnFirstCall(t *testing.T) {
 	}
 }
 
+func TestEnrollAssignsSelectedCompliancePolicy(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, tenantID := setupEnrollmentServer(t)
+	policyID := uuid.New()
+	store := srv.store.(*fakeStore)
+	store.policies = map[uuid.UUID]storage.Policy{
+		policyID: {
+			ID:        policyID,
+			TenantID:  tenantID,
+			Name:      "CIS Level 1",
+			RuleType:  "json-dsl",
+			Enabled:   true,
+			Labels:    map[string]string{},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+
+	rec := enroll(t, srv, map[string]any{
+		"token":                rawToken,
+		"hostname":             "host-policy",
+		"machine_id":           "machine-policy",
+		"compliance_policy_id": policyID.String(),
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+	if len(store.policyAssignments) != 1 {
+		t.Fatalf("expected 1 policy assignment, got %d", len(store.policyAssignments))
+	}
+	got := store.policyAssignments[0]
+	if got.PolicyID != policyID || got.TenantID != tenantID || got.NodeID == uuid.Nil {
+		t.Fatalf("unexpected assignment: %+v", got)
+	}
+}
+
 func TestEnrollIsIdempotentByMachineID(t *testing.T) {
 	t.Parallel()
 

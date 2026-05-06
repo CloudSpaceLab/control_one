@@ -638,6 +638,7 @@ export interface FleetEnrollRequest {
   ssh_key?: string;
   ssh_password?: string;
   token: string;
+  compliance_policy_id?: string;
   parallel?: number;
   labels?: Record<string, string>;
 }
@@ -1931,10 +1932,24 @@ export class APIClient {
     };
   }
 
-  async getNodeTelemetryMetrics(nodeId: string, params: { tenant_id?: string; metric_name?: string } = {}): Promise<PaginatedResponse<TelemetryMetric>> {
+  async getNodeTelemetryMetrics(
+    nodeId: string,
+    params: {
+      tenant_id?: string;
+      metric_name?: string;
+      since?: string;
+      until?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<TelemetryMetric>> {
     const search = new URLSearchParams();
     if (params.tenant_id) search.set('tenant_id', params.tenant_id);
     if (params.metric_name) search.set('metric_name', params.metric_name);
+    if (params.since) search.set('since', params.since);
+    if (params.until) search.set('until', params.until);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
     const suffix = search.toString() ? `?${search.toString()}` : '';
     const encoded = encodeURIComponent(nodeId);
     const response = await this.request<RawPaginatedResponse<TelemetryMetric>>(
@@ -2792,11 +2807,14 @@ export class APIClient {
     const search = new URLSearchParams();
     if (params.tenantId) search.set('tenant_id', params.tenantId);
     if (params.ip) search.set('ip', params.ip);
+    if (params.nodeId) search.set('node_id', params.nodeId);
+    if (typeof params.openOnly === 'boolean') search.set('open_only', String(params.openOnly));
     if (params.since) search.set('since', params.since);
     if (params.until) search.set('until', params.until);
     if (typeof params.limit === 'number') search.set('limit', String(params.limit));
     const q = search.toString();
-    return this.request<ConnectionRow[]>(`/api/v1/connections${q ? `?${q}` : ''}`);
+    const resp = await this.request<ConnectionRow[] | { data: ConnectionRow[] }>(`/api/v1/connections${q ? `?${q}` : ''}`);
+    return Array.isArray(resp) ? resp : resp.data ?? [];
   }
 
   async getConnectionDetail(connID: string): Promise<ConnectionDetail> {
@@ -3497,6 +3515,8 @@ export interface CaseEvidenceLink {
 export interface ListConnectionsParams {
   tenantId?: string;
   ip?: string;
+  nodeId?: string;
+  openOnly?: boolean;
   since?: string;
   until?: string;
   limit?: number;

@@ -33,10 +33,11 @@ import (
 // promoted that to log.Fatal, and the heartbeat goroutine never spawned.
 //
 // The fix has three layers, each tested independently:
-//   case_no_policy_section_in_yaml — defaults no longer point at a phantom path
-//   case_yaml_explicit_empty_path  — explicit empty disables sig verification
-//   case_yaml_path_missing_file    — soft-fails instead of hard-failing
-//   case_yaml_path_with_valid_key  — loads the key when the file exists
+//
+//	case_no_policy_section_in_yaml — defaults no longer point at a phantom path
+//	case_yaml_explicit_empty_path  — explicit empty disables sig verification
+//	case_yaml_path_missing_file    — soft-fails instead of hard-failing
+//	case_yaml_path_with_valid_key  — loads the key when the file exists
 //
 // Failure of any subtest means a regression in one of the three layers.
 func TestBootstrapE2E_FreshEnrollmentBootsCleanly(t *testing.T) {
@@ -246,7 +247,7 @@ func TestRunJoinEmitsParseableYAML(t *testing.T) {
 	dataDir := t.TempDir()
 	configDir := t.TempDir()
 
-	if err := runJoin(enrollSrv.URL, "fake-token", "test-node", configDir, dataDir, false, false); err != nil {
+	if err := runJoin(enrollSrv.URL, "fake-token", "test-node", configDir, dataDir, "control-one-default-hardening", false, false); err != nil {
 		t.Fatalf("runJoin: %v", err)
 	}
 

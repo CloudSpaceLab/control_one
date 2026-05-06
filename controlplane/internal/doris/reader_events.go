@@ -76,6 +76,49 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 	return out, rows.Err()
 }
 
+// ListConnectionsForNode returns recent or currently-open connections for one node.
+func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID string, since, until time.Time, limit int, openOnly bool) ([]ConnectionRow, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("doris client unavailable")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	openClause := ""
+	if openOnly {
+		openClause = " AND ended_at IS NULL"
+	}
+	q := `
+		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
+		FROM process_connections
+		WHERE tenant_id = ?
+		  AND node_id = ?
+		  AND started_at >= ? AND started_at <= ?` + openClause + `
+		ORDER BY threat_match DESC, started_at DESC
+		LIMIT ?
+	`
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+	rows, err := c.db.QueryContext(qctx, q, tenantID, nodeID, since, until, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ConnectionRow, 0, limit)
+	for rows.Next() {
+		r, err := scanConnectionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ConnectionLifetime returns the full record for a single conn_id (matches
 // open + close + state_change rolls).
 func (c *Client) ConnectionLifetime(ctx context.Context, tenantID, connID string) (*ConnectionRow, error) {

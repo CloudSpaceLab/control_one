@@ -144,6 +144,26 @@ func TestInstallScriptRenders(t *testing.T) {
 	}
 }
 
+func TestInstallScriptCarriesCompliancePolicy(t *testing.T) {
+	t.Parallel()
+
+	srv := newAgentTestServer(t, t.TempDir(), "", "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/install-script?token=cot_test&compliance_policy_id=policy-123", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `COMPLIANCE_POLICY_ID="${COMPLIANCE_POLICY_ID:-policy-123}"`) {
+		t.Fatalf("install script did not bake compliance policy id")
+	}
+	if !strings.Contains(body, `--compliance-policy" "$COMPLIANCE_POLICY_ID"`) {
+		t.Fatalf("install script does not pass compliance policy to join")
+	}
+}
+
 func TestAgentBinaryReturnsSignedHeadersWhenKeyConfigured(t *testing.T) {
 	t.Parallel()
 

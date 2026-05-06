@@ -30,6 +30,7 @@ import type {
   FleetEnrollStatus,
   FleetEnrollTarget,
   NodeSummary,
+  Policy,
 } from '../lib/api';
 
 // JOB_POLL_MS drives how often we re-fetch the fleet enroll status. 1000ms
@@ -45,6 +46,7 @@ const NODE_POLL_MS = 5000;
 // MAX_NODE_POLL_MS caps how long we keep polling a single node. 10 minutes
 // covers the full enrollment_pending timeout + a generous buffer.
 const MAX_NODE_POLL_MS = 10 * 60 * 1000;
+const DEFAULT_HARDENING_POLICY_ID = 'control-one-default-hardening';
 
 // parseTargets splits the newline-separated host list into FleetEnrollTargets.
 function parseTargets(raw: string): FleetEnrollTarget[] {
@@ -111,6 +113,9 @@ export function FleetEnroll(): JSX.Element {
   const { data: tenants } = useTenants();
 
   const [tenantId, setTenantId] = useState<string>('');
+  const [compliancePolicyId, setCompliancePolicyId] = useState<string>(DEFAULT_HARDENING_POLICY_ID);
+  const [policies, setPolicies] = useState<Policy[]>([]);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
   const [targetsRaw, setTargetsRaw] = useState<string>('');
   const [sshUser, setSshUser] = useState<string>('');
   const [sshKey, setSshKey] = useState<string>('');
@@ -145,6 +150,34 @@ export function FleetEnroll(): JSX.Element {
   const [nodeStates, setNodeStates] = useState<Record<string, NodeGateState>>({});
 
   const parsedTargets = useMemo(() => parseTargets(targetsRaw), [targetsRaw]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPolicies([]);
+    if (!tenantId) {
+      return undefined;
+    }
+    setPoliciesLoading(true);
+    api.listPolicies({ tenant_id: tenantId, enabled: true, limit: 100 })
+      .then((resp) => {
+        if (!cancelled) {
+          setPolicies(resp.data.filter((policy) => !policy.archived_at));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPolicies([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPoliciesLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, tenantId]);
 
   const jobStatusRef = useRef<FleetEnrollStatus | null>(null);
   useEffect(() => {
@@ -320,6 +353,7 @@ export function FleetEnroll(): JSX.Element {
     const payload: FleetEnrollRequest = {
       targets: parsedTargets,
       token: token.trim(),
+      compliance_policy_id: compliancePolicyId,
       parallel,
     };
     if (sshUser.trim()) {
@@ -726,7 +760,7 @@ export function FleetEnroll(): JSX.Element {
 
             <SelectField
               id="enroll-tenant"
-              label="Tenant (optional, for reference)"
+              label="Tenant"
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
             >
@@ -737,6 +771,27 @@ export function FleetEnroll(): JSX.Element {
                 </option>
               ))}
             </SelectField>
+
+            <SelectField
+              id="compliance-policy"
+              label="Compliance policy"
+              value={compliancePolicyId}
+              onChange={(e) => setCompliancePolicyId(e.target.value)}
+            >
+              <option value={DEFAULT_HARDENING_POLICY_ID}>
+                Control One default hardening
+              </option>
+              {policies.map((policy) => (
+                <option key={policy.id} value={policy.id}>
+                  {policy.name}
+                </option>
+              ))}
+            </SelectField>
+            <p className="text-xs text-text-muted">
+              {policiesLoading
+                ? 'Loading tenant policies...'
+                : 'The selected policy is applied during enrollment; default hardening remains the built-in baseline.'}
+            </p>
 
             {formError ? (
               <p className="text-sm text-state-critical" role="alert">

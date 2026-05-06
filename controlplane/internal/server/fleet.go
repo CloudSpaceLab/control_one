@@ -21,13 +21,14 @@ import (
 // ─── Request / Response types ───────────────────────────────────────
 
 type fleetEnrollRequest struct {
-	Targets     []fleet.Target    `json:"targets"`
-	SSHUser     string            `json:"ssh_user"`
-	SSHKey      string            `json:"ssh_key"`      // base64-encoded PEM
-	SSHPassword string            `json:"ssh_password"` // optional
-	Token       string            `json:"token"`
-	Parallel    int               `json:"parallel"`
-	Labels      map[string]string `json:"labels"`
+	Targets            []fleet.Target    `json:"targets"`
+	SSHUser            string            `json:"ssh_user"`
+	SSHKey             string            `json:"ssh_key"`      // base64-encoded PEM
+	SSHPassword        string            `json:"ssh_password"` // optional
+	Token              string            `json:"token"`
+	CompliancePolicyID string            `json:"compliance_policy_id,omitempty"`
+	Parallel           int               `json:"parallel"`
+	Labels             map[string]string `json:"labels"`
 }
 
 func (r fleetEnrollRequest) validate() error {
@@ -195,14 +196,15 @@ func (s *Server) buildFleetEnrollJob(jobID uuid.UUID, req fleetEnrollRequest, cp
 		}
 
 		provReq := fleet.ProvisionRequest{
-			Targets:     req.Targets,
-			SSHUser:     req.SSHUser,
-			SSHKey:      sshKey,
-			SSHPassword: req.SSHPassword,
-			TokenRaw:    req.Token,
-			CPURL:       cpURL,
-			Parallel:    req.Parallel,
-			Labels:      req.Labels,
+			Targets:            req.Targets,
+			SSHUser:            req.SSHUser,
+			SSHKey:             sshKey,
+			SSHPassword:        req.SSHPassword,
+			TokenRaw:           req.Token,
+			CompliancePolicyID: req.CompliancePolicyID,
+			CPURL:              cpURL,
+			Parallel:           req.Parallel,
+			Labels:             req.Labels,
 		}
 
 		results := provisioner.Provision(ctx, provReq)

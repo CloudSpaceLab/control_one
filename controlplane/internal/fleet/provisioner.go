@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -23,15 +24,16 @@ type Target struct {
 
 // ProvisionRequest captures all parameters for a fleet enrollment run.
 type ProvisionRequest struct {
-	Targets     []Target
-	SSHUser     string
-	SSHPort     int
-	SSHKey      []byte
-	SSHPassword string
-	TokenRaw    string
-	CPURL       string
-	Parallel    int
-	Labels      map[string]string
+	Targets            []Target
+	SSHUser            string
+	SSHPort            int
+	SSHKey             []byte
+	SSHPassword        string
+	TokenRaw           string
+	CompliancePolicyID string
+	CPURL              string
+	Parallel           int
+	Labels             map[string]string
 }
 
 // ProvisionResult captures the outcome of provisioning a single target.
@@ -142,11 +144,16 @@ func (p *Provisioner) provisionOne(ctx context.Context, host string, port int, u
 	// empty stdin. The two-step approach ensures any download failure
 	// (network, HTTP error, auth failure) is immediately visible as a
 	// non-zero exit code and appears in ssh_output for diagnosis.
+	installScriptURL := fmt.Sprintf("%s/api/v1/agent/install-script?token=%s",
+		req.CPURL, url.QueryEscape(req.TokenRaw))
+	if req.CompliancePolicyID != "" {
+		installScriptURL += "&compliance_policy_id=" + url.QueryEscape(req.CompliancePolicyID)
+	}
 	installCmd := fmt.Sprintf(
 		`_c1tmp=$(mktemp /tmp/c1-install.XXXXXX.sh) && `+
-			`curl -fsSL '%s/api/v1/agent/install-script?token=%s' -o "$_c1tmp" && `+
+			`curl -fsSL '%s' -o "$_c1tmp" && `+
 			`bash "$_c1tmp"; _c1ret=$?; rm -f "$_c1tmp"; exit $_c1ret`,
-		req.CPURL, req.TokenRaw,
+		installScriptURL,
 	)
 
 	p.log.Info("running install command on target",

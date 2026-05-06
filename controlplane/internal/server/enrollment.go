@@ -47,13 +47,14 @@ type enrollmentTokenResponse struct {
 // --- Enroll types ---
 
 type enrollRequest struct {
-	Token       string `json:"token"`
-	Hostname    string `json:"hostname"`
-	OS          string `json:"os"`
-	Arch        string `json:"arch"`
-	PublicIP    string `json:"public_ip"`
-	Fingerprint string `json:"fingerprint"`
-	MachineID   string `json:"machine_id"`
+	Token              string `json:"token"`
+	Hostname           string `json:"hostname"`
+	OS                 string `json:"os"`
+	Arch               string `json:"arch"`
+	PublicIP           string `json:"public_ip"`
+	Fingerprint        string `json:"fingerprint"`
+	MachineID          string `json:"machine_id"`
+	CompliancePolicyID string `json:"compliance_policy_id,omitempty"`
 }
 
 type enrollResponse struct {
@@ -82,6 +83,8 @@ type enrollPolicy struct {
 	PublicKeyPEM string `json:"public_key_pem,omitempty"`
 }
 
+const defaultHardeningPolicyID = "control-one-default-hardening"
+
 // policyPublicKeyPEM returns the PEM-encoded ed25519 public key the server
 // uses to sign policy bundles, loaded from cfg.Policy.PublicKeyFile. Returns
 // nil when no path is configured or the file can't be read — the missing
@@ -104,6 +107,52 @@ func (s *Server) policyPublicKeyPEM() []byte {
 		s.policyKeyPEM = data
 	})
 	return s.policyKeyPEM
+}
+
+func selectedCompliancePolicyID(req enrollRequest, token *storage.EnrollmentToken) string {
+	selected := strings.TrimSpace(req.CompliancePolicyID)
+	if selected == "" && token != nil && token.Labels != nil {
+		selected = strings.TrimSpace(token.Labels["compliance_policy_id"])
+	}
+	if selected == "" {
+		selected = defaultHardeningPolicyID
+	}
+	return selected
+}
+
+func (s *Server) applyEnrollmentCompliancePolicy(ctx context.Context, tenantID, nodeID uuid.UUID, selected string) error {
+	selected = strings.TrimSpace(selected)
+	if selected == "" || selected == defaultHardeningPolicyID {
+		s.ensureDefaultPolicies(ctx, tenantID)
+		return nil
+	}
+
+	policyID, err := uuid.Parse(selected)
+	if err != nil {
+		return fmt.Errorf("invalid compliance_policy_id")
+	}
+	policy, err := s.store.GetPolicy(ctx, policyID)
+	if err != nil {
+		return fmt.Errorf("load compliance policy: %w", err)
+	}
+	if policy == nil || policy.TenantID != tenantID {
+		return fmt.Errorf("compliance policy not found for tenant")
+	}
+	if !policy.Enabled || policy.ArchivedAt.Valid {
+		return fmt.Errorf("compliance policy is not active")
+	}
+	if _, err := s.store.CreatePolicyAssignment(ctx, storage.CreatePolicyAssignmentParams{
+		PolicyID: policyID,
+		TenantID: tenantID,
+		NodeID:   nodeID,
+	}); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") ||
+			strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return nil
+		}
+		return fmt.Errorf("assign compliance policy: %w", err)
+	}
+	return nil
 }
 
 // --- Token CRUD handlers ---
@@ -373,6 +422,24 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	compliancePolicyID := selectedCompliancePolicyID(req, token)
+	if compliancePolicyID != "" && compliancePolicyID != defaultHardeningPolicyID {
+		policyID, parseErr := uuid.Parse(compliancePolicyID)
+		if parseErr != nil {
+			http.Error(w, "invalid compliance_policy_id", http.StatusBadRequest)
+			return
+		}
+		policy, policyErr := s.store.GetPolicy(r.Context(), policyID)
+		if policyErr != nil {
+			s.logger.Error("lookup enrollment compliance policy", zap.Error(policyErr))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if policy == nil || policy.TenantID != tenant.ID || !policy.Enabled || policy.ArchivedAt.Valid {
+			http.Error(w, "compliance policy not found or inactive", http.StatusBadRequest)
+			return
+		}
+	}
 
 	hostname := strings.TrimSpace(req.Hostname)
 	machineID := strings.TrimSpace(req.MachineID)
@@ -444,6 +511,13 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.SetNodeAuthToken(r.Context(), existing.ID, reNodeToken); err != nil {
 			s.logger.Warn("set node auth token (re-enrollment)", zap.Error(err))
 		}
+		if err := s.applyEnrollmentCompliancePolicy(r.Context(), tenant.ID, existing.ID, compliancePolicyID); err != nil {
+			s.logger.Warn("apply enrollment compliance policy", zap.Error(err),
+				zap.String("node_id", existing.ID.String()),
+				zap.String("policy", compliancePolicyID))
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		writeJSON(w, http.StatusOK, enrollResponse{
 			NodeID:    existing.ID.String(),
 			TenantID:  tenant.ID.String(),
@@ -508,6 +582,13 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("set node auth token", zap.Error(err))
 		// non-fatal: node can still use mTLS
 	}
+	if err := s.applyEnrollmentCompliancePolicy(r.Context(), tenant.ID, created.ID, compliancePolicyID); err != nil {
+		s.logger.Warn("apply enrollment compliance policy", zap.Error(err),
+			zap.String("node_id", created.ID.String()),
+			zap.String("policy", compliancePolicyID))
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	resp := enrollResponse{
 		NodeID:    created.ID.String(),
@@ -527,17 +608,14 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, resp)
 
-	// Seed default security compliance policies for this tenant if not yet done.
-	// Runs in a goroutine so it never blocks the enrollment response.
-	go s.ensureDefaultPolicies(context.Background(), tenant.ID)
-
 	// Audit log with system actor since there is no authenticated principal
 	s.recordAudit(r.Context(), s.systemActor(), tenant.ID, "node.enrolled", "node", created.ID.String(), map[string]any{
-		"hostname":    hostname,
-		"machine_id":  machineID,
-		"token_id":    token.ID.String(),
-		"token_name":  token.Name,
-		"fingerprint": req.Fingerprint,
+		"hostname":             hostname,
+		"machine_id":           machineID,
+		"token_id":             token.ID.String(),
+		"token_name":           token.Name,
+		"fingerprint":          req.Fingerprint,
+		"compliance_policy_id": compliancePolicyID,
 	})
 }
 
