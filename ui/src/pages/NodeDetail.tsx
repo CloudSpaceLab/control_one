@@ -129,6 +129,16 @@ function latestValue(metrics: TelemetryMetric[], name: string): number | null {
   return series.length ? series[series.length - 1] : null;
 }
 
+function externalPeerIP(ip?: string): boolean {
+  if (!ip) return false;
+  if (ip === '-' || ip === '0.0.0.0' || ip === '::') return false;
+  if (ip.startsWith('127.') || ip === '::1') return false;
+  if (ip.startsWith('10.') || ip.startsWith('192.168.')) return false;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return false;
+  if (ip.startsWith('169.254.')) return false;
+  return true;
+}
+
 function numericLabel(node: import('@/lib/api').Node, keys: string[]): number | null {
   const labels = node.labels ?? {};
   for (const key of keys) {
@@ -181,6 +191,7 @@ export function NodeDetail(): JSX.Element {
   const cpuCount = latestValue(telemetry, 'cpu_count') ?? numericLabel(node, ['cpu_count', 'cpu_cores', 'cores']);
   const memTotal = latestValue(telemetry, 'memory_total_bytes') ?? numericLabel(node, ['memory_total_bytes', 'total_ram_bytes', 'ram_bytes']);
   const diskTotal = latestValue(telemetry, 'disk_total_bytes') ?? numericLabel(node, ['disk_total_bytes', 'disk_size_bytes', 'root_disk_bytes']);
+  const diskFree = latestValue(telemetry, 'disk_free_bytes') ?? numericLabel(node, ['disk_free_bytes', 'free_disk_bytes', 'root_disk_free_bytes']);
 
   const calibratingSamples =
     health?.risk_level === 'calibrating'
@@ -249,6 +260,7 @@ export function NodeDetail(): JSX.Element {
             cpuCount={cpuCount}
             memTotal={memTotal}
             diskTotal={diskTotal}
+            diskFree={diskFree}
             telemetryLoading={loading}
           />
         </TabsContent>
@@ -288,6 +300,7 @@ interface OverviewProps {
   cpuCount: number | null;
   memTotal: number | null;
   diskTotal: number | null;
+  diskFree: number | null;
   telemetryLoading: boolean;
 }
 
@@ -298,7 +311,7 @@ function fmtBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskLatest, cpuCount, memTotal, diskTotal, telemetryLoading }: OverviewProps) {
+function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskLatest, cpuCount, memTotal, diskTotal, diskFree, telemetryLoading }: OverviewProps) {
   const calibratingSamples =
     health?.risk_level === 'calibrating'
       ? (health.components as { calibrating_samples?: number })?.calibrating_samples
@@ -337,6 +350,8 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
           <Vital label="CPU cores" value={cpuCount != null ? String(Math.round(cpuCount)) : '—'} />
           <Vital label="Total RAM" value={memTotal != null ? fmtBytes(memTotal) : '—'} />
           <Vital label="Disk size" value={diskTotal != null ? fmtBytes(diskTotal) : '—'} />
+          <Vital label="Disk free" value={diskFree != null ? fmtBytes(diskFree) : '—'} />
+          <Vital label="Disk used" value={diskTotal != null && diskFree != null ? fmtBytes(Math.max(0, diskTotal - diskFree)) : '—'} />
         </dl>
       </Panel>
 
@@ -498,9 +513,20 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     refresh();
   }, [refresh]);
 
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        const ip = peerIp(row);
+        if (!externalPeerIP(ip)) return false;
+        const bytes = (row.bytes_in ?? 0) + (row.bytes_out ?? 0);
+        return bytes > 0 || row.threat_match || row.direction === 'inbound';
+      }),
+    [rows],
+  );
+
   useEffect(() => {
     let cancelled = false;
-    const ips = Array.from(new Set(rows.map(peerIp).filter(Boolean))).filter((ip) => !countries[ip]);
+    const ips = Array.from(new Set(filteredRows.map(peerIp).filter(Boolean))).filter((ip) => !countries[ip]);
     if (ips.length === 0) return;
     Promise.all(
       ips.slice(0, 25).map((ip) =>
@@ -519,13 +545,13 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     return () => {
       cancelled = true;
     };
-  }, [api, countries, rows]);
+  }, [api, countries, filteredRows]);
 
   const totals = useMemo(() => ({
-    peers: new Set(rows.map(peerIp).filter(Boolean)).size,
-    bytes: rows.reduce((sum, row) => sum + (row.bytes_in ?? 0) + (row.bytes_out ?? 0), 0),
-    threats: rows.filter((row) => row.threat_match).length,
-  }), [rows]);
+    peers: new Set(filteredRows.map(peerIp).filter(Boolean)).size,
+    bytes: filteredRows.reduce((sum, row) => sum + (row.bytes_in ?? 0) + (row.bytes_out ?? 0), 0),
+    threats: filteredRows.filter((row) => row.threat_match).length,
+  }), [filteredRows]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -552,8 +578,8 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
-        {!loading && rows.length === 0 ? (
-          <p className="text-sm text-text-muted">No open connections reported for this node in the current 24h window.</p>
+        {!loading && filteredRows.length === 0 ? (
+          <p className="text-sm text-text-muted">No meaningful external open connections in the current 24h window.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
@@ -570,7 +596,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
-                {rows.map((row) => {
+                {filteredRows.map((row) => {
                   const ip = peerIp(row);
                   const port = row.direction === 'inbound' ? row.src_port : row.dst_port;
                   const age = row.duration_ms ?? (Date.now() - new Date(row.started_at).getTime());
@@ -771,10 +797,30 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
     };
   }, [api, nodeId]);
 
-  const processCount = new Set(services.map((svc) => svc.process || 'unknown')).size;
-  const exposedCount = services.filter((svc) => {
+  const normalizedServices = useMemo(() => {
+    const groups = new Map<string, import('@/lib/api').NodeService[]>();
+    for (const svc of services) {
+      const key = `${svc.process || 'unknown'}:${svc.service_kind || 'service'}:${svc.port}`;
+      const bucket = groups.get(key) ?? [];
+      bucket.push(svc);
+      groups.set(key, bucket);
+    }
+    return Array.from(groups.values()).map((bucket) => {
+      const canonical = bucket[0];
+      const listens = Array.from(new Set(bucket.map((s) => s.listen_addr || '*')));
+      const probe = bucket.find((s) => s.probe_status != null)?.probe_status ?? canonical.probe_status;
+      return {
+        ...canonical,
+        probe_status: probe,
+        listen_addr: listens.join(' / '),
+      };
+    });
+  }, [services]);
+
+  const processCount = new Set(normalizedServices.map((svc) => svc.process || 'unknown')).size;
+  const exposedCount = normalizedServices.filter((svc) => {
     const addr = svc.listen_addr || '';
-    return addr === '0.0.0.0' || addr === '::' || addr.startsWith('*');
+    return addr.includes('0.0.0.0') || addr.includes('::') || addr.startsWith('*');
   }).length;
 
   return (
@@ -782,28 +828,28 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
       <Panel padding="md" eyebrow="KNOWLEDGE GRAPH" title="Node service graph">
         {loading && <Loader label="Loading services..." />}
         {err && <Alert variant="critical">{err}</Alert>}
-        {!loading && services.length === 0 ? (
+        {!loading && normalizedServices.length === 0 ? (
           <Alert variant="info" title="No services reported yet">
             No listening services have been ingested for this node. Confirm the
             agent is current and has posted its service inventory.
           </Alert>
         ) : (
-          <KnowledgeGraphCanvas nodeId={nodeId} services={services} />
+          <KnowledgeGraphCanvas nodeId={nodeId} services={normalizedServices} />
         )}
       </Panel>
 
       <Panel
         padding="md"
         eyebrow="SERVICE INVENTORY"
-        title={`${services.length} listener${services.length === 1 ? '' : 's'}`}
+        title={`${normalizedServices.length} listener${normalizedServices.length === 1 ? '' : 's'}`}
       >
         <div className="mb-3 grid grid-cols-3 gap-2">
-          <KpiTile label="Ports" value={services.length} tone="brand" icon={<Network />} loading={loading} />
+          <KpiTile label="Ports" value={normalizedServices.length} tone="brand" icon={<Network />} loading={loading} />
           <KpiTile label="Processes" value={processCount} tone="unknown" icon={<Cpu />} loading={loading} />
           <KpiTile label="Exposed" value={exposedCount} tone={exposedCount > 0 ? 'warning' : 'healthy'} icon={<Globe2 />} loading={loading} />
         </div>
         <ul className="flex max-h-[420px] flex-col divide-y divide-border-subtle overflow-auto text-sm">
-          {services.map((svc) => (
+          {normalizedServices.map((svc) => (
             <li key={svc.id} className="flex items-center gap-3 py-2">
               <span className="flex h-8 w-12 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-surface-2 font-mono text-xs tabular-nums text-text-secondary">
                 {svc.port}
