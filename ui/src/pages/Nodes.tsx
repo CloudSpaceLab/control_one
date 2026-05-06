@@ -22,7 +22,7 @@ import type {
   NodeHealthScore,
   NodeSummary,
 } from '../lib/api';
-import { WORLD_COUNTRY_PATHS, projectGeoCoordinates } from '@/lib/worldMap';
+import { WORLD_COUNTRY_PATHS, projectGeoCoordinates } from '../lib/worldMap';
 import type { ColumnDef } from '@tanstack/react-table';
 
 // ── Region types ───────────────────────────────────────────────────────────

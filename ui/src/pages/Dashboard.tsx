@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
-import { useTenants } from '../hooks/useTenants';
 import type { DashboardOverview, SeverityBreakdown } from '../lib/api';
 import { useFleetSummary } from '../hooks/useFleetSummary';
+import { useTenant } from '../providers/TenantProvider';
 import TopologyGrid, { TopologyNode } from '../components/glyphs/TopologyGrid';
 import StatusDot, { State } from '../components/glyphs/StatusDot';
 import {
@@ -44,8 +44,8 @@ const INITIAL_OVERVIEW: DashboardOverview = {
 export function Dashboard(): JSX.Element {
   const navigate = useNavigate();
   const client = useApiClient();
-  const { data: tenants } = useTenants({ limit: 1, offset: 0 });
-  const tenantId = tenants[0]?.id;
+  const { currentTenantId } = useTenant();
+  const tenantId = currentTenantId ?? undefined;
 
   const [overview, setOverview] = useState<DashboardOverview>(INITIAL_OVERVIEW);
   const [loading, setLoading] = useState(true);
