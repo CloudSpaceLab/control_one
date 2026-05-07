@@ -238,11 +238,15 @@ func (s *Server) buildClusterRolloutGateCheckJob(jobID uuid.UUID, payload cluste
 		if err != nil {
 			return s.failClusterJob(ctx, jobID, fmt.Errorf("invalid cluster id: %w", err))
 		}
-		tenantID := uuid.Nil
-		if payload.TenantID != "" {
-			if parsed, err := uuid.Parse(payload.TenantID); err == nil {
-				tenantID = parsed
-			}
+		// Rollout jobs are dispatched by the controlplane and always carry a
+		// tenant. Reject the payload outright when it's missing so we can't
+		// silently process a cluster rollout under "no tenant scope".
+		if payload.TenantID == "" {
+			return s.failClusterJob(ctx, jobID, errors.New("payload missing tenant_id"))
+		}
+		tenantID, err := uuid.Parse(payload.TenantID)
+		if err != nil {
+			return s.failClusterJob(ctx, jobID, fmt.Errorf("invalid tenant_id: %w", err))
 		}
 
 		rollout, err := s.store.GetClusterRolloutByID(ctx, rolloutID)

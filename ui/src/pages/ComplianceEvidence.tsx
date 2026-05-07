@@ -174,9 +174,9 @@ export function ComplianceEvidence(): JSX.Element {
   };
 
   const handleDelete = async () => {
-    if (!deleteId) return;
+    if (!deleteId || !selectedTenant) return;
     try {
-      await client.deleteComplianceEvidence(deleteId);
+      await client.deleteComplianceEvidence(deleteId, selectedTenant);
       void load();
     } finally {
       setDeleteId(null);
@@ -216,7 +216,10 @@ export function ComplianceEvidence(): JSX.Element {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => window.open(client.buildEvidenceDownloadUrl(row.original.id), '_blank')}
+            onClick={() => {
+              if (!selectedTenant) return;
+              window.open(client.buildEvidenceDownloadUrl(row.original.id, selectedTenant), '_blank');
+            }}
           >
             <Download className="w-3.5 h-3.5" />
           </Button>

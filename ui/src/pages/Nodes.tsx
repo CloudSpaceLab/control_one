@@ -742,8 +742,12 @@ export function Nodes(): JSX.Element {
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
 
-  // Fetch all nodes with a generous limit for the overview
-  const { data: nodes, loading, error, pagination, reload } = useNodes({ limit: 500 });
+  // Fetch nodes scoped to the active tenant. Without a tenant filter the
+  // server returns every tenant's nodes, so callers must pass currentTenantId.
+  const { data: nodes, loading, error, pagination, reload } = useNodes({
+    tenantId: currentTenantId ?? undefined,
+    limit: 500,
+  });
   const { data: fleetSnap, loading: snapLoading } = useFleetSummary({ tenantId: currentTenantId ?? undefined, intervalMs: 30_000 });
   const { data: tenants } = useTenants();
 

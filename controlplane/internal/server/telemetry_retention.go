@@ -69,14 +69,15 @@ func (s *Server) handleListRetentionPolicies(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var tenantID uuid.UUID
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
 	}
 
 	policies, total, err := s.store.ListRetentionPolicies(r.Context(), tenantID, limit, offset)

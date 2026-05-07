@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
@@ -126,7 +127,7 @@ func TestInvestigateSearch_HappyPath(t *testing.T) {
 	t.Parallel()
 	srv := newInvestigateServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=10.0.0.1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=10.0.0.1&tenant_id="+uuid.New().String(), nil)
 	req = withPrincipal(req, viewerPrincipal())
 	rec := httptest.NewRecorder()
 	srv.handleInvestigateSearch(rec, req)
@@ -257,7 +258,7 @@ func TestIPEnrich_ClassifiesPublic(t *testing.T) {
 	t.Parallel()
 	srv := newInvestigateServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/entities/ip/8.8.8.8/enrich", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/entities/ip/8.8.8.8/enrich?tenant_id="+uuid.New().String(), nil)
 	req = withPrincipal(req, viewerPrincipal())
 	rec := httptest.NewRecorder()
 	srv.handleEntitySubroutes(rec, req)

@@ -52,14 +52,17 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 		ResourceType: strings.TrimSpace(r.URL.Query().Get("resource_type")),
 		ResourceID:   strings.TrimSpace(r.URL.Query().Get("resource_id")),
 	}
-	if tenantVal := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantVal != "" {
-		tenantID, parseErr := uuid.Parse(tenantVal)
-		if parseErr != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = tenantID
+	tenantVal := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantVal == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
 	}
+	tenantID, parseErr := uuid.Parse(tenantVal)
+	if parseErr != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	filter.TenantID = tenantID
 	if sinceVal := strings.TrimSpace(r.URL.Query().Get("since")); sinceVal != "" {
 		ts, parseErr := time.Parse(time.RFC3339, sinceVal)
 		if parseErr != nil {

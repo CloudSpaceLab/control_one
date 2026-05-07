@@ -202,7 +202,10 @@ export function FleetEnroll(): JSX.Element {
 
     const fetchStatus = async () => {
       try {
-        const status = await api.getFleetEnrollStatus(jobId);
+        if (!tenantId) {
+          throw new Error('tenant unavailable');
+        }
+        const status = await api.getFleetEnrollStatus(jobId, tenantId);
         if (!cancelled) {
           setJobStatus(status);
           setPollError(null);
@@ -228,7 +231,7 @@ export function FleetEnroll(): JSX.Element {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [api, jobId]);
+  }, [api, jobId, tenantId]);
 
   // When the fleet job reports per-host results, ensure we start tracking
   // node-gate state for every successful enrollment.
@@ -374,6 +377,7 @@ export function FleetEnroll(): JSX.Element {
       const payload: FleetEnrollRequest = {
         targets: parsedTargets,
         token: issued.token,
+        tenant_id: tenantId,
         compliance_policy_id: compliancePolicyId,
         parallel,
       };

@@ -843,7 +843,7 @@ func TestRBACAuthorization(t *testing.T) {
 			UpdatedAt: time.Unix(1700000000, 0),
 		}
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, "/api/v1/jobs", nil))
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, "/api/v1/jobs?tenant_id="+tenantID.String(), nil))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 got %d", rec.Code)
@@ -950,11 +950,11 @@ func TestRBACAuthorization(t *testing.T) {
 	})
 
 	t.Run("GET /api/v1/jobs filters by status", func(t *testing.T) {
-		jobA, _ := store.CreateJob(context.Background(), &storage.Job{Type: "provision.apply", Status: storage.JobStatusQueued, CreatedAt: time.Now().Add(-2 * time.Minute)}, nil)
-		jobB, _ := store.CreateJob(context.Background(), &storage.Job{Type: "provision.apply", Status: storage.JobStatusFailed, CreatedAt: time.Now().Add(-time.Minute)}, nil)
+		jobA, _ := store.CreateJob(context.Background(), &storage.Job{TenantID: tenantID, Type: "provision.apply", Status: storage.JobStatusQueued, CreatedAt: time.Now().Add(-2 * time.Minute)}, nil)
+		jobB, _ := store.CreateJob(context.Background(), &storage.Job{TenantID: tenantID, Type: "provision.apply", Status: storage.JobStatusFailed, CreatedAt: time.Now().Add(-time.Minute)}, nil)
 
 		rec := httptest.NewRecorder()
-		req := bearerReq(http.MethodGet, "/api/v1/jobs?status="+string(storage.JobStatusFailed), nil)
+		req := bearerReq(http.MethodGet, "/api/v1/jobs?tenant_id="+tenantID.String()+"&status="+string(storage.JobStatusFailed), nil)
 		srv.Handler().ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {

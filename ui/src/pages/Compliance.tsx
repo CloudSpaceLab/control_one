@@ -23,6 +23,7 @@ import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useApiClient } from '../hooks/useApiClient';
 import { useToast } from '../providers/ToastProvider';
+import { useTenant } from '../providers/TenantProvider';
 import type {
   ComplianceResult,
   Policy,
@@ -432,7 +433,11 @@ function PoliciesTab(): JSX.Element {
   const api = useApiClient();
   const { showToast } = useToast();
   const { data: tenants } = useTenants();
-  const { data: nodes } = useNodes({ limit: 1000 });
+  const { currentTenantId } = useTenant();
+  const { data: nodes } = useNodes({
+    tenantId: currentTenantId ?? undefined,
+    limit: 1000,
+  });
 
   // Policy list state
   const [policies, setPolicies] = useState<Policy[]>([]);
@@ -468,9 +473,15 @@ function PoliciesTab(): JSX.Element {
   const [evalResults, setEvalResults] = useState<ComplianceEvaluateResult[] | null>(null);
 
   const loadPolicies = async () => {
+    const tenantForList = tenantFilter || currentTenantId;
+    if (!tenantForList) {
+      setPolicies([]);
+      setPoliciesLoaded(true);
+      return;
+    }
     setPoliciesLoading(true);
     try {
-      const res = await api.listPolicies({ tenant_id: tenantFilter || undefined, limit: 100 });
+      const res = await api.listPolicies({ tenant_id: tenantForList, limit: 100 });
       setPolicies(res.data);
       setPoliciesLoaded(true);
     } catch (err) {

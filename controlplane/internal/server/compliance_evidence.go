@@ -223,12 +223,18 @@ func (s *Server) handleDownloadComplianceEvidence(w http.ResponseWriter, r *http
 		return
 	}
 
+	tenantID, terr := requiredTenantID(r)
+	if terr != nil {
+		http.Error(w, terr.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ev, err := s.store.GetComplianceEvidence(r.Context(), id)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if ev == nil {
+	if ev == nil || ev.TenantID != tenantID {
 		http.NotFound(w, r)
 		return
 	}
@@ -251,12 +257,18 @@ func (s *Server) handleDeleteComplianceEvidence(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	tenantID, terr := requiredTenantID(r)
+	if terr != nil {
+		http.Error(w, terr.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ev, err := s.store.GetComplianceEvidence(r.Context(), id)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if ev == nil {
+	if ev == nil || ev.TenantID != tenantID {
 		http.NotFound(w, r)
 		return
 	}

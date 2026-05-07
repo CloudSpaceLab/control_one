@@ -8,7 +8,7 @@ import { FleetEnroll } from './FleetEnroll';
 // boundary keeps the test fast and lets us drive the full submit->poll loop
 // without spinning up providers.
 const startFleetEnroll = vi.fn<(payload: unknown) => Promise<FleetEnrollResponse>>();
-const getFleetEnrollStatus = vi.fn<(id: string) => Promise<FleetEnrollStatus>>();
+const getFleetEnrollStatus = vi.fn<(id: string, tenantId: string) => Promise<FleetEnrollStatus>>();
 const getNode = vi.fn<(id: string) => Promise<NodeSummary>>();
 const listPolicies = vi.fn();
 const createEnrollmentToken = vi.fn();
@@ -17,7 +17,7 @@ const showToast = vi.fn();
 vi.mock('../hooks/useApiClient', () => ({
   useApiClient: () => ({
     startFleetEnroll: (payload: unknown) => startFleetEnroll(payload),
-    getFleetEnrollStatus: (id: string) => getFleetEnrollStatus(id),
+    getFleetEnrollStatus: (id: string, tenantId: string) => getFleetEnrollStatus(id, tenantId),
     getNode: (id: string) => getNode(id),
     listPolicies: (params: unknown) => listPolicies(params),
     createEnrollmentToken: (payload: unknown) => createEnrollmentToken(payload),

@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +28,7 @@ type fleetEnrollRequest struct {
 	SSHKey             string            `json:"ssh_key"`      // base64-encoded PEM
 	SSHPassword        string            `json:"ssh_password"` // optional
 	Token              string            `json:"token"`
+	TenantID           string            `json:"tenant_id,omitempty"`
 	CompliancePolicyID string            `json:"compliance_policy_id,omitempty"`
 	Parallel           int               `json:"parallel"`
 	Labels             map[string]string `json:"labels"`
@@ -117,9 +120,28 @@ func (s *Server) handleFleetEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve tenant: prefer the explicit field on the request, fall back to
+	// the enrollment token's tenant so older clients keep working.
+	var jobTenantID uuid.UUID
+	if t := strings.TrimSpace(req.TenantID); t != "" {
+		parsed, perr := uuid.Parse(t)
+		if perr != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		jobTenantID = parsed
+	} else if strings.TrimSpace(req.Token) != "" {
+		h := sha256.Sum256([]byte(strings.TrimSpace(req.Token)))
+		hash := hex.EncodeToString(h[:])
+		if tok, terr := s.store.GetEnrollmentTokenByHash(r.Context(), hash); terr == nil && tok != nil {
+			jobTenantID = tok.TenantID
+		}
+	}
+
 	// Create a job record.
 	payloadBytes, _ := json.Marshal(req)
 	job := &storage.Job{
+		TenantID:   jobTenantID,
 		Type:       "fleet.enroll",
 		Status:     storage.JobStatusQueued,
 		Payload:    payloadBytes,
@@ -138,7 +160,7 @@ func (s *Server) handleFleetEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.recordAudit(ctx, principal, uuid.Nil, "fleet.enroll.created", "job", created.ID.String(), map[string]any{
+	s.recordAudit(ctx, principal, jobTenantID, "fleet.enroll.created", "job", created.ID.String(), map[string]any{
 		"targets": len(req.Targets),
 	})
 
@@ -271,6 +293,17 @@ func (s *Server) handleFleetEnrollStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+
 	// Parse job_id from /api/v1/fleet/enroll/{job_id}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/fleet/enroll/")
 	idStr = strings.TrimSuffix(idStr, "/")
@@ -286,7 +319,7 @@ func (s *Server) handleFleetEnrollStatus(w http.ResponseWriter, r *http.Request)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if job == nil {
+	if job == nil || (job.TenantID != uuid.Nil && job.TenantID != tenantID) {
 		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}

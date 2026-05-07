@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import { useToast } from '../providers/ToastProvider';
 import { SectionHeader, Panel, EmptyState, StatusTag, DataTable, SelectField, FileUploadButton } from '../components/kit';
 import { Button } from '@/components/ui/button';
@@ -137,6 +138,7 @@ const HOST_FORM_DEFAULT: HostFormState = {
 export function Hypervisors(): JSX.Element {
   const api = useApiClient();
   const { data: tenants } = useTenants();
+  const { currentTenantId } = useTenant();
   const { showToast } = useToast();
 
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
@@ -150,11 +152,17 @@ export function Hypervisors(): JSX.Element {
   const [submittingHost, setSubmittingHost] = useState(false);
 
   const refresh = useCallback(async () => {
+    if (!currentTenantId) {
+      setCredentials([]);
+      setHosts([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const [credResp, hostResp] = await Promise.all([
-        api.listProviderCredentials({ limit: 200 }),
-        api.listHypervisorHosts({ limit: 200 }),
+        api.listProviderCredentials({ tenantId: currentTenantId, limit: 200 }),
+        api.listHypervisorHosts({ tenantId: currentTenantId, limit: 200 }),
       ]);
       setCredentials(credResp.items ?? []);
       setHosts(hostResp.items ?? []);
@@ -163,7 +171,7 @@ export function Hypervisors(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [api, showToast]);
+  }, [api, showToast, currentTenantId]);
 
   useEffect(() => {
     void refresh();

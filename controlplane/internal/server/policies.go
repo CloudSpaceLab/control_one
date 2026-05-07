@@ -312,14 +312,17 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 		IncludeArchived: parseBoolQuery(r.URL.Query().Get("include_archived")),
 	}
 
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
 	}
+	parsedTenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	filter.TenantID = parsedTenantID
 
 	if enabledParam := strings.TrimSpace(r.URL.Query().Get("enabled")); enabledParam != "" {
 		enabled := parseBoolQuery(enabledParam)

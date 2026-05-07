@@ -193,14 +193,15 @@ func (s *Server) listHypervisorHosts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
 	}
 	provider := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("provider")))
 
@@ -221,13 +222,23 @@ func (s *Server) listHypervisorHosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getHypervisorHost(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
 	host, err := s.store.GetHypervisorHost(r.Context(), id)
 	if err != nil {
 		s.logger.Error("get hypervisor host", zap.Error(err))
 		http.Error(w, "get hypervisor host", http.StatusInternalServerError)
 		return
 	}
-	if host == nil {
+	if host == nil || host.TenantID != tenantID {
 		http.NotFound(w, r)
 		return
 	}

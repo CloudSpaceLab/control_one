@@ -198,6 +198,26 @@ func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request
 		http.Error(w, "secrets encryption is not configured", http.StatusServiceUnavailable)
 		return
 	}
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	existing, err := s.store.GetProviderCredential(r.Context(), id)
+	if err != nil {
+		s.logger.Error("get provider credential", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil || existing.TenantID != tenantID {
+		http.NotFound(w, r)
+		return
+	}
 	var req providerCredentialRotateRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -248,14 +268,15 @@ func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
 	}
 	provider := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("provider")))
 
@@ -276,13 +297,23 @@ func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) getProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
 	cred, err := s.store.GetProviderCredential(r.Context(), id)
 	if err != nil {
 		s.logger.Error("get provider credential", zap.Error(err))
 		http.Error(w, "get provider credential", http.StatusInternalServerError)
 		return
 	}
-	if cred == nil {
+	if cred == nil || cred.TenantID != tenantID {
 		http.NotFound(w, r)
 		return
 	}
@@ -290,13 +321,23 @@ func (s *Server) getProviderCredential(w http.ResponseWriter, r *http.Request, i
 }
 
 func (s *Server) deleteProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
 	cred, err := s.store.GetProviderCredential(r.Context(), id)
 	if err != nil {
 		s.logger.Error("get provider credential", zap.Error(err))
 		http.Error(w, "delete provider credential", http.StatusInternalServerError)
 		return
 	}
-	if cred == nil {
+	if cred == nil || cred.TenantID != tenantID {
 		http.NotFound(w, r)
 		return
 	}

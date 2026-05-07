@@ -156,12 +156,15 @@ func (s *Store) IncrementHourlyRollup(ctx context.Context, tenantID uuid.UUID, n
 	// using IS NOT DISTINCT FROM, so we use a synthetic empty UUID for the
 	// PK-targetable INSERT and a separate update path for null nodes.
 	if nArg == nil {
-		// Postgres treats NULL as distinct in PK, so we can have multiple
-		// (tenant, NULL, type, hour) rows; merge with a CTE upsert.
+		// Postgres treats NULL as distinct in unique indexes, so the PK on
+		// (tenant, node_id, type, hour) cannot dedupe NULL-node rows. The
+		// migration in 0091 adds a partial unique index covering exactly
+		// (tenant, type, hour) WHERE node_id IS NULL; ON CONFLICT can now
+		// target it via the WHERE predicate inference.
 		_, err := s.db.ExecContext(ctx, `
 			INSERT INTO event_rollups_hourly (tenant_id, node_id, event_type, hour_ts, cnt, bytes_in, bytes_out, sev_max)
 			VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)
-			ON CONFLICT (tenant_id, node_id, event_type, hour_ts) DO UPDATE
+			ON CONFLICT (tenant_id, event_type, hour_ts) WHERE node_id IS NULL DO UPDATE
 			   SET cnt       = event_rollups_hourly.cnt + EXCLUDED.cnt,
 			       bytes_in  = event_rollups_hourly.bytes_in + EXCLUDED.bytes_in,
 			       bytes_out = event_rollups_hourly.bytes_out + EXCLUDED.bytes_out,

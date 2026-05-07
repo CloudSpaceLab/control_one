@@ -121,7 +121,7 @@ function SSHRepair({
     let cancelled = false;
     const tick = async () => {
       try {
-        const resp: FleetEnrollStatus = await client.getFleetEnrollStatus(jobId);
+        const resp: FleetEnrollStatus = await client.getFleetEnrollStatus(jobId, node.tenant_id);
         if (cancelled) return;
         const result = resp.results?.[0];
         const terminal = resp.status === 'succeeded' || resp.status === 'failed';

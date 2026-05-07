@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Play, RefreshCw, Terminal } from 'lucide-react';
 import { useApiClient } from '../hooks/useApiClient';
+import { useTenant } from '../providers/TenantProvider';
 import { SessionReplay } from '../components/SessionReplay';
 import { Button } from '../components/ui/button';
 import {
@@ -24,15 +25,21 @@ const STATUS_TONE: Record<string, StateTone> = {
 
 export function Sessions(): JSX.Element {
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const [sessions, setSessions] = useState<SessionRecording[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openSession, setOpenSession] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!currentTenantId) return;
     setLoading(true);
     try {
-      const resp = await client.listSessions({ limit: 50, offset: 0 });
+      const resp = await client.listSessions({
+        tenantId: currentTenantId,
+        limit: 50,
+        offset: 0,
+      });
       setSessions(resp.data);
       setError(null);
     } catch (err) {
@@ -40,7 +47,7 @@ export function Sessions(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [client]);
+  }, [client, currentTenantId]);
 
   useEffect(() => {
     refresh();

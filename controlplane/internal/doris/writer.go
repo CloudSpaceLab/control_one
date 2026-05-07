@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -163,6 +165,7 @@ type Writer struct {
 	onError        func(table string, err error)
 	metrics        MetricsReporter
 	hostname       string
+	nonce          string
 	pid            int
 	labelCounter   atomic.Uint64
 	healthyAtomic  atomic.Bool
@@ -198,6 +201,11 @@ func NewWriter(c *Client, opts WriterOptions) *Writer {
 	if host == "" {
 		host = "controlplane"
 	}
+	// 32-bit random nonce stamped into every label so two replicas that share
+	// a hostname (rolling restart, blue/green with sticky DNS) cannot collide
+	// on (table, label) inside Doris's 3-day dedup window.
+	var nonceBytes [4]byte
+	_, _ = rand.Read(nonceBytes[:])
 	w := &Writer{
 		c:              c,
 		pending:        make(map[string][]map[string]any),
@@ -210,6 +218,7 @@ func NewWriter(c *Client, opts WriterOptions) *Writer {
 		metrics:        opts.Metrics,
 		hostname:       host,
 		pid:            os.Getpid(),
+		nonce:          hex.EncodeToString(nonceBytes[:]),
 		compress:       opts.Compress,
 	}
 	w.cond = sync.NewCond(&w.mu)
@@ -246,10 +255,14 @@ func (w *Writer) enqueue(table string, rows []map[string]any, block bool) error 
 	if len(rows) == 0 {
 		return nil
 	}
+	w.mu.Lock()
+	// closed must be re-checked under the lock so Close() — which sets the
+	// flag and then waits on flushWG — cannot race with a flushWG.Add() that
+	// happens after Wait() has already returned.
 	if w.closed.Load() {
+		w.mu.Unlock()
 		return ErrWriterClosed
 	}
-	w.mu.Lock()
 	for len(w.pending[table]) >= w.maxPendingRows {
 		if !block {
 			w.mu.Unlock()
@@ -268,9 +281,12 @@ func (w *Writer) enqueue(table string, rows []map[string]any, block bool) error 
 	if overflow {
 		batch := w.pending[table]
 		w.pending[table] = nil
+		// Add to the waitgroup before releasing the lock so Close() — which
+		// sets closed under the same lock — sees a coherent counter when it
+		// transitions to Wait().
+		w.flushWG.Add(1)
 		w.cond.Broadcast()
 		w.mu.Unlock()
-		w.flushWG.Add(1)
 		go func() {
 			defer w.flushWG.Done()
 			w.flushTable(table, batch)
@@ -383,12 +399,15 @@ func approxBytes(rows []map[string]any) int {
 // flush so our retries on transient errors can reuse the same label and let
 // Doris's built-in dedup absorb duplicates safely.
 //
-// Format: co-{hostname}-{pid}-{nanos}-{counter}-{table}
+// Format: co-{hostname}-{pid}-{nonce}-{nanos}-{counter}-{table}
+// {nonce} is a per-Writer random hex string so two replicas that happen to
+// share a hostname (and even a pid in container restart edge cases) still
+// emit non-colliding labels.
 func (w *Writer) makeLabel(table string) string {
 	n := time.Now().UnixNano()
 	c := w.labelCounter.Add(1)
 	host := strings.ReplaceAll(w.hostname, ".", "-")
-	return fmt.Sprintf("co-%s-%d-%d-%d-%s", host, w.pid, n, c, sanitizeLabel(table))
+	return fmt.Sprintf("co-%s-%d-%s-%d-%d-%s", host, w.pid, w.nonce, n, c, sanitizeLabel(table))
 }
 
 func sanitizeLabel(s string) string {

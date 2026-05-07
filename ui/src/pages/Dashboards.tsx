@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import { SectionHeader, Panel, EmptyState, SelectField } from '../components/kit';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -298,6 +299,7 @@ interface EditorProps {
 
 function WidgetEditor({ initial, onCancel, onSave }: EditorProps) {
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const [title, setTitle] = useState(initial?.title ?? '');
   const [widgetType, setWidgetType] = useState<WidgetType>(initial?.widget_type ?? 'sys_resources');
   const [refresh, setRefresh] = useState(initial?.refresh_seconds ?? 30);
@@ -314,8 +316,15 @@ function WidgetEditor({ initial, onCancel, onSave }: EditorProps) {
   }, [widgetType, initial]);
 
   useEffect(() => {
-    client.listNodes({ limit: 200 }).then((r) => setAllNodes(r.data)).catch(() => {});
-  }, [client]);
+    if (!currentTenantId) {
+      setAllNodes([]);
+      return;
+    }
+    client
+      .listNodes({ tenantId: currentTenantId, limit: 200 })
+      .then((r) => setAllNodes(r.data))
+      .catch(() => {});
+  }, [client, currentTenantId]);
 
   const parsedSpec = (): Record<string, unknown> => {
     try { return JSON.parse(specJson); } catch { return {}; }

@@ -79,6 +79,11 @@ func swapPrev(exe, prevPath string) error {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("copy .prev to temp: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("fsync temp: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close temp: %w", err)

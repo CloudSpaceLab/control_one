@@ -121,14 +121,17 @@ func (s *Server) listAccessRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := storage.AccessRequestFilter{Status: strings.TrimSpace(r.URL.Query().Get("status"))}
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		f.TenantID = id
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
 	}
+	tid, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	f.TenantID = tid
 	items, total, err := s.store.ListAccessRequests(r.Context(), f, limit, offset)
 	if err != nil {
 		s.logger.Error("list access requests", zap.Error(err))

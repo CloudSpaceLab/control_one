@@ -219,7 +219,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		resp.PendingActions = append(resp.PendingActions, "agent_update")
 		// Transition job to running so it won't appear again on the next heartbeat
 		// until the agent confirms completion (or the job times out).
-		_ = s.store.UpdateJobStatus(r.Context(), pendingJob.ID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
+		if uerr := s.store.UpdateJobStatus(r.Context(), pendingJob.ID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
+			s.logger.Warn("mark agent_update job running",
+				zap.String("job_id", pendingJob.ID.String()), zap.Error(uerr))
+		}
+	} else if jerr != nil {
+		s.logger.Warn("get pending agent update job",
+			zap.String("node_id", nodeID.String()), zap.Error(jerr))
 	}
 	// Append pending firewall actions (PR 3). Each is encoded as
 	// "<job_type>:<job_id>" so the agent can dispatch in one switch and so
@@ -235,7 +241,10 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 			}
 			resp.PendingActions = append(resp.PendingActions, actionType+":"+rule.JobID.String())
 			// Mark the job Running so the worker view reflects in-flight state.
-			_ = s.store.UpdateJobStatus(r.Context(), *rule.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
+			if uerr := s.store.UpdateJobStatus(r.Context(), *rule.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
+				s.logger.Warn("mark firewall job running",
+					zap.String("job_id", rule.JobID.String()), zap.Error(uerr))
+			}
 		}
 	} else if !errors.Is(ferr, sql.ErrNoRows) {
 		s.logger.Warn("list pending firewall rules", zap.Error(ferr))
@@ -248,7 +257,10 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 				continue
 			}
 			resp.PendingActions = append(resp.PendingActions, JobTypePatchDeployDirect+":"+ps.JobID.String())
-			_ = s.store.UpdateJobStatus(r.Context(), *ps.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil)
+			if uerr := s.store.UpdateJobStatus(r.Context(), *ps.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
+				s.logger.Warn("mark patch job running",
+					zap.String("job_id", ps.JobID.String()), zap.Error(uerr))
+			}
 		}
 	} else if !errors.Is(perr, sql.ErrNoRows) {
 		s.logger.Warn("list pending patch states", zap.Error(perr))
@@ -281,19 +293,35 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			}
 			if c.Status == "succeeded" {
 				// Apply or remove — record in the same row.
+				var markErr error
 				if c.Action == JobTypeFirewallRuleDelete {
-					_ = s.store.MarkNodeFirewallRuleRemoved(ctx, rule.ID)
+					markErr = s.store.MarkNodeFirewallRuleRemoved(ctx, rule.ID)
 				} else {
-					_ = s.store.MarkNodeFirewallRuleApplied(ctx, rule.ID)
+					markErr = s.store.MarkNodeFirewallRuleApplied(ctx, rule.ID)
 				}
-				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported success", nil)
+				if markErr != nil {
+					s.logger.Warn("mark firewall rule state",
+						zap.String("rule_id", rule.ID.String()),
+						zap.String("action", c.Action),
+						zap.Error(markErr))
+				}
+				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported success", nil); jerr != nil {
+					s.logger.Warn("firewall job mark succeeded",
+						zap.String("job_id", jobID.String()), zap.Error(jerr))
+				}
 			} else {
 				errMsg := strings.TrimSpace(c.Error)
 				if errMsg == "" {
 					errMsg = "agent reported failure"
 				}
-				_ = s.store.MarkNodeFirewallRuleFailed(ctx, rule.ID, errMsg)
-				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg})
+				if merr := s.store.MarkNodeFirewallRuleFailed(ctx, rule.ID, errMsg); merr != nil {
+					s.logger.Warn("mark firewall rule failed",
+						zap.String("rule_id", rule.ID.String()), zap.Error(merr))
+				}
+				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg}); jerr != nil {
+					s.logger.Warn("firewall job mark failed",
+						zap.String("job_id", jobID.String()), zap.Error(jerr))
+				}
 			}
 		case JobTypePatchDeployDirect:
 			ps, perr := s.store.GetNodePatchStateByJobID(ctx, jobID)
@@ -307,17 +335,29 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			logTail, _ := c.Metadata["log_tail"].(string)
 			pkgsUpgraded := metadataInt(c.Metadata, "packages_upgraded")
 			if c.Status == "succeeded" {
-				_ = s.store.MarkNodePatchApplied(ctx, ps.ID, pkgsUpgraded, logTail)
-				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported success", map[string]any{
+				if merr := s.store.MarkNodePatchApplied(ctx, ps.ID, pkgsUpgraded, logTail); merr != nil {
+					s.logger.Warn("mark patch applied",
+						zap.String("patch_state_id", ps.ID.String()), zap.Error(merr))
+				}
+				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported success", map[string]any{
 					"packages_upgraded": pkgsUpgraded,
-				})
+				}); jerr != nil {
+					s.logger.Warn("patch job mark succeeded",
+						zap.String("job_id", jobID.String()), zap.Error(jerr))
+				}
 			} else {
 				errMsg := strings.TrimSpace(c.Error)
 				if errMsg == "" {
 					errMsg = "agent reported failure"
 				}
-				_ = s.store.MarkNodePatchFailed(ctx, ps.ID, errMsg, logTail)
-				_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg})
+				if merr := s.store.MarkNodePatchFailed(ctx, ps.ID, errMsg, logTail); merr != nil {
+					s.logger.Warn("mark patch failed",
+						zap.String("patch_state_id", ps.ID.String()), zap.Error(merr))
+				}
+				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg}); jerr != nil {
+					s.logger.Warn("patch job mark failed",
+						zap.String("job_id", jobID.String()), zap.Error(jerr))
+				}
 			}
 			// Roll up the parent deployment if every node has finished.
 			s.maybeRollupPatchDeployment(ctx, ps.DeploymentID)
@@ -375,7 +415,10 @@ func (s *Server) maybeRollupPatchDeployment(ctx context.Context, deploymentID uu
 	case failed > 0:
 		status = "partial"
 	}
-	_ = s.store.UpdatePatchDeploymentStatus(ctx, deploymentID, status, true)
+	if uerr := s.store.UpdatePatchDeploymentStatus(ctx, deploymentID, status, true); uerr != nil {
+		s.logger.Warn("rollup patch deployment",
+			zap.String("deployment_id", deploymentID.String()), zap.Error(uerr))
+	}
 }
 
 // fullInventoryRefreshInterval bounds how stale the server's package
@@ -589,6 +632,7 @@ func (s *Server) emitEnrollmentWebhook(ctx context.Context, tenantID uuid.UUID, 
 // test mutations of the in-memory fake store.
 type enrollmentReaperState struct {
 	stopCh chan struct{}
+	cancel context.CancelFunc
 }
 
 // pendingReaper is initialised on first use. Tests that need deterministic
@@ -613,7 +657,9 @@ func (s *Server) startEnrollmentReaper() {
 		}
 	}
 	s.enrollmentReaper.stopCh = make(chan struct{})
-	go s.runEnrollmentPendingReaper(s.enrollmentReaper.stopCh)
+	parentCtx, cancel := context.WithCancel(context.Background())
+	s.enrollmentReaper.cancel = cancel
+	go s.runEnrollmentPendingReaper(parentCtx, s.enrollmentReaper.stopCh)
 }
 
 // stopEnrollmentReaper halts the reaper goroutine. Safe to call when the
@@ -628,36 +674,48 @@ func (s *Server) stopEnrollmentReaper() {
 	default:
 		close(s.enrollmentReaper.stopCh)
 	}
+	if s.enrollmentReaper.cancel != nil {
+		s.enrollmentReaper.cancel()
+		s.enrollmentReaper.cancel = nil
+	}
 }
 
 // runEnrollmentPendingReaper is the background loop. It wakes on
 // reaperScanInterval, asks the store for any pending rows older than the
 // timeout, and flips each one to enrollment_failed + emits a webhook.
-func (s *Server) runEnrollmentPendingReaper(stop <-chan struct{}) {
+func (s *Server) runEnrollmentPendingReaper(parentCtx context.Context, stop <-chan struct{}) {
 	ticker := time.NewTicker(reaperScanInterval)
 	defer ticker.Stop()
 
 	// Drain immediately on start so nodes created with backdated timestamps
 	// don't need to wait a full interval to time out.
-	s.reapPendingEnrollments()
+	s.reapPendingEnrollmentsCtx(parentCtx)
 
 	for {
 		select {
 		case <-stop:
 			return
+		case <-parentCtx.Done():
+			return
 		case <-ticker.C:
-			s.reapPendingEnrollments()
+			s.reapPendingEnrollmentsCtx(parentCtx)
 		}
 	}
 }
 
-// reapPendingEnrollments does a single reaper pass. Isolated from the loop so
-// tests can drive it deterministically.
+// reapPendingEnrollments does a single reaper pass with a fresh background
+// context. Kept for tests that drive the reaper outside the lifecycle loop.
 func (s *Server) reapPendingEnrollments() {
+	s.reapPendingEnrollmentsCtx(context.Background())
+}
+
+// reapPendingEnrollmentsCtx runs one reaper pass under a parent context so
+// shutdown cancels in-flight DB work instead of orphaning it.
+func (s *Server) reapPendingEnrollmentsCtx(parent context.Context) {
 	if s.store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	cutoff := s.reaperNow().Add(-enrollmentPendingTimeout)

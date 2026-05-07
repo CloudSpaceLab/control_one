@@ -638,6 +638,7 @@ export interface FleetEnrollRequest {
   ssh_key?: string;
   ssh_password?: string;
   token: string;
+  tenant_id?: string;
   compliance_policy_id?: string;
   parallel?: number;
   labels?: Record<string, string>;
@@ -2069,9 +2070,11 @@ export class APIClient {
     });
   }
 
-  async getFleetEnrollStatus(jobId: string): Promise<FleetEnrollStatus> {
+  async getFleetEnrollStatus(jobId: string, tenantId: string): Promise<FleetEnrollStatus> {
     const encoded = encodeURIComponent(jobId);
-    return this.request<FleetEnrollStatus>(`/api/v1/fleet/enroll/${encoded}`);
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    return this.request<FleetEnrollStatus>(`/api/v1/fleet/enroll/${encoded}?${search.toString()}`);
   }
 
   async listSecretSyncs(groupId: string, params: ListSecretSyncsParams = {}): Promise<PaginatedResponse<SecretSync>> {
@@ -2648,8 +2651,9 @@ export class APIClient {
     return this.request<{ data: ReportDesc[] }>('/api/v1/reports');
   }
 
-  async listSessions(params: { nodeId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<SessionRecording>> {
+  async listSessions(params: { tenantId?: string; nodeId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<SessionRecording>> {
     const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
     if (params.nodeId) search.set('node_id', params.nodeId);
     if (typeof params.limit === 'number') search.set('limit', String(params.limit));
     if (typeof params.offset === 'number') search.set('offset', String(params.offset));
@@ -2963,8 +2967,13 @@ export class APIClient {
     };
   }
 
-  async deleteComplianceEvidence(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/compliance/evidence/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  async deleteComplianceEvidence(id: string, tenantId: string): Promise<void> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    await this.request<void>(
+      `/api/v1/compliance/evidence/${encodeURIComponent(id)}?${search.toString()}`,
+      { method: 'DELETE' },
+    );
   }
 
   async listComplianceFrameworks(): Promise<{ frameworks: string[]; controls: Record<string, FrameworkControl[]> }> {
@@ -3229,8 +3238,10 @@ export class APIClient {
     return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download`;
   }
 
-  buildEvidenceDownloadUrl(id: string): string {
-    return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download`;
+  buildEvidenceDownloadUrl(id: string, tenantId: string): string {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download?${search.toString()}`;
   }
 
   // ---- Compliance Reviews ----------------------------------------

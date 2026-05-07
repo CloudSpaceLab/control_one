@@ -350,17 +350,31 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 		if err := s.dorisWriter.EnqueueNonBlocking("events", dorisRows); err != nil {
 			dorisErr = err
 		}
+		// Side-table writes are best-effort but operators need visibility when
+		// rows are dropped (typically backpressure during a Doris stall).
 		if len(connRows) > 0 {
-			_ = s.dorisWriter.EnqueueNonBlocking("process_connections", connRows)
+			if eerr := s.dorisWriter.EnqueueNonBlocking("process_connections", connRows); eerr != nil {
+				s.logger.Warn("doris enqueue process_connections",
+					zap.Int("rows", len(connRows)), zap.Error(eerr))
+			}
 		}
 		if len(lineageRows) > 0 {
-			_ = s.dorisWriter.EnqueueNonBlocking("process_lineage", lineageRows)
+			if eerr := s.dorisWriter.EnqueueNonBlocking("process_lineage", lineageRows); eerr != nil {
+				s.logger.Warn("doris enqueue process_lineage",
+					zap.Int("rows", len(lineageRows)), zap.Error(eerr))
+			}
 		}
 		if len(fileRows) > 0 {
-			_ = s.dorisWriter.EnqueueNonBlocking("file_accesses", fileRows)
+			if eerr := s.dorisWriter.EnqueueNonBlocking("file_accesses", fileRows); eerr != nil {
+				s.logger.Warn("doris enqueue file_accesses",
+					zap.Int("rows", len(fileRows)), zap.Error(eerr))
+			}
 		}
 		if len(dbRows) > 0 {
-			_ = s.dorisWriter.EnqueueNonBlocking("db_queries", dbRows)
+			if eerr := s.dorisWriter.EnqueueNonBlocking("db_queries", dbRows); eerr != nil {
+				s.logger.Warn("doris enqueue db_queries",
+					zap.Int("rows", len(dbRows)), zap.Error(eerr))
+			}
 		}
 		if dorisErr != nil {
 			dorisStatus = "pending"

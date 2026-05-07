@@ -142,6 +142,12 @@ func saveAgentState(dataDir string, state map[string]any) error {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write temp state: %w", err)
 	}
+	// fsync before close so the rename below survives a crash mid-write.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("fsync temp state: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close temp state: %w", err)
@@ -314,18 +320,30 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		log.Error("write update binary", zap.Error(err))
 		return
 	}
+	// fsync the binary before rename so a crash between rename and the next
+	// boot doesn't leave a partial executable on disk.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		log.Error("fsync update binary", zap.Error(err))
+		return
+	}
 	_ = tmp.Close()
 
-	if manifest.SHA256 != "" {
-		actual := hex.EncodeToString(hasher.Sum(nil))
-		if actual != manifest.SHA256 {
-			log.Error("update binary checksum mismatch",
-				zap.String("expected", manifest.SHA256),
-				zap.String("actual", actual))
-			return
-		}
-		log.Info("update binary checksum verified")
+	// Fail closed when the manifest doesn't carry a digest — without it we
+	// cannot prove integrity, and silently accepting an unverified binary
+	// hands an upgrade primitive to anything that can MITM the download.
+	if manifest.SHA256 == "" {
+		log.Error("update manifest missing sha256; refusing to apply")
+		return
 	}
+	actual := hex.EncodeToString(hasher.Sum(nil))
+	if actual != manifest.SHA256 {
+		log.Error("update binary checksum mismatch",
+			zap.String("expected", manifest.SHA256),
+			zap.String("actual", actual))
+		return
+	}
+	log.Info("update binary checksum verified")
 
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
 		log.Error("chmod update binary", zap.Error(err))
@@ -339,15 +357,27 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		log.Warn("save .prev binary", zap.Error(err))
 	}
 
+	// Record the seq we're about to apply *before* renaming the binary. If
+	// the rename succeeds but the post-rename state save fails, the next
+	// boot would otherwise see the old seq and re-download the same binary
+	// in a tight loop. The pending field lets us promote-on-restart.
+	state["pending_release_seq"] = manifest.ReleaseSeq
+	if err := saveAgentState(u.dataDir, state); err != nil {
+		log.Warn("persist pending_release_seq",
+			zap.Int("release_seq", manifest.ReleaseSeq),
+			zap.Error(err))
+	}
+
 	// Atomic replace.
 	if err := os.Rename(tmpPath, exe); err != nil {
 		log.Error("replace binary", zap.Error(err))
 		return
 	}
 
-	// Persist new release_seq so subsequent manifests at the same seq are
-	// recognised as "already applied" and downgrades fail their gate.
+	// Promote pending → current after the rename succeeds. If saveAgentState
+	// fails here, the next boot will see pending == current and reconcile.
 	state["current_release_seq"] = manifest.ReleaseSeq
+	delete(state, "pending_release_seq")
 	if err := saveAgentState(u.dataDir, state); err != nil {
 		log.Warn("persist current_release_seq",
 			zap.Int("release_seq", manifest.ReleaseSeq),

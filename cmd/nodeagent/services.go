@@ -52,13 +52,14 @@ func collectServices(log *zap.Logger) []ServiceInfo {
 	return dedupeAndAnnotate(raw)
 }
 
-// normalizeAddr collapses all wildcard listen addresses (0.0.0.0, ::, [::])
-// to "*" so that IPv4 and IPv6 dual-stack listeners on the same port are
-// treated as one logical binding.
+// normalizeAddr trims surrounding whitespace and the IPv6 brackets so that
+// "[::]" and "::" hash to the same dedupe key, but keeps IPv4 and IPv6
+// wildcards distinct — a dual-stack listener legitimately has two rows the
+// graph wants to keep separate.
 func normalizeAddr(addr string) string {
-	switch strings.TrimSpace(addr) {
-	case "0.0.0.0", "::", "[::]", "":
-		return "*"
+	addr = strings.TrimSpace(addr)
+	if addr == "[::]" {
+		return "::"
 	}
 	return addr
 }
@@ -92,6 +93,20 @@ func dedupeAndAnnotate(in []ServiceInfo) []ServiceInfo {
 		return out[i].ListenAddr < out[j].ListenAddr
 	})
 	return out
+}
+
+// genericInterpreterKind returns "http-app" or "https-app" for ports that
+// carry an obvious protocol hint, otherwise empty so the caller falls back to
+// the language-specific kind. Used for node/python/java/etc. where the
+// process name alone doesn't tell us what protocol it serves.
+func genericInterpreterKind(port int) string {
+	switch port {
+	case 80, 8000, 8080, 5000, 3000, 3001, 4000:
+		return "http-app"
+	case 443, 8443:
+		return "https-app"
+	}
+	return ""
 }
 
 // serviceKindFor maps the observed process to a coarse fingerprint the
@@ -170,13 +185,11 @@ func serviceKindFor(process, binaryPath string, port int) string {
 		strings.Contains(name, "next") && (port == 3000 || port == 3001):
 		return "nextjs"
 	case strings.Contains(name, "node"), strings.Contains(name, "bun"):
-		switch port {
-		case 3000, 3001, 4000:
-			return "nodejs"
-		case 80, 8080, 8000, 5000:
-			return "nodejs"
-		case 443, 8443:
-			return "nodejs"
+		// Generic interpreter: prefer the port-hint kind so the graph groups
+		// it with other HTTP-ish workloads. Fall back to "nodejs" only when
+		// the port carries no obvious protocol hint.
+		if k := genericInterpreterKind(port); k != "" {
+			return k
 		}
 		return "nodejs"
 
@@ -200,23 +213,21 @@ func serviceKindFor(process, binaryPath string, port int) string {
 	case strings.Contains(name, "daphne"), strings.Contains(name, "hypercorn"):
 		return "python-asgi"
 	case strings.Contains(name, "python"), strings.Contains(name, "python3"):
-		switch port {
-		case 80, 8080, 8000, 5000:
-			return "python-app"
-		case 443, 8443:
-			return "python-app"
+		if k := genericInterpreterKind(port); k != "" {
+			return k
 		}
 		return "python-app"
 
 	// JVM
 	case strings.Contains(name, "java"):
 		switch port {
-		case 8080, 8443, 8000:
-			return "java-app"
 		case 9200, 9300:
 			return "elasticsearch"
 		case 2181:
 			return "zookeeper"
+		}
+		if k := genericInterpreterKind(port); k != "" {
+			return k
 		}
 		return "java-app"
 

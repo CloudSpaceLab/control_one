@@ -96,7 +96,7 @@ func (s *Server) handleInvestigateSearch(w http.ResponseWriter, r *http.Request)
 	detected, _ := ClassifyValue(q)
 	requestedTypes := splitCSV(r.URL.Query().Get("types"))
 
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 
 	resp := searchResponse{Query: q, Detected: detected, Facets: []searchFacet{}, Items: []searchItem{}}
 
@@ -200,7 +200,7 @@ func (s *Server) handleEntityOverview(w http.ResponseWriter, r *http.Request, en
 		return
 	}
 
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 	summary, err := ib.EntitySummary(r.Context(), tenantID, entityType, entityID)
 	if err != nil {
 		s.logger.Warn("entity summary", zap.Error(err))
@@ -283,7 +283,7 @@ func (s *Server) handleEntityLifecycle(w http.ResponseWriter, r *http.Request, e
 		}
 	}
 
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 	filter := storage.LifecycleFilter{
 		TenantID:   tenantID,
 		EntityType: entityType,
@@ -346,7 +346,7 @@ func (s *Server) handleEntityRelated(w http.ResponseWriter, r *http.Request, ent
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 
 	related := []relatedItem{}
 	if s.dorisClient != nil && tenantID != uuid.Nil {
@@ -420,7 +420,7 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 		return
 	}
 
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 	var assets []net.IPNet
 	if ib := s.investigateBackend(); ib != nil && tenantID != uuid.Nil {
 		assets, _ = ib.ListAssetCIDRs(r.Context(), tenantID)
@@ -574,7 +574,7 @@ func (s *Server) savedSearchesList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 	userID := principalUserID(s, r.Context(), principal)
 	items, total, err := ib.ListSavedSearches(r.Context(), tenantID, userID, limit, offset)
 	if err != nil {
@@ -607,7 +607,7 @@ func (s *Server) savedSearchesCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 	userID := principalUserID(s, r.Context(), principal)
 	row, err := ib.CreateSavedSearch(r.Context(), storage.SavedSearch{
 		TenantID:    tenantID,
@@ -775,7 +775,11 @@ func (s *Server) handleEntityTagsCollection(w http.ResponseWriter, r *http.Reque
 			writeJSON(w, http.StatusOK, []storage.EntityTag{})
 			return
 		}
-		items, err := ib.ListEntityTags(r.Context(), tenantFromQuery(r), entityType, entityID)
+		tenantID, ok := tenantFromQuery(w, r)
+		if !ok {
+			return
+		}
+		items, err := ib.ListEntityTags(r.Context(), tenantID, entityType, entityID)
 		if err != nil {
 			s.logger.Warn("list entity tags", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -813,8 +817,12 @@ func (s *Server) handleEntityTagsCollection(w http.ResponseWriter, r *http.Reque
 			id := userID
 			creator = &id
 		}
+		tenantID, ok := tenantFromQuery(w, r)
+		if !ok {
+			return
+		}
 		row, err := ib.AddEntityTag(r.Context(), storage.EntityTag{
-			TenantID:   tenantFromQuery(r),
+			TenantID:   tenantID,
 			EntityType: entityType,
 			EntityID:   entityID,
 			Tag:        tag,
@@ -846,7 +854,11 @@ func (s *Server) handleEntityTagDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "investigate store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := ib.RemoveEntityTag(r.Context(), tenantFromQuery(r), entityType, entityID, tag); err != nil {
+	tenantID, ok := tenantFromQuery(w, r)
+	if !ok {
+		return
+	}
+	if err := ib.RemoveEntityTag(r.Context(), tenantID, entityType, entityID, tag); err != nil {
 		s.logger.Warn("remove entity tag", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
@@ -905,7 +917,7 @@ func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, ent
 		return
 	}
 
-	tenantID := tenantFromQuery(r)
+	tenantID, ok := tenantFromQuery(w, r); if !ok { return }
 	userID := principalUserID(s, r.Context(), principal)
 	var creator *uuid.UUID
 	if userID != uuid.Nil {
@@ -1032,16 +1044,23 @@ func (s *Server) fanOutFirewallAction(
 
 // ===== Helpers =====
 
-func tenantFromQuery(r *http.Request) uuid.UUID {
+// tenantFromQuery extracts tenant_id and writes a 400 if it's missing or
+// invalid. Returns ok=false in those cases so callers can short-circuit.
+// Investigate handlers fan out to many storage methods that filter by
+// tenant; without a real tenant id they would silently return cross-tenant
+// data, so we fail closed at the boundary.
+func tenantFromQuery(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	v := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if v == "" {
-		return uuid.Nil
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return uuid.Nil, false
 	}
 	id, err := uuid.Parse(v)
 	if err != nil {
-		return uuid.Nil
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return uuid.Nil, false
 	}
-	return id
+	return id, true
 }
 
 func splitCSV(v string) []string {

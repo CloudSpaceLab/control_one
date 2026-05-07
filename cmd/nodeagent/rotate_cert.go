@@ -249,6 +249,12 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		_ = f.Close()
 		return err
 	}
+	// fsync before close so the rename below is atomic against power loss; the
+	// docstring above promised this but the call was missing.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
 	if err := f.Close(); err != nil {
 		return err
 	}

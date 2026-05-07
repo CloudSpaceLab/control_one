@@ -5,6 +5,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { useJobs } from '../hooks/useJobs';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import type { Job, JobStatus } from '../lib/api';
 import { useApiClient } from '../hooks/useApiClient';
 import { useToast } from '../providers/ToastProvider';
@@ -140,7 +141,8 @@ export function Jobs(): JSX.Element {
   const api = useApiClient();
   const { showToast } = useToast();
   const { data: tenants } = useTenants();
-  const [tenantFilter, setTenantFilter] = useState<string>('');
+  const { currentTenantId } = useTenant();
+  const [tenantFilter, setTenantFilter] = useState<string>(currentTenantId ?? '');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [limit] = useState(20);

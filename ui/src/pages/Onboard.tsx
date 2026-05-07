@@ -152,6 +152,7 @@ export function Onboard(): JSX.Element {
         ssh_key: auth === 'private_key' && privateKey ? toBase64(privateKey) : undefined,
         ssh_password: auth === 'password' && password ? password : undefined,
         token: token.token,
+        tenant_id: enrolTenantId,
         labels: { group: trimmedGroup },
         parallel: 1,
       };

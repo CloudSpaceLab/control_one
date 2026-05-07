@@ -63,6 +63,7 @@ type UpdateSessionRecordingParams struct {
 
 // ListSessionRecordingsParams defines filters for listing sessions
 type ListSessionRecordingsParams struct {
+	TenantID    *uuid.UUID
 	NodeID      *uuid.UUID
 	UserID      *string
 	SessionType *string
@@ -184,6 +185,10 @@ func (s *Store) ListSessionRecordings(ctx context.Context, params ListSessionRec
 	clauses := []string{"TRUE"}
 	args := []any{}
 
+	if params.TenantID != nil {
+		args = append(args, *params.TenantID)
+		clauses = append(clauses, fmt.Sprintf("node_id IN (SELECT id FROM nodes WHERE tenant_id = $%d)", len(args)))
+	}
 	if params.NodeID != nil {
 		args = append(args, *params.NodeID)
 		clauses = append(clauses, fmt.Sprintf("node_id = $%d", len(args)))

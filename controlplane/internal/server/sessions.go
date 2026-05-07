@@ -124,6 +124,18 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 	params := storage.ListSessionRecordingsParams{}
 
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	params.TenantID = &tenantID
+
 	if nodeIDStr := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeIDStr != "" {
 		if nodeID, err := uuid.Parse(nodeIDStr); err == nil {
 			params.NodeID = &nodeID
