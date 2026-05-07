@@ -140,12 +140,17 @@ func (s *Server) handleCorrelationRuleSubroutes(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
+	tenantID, err := requiredTenantID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if _, ok := s.authorize(w, r, roleViewer); !ok {
 			return
 		}
-		rr, err := s.store.GetCorrelationRule(r.Context(), id)
+		rr, err := s.store.GetCorrelationRule(r.Context(), tenantID, id)
 		if err != nil {
 			s.logger.Error("get correlation rule", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -160,7 +165,7 @@ func (s *Server) handleCorrelationRuleSubroutes(w http.ResponseWriter, r *http.R
 		if _, ok := s.authorize(w, r, roleAdmin); !ok {
 			return
 		}
-		if err := s.store.DeleteCorrelationRule(r.Context(), id); err != nil {
+		if err := s.store.DeleteCorrelationRule(r.Context(), tenantID, id); err != nil {
 			http.Error(w, fmt.Sprintf("delete failed: %v", err), http.StatusBadRequest)
 			return
 		}

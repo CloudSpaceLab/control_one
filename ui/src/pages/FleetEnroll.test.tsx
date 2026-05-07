@@ -11,6 +11,7 @@ const startFleetEnroll = vi.fn<(payload: unknown) => Promise<FleetEnrollResponse
 const getFleetEnrollStatus = vi.fn<(id: string) => Promise<FleetEnrollStatus>>();
 const getNode = vi.fn<(id: string) => Promise<NodeSummary>>();
 const listPolicies = vi.fn();
+const createEnrollmentToken = vi.fn();
 const showToast = vi.fn();
 
 vi.mock('../hooks/useApiClient', () => ({
@@ -19,11 +20,16 @@ vi.mock('../hooks/useApiClient', () => ({
     getFleetEnrollStatus: (id: string) => getFleetEnrollStatus(id),
     getNode: (id: string) => getNode(id),
     listPolicies: (params: unknown) => listPolicies(params),
+    createEnrollmentToken: (payload: unknown) => createEnrollmentToken(payload),
   }),
 }));
 
 vi.mock('../providers/ToastProvider', () => ({
   useToast: () => ({ showToast }),
+}));
+
+vi.mock('../providers/TenantProvider', () => ({
+  useTenant: () => ({ currentTenantId: 't-1' }),
 }));
 
 vi.mock('../hooks/useTenants', () => ({
@@ -44,6 +50,8 @@ describe('FleetEnroll', () => {
     getNode.mockReset();
     listPolicies.mockReset();
     listPolicies.mockResolvedValue({ data: [], pagination: { total: 0, count: 0, limit: 100, offset: 0 } });
+    createEnrollmentToken.mockReset();
+    createEnrollmentToken.mockResolvedValue({ id: 'tok-1', token: 'cot_auto' });
     showToast.mockReset();
   });
 
@@ -130,14 +138,12 @@ describe('FleetEnroll', () => {
           '-----BEGIN OPENSSH PRIVATE KEY-----\nabc123\n-----END OPENSSH PRIVATE KEY-----',
       },
     });
-    fireEvent.change(screen.getByLabelText(/enrollment token/i), {
-      target: { value: 'cot_test' },
-    });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /start fleet enrollment/i }));
     });
 
+    await waitFor(() => expect(createEnrollmentToken).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startFleetEnroll).toHaveBeenCalledTimes(1));
     const payload = startFleetEnroll.mock.calls[0][0] as {
       targets: Array<{ host: string }>;
@@ -147,7 +153,7 @@ describe('FleetEnroll', () => {
       compliance_policy_id?: string;
     };
     expect(payload.targets).toEqual([{ host: '10.0.0.5', user: undefined }]);
-    expect(payload.token).toBe('cot_test');
+    expect(payload.token).toBe('cot_auto');
     expect(payload.ssh_user).toBe('ubuntu');
     expect(payload.ssh_key).toBeTruthy();
     expect(payload.compliance_policy_id).toBe('control-one-default-hardening');
@@ -180,9 +186,6 @@ describe('FleetEnroll', () => {
     });
     fireEvent.change(screen.getByLabelText(/ssh private key/i), {
       target: { value: '-----BEGIN OPENSSH PRIVATE KEY-----\nxyz\n-----END OPENSSH PRIVATE KEY-----' },
-    });
-    fireEvent.change(screen.getByLabelText(/enrollment token/i), {
-      target: { value: 'cot_test2' },
     });
 
     await act(async () => {

@@ -285,6 +285,57 @@ func (s *Store) ListTelemetryLogs(ctx context.Context, filter TelemetryLogFilter
 	return logs, total, nil
 }
 
+// LogThroughputBucket is one bucket of telemetry_logs counts in PostgreSQL.
+type LogThroughputBucket struct {
+	Timestamp time.Time
+	Events    int64
+}
+
+// LogThroughputSeries returns bucketed telemetry_logs counts from PostgreSQL,
+// used as a fallback for the admin ingest dashboard when Doris is unavailable
+// or empty. Empty tenantID aggregates across all tenants.
+func (s *Store) LogThroughputSeries(ctx context.Context, tenantID uuid.UUID, since, until time.Time, bucketDur time.Duration) ([]LogThroughputBucket, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if bucketDur < time.Minute {
+		bucketDur = time.Minute
+	}
+	bucketSec := int64(bucketDur.Seconds())
+
+	clauses := []string{"timestamp >= $1", "timestamp <= $2"}
+	args := []any{since, until}
+	if tenantID != uuid.Nil {
+		args = append(args, tenantID)
+		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT to_timestamp(floor(extract(epoch from timestamp) / %d) * %d) AS bucket_ts,
+		       COUNT(*) AS cnt
+		FROM telemetry_logs
+		WHERE %s
+		GROUP BY bucket_ts
+		ORDER BY bucket_ts
+	`, bucketSec, bucketSec, strings.Join(clauses, " AND "))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query telemetry log throughput: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]LogThroughputBucket, 0)
+	for rows.Next() {
+		var b LogThroughputBucket
+		if err := rows.Scan(&b.Timestamp, &b.Events); err != nil {
+			return nil, fmt.Errorf("scan telemetry log throughput: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // CreateTelemetryMetrics persists multiple metrics in a batch.
 func (s *Store) CreateTelemetryMetrics(ctx context.Context, metrics []CreateTelemetryMetricParams) error {
 	if s.db == nil {

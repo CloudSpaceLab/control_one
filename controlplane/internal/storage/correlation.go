@@ -75,11 +75,18 @@ func (s *Store) CreateCorrelationRule(ctx context.Context, p CreateCorrelationRu
 	if err != nil {
 		return nil, fmt.Errorf("insert correlation rule: %w", err)
 	}
-	return s.GetCorrelationRule(ctx, id)
+	return s.GetCorrelationRule(ctx, p.TenantID, id)
 }
 
-func (s *Store) GetCorrelationRule(ctx context.Context, id uuid.UUID) (*CorrelationRule, error) {
-	row := s.db.QueryRowContext(ctx, correlationRuleSelectSQL+` WHERE id = $1`, id)
+// GetCorrelationRule returns the rule when (id, tenantID) match. Pass uuid.Nil
+// for tenantID to bypass scoping (intended only for callers that have already
+// verified tenancy themselves, e.g. background workers).
+func (s *Store) GetCorrelationRule(ctx context.Context, tenantID, id uuid.UUID) (*CorrelationRule, error) {
+	if tenantID == uuid.Nil {
+		row := s.db.QueryRowContext(ctx, correlationRuleSelectSQL+` WHERE id = $1`, id)
+		return scanCorrelationRule(row)
+	}
+	row := s.db.QueryRowContext(ctx, correlationRuleSelectSQL+` WHERE id = $1 AND tenant_id = $2`, id, tenantID)
 	return scanCorrelationRule(row)
 }
 
@@ -103,11 +110,17 @@ func (s *Store) ListCorrelationRules(ctx context.Context, tenantID uuid.UUID) ([
 	return out, rows.Err()
 }
 
-func (s *Store) DeleteCorrelationRule(ctx context.Context, id uuid.UUID) error {
+// DeleteCorrelationRule removes a rule scoped to (tenantID, id). Pass uuid.Nil
+// for tenantID to bypass scoping; callers must justify that path.
+func (s *Store) DeleteCorrelationRule(ctx context.Context, tenantID, id uuid.UUID) error {
 	if s.db == nil {
 		return errors.New("store database not initialized")
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM correlation_rules WHERE id = $1`, id)
+	if tenantID == uuid.Nil {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM correlation_rules WHERE id = $1`, id)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM correlation_rules WHERE id = $1 AND tenant_id = $2`, id, tenantID)
 	return err
 }
 

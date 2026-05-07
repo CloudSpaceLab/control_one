@@ -1,6 +1,7 @@
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import { useApiClient } from '../hooks/useApiClient';
 import {
   SectionHeader,
@@ -111,8 +112,9 @@ export function FleetEnroll(): JSX.Element {
     reset: resetFeedback,
   } = useFormFeedback();
   const { data: tenants } = useTenants();
+  const { currentTenantId } = useTenant();
 
-  const [tenantId, setTenantId] = useState<string>('');
+  const [tenantId, setTenantId] = useState<string>(currentTenantId ?? '');
   const [compliancePolicyId, setCompliancePolicyId] = useState<string>(DEFAULT_HARDENING_POLICY_ID);
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [policiesLoading, setPoliciesLoading] = useState(false);
@@ -120,9 +122,14 @@ export function FleetEnroll(): JSX.Element {
   const [sshUser, setSshUser] = useState<string>('');
   const [sshKey, setSshKey] = useState<string>('');
   const [sshPassword, setSshPassword] = useState<string>('');
-  const [token, setToken] = useState<string>('');
   const [parallel, setParallel] = useState<number>(5);
   const [submitting, setSubmitting] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!tenantId && currentTenantId) {
+      setTenantId(currentTenantId);
+    }
+  }, [currentTenantId, tenantId]);
 
   // Form collapsed when a job is being viewed
   const [formCollapsed, setFormCollapsed] = useState<boolean>(false);
@@ -336,8 +343,8 @@ export function FleetEnroll(): JSX.Element {
       showError('Add at least one host');
       return;
     }
-    if (!token.trim()) {
-      showError('Enrollment token is required');
+    if (!tenantId) {
+      showError('Select a tenant before enrolling');
       return;
     }
     const hasPerTargetUsers = parsedTargets.every((t) => !!t.user?.trim());
@@ -350,24 +357,36 @@ export function FleetEnroll(): JSX.Element {
       return;
     }
 
-    const payload: FleetEnrollRequest = {
-      targets: parsedTargets,
-      token: token.trim(),
-      compliance_policy_id: compliancePolicyId,
-      parallel,
-    };
-    if (sshUser.trim()) {
-      payload.ssh_user = sshUser.trim();
-    }
-    if (sshKey.trim()) {
-      payload.ssh_key = encodeSshKey(sshKey);
-    }
-    if (sshPassword.trim()) {
-      payload.ssh_password = sshPassword;
-    }
-
     try {
       setSubmitting(true);
+      const issued = await api.createEnrollmentToken({
+        name: `fleet-enroll-${Date.now()}`,
+        tenant_id: tenantId,
+        max_nodes: parsedTargets.length,
+        ttl: '24h',
+        labels: { onboard_source: 'fleet-enroll' },
+        capabilities: ['agent.run'],
+      });
+      if (!issued.token) {
+        throw new Error('controlplane returned no enrollment token');
+      }
+
+      const payload: FleetEnrollRequest = {
+        targets: parsedTargets,
+        token: issued.token,
+        compliance_policy_id: compliancePolicyId,
+        parallel,
+      };
+      if (sshUser.trim()) {
+        payload.ssh_user = sshUser.trim();
+      }
+      if (sshKey.trim()) {
+        payload.ssh_key = encodeSshKey(sshKey);
+      }
+      if (sshPassword.trim()) {
+        payload.ssh_password = sshPassword;
+      }
+
       const response = await api.startFleetEnroll(payload);
       setJobId(response.job_id);
       setJobStatus(null);
@@ -732,30 +751,16 @@ export function FleetEnroll(): JSX.Element {
               <p className="text-xs text-text-muted">Key held in memory only — never persisted.</p>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="ssh-password">SSH password (fallback)</Label>
-                <Input
-                  id="ssh-password"
-                  type="password"
-                  value={sshPassword}
-                  onChange={(e) => setSshPassword(e.target.value)}
-                  autoComplete="new-password"
-                  aria-label="ssh password"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="enroll-token">Enrollment token</Label>
-                <Input
-                  id="enroll-token"
-                  type="text"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="cot_…"
-                  autoComplete="off"
-                  aria-label="enrollment token"
-                />
-              </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="ssh-password">SSH password (fallback)</Label>
+              <Input
+                id="ssh-password"
+                type="password"
+                value={sshPassword}
+                onChange={(e) => setSshPassword(e.target.value)}
+                autoComplete="new-password"
+                aria-label="ssh password"
+              />
             </div>
 
             <SelectField

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
 
@@ -28,6 +29,13 @@ type adminSelfHealthResponse struct {
 // adding Ping to the main Store interface.
 type pinger interface {
 	Ping(context.Context) error
+}
+
+// logThroughputProvider is satisfied by storage.Store; used via type
+// assertion so the main Store interface stays narrow and existing test
+// fakes don't all need to implement it.
+type logThroughputProvider interface {
+	LogThroughputSeries(context.Context, uuid.UUID, time.Time, time.Time, time.Duration) ([]storage.LogThroughputBucket, error)
 }
 
 func (s *Server) handleAdminSelfHealth(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +135,19 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 		bucketDur = time.Hour
 	}
 
+	// Period controls the rolling window the series covers. UI sends 1h/24h/7d.
+	// Default to 1h to preserve prior behaviour.
+	periodStr := strings.TrimSpace(r.URL.Query().Get("period"))
+	window := time.Hour
+	switch periodStr {
+	case "24h":
+		window = 24 * time.Hour
+	case "7d":
+		window = 7 * 24 * time.Hour
+	case "30d":
+		window = 30 * 24 * time.Hour
+	}
+
 	resp := ingestThroughputResponse{
 		Stream:   stream,
 		Interval: intervalStr,
@@ -134,32 +155,56 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 		Totals:   ingestThroughputTotals{},
 	}
 
-	if s.dorisClient == nil {
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-
-	// Query across all tenants by using empty string (doris reader handles this).
 	now := time.Now().UTC()
-	since := now.Add(-time.Hour)
+	since := now.Add(-window)
 	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 
-	buckets, err := s.dorisClient.LogThroughputSeries(r.Context(), tenantID, since, now, bucketDur)
-	if err != nil {
-		s.logger.Warn("ingest throughput series", zap.Error(err))
-		writeJSON(w, http.StatusOK, resp)
-		return
+	type bucket struct {
+		ts     time.Time
+		events int64
+	}
+	var buckets []bucket
+
+	// Prefer Doris when configured; fall back to PostgreSQL telemetry_logs so
+	// the dashboard reflects ingest even on deployments without Doris.
+	if s.dorisClient != nil {
+		dorisBuckets, err := s.dorisClient.LogThroughputSeries(r.Context(), tenantID, since, now, bucketDur)
+		if err != nil {
+			s.logger.Warn("ingest throughput series (doris)", zap.Error(err))
+		} else {
+			for _, b := range dorisBuckets {
+				buckets = append(buckets, bucket{ts: b.Timestamp, events: b.Events})
+			}
+		}
+	}
+	if len(buckets) == 0 && s.store != nil {
+		if pg, ok := s.store.(logThroughputProvider); ok {
+			var tenantUUID uuid.UUID
+			if tenantID != "" {
+				if id, err := uuid.Parse(tenantID); err == nil {
+					tenantUUID = id
+				}
+			}
+			pgBuckets, err := pg.LogThroughputSeries(r.Context(), tenantUUID, since, now, bucketDur)
+			if err != nil {
+				s.logger.Warn("ingest throughput series (postgres)", zap.Error(err))
+			} else {
+				for _, b := range pgBuckets {
+					buckets = append(buckets, bucket{ts: b.Timestamp, events: b.Events})
+				}
+			}
+		}
 	}
 
 	bucketSec := bucketDur.Seconds()
 	for _, b := range buckets {
-		eps := float64(b.Events) / bucketSec
+		eps := float64(b.events) / bucketSec
 		resp.Series = append(resp.Series, ingestThroughputPoint{
-			Timestamp:    formatTime(b.Timestamp),
+			Timestamp:    formatTime(b.ts),
 			EventsPerSec: eps,
 			BytesPerSec:  0, // byte tracking not in telemetry_logs schema
 		})
-		resp.Totals.Events += b.Events
+		resp.Totals.Events += b.events
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -209,7 +254,16 @@ func (s *Server) handleAdminTenantsActivity(w http.ResponseWriter, r *http.Reque
 	}
 
 	now := time.Now().UTC()
-	since := now.Add(-24 * time.Hour)
+	window := 24 * time.Hour
+	switch period {
+	case "1h":
+		window = time.Hour
+	case "7d":
+		window = 7 * 24 * time.Hour
+	case "30d":
+		window = 30 * 24 * time.Hour
+	}
+	since := now.Add(-window)
 	rows := make([]tenantActivityRow, 0, len(tenants))
 	activeCount := 0
 

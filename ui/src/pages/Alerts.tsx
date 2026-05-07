@@ -142,8 +142,8 @@ export function Alerts(): JSX.Element {
   };
 
   const handleDeleteRule = async () => {
-    if (!deleteRuleId) return;
-    await client.deleteCorrelationRule(deleteRuleId);
+    if (!deleteRuleId || !tenantId) return;
+    await client.deleteCorrelationRule(deleteRuleId, tenantId);
     setDeleteRuleId(null);
     setRulesReloadToken((n) => n + 1);
   };

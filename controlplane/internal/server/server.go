@@ -263,9 +263,9 @@ type Store interface {
 	DeleteCommandACL(context.Context, uuid.UUID) error
 	// Correlation + behavioral.
 	CreateCorrelationRule(context.Context, storage.CreateCorrelationRuleParams) (*storage.CorrelationRule, error)
-	GetCorrelationRule(context.Context, uuid.UUID) (*storage.CorrelationRule, error)
+	GetCorrelationRule(context.Context, uuid.UUID, uuid.UUID) (*storage.CorrelationRule, error)
 	ListCorrelationRules(context.Context, uuid.UUID) ([]storage.CorrelationRule, error)
-	DeleteCorrelationRule(context.Context, uuid.UUID) error
+	DeleteCorrelationRule(context.Context, uuid.UUID, uuid.UUID) error
 	UpsertBehavioralBaseline(context.Context, uuid.UUID, *uuid.UUID, string, string, map[string]any, int) error
 	ListBehavioralBaselines(context.Context, uuid.UUID, uuid.UUID) ([]storage.BehavioralBaseline, error)
 	CreatePortObservation(context.Context, storage.CreatePortObservationParams) error

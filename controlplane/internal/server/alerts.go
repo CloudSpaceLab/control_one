@@ -203,14 +203,17 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		State:    strings.TrimSpace(r.URL.Query().Get("state")),
 		Severity: strings.TrimSpace(r.URL.Query().Get("severity")),
 	}
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		f.TenantID = id
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
 	}
+	tid, err := uuid.Parse(tenantParam)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	f.TenantID = tid
 	if v := strings.TrimSpace(r.URL.Query().Get("node_id")); v != "" {
 		id, err := uuid.Parse(v)
 		if err != nil {

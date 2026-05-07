@@ -154,17 +154,23 @@ func (c *Client) LogThroughputSeries(ctx context.Context, tenantID string, since
 		bucketDur = time.Minute
 	}
 	bucketSec := int64(bucketDur.Seconds())
+	tenantClause := "tenant_id = ?"
+	args := []any{tenantID, since, until}
+	if strings.TrimSpace(tenantID) == "" {
+		tenantClause = "1 = 1"
+		args = []any{since, until}
+	}
 	q := fmt.Sprintf(`
 		SELECT FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(timestamp) / %d) * %d) AS bucket_ts,
 		       COUNT(*) AS cnt
 		FROM telemetry_logs
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+		WHERE %s AND timestamp >= ? AND timestamp <= ?
 		GROUP BY bucket_ts
 		ORDER BY bucket_ts
-	`, bucketSec, bucketSec)
+	`, bucketSec, bucketSec, tenantClause)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, since, until)
+	rows, err := c.db.QueryContext(qctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("throughput series: %w", err)
 	}

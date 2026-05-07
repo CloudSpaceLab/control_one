@@ -2250,10 +2250,15 @@ export class APIClient {
     return this.request<AdminSelfHealth>('/api/v1/admin/self-health');
   }
 
-  async getAdminIngestThroughput(stream = 'events', interval = '1m'): Promise<AdminIngestThroughput> {
+  async getAdminIngestThroughput(
+    stream = 'events',
+    interval = '1m',
+    period = '1h',
+  ): Promise<AdminIngestThroughput> {
     const search = new URLSearchParams();
     search.set('stream', stream);
     search.set('interval', interval);
+    search.set('period', period);
     return this.request<AdminIngestThroughput>(`/api/v1/admin/ingest/throughput?${search.toString()}`);
   }
 
@@ -2887,11 +2892,11 @@ export class APIClient {
     if (typeof params.limit === 'number') search.set('limit', String(params.limit));
     if (typeof params.offset === 'number') search.set('offset', String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<CorrelationRule>>(`/api/v1/correlation/rules${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<CorrelationRule>>(`/api/v1/correlation-rules${qs ? `?${qs}` : ''}`);
   }
 
   async createCorrelationRule(payload: CreateCorrelationRulePayload): Promise<CorrelationRule> {
-    return this.request<CorrelationRule>('/api/v1/correlation/rules', {
+    return this.request<CorrelationRule>('/api/v1/correlation-rules', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -2989,8 +2994,13 @@ export class APIClient {
     });
   }
 
-  async deleteCorrelationRule(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/correlation/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  async deleteCorrelationRule(id: string, tenantId: string): Promise<void> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    await this.request<void>(
+      `/api/v1/correlation-rules/${encodeURIComponent(id)}?${search.toString()}`,
+      { method: 'DELETE' },
+    );
   }
 
   // ── Command ACLs ──────────────────────────────────────────────────────

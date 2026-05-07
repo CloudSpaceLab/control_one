@@ -50,7 +50,8 @@ export function AdminDashboard(): JSX.Element {
   });
   const ingestQ = useQuery<AdminIngestThroughput>({
     queryKey: ['admin.ingest', period],
-    queryFn: () => client.getAdminIngestThroughput('events', period === '1h' ? '1m' : '5m'),
+    queryFn: () =>
+      client.getAdminIngestThroughput('events', period === '1h' ? '1m' : '5m', period),
     refetchInterval: 30_000,
   });
   const tenantsQ = useQuery<AdminTenantsActivity>({
@@ -189,7 +190,11 @@ export function AdminDashboard(): JSX.Element {
             value={`${(ingestQ.data?.totals.events ?? 0).toLocaleString()}`}
             tone="brand"
             sparkline={(ingestQ.data?.series ?? []).slice(-30).map((p) => p.events_per_sec)}
-            hint={`${(ingestQ.data?.totals.bytes ?? 0).toLocaleString()} bytes · ${period}`}
+            hint={
+              (ingestQ.data?.totals.bytes ?? 0) > 0
+                ? `${(ingestQ.data?.totals.bytes ?? 0).toLocaleString()} bytes · ${period}`
+                : `events · ${period}`
+            }
             loading={ingestQ.isLoading}
           />
         </DashboardGridItem>
