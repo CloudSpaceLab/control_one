@@ -151,7 +151,7 @@ function SSHRepair({
     return () => {
       cancelled = true;
     };
-  }, [client, jobId, showToast]);
+  }, [client, jobId, showToast, node.tenant_id]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const onPickKey = (file: File | null) => {

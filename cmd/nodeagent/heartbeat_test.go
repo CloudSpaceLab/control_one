@@ -21,13 +21,13 @@ import (
 // fields documented in heartbeat.go.
 func TestSendHeartbeatTransmitsPayload(t *testing.T) {
 	var (
-		mu          sync.Mutex
-		gotMethod   string
-		gotPath     string
-		gotCT       string
-		gotBodyRaw  []byte
-		gotPayload  heartbeatPayload
-		callCount   int
+		mu         sync.Mutex
+		gotMethod  string
+		gotPath    string
+		gotCT      string
+		gotBodyRaw []byte
+		gotPayload heartbeatPayload
+		callCount  int
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

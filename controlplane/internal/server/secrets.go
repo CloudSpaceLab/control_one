@@ -325,9 +325,9 @@ func (s *Server) handleSyncSecretGroup(w http.ResponseWriter, r *http.Request, g
 	}
 
 	if enqErr := s.worker.Enqueue(worker.Task{
-		Name:        fmt.Sprintf("secrets.sync.%s", groupID),
-		Job:         syncJob,
-		MaxAttempts: 3,
+		Name:         fmt.Sprintf("secrets.sync.%s", groupID),
+		Job:          syncJob,
+		MaxAttempts:  3,
 		RetryBackoff: 30 * time.Second,
 	}); enqErr != nil {
 		s.logger.Error("enqueue secret sync", zap.Error(enqErr))
