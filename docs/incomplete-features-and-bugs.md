@@ -17,6 +17,7 @@
 | Single-node view: open connections | Tab shows empty even on active node | Server filter `ended_at IS NULL` excludes summary aggregates; UI client-side filter strips RFC1918 peers | **P0** |
 | Single-node view: recommendations | Tab shows empty for every node | `port_observations` table has **zero writers anywhere in the codebase**; the generator's input is permanently empty | **P0** |
 | Patch management | Every deploy fails with "approval required" by default | `runPatchSafetyGates` hard-codes severity=high; default `MinApprovalSeverity` is also high; no approval-then-dispatch loop | **P0** |
+| Compliance results page | Failed result row shows node hostname as **plain text** — no way to navigate to the affected node | `Compliance.tsx:267-268` renders a `<span>` instead of wrapping the hostname in `navigate(\`/nodes/${id}\`)` (the pattern other pages already use) | **P1** UX |
 | Knowledge graph | Comment claims firewall posture; LLM can't answer "what's surging" | KG is a hand-rolled markdown blob over 2 tables; firewall/baselines/Doris/alerts/health all unused | **P1** |
 | AML gateway | PII (BVN, NIN, DOB, address) readable without auth | No `s.authorize()` on AML routes | **P0 security** |
 | Sanctions client | Hardcoded `http://178.79.176.19/moov-watchman-aml` (plain HTTP) | Sanctions data unencrypted in transit | **P0 security** |
@@ -104,6 +105,59 @@ journalctl -u controlone-agent | grep telemetry.metrics.sent
 ### 1.4 100-word verdict
 
 Three independent failures, all rooted in **incomplete agent ↔ controlplane wiring**, not a single ingestion outage. Predictive scoring queries names the agent has never emitted (pure naming/coverage gap). Connections rows likely *do* exist in Doris but are doubly filtered (server-side `ended_at IS NULL` excludes summaries, UI strips RFC1918 peers). Recommendations input table `port_observations` has no writers; the generator is a dead loop. Fix order: 1.3 (smallest, highest-value), then 1.1 (rename metrics), then 1.2 (Doris filter + UI toggle).
+
+---
+
+## 1.5 Compliance results — failed row has no navigation to the affected node
+
+**Symptom (operator-reported):** when a compliance result fails, the table row shows the node hostname but there's no way to click through to the affected node's detail page. Operator has to copy the hostname or UUID and paste it into the URL bar.
+
+**Trace:**
+- UI table column: `ui/src/pages/Compliance.tsx:263-270`
+  ```tsx
+  {
+    id: 'node',
+    header: 'Node',
+    cell: ({ row }) => {
+      const node = nodes.find((n) => n.id === row.original.node_id);
+      return <span className="text-sm text-foreground">{node?.hostname || row.original.node_id || '—'}</span>;
+    },
+  },
+  ```
+- The `node_id` is present on every row (`row.original.node_id` at line 267), but it's rendered inside a non-interactive `<span>`.
+- The pattern for navigating to a node *already exists* in this codebase: `navigate(\`/nodes/${id}\`)` at `ui/src/pages/Nodes.tsx:967, 1070, 1102, 1195`. Compliance.tsx just doesn't use it.
+- Same pattern likely missing on the audit log, security events, and alerts tables — worth a sweep.
+
+**Root cause (confirmed):** plain-text render where a `<button onClick>` or `<Link to>` should be. Single-line UX bug, high-friction for the on-call workflow ("compliance just failed → which node? → click → see why").
+
+**Fix sketch (~30 min):**
+```tsx
+import { useNavigate } from 'react-router-dom';
+// ...
+const navigate = useNavigate();
+// ...
+{
+  id: 'node',
+  header: 'Node',
+  cell: ({ row }) => {
+    const node = nodes.find((n) => n.id === row.original.node_id);
+    if (!row.original.node_id) return <span className="text-text-muted">—</span>;
+    return (
+      <button
+        type="button"
+        onClick={() => navigate(`/nodes/${row.original.node_id}`)}
+        className="text-sm text-link hover:underline"
+      >
+        {node?.hostname || row.original.node_id}
+      </button>
+    );
+  },
+},
+```
+
+**While in there**: extend the same fix to any other page that displays `node_id` as text — likely the alerts table, the audit log, the security events list, and any "investigation" surface. A grep for `row.original.node_id` and `node?.hostname` will surface them.
+
+**Bigger fix (P2):** introduce a `<NodeLink nodeId={...} fallback="—" />` shared component so this pattern is one place, not N. Then reuse it across compliance, alerts, audit log, security events, and any future entity table that references nodes.
 
 ---
 
@@ -266,6 +320,7 @@ This PR's bugs doc should also be referenced from `Wiki/wiki/tasks/backlog.md` s
 2. Single-node view three fixes (§1) — recommendations (smallest), then calibration metric-name contract, then connections filter
 3. Patch-management approval-gate fix (§3.1) + node-selector + packages-on-node tab + heartbeat action-prefix fix
 4. Knowledge-graph minimal enrichment (§2 option A)
+5. Compliance row → node navigation (§1.5) — 30-minute fix; ship with the P0 batch since on-call workflows hit it daily
 
 **P1 — required before bank pilot signoff (~3–4 weeks):**
 
