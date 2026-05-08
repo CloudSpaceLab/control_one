@@ -8,7 +8,7 @@
 **Start date:** 2026-05-11
 **Projected end:** 2026-08-21
 
-PR #51 shipped two strategic docs anchored to the owner's three-pillar lens but no delivery plan: no calendar, no worktree breakdown, no dependency graph, no projected tag. This document is the plan. Scope: full **P0 + P1 + P2 + P3** (~13 working weeks), modeled as parallel worktrees per sprint, executed via a `/loop`-driven coordinator that dispatches per-worktree subagents.
+PR #51 shipped two strategic docs anchored to the owner's three-pillar lens but no delivery plan: no calendar, no worktree breakdown, no dependency graph, no projected tag. This document is the plan. Scope: full **P0 + P1 + P2 + P3** (~13 working weeks), modeled as parallel worktrees per sprint, executed via a `/loop`-driven coordinator that dispatches per-worktree subagents across **three Claude tiers (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) and three frontier providers (Anthropic, OpenAI, Google)** behind a unified Go router introduced in Sprint 5.
 
 Predecessor work (Sprints 0–3, v1.0.0) is closed. This is **Sprint 4 onward**.
 
@@ -64,11 +64,11 @@ Every worktree below carries a pillar tag (🚦 / 🛡️ / 💚 / 🔬 / 🏛�
 | Sprint | Tier | Wall time | Worktrees | Goal |
 |---|---|---|---:|---|
 | **Sprint 4** | P0 | ~2 wks | 13 | Block-any-pilot-demo: security + 3 single-node bugs + patch gate + KG-A + UX nav |
-| **Sprint 5** | P1 | ~3 wks | 10 | Pilot-signoff: MCP/tool_use chain + CVE/KEV + agent reliability + critical test coverage |
+| **Sprint 5** | P1 | ~3 wks | 11 | Pilot-signoff: LLM router + MCP/tool_use chain + CVE/KEV + agent reliability + critical test coverage |
 | **Sprint 6** | P2 | ~2 wks | 10 | Hardening: KG tool-shaped + Probo cherry-picks + scalability + evidence backend |
 | **Sprint 7** | P3 | ~1 wk | 6 | Cleanup: telemetry rough edges + shim removal + production runbook |
 
-**39 worktrees total. Projected v1.1.0-pilot tag: 2026-08-21.**
+**40 worktrees total. Projected v1.1.0-pilot tag: 2026-08-21.**
 
 ---
 
@@ -110,9 +110,49 @@ The loop dispatches each worktree to a Claude variant matched to its complexity,
 | **L2 — Standard** | Sonnet 4.6 | 1–3 d effort, multi-file but bounded scope, follows an existing pattern in the repo (e.g. add a new endpoint matching siblings, a new tab on an existing page, refactor with clear analogue) | Default tier. Most worktrees land here. |
 | **L3 — Architectural** | Opus 4.7 | New control flow, agent↔server contract change, security-critical correctness, code with no analogue in the repo (e.g. MCP wrapper, `tool_use` loop in `ai_ask.go`, KG tool-shaped rewrite, calibration metric-name contract spanning agent + predictive engine, CVE/KEV pipeline) | Highest cost, deepest reasoning. Reserved for the rows where wrong-shape changes block the next sprint. |
 
-**Tier appears in every worktree table below as the `Model` column.** Tier counts across the 39 worktrees: **L1 Haiku ×14, L2 Sonnet ×19, L3 Opus ×6**. Owner can override any row before kickoff (e.g. promote a borderline L2 to L3 if the operator-mode trigger is fragile).
+**Tier appears in every worktree table below as the `Model` column.** Tier counts across the 40 worktrees: **L1 Haiku ×14, L2 Sonnet ×19, L3 Opus ×7**. Owner can override any row before kickoff (e.g. promote a borderline L2 to L3 if the operator-mode trigger is fragile).
 
-**Re-dispatch escalation:** if an L1 or L2 agent errors twice on CI/lint or opens a PR with a structural review comment, the loop promotes that worktree one tier on the next dispatch. `c1-aml-auth-fix` errored as L1 → next tick redispatch as L2. Flagged in the tick table snapshot.
+**Re-dispatch escalation (two axes):**
+- *Tier promotion:* if an L1/L2 row errors twice on CI/lint or hits a structural review comment, the loop promotes one tier on next dispatch. `c1-aml-auth-fix` errored as L1 → next tick redispatch as L2.
+- *Provider fallback:* if the primary provider returns 5xx or the agent errors twice, the loop reroutes to the secondary provider (see fallback chain in Multi-provider routing below). Both axes can fire on the same row; tier promotion happens within a provider, fallback happens across providers.
+
+### Multi-provider routing
+
+The dispatch policy spans **three Claude variants AND three frontier providers**, not just Anthropic. Sprint 5 introduces a thin LLM router (`c1-llm-router`, see §5) that wraps three SDKs behind one Go interface; the loop selects provider per-worktree based on the model's known strengths.
+
+**Library pick-list (Go server side):**
+
+```
+github.com/anthropics/anthropic-sdk-go    # Claude — default; Opus/Sonnet/Haiku
+github.com/openai/openai-go               # GPT family — test-gen, prose, structured extraction
+google.golang.org/genai                   # Gemini family — long-context wins
+```
+
+**Why three providers, not one:**
+1. **Diversity of strengths** — GPT-5 family is stronger at test generation and prose; Gemini 2.5 has 2M-token context that absorbs full KEV/CVE catalogs in one pass.
+2. **Redundancy** — an Anthropic API outage on a kickoff morning shouldn't pause the entire sprint; the loop falls back across providers.
+3. **Cost shape** — long-context jobs are cheaper on Gemini Flash than Opus 4.7 even at the same quality bar.
+4. **Independent benchmarking** — a row that fails twice on one provider auto-redispatches on a second before owner escalation.
+
+**Per-worktree provider overrides** (default is Anthropic; rows below override):
+
+| Worktree | Sprint | Provider + Model | Why |
+|---|---|---|---|
+| `c1-cve-kev-osv` | S5 | **Google Gemini 2.5 Pro** | Scans full CISA KEV catalog + OSV database + `node_packages`; long-context dominates here |
+| `c1-critical-test-coverage` | S5 | **OpenAI GPT-5** | Test generation across 4 untested Go modules — GPT-5 family's strongest documented modality |
+| `c1-process-tree-hydrate` | S5 | **OpenAI GPT-5** | Algorithmic recursion over `process_lineage`; well-trodden GPT-5 territory |
+| `c1-trivy-cve-detail` | S5 | **OpenAI GPT-5** | Parser/adapter work — structured-data extraction from Trivy JSON output |
+| `c1-dashboard-scalability` | S6 | **Google Gemini 2.5 Pro** | Holds whole dashboard query tree + Doris MV definitions in context simultaneously |
+| `c1-ingest-version-tolerance` | S6 | **Google Gemini 2.5 Flash** | Wire-format compatibility analysis across agent + controlplane versions |
+| `c1-evidence-metadata-jsonb` | S6 | **OpenAI GPT-5-mini** | JSONB schema reconciliation — structured-data work, cost-shaped to mini |
+| `c1-rollup-reconciliation` | S7 | **Google Gemini 2.5 Pro** | Cross-system reconciliation — Postgres `IncrementHourlyRollup` vs Doris `events_per_hour_mv` held in one context window |
+| `c1-prod-runbook-wiki` | S7 | **OpenAI GPT-5** | Long-form prose writing for on-call audience |
+
+All other 31 rows route to Anthropic per the L1/L2/L3 model column.
+
+**Provider mix across 40 worktrees:** Anthropic ×31 (78%), OpenAI ×5 (12%), Google ×4 (10%).
+
+**Fallback chain:** the router records `{worktree, primary, secondary, tertiary}` per row. If primary errors twice (CI/lint or 5xx from API), the next dispatch routes to secondary; if secondary errors, tertiary. Default chain for Anthropic-default rows is `Anthropic → OpenAI → Google`; Gemini-primary rows fall back `Google → Anthropic → OpenAI`. Owner is paged before the chain exhausts.
 
 ---
 
@@ -204,6 +244,7 @@ All other rows are independent — parallel-safe.
 
 | Worktree | Branch | Pillar | Source | Effort | Model | PR | Status | Merge SHA |
 |---|---|---|---|---|---|---|---|---|
+| `c1-llm-router` | `feat/c1-s5-llm-router` | 🔬 | new (multi-provider) | 1 d | **L3 Opus** | — | pending | — |
 | `c1-mcp-wrapper` | `feat/c1-s5-mcp-wrapper` | 🔬 | gap §6 day 1 | 1 d | **L3 Opus** | — | pending | — |
 | `c1-tooluse-loop` | `feat/c1-s5-tooluse-loop` | 🔬 | gap §6 day 2 | 1 d | **L3 Opus** | — | pending | — |
 | `c1-streaming-citations` | `feat/c1-s5-stream-cite` | 🔬 | gap §6 day 3 | 1 d | L2 Sonnet | — | pending | — |
@@ -215,32 +256,37 @@ All other rows are independent — parallel-safe.
 | `c1-critical-test-coverage` | `test/c1-s5-coverage` | 🏛️ | bugs §5 #9 | 4 d | L2 Sonnet | — | pending | — |
 | `c1-trivy-cve-detail` | `fix/c1-s5-trivy-detail` | 🛡️ | bugs §5 #10 | 1 d | L1 Haiku | — | pending | — |
 
-**S5 tier mix:** L1 ×1 / L2 ×6 / L3 ×3. Three Opus seats reserved for genuinely architectural work: MCP wrapper (new Go package + transport choice), the `tool_use` loop refactor in `ai_ask.go` (new control flow with stop-reason parsing), and the CVE/KEV/OSV pipeline (new feed integration with KEV+EPSS prioritization). Day-3..day-5 of the MCP chain are mechanical extensions of the day-1/day-2 architecture, hence Sonnet.
+**S5 tier mix:** L1 ×1 / L2 ×6 / L3 ×4. Four Opus seats reserved for genuinely architectural work: the LLM router (new Go package abstracting Anthropic + OpenAI + Google SDKs), MCP wrapper (new Go package + transport choice), the `tool_use` loop refactor in `ai_ask.go` (new control flow with stop-reason parsing), and the CVE/KEV/OSV pipeline (new feed integration with KEV+EPSS prioritization, Gemini-primary). Day-3..day-5 of the MCP chain are mechanical extensions of the day-1/day-2 architecture, hence Sonnet.
+
+**S5 worktree count: 11** (was 10 before adding `c1-llm-router`).
 
 ### Hard-gate DAG (intra-sprint)
 
 ```
-c1-mcp-wrapper → c1-tooluse-loop → c1-streaming-citations
-                                 → c1-tool-rbac
-                                 → c1-operator-mode
-                                 (strict day-1..day-5 chain; one agent
-                                  drives this branch sequentially)
+c1-llm-router → c1-mcp-wrapper → c1-tooluse-loop → c1-streaming-citations
+                                                 → c1-tool-rbac
+                                                 → c1-operator-mode
+                                                 (strict day-0..day-5 chain;
+                                                  one agent drives this branch
+                                                  sequentially)
 
-c1-cve-kev-osv  ⊥  the MCP chain  (independent, runs in parallel for ~13 d)
+c1-cve-kev-osv  ⊥  the MCP chain  (independent, runs in parallel for ~13 d
+                                  on Google Gemini 2.5 Pro)
 
 c1-calibration-metric (S4) ──→ c1-operator-mode
                                 (operator-mode triggers on anomaly emits;
                                  needs real signals from S4 calibration fix)
 ```
 
-Non-MCP rows all parallel-safe.
+`c1-llm-router` is the day-0 prerequisite: all subsequent S5/S6 LLM-touching code calls through `controlplane/internal/llm/router.go` rather than `anthropic-sdk-go` directly. Non-MCP, non-router rows all parallel-safe.
 
 ### Per-worktree exit criteria
 
 Same six rules as S4. Additional:
+- `c1-llm-router`: the same `ai_ask.go` question routes successfully through Anthropic, OpenAI, and Google providers in three smoke-test invocations; fallback chain triggers on simulated 5xx
 - MCP chain rows: each day's tool surface is callable from `curl /ai/ask` with at least one demonstrable tool_use round-trip
 - `c1-operator-mode`: an injected anomaly emit results in an `investigations` table row within 60 s
-- `c1-cve-kev-osv`: at least one `node_packages` row gets a CVE/KEV stamp end-to-end
+- `c1-cve-kev-osv`: at least one `node_packages` row gets a CVE/KEV stamp end-to-end (via Gemini 2.5 Pro long-context scan)
 
 ### Sprint exit gate
 
@@ -443,7 +489,8 @@ These are flagged here, not silently chosen. Owner ack required before S4 kickof
 | `c1-heartbeat-action-prefix` | `controlplane/internal/server/heartbeat.go:259` |
 | `c1-kg-minimal-enrichment` | `controlplane/internal/server/knowledge_graph.go:235-323` |
 | `c1-compliance-row-nav` | `controlplane/ui/src/pages/Compliance.tsx:263-270` |
-| `c1-mcp-wrapper` → `c1-operator-mode` | `controlplane/internal/server/ai_ask.go:256`, `investigate.go:79, 738`, `events_anomaly.go:22-300` |
+| `c1-llm-router` | new package `controlplane/internal/llm/router.go` wrapping `anthropic-sdk-go` + `openai-go` + `genai`; provider fallback chain + per-row override registry |
+| `c1-mcp-wrapper` → `c1-operator-mode` | `controlplane/internal/server/ai_ask.go:256`, `investigate.go:79, 738`, `events_anomaly.go:22-300` (all calls go through `internal/llm/router` not `anthropic-sdk-go` directly) |
 | `c1-cve-kev-osv` | `node_packages` + new CVE feed worker |
 | `c1-agent-fatal-cleanup` | `cmd/nodeagent/` (15+ `panic`/`log.Fatal`) |
 | `c1-process-tree-hydrate` | process-tree handler (stub) |
