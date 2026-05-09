@@ -311,7 +311,21 @@ Same six rules as S4. Additional:
 
 **Goal:** turn the user's example incident — log accumulating MBs fast → connection spike → CPU/memory pin — into a single `investigation_event` row containing the full timeline (network deltas, resource deltas, file-system growth, redacted log tails, root-cause verdict, recommended action). After S6, MCP/`tool_use` from S5 isn't just *reasoning*; it has *evidence* across five dimensions, plus a gated action layer for safe auto-de-escalation.
 
+> **This sprint is mostly architectural refactor, not new features.** See [`c1-node-agent.md`](./c1-node-agent.md) for the living architecture document. Of the 7 worktrees in this sprint, 5 are extensions of existing plumbing (fsnotify is already in use for log tailing; Doris already has 5 time-series tables; `investigate.go` already supports `since`/`until` time-window queries; 8 anomaly detectors already fire). Only 2 are genuinely net-new architectural components: the cross-reference + RCA synthesizer (`c1-root-cause-synth`) and the broadened action surface (`c1-auto-deescalate`). The reframe matters because it sets the right effort baseline and review posture: most of S6 is wiring, not greenfield design.
+
 The synthesizer (`c1-root-cause-synth`) routes to **Google Gemini 2.5 Pro** for its 2 M-token context window — a real disk-fill incident easily ships >200 K tokens of timeline + log tails into one synthesis call. Anthropic Opus 4.7 stays as the fallback per the multi-provider router from S5.
+
+### Refactor vs net-new (per [`c1-node-agent.md`](./c1-node-agent.md) §9)
+
+| Worktree | Type | Existing plumbing it extends |
+|---|---|---|
+| `c1-fs-watcher` | **Extension** | `internal/telemetry/logs/collector_file.go` already runs fsnotify; just add a size-sampling emitter |
+| `c1-flowrate-aggregator` | **Extension** | New Doris MV over existing `process_connections` table |
+| `c1-bandwidth-rollups` | **Extension** | New Doris MV over `process_connections` (tighter than `events_per_hour_mv`) |
+| `c1-resource-delta-tool` | **Extension** | Wraps existing time-window query in `investigate.go:288-334`; needs S4 `c1-calibration-metric-contract` to land host metrics first |
+| `c1-log-tail-tool` | **Extension** | Logs already in Doris via `telemetry/logs/collector_file.go`; new query handler + redaction layer |
+| `c1-root-cause-synth` | **Net-new orchestration** | No synthesizer/correlator exists today (8 detectors fire independently) |
+| `c1-auto-deescalate` | **Net-new agent capability** | Only `firewall.rule_add/delete` + scripts exist today; truncate/kill-proc/kill-conn are absent |
 
 ### Tick table (planned)
 
@@ -327,17 +341,19 @@ The synthesizer (`c1-root-cause-synth`) routes to **Google Gemini 2.5 Pro** for 
 
 ### Worktrees
 
-| Worktree | Branch | Pillar | Source | Effort | Model | PR | Status | Merge SHA |
+| Worktree | Branch | Pillar | Type | Effort | Model | PR | Status | Merge SHA |
 |---|---|---|---|---|---|---|---|---|
-| `c1-fs-watcher` | `feat/c1-s6-fs-watcher` | 💚🔬 | new (event-capture) | 3 d | L2 Sonnet | — | pending | — |
-| `c1-flowrate-aggregator` | `feat/c1-s6-flowrate` | 🚦🔬 | new (event-capture) | 2 d | L2 Sonnet | — | pending | — |
-| `c1-bandwidth-rollups` | `feat/c1-s6-bandwidth` | 🚦🔬 | new (event-capture) | 1 d | L1 Haiku | — | pending | — |
-| `c1-resource-delta-tool` | `feat/c1-s6-delta-tool` | 🔬 | new (event-capture) | 1 d | L1 Haiku | — | pending | — |
-| `c1-log-tail-tool` | `feat/c1-s6-log-tail` | 🔬 | new (event-capture) | 2 d | L2 Sonnet | — | pending | — |
-| `c1-root-cause-synth` | `feat/c1-s6-rc-synth` | 🔬 | new (event-capture) | 2 d | **L3 Opus** *(Gemini 2.5 Pro primary, Opus 4.7 fallback)* | — | pending | — |
-| `c1-auto-deescalate` | `feat/c1-s6-deescalate` | 🛡️🔬 | new (event-capture); default OFF per `tenant.auto_deescalate` | 4 d | **L3 Opus** | — | pending | — |
+| `c1-fs-watcher` | `feat/c1-s6-fs-watcher` | 💚🔬 | extends `collector_file.go` | 1.5 d | L2 Sonnet | — | pending | — |
+| `c1-flowrate-aggregator` | `feat/c1-s6-flowrate` | 🚦🔬 | new Doris MV over `process_connections` | 1 d | L1 Haiku | — | pending | — |
+| `c1-bandwidth-rollups` | `feat/c1-s6-bandwidth` | 🚦🔬 | new Doris MV over `process_connections` | 0.5 d | L1 Haiku | — | pending | — |
+| `c1-resource-delta-tool` | `feat/c1-s6-delta-tool` | 🔬 | extends `investigate.go` window query | 1 d | L1 Haiku | — | pending | — |
+| `c1-log-tail-tool` | `feat/c1-s6-log-tail` | 🔬 | new query handler over existing log ingest | 1 d | L2 Sonnet | — | pending | — |
+| `c1-root-cause-synth` | `feat/c1-s6-rc-synth` | 🔬 | **net-new orchestration** | 3 d | **L3 Opus** *(Gemini 2.5 Pro primary, Opus 4.7 fallback)* | — | pending | — |
+| `c1-auto-deescalate` | `feat/c1-s6-deescalate` | 🛡️🔬 | **net-new agent capability**; default OFF per `tenant.auto_deescalate` | 4 d | **L3 Opus** | — | pending | — |
 
-**S6 tier mix:** L1 ×2 / L2 ×3 / L3 ×2. Two Opus seats: the synthesizer (architectural — composes 5 evidence streams into one verdict) and auto-de-escalate (safety-critical — rogue-process kill must never miss the PID-allowlist guard).
+**S6 tier mix:** L1 ×3 / L2 ×2 / L3 ×2. Two Opus seats reserved for the genuinely architectural rows: the synthesizer (composes 5 evidence streams into one verdict over Gemini long-context) and auto-de-escalate (safety-critical — rogue-process kill must never miss the PID-allowlist guard).
+
+**Effort reframe (post-agent-architecture audit):** 5 rows downgraded to L1 Haiku or shorter L2 Sonnet because the audit confirmed they're extensions of plumbing that already exists (fsnotify, time-window queries, log ingest, time-series Doris schema). Total effort ~12 wd vs original 15 wd estimate; critical path unchanged at ~10 wd because the sequential dependency `synth → de-escalate` (3 + 4 = 7 d) plus longest collector (1.5 d) still dominates.
 
 ### Hard-gate DAG (intra-sprint)
 
