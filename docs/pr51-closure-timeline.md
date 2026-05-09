@@ -6,9 +6,11 @@
 **Companion docs:** [`gaps-vs-probo-holmesgpt.md`](./gaps-vs-probo-holmesgpt.md), [`incomplete-features-and-bugs.md`](./incomplete-features-and-bugs.md)
 **Target tag:** v1.1.0-pilot
 **Start date:** 2026-05-11
-**Projected end:** 2026-08-21
+**Projected end:** 2026-09-04
 
-PR #51 shipped two strategic docs anchored to the owner's three-pillar lens but no delivery plan: no calendar, no worktree breakdown, no dependency graph, no projected tag. This document is the plan. Scope: full **P0 + P1 + P2 + P3** (~13 working weeks), modeled as parallel worktrees per sprint, executed via a `/loop`-driven coordinator that dispatches per-worktree subagents across **three Claude tiers (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) and three frontier providers (Anthropic, OpenAI, Google)** behind a unified Go router introduced in Sprint 5.
+PR #51 shipped two strategic docs anchored to the owner's three-pillar lens but no delivery plan: no calendar, no worktree breakdown, no dependency graph, no projected tag. This document is the plan. Scope: full **P0 + P1 + P1.5 + P2 + P3** (~15 working weeks), modeled as parallel worktrees per sprint, executed via a `/loop`-driven coordinator that dispatches per-worktree subagents across **three Claude tiers (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) and three frontier providers (Anthropic, OpenAI, Google)** behind a unified Go router introduced in Sprint 5.
+
+**P1.5 (Sprint 6) is the investigation event-capture layer** — without it, the MCP/`tool_use` surface from S5 can reason but the evidence base is shallow. Concrete target: when "server disk space starts depreciating fast because a log is accumulating MBs fast" happens in production, the investigation surface should be able to answer, in one chat turn, the full timeline — connection-rate doubling on port 80 (15→30 cps), 2 TB transferred in the spike window, CPU 20→99%, memory 60→99%, three log files growing 30 MB → 13 GB, the app/db log lines that explain the cause — and (when safe gates pass) auto-de-escalate via smart log truncation or rogue-connection/process kill before the host locks out.
 
 Predecessor work (Sprints 0–3, v1.0.0) is closed. This is **Sprint 4 onward**.
 
@@ -56,6 +58,12 @@ Every worktree below carries a pillar tag (🚦 / 🛡️ / 💚 / 🔬 / 🏛�
 | 10+ REST investigation endpoints | Single-shot LLM at `controlplane/internal/server/ai_ask.go:256` — no `tool_use` loop |
 | Hand-rolled markdown KG | KG ~15% of what its intro claims (no firewall, alerts, health, baselines, Doris reads) |
 | | OpenReplay session recording is a no-op stub |
+| | **No per-port flow-rate tracking (cps deltas)** — `process_connections` has rows but no rolling-window aggregate |
+| | **No file-system growth tracking** — agent doesn't watch log dirs; can't say "this log grew 13 GB in 8m" |
+| | **No log-tail tool** — LLM can't read app/db log lines to diagnose root cause |
+| | **No resource-delta tool** — LLM can ask for a metric value but not "value at T0 vs T1" |
+| | **No root-cause synthesizer** — anomaly emit + dimensions + log tails never collapsed into one verdict row |
+| | **No auto-de-escalation action layer** — smart log truncation, rogue-conn kill, rogue-process kill |
 
 ---
 
@@ -65,10 +73,11 @@ Every worktree below carries a pillar tag (🚦 / 🛡️ / 💚 / 🔬 / 🏛�
 |---|---|---|---:|---|
 | **Sprint 4** | P0 | ~2 wks | 13 | Block-any-pilot-demo: security + 3 single-node bugs + patch gate + KG-A + UX nav |
 | **Sprint 5** | P1 | ~3 wks | 11 | Pilot-signoff: LLM router + MCP/tool_use chain + CVE/KEV + agent reliability + critical test coverage |
-| **Sprint 6** | P2 | ~2 wks | 10 | Hardening: KG tool-shaped + Probo cherry-picks + scalability + evidence backend |
-| **Sprint 7** | P3 | ~1 wk | 6 | Cleanup: telemetry rough edges + shim removal + production runbook |
+| **Sprint 6** | P1.5 | ~2 wks | 7 | **Investigation event-capture:** fs-watcher + flow-rate + bandwidth rollups + delta tool + log-tail + root-cause synth + auto-de-escalate |
+| **Sprint 7** | P2 | ~2 wks | 10 | Hardening: KG tool-shaped + Probo cherry-picks + scalability + evidence backend |
+| **Sprint 8** | P3 | ~1 wk | 6 | Cleanup: telemetry rough edges + shim removal + production runbook |
 
-**40 worktrees total. Projected v1.1.0-pilot tag: 2026-08-21.**
+**47 worktrees total. Projected v1.1.0-pilot tag: 2026-09-04.**
 
 ---
 
@@ -110,7 +119,7 @@ The loop dispatches each worktree to a Claude variant matched to its complexity,
 | **L2 — Standard** | Sonnet 4.6 | 1–3 d effort, multi-file but bounded scope, follows an existing pattern in the repo (e.g. add a new endpoint matching siblings, a new tab on an existing page, refactor with clear analogue) | Default tier. Most worktrees land here. |
 | **L3 — Architectural** | Opus 4.7 | New control flow, agent↔server contract change, security-critical correctness, code with no analogue in the repo (e.g. MCP wrapper, `tool_use` loop in `ai_ask.go`, KG tool-shaped rewrite, calibration metric-name contract spanning agent + predictive engine, CVE/KEV pipeline) | Highest cost, deepest reasoning. Reserved for the rows where wrong-shape changes block the next sprint. |
 
-**Tier appears in every worktree table below as the `Model` column.** Tier counts across the 40 worktrees: **L1 Haiku ×14, L2 Sonnet ×19, L3 Opus ×7**. Owner can override any row before kickoff (e.g. promote a borderline L2 to L3 if the operator-mode trigger is fragile).
+**Tier appears in every worktree table below as the `Model` column.** Tier counts across the 47 worktrees: **L1 Haiku ×16, L2 Sonnet ×22, L3 Opus ×9**. Owner can override any row before kickoff (e.g. promote a borderline L2 to L3 if the operator-mode trigger is fragile).
 
 **Re-dispatch escalation (two axes):**
 - *Tier promotion:* if an L1/L2 row errors twice on CI/lint or hits a structural review comment, the loop promotes one tier on next dispatch. `c1-aml-auth-fix` errored as L1 → next tick redispatch as L2.
@@ -142,15 +151,16 @@ google.golang.org/genai                   # Gemini family — long-context wins
 | `c1-critical-test-coverage` | S5 | **OpenAI GPT-5** | Test generation across 4 untested Go modules — GPT-5 family's strongest documented modality |
 | `c1-process-tree-hydrate` | S5 | **OpenAI GPT-5** | Algorithmic recursion over `process_lineage`; well-trodden GPT-5 territory |
 | `c1-trivy-cve-detail` | S5 | **OpenAI GPT-5** | Parser/adapter work — structured-data extraction from Trivy JSON output |
-| `c1-dashboard-scalability` | S6 | **Google Gemini 2.5 Pro** | Holds whole dashboard query tree + Doris MV definitions in context simultaneously |
-| `c1-ingest-version-tolerance` | S6 | **Google Gemini 2.5 Flash** | Wire-format compatibility analysis across agent + controlplane versions |
-| `c1-evidence-metadata-jsonb` | S6 | **OpenAI GPT-5-mini** | JSONB schema reconciliation — structured-data work, cost-shaped to mini |
-| `c1-rollup-reconciliation` | S7 | **Google Gemini 2.5 Pro** | Cross-system reconciliation — Postgres `IncrementHourlyRollup` vs Doris `events_per_hour_mv` held in one context window |
-| `c1-prod-runbook-wiki` | S7 | **OpenAI GPT-5** | Long-form prose writing for on-call audience |
+| `c1-root-cause-synth` | **S6 (P1.5)** | **Google Gemini 2.5 Pro** | Synthesizes 5 dimension time-series + multi-MB log tails into one verdict — easily exceeds 200 K tokens for a real incident |
+| `c1-dashboard-scalability` | S7 | **Google Gemini 2.5 Pro** | Holds whole dashboard query tree + Doris MV definitions in context simultaneously |
+| `c1-ingest-version-tolerance` | S7 | **Google Gemini 2.5 Flash** | Wire-format compatibility analysis across agent + controlplane versions |
+| `c1-evidence-metadata-jsonb` | S7 | **OpenAI GPT-5-mini** | JSONB schema reconciliation — structured-data work, cost-shaped to mini |
+| `c1-rollup-reconciliation` | S8 | **Google Gemini 2.5 Pro** | Cross-system reconciliation — Postgres `IncrementHourlyRollup` vs Doris `events_per_hour_mv` held in one context window |
+| `c1-prod-runbook-wiki` | S8 | **OpenAI GPT-5** | Long-form prose writing for on-call audience |
 
-All other 31 rows route to Anthropic per the L1/L2/L3 model column.
+All other 37 rows route to Anthropic per the L1/L2/L3 model column.
 
-**Provider mix across 40 worktrees:** Anthropic ×31 (78%), OpenAI ×5 (12%), Google ×4 (10%).
+**Provider mix across 47 worktrees:** Anthropic ×37 (79%), OpenAI ×5 (11%), Google ×5 (10%).
 
 **Fallback chain:** the router records `{worktree, primary, secondary, tertiary}` per row. If primary errors twice (CI/lint or 5xx from API), the next dispatch routes to secondary; if secondary errors, tertiary. Default chain for Anthropic-default rows is `Anthropic → OpenAI → Google`; Gemini-primary rows fall back `Google → Anthropic → OpenAI`. Owner is paged before the chain exhausts.
 
@@ -297,7 +307,212 @@ Same six rules as S4. Additional:
 
 ---
 
-## 6. Sprint 6 — P2 (hardening)
+## 6. Sprint 6 — P1.5 (Investigation event-capture)
+
+**Goal:** turn the user's example incident — log accumulating MBs fast → connection spike → CPU/memory pin — into a single `investigation_event` row containing the full timeline (network deltas, resource deltas, file-system growth, redacted log tails, root-cause verdict, recommended action). After S6, MCP/`tool_use` from S5 isn't just *reasoning*; it has *evidence* across five dimensions, plus a gated action layer for safe auto-de-escalation.
+
+The synthesizer (`c1-root-cause-synth`) routes to **Google Gemini 2.5 Pro** for its 2 M-token context window — a real disk-fill incident easily ships >200 K tokens of timeline + log tails into one synthesis call. Anthropic Opus 4.7 stays as the fallback per the multi-provider router from S5.
+
+### Tick table (planned)
+
+| Tick | Wall time | Pacing | Action | Snapshot |
+|---:|---|---|---|---|
+| 0 | 2026-06-22 09:00 | — | Dispatch 5 collectors/tools as parallel Agent batch (#1 fs-watcher, #2 flowrate, #3 bandwidth, #4 delta-tool, #5 log-tail) | `5 dispatched / 0 merged` |
+| 1..3 | +1800 s | 30 min | First L1 rows land (#3 bandwidth-rollups, #4 resource-delta-tool) | `2 merged / 3 in-progress` |
+| 4..6 | +1800 s | 30 min | L2 rows land (#2 flowrate, #5 log-tail) | `4 merged / 1 in-progress` |
+| 7 | day 3 | — | #1 fs-watcher merges (cross-OS work took longest); dispatch #6 root-cause-synth | `5 merged / 1 dispatched` |
+| 8..9 | +1800 s | 30 min | #6 synthesizer lands (Gemini long-context smoke-tested); dispatch #7 auto-deescalate | `6 merged / 1 dispatched` |
+| 10..N | per day | 30 min | #7 auto-deescalate iterates with safety-gate review | `6 merged / 1 review` |
+| N | exit | — | All 7 merged + disk-fill scenario reproduces an `investigation_event` row in <90 s | `7 merged → SprintGate` |
+
+### Worktrees
+
+| Worktree | Branch | Pillar | Source | Effort | Model | PR | Status | Merge SHA |
+|---|---|---|---|---|---|---|---|---|
+| `c1-fs-watcher` | `feat/c1-s6-fs-watcher` | 💚🔬 | new (event-capture) | 3 d | L2 Sonnet | — | pending | — |
+| `c1-flowrate-aggregator` | `feat/c1-s6-flowrate` | 🚦🔬 | new (event-capture) | 2 d | L2 Sonnet | — | pending | — |
+| `c1-bandwidth-rollups` | `feat/c1-s6-bandwidth` | 🚦🔬 | new (event-capture) | 1 d | L1 Haiku | — | pending | — |
+| `c1-resource-delta-tool` | `feat/c1-s6-delta-tool` | 🔬 | new (event-capture) | 1 d | L1 Haiku | — | pending | — |
+| `c1-log-tail-tool` | `feat/c1-s6-log-tail` | 🔬 | new (event-capture) | 2 d | L2 Sonnet | — | pending | — |
+| `c1-root-cause-synth` | `feat/c1-s6-rc-synth` | 🔬 | new (event-capture) | 2 d | **L3 Opus** *(Gemini 2.5 Pro primary, Opus 4.7 fallback)* | — | pending | — |
+| `c1-auto-deescalate` | `feat/c1-s6-deescalate` | 🛡️🔬 | new (event-capture); default OFF per `tenant.auto_deescalate` | 4 d | **L3 Opus** | — | pending | — |
+
+**S6 tier mix:** L1 ×2 / L2 ×3 / L3 ×2. Two Opus seats: the synthesizer (architectural — composes 5 evidence streams into one verdict) and auto-de-escalate (safety-critical — rogue-process kill must never miss the PID-allowlist guard).
+
+### Hard-gate DAG (intra-sprint)
+
+```
+c1-fs-watcher ──────────┐
+c1-flowrate-aggregator ─┤
+c1-bandwidth-rollups ───┼─→ c1-root-cause-synth ─→ c1-auto-deescalate
+c1-resource-delta-tool ─┤   (synthesizer needs        (de-escalate fires
+c1-log-tail-tool ───────┘    all 5 evidence streams)   only on synth verdict)
+```
+
+**Cross-sprint deps:**
+- `c1-mcp-wrapper` (S5) → `c1-resource-delta-tool` and `c1-log-tail-tool` (both register as MCP tools via the S5 wrapper)
+- `c1-operator-mode` (S5) → `c1-root-cause-synth` (synth subscribes to operator-mode anomaly emits)
+- `c1-connections-doublefilter` (S4) → `c1-bandwidth-rollups` (Doris MV reads the unblocked connection rows)
+
+### Runtime flow — the disk-fill scenario, end-to-end
+
+This diagram traces what happens at production runtime on a node experiencing the user's example incident. Each labeled box is implemented by a specific worktree from this sprint.
+
+```
+                       ┌─────────────────────────────────────────┐
+                       │ ANOMALY EMIT (severity ≥ high)          │
+                       │ from S5 c1-operator-mode                │
+                       │ trigger: e.g. disk_pct > 90 + Δ rapid   │
+                       └─────────────────┬───────────────────────┘
+                                         │
+                                         ▼
+                       ┌─────────────────────────────────────────┐
+                       │ #6 c1-root-cause-synth (orchestrator)   │
+                       │ window = [emit_ts − 10m, emit_ts]       │
+                       └─────────────────┬───────────────────────┘
+                                         │  fan-out (parallel)
+        ┌──────────────┬─────────────────┼─────────────────┬──────────────┐
+        ▼              ▼                 ▼                 ▼              ▼
+  ┌──────────┐   ┌──────────┐     ┌──────────┐     ┌──────────┐   ┌──────────┐
+  │   #1     │   │   #2     │     │   #3     │     │   #4     │   │   #5     │
+  │fs-watcher│   │flowrate- │     │bandwidth-│     │resource- │   │log-tail- │
+  │          │   │aggregator│     │rollups   │     │delta-tool│   │tool      │
+  ├──────────┤   ├──────────┤     ├──────────┤     ├──────────┤   ├──────────┤
+  │ 3 logs   │   │ port 80  │     │ 2 TB     │     │ CPU      │   │ last     │
+  │ grew     │   │ cps      │     │ bytes    │     │ 20 → 99% │   │ 5 MB of  │
+  │ 30 MB →  │   │ 15 → 30  │     │ in/out   │     │ MEM      │   │ each app │
+  │ 13 GB    │   │ /s       │     │ in win   │     │ 60 → 99% │   │ + db log │
+  │ /var/log │   │          │     │          │     │          │   │ (redact) │
+  │ growth_  │   │ +100%    │     │          │     │          │   │          │
+  │ rate ↑   │   │ delta    │     │          │     │          │   │          │
+  └────┬─────┘   └────┬─────┘     └────┬─────┘     └────┬─────┘   └────┬─────┘
+       │              │                │                │              │
+       │              │                │                │              │  RBAC + redact
+       │              │                │                │              │  filter applied
+       └──────────────┴────────┬───────┴────────────────┴──────────────┘
+                               │  five JSON evidence blobs
+                               ▼
+                    ┌────────────────────────────────────┐
+                    │ #6 c1-root-cause-synth (synthesis) │
+                    │                                    │
+                    │ Google Gemini 2.5 Pro              │
+                    │ long-context pass over:            │
+                    │   timeline + 5 dim values + tails  │
+                    │                                    │
+                    │ Anthropic Opus 4.7 = fallback      │
+                    └────────────────┬───────────────────┘
+                                     │
+                                     ▼
+                    ┌────────────────────────────────────┐
+                    │ INSERT investigation_events ROW    │
+                    │ {                                  │
+                    │   timeline: [t0..t1, by signal],   │
+                    │   dimensions: [net, cpu, mem,      │
+                    │                fs, log_excerpt],   │
+                    │   verdict: "runaway logger:        │
+                    │             /var/log/app.log       │
+                    │             grew 13 GB in 8m       │
+                    │             during 3x port-80      │
+                    │             traffic spike",        │
+                    │   recommended_action: {            │
+                    │     type: "log_truncate",          │
+                    │     target: "/var/log/app.log",    │
+                    │     keep_tail_mb: 200              │
+                    │   }                                │
+                    │ }                                  │
+                    └────────────────┬───────────────────┘
+                                     │
+                                     ▼
+                       ┌──────────────────────────────┐
+                       │ tenant.auto_deescalate ?     │   default: FALSE
+                       └──────┬───────────────┬───────┘   (decision #4)
+                              │ false         │ true
+                              ▼               ▼
+                ┌──────────────────┐    ┌─────────────────────────────┐
+                │ ALERT-ONLY PATH  │    │ #7 c1-auto-deescalate        │
+                │ ──────────────── │    │ ─────────────────────────────│
+                │ Webhook fires    │    │ SAFETY GATES (must all pass):│
+                │ Operator paged   │    │  • 1-host canary required    │
+                │ Verdict on UI    │    │  • blast-radius CB ok        │
+                │ NO action taken  │    │    (reuse Sprint-2 pattern)  │
+                └──────────────────┘    │  • action ∉ deny-list        │
+                                        │  • verdict confidence ≥ 0.85 │
+                                        └──────────────┬───────────────┘
+                                                       │ all gates pass
+                                  ┌────────────────────┼─────────────────────┐
+                                  ▼                    ▼                     ▼
+                        ┌──────────────────┐ ┌─────────────────┐ ┌────────────────┐
+                        │ smart log        │ │ rogue-conn kill │ │ rogue-proc kill│
+                        │ truncation       │ │ (autoblock      │ │ (new agent     │
+                        │                  │ │  fan-out)       │ │  capability)   │
+                        ├──────────────────┤ ├─────────────────┤ ├────────────────┤
+                        │ • archive head   │ │ • iptables drop │ │ • SIGTERM then │
+                        │   to S3          │ │ • per-port LB   │ │   SIGKILL      │
+                        │ • truncate to    │ │   deregister    │ │ • PID-allowlist│
+                        │   keep_tail_mb   │ │ • 5 m TTL       │ │   guard        │
+                        │ • re-open file   │ │                 │ │ • PIDs only,   │
+                        │   handles        │ │                 │ │   never PPID 1 │
+                        └────────┬─────────┘ └────────┬────────┘ └───────┬────────┘
+                                 │                    │                  │
+                                 └────────────────────┼──────────────────┘
+                                                      │
+                                                      ▼
+                                       ┌──────────────────────────┐
+                                       │ AUDIT ROW + post-action  │
+                                       │ verification re-scan     │
+                                       │ • disk_pct check         │
+                                       │ • cps re-baseline        │
+                                       │ • CPU/MEM re-baseline    │
+                                       │ → append to              │
+                                       │   investigation_events   │
+                                       │ → fire webhook outbox    │
+                                       └──────────────────────────┘
+                                                      │
+                                                      ▼
+                                       ┌──────────────────────────┐
+                                       │ RESULT VISIBLE IN:       │
+                                       │ • /ai/ask chat (cited)   │
+                                       │ • node detail UI         │
+                                       │ • compliance audit log   │
+                                       │ • operator alert thread  │
+                                       └──────────────────────────┘
+```
+
+**How this maps back to the user's 7-bullet vision:**
+
+| User's bullet | Implemented by |
+|---|---|
+| 1. Connection rate doubled (15 → 30 cps) | #2 `c1-flowrate-aggregator` |
+| 2. 2 TB transferred in window | #3 `c1-bandwidth-rollups` |
+| 3. CPU 20 → 99% | #4 `c1-resource-delta-tool` |
+| 4. Memory 60 → 99% | #4 `c1-resource-delta-tool` |
+| 5. 3 logs grew 30 MB → 13 GB | #1 `c1-fs-watcher` |
+| 6. App + DB log root-cause analysis | #5 `c1-log-tail-tool` (data) + #6 `c1-root-cause-synth` (verdict) |
+| 7. Auto-de-escalation | #7 `c1-auto-deescalate` (gated, default OFF) |
+
+### Per-worktree exit criteria
+
+Same six rules as prior sprints. Additional per-row:
+
+- `c1-fs-watcher`: Linux PSI/inotify path emits per-file `growth_rate.bytes_per_sec` time-series; macOS FSEvents and Windows ReadDirectoryChangesW paths exist (Linux-first, fail-safe to omit on other OSs).
+- `c1-flowrate-aggregator`: Doris MV produces 1m / 5m / 1h rolling per-(node, port) cps; verified by injecting 30 cps to port 80 in a test.
+- `c1-bandwidth-rollups`: Doris MV produces per-window byte counters; depends on S4 `c1-connections-doublefilter`.
+- `c1-resource-delta-tool`: callable from `curl /ai/ask` with a `tool_use` request returning `{value_at_t0, value_at_t1, delta, pct_change}`.
+- `c1-log-tail-tool`: callable from `curl /ai/ask`; redaction layer strips known token/PII regexes; per-tool RBAC blocks operator-tier from app/db logs unless explicitly granted.
+- `c1-root-cause-synth`: end-to-end run on a synthetic disk-fill anomaly produces an `investigation_events` row with all 5 dimensions + verdict + recommended_action in <90 s; Gemini 2.5 Pro primary, Opus 4.7 fallback both pass.
+- `c1-auto-deescalate`: 1-host canary on a stub workload — smart log truncation runs, archives head to S3, truncates target file to `keep_tail_mb`, re-opens file handles, post-action re-scan confirms `disk_pct` dropped; rogue-process kill demonstrated against a stub PID with allowlist guard tested.
+
+### Sprint exit gate
+
+- All 7 worktrees merged
+- The disk-fill scenario reproducibly produces a single `investigation_events` row containing all 5 dimensions and a coherent verdict + recommended_action within 90 s of anomaly emit (synthetic incident in staging with 3 log files growing fast, port 80 spike injected, CPU/memory pin via stress-ng)
+- Auto-de-escalate canary run on a stub workload merges + reverts cleanly when `tenant.auto_deescalate=true`; no execution attempted when default `false`
+- Webhook outbox fires for both alert-only and action paths
+- Owner ack received before S7 kickoff
+
+---
+
+## 7. Sprint 7 — P2 (hardening)
 
 **Goal:** swap KG-A for KG-B (tool-shaped), land Probo cherry-picks (Findings + Snapshots + Asset criticality), fix dashboard scalability, move evidence to S3, kill ingest version-bump landmines.
 
@@ -305,7 +520,7 @@ Same six rules as S4. Additional:
 
 | Tick | Wall time | Pacing | Action | Snapshot |
 |---:|---|---|---|---|
-| 0 | 2026-06-22 09:00 | — | Dispatch all 10 worktrees as one Agent batch | `10 dispatched / 0 merged` |
+| 0 | 2026-07-06 09:00 | — | Dispatch all 10 worktrees as one Agent batch | `10 dispatched / 0 merged` |
 | 1..N | +1800 s | 30 min | (live) | … |
 | N | exit | — | All 10 merged + KG-B replaces KG-A in `ai_ask.go` | `10 merged → SprintGate` |
 
@@ -329,16 +544,20 @@ Same six rules as S4. Additional:
 ### Hard-gate DAG (cross-sprint)
 
 ```
-c1-tooluse-loop (S5) ──→ c1-kg-tool-shaped (S6)
+c1-tooluse-loop (S5) ──→ c1-kg-tool-shaped (S7)
                           (KG-B is a thin tool over the loop;
                            cannot ship without S5 chain)
 
-c1-kg-minimal-enrichment (S4) ──→ c1-kg-tool-shaped (S6)
+c1-kg-minimal-enrichment (S4) ──→ c1-kg-tool-shaped (S7)
                                    (option B replaces option A;
                                     delete A's code path on merge)
+
+c1-log-tail-tool (S6) ──→ c1-kg-tool-shaped (S7)
+                          (KG-B exposes log-tail as one of its
+                           composable tools)
 ```
 
-All other S6 rows are independent.
+All other S7 rows are independent.
 
 ### Sprint exit gate
 
@@ -350,7 +569,7 @@ All other S6 rows are independent.
 
 ---
 
-## 7. Sprint 7 — P3 (cleanup)
+## 8. Sprint 8 — P3 (cleanup)
 
 **Goal:** retire telemetry rough edges, drop the test-hooks shim, write a production runbook the on-call rotation can actually use.
 
@@ -358,7 +577,7 @@ All other S6 rows are independent.
 
 | Tick | Wall time | Pacing | Action | Snapshot |
 |---:|---|---|---|---|
-| 0 | 2026-07-13 09:00 | — | Dispatch all 6 worktrees in parallel | `6 dispatched / 0 merged` |
+| 0 | 2026-07-27 09:00 | — | Dispatch all 6 worktrees in parallel | `6 dispatched / 0 merged` |
 | 1..N | +1800 s | 30 min | (live) | … |
 | N | exit | — | All 6 merged | `6 merged → SprintGate` |
 
@@ -373,7 +592,7 @@ All other S6 rows are independent.
 | `c1-test-hooks-shim-remove` | `chore/c1-s7-shim-remove` | 🏛️ | bugs §5 #14 | 1 h | L1 Haiku | — | pending | — |
 | `c1-prod-runbook-wiki` | `docs/c1-s7-runbook` | 🔬 | bugs §7 | 1 d | L2 Sonnet | — | pending | — |
 
-**S7 tier mix:** L1 ×4 / L2 ×2 / L3 ×0. P3 cleanup is the cheapest sprint — almost all Haiku. Rollup reconciliation gets Sonnet because the divergence-bomb risk (Postgres `IncrementHourlyRollup` vs Doris `events_per_hour_mv`) needs careful equivalence checking, not mechanical transposition.
+**S8 tier mix:** L1 ×4 / L2 ×2 / L3 ×0. P3 cleanup is the cheapest sprint — almost all Haiku. Rollup reconciliation gets Sonnet because the divergence-bomb risk (Postgres `IncrementHourlyRollup` vs Doris `events_per_hour_mv`) needs careful equivalence checking, not mechanical transposition.
 
 All P3 rows independent — single parallel batch, no DAG within sprint.
 
@@ -385,35 +604,54 @@ All P3 rows independent — single parallel batch, no DAG within sprint.
 
 ---
 
-## 8. Cross-sprint dependency graph
+## 9. Cross-sprint dependency graph
 
 ```
    ┌──────────── Sprint 4 (P0) ────────────┐
    │ recommendations-bridge ──┐            │
    │ calibration-metric ──────┼─→ kg-minimal-enrichment
    │ patch-approval-gate ─────┴─→ patch-node-selector
+   │ connections-doublefilter (unblocks    │
+   │   bandwidth-rollups in S6)            │
    │ + 9 independent rows                  │
    └────────┬───────────────────────────────┘
             │
             └─ calibration-metric ──────────┐
                                             ▼
    ┌──────────── Sprint 5 (P1) ─────────────────┐
-   │ mcp-wrapper → tooluse-loop → streaming     │
-   │                            → tool-rbac     │
-   │                            → operator-mode │
-   │ cve-kev-osv (parallel, ~13d)               │
+   │ llm-router → mcp-wrapper → tooluse-loop →  │
+   │                            streaming       │
+   │                            tool-rbac       │
+   │                            operator-mode   │
+   │ cve-kev-osv (parallel, ~13d, Gemini)       │
    │ + 4 independent rows                       │
    └────────┬───────────────────────────────────┘
             │
+            ├─ mcp-wrapper ──→ resource-delta-tool / log-tail-tool (S6)
+            ├─ operator-mode ──→ root-cause-synth (S6)
             └─ tooluse-loop ──┐
+                              │
                               ▼
-   ┌──────────── Sprint 6 (P2) ────────────┐
-   │ kg-tool-shaped (replaces kg-minimal)  │
+   ┌──────────── Sprint 6 (P1.5 — NEW) ─────────┐
+   │ INVESTIGATION EVENT-CAPTURE                │
+   │ fs-watcher / flowrate / bandwidth /        │
+   │ delta-tool / log-tail (5 parallel) ─────┐  │
+   │                                         │  │
+   │ root-cause-synth (Gemini 2.5 Pro) ←─────┘  │
+   │   ↓                                        │
+   │ auto-deescalate (gated; default OFF)       │
+   └────────┬───────────────────────────────────┘
+            │
+            └─ log-tail-tool ──┐
+                                ▼
+   ┌──────────── Sprint 7 (P2) ────────────┐
+   │ kg-tool-shaped (replaces kg-minimal,  │
+   │   composes log-tail as a tool)        │
    │ + 9 independent rows                  │
    └────────┬──────────────────────────────┘
             │
             ▼
-   ┌──────────── Sprint 7 (P3) ────────────┐
+   ┌──────────── Sprint 8 (P3) ────────────┐
    │ 6 fully independent rows              │
    └────────────────────────────────────────┘
             │
@@ -423,52 +661,62 @@ All P3 rows independent — single parallel batch, no DAG within sprint.
 
 ---
 
-## 9. Calendar math
+## 10. Calendar math
 
 - **Start:** 2026-05-11 (Mon following PR #51 merge; 2026-05-08 was Fri)
 - **Working day model:** 5 days/week. Nigerian Democracy Day **2026-06-12 (Fri)** subtracted from S5
-- **Sum of effort:** ~13 working weeks = 65 working days. + 1 integration day per sprint (×4) + 5 buffer days = **74 working days**
+- **Sum of effort:** ~13 working weeks of original P0–P3 + ~2 wks of P1.5 event-capture = **80 working days of effort + 5 integration days (one per sprint) + 5 buffer days = 90 working days, less 1 holiday = 89 wd**. Critical path with parallelism reduces to ~84 wd elapsed.
 - **Projected sprint ends:**
-  - S4 ends **2026-05-22 (Fri)** — 10 working days
-  - S5 ends **2026-06-19 (Fri)** — 19 working days (S5 length 14 + holiday + integration)
-  - S6 ends **2026-07-10 (Fri)** — 14 working days
-  - S7 ends **2026-07-24 (Fri)** — 9 working days
-  - Integration + buffer → **2026-08-21 (Fri)**
-- **Projected v1.1.0-pilot tag: 2026-08-21**
+  - S4 (P0) ends **2026-05-22 (Fri)** — 10 working days
+  - S5 (P1) ends **2026-06-19 (Fri)** — 19 working days (incl. Democracy Day + integration)
+  - **S6 (P1.5 — NEW) ends 2026-07-03 (Fri)** — 10 working days
+  - S7 (P2) ends **2026-07-24 (Fri)** — 14 working days
+  - S8 (P3) ends **2026-08-07 (Fri)** — 9 working days
+  - Integration + buffer → **2026-09-04 (Fri)**
+- **Projected v1.1.0-pilot tag: 2026-09-04** (was 2026-08-21 before P1.5 insertion)
 
 These dates are nominal until owner confirms; will be locked at S4 kickoff.
 
 ---
 
-## 10. Decisions deferred to owner
+## 11. Decisions deferred to owner
 
 These are flagged here, not silently chosen. Owner ack required before S4 kickoff.
 
 1. **`c1-patch-approval-gate` — quick vs proper** (4–6 h flag flip vs 2–3 d real approve→dispatch loop). Bugs doc §3.1 presents both. Plan assumes proper loop; if quick wins, S4 shrinks by ~2 d.
 2. **`c1-openreplay-decision`** — implement OpenReplay upload (compliance feature) vs remove flag + document (operational honesty). Default: remove + document; revisit when a paying bank asks.
-3. **Sprint 7 inclusion** — P3 is "as-asked" in the source docs. Plan includes it for completeness; owner may push S7 to backlog and tag v1.1.0-pilot at end of S6.
+3. **Sprint 8 (P3) inclusion** — P3 is "as-asked" in the source docs. Plan includes it for completeness; owner may push S8 to backlog and tag v1.1.0-pilot at end of S7.
+4. **`c1-auto-deescalate` default posture** — **decided: per-tenant config, default OFF.** Synthesizer always writes the verdict + recommended action; execution requires `tenant.auto_deescalate=true`. Mirrors the patch-approval-gate pattern from S4. Listed here for traceability; revisit if a pilot bank explicitly requests on-by-default.
 
 ---
 
-## 11. Risk register
+## 12. Risk register
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | R1 | Doris cluster instability during `c1-connections-doublefilter` testing | M | Sprint slip 2–3 d | Set up Doris dev replica before S4 kickoff |
 | R2 | Anthropic SDK churn breaking the MCP chain mid-S5 | L | Sprint slip 1 wk | Pin SDK version at S5 kickoff; defer SDK upgrade to post-pilot |
-| R3 | Agent rollout reveals untested OS combos for new collectors (PSI, SMART, ICMP) | M | Sprint slip 2–3 d in S4 | macOS/Windows fail-safe to omit signal; Linux-first deploy |
+| R3 | Agent rollout reveals untested OS combos for new collectors (PSI, SMART, ICMP, fsnotify) | M | Sprint slip 2–3 d in S4/S6 | macOS/Windows fail-safe to omit signal; Linux-first deploy |
 | R4 | `c1-cve-kev-osv` blocks on missing test fixtures (no offline KEV mirror) | M | S5 slip 3–5 d | Mirror CISA KEV catalog locally at S5 kickoff |
-| R5 | Owner unavailable for S5/S6/S7 sprint-boundary review (creates idle time) | M | Wall-clock slip per gap | Confirm review windows before S4 kickoff; pre-authorize S6 cleanup-only rows |
+| R5 | Owner unavailable for S5/S6/S7/S8 sprint-boundary review (creates idle time) | M | Wall-clock slip per gap | Confirm review windows before S4 kickoff; pre-authorize S8 cleanup-only rows |
+| R6 | `c1-auto-deescalate` blast radius if tenant enables `auto_deescalate=true` with a miscalibrated synth verdict (false-positive log truncation or process kill on healthy hosts) | M | Customer-visible incident; trust loss with pilot bank | 1-host canary required; blast-radius circuit breaker reuses Sprint-2 `remediation_safety` pattern; verdict confidence threshold ≥ 0.85; PID-allowlist guard never kills PPID 1; post-action verification re-scan before fan-out beyond canary |
+| R7 | `c1-log-tail-tool` RBAC bypass risk — operator pulls customer PII from app logs | L | Compliance failure | Redaction layer with regex denylist for tokens/PII; per-tool RBAC (operator-tier denied app/db logs by default); audit trail logs every tool invocation with caller + file_path + bytes_returned |
+| R8 | Gemini 2.5 Pro long-context costs balloon if `c1-root-cause-synth` is invoked too liberally | L | Budget slip in S6 | Per-tenant rate limit on synthesizer invocations; cache synth output keyed on `(node, anomaly_id, window_hash)` for 60s; fallback to Opus 4.7 when context fits in 200K |
 
 ---
 
-## 12. Verification (per sprint)
+## 13. Verification (per sprint)
 
 1. All worktree exit criteria green (tests, lint, migration, integration test)
 2. Bugs doc §9 diagnostic SQL recipes return expected results on production
 3. Integration test on production-like Doris+Postgres stack
 4. Worktree status table fully populated (no `pending` rows)
 5. Owner ack on the sprint result table before next sprint kicks off
+
+**S6 (P1.5) end-to-end verification specifically:**
+6. Synthetic disk-fill scenario in staging: 3 log files growing > 1 GB/min, port-80 cps spike injected via `wrk`, CPU/memory pinned via `stress-ng` → an `investigation_events` row appears within 90 s of anomaly emit, containing all 5 dimensions populated and a coherent verdict + recommended_action.
+7. Auto-de-escalate canary on a stub workload: with `tenant.auto_deescalate=true`, smart log truncation runs end-to-end (archive → truncate → re-open handles); post-action `disk_pct` confirms drop; with default `false`, no execution attempted, only verdict + alert.
+8. Webhook outbox fires for both alert-only and action paths; both `/ai/ask` chat and node-detail UI surface the verdict with citations.
 
 ---
 
@@ -491,6 +739,13 @@ These are flagged here, not silently chosen. Owner ack required before S4 kickof
 | `c1-compliance-row-nav` | `controlplane/ui/src/pages/Compliance.tsx:263-270` |
 | `c1-llm-router` | new package `controlplane/internal/llm/router.go` wrapping `anthropic-sdk-go` + `openai-go` + `genai`; provider fallback chain + per-row override registry |
 | `c1-mcp-wrapper` → `c1-operator-mode` | `controlplane/internal/server/ai_ask.go:256`, `investigate.go:79, 738`, `events_anomaly.go:22-300` (all calls go through `internal/llm/router` not `anthropic-sdk-go` directly) |
+| `c1-fs-watcher` (S6) | new agent collector `internal/fswatcher/`; Linux PSI + inotify, macOS FSEvents, Windows ReadDirectoryChangesW; emits `file.size.bytes` + `file.growth_rate.bytes_per_sec` |
+| `c1-flowrate-aggregator` (S6) | new Doris MV in `controlplane/internal/doris/`; rolling per-(node, port, direction) cps over 1m/5m/1h |
+| `c1-bandwidth-rollups` (S6) | extends netflow collector at `internal/netflow/collector.go:165`; new Doris MV per-(node, port, window) bytes_in/out |
+| `c1-resource-delta-tool` (S6) | new MCP tool `c1_metric_delta` registered via `internal/mcp/`; wraps `telemetry_metrics` lookups |
+| `c1-log-tail-tool` (S6) | new MCP tool `c1_log_tail` + agent-side endpoint; new package `internal/redact/` for PII/token regex denylist; per-tool RBAC enforced at controlplane |
+| `c1-root-cause-synth` (S6) | extends `events_anomaly.go` operator-mode worker; new `investigation_events` table + migration; routes to Gemini 2.5 Pro via `internal/llm/router` (Opus 4.7 fallback) |
+| `c1-auto-deescalate` (S6) | new package `internal/deescalate/`; reuses `internal/autoblock/` for connection kill, `internal/remediation/` safety gates; new agent capability for SIGTERM/SIGKILL with PID-allowlist guard; new tenant config `tenant.auto_deescalate` (default `false`) |
 | `c1-cve-kev-osv` | `node_packages` + new CVE feed worker |
 | `c1-agent-fatal-cleanup` | `cmd/nodeagent/` (15+ `panic`/`log.Fatal`) |
 | `c1-process-tree-hydrate` | process-tree handler (stub) |
