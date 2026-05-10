@@ -57,6 +57,7 @@ Every worktree below carries a pillar tag (🚦 / 🛡️ / 💚 / 🔬 / 🏛�
 |---|---|
 | 10+ REST investigation endpoints | Single-shot LLM at `controlplane/internal/server/ai_ask.go:256` — no `tool_use` loop |
 | Hand-rolled markdown KG | KG ~15% of what its intro claims (no firewall, alerts, health, baselines, Doris reads) |
+| | KG-A is dumped whole into every `/ai/ask` system prompt (S4 `c1-kg-compress` adds dedup + keyword-prune as the bridge to S7 KG-B; see §11 D5) |
 | | OpenReplay session recording is a no-op stub |
 | | **No per-port flow-rate tracking (cps deltas)** — `process_connections` has rows but no rolling-window aggregate |
 | | **No file-system growth tracking** — agent doesn't watch log dirs; can't say "this log grew 13 GB in 8m" |
@@ -196,18 +197,22 @@ All other 37 rows route to Anthropic per the L1/L2/L3 model column.
 | `c1-patch-node-selector` | `fix/c1-s4-patch-selector` | 🛡️ | bugs §3.3 #2 | 4–6 h | L2 Sonnet | — | pending | — |
 | `c1-packages-on-node-tab` | `fix/c1-s4-packages-tab` | 🛡️ | bugs §3.3 #3 | 6–8 h | L2 Sonnet | — | pending | — |
 | `c1-heartbeat-action-prefix` | `fix/c1-s4-hb-prefix` | 🛡️ | bugs §3.3 #5 | 2–3 h | L1 Haiku | — | pending | — |
-| `c1-kg-minimal-enrichment` | `fix/c1-s4-kg-enrich` | 🔬 | bugs §2 option A | 2 d | **L3 Opus** | — | pending | — |
+| `c1-kg-compress` | `fix/c1-s4-kg-compress` | 🔬 | bugs §2 option A + §11 D5 | 3 d | **L3 Opus** | — | pending | — |
 | `c1-compliance-row-nav` | `fix/c1-s4-compliance-nav` | 🔬 | bugs §1.5 | 30 min | L1 Haiku | — | pending | — |
 
-**S4 tier mix:** L1 ×6 / L2 ×5 / L3 ×2. Calibration + KG-enrichment carry the Opus seats — both are cross-cutting (agent↔server contract / cache-invalidation graph) where wrong-shape merges block S5 and S6 respectively.
+**S4 tier mix:** L1 ×6 / L2 ×5 / L3 ×2. Calibration + KG-compress carry the Opus seats — both are cross-cutting (agent↔server metric-name contract / `/ai/ask` context shape) where wrong-shape merges block S5 (calibration → operator-mode) and S7 (KG-compress → KG-B) respectively.
 
 ### Hard-gate DAG (intra-sprint)
 
 ```
 c1-recommendations-bridge ─┐
-c1-calibration-metric ─────┼─→ c1-kg-minimal-enrichment
-                           │   (KG enrichment reads node_health_scores +
-                           │    port_observations; both empty until these merge)
+c1-calibration-metric ─────┼─→ c1-kg-compress
+                           │   (compression reads node_health_scores +
+                           │    port_observations to render outliers;
+                           │    both empty until these merge.
+                           │    Successor: produces compressed system block
+                           │    consumed by S5 c1-tooluse-loop, leaving
+                           │    headroom for tool turns.)
 c1-patch-approval-gate ───────→ c1-patch-node-selector
                                 (no point in better UI if every deploy is gate_blocked)
 c1-aml-auth-fix ──────────────→ unblocks "demo to bank" (informational, not code)
@@ -231,6 +236,7 @@ All other rows are independent — parallel-safe.
   - calibration: predictive metric names appear in `telemetry_metrics`
   - connections: `process_connections` rows visible with active flow filter
   - recommendations: `port_observations` row count > 0
+  - KG compression: synthetic 1000-node tenant `POST /ai/ask` returns compressed context ≤ 8K tokens (logged length stays under budget); UUID/IP exact-match always present in the system block
 - Owner ack received before S5 kickoff
 
 ---
@@ -289,6 +295,8 @@ c1-calibration-metric (S4) ──→ c1-operator-mode
 ```
 
 `c1-llm-router` is the day-0 prerequisite: all subsequent S5/S6 LLM-touching code calls through `controlplane/internal/llm/router.go` rather than `anthropic-sdk-go` directly. Non-MCP, non-router rows all parallel-safe.
+
+**Context budget assumption.** The `c1-tooluse-loop` per-turn system block is the **compressed KG** produced by S4 `c1-kg-compress` (≤ 8K tokens after dedup + keyword-prune), not the raw KG-A markdown blob. Tool-turn budget arithmetic in this sprint assumes that ceiling — a regression in the S4 compression (logged length growing) would eat into the headroom S5 reserves for tool turns and is treated as an S4-side bug, not an S5 design change.
 
 ### Per-worktree exit criteria
 
@@ -564,9 +572,11 @@ c1-tooluse-loop (S5) ──→ c1-kg-tool-shaped (S7)
                           (KG-B is a thin tool over the loop;
                            cannot ship without S5 chain)
 
-c1-kg-minimal-enrichment (S4) ──→ c1-kg-tool-shaped (S7)
-                                   (option B replaces option A;
-                                    delete A's code path on merge)
+c1-kg-compress (S4) ──→ c1-kg-tool-shaped (S7)
+                         (S7 retires the markdown blob in favor of tool calls;
+                          the section index from S4 becomes the planner input
+                          for "which entities to fan tool-calls against".
+                          Delete S4 code path on S7 merge.)
 
 c1-log-tail-tool (S6) ──→ c1-kg-tool-shaped (S7)
                           (KG-B exposes log-tail as one of its
@@ -625,7 +635,7 @@ All P3 rows independent — single parallel batch, no DAG within sprint.
 ```
    ┌──────────── Sprint 4 (P0) ────────────┐
    │ recommendations-bridge ──┐            │
-   │ calibration-metric ──────┼─→ kg-minimal-enrichment
+   │ calibration-metric ──────┼─→ kg-compress
    │ patch-approval-gate ─────┴─→ patch-node-selector
    │ connections-doublefilter (unblocks    │
    │   bandwidth-rollups in S6)            │
@@ -661,7 +671,7 @@ All P3 rows independent — single parallel batch, no DAG within sprint.
             └─ log-tail-tool ──┐
                                 ▼
    ┌──────────── Sprint 7 (P2) ────────────┐
-   │ kg-tool-shaped (replaces kg-minimal,  │
+   │ kg-tool-shaped (replaces kg-compress, │
    │   composes log-tail as a tool)        │
    │ + 9 independent rows                  │
    └────────┬──────────────────────────────┘
@@ -703,6 +713,10 @@ These are flagged here, not silently chosen. Owner ack required before S4 kickof
 2. **`c1-openreplay-decision`** — implement OpenReplay upload (compliance feature) vs remove flag + document (operational honesty). Default: remove + document; revisit when a paying bank asks.
 3. **Sprint 8 (P3) inclusion** — P3 is "as-asked" in the source docs. Plan includes it for completeness; owner may push S8 to backlog and tag v1.1.0-pilot at end of S7.
 4. **`c1-auto-deescalate` default posture** — **decided: per-tenant config, default OFF.** Synthesizer always writes the verdict + recommended action; execution requires `tenant.auto_deescalate=true`. Mirrors the patch-approval-gate pattern from S4. Listed here for traceability; revisit if a pilot bank explicitly requests on-by-default.
+5. **`c1-kg-compress` — KG-A patch shape** (was open; **resolved 2026-05-09, owner**). The S4 KG-A bridge fix (`bugs §2 option A`) had two candidate shapes:
+   - **A1 (chosen): dedup + keyword-match algorithmic compression.** Stage 1 groups nodes by `(os,arch,agent,state)` and renders majority groups as one summary line, outliers as full sections (build-time, in `knowledge_graph.go`). Stage 2 keyword-prunes the resulting section list against tokens extracted from the user question, greedy-packs to an 8K-token budget, force-includes the fleet baseline + UUID/IP exact matches (per-request, in new `kg_compress.go`).
+   - **A2 (rejected): telemetry-only MVP.** Strip KG-A entirely; inject only `telemetry_metrics_1m` + `node_health_scores` into the system block.
+   - **Rationale.** A2 kills the differentiator (Holmes/Probo already do telemetry-only Q&A — Control One's edge in the chat surface is connections + threat enrichment + investigation depth, exactly what A2 drops); A2 is throwaway work the S5 MCP `tool_use` chain replaces in 2–3 weeks; A1 composes with S5 (the dedupped section index becomes the planner input for fan-out tool-call selection) and with S7 KG-B (same shape, just sourced from tool-calls instead of build-time render); A1 is purely algorithmic — no embeddings, no vector store, no new infra, fits inside the 5-min `knowledgeGraphCache` already in place.
 
 ---
 
@@ -718,6 +732,7 @@ These are flagged here, not silently chosen. Owner ack required before S4 kickof
 | R6 | `c1-auto-deescalate` blast radius if tenant enables `auto_deescalate=true` with a miscalibrated synth verdict (false-positive log truncation or process kill on healthy hosts) | M | Customer-visible incident; trust loss with pilot bank | 1-host canary required; blast-radius circuit breaker reuses Sprint-2 `remediation_safety` pattern; verdict confidence threshold ≥ 0.85; PID-allowlist guard never kills PPID 1; post-action verification re-scan before fan-out beyond canary |
 | R7 | `c1-log-tail-tool` RBAC bypass risk — operator pulls customer PII from app logs | L | Compliance failure | Redaction layer with regex denylist for tokens/PII; per-tool RBAC (operator-tier denied app/db logs by default); audit trail logs every tool invocation with caller + file_path + bytes_returned |
 | R8 | Gemini 2.5 Pro long-context costs balloon if `c1-root-cause-synth` is invoked too liberally | L | Budget slip in S6 | Per-tenant rate limit on synthesizer invocations; cache synth output keyed on `(node, anomaly_id, window_hash)` for 60s; fallback to Opus 4.7 when context fits in 200K |
+| R9 | `c1-kg-compress` keyword-prune starves the LLM of relevant context (e.g. operator asks an ID-free, vague question and the pruner drops the right outlier) | L | Wrong/empty answers on chat surface; trust loss | Force-include the fleet baseline summary + top-N largest-state outliers when the question has zero matching terms; log compressed-KG length per request behind `s.logger` so undersized contexts surface in dashboards; integration test in §4 exit gate seeds a 1000-node fixture and asserts UUID/IP exact-match always present in the emitted system block; budget knob is a `const` in `kg_compress.go` — easy bump if logs show frequent under-coverage |
 
 ---
 
@@ -751,7 +766,7 @@ These are flagged here, not silently chosen. Owner ack required before S4 kickof
 | `c1-patch-node-selector` | `controlplane/ui/src/pages/PatchManagement.tsx` |
 | `c1-packages-on-node-tab` | `node_packages` storage + new endpoint + `NodeDetail.tsx` tab |
 | `c1-heartbeat-action-prefix` | `controlplane/internal/server/heartbeat.go:259` |
-| `c1-kg-minimal-enrichment` | `controlplane/internal/server/knowledge_graph.go:235-323` |
+| `c1-kg-compress` | `controlplane/internal/server/knowledge_graph.go:235-323` (refactor `buildKnowledgeGraphCtx` to emit `[]kgSection` with Stage-1 group-by-`(os,arch,agent,state)` dedup); `controlplane/internal/server/ai_ask.go:228` (call site swaps to `compressForQuery(sections, question, budget)`); `controlplane/internal/server/kg_compress.go` (new, ~150 LOC: tokenize → score → greedy-pack ≤ 8K tok); `controlplane/internal/server/kg_compress_test.go` (new, table tests). Reuses `nodeDisplayName`, `serviceURL`, `strOrDash`, `knowledgeGraphCache`. |
 | `c1-compliance-row-nav` | `controlplane/ui/src/pages/Compliance.tsx:263-270` |
 | `c1-llm-router` | new package `controlplane/internal/llm/router.go` wrapping `anthropic-sdk-go` + `openai-go` + `genai`; provider fallback chain + per-row override registry |
 | `c1-mcp-wrapper` → `c1-operator-mode` | `controlplane/internal/server/ai_ask.go:256`, `investigate.go:79, 738`, `events_anomaly.go:22-300` (all calls go through `internal/llm/router` not `anthropic-sdk-go` directly) |
