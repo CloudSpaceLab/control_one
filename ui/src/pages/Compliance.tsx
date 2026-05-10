@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Download, FileText, Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -264,8 +265,17 @@ function PostureTab(): JSX.Element {
       id: 'node',
       header: 'Node',
       cell: ({ row }) => {
-        const node = nodes.find((n) => n.id === row.original.node_id);
-        return <span className="text-sm text-foreground">{node?.hostname || row.original.node_id || '—'}</span>;
+        const nodeId = row.original.node_id;
+        if (!nodeId) return <span className="text-sm text-text-muted">—</span>;
+        const node = nodes.find((n) => n.id === nodeId);
+        return (
+          <Link
+            to={`/nodes/${nodeId}`}
+            className="text-sm text-foreground hover:text-link hover:underline focus:outline-none focus-visible:underline"
+          >
+            {node?.hostname || nodeId}
+          </Link>
+        );
       },
     },
     {
