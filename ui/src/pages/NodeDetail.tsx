@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Cpu, Globe2, KeyRound, Network, RefreshCw, Server, ShieldAlert, Trash2 } from 'lucide-react';
+import { ArrowLeft, Cpu, Globe2, KeyRound, Network, Package, RefreshCw, Server, ShieldAlert, Trash2 } from 'lucide-react';
 import {
   Alert,
   Eyebrow,
@@ -147,7 +147,7 @@ export function NodeDetail(): JSX.Element {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { node, health, telemetry, loading, error, reload } = useNode(id);
-  const [tab, setTab] = useState<'overview' | 'activity' | 'connections' | 'kg' | 'recommendations' | 'settings'>('overview');
+  const [tab, setTab] = useState<'overview' | 'activity' | 'connections' | 'kg' | 'packages' | 'recommendations' | 'settings'>('overview');
 
   if (loading && !node) {
     return (
@@ -233,6 +233,7 @@ export function NodeDetail(): JSX.Element {
           <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="connections">Connections</TabsTrigger>
           <TabsTrigger value="kg">Knowledge graph</TabsTrigger>
+          <TabsTrigger value="packages">Packages</TabsTrigger>
           <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
@@ -262,6 +263,9 @@ export function NodeDetail(): JSX.Element {
         </TabsContent>
         <TabsContent value="kg" className="pt-4">
           <KnowledgeGraphTab nodeId={node.id} />
+        </TabsContent>
+        <TabsContent value="packages" className="pt-4">
+          <PackagesTab nodeId={node.id} />
         </TabsContent>
         <TabsContent value="recommendations" className="pt-4">
           <RecommendationsTab nodeId={node.id} tenantId={node.tenant_id} health={health} />
@@ -986,6 +990,139 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
     </div>
   );
 
+}
+
+// PackagesTab surfaces the OS-package inventory the agent reports through
+// heartbeats. Read-only — backed by GET /api/v1/nodes/:id/packages, which
+// reads `node_packages` directly. Filter is client-side because the table
+// is bounded (~few thousand rows on a fat host) and round-tripping is wasteful.
+function PackagesTab({ nodeId }: { nodeId: string }) {
+  const api = useApiClient();
+  const [packages, setPackages] = useState<import('@/lib/api').NodePackage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const resp = await api.listNodePackages(nodeId);
+      setPackages(resp.data ?? []);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'load failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [api, nodeId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return packages;
+    return packages.filter(
+      (p) =>
+        p.name.toLowerCase().includes(needle) ||
+        p.version.toLowerCase().includes(needle) ||
+        p.source.toLowerCase().includes(needle),
+    );
+  }, [packages, query]);
+
+  const sources = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of packages) counts.set(p.source, (counts.get(p.source) ?? 0) + 1);
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [packages]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <KpiTile label="Packages" value={packages.length} tone="brand" icon={<Package />} loading={loading} />
+        <KpiTile
+          label="Primary source"
+          value={sources[0]?.[0] ?? '—'}
+          tone="unknown"
+          loading={loading}
+        />
+        <KpiTile
+          label="Sources"
+          value={sources.length}
+          tone="unknown"
+          loading={loading}
+        />
+      </div>
+
+      <Panel
+        padding="md"
+        eyebrow="INVENTORY"
+        title="Installed packages"
+        actions={
+          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
+        }
+      >
+        {err && <Alert variant="critical">{err}</Alert>}
+
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter by name, version, or source"
+            className="max-w-sm"
+            aria-label="Filter packages"
+          />
+          <span className="font-mono text-xs text-text-muted">
+            {filtered.length} / {packages.length}
+          </span>
+        </div>
+
+        {loading && packages.length === 0 ? (
+          <Loader label="Loading package inventory…" />
+        ) : !loading && packages.length === 0 ? (
+          <Alert variant="info" title="No package inventory yet">
+            The agent has not yet uploaded a package list for this host. The
+            first full sync runs within 24h of enrollment, or sooner when the
+            agent detects a hash drift.
+          </Alert>
+        ) : filtered.length === 0 ? (
+          <p className="text-sm text-text-muted">No packages match the current filter.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="border-b border-border-subtle text-xs uppercase tracking-wider text-text-muted">
+                <tr>
+                  <th className="px-3 py-2">Name</th>
+                  <th className="px-3 py-2">Version</th>
+                  <th className="px-3 py-2">Source</th>
+                  <th className="px-3 py-2">Arch</th>
+                  <th className="px-3 py-2">Installed</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-subtle">
+                {filtered.map((p) => (
+                  <tr key={`${p.name}|${p.version}|${p.arch ?? ''}`}>
+                    <td className="px-3 py-2 font-medium text-foreground">{p.name}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-secondary">{p.version}</td>
+                    <td className="px-3 py-2">
+                      <StatusTag tone="unknown">{p.source}</StatusTag>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-secondary">{p.arch ?? '—'}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-secondary">
+                      {p.installed_at ? formatTs(p.installed_at) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
 }
 
 function RecommendationsTab({ nodeId, tenantId, health }: { nodeId: string; tenantId: string; health: import('@/lib/api').NodeHealthScore | null }) {
