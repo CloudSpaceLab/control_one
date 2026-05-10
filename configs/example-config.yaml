@@ -209,6 +209,3 @@ session_recording:
   record_commands: true
   tlog_path: /usr/bin/tlog-rec
   auditx_path: /usr/bin/auditx
-  # Optional: OpenReplay integration
-  # openreplay_api_key: ""
-  # openreplay_url: ""

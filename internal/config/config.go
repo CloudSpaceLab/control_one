@@ -157,8 +157,6 @@ type Config struct {
 		RecordCommands   bool          `mapstructure:"record_commands"`
 		TlogPath         string        `mapstructure:"tlog_path"`
 		AuditxPath       string        `mapstructure:"auditx_path"`
-		OpenReplayAPIKey string        `mapstructure:"openreplay_api_key"`
-		OpenReplayURL    string        `mapstructure:"openreplay_url"`
 	} `mapstructure:"session_recording"`
 }
 
@@ -400,8 +398,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("session_recording.record_commands", true)
 	v.SetDefault("session_recording.tlog_path", "/usr/bin/tlog-rec")
 	v.SetDefault("session_recording.auditx_path", "/usr/bin/auditx")
-	v.SetDefault("session_recording.openreplay_api_key", "")
-	v.SetDefault("session_recording.openreplay_url", "")
 
 	v.SetDefault("mesh.enabled", true)
 	v.SetDefault("mesh.coordinator_url", "")
@@ -504,8 +500,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("session_recording.record_commands", true)
 	v.SetDefault("session_recording.tlog_path", "/usr/bin/tlog-rec")
 	v.SetDefault("session_recording.auditx_path", "/usr/bin/auditx")
-	v.SetDefault("session_recording.openreplay_api_key", "")
-	v.SetDefault("session_recording.openreplay_url", "")
 }
 
 func applyFallbacks(cfg *Config) {

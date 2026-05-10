@@ -17,7 +17,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 )
 
-// Service manages session recording using tlog, auditx, and optionally OpenReplay
+// Service manages session recording using tlog or auditx.
 type Service struct {
 	log            *zap.Logger
 	client         *api.Client
@@ -42,8 +42,6 @@ type Config struct {
 	RecordCommands   bool
 	TlogPath         string
 	AuditxPath       string
-	OpenReplayAPIKey string
-	OpenReplayURL    string
 }
 
 // Session represents an active recording session
@@ -158,12 +156,6 @@ func (s *Service) StopSession(ctx context.Context, sessionID string) error {
 		"artifact_size":    artifactSize,
 	}); err != nil {
 		s.log.Warn("failed to notify control plane of session stop", zap.Error(err))
-	}
-
-	if s.cfg.OpenReplayAPIKey != "" && s.cfg.OpenReplayURL != "" {
-		if err := s.uploadToOpenReplay(ctx, session); err != nil {
-			s.log.Warn("failed to upload to OpenReplay", zap.Error(err))
-		}
 	}
 
 	s.log.Info("session recording stopped",
@@ -298,22 +290,3 @@ func (s *Service) notifyControlPlane(ctx context.Context, sessionID, sessionType
 	return nil
 }
 
-func (s *Service) uploadToOpenReplay(ctx context.Context, session *Session) error {
-	if s.cfg.OpenReplayAPIKey == "" || s.cfg.OpenReplayURL == "" {
-		return nil
-	}
-
-	file, err := os.Open(session.ArtifactPath)
-	if err != nil {
-		return fmt.Errorf("open artifact: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	// OpenReplay upload would go here
-	// This is a placeholder for the actual OpenReplay integration
-	s.log.Info("OpenReplay upload placeholder",
-		zap.String("session_id", session.ID),
-		zap.String("url", s.cfg.OpenReplayURL))
-
-	return nil
-}
