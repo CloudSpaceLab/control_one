@@ -153,9 +153,76 @@ func (s *Server) handleNodeServicesIngest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Bridge node_services -> port_observations (bugs §1.3).
+	//
+	// Until this bridge existed the table had zero writers in the codebase:
+	// the agent only POSTs `node_services`, never raw port observations,
+	// so AggregatePortObservations always returned [] and the
+	// Recommendations tab was permanently empty for every tenant. Each
+	// listening service is, by definition, an observation that the port
+	// was open at this tick; we persist one row per service per ingest
+	// so the existing aggregator (50-sample / 95%-dominant) has input.
+	//
+	// Best-effort: a partial failure here MUST NOT fail the agent's ingest
+	// (services are already committed). We log and continue.
+	s.bridgePortObservations(r.Context(), node.TenantID, nodeID, services)
+
 	knowledgeGraphCache.invalidate(node.TenantID)
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// bridgePortObservations writes one port_observations row per listening
+// service so the recommendations generator (`handleRecommendations`) has
+// non-empty input. See bugs §1.3.
+func (s *Server) bridgePortObservations(ctx context.Context, tenantID, nodeID uuid.UUID, services []storage.NodeService) {
+	if s.store == nil || len(services) == 0 {
+		return
+	}
+	nodeRef := nodeID
+	for _, svc := range services {
+		if svc.Port <= 0 || svc.Port > 65535 {
+			continue
+		}
+		params := storage.CreatePortObservationParams{
+			TenantID: tenantID,
+			NodeID:   &nodeRef,
+			Port:     svc.Port,
+			Protocol: protocolFromServiceKind(svc.ServiceKind),
+			State:    portStateFromService(svc),
+		}
+		if err := s.store.CreatePortObservation(ctx, params); err != nil {
+			s.logger.Warn("create port observation",
+				zap.String("tenant", tenantID.String()),
+				zap.String("node", nodeID.String()),
+				zap.Int("port", svc.Port),
+				zap.Error(err))
+		}
+	}
+}
+
+// protocolFromServiceKind maps the agent's service_kind heuristic to the
+// transport protocol stored in port_observations. Today every kind comes
+// from a TCP listening socket; udp will be added when the agent grows
+// udp inventory.
+func protocolFromServiceKind(kind string) string {
+	_ = strings.ToLower(strings.TrimSpace(kind))
+	return "tcp"
+}
+
+// portStateFromService classifies a listening service into the
+// observation states the recommendations aggregator understands.
+// Anything in node_services is, by definition, in LISTEN -> "open".
+// 5xx (or zero) HTTP probe statuses are treated as "filtered" so
+// misbehaving services don't drown out healthy ones in dominant-state.
+func portStateFromService(svc storage.NodeService) string {
+	if svc.ProbeStatus != nil {
+		code := *svc.ProbeStatus
+		if code >= 500 || code == 0 {
+			return "filtered"
+		}
+	}
+	return "open"
 }
 
 func (s *Server) handleNodeServicesList(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
