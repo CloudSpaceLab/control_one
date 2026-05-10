@@ -36,11 +36,16 @@ type TenantRemediationConfig struct {
 	CircuitBreakerWindowMin  int
 	CircuitBreakerFailPct    int
 	CircuitBreakerMinSamples int
-	UpdatedAt                time.Time
+	// PatchRequiresApproval gates fleet patch deploys behind the proper
+	// approve→dispatch loop (see migration 0092). Default: true — production
+	// tenants land on the safe path. Set to false to keep the legacy
+	// immediate-dispatch behaviour (lab / non-prod tenants).
+	PatchRequiresApproval bool
+	UpdatedAt             time.Time
 }
 
 // DefaultTenantRemediationConfig returns the baseline config for a tenant that
-// has never customised their safety gates. Matches migration 0030 defaults.
+// has never customised their safety gates. Matches migration 0030 + 0092 defaults.
 func DefaultTenantRemediationConfig(tenantID uuid.UUID) TenantRemediationConfig {
 	return TenantRemediationConfig{
 		TenantID:                 tenantID,
@@ -50,6 +55,7 @@ func DefaultTenantRemediationConfig(tenantID uuid.UUID) TenantRemediationConfig 
 		CircuitBreakerWindowMin:  15,
 		CircuitBreakerFailPct:    30,
 		CircuitBreakerMinSamples: 5,
+		PatchRequiresApproval:    true,
 	}
 }
 
@@ -62,6 +68,7 @@ type UpdateTenantRemediationConfigParams struct {
 	CircuitBreakerWindowMin  *int
 	CircuitBreakerFailPct    *int
 	CircuitBreakerMinSamples *int
+	PatchRequiresApproval    *bool
 }
 
 // GetTenantRemediationConfig returns the tenant's config, falling back to a
@@ -78,7 +85,7 @@ func (s *Store) GetTenantRemediationConfig(ctx context.Context, tenantID uuid.UU
 	row := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, min_approval_severity, change_windows, critical_override,
 		       circuit_breaker_window_min, circuit_breaker_fail_pct,
-		       circuit_breaker_min_samples, updated_at
+		       circuit_breaker_min_samples, patch_requires_approval, updated_at
 		FROM tenant_remediation_config
 		WHERE tenant_id = $1
 	`, tenantID)
@@ -96,6 +103,7 @@ func (s *Store) GetTenantRemediationConfig(ctx context.Context, tenantID uuid.UU
 		&cfg.CircuitBreakerWindowMin,
 		&cfg.CircuitBreakerFailPct,
 		&cfg.CircuitBreakerMinSamples,
+		&cfg.PatchRequiresApproval,
 		&cfg.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -163,9 +171,9 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		INSERT INTO tenant_remediation_config (
 			tenant_id, min_approval_severity, change_windows, critical_override,
 			circuit_breaker_window_min, circuit_breaker_fail_pct, circuit_breaker_min_samples,
-			updated_at
+			patch_requires_approval, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			min_approval_severity       = EXCLUDED.min_approval_severity,
 			change_windows              = EXCLUDED.change_windows,
@@ -173,10 +181,11 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 			circuit_breaker_window_min  = EXCLUDED.circuit_breaker_window_min,
 			circuit_breaker_fail_pct    = EXCLUDED.circuit_breaker_fail_pct,
 			circuit_breaker_min_samples = EXCLUDED.circuit_breaker_min_samples,
+			patch_requires_approval     = EXCLUDED.patch_requires_approval,
 			updated_at                  = EXCLUDED.updated_at
 		RETURNING tenant_id, min_approval_severity, change_windows, critical_override,
 		          circuit_breaker_window_min, circuit_breaker_fail_pct,
-		          circuit_breaker_min_samples, updated_at
+		          circuit_breaker_min_samples, patch_requires_approval, updated_at
 	`,
 		cfg.TenantID,
 		cfg.MinApprovalSeverity,
@@ -185,6 +194,7 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		cfg.CircuitBreakerWindowMin,
 		cfg.CircuitBreakerFailPct,
 		cfg.CircuitBreakerMinSamples,
+		cfg.PatchRequiresApproval,
 		now,
 	)
 
@@ -201,6 +211,7 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		&out.CircuitBreakerWindowMin,
 		&out.CircuitBreakerFailPct,
 		&out.CircuitBreakerMinSamples,
+		&out.PatchRequiresApproval,
 		&out.UpdatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("upsert tenant remediation config: %w", err)

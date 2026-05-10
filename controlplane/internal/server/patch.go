@@ -117,6 +117,10 @@ type patchDeployResponse struct {
 	Succeeded   []string                 `json:"succeeded,omitempty"`
 	Failed      []map[string]string      `json:"failed,omitempty"`
 	GateBlocked []map[string]string      `json:"gate_blocked,omitempty"`
+	// AwaitingApproval lists nodes that have been parked in patch_approvals
+	// pending an operator green-light. Each entry carries the approval id so
+	// the UI can deep-link straight into the approve/deny workflow.
+	AwaitingApproval []map[string]string `json:"awaiting_approval,omitempty"`
 }
 
 // handlePatchDeployments routes /api/v1/patch/deployments — POST creates a
@@ -209,6 +213,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 	succeeded := make([]string, 0, len(nodeIDs))
 	failed := make([]map[string]string, 0)
 	gateBlocked := make([]map[string]string, 0)
+	awaiting := make([]map[string]string, 0)
 
 	for _, nid := range nodeIDs {
 		nodeMode := requestedMode
@@ -229,17 +234,32 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 
 		// Gate routing: every per-node patch passes through the same 4 gates
 		// the compliance remediation engine uses (opt-out / change window /
-		// circuit breaker / approval). The patch synthesises a compliance
-		// Result so the existing engine can score it.
-		ok, reason := s.runPatchSafetyGates(r.Context(), tenantID, nid, deployment.ID, nodeMode)
-		if !ok {
+		// circuit breaker / approval). When the approval gate fires for a
+		// tenant whose patch_requires_approval flag is true, the gate parks
+		// a row in patch_approvals and the dispatch waits — the operator
+		// approve endpoint re-runs dispatchPatchModeToNode for that row.
+		gate := s.runPatchSafetyGates(r.Context(), tenantID, nid, deployment.ID, nodeMode, proxyID, windowID)
+		switch {
+		case gate.AwaitingApproval:
+			entry := map[string]string{"node_id": nid.String()}
+			if gate.ApprovalID != uuid.Nil {
+				entry["approval_id"] = gate.ApprovalID.String()
+			}
+			entry["reason"] = gate.Reason
+			awaiting = append(awaiting, entry)
+			s.logger.Info("patch deploy parked for approval",
+				zap.String("node_id", nid.String()),
+				zap.String("approval_id", gate.ApprovalID.String()),
+			)
+			continue
+		case !gate.Allowed:
 			gateBlocked = append(gateBlocked, map[string]string{
 				"node_id": nid.String(),
-				"reason":  reason,
+				"reason":  gate.Reason,
 			})
 			s.logger.Info("patch deploy blocked by safety gate",
 				zap.String("node_id", nid.String()),
-				zap.String("reason", reason),
+				zap.String("reason", gate.Reason),
 			)
 			continue
 		}
@@ -259,48 +279,77 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		succeeded = append(succeeded, nid.String())
 	}
 
-	// Flip header to in_progress when we dispatched anything; mark failed
-	// when nothing got out the door.
-	if len(succeeded) > 0 {
+	// Header status: in_progress when anything dispatched, pending_approval
+	// when every target is parked behind the gate, failed when nothing
+	// progressed at all. Pending_approval reuses the existing 'pending'
+	// status so the schema check constraint stays valid.
+	switch {
+	case len(succeeded) > 0:
 		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "in_progress", false)
-	} else {
+	case len(awaiting) > 0 && len(failed) == 0 && len(gateBlocked) == 0:
+		// Leaves the deployment in 'pending' (the default insert state) so
+		// approval-driven dispatch picks it up later. We still emit a
+		// no-op status update so updated_at advances.
+		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "pending", false)
+	default:
 		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "failed", true)
 	}
 
 	s.recordAudit(r.Context(), principal, tenantID, "patch.deploy.queued", "patch_deployment", deployment.ID.String(), map[string]any{
-		"mode":         headerMode,
-		"node_count":   len(nodeIDs),
-		"reason":       req.Reason,
-		"succeeded":    len(succeeded),
-		"failed":       len(failed),
-		"gate_blocked": len(gateBlocked),
+		"mode":              headerMode,
+		"node_count":        len(nodeIDs),
+		"reason":            req.Reason,
+		"succeeded":         len(succeeded),
+		"failed":            len(failed),
+		"gate_blocked":      len(gateBlocked),
+		"awaiting_approval": len(awaiting),
 	})
 
 	writeJSON(w, http.StatusCreated, patchDeployResponse{
-		Deployment:  deployment,
-		NodeCount:   len(succeeded),
-		Succeeded:   succeeded,
-		Failed:      failed,
-		GateBlocked: gateBlocked,
+		Deployment:       deployment,
+		NodeCount:        len(succeeded),
+		Succeeded:        succeeded,
+		Failed:           failed,
+		GateBlocked:      gateBlocked,
+		AwaitingApproval: awaiting,
 	})
 }
 
+// patchGateResult captures a per-(deployment, node) gate decision. Allowed +
+// AwaitingApproval are mutually exclusive; both being false means a hard
+// block that surfaces in `gate_blocked`. AwaitingApproval=true means a row
+// has been parked in patch_approvals and the dispatch will run once an
+// operator approves it.
+type patchGateResult struct {
+	Allowed          bool
+	AwaitingApproval bool
+	Reason           string
+	ApprovalID       uuid.UUID
+}
+
+// patchApprovalTTL bounds how long a parked patch approval remains
+// actionable. After this window the reaper flips the row to expired and
+// the operator must re-issue the deploy. 24h matches the operational
+// rhythm of patch windows (deploy queued during business hours, applied
+// in the next maintenance window).
+const patchApprovalTTL = 24 * time.Hour
+
 // runPatchSafetyGates runs the same four gates compliance remediation runs:
-// opt-out label, change window, circuit breaker, approval. The patch
-// pipeline never holds for approval — gates that would defer or hold a
-// remediation just block the dispatch and surface in the response so the
-// operator can re-target.
+// opt-out label, change window, circuit breaker, approval.
 //
-// Returns (allowed, reason). Reason is empty when allowed=true.
-func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, deploymentID uuid.UUID, mode string) (bool, string) {
+// Approval semantics — D1 = proper (timeline §11):
+//   - Tenants with patch_requires_approval=true (default): the gate writes a
+//     pending row to patch_approvals and signals AwaitingApproval. The
+//     operator approves via /api/v1/patch/approvals/:id/approve which calls
+//     dispatchPatchModeToNode for that row. Denying flips the approval to
+//     denied with no dispatch.
+//   - Tenants with patch_requires_approval=false: the legacy immediate-
+//     dispatch behaviour applies — the approval gate is a no-op so any
+//     non-blocking deploy fans straight out.
+func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, deploymentID uuid.UUID, mode string, proxyID, windowID *uuid.UUID) patchGateResult {
 	if s.store == nil {
-		return true, ""
+		return patchGateResult{Allowed: true}
 	}
-	// Synthesise a failing compliance.Result so triggerAutoRemediation's
-	// gate logic has something to score. We don't want it to actually
-	// execute a remediation script — there isn't one for "patch deploy". So
-	// we run the gates inline here against the same primitives.
-	severity := "high"
 	now := time.Now().UTC()
 
 	// Gate 1 — opt-out label.
@@ -308,7 +357,7 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil && node.Labels != nil {
 			if val, ok := node.Labels["remediation"]; ok {
 				if str, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(str), "manual-only") {
-					return false, "node labelled remediation=manual-only"
+					return patchGateResult{Reason: "node labelled remediation=manual-only"}
 				}
 			}
 		}
@@ -323,7 +372,7 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 		cfg = &defaults
 	}
 	if !storage.IsInsideChangeWindow(cfg.ChangeWindows, now) {
-		return false, "outside tenant change window"
+		return patchGateResult{Reason: "outside tenant change window"}
 	}
 
 	// Gate 3 — circuit breaker. Use a synthetic rule_id keyed to the patch
@@ -331,31 +380,57 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	patchRuleID := "patch.deploy"
 	if breaker, err := s.store.GetCircuitBreakerState(ctx, tenantID, patchRuleID); err == nil &&
 		breaker != nil && breaker.AckedAt == nil {
-		return false, fmt.Sprintf("circuit breaker tripped: %s", breaker.TrippedReason)
+		return patchGateResult{Reason: fmt.Sprintf("circuit breaker tripped: %s", breaker.TrippedReason)}
 	}
 
-	// Gate 4 — approval. Patch deploys are always at-or-above the operator
-	// threshold for tenants that require approvals; we synthesise a webhook
-	// notification but block locally (operator sees the request in the
-	// approvals UI and re-runs once approved).
-	if storage.SeverityAtLeast(severity, cfg.MinApprovalSeverity) {
-		// Patch deploys queued for approval are out of scope for the
-		// dispatch path; we emit a webhook for visibility.
+	// Gate 4 — approval. The proper approve→dispatch loop (D1: proper)
+	// parks a patch_approvals row when the tenant requires approval. The
+	// operator approve endpoint then re-runs dispatchPatchModeToNode. When
+	// the tenant has opted out (PatchRequiresApproval=false) we keep the
+	// legacy immediate-dispatch path — the gate is a no-op.
+	if cfg.PatchRequiresApproval {
+		approval, err := s.store.CreatePatchApproval(ctx, storage.CreatePatchApprovalParams{
+			TenantID:     tenantID,
+			DeploymentID: deploymentID,
+			NodeID:       nodeID,
+			Mode:         mode,
+			ProxyID:      proxyID,
+			WindowID:     windowID,
+			ExpiresAt:    now.Add(patchApprovalTTL),
+		})
+		if err != nil {
+			s.logger.Warn("create patch approval",
+				zap.Error(err),
+				zap.String("tenant_id", tenantID.String()),
+				zap.String("deployment_id", deploymentID.String()),
+				zap.String("node_id", nodeID.String()),
+			)
+			return patchGateResult{Reason: "approval gate write failed: " + err.Error()}
+		}
+
+		// Notify operators via the existing webhook channel so the chat-
+		// first investigation surface and the approvals UI stay in sync.
 		s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationApprovalRequested, map[string]any{
 			"tenant_id":     tenantID.String(),
 			"node_id":       nodeID.String(),
 			"deployment_id": deploymentID.String(),
+			"approval_id":   approval.ID.String(),
 			"rule_id":       patchRuleID,
-			"severity":      severity,
+			"severity":      "high",
 			"mode":          mode,
 			"context":       "patch.deploy",
 		})
-		return false, "approval required"
+
+		return patchGateResult{
+			AwaitingApproval: true,
+			Reason:           "approval required",
+			ApprovalID:       approval.ID,
+		}
 	}
 
 	// All four gates passed.
 	_ = compliance.Result{} // keep the import live for the gate type.
-	return true, ""
+	return patchGateResult{Allowed: true}
 }
 
 func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Request) {
