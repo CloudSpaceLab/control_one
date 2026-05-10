@@ -260,6 +260,8 @@ From `Wiki/wiki/synthesis/control-one-deep-gap-analysis.md:218-230` — re-confi
 | 3 | **SanctionsScanner hardcodes fallback `birthDate=1962-11-23`** when DOB is null | synthesis line 222 | Refuse the scan instead of silently returning a wrong-person match |
 | 4 | **OpenReplay session recording is a no-op** — `uploadToOpenReplay()` logs "placeholder" and returns nil | synthesis line 223 | Either implement properly or remove the feature flag and document |
 
+> **RESOLVED 2026-05-10 (D2 option B: removed flag — see PR #53 §11 D2)** — Session recording (OpenReplay) is intentionally not implemented in v1.1.0-pilot. The `uploadToOpenReplay()` stub, the `openreplay_api_key` / `openreplay_url` config fields, and the example-config commented hints have been removed so the compliance posture matches the actual implementation (tlog/auditx only). Revisit when a pilot bank explicitly requests session replay; reference Probo's session-replay implementation as the comparison point.
+
 **Severity rationale:** all four are **silent compliance failures** in a regulated-industry product. Gap 4 is especially nasty — operators believe sessions are recorded for forensics but nothing is captured.
 
 ---

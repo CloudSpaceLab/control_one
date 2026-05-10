@@ -303,8 +303,6 @@ func main() {
 			RecordCommands:   cfg.SessionRecording.RecordCommands,
 			TlogPath:         cfg.SessionRecording.TlogPath,
 			AuditxPath:       cfg.SessionRecording.AuditxPath,
-			OpenReplayAPIKey: cfg.SessionRecording.OpenReplayAPIKey,
-			OpenReplayURL:    cfg.SessionRecording.OpenReplayURL,
 		})
 		log.Info("session recording service initialized", zap.Bool("enabled", true))
 		emitHook(ctx, hooksService, log, "session_recording.initialized", state.NodeID, map[string]any{
