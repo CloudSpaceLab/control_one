@@ -1232,6 +1232,7 @@ type fakeStore struct {
 	knownExeHashes       map[string]int64
 	knownQueryHashes     map[string]int64
 	remediationApprovals map[uuid.UUID]storage.RemediationApproval
+	patchApprovals       map[uuid.UUID]storage.PatchApproval
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
@@ -4010,6 +4011,111 @@ func (f *fakeStore) ListNodePatchStatesForDeployment(_ context.Context, _ uuid.U
 }
 func (f *fakeStore) GetNodePatchStateByJobID(_ context.Context, _ uuid.UUID) (*storage.NodePatchState, error) {
 	return nil, nil
+}
+
+// Patch approvals — D1 proper approve→dispatch loop (S4 row 8).
+func (f *fakeStore) CreatePatchApproval(_ context.Context, params storage.CreatePatchApprovalParams) (*storage.PatchApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.patchApprovals == nil {
+		f.patchApprovals = map[uuid.UUID]storage.PatchApproval{}
+	}
+	id := uuid.New()
+	a := storage.PatchApproval{
+		ID:           id,
+		TenantID:     params.TenantID,
+		DeploymentID: params.DeploymentID,
+		NodeID:       params.NodeID,
+		Mode:         params.Mode,
+		ProxyID:      params.ProxyID,
+		WindowID:     params.WindowID,
+		Status:       storage.ApprovalStatusPending,
+		CreatedAt:    time.Now().UTC(),
+		ExpiresAt:    params.ExpiresAt.UTC(),
+	}
+	f.patchApprovals[id] = a
+	copy := a
+	return &copy, nil
+}
+
+func (f *fakeStore) GetPatchApproval(_ context.Context, id uuid.UUID) (*storage.PatchApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a, ok := f.patchApprovals[id]; ok {
+		copy := a
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListPatchApprovals(_ context.Context, filter storage.ListPatchApprovalsFilter, limit, offset int) ([]storage.PatchApproval, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []storage.PatchApproval
+	for _, a := range f.patchApprovals {
+		if filter.TenantID != uuid.Nil && a.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.DeploymentID != uuid.Nil && a.DeploymentID != filter.DeploymentID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && a.NodeID != filter.NodeID {
+			continue
+		}
+		if string(filter.Status) != "" && a.Status != filter.Status {
+			continue
+		}
+		all = append(all, a)
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	total := len(all)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return all[offset:end], total, nil
+}
+
+func (f *fakeStore) ResolvePatchApproval(_ context.Context, id uuid.UUID, status storage.ApprovalStatus, approverID uuid.UUID) (*storage.PatchApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.patchApprovals[id]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	if a.Status != storage.ApprovalStatusPending {
+		return nil, sql.ErrNoRows
+	}
+	a.Status = status
+	now := time.Now().UTC()
+	a.ApprovedAt = &now
+	if approverID != uuid.Nil {
+		approver := approverID
+		a.ApprovedBy = &approver
+	}
+	f.patchApprovals[id] = a
+	copy := a
+	return &copy, nil
+}
+
+func (f *fakeStore) ExpirePatchApprovals(_ context.Context, now time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	n := 0
+	for id, a := range f.patchApprovals {
+		if a.Status == storage.ApprovalStatusPending && !a.ExpiresAt.IsZero() && a.ExpiresAt.Before(now) {
+			a.Status = storage.ApprovalStatusExpired
+			f.patchApprovals[id] = a
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Patch management — Wave C stubs.

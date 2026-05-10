@@ -402,6 +402,12 @@ type Store interface {
 	ListPendingNodePatchStates(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
 	ListNodePatchStatesForDeployment(context.Context, uuid.UUID) ([]storage.NodePatchState, error)
 	GetNodePatchStateByJobID(context.Context, uuid.UUID) (*storage.NodePatchState, error)
+	// Patch approvals — D1 proper approve→dispatch loop (S4 row 8).
+	CreatePatchApproval(context.Context, storage.CreatePatchApprovalParams) (*storage.PatchApproval, error)
+	GetPatchApproval(context.Context, uuid.UUID) (*storage.PatchApproval, error)
+	ListPatchApprovals(context.Context, storage.ListPatchApprovalsFilter, int, int) ([]storage.PatchApproval, int, error)
+	ResolvePatchApproval(context.Context, uuid.UUID, storage.ApprovalStatus, uuid.UUID) (*storage.PatchApproval, error)
+	ExpirePatchApprovals(context.Context, time.Time) (int, error)
 	// Predictive server downtime — Use Case 5.
 	GetNodeHealthScore(context.Context, uuid.UUID) (*storage.NodeHealthScore, error)
 	UpsertNodeHealthScore(context.Context, storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error)
@@ -1088,6 +1094,12 @@ func (s *Server) registerRoutes() {
 	// Patch management — fleet OS package patching (PR 4).
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments", s.handlePatchDeployments)
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments/", s.handlePatchDeploymentSubroute)
+	// Patch approval gate — operator approve→dispatch loop (S4 row 8 / D1
+	// proper, bugs §3.1). Tenants whose patch_requires_approval flag is true
+	// (the production default) park each deploy in patch_approvals; the
+	// approve endpoint re-runs dispatchPatchModeToNode on green-light.
+	s.baseRouter.HandleFunc("/api/v1/patch/approvals", s.handlePatchApprovalsCollection)
+	s.baseRouter.HandleFunc("/api/v1/patch/approvals/", s.handlePatchApprovalSubroutes)
 	// Patch management completion — Wave C: per-node config, maintenance
 	// windows, Squid proxies.
 	s.baseRouter.HandleFunc("/api/v1/patch/config", s.handlePatchConfig)

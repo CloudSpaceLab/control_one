@@ -23,6 +23,9 @@ func TestTenantRemediationConfig_DefaultFallback(t *testing.T) {
 	require.Equal(t, 30, cfg.CircuitBreakerFailPct)
 	require.Equal(t, 5, cfg.CircuitBreakerMinSamples)
 	require.Empty(t, cfg.ChangeWindows)
+	// D1 default — production tenants land on the proper approve→dispatch
+	// loop. Lab tenants explicitly opt out via the Upsert API.
+	require.True(t, cfg.PatchRequiresApproval, "patch_requires_approval must default to true")
 }
 
 func TestTenantRemediationConfig_UpsertRoundTrips(t *testing.T) {
@@ -42,6 +45,7 @@ func TestTenantRemediationConfig_UpsertRoundTrips(t *testing.T) {
 		CircuitBreakerWindowMin:  30,
 		CircuitBreakerFailPct:    50,
 		CircuitBreakerMinSamples: 10,
+		PatchRequiresApproval:    false, // operator opts out of the gate
 	}
 
 	saved, err := store.UpsertTenantRemediationConfig(ctx, in)
@@ -49,6 +53,7 @@ func TestTenantRemediationConfig_UpsertRoundTrips(t *testing.T) {
 	require.NotNil(t, saved)
 	require.Equal(t, "medium", saved.MinApprovalSeverity)
 	require.False(t, saved.CriticalOverride)
+	require.False(t, saved.PatchRequiresApproval, "PatchRequiresApproval must round-trip from upsert")
 	require.Equal(t, 1, len(saved.ChangeWindows))
 	require.Equal(t, 2, saved.ChangeWindows[0].StartHour)
 
@@ -56,6 +61,7 @@ func TestTenantRemediationConfig_UpsertRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "medium", reloaded.MinApprovalSeverity)
 	require.Equal(t, 30, reloaded.CircuitBreakerWindowMin)
+	require.False(t, reloaded.PatchRequiresApproval, "PatchRequiresApproval must round-trip from get")
 
 	// Update again — should overwrite in place.
 	in2 := in
