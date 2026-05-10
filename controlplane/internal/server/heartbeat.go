@@ -250,13 +250,30 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		s.logger.Warn("list pending firewall rules", zap.Error(ferr))
 	}
 	// Append pending patch actions (PR 4). Same encoding as firewall.* —
-	// "patch.deploy_direct:<job_id>".
+	// "<job_type>:<job_id>". The job_type prefix is read from the job row so
+	// proxy/airgapped/direct deployments dispatch correctly — hard-coding
+	// JobTypePatchDeployDirect (PR 51 audit, bugs §3.3 #5) silently misrouted
+	// the other two modes because the agent switches on the prefix.
 	if pending, perr := s.store.ListPendingNodePatchStates(r.Context(), nodeID); perr == nil {
 		for _, ps := range pending {
 			if ps.JobID == nil {
 				continue
 			}
-			resp.PendingActions = append(resp.PendingActions, JobTypePatchDeployDirect+":"+ps.JobID.String())
+			job, jerr := s.store.GetJob(r.Context(), *ps.JobID)
+			if jerr != nil || job == nil {
+				if jerr != nil {
+					s.logger.Warn("lookup patch job for heartbeat dispatch",
+						zap.String("job_id", ps.JobID.String()), zap.Error(jerr))
+				}
+				continue
+			}
+			actionType := job.Type
+			if actionType == "" {
+				// Defensive fallback: if a row somehow lost its type, default
+				// to direct rather than dropping the action silently.
+				actionType = JobTypePatchDeployDirect
+			}
+			resp.PendingActions = append(resp.PendingActions, actionType+":"+ps.JobID.String())
 			if uerr := s.store.UpdateJobStatus(r.Context(), *ps.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
 				s.logger.Warn("mark patch job running",
 					zap.String("job_id", ps.JobID.String()), zap.Error(uerr))
@@ -323,7 +340,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
 				}
 			}
-		case JobTypePatchDeployDirect:
+		case JobTypePatchDeployDirect, JobTypePatchDeployProxy, JobTypePatchDeployAirgapped:
 			ps, perr := s.store.GetNodePatchStateByJobID(ctx, jobID)
 			if perr != nil {
 				s.logger.Warn("get patch state by job id", zap.Error(perr))
