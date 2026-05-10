@@ -223,7 +223,7 @@ All other rows are independent — parallel-safe.
 ### Per-worktree exit criteria
 
 1. `cd controlplane && go test ./... -count=1 -short` green
-2. `cd controlplane/ui && npm run lint && npm test` green
+2. `cd ui && npm run lint && npm test` green
 3. `golangci-lint run ./...` clean (or matches pre-existing baseline)
 4. Migration up/down tested via testcontainers (only if migration touched)
 5. One golden-path integration test for the feature
@@ -761,13 +761,13 @@ These are flagged here, not silently chosen. Owner ack required before S4 kickof
 | `c1-openreplay-decision` | `uploadToOpenReplay()` |
 | `c1-recommendations-bridge` | `controlplane/internal/server/recommendations.go:33-108`, `correlation.go:229-242`, `knowledge_graph.go:94-159` |
 | `c1-calibration-metric-contract` | `controlplane/internal/server/node_predictive.go:63-110, 494-539` + `internal/util/sysinfo.go:53-85` |
-| `c1-connections-doublefilter` | `controlplane/internal/server/connections_query.go:23-67`, `controlplane/internal/doris/reader_events.go:78-118`, `controlplane/ui/src/pages/NodeDetail.tsx:484-640` |
+| `c1-connections-doublefilter` | `controlplane/internal/server/connections_query.go:23-67`, `controlplane/internal/doris/reader_events.go:78-118`, `ui/src/pages/NodeDetail.tsx:484-640` |
 | `c1-patch-approval-gate` | `controlplane/internal/server/patch.go:341` + `tenant_remediation_config.go:47` |
-| `c1-patch-node-selector` | `controlplane/ui/src/pages/PatchManagement.tsx` |
+| `c1-patch-node-selector` | `ui/src/pages/PatchManagement.tsx` |
 | `c1-packages-on-node-tab` | `node_packages` storage + new endpoint + `NodeDetail.tsx` tab |
 | `c1-heartbeat-action-prefix` | `controlplane/internal/server/heartbeat.go:259` |
 | `c1-kg-compress` | `controlplane/internal/server/knowledge_graph.go:235-323` (refactor `buildKnowledgeGraphCtx` to emit `[]kgSection` with Stage-1 group-by-`(os,arch,agent,state)` dedup); `controlplane/internal/server/ai_ask.go:228` (call site swaps to `compressForQuery(sections, question, budget)`); `controlplane/internal/server/kg_compress.go` (new, ~150 LOC: tokenize → score → greedy-pack ≤ 8K tok); `controlplane/internal/server/kg_compress_test.go` (new, table tests). Reuses `nodeDisplayName`, `serviceURL`, `strOrDash`, `knowledgeGraphCache`. |
-| `c1-compliance-row-nav` | `controlplane/ui/src/pages/Compliance.tsx:263-270` |
+| `c1-compliance-row-nav` | `ui/src/pages/Compliance.tsx:263-270` |
 | `c1-llm-router` | new package `controlplane/internal/llm/router.go` wrapping `anthropic-sdk-go` + `openai-go` + `genai`; provider fallback chain + per-row override registry |
 | `c1-mcp-wrapper` → `c1-operator-mode` | `controlplane/internal/server/ai_ask.go:256`, `investigate.go:79, 738`, `events_anomaly.go:22-300` (all calls go through `internal/llm/router` not `anthropic-sdk-go` directly) |
 | `c1-fs-watcher` (S6) | new agent collector `internal/fswatcher/`; Linux PSI + inotify, macOS FSEvents, Windows ReadDirectoryChangesW; emits `file.size.bytes` + `file.growth_rate.bytes_per_sec` |
