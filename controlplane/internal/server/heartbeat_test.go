@@ -340,3 +340,185 @@ func TestHeartbeatRejectsWrongMethod(t *testing.T) {
 
 // Guard against unused imports when tests are trimmed.
 var _ = sql.ErrNoRows
+
+// patchPendingStore wraps fakeStore to feed the heartbeat handler a known set
+// of pending node_patch_state rows. fakeStore's stub returns nil — we override
+// just enough surface to drive the patch dispatch path without standing up a
+// real DB.
+type patchPendingStore struct {
+	*fakeStore
+	pending []storage.NodePatchState
+}
+
+func (p *patchPendingStore) ListPendingNodePatchStates(_ context.Context, _ uuid.UUID) ([]storage.NodePatchState, error) {
+	return p.pending, nil
+}
+
+// TestHeartbeatPendingActionsUseJobTypePrefix pins the bug fix for §3.3 #5:
+// previously heartbeat.go:259 hard-coded "patch.deploy_direct" as the prefix
+// for every pending patch action, so proxy- and airgapped-mode deployments
+// were silently routed as direct-mode by the agent. The fix reads the prefix
+// from the job row's Type column, so the agent's switch dispatches to the
+// correct handler. This test seeds three pending rows (one per mode) and
+// asserts each lands in resp.PendingActions with the correct prefix.
+func TestHeartbeatPendingActionsUseJobTypePrefix(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+
+	directJobID := uuid.New()
+	proxyJobID := uuid.New()
+	airgapJobID := uuid.New()
+
+	pending := []storage.NodePatchState{
+		{ID: uuid.New(), DeploymentID: uuid.New(), NodeID: nodeID, TenantID: tenantID, Status: "pending", JobID: &directJobID, RequestedAt: now},
+		{ID: uuid.New(), DeploymentID: uuid.New(), NodeID: nodeID, TenantID: tenantID, Status: "pending", JobID: &proxyJobID, RequestedAt: now.Add(time.Second)},
+		{ID: uuid.New(), DeploymentID: uuid.New(), NodeID: nodeID, TenantID: tenantID, Status: "pending", JobID: &airgapJobID, RequestedAt: now.Add(2 * time.Second)},
+	}
+	jobs := map[uuid.UUID]*storage.Job{
+		directJobID: {ID: directJobID, TenantID: tenantID, Type: JobTypePatchDeployDirect, Status: storage.JobStatusQueued},
+		proxyJobID:  {ID: proxyJobID, TenantID: tenantID, Type: JobTypePatchDeployProxy, Status: storage.JobStatusQueued},
+		airgapJobID: {ID: airgapJobID, TenantID: tenantID, Type: JobTypePatchDeployAirgapped, Status: storage.JobStatusQueued},
+	}
+
+	base := &fakeStore{
+		nodes: []storage.Node{{
+			ID:          nodeID,
+			TenantID:    tenantID,
+			Hostname:    "patch-host",
+			State:       storage.NodeStateActive,
+			FirstScanAt: &now,
+			LastSeenAt:  &now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Labels:      map[string]any{},
+		}},
+		jobs: jobs,
+	}
+	store := &patchPendingStore{fakeStore: base, pending: pending}
+
+	cfg := &config.Config{HTTP: config.HTTPConfig{Address: ":0"}}
+	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
+	t.Cleanup(srv.stopEnrollmentReaper)
+
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	var resp heartbeatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	want := map[string]string{
+		JobTypePatchDeployDirect + ":" + directJobID.String():    JobTypePatchDeployDirect,
+		JobTypePatchDeployProxy + ":" + proxyJobID.String():      JobTypePatchDeployProxy,
+		JobTypePatchDeployAirgapped + ":" + airgapJobID.String(): JobTypePatchDeployAirgapped,
+	}
+	got := map[string]struct{}{}
+	for _, a := range resp.PendingActions {
+		got[a] = struct{}{}
+	}
+	for action := range want {
+		if _, ok := got[action]; !ok {
+			t.Errorf("missing pending_action %q\n got=%v", action, resp.PendingActions)
+		}
+	}
+
+	// Each job should have flipped to running so the next heartbeat doesn't
+	// re-dispatch the same action.
+	for jobID, job := range jobs {
+		if job.Status != storage.JobStatusRunning {
+			t.Errorf("job %s status = %s, want running", jobID, job.Status)
+		}
+	}
+}
+
+// patchCompletionStore wraps fakeStore to (a) return a known
+// node_patch_state for any job_id and (b) record which state IDs were marked
+// applied or failed. This lets the consumer-side test observe whether the
+// patch case actually fired or fell through to the default branch.
+type patchCompletionStore struct {
+	*fakeStore
+	state          *storage.NodePatchState
+	appliedIDs     []uuid.UUID
+	failedIDs      []uuid.UUID
+	rollupSeen     []uuid.UUID
+	deploymentRows []storage.NodePatchState
+}
+
+func (p *patchCompletionStore) GetNodePatchStateByJobID(_ context.Context, _ uuid.UUID) (*storage.NodePatchState, error) {
+	return p.state, nil
+}
+
+func (p *patchCompletionStore) MarkNodePatchApplied(_ context.Context, id uuid.UUID, _ int, _ string) error {
+	p.appliedIDs = append(p.appliedIDs, id)
+	return nil
+}
+
+func (p *patchCompletionStore) MarkNodePatchFailed(_ context.Context, id uuid.UUID, _ string, _ string) error {
+	p.failedIDs = append(p.failedIDs, id)
+	return nil
+}
+
+func (p *patchCompletionStore) ListNodePatchStatesForDeployment(_ context.Context, deploymentID uuid.UUID) ([]storage.NodePatchState, error) {
+	p.rollupSeen = append(p.rollupSeen, deploymentID)
+	return p.deploymentRows, nil
+}
+
+// TestHeartbeatCompletedActionsAcceptAllPatchModes pins the consumer side of
+// the fix: previously the completed_actions switch only matched
+// JobTypePatchDeployDirect, so an agent reporting success for a proxy- or
+// airgapped-mode deployment fell through to the "ignore unknown" default and
+// the node_patch_state row stayed pending forever. The fix adds the proxy +
+// airgapped cases. Each subtest sends one completed action per mode and
+// asserts MarkNodePatchApplied was invoked.
+func TestHeartbeatCompletedActionsAcceptAllPatchModes(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{JobTypePatchDeployDirect, JobTypePatchDeployProxy, JobTypePatchDeployAirgapped} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			tenantID := uuid.New()
+			nodeID := uuid.New()
+			deploymentID := uuid.New()
+			stateID := uuid.New()
+			jobID := uuid.New()
+
+			ps := &storage.NodePatchState{
+				ID: stateID, DeploymentID: deploymentID, NodeID: nodeID,
+				TenantID: tenantID, Status: "pending", JobID: &jobID,
+			}
+			base := &fakeStore{
+				jobs: map[uuid.UUID]*storage.Job{
+					jobID: {ID: jobID, TenantID: tenantID, Type: mode, Status: storage.JobStatusRunning},
+				},
+			}
+			store := &patchCompletionStore{fakeStore: base, state: ps}
+
+			srv := &Server{logger: zap.NewNop(), store: store}
+
+			completed := []heartbeatCompletedAction{{
+				Action:   mode,
+				JobID:    jobID.String(),
+				Status:   "succeeded",
+				Metadata: map[string]any{"packages_upgraded": float64(3), "log_tail": "ok"},
+			}}
+			srv.processHeartbeatCompletedActions(context.Background(), nodeID, completed)
+
+			if len(store.appliedIDs) != 1 || store.appliedIDs[0] != stateID {
+				t.Fatalf("MarkNodePatchApplied not called for mode %s; appliedIDs=%v", mode, store.appliedIDs)
+			}
+			if got := base.jobs[jobID].Status; got != storage.JobStatusSucceeded {
+				t.Fatalf("job status = %s for mode %s, want succeeded", got, mode)
+			}
+		})
+	}
+}
