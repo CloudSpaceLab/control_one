@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/internal/metrics"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -56,17 +57,17 @@ type agentMetricsIngestRequest struct {
 // metricUnits maps the well-known agent metric names emitted by
 // internal/util/sysinfo.go (CollectHostMetrics) to a unit string. Anything
 // unmapped is stored with no unit — the read endpoint just round-trips it.
-var metricUnits = map[string]string{
-	"cpu_usage_percent":   "percent",
-	"cpu_count":           "",
-	"memory_used_percent": "percent",
-	"memory_total_bytes":  "bytes",
-	"disk_usage_percent":  "percent",
-	"disk_total_bytes":    "bytes",
-	"load1":               "",
-	"load5":               "",
-	"load15":              "",
-}
+//
+// Both the names and the units are derived from the single source of truth
+// at controlplane/internal/metrics. Adding or renaming a metric MUST happen
+// in that package; TestMetricNamesContract pins agent + server together.
+var metricUnits = func() map[string]string {
+	m := make(map[string]string, len(metrics.CoreEmitted))
+	for _, name := range metrics.CoreEmitted {
+		m[name] = metrics.Units(name)
+	}
+	return m
+}()
 
 // handleTelemetryIngest accepts agent-emitted host metrics (CPU, memory,
 // disk, load averages) and persists them into telemetry_metrics.

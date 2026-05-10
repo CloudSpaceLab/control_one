@@ -13,6 +13,8 @@ import (
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
+
+	"github.com/CloudSpaceLab/control_one/internal/metrics"
 )
 
 // SystemInfo represents basic machine metadata collected at bootstrap.
@@ -60,28 +62,30 @@ func CollectHostMetrics() map[string]any {
 	diskStat, _ := disk.UsageWithContext(ctx, "/")
 	loadStat, _ := load.AvgWithContext(ctx)
 
-	metrics := map[string]any{}
+	// Metric names imported from controlplane/internal/metrics — single
+	// source of truth shared with the predictive engine.
+	out := map[string]any{}
 	if len(cpuPercent) > 0 {
-		metrics["cpu_usage_percent"] = cpuPercent[0]
+		out[metrics.MetricCPUUsagePercent] = cpuPercent[0]
 	}
 	if cpuCounts > 0 {
-		metrics["cpu_count"] = float64(cpuCounts)
+		out[metrics.MetricCPUCount] = float64(cpuCounts)
 	}
 	if memStat != nil {
-		metrics["memory_total_bytes"] = memStat.Total
-		metrics["memory_used_percent"] = memStat.UsedPercent
+		out[metrics.MetricMemoryTotalBytes] = memStat.Total
+		out[metrics.MetricMemoryUsedPercent] = memStat.UsedPercent
 	}
 	if diskStat != nil {
-		metrics["disk_usage_percent"] = diskStat.UsedPercent
-		metrics["disk_total_bytes"] = diskStat.Total
+		out[metrics.MetricDiskUsagePercent] = diskStat.UsedPercent
+		out[metrics.MetricDiskTotalBytes] = diskStat.Total
 	}
 	if loadStat != nil {
-		metrics["load1"] = loadStat.Load1
-		metrics["load5"] = loadStat.Load5
-		metrics["load15"] = loadStat.Load15
+		out[metrics.MetricLoad1] = loadStat.Load1
+		out[metrics.MetricLoad5] = loadStat.Load5
+		out[metrics.MetricLoad15] = loadStat.Load15
 	}
 
-	return metrics
+	return out
 }
 
 func firstNonLoopbackIP() string {

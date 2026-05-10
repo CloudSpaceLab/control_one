@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/internal/metrics"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -55,6 +56,13 @@ type healthSignal struct {
 	trigger func(samples []storage.TelemetryMetric) bool
 	// primaryKey is the components-map key for incident dedupe.
 	primaryKey string
+	// optional marks signals that the agent does not yet emit (PSI iowait,
+	// SMART, ICMP, oom_kill, etc — see controlplane/internal/metrics
+	// OptionalSignals). The calibration gate excludes optional signals
+	// from min(samples) so a fresh node can finish calibrating using only
+	// CoreEmitted signals (load1) instead of waiting for unlanded
+	// collectors. Penalty still applies once the metric arrives.
+	optional bool
 }
 
 // healthSignalsCatalog returns the deterministic list of signals
@@ -62,51 +70,70 @@ type healthSignal struct {
 // tie-breaking when two signals have identical penalties.
 func healthSignalsCatalog() []healthSignal {
 	return []healthSignal{
+		// Optional signals — names live in metrics.OptionalSignals; the
+		// agent does not yet emit these. They contribute penalties when
+		// rows arrive but never gate calibration (see scorePredictForTenant).
 		{
-			metricName: "smart.reallocated_sector_count",
+			metricName: metrics.MetricSmartReallocatedSectors,
 			penalty:    35,
 			primaryKey: "smart_reallocated",
 			trigger:    triggerLatestPositive,
+			optional:   true,
 		},
 		{
-			metricName: "smart.uncorrectable_errors",
+			metricName: metrics.MetricSmartUncorrectableErrs,
 			penalty:    30,
 			primaryKey: "smart_uncorrectable",
 			trigger:    triggerLatestPositive,
+			optional:   true,
 		},
 		{
-			metricName: "host.oom_events_count",
+			metricName: metrics.MetricHostOOMEventsCount,
 			penalty:    25,
 			primaryKey: "oom_events",
 			trigger:    triggerLastHourPositive,
+			optional:   true,
 		},
 		{
-			metricName: "host.swap_used_pct",
+			metricName: metrics.MetricHostSwapUsedPct,
 			penalty:    15,
 			primaryKey: "swap_used",
 			trigger:    triggerLatestAbove(80),
+			optional:   true,
 		},
 		{
-			metricName: "host.iowait_pct",
+			metricName: metrics.MetricHostIowaitPct,
 			penalty:    15,
 			primaryKey: "iowait_sustained",
 			trigger:    triggerSustainedAbove(30, 6),
+			optional:   true,
 		},
 		{
-			metricName: "host.load_avg_ratio",
+			metricName: metrics.MetricHostLoadAvgRatio,
 			penalty:    10,
 			primaryKey: "load_avg_high",
 			trigger:    triggerLatestAbove(2),
+			optional:   true,
 		},
 		{
-			metricName: "net.packet_loss_pct",
+			metricName: metrics.MetricNetPacketLossPct,
 			penalty:    10,
 			primaryKey: "packet_loss",
 			trigger:    triggerLatestAbove(5),
+			optional:   true,
+		},
+		// Core-emitted signal: gates calibration. load1 ships from the
+		// agent today (internal/util/sysinfo.go CollectHostMetrics).
+		{
+			metricName: metrics.MetricLoad1,
+			penalty:    10,
+			primaryKey: "load1_high",
+			trigger:    triggerLatestAbove(8),
 		},
 		// icmp_latency p99 baseline-relative is handled separately by
 		// scoreLatencyVsBaseline so it can compare against the EWMA
 		// baseline — it doesn't fit the static-threshold trigger shape.
+		// It is also optional (no agent emitter today).
 	}
 }
 
@@ -373,7 +400,7 @@ func (s *Server) computeBaselinesForTenant(
 		}
 		// icmp_latency baseline lives alongside the static-threshold
 		// signals; include it explicitly so we keep p99 fresh.
-		metricNames := append([]string{"net.icmp_latency_p99"}, func() []string {
+		metricNames := append([]string{metrics.MetricNetIcmpLatencyP99}, func() []string {
 			out := make([]string, 0, len(signals))
 			for _, sig := range signals {
 				out = append(out, sig.metricName)
@@ -489,6 +516,11 @@ func (s *Server) scorePredictForTenant(ctx context.Context, tenantID uuid.UUID, 
 		node := nodes[i]
 		nodeID := node.ID
 		// Pull samples per signal and the baselines (for icmp).
+		// Calibration min(samples) is computed ONLY across non-optional
+		// (core-emitted) signals — optional signals (SMART/PSI/ICMP) do
+		// not yet have agent-side emitters and would otherwise pin
+		// every node at calibrating_samples=0 forever (see
+		// docs/incomplete-features-and-bugs.md §1.1).
 		samplesByMetric := make(map[string][]storage.TelemetryMetric, len(signals)+1)
 		minSamples := math.MaxInt
 		for _, sig := range signals {
@@ -502,21 +534,22 @@ func (s *Server) scorePredictForTenant(ctx context.Context, tenantID uuid.UUID, 
 				continue
 			}
 			samplesByMetric[sig.metricName] = samples
+			if sig.optional {
+				continue
+			}
 			if len(samples) < minSamples {
 				minSamples = len(samples)
 			}
 		}
-		// icmp latency
+		// icmp latency — optional, fetched for scoring but does not gate
+		// calibration.
 		latencySamples, _, _ := s.store.ListTelemetryMetrics(ctx, storage.TelemetryMetricFilter{
 			TenantID:   tenantID,
 			NodeID:     nodeID,
-			MetricName: "net.icmp_latency_p99",
+			MetricName: metrics.MetricNetIcmpLatencyP99,
 			Since:      &since,
 		}, 256, 0)
-		samplesByMetric["net.icmp_latency_p99"] = latencySamples
-		if len(latencySamples) < minSamples {
-			minSamples = len(latencySamples)
-		}
+		samplesByMetric[metrics.MetricNetIcmpLatencyP99] = latencySamples
 		// Cold-start gate.
 		if minSamples == math.MaxInt {
 			minSamples = 0
@@ -599,7 +632,7 @@ func (s *Server) scoreLatencyVsBaseline(
 	}
 	var baselineEWMA float64
 	for _, b := range baselines {
-		if b.SignalType == "health.net.icmp_latency_p99" {
+		if b.SignalType == "health."+metrics.MetricNetIcmpLatencyP99 {
 			if v, ok := b.Baseline["ewma"].(float64); ok {
 				baselineEWMA = v
 				break
