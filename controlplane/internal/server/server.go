@@ -1136,6 +1136,11 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/finacle/profiles", s.handleFinacleProfiles)
 	s.baseRouter.HandleFunc("/api/v1/finacle/profiles/", s.handleFinacleProfileSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/finacle/shift-rotate", s.handleFinacleShiftRotate)
+	// AML / KYC screening gateway. PII-bearing — auth required at the
+	// handler entry point. See controlplane/internal/server/aml.go for the
+	// security invariants. Bugs §4 #1, sprint 4 row 1.
+	s.baseRouter.HandleFunc("/api/v1/aml/screen", s.handleAMLScreen)
+	s.baseRouter.HandleFunc("/api/v1/aml/verdicts/", s.handleAMLVerdicts)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
