@@ -129,16 +129,6 @@ function latestValue(metrics: TelemetryMetric[], name: string): number | null {
   return series.length ? series[series.length - 1] : null;
 }
 
-function externalPeerIP(ip?: string): boolean {
-  if (!ip) return false;
-  if (ip === '-' || ip === '0.0.0.0' || ip === '::') return false;
-  if (ip.startsWith('127.') || ip === '::1') return false;
-  if (ip.startsWith('10.') || ip.startsWith('192.168.')) return false;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return false;
-  if (ip.startsWith('169.254.')) return false;
-  return true;
-}
-
 function numericLabel(node: import('@/lib/api').Node, keys: string[]): number | null {
   const labels = node.labels ?? {};
   for (const key of keys) {
@@ -513,16 +503,14 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     refresh();
   }, [refresh]);
 
-  const filteredRows = useMemo(
-    () =>
-      rows.filter((row) => {
-        const ip = peerIp(row);
-        if (!externalPeerIP(ip)) return false;
-        const bytes = (row.bytes_in ?? 0) + (row.bytes_out ?? 0);
-        return bytes > 0 || row.threat_match || row.direction === 'inbound';
-      }),
-    [rows],
-  );
+  // The server is the canonical filter for connection visibility — see
+  // `controlplane/internal/doris/reader_events.go` `ListConnectionsForNode`.
+  // We previously stripped RFC1918 peers and zero-byte rows here, which
+  // double-filtered the result and emptied the panel on dev/internal nodes
+  // where most peers are private (bugs §1.2). Display whatever the server
+  // returns; an "External only" toggle can be reintroduced server-side when
+  // operators ask for it.
+  const filteredRows = rows;
 
   useEffect(() => {
     let cancelled = false;
@@ -579,7 +567,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
       >
         {err && <Alert variant="critical">{err}</Alert>}
         {!loading && filteredRows.length === 0 ? (
-          <p className="text-sm text-text-muted">No meaningful external open connections in the current 24h window.</p>
+          <p className="text-sm text-text-muted">No open connections in the current 24h window.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
