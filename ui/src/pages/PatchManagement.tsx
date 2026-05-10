@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw, ShieldAlert, ShieldCheck, Clock, Server, Plus, Trash2 } from 'lucide-react';
+import { Loader2, RefreshCw, ShieldAlert, ShieldCheck, Clock, Server, Plus, Trash2, Check, X, Hourglass } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 import { SectionHeader, EmptyState, StatusTag, KpiTile } from '../components/kit';
@@ -12,13 +12,16 @@ import type {
   NodePatchConfig,
   MaintenanceWindow,
   SquidProxy,
+  NodeSummary,
+  PatchApproval,
 } from '../lib/api';
 
 // PatchManagement is the operator console for fleet OS-package patching.
 // Wave C extends the page with Squid proxy management, maintenance window
 // scheduling, and per-node mode configuration on top of the direct-mode
-// MVP shipped in PR #30.
-type Tab = 'deployments' | 'proxies' | 'windows';
+// MVP shipped in PR #30. S4 Wave-2 (PR #65 + this PR) adds the approval
+// gate, per-node selector and the approval queue.
+type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals';
 
 export function PatchManagement(): JSX.Element {
   const client = useApiClient();
@@ -27,26 +30,31 @@ export function PatchManagement(): JSX.Element {
   const [deployments, setDeployments] = useState<PatchDeployment[]>([]);
   const [proxies, setProxies] = useState<SquidProxy[]>([]);
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<PatchApproval[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<PatchDeployment | null>(null);
   const [showProxyForm, setShowProxyForm] = useState(false);
   const [showWindowForm, setShowWindowForm] = useState(false);
+  const [showDeployForm, setShowDeployForm] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) return;
     setLoading(true);
     setError(null);
     try {
-      const [deps, proxyList, windowList] = await Promise.all([
+      const [deps, proxyList, windowList, approvals] = await Promise.all([
         client.listPatchDeployments({ tenantId: currentTenantId, limit: 50 }),
         client.listSquidProxies(currentTenantId).catch(() => ({ proxies: [] as SquidProxy[] })),
         client.listMaintenanceWindows(currentTenantId).catch(() => ({ windows: [] as MaintenanceWindow[] })),
+        client
+          .listPatchApprovals({ status: 'pending', tenantId: currentTenantId, limit: 100 })
+          .catch(() => ({ data: [] as PatchApproval[], pagination: { total: 0, limit: 0, offset: 0, count: 0 } })),
       ]);
       setDeployments(deps.deployments ?? []);
       setProxies(proxyList.proxies ?? []);
       setWindows(windowList.windows ?? []);
+      setPendingApprovals(approvals.data ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'load failed');
     } finally {
@@ -71,31 +79,6 @@ export function PatchManagement(): JSX.Element {
     );
   }, [deployments]);
 
-  const deployFleet = async () => {
-    if (!currentTenantId) {
-      toast.error('Select a tenant first');
-      return;
-    }
-    if (!confirm('Deploy patches to every enrolled node in this tenant? Each node passes through the 4-gate safety pipeline.')) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const resp = await client.createPatchDeployment({ tenant_id: currentTenantId, mode: 'auto' });
-      const blocked = resp.gate_blocked?.length ?? 0;
-      const failedCount = resp.failed?.length ?? 0;
-      let msg = `Patch deployment dispatched to ${resp.node_count} node${resp.node_count === 1 ? '' : 's'}`;
-      if (blocked > 0) msg += `; ${blocked} blocked by safety gate`;
-      if (failedCount > 0) msg += `; ${failedCount} failed to dispatch`;
-      toast.success(msg);
-      refresh();
-    } catch (err) {
-      toast.error(`Deploy failed: ${err instanceof Error ? err.message : 'unknown'}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (!currentTenantId) {
     return (
       <div className="space-y-6 p-6">
@@ -116,9 +99,9 @@ export function PatchManagement(): JSX.Element {
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
-            <Button size="sm" onClick={deployFleet} disabled={busy}>
-              {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
-              Deploy fleet-wide
+            <Button size="sm" onClick={() => setShowDeployForm(true)}>
+              <ShieldAlert className="mr-2 h-4 w-4" />
+              Deploy patches…
             </Button>
           </div>
         }
@@ -135,6 +118,11 @@ export function PatchManagement(): JSX.Element {
         <TabButton active={tab === 'deployments'} onClick={() => setTab('deployments')} label="Deployments" />
         <TabButton active={tab === 'proxies'} onClick={() => setTab('proxies')} label={`Proxies (${proxies.length})`} />
         <TabButton active={tab === 'windows'} onClick={() => setTab('windows')} label={`Windows (${windows.length})`} />
+        <TabButton
+          active={tab === 'approvals'}
+          onClick={() => setTab('approvals')}
+          label={`Approvals (${pendingApprovals.length})`}
+        />
       </div>
 
       {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
@@ -144,6 +132,8 @@ export function PatchManagement(): JSX.Element {
           loading={loading}
           deployments={deployments}
           onSelect={setSelected}
+          onJumpToApprovals={() => setTab('approvals')}
+          pendingApprovalCount={pendingApprovals.length}
         />
       )}
       {tab === 'proxies' && (
@@ -159,6 +149,13 @@ export function PatchManagement(): JSX.Element {
           windows={windows}
           tenantId={currentTenantId}
           onCreate={() => setShowWindowForm(true)}
+          onChanged={refresh}
+        />
+      )}
+      {tab === 'approvals' && (
+        <ApprovalQueue
+          approvals={pendingApprovals}
+          loading={loading}
           onChanged={refresh}
         />
       )}
@@ -184,6 +181,19 @@ export function PatchManagement(): JSX.Element {
           }}
         />
       )}
+      {showDeployForm && currentTenantId && (
+        <DeployForm
+          tenantId={currentTenantId}
+          onClose={() => setShowDeployForm(false)}
+          onSubmitted={(awaitingCount) => {
+            setShowDeployForm(false);
+            refresh();
+            if (awaitingCount > 0) {
+              setTab('approvals');
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -206,54 +216,71 @@ function DeploymentsPanel({
   loading,
   deployments,
   onSelect,
+  onJumpToApprovals,
+  pendingApprovalCount,
 }: {
   loading: boolean;
   deployments: PatchDeployment[];
   onSelect: (d: PatchDeployment) => void;
+  onJumpToApprovals: () => void;
+  pendingApprovalCount: number;
 }): JSX.Element {
   if (loading && deployments.length === 0) return <Skeleton className="h-32 w-full" />;
   if (!loading && deployments.length === 0) {
     return (
       <EmptyState
         title="No deployments yet"
-        description="Click Deploy fleet-wide to run apt-get / dnf / winget upgrade on every enrolled node. Each node passes through the 4 safety gates."
+        description="Click Deploy patches… to pick a node subset and dispatch apt-get / dnf / winget upgrade. Each node passes through the 4 safety gates."
       />
     );
   }
   return (
-    <div className="rounded border border-border">
-      <table className="w-full text-sm">
-        <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
-          <tr>
-            <th className="px-3 py-2">Requested</th>
-            <th className="px-3 py-2">Mode</th>
-            <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2">Applied / Total</th>
-            <th className="px-3 py-2">Failed</th>
-            <th className="px-3 py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {deployments.map((d) => (
-            <tr key={d.ID} className="border-t border-border hover:bg-hover">
-              <td className="px-3 py-2 text-text-secondary">{new Date(d.RequestedAt).toLocaleString()}</td>
-              <td className="px-3 py-2">{d.Mode}</td>
-              <td className="px-3 py-2">
-                <StatusTag tone={statusTone(d.Status)}>{d.Status}</StatusTag>
-              </td>
-              <td className="px-3 py-2">
-                {(d.nodes_applied ?? 0)}/{d.TargetNodeCount}
-              </td>
-              <td className="px-3 py-2">{d.nodes_failed ?? 0}</td>
-              <td className="px-3 py-2 text-right">
-                <Button variant="ghost" size="sm" onClick={() => onSelect(d)}>
-                  Per-node
-                </Button>
-              </td>
+    <div className="space-y-3">
+      {pendingApprovalCount > 0 && (
+        <div className="flex items-center justify-between rounded border border-warning/40 bg-warning/10 p-3 text-sm">
+          <span className="flex items-center gap-2">
+            <Hourglass className="h-4 w-4" />
+            {pendingApprovalCount} patch deployment{pendingApprovalCount === 1 ? '' : 's'} awaiting approval.
+          </span>
+          <Button variant="outline" size="sm" onClick={onJumpToApprovals}>
+            Review queue
+          </Button>
+        </div>
+      )}
+      <div className="rounded border border-border">
+        <table className="w-full text-sm">
+          <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
+            <tr>
+              <th className="px-3 py-2">Requested</th>
+              <th className="px-3 py-2">Mode</th>
+              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Applied / Total</th>
+              <th className="px-3 py-2">Failed</th>
+              <th className="px-3 py-2"></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {deployments.map((d) => (
+              <tr key={d.ID} className="border-t border-border hover:bg-hover">
+                <td className="px-3 py-2 text-text-secondary">{new Date(d.RequestedAt).toLocaleString()}</td>
+                <td className="px-3 py-2">{d.Mode}</td>
+                <td className="px-3 py-2">
+                  <StatusTag tone={statusTone(d.Status)}>{d.Status}</StatusTag>
+                </td>
+                <td className="px-3 py-2">
+                  {(d.nodes_applied ?? 0)}/{d.TargetNodeCount}
+                </td>
+                <td className="px-3 py-2">{d.nodes_failed ?? 0}</td>
+                <td className="px-3 py-2 text-right">
+                  <Button variant="ghost" size="sm" onClick={() => onSelect(d)}>
+                    Per-node
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -927,6 +954,361 @@ function NodeConfigEditor({
         ))}
       </div>
     </aside>
+  );
+}
+
+// DeployForm replaces the old "deploy fleet-wide" confirm() with a per-node
+// selector. Operator picks the subset, and on submit we POST node_ids to the
+// existing /api/v1/patch/deployments endpoint. When the response includes
+// awaiting_approval entries (PR #65), we surface them inline and the parent
+// component flips to the Approvals tab.
+function DeployForm({
+  tenantId,
+  onClose,
+  onSubmitted,
+}: {
+  tenantId: string;
+  onClose: () => void;
+  onSubmitted: (awaitingCount: number) => void;
+}): JSX.Element {
+  const client = useApiClient();
+  const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState('');
+  const [mode, setMode] = useState<'auto' | 'direct' | 'proxy' | 'airgapped'>('auto');
+  const [reason, setReason] = useState('');
+  const [loadingNodes, setLoadingNodes] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingNodes(true);
+      setLoadError(null);
+      try {
+        const resp = await client.listNodes({ tenantId, limit: 500 });
+        if (cancelled) return;
+        setNodes(resp.data ?? []);
+      } catch (err) {
+        if (cancelled) return;
+        setLoadError(err instanceof Error ? err.message : 'load failed');
+      } finally {
+        if (!cancelled) setLoadingNodes(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, tenantId]);
+
+  const filteredNodes = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    if (!needle) return nodes;
+    return nodes.filter(
+      (n) =>
+        n.hostname.toLowerCase().includes(needle) ||
+        n.id.toLowerCase().includes(needle) ||
+        (n.public_ip ?? '').toLowerCase().includes(needle),
+    );
+  }, [nodes, filter]);
+
+  const toggle = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredNodes.forEach((n) => next.add(n.id));
+      return next;
+    });
+  };
+
+  const clearVisible = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredNodes.forEach((n) => next.delete(n.id));
+      return next;
+    });
+  };
+
+  const submit = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      toast.error('Select at least one node');
+      return;
+    }
+    setBusy(true);
+    try {
+      const resp = await client.createPatchDeployment({
+        tenant_id: tenantId,
+        node_ids: ids,
+        mode,
+        reason: reason.trim() || undefined,
+      });
+      const awaitingCount = resp.awaiting_approval?.length ?? 0;
+      const blocked = resp.gate_blocked?.length ?? 0;
+      const failedCount = resp.failed?.length ?? 0;
+      let msg = `Patch deployment dispatched to ${resp.node_count} node${resp.node_count === 1 ? '' : 's'}`;
+      if (awaitingCount > 0) msg += `; ${awaitingCount} awaiting approval`;
+      if (blocked > 0) msg += `; ${blocked} blocked by safety gate`;
+      if (failedCount > 0) msg += `; ${failedCount} failed to dispatch`;
+      if (awaitingCount > 0) {
+        toast.warning(msg);
+      } else {
+        toast.success(msg);
+      }
+      onSubmitted(awaitingCount);
+    } catch (err) {
+      toast.error(`Deploy failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const visibleSelectedCount = filteredNodes.filter((n) => selectedIds.has(n.id)).length;
+
+  return (
+    <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-2xl flex-col border-l border-border bg-elevated shadow-2xl">
+      <div className="flex items-start justify-between border-b border-border p-6">
+        <div>
+          <h3 className="text-lg font-semibold">Deploy patches</h3>
+          <p className="mt-1 text-xs text-text-secondary">
+            Pick the nodes to receive this deployment. Each selected node passes through the 4-gate safety pipeline
+            (opt-out / change window / circuit breaker / approval).
+          </p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+
+      <div className="space-y-3 border-b border-border p-6">
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block text-sm">
+            <span className="text-text-secondary">Mode</span>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as typeof mode)}
+              className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm"
+            >
+              <option value="auto">auto (per-node config)</option>
+              <option value="direct">direct</option>
+              <option value="proxy">proxy</option>
+              <option value="airgapped">airgapped</option>
+            </select>
+          </label>
+          <label className="block text-sm">
+            <span className="text-text-secondary">Reason (optional)</span>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm"
+              placeholder="e.g. CVE-2026-XXXX hotfix"
+            />
+          </label>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="search"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filter by hostname / id / ip…"
+            className="flex-1 rounded border border-border bg-surface-1 px-2 py-1 text-sm"
+          />
+          <Button variant="outline" size="sm" onClick={selectAllVisible} disabled={filteredNodes.length === 0}>
+            Select all
+          </Button>
+          <Button variant="outline" size="sm" onClick={clearVisible} disabled={filteredNodes.length === 0}>
+            Clear
+          </Button>
+        </div>
+        <p className="text-xs text-text-secondary">
+          {selectedIds.size} of {nodes.length} nodes selected
+          {filter && ` · ${visibleSelectedCount} of ${filteredNodes.length} visible`}
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6">
+        {loadError && (
+          <div className="mb-3 rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{loadError}</div>
+        )}
+        {loadingNodes && nodes.length === 0 ? (
+          <Skeleton className="h-40 w-full" />
+        ) : filteredNodes.length === 0 ? (
+          <EmptyState title="No matching nodes" description={filter ? 'Adjust the filter.' : 'No enrolled nodes in this tenant.'} />
+        ) : (
+          <div className="rounded border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
+                <tr>
+                  <th className="px-3 py-2 w-8"></th>
+                  <th className="px-3 py-2">Hostname</th>
+                  <th className="px-3 py-2">OS</th>
+                  <th className="px-3 py-2">State</th>
+                  <th className="px-3 py-2">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredNodes.map((n) => {
+                  const checked = selectedIds.has(n.id);
+                  return (
+                    <tr
+                      key={n.id}
+                      className={`border-t border-border cursor-pointer hover:bg-hover ${checked ? 'bg-surface-2' : ''}`}
+                      onClick={() => toggle(n.id)}
+                    >
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select node ${n.hostname}`}
+                          checked={checked}
+                          onChange={() => toggle(n.id)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium">{n.hostname}</div>
+                        <div className="font-mono text-[10px] text-text-secondary">{n.id.slice(0, 8)}</div>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-text-secondary">{n.os ?? '—'}</td>
+                      <td className="px-3 py-2 text-xs">{n.state}</td>
+                      <td className="px-3 py-2 text-xs text-text-secondary">
+                        {n.last_seen_at ? new Date(n.last_seen_at).toLocaleString() : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end gap-2 border-t border-border p-4">
+        <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={submit} disabled={busy || selectedIds.size === 0}>
+          {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+          Deploy to {selectedIds.size} node{selectedIds.size === 1 ? '' : 's'}
+        </Button>
+      </div>
+    </aside>
+  );
+}
+
+// ApprovalQueue lists pending patch_approvals rows for the current tenant
+// (PR #65) and exposes Approve / Deny controls. Approve re-runs the
+// dispatch; deny lets the operator drop a parked deployment.
+function ApprovalQueue({
+  approvals,
+  loading,
+  onChanged,
+}: {
+  approvals: PatchApproval[];
+  loading: boolean;
+  onChanged: () => void;
+}): JSX.Element {
+  const client = useApiClient();
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const approve = async (a: PatchApproval) => {
+    setBusy(a.id);
+    try {
+      await client.approvePatchApproval(a.id);
+      toast.success('Approved — deployment re-dispatched');
+      onChanged();
+    } catch (err) {
+      toast.error(`Approve failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deny = async (a: PatchApproval) => {
+    if (!confirm(`Deny patch approval for node ${a.node_id.slice(0, 8)}?`)) return;
+    setBusy(a.id);
+    try {
+      await client.denyPatchApproval(a.id);
+      toast.success('Denied');
+      onChanged();
+    } catch (err) {
+      toast.error(`Deny failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (loading && approvals.length === 0) return <Skeleton className="h-32 w-full" />;
+  if (approvals.length === 0) {
+    return (
+      <EmptyState
+        title="No pending approvals"
+        description="When a tenant has patch_requires_approval=true, parked deployments show up here for an operator to approve or deny."
+      />
+    );
+  }
+
+  return (
+    <div className="rounded border border-border">
+      <table className="w-full text-sm">
+        <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
+          <tr>
+            <th className="px-3 py-2">Requested</th>
+            <th className="px-3 py-2">Deployment</th>
+            <th className="px-3 py-2">Node</th>
+            <th className="px-3 py-2">Mode</th>
+            <th className="px-3 py-2">Expires</th>
+            <th className="px-3 py-2 text-right"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {approvals.map((a) => {
+            const expired = a.expires_at && new Date(a.expires_at).getTime() < Date.now();
+            return (
+              <tr key={a.id} className="border-t border-border align-top">
+                <td className="px-3 py-2 text-xs text-text-secondary">{new Date(a.created_at).toLocaleString()}</td>
+                <td className="px-3 py-2 font-mono text-xs">{a.deployment_id.slice(0, 8)}</td>
+                <td className="px-3 py-2 font-mono text-xs">{a.node_id.slice(0, 8)}</td>
+                <td className="px-3 py-2 text-xs">{a.mode}</td>
+                <td className="px-3 py-2 text-xs text-text-secondary">
+                  {a.expires_at ? new Date(a.expires_at).toLocaleString() : '—'}
+                  {expired && <span className="ml-1 text-destructive">(expired)</span>}
+                </td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => approve(a)}
+                    disabled={busy === a.id || !!expired}
+                    aria-label={`Approve patch deployment for node ${a.node_id}`}
+                  >
+                    <Check className="h-4 w-4 mr-1" /> Approve
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => deny(a)}
+                    disabled={busy === a.id}
+                    aria-label={`Deny patch deployment for node ${a.node_id}`}
+                  >
+                    <X className="h-4 w-4 mr-1" /> Deny
+                  </Button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

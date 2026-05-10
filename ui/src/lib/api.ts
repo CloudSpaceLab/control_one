@@ -2404,22 +2404,51 @@ export class APIClient {
     node_ids?: string[];
     mode?: 'direct' | 'proxy' | 'airgapped' | 'auto';
     reason?: string;
-  }): Promise<{
-    deployment: PatchDeployment;
-    node_count: number;
-    succeeded?: string[];
-    failed?: { node_id: string; error: string }[];
-    gate_blocked?: { node_id: string; reason: string }[];
-  }> {
-    return this.request<{
-      deployment: PatchDeployment;
-      node_count: number;
-      succeeded?: string[];
-      failed?: { node_id: string; error: string }[];
-      gate_blocked?: { node_id: string; reason: string }[];
-    }>(
+  }): Promise<PatchDeployResponse> {
+    return this.request<PatchDeployResponse>(
       '/api/v1/patch/deployments',
       { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  // ── Patch approvals (PR #65 c1-patch-approval-gate) ────────────────────
+  async listPatchApprovals(params: {
+    status?: 'pending' | 'approved' | 'denied' | 'expired';
+    tenantId?: string;
+    deploymentId?: string;
+    nodeId?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<PaginatedResponse<PatchApproval>> {
+    const search = new URLSearchParams();
+    if (params.status) search.set('status', params.status);
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.deploymentId) search.set('deployment_id', params.deploymentId);
+    if (params.nodeId) search.set('node_id', params.nodeId);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const query = search.toString();
+    const suffix = query ? `?${query}` : '';
+    const response = await this.request<RawPaginatedResponse<PatchApproval>>(
+      `/api/v1/patch/approvals${suffix}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async approvePatchApproval(id: string): Promise<PatchApproval> {
+    return this.request<PatchApproval>(
+      `/api/v1/patch/approvals/${encodeURIComponent(id)}/approve`,
+      { method: 'POST' },
+    );
+  }
+
+  async denyPatchApproval(id: string): Promise<PatchApproval> {
+    return this.request<PatchApproval>(
+      `/api/v1/patch/approvals/${encodeURIComponent(id)}/deny`,
+      { method: 'POST' },
     );
   }
 
@@ -3627,6 +3656,35 @@ export interface NodePatchState {
   JobID?: string;
   RequestedAt: string;
   AppliedAt?: string;
+}
+
+// PatchDeployResponse mirrors patchDeployResponse on the server. The
+// awaiting_approval list (PR #65) carries one entry per node parked behind
+// the approval gate when the tenant has patch_requires_approval=true.
+export interface PatchDeployResponse {
+  deployment: PatchDeployment;
+  node_count: number;
+  succeeded?: string[];
+  failed?: { node_id: string; error: string }[];
+  gate_blocked?: { node_id: string; reason: string }[];
+  awaiting_approval?: { node_id: string; approval_id?: string; reason?: string }[];
+}
+
+// PatchApproval mirrors patchApprovalResponse on the server.
+export interface PatchApproval {
+  id: string;
+  tenant_id: string;
+  deployment_id: string;
+  node_id: string;
+  mode: string;
+  proxy_id?: string;
+  window_id?: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  approved_by?: string;
+  approved_at?: string;
+  created_at: string;
+  expires_at: string;
+  job_id?: string;
 }
 
 // ── Patch Management — Wave C (proxy / airgapped / Squid / windows) ──────
