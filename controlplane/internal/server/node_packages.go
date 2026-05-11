@@ -20,15 +20,21 @@ type nodePackageResponse struct {
 	Source      string  `json:"source"`
 	Arch        *string `json:"arch,omitempty"`
 	InstalledAt *string `json:"installed_at,omitempty"`
+	// IsSystem flags packages that match an OS-baseline name-pattern heuristic
+	// (kernel, libc, systemd, Microsoft.*, etc.). The UI defaults to hiding
+	// these so operators see application packages first. Stored nowhere —
+	// computed read-side via isSystemPackage(name, source).
+	IsSystem bool `json:"is_system"`
 }
 
 func newNodePackageResponse(p storage.NodePackage) nodePackageResponse {
 	out := nodePackageResponse{
-		NodeID:  p.NodeID.String(),
-		Name:    p.Name,
-		Version: p.Version,
-		Source:  p.Source,
-		Arch:    p.Arch,
+		NodeID:   p.NodeID.String(),
+		Name:     p.Name,
+		Version:  p.Version,
+		Source:   p.Source,
+		Arch:     p.Arch,
+		IsSystem: isSystemPackage(p.Name, p.Source),
 	}
 	if p.InstalledAt != nil {
 		s := p.InstalledAt.UTC().Format(time.RFC3339)

@@ -1002,6 +1002,10 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  // Default ON so first-paint shows application packages, not OS noise.
+  // Server flags `is_system` via name-pattern heuristic — see
+  // controlplane/internal/server/node_packages_heuristic.go.
+  const [hideSystem, setHideSystem] = useState(true);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -1020,16 +1024,24 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
     refresh();
   }, [refresh]);
 
+  const systemCount = useMemo(
+    () => packages.reduce((n, p) => (p.is_system ? n + 1 : n), 0),
+    [packages],
+  );
+  const applicationCount = packages.length - systemCount;
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return packages;
-    return packages.filter(
-      (p) =>
+    return packages.filter((p) => {
+      if (hideSystem && p.is_system) return false;
+      if (!needle) return true;
+      return (
         p.name.toLowerCase().includes(needle) ||
         p.version.toLowerCase().includes(needle) ||
-        p.source.toLowerCase().includes(needle),
-    );
-  }, [packages, query]);
+        p.source.toLowerCase().includes(needle)
+      );
+    });
+  }, [packages, query, hideSystem]);
 
   const sources = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1037,10 +1049,22 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [packages]);
 
+  const kpiLabel = hideSystem ? 'Application packages' : 'Packages';
+  const kpiValue = hideSystem ? applicationCount : packages.length;
+  const kpiHint =
+    hideSystem && systemCount > 0 ? `${systemCount} system hidden` : undefined;
+
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiTile label="Packages" value={packages.length} tone="brand" icon={<Package />} loading={loading} />
+        <KpiTile
+          label={kpiLabel}
+          value={kpiValue}
+          hint={kpiHint}
+          tone="brand"
+          icon={<Package />}
+          loading={loading}
+        />
         <KpiTile
           label="Primary source"
           value={sources[0]?.[0] ?? '—'}
@@ -1075,6 +1099,16 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
             className="max-w-sm"
             aria-label="Filter packages"
           />
+          <label className="flex items-center gap-1.5 text-xs text-text-secondary">
+            <input
+              type="checkbox"
+              checked={hideSystem}
+              onChange={(e) => setHideSystem(e.target.checked)}
+              className="h-3.5 w-3.5 cursor-pointer accent-brand"
+              aria-label="Hide system packages"
+            />
+            Hide system packages
+          </label>
           <span className="font-mono text-xs text-text-muted">
             {filtered.length} / {packages.length}
           </span>

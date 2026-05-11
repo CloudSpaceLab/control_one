@@ -91,6 +91,25 @@ func TestHandleNodePackagesReturnsRows(t *testing.T) {
 	if openssl.NodeID != nodeID.String() {
 		t.Fatalf("node_id = %q, want %q", openssl.NodeID, nodeID.String())
 	}
+	// `openssl` matches the apt system-prefix heuristic; `curl` does not.
+	// This pins the response shape (the new is_system field travels on the
+	// wire) and verifies the handler applies the heuristic to every row.
+	if !openssl.IsSystem {
+		t.Fatalf("openssl is_system = false, want true (matches apt system prefix)")
+	}
+	var curl *nodePackageResponse
+	for i, row := range body.Data {
+		if row.Name == "curl" {
+			curl = &body.Data[i]
+			break
+		}
+	}
+	if curl == nil {
+		t.Fatalf("curl row missing from response: %s", rec.Body.String())
+	}
+	if curl.IsSystem {
+		t.Fatalf("curl is_system = true, want false (application package)")
+	}
 }
 
 // TestHandleNodePackagesEmptyForKnownNode verifies a node with no rows returns

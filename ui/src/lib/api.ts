@@ -1261,6 +1261,10 @@ export interface NodePackage {
   source: string;
   arch?: string | null;
   installed_at?: string | null;
+  // Server-computed via name-pattern heuristic (kernel, libc, systemd,
+  // Microsoft.*, etc.). The PackagesTab uses this to default-hide OS
+  // baseline noise so operators see real application packages.
+  is_system?: boolean;
 }
 
 export interface NodeService {
