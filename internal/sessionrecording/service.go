@@ -29,19 +29,19 @@ type Service struct {
 
 // Config holds session recording configuration
 type Config struct {
-	Enabled          bool
-	Backend          string
-	StoragePath      string
-	RetentionDays    int
-	MaxSizeMB        int
-	Compress         bool
-	UploadInterval   time.Duration
-	SessionTypes     []string
-	RecordSSH        bool
-	RecordTerminal   bool
-	RecordCommands   bool
-	TlogPath         string
-	AuditxPath       string
+	Enabled        bool
+	Backend        string
+	StoragePath    string
+	RetentionDays  int
+	MaxSizeMB      int
+	Compress       bool
+	UploadInterval time.Duration
+	SessionTypes   []string
+	RecordSSH      bool
+	RecordTerminal bool
+	RecordCommands bool
+	TlogPath       string
+	AuditxPath     string
 }
 
 // Session represents an active recording session
@@ -289,4 +289,3 @@ func (s *Service) notifyControlPlane(ctx context.Context, sessionID, sessionType
 
 	return nil
 }
-

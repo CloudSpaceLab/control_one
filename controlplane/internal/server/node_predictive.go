@@ -14,8 +14,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/CloudSpaceLab/control_one/internal/metrics"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/metrics"
 )
 
 // Job type constants for the predictive server downtime pipeline (Use
