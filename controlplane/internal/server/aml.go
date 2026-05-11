@@ -87,7 +87,7 @@ func (s *Server) handleAMLScreen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	var req amlScreenRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
 	dec.DisallowUnknownFields()

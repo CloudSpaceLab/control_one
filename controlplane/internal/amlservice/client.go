@@ -134,7 +134,7 @@ func (c *Client) Screen(ctx context.Context, req ScreeningRequest) (*ScreeningRe
 	if err != nil {
 		return nil, fmt.Errorf("amlservice: screen request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("amlservice: screen returned %d", resp.StatusCode)
 	}
