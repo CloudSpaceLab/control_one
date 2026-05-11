@@ -14,6 +14,13 @@ observability:
   enable_metrics: true
   metrics_path: /metrics
 
+aml:
+  base_url: "http://localhost:8090"
+  api_key: "your-secret-api-key-here"
+  timeout: 10s
+  allow_insecure: true
+  insecure_skip_verify: false
+
 database:
   url: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
   max_open_conns: 5

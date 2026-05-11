@@ -28,6 +28,17 @@ type Config struct {
 	LDAP          LDAPConfig          `mapstructure:"ldap"`
 	IPIntel       IPIntelConfig       `mapstructure:"ipintel"`
 	Policy        PolicyConfig        `mapstructure:"policy"`
+	AML           AMLConfig           `mapstructure:"aml"`
+}
+
+// AMLConfig points Control One at the existing CloudSpaceLab/aml-service.
+// When BaseURL is empty, AML routes fail closed with 503.
+type AMLConfig struct {
+	BaseURL            string        `mapstructure:"base_url"`
+	APIKey             string        `mapstructure:"api_key"`
+	Timeout            time.Duration `mapstructure:"timeout"`
+	AllowInsecure      bool          `mapstructure:"allow_insecure"`
+	InsecureSkipVerify bool          `mapstructure:"insecure_skip_verify"`
 }
 
 // PolicyConfig points the control plane at the public half of the ed25519
@@ -333,6 +344,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("remediation.lease_ttl", 10*time.Minute)
 
 	v.SetDefault("registration.bootstrap_tokens", []string{})
+	v.SetDefault("aml.timeout", 10*time.Second)
+	v.BindEnv("aml.base_url", "AML_SERVICE_BASE_URL")
+	v.BindEnv("aml.api_key", "AML_SERVICE_API_KEY")
 
 	v.SetDefault("auth.oidc.enabled", false)
 	v.SetDefault("auth.oidc.username_claim", "email")
@@ -376,6 +390,9 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.Remediation.LeaseTTL <= 0 {
 		cfg.Remediation.LeaseTTL = 10 * time.Minute
+	}
+	if cfg.AML.Timeout <= 0 {
+		cfg.AML.Timeout = 10 * time.Second
 	}
 }
 

@@ -133,6 +133,9 @@ var FrameworkControls = map[string][]ControlMapping{
 		{Framework: "GDPR", ControlID: "Art.33", Title: "Notification of a personal data breach to the supervisory authority", Description: "Notify the supervisory authority of a personal data breach within 72 hours where feasible."},
 		{Framework: "GDPR", ControlID: "Art.34", Title: "Communication of a personal data breach to the data subject", Description: "Communicate the breach to the data subject without undue delay when likely to result in a high risk."},
 	},
+	"BSA": {
+		{Framework: "BSA", ControlID: "AML-SCREEN", Title: "Customer sanctions screening", Description: "Customer identity is matched against OFAC and equivalent sanctions watchlists prior to account activation and periodic review."},
+	},
 }
 
 // ListFrameworks returns a sorted list of supported framework names.

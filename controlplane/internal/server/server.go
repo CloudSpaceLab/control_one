@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/amlservice"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/behavioral"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
@@ -846,6 +847,9 @@ type Server struct {
 	// nil ⇒ stubFinacleClient, which always returns errFinacleUnconfigured
 	// (handlers convert that into 503-style messages).
 	finacleClient finacleClient
+	// amlClient proxies AML/KYC screening to CloudSpaceLab/aml-service.
+	// nil means aml.base_url is not configured or failed validation.
+	amlClient amlScreener
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -1148,6 +1152,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/finacle/profiles", s.handleFinacleProfiles)
 	s.baseRouter.HandleFunc("/api/v1/finacle/profiles/", s.handleFinacleProfileSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/finacle/shift-rotate", s.handleFinacleShiftRotate)
+	s.baseRouter.HandleFunc("/api/v1/aml/screen", s.handleAMLScreen)
 }
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -2319,6 +2324,17 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true, eventBus: eventbus.New(64)}
 	serverRef = s
+	if client, err := amlservice.NewClient(amlservice.Config{
+		BaseURL:            cfg.AML.BaseURL,
+		APIKey:             cfg.AML.APIKey,
+		Timeout:            cfg.AML.Timeout,
+		AllowInsecure:      cfg.AML.AllowInsecure,
+		InsecureSkipVerify: cfg.AML.InsecureSkipVerify,
+	}); err == nil {
+		s.amlClient = client
+	} else if strings.TrimSpace(cfg.AML.BaseURL) != "" {
+		logger.Warn("init aml service client", zap.Error(err))
+	}
 
 	// IP intelligence (Investigate). Wires akyriako/ipquery + AbuseIPDB with
 	// a Postgres-backed cache when *storage.Store is available; falls back
