@@ -1,26 +1,29 @@
 import { geoNaturalEarth1, geoPath } from 'd3-geo';
 import { feature } from 'topojson-client';
 import worldAtlas from 'world-atlas/countries-110m.json';
+import type { FeatureCollection, GeometryObject } from 'geojson';
+import type { GeometryCollection, Topology } from 'topojson-specification';
 
-const atlas = worldAtlas as any;
-const countries = (feature(atlas, atlas.objects.countries) as any).features.filter(
-  (country: any) => String(country.id ?? '') !== '010',
-);
+type CountriesTopology = Topology<{ countries: GeometryCollection }>;
+
+const atlas = worldAtlas as unknown as CountriesTopology;
+const countryFeatures = feature(atlas, atlas.objects.countries) as FeatureCollection<GeometryObject>;
+const countries = countryFeatures.features.filter((country) => String(country.id ?? '') !== '010');
 
 const projection = geoNaturalEarth1().fitExtent(
   [
     [18, 18],
     [982, 462],
   ],
-  { type: 'FeatureCollection', features: countries } as any,
+  { type: 'FeatureCollection', features: countries },
 );
 
 const path = geoPath(projection);
 
 export const WORLD_COUNTRY_PATHS = countries
-  .map((country: any, index: number) => ({
+  .map((country, index: number) => ({
     id: String(country.id ?? index),
-    d: path(country as any) ?? '',
+    d: path(country) ?? '',
   }))
   .filter((country: { d: string }) => country.d.length > 0);
 

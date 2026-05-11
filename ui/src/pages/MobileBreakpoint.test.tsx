@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Dashboard } from './Dashboard';
 import * as useApiClientModule from '../hooks/useApiClient';
+import * as useTenantModule from '../providers/TenantProvider';
 import * as useTenantsModule from '../hooks/useTenants';
 
 // Mobile test stub: uses matchMedia overrides + a 375px viewport to confirm
@@ -31,7 +32,60 @@ describe('Dashboard at multiple breakpoints', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useApiClientModule, 'useApiClient') as any).mockReturnValue({
       getDashboardOverview: vi.fn().mockResolvedValue(overview),
+      getRiskScore: vi.fn().mockResolvedValue({
+        score: 88,
+        max_score: 100,
+        percent: 88,
+        trend_direction: 'stable',
+        trend_delta: 0,
+        components: [],
+        calculated_at: new Date().toISOString(),
+      }),
+      getMTTDMetrics: vi.fn().mockResolvedValue({
+        severity: 'critical',
+        mean_minutes: 240,
+        median_minutes: 180,
+        p95_minutes: 360,
+        event_count: 3,
+        period: '7d',
+        calculated_at: new Date().toISOString(),
+      }),
+      getMTTRMetrics: vi.fn().mockResolvedValue({
+        severity: 'critical',
+        mean_minutes: 720,
+        median_minutes: 600,
+        p95_minutes: 1440,
+        remediation_count: 2,
+        period: '7d',
+        calculated_at: new Date().toISOString(),
+      }),
+      getRemediationVelocity: vi.fn().mockResolvedValue({
+        period: '30d',
+        period_count: 30,
+        remediations: 7,
+        avg_per_period: 0.23,
+        trend_direction: 'stable',
+        trend_percent: 0,
+      }),
+      getFindingsAging: vi.fn().mockResolvedValue({
+        severity: 'critical',
+        less_than_7_days: 1,
+        days_7_to_30: 1,
+        days_30_to_90: 0,
+        over_90_days: 0,
+        total_open: 2,
+      }),
       streamEvents: vi.fn().mockReturnValue(() => undefined),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (vi.spyOn(useTenantModule, 'useTenant') as any).mockReturnValue({
+      currentTenantId: 'tenant-1',
+      currentTenant: { id: 'tenant-1', name: 't', created_at: '', updated_at: '' },
+      tenants: [{ id: 'tenant-1', name: 't', created_at: '', updated_at: '' }],
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn(),
+      loading: false,
+      error: null,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useTenantsModule, 'useTenants') as any).mockReturnValue({

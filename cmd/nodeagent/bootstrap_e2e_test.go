@@ -265,6 +265,9 @@ func TestRunJoinEmitsParseableYAML(t *testing.T) {
 	if cfg.Policy.PublicKeyFile != "" {
 		t.Errorf("policy.public_key_file = %q, want empty (server returned no PEM)", cfg.Policy.PublicKeyFile)
 	}
+	if filepath.ToSlash(cfg.LogDir) != filepath.ToSlash(filepath.Join(dataDir, "logs")) {
+		t.Errorf("log_dir = %q, want %q", cfg.LogDir, filepath.Join(dataDir, "logs"))
+	}
 	if !strings.Contains(cfg.PolicyDir, dataDir[:1]) && !strings.Contains(filepath.ToSlash(cfg.PolicyDir), filepath.ToSlash(dataDir)[:1]) {
 		t.Errorf("policy_dir = %q, expected to be rooted under dataDir %q", cfg.PolicyDir, dataDir)
 	}
