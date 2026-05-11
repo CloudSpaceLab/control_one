@@ -75,19 +75,22 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 	return out, rows.Err()
 }
 
-// ListConnectionsForNode returns recent or currently-open connections for one node.
-func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID string, since, until time.Time, limit int, openOnly bool) ([]ConnectionRow, error) {
-	if c == nil || c.db == nil {
-		return nil, fmt.Errorf("doris client unavailable")
-	}
-	if limit <= 0 || limit > 1000 {
-		limit = 200
-	}
+// buildListConnectionsForNodeQuery composes the SQL for ListConnectionsForNode.
+//
+// It is deliberately *single-layer*: the only filtering applied is on
+// (tenant_id, node_id, time window, optional ended_at IS NULL). The peer-IP
+// classification (RFC1918 vs external) lives ONE layer further out — at the
+// agent's `internal/netflow/filter.go` capture-policy boundary — and is NOT
+// re-applied here. Re-applying it would double-strip internal flows on
+// dev/internal nodes where most peers are private (bugs §1.2). Callers that
+// want "external only" should pass an explicit predicate via a future
+// parameter instead of post-filtering rows in the UI.
+func buildListConnectionsForNodeQuery(limit int, openOnly bool) string {
 	openClause := ""
 	if openOnly {
 		openClause = " AND ended_at IS NULL"
 	}
-	q := withLimit(`
+	return withLimit(`
 		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
 		       pid, process_name, cmdline, user_name,
 		       src_ip, src_port, dst_ip, dst_port, protocol,
@@ -99,6 +102,17 @@ func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID st
 		  AND started_at >= ? AND started_at <= ?`+openClause+`
 		ORDER BY threat_match DESC, started_at DESC
 	`, limit)
+}
+
+// ListConnectionsForNode returns recent or currently-open connections for one node.
+func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID string, since, until time.Time, limit int, openOnly bool) ([]ConnectionRow, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("doris client unavailable")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	q := buildListConnectionsForNodeQuery(limit, openOnly)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
 	rows, err := c.db.QueryContext(qctx, q, tenantID, nodeID, since, until)
