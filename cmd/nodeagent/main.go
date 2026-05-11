@@ -290,19 +290,19 @@ func main() {
 	var sessionRecordingSvc *sessionrecording.Service
 	if cfg.SessionRecording.Enabled {
 		sessionRecordingSvc = sessionrecording.NewService(log, client, state.NodeID, sessionrecording.Config{
-			Enabled:          cfg.SessionRecording.Enabled,
-			Backend:          cfg.SessionRecording.Backend,
-			StoragePath:      cfg.SessionRecording.StoragePath,
-			RetentionDays:    cfg.SessionRecording.RetentionDays,
-			MaxSizeMB:        cfg.SessionRecording.MaxSizeMB,
-			Compress:         cfg.SessionRecording.Compress,
-			UploadInterval:   cfg.SessionRecording.UploadInterval,
-			SessionTypes:     cfg.SessionRecording.SessionTypes,
-			RecordSSH:        cfg.SessionRecording.RecordSSH,
-			RecordTerminal:   cfg.SessionRecording.RecordTerminal,
-			RecordCommands:   cfg.SessionRecording.RecordCommands,
-			TlogPath:         cfg.SessionRecording.TlogPath,
-			AuditxPath:       cfg.SessionRecording.AuditxPath,
+			Enabled:        cfg.SessionRecording.Enabled,
+			Backend:        cfg.SessionRecording.Backend,
+			StoragePath:    cfg.SessionRecording.StoragePath,
+			RetentionDays:  cfg.SessionRecording.RetentionDays,
+			MaxSizeMB:      cfg.SessionRecording.MaxSizeMB,
+			Compress:       cfg.SessionRecording.Compress,
+			UploadInterval: cfg.SessionRecording.UploadInterval,
+			SessionTypes:   cfg.SessionRecording.SessionTypes,
+			RecordSSH:      cfg.SessionRecording.RecordSSH,
+			RecordTerminal: cfg.SessionRecording.RecordTerminal,
+			RecordCommands: cfg.SessionRecording.RecordCommands,
+			TlogPath:       cfg.SessionRecording.TlogPath,
+			AuditxPath:     cfg.SessionRecording.AuditxPath,
 		})
 		log.Info("session recording service initialized", zap.Bool("enabled", true))
 		emitHook(ctx, hooksService, log, "session_recording.initialized", state.NodeID, map[string]any{

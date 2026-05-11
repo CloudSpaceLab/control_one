@@ -144,19 +144,19 @@ type Config struct {
 	} `mapstructure:"dlp"`
 
 	SessionRecording struct {
-		Enabled          bool          `mapstructure:"enabled"`
-		Backend          string        `mapstructure:"backend"`
-		StoragePath      string        `mapstructure:"storage_path"`
-		RetentionDays    int           `mapstructure:"retention_days"`
-		MaxSizeMB        int           `mapstructure:"max_size_mb"`
-		Compress         bool          `mapstructure:"compress"`
-		UploadInterval   time.Duration `mapstructure:"upload_interval"`
-		SessionTypes     []string      `mapstructure:"session_types"`
-		RecordSSH        bool          `mapstructure:"record_ssh"`
-		RecordTerminal   bool          `mapstructure:"record_terminal"`
-		RecordCommands   bool          `mapstructure:"record_commands"`
-		TlogPath         string        `mapstructure:"tlog_path"`
-		AuditxPath       string        `mapstructure:"auditx_path"`
+		Enabled        bool          `mapstructure:"enabled"`
+		Backend        string        `mapstructure:"backend"`
+		StoragePath    string        `mapstructure:"storage_path"`
+		RetentionDays  int           `mapstructure:"retention_days"`
+		MaxSizeMB      int           `mapstructure:"max_size_mb"`
+		Compress       bool          `mapstructure:"compress"`
+		UploadInterval time.Duration `mapstructure:"upload_interval"`
+		SessionTypes   []string      `mapstructure:"session_types"`
+		RecordSSH      bool          `mapstructure:"record_ssh"`
+		RecordTerminal bool          `mapstructure:"record_terminal"`
+		RecordCommands bool          `mapstructure:"record_commands"`
+		TlogPath       string        `mapstructure:"tlog_path"`
+		AuditxPath     string        `mapstructure:"auditx_path"`
 	} `mapstructure:"session_recording"`
 }
 

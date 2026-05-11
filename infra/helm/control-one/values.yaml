@@ -64,6 +64,13 @@ controlplane:
     observability:
       enable_metrics: true
       metrics_path: /metrics
+
+    aml:
+      base_url: ""
+      api_key: ""
+      timeout: 10s
+      allow_insecure: false
+      insecure_skip_verify: false
     
     database:
       url: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}?sslmode=require"
@@ -341,5 +348,4 @@ observability:
       limits:
         cpu: 2000m
         memory: 4Gi
-
 
