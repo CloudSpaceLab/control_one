@@ -535,22 +535,102 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     };
   }, [api, countries, filteredRows]);
 
-  const totals = useMemo(() => ({
-    peers: new Set(filteredRows.map(peerIp).filter(Boolean)).size,
-    bytes: filteredRows.reduce((sum, row) => sum + (row.bytes_in ?? 0) + (row.bytes_out ?? 0), 0),
-    threats: filteredRows.filter((row) => row.threat_match).length,
-  }), [filteredRows]);
+  const [listeningOnly, setListeningOnly] = useState(false);
+
+  // Listening sockets are typically modelled as direction === 'listening',
+  // but some agent versions report them via the absence of a peer or via
+  // an explicit state field. Accept any reasonable signal so the toggle
+  // stays useful across heterogeneous fleets.
+  const isListening = useCallback((row: import('@/lib/api').ConnectionRow): boolean => {
+    const direction = (row.direction ?? '').toLowerCase();
+    if (direction === 'listening' || direction === 'listen') return true;
+    // Heuristic fallback: inbound row with no remote peer is effectively a
+    // server-side listening socket.
+    if (direction === 'inbound' && (!row.src_ip || row.src_ip === '0.0.0.0') && !row.dst_ip) return true;
+    return false;
+  }, []);
+
+  const visibleRows = useMemo(
+    () => (listeningOnly ? filteredRows.filter(isListening) : filteredRows),
+    [filteredRows, listeningOnly, isListening],
+  );
+
+  // KPIs derived from the currently visible rows so the strip reflects
+  // whatever the operator is looking at (listening-only flip included).
+  const kpis = useMemo(() => {
+    const total = visibleRows.length;
+    const threatCount = visibleRows.filter((row) => row.threat_match).length;
+    const threatPct = total > 0 ? (threatCount / total) * 100 : 0;
+
+    const protoCounts = new Map<string, number>();
+    for (const row of visibleRows) {
+      const proto = (row.protocol ?? 'unknown').toUpperCase();
+      protoCounts.set(proto, (protoCounts.get(proto) ?? 0) + 1);
+    }
+    let topProto: { name: string; count: number } = { name: '-', count: 0 };
+    for (const [name, count] of protoCounts) {
+      if (count > topProto.count) topProto = { name, count };
+    }
+
+    const procBytes = new Map<string, number>();
+    for (const row of visibleRows) {
+      const name = row.process_name ?? 'unknown';
+      const bytes = (row.bytes_in ?? 0) + (row.bytes_out ?? 0);
+      procBytes.set(name, (procBytes.get(name) ?? 0) + bytes);
+    }
+    let topProc: { name: string; bytes: number } = { name: '-', bytes: 0 };
+    for (const [name, bytes] of procBytes) {
+      if (bytes > topProc.bytes) topProc = { name, bytes };
+    }
+
+    return { total, threatPct, topProto, topProc };
+  }, [visibleRows]);
+
+  // Bandwidth: byte rate across the lifetime of the connection. For still-
+  // open rows (duration_ms === 0 or undefined) we cannot compute a rate,
+  // so we surface a dash and expose the total in a tooltip via title.
+  const bandwidthFor = useCallback((row: import('@/lib/api').ConnectionRow): { label: string; tooltip: string } => {
+    const total = (row.bytes_in ?? 0) + (row.bytes_out ?? 0);
+    const ms = row.duration_ms ?? 0;
+    if (ms <= 0) {
+      return { label: '—', tooltip: `${formatBytes(total)} transferred (connection still active)` };
+    }
+    const rate = total / (ms / 1000);
+    return { label: `${formatBytes(rate)}/s`, tooltip: `${formatBytes(total)} over ${formatDuration(ms)}` };
+  }, []);
+
+  // Status derived from closed_reason. A null/empty closed_reason on an
+  // openOnly query means the connection is still alive.
+  const statusFor = useCallback((row: import('@/lib/api').ConnectionRow): { label: string; tone: StateTone } => {
+    const reason = (row.closed_reason ?? '').toLowerCase();
+    if (!reason) return { label: 'Open', tone: 'healthy' };
+    if (reason === 'normal') return { label: 'Closed (normal)', tone: 'unknown' };
+    if (reason === 'rst') return { label: 'Closed (RST)', tone: 'warning' };
+    if (reason === 'timeout') return { label: 'Closed (timeout)', tone: 'degraded' };
+    return { label: `Closed (${reason})`, tone: 'unknown' };
+  }, []);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiTile label="Open peers" value={totals.peers} tone="brand" icon={<Network />} loading={loading} />
-        <KpiTile label="Data transferred" value={formatBytes(totals.bytes)} tone="unknown" loading={loading} />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiTile label="Total" value={kpis.total} tone="brand" icon={<Network />} loading={loading} />
         <KpiTile
-          label="Threat matches"
-          value={totals.threats}
-          tone={totals.threats > 0 ? 'critical' : 'healthy'}
+          label="Threat-flagged"
+          value={`${kpis.threatPct.toFixed(1)}%`}
+          tone={kpis.threatPct > 0 ? 'critical' : 'healthy'}
           icon={<ShieldAlert />}
+          loading={loading}
+        />
+        <KpiTile
+          label="Top protocol"
+          value={kpis.topProto.count > 0 ? `${kpis.topProto.name} (${kpis.topProto.count})` : '—'}
+          tone="unknown"
+          loading={loading}
+        />
+        <KpiTile
+          label="Top process by throughput"
+          value={kpis.topProc.bytes > 0 ? `${kpis.topProc.name} (${formatBytes(kpis.topProc.bytes)})` : '—'}
+          tone="unknown"
           loading={loading}
         />
       </div>
@@ -560,14 +640,28 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         eyebrow="NETWORK"
         title="Open connections"
         actions={
-          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={listeningOnly ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setListeningOnly((v) => !v)}
+              aria-pressed={listeningOnly}
+            >
+              Listening only
+            </Button>
+            <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+          </div>
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
-        {!loading && filteredRows.length === 0 ? (
-          <p className="text-sm text-text-muted">No open connections in the current 24h window.</p>
+        {!loading && visibleRows.length === 0 ? (
+          <p className="text-sm text-text-muted">
+            {listeningOnly
+              ? 'No listening sockets reported in the current 24h window.'
+              : 'No open connections in the current 24h window.'}
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
@@ -576,27 +670,43 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
                   <th className="px-3 py-2">Peer IP</th>
                   <th className="px-3 py-2">Country</th>
                   <th className="px-3 py-2">Direction</th>
+                  <th className="px-3 py-2">Proto</th>
                   <th className="px-3 py-2">Process</th>
                   <th className="px-3 py-2">Port</th>
                   <th className="px-3 py-2">Connected</th>
                   <th className="px-3 py-2">Transferred</th>
+                  <th className="px-3 py-2">Bandwidth</th>
+                  <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Threat</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
-                {filteredRows.map((row) => {
+                {visibleRows.map((row) => {
                   const ip = peerIp(row);
                   const port = row.direction === 'inbound' ? row.src_port : row.dst_port;
                   const age = row.duration_ms ?? (Date.now() - new Date(row.started_at).getTime());
+                  const bandwidth = bandwidthFor(row);
+                  const status = statusFor(row);
+                  // Long-lived connections (>1h) frequently indicate a
+                  // forgotten tunnel, stuck SSH session, or fd leak. Tint
+                  // the row so it survives a casual scroll-through.
+                  const isAged = (row.duration_ms ?? 0) > 3_600_000;
+                  const rowCls = [
+                    'cursor-pointer hover:bg-surface-2',
+                    isAged ? 'border-l-2 border-state-warning bg-state-warning/5' : '',
+                  ].filter(Boolean).join(' ');
                   return (
                     <tr
                       key={row.conn_id}
-                      className="cursor-pointer hover:bg-surface-2"
+                      className={rowCls}
                       onClick={() => setOpenConnId(row.conn_id)}
                     >
                       <td className="px-3 py-2 font-mono text-xs text-foreground">{ip || '-'}</td>
                       <td className="px-3 py-2 text-text-secondary">{countries[ip] ?? 'Looking up...'}</td>
                       <td className="px-3 py-2 capitalize text-text-secondary">{row.direction ?? '-'}</td>
+                      <td className="px-3 py-2 font-mono text-xs uppercase text-text-secondary">
+                        {row.protocol ?? '-'}
+                      </td>
                       <td className="px-3 py-2">
                         <span className="font-medium text-foreground">{row.process_name ?? '-'}</span>
                         {row.pid ? <span className="ml-1 font-mono text-[0.7rem] text-text-muted">pid {row.pid}</span> : null}
@@ -605,6 +715,15 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
                       <td className="px-3 py-2 font-mono text-xs text-text-secondary">{formatDuration(age)}</td>
                       <td className="px-3 py-2 font-mono text-xs text-text-secondary">
                         {formatBytes((row.bytes_in ?? 0) + (row.bytes_out ?? 0))}
+                      </td>
+                      <td
+                        className="px-3 py-2 font-mono text-xs text-text-secondary"
+                        title={bandwidth.tooltip}
+                      >
+                        {bandwidth.label}
+                      </td>
+                      <td className="px-3 py-2">
+                        <StatusTag tone={status.tone}>{status.label}</StatusTag>
                       </td>
                       <td className="px-3 py-2">
                         {row.threat_match ? (
