@@ -7,25 +7,36 @@ import { FleetEnroll } from './FleetEnroll';
 // The FleetEnroll page reaches into a handful of hooks. Mocking at the module
 // boundary keeps the test fast and lets us drive the full submit->poll loop
 // without spinning up providers.
-const startFleetEnroll = vi.fn<(payload: unknown) => Promise<FleetEnrollResponse>>();
-const getFleetEnrollStatus = vi.fn<(id: string, tenantId: string) => Promise<FleetEnrollStatus>>();
-const getNode = vi.fn<(id: string) => Promise<NodeSummary>>();
-const listPolicies = vi.fn();
-const createEnrollmentToken = vi.fn();
-const showToast = vi.fn();
+const mocks = vi.hoisted(() => {
+  const startFleetEnroll = vi.fn<(payload: unknown) => Promise<FleetEnrollResponse>>();
+  const getFleetEnrollStatus = vi.fn<(id: string, tenantId: string) => Promise<FleetEnrollStatus>>();
+  const getNode = vi.fn<(id: string) => Promise<NodeSummary>>();
+  const listPolicies = vi.fn();
+  const createEnrollmentToken = vi.fn();
+
+  return {
+    startFleetEnroll,
+    getFleetEnrollStatus,
+    getNode,
+    listPolicies,
+    createEnrollmentToken,
+    showToast: vi.fn(),
+    apiClient: {
+      startFleetEnroll: (payload: unknown) => startFleetEnroll(payload),
+      getFleetEnrollStatus: (id: string, tenantId: string) => getFleetEnrollStatus(id, tenantId),
+      getNode: (id: string) => getNode(id),
+      listPolicies: (params: unknown) => listPolicies(params),
+      createEnrollmentToken: (payload: unknown) => createEnrollmentToken(payload),
+    },
+  };
+});
 
 vi.mock('../hooks/useApiClient', () => ({
-  useApiClient: () => ({
-    startFleetEnroll: (payload: unknown) => startFleetEnroll(payload),
-    getFleetEnrollStatus: (id: string, tenantId: string) => getFleetEnrollStatus(id, tenantId),
-    getNode: (id: string) => getNode(id),
-    listPolicies: (params: unknown) => listPolicies(params),
-    createEnrollmentToken: (payload: unknown) => createEnrollmentToken(payload),
-  }),
+  useApiClient: () => mocks.apiClient,
 }));
 
 vi.mock('../providers/ToastProvider', () => ({
-  useToast: () => ({ showToast }),
+  useToast: () => ({ showToast: mocks.showToast }),
 }));
 
 vi.mock('../providers/TenantProvider', () => ({
@@ -45,14 +56,14 @@ vi.mock('../hooks/useTenants', () => ({
 
 describe('FleetEnroll', () => {
   beforeEach(() => {
-    startFleetEnroll.mockReset();
-    getFleetEnrollStatus.mockReset();
-    getNode.mockReset();
-    listPolicies.mockReset();
-    listPolicies.mockResolvedValue({ data: [], pagination: { total: 0, count: 0, limit: 100, offset: 0 } });
-    createEnrollmentToken.mockReset();
-    createEnrollmentToken.mockResolvedValue({ id: 'tok-1', token: 'cot_auto' });
-    showToast.mockReset();
+    mocks.startFleetEnroll.mockReset();
+    mocks.getFleetEnrollStatus.mockReset();
+    mocks.getNode.mockReset();
+    mocks.listPolicies.mockReset();
+    mocks.listPolicies.mockResolvedValue({ data: [], pagination: { total: 0, count: 0, limit: 100, offset: 0 } });
+    mocks.createEnrollmentToken.mockReset();
+    mocks.createEnrollmentToken.mockResolvedValue({ id: 'tok-1', token: 'cot_auto' });
+    mocks.showToast.mockReset();
   });
 
   afterEach(() => {
@@ -85,18 +96,18 @@ describe('FleetEnroll', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(/add at least one host/i),
     );
-    expect(startFleetEnroll).not.toHaveBeenCalled();
+    expect(mocks.startFleetEnroll).not.toHaveBeenCalled();
   });
 
   it('submits the fleet enroll request with parsed targets and starts polling', async () => {
-    startFleetEnroll.mockResolvedValue({
+    mocks.startFleetEnroll.mockResolvedValue({
       job_id: 'job-1',
       status: 'queued',
       message: 'ok',
     });
     // Resolve polling to a terminal state immediately so the post-submit
     // setInterval has nothing interesting to do during this test.
-    getFleetEnrollStatus.mockResolvedValue({
+    mocks.getFleetEnrollStatus.mockResolvedValue({
       job_id: 'job-1',
       status: 'succeeded',
       results: [
@@ -111,7 +122,7 @@ describe('FleetEnroll', () => {
         },
       ],
     });
-    getNode.mockResolvedValue({
+    mocks.getNode.mockResolvedValue({
       id: 'node-uuid-1',
       tenant_id: 't-1',
       hostname: '10.0.0.5',
@@ -143,9 +154,9 @@ describe('FleetEnroll', () => {
       fireEvent.click(screen.getByRole('button', { name: /start fleet enrollment/i }));
     });
 
-    await waitFor(() => expect(createEnrollmentToken).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(startFleetEnroll).toHaveBeenCalledTimes(1));
-    const payload = startFleetEnroll.mock.calls[0][0] as {
+    await waitFor(() => expect(mocks.createEnrollmentToken).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.startFleetEnroll).toHaveBeenCalledTimes(1));
+    const payload = mocks.startFleetEnroll.mock.calls[0][0] as {
       targets: Array<{ host: string }>;
       token: string;
       ssh_user?: string;
@@ -173,8 +184,8 @@ describe('FleetEnroll', () => {
   });
 
   it('parses user@host:port target syntax and strips comments', async () => {
-    startFleetEnroll.mockResolvedValue({ job_id: 'job-2', status: 'queued', message: 'ok' });
-    getFleetEnrollStatus.mockResolvedValue({ job_id: 'job-2', status: 'running', results: [] });
+    mocks.startFleetEnroll.mockResolvedValue({ job_id: 'job-2', status: 'queued', message: 'ok' });
+    mocks.getFleetEnrollStatus.mockResolvedValue({ job_id: 'job-2', status: 'running', results: [] });
 
     render(
       <MemoryRouter>
@@ -192,8 +203,8 @@ describe('FleetEnroll', () => {
       fireEvent.click(screen.getByRole('button', { name: /start fleet enrollment/i }));
     });
 
-    await waitFor(() => expect(startFleetEnroll).toHaveBeenCalledTimes(1));
-    const payload = startFleetEnroll.mock.calls[0][0] as {
+    await waitFor(() => expect(mocks.startFleetEnroll).toHaveBeenCalledTimes(1));
+    const payload = mocks.startFleetEnroll.mock.calls[0][0] as {
       targets: Array<{ host: string; port?: number; user?: string }>;
     };
     expect(payload.targets).toEqual([
