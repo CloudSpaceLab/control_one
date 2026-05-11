@@ -345,8 +345,8 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("registration.bootstrap_tokens", []string{})
 	v.SetDefault("aml.timeout", 10*time.Second)
-	v.BindEnv("aml.base_url", "AML_SERVICE_BASE_URL")
-	v.BindEnv("aml.api_key", "AML_SERVICE_API_KEY")
+	_ = v.BindEnv("aml.base_url", "AML_SERVICE_BASE_URL")
+	_ = v.BindEnv("aml.api_key", "AML_SERVICE_API_KEY")
 
 	v.SetDefault("auth.oidc.enabled", false)
 	v.SetDefault("auth.oidc.username_claim", "email")

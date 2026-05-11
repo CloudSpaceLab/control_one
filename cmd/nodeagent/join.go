@@ -101,11 +101,9 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir, compliancePolicyID st
 	certDir := filepath.Join(dataDir, "certs")
 	policyDir := filepath.Join(dataDir, "policies")
 	keyDir := filepath.Join(dataDir, "keys")
-	// Default to a Unix-friendly system log path; Windows lacks /var, so place
-	// logs alongside the agent data dir there.
-	logDir := "/var/log/control-one/nodeagent"
-	if runtime.GOOS == "windows" {
-		logDir = filepath.Join(dataDir, "logs")
+	logDir := filepath.Join(dataDir, "logs")
+	if installService && runtime.GOOS != "windows" {
+		logDir = "/var/log/control-one/nodeagent"
 	}
 
 	for _, dir := range []string{certDir, policyDir, keyDir, logDir, configDir, filepath.Dir(filepath.Join(dataDir, "state.json"))} {
