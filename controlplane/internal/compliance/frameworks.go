@@ -59,6 +59,7 @@ var FrameworkControls = map[string][]ControlMapping{
 		{Framework: "ISO27001", ControlID: "A.5.15", Title: "Access control", Description: "Rules to control physical and logical access to information are established."},
 		{Framework: "ISO27001", ControlID: "A.5.30", Title: "ICT readiness for business continuity", Description: "ICT readiness is planned, implemented, and tested based on business continuity objectives."},
 		{Framework: "ISO27001", ControlID: "A.6.1", Title: "Screening", Description: "Background verification checks on candidates are carried out prior to joining."},
+		{Framework: "ISO27001", ControlID: "A.6.1-AML", Title: "Customer screening — AML/sanctions", Description: "Customers are screened against sanctions watchlists during onboarding and on periodic review."},
 		{Framework: "ISO27001", ControlID: "A.6.3", Title: "Information security awareness", Description: "Personnel receive information-security awareness, education, and training."},
 		{Framework: "ISO27001", ControlID: "A.7.1", Title: "Physical security perimeter", Description: "Security perimeters are defined and used to protect areas containing information."},
 		{Framework: "ISO27001", ControlID: "A.7.2", Title: "Physical entry", Description: "Secure areas are protected by appropriate entry controls and access points."},
@@ -132,6 +133,9 @@ var FrameworkControls = map[string][]ControlMapping{
 		{Framework: "GDPR", ControlID: "Art.32", Title: "Security of processing", Description: "Implement appropriate technical and organisational measures to ensure a level of security appropriate to the risk, including pseudonymisation, encryption, ongoing confidentiality and integrity, resilience, and recovery."},
 		{Framework: "GDPR", ControlID: "Art.33", Title: "Notification of a personal data breach to the supervisory authority", Description: "Notify the supervisory authority of a personal data breach within 72 hours where feasible."},
 		{Framework: "GDPR", ControlID: "Art.34", Title: "Communication of a personal data breach to the data subject", Description: "Communicate the breach to the data subject without undue delay when likely to result in a high risk."},
+	},
+	"BSA": {
+		{Framework: "BSA", ControlID: "AML-SCREEN", Title: "Customer sanctions screening", Description: "Customer identity is matched against OFAC and equivalent sanctions watchlists prior to account activation."},
 	},
 }
 
