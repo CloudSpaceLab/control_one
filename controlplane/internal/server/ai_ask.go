@@ -222,15 +222,18 @@ func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build grounded context: knowledge_graph.md per tenant. Cached 5 min,
-	// served as a single big string we mark cache_control: ephemeral so
-	// repeat asks within the cache window are dirt cheap.
-	kg, err := s.buildKnowledgeGraph(r, tenantID)
+	// Build grounded context: per-tenant knowledge graph, compressed to
+	// an 8K-token budget for this specific question. Stage 1 (cached
+	// 5 min) dedupes nodes by (os, arch, agent, state); stage 2 scores
+	// the cached sections against the question and greedy-packs them.
+	// See kg_compress.go for the per-request compressor.
+	sections, err := s.getCachedKGSections(r.Context(), tenantID)
 	if err != nil {
 		s.logger.Error("build kg for ask", zap.Error(err))
 		http.Error(w, "could not build context", http.StatusInternalServerError)
 		return
 	}
+	kg := compressForQuery(sections, body.Question, 8192)
 
 	systemBlocks := []anthropicMessageBlock{
 		{
