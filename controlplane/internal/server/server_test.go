@@ -1242,6 +1242,11 @@ type fakeStore struct {
 	whistleblowerSubs []storage.WhistleblowerSubmission
 	caseEvidenceLinks map[uuid.UUID][]storage.CaseEvidenceLink
 	riskSignals       map[uuid.UUID][]storage.RiskSignal
+
+	// bugs §1.3 — port observations written by the node_services -> port_observations
+	// bridge in handleNodeServicesIngest. Tests assert this slice is non-empty
+	// after a recommendation cycle.
+	portObservations []storage.CreatePortObservationParams
 }
 
 type stubQueue struct{}
@@ -3749,11 +3754,37 @@ func (f *fakeStore) UpsertBehavioralBaseline(_ context.Context, _ uuid.UUID, _ *
 func (f *fakeStore) ListBehavioralBaselines(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]storage.BehavioralBaseline, error) {
 	return nil, nil
 }
-func (f *fakeStore) CreatePortObservation(_ context.Context, _ storage.CreatePortObservationParams) error {
+func (f *fakeStore) CreatePortObservation(_ context.Context, p storage.CreatePortObservationParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.portObservations = append(f.portObservations, p)
 	return nil
 }
-func (f *fakeStore) AggregatePortObservations(_ context.Context, _ uuid.UUID, _ time.Time) ([]storage.PortObservationStats, error) {
-	return nil, nil
+func (f *fakeStore) AggregatePortObservations(_ context.Context, tenantID uuid.UUID, _ time.Time) ([]storage.PortObservationStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	type key struct {
+		port     int
+		protocol string
+		state    string
+	}
+	counts := map[key]int{}
+	for _, o := range f.portObservations {
+		if o.TenantID != tenantID {
+			continue
+		}
+		counts[key{o.Port, o.Protocol, o.State}]++
+	}
+	out := make([]storage.PortObservationStats, 0, len(counts))
+	for k, c := range counts {
+		out = append(out, storage.PortObservationStats{
+			Port:     k.port,
+			Protocol: k.protocol,
+			State:    k.state,
+			Count:    c,
+		})
+	}
+	return out, nil
 }
 
 // --- Threat feeds stubs ---
