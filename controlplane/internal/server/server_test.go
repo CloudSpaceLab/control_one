@@ -1236,6 +1236,7 @@ type fakeStore struct {
 	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+	nodePackages         map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -3950,11 +3951,31 @@ func (f *fakeStore) GetPerNodeMatrix(_ context.Context, _ uuid.UUID, _ string, _
 }
 
 // Heartbeat inventory + firewall stubs (PR 2).
-func (f *fakeStore) ReplaceNodePackages(_ context.Context, _ uuid.UUID, _ []storage.NodePackage) error {
+func (f *fakeStore) ReplaceNodePackages(_ context.Context, nodeID uuid.UUID, packages []storage.NodePackage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nodePackages == nil {
+		f.nodePackages = make(map[uuid.UUID][]storage.NodePackage)
+	}
+	if len(packages) == 0 {
+		delete(f.nodePackages, nodeID)
+		return nil
+	}
+	cp := make([]storage.NodePackage, len(packages))
+	copy(cp, packages)
+	f.nodePackages[nodeID] = cp
 	return nil
 }
-func (f *fakeStore) ListNodePackages(_ context.Context, _ uuid.UUID) ([]storage.NodePackage, error) {
-	return nil, nil
+func (f *fakeStore) ListNodePackages(_ context.Context, nodeID uuid.UUID) ([]storage.NodePackage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pkgs, ok := f.nodePackages[nodeID]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]storage.NodePackage, len(pkgs))
+	copy(out, pkgs)
+	return out, nil
 }
 func (f *fakeStore) GetNodeInventorySync(_ context.Context, _ uuid.UUID) (*storage.NodeInventorySync, error) {
 	return nil, nil

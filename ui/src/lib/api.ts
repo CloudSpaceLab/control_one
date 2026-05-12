@@ -1254,6 +1254,19 @@ export interface AIConfigPut {
   api_key: string;
 }
 
+export interface NodePackage {
+  node_id: string;
+  name: string;
+  version: string;
+  source: string;
+  arch?: string | null;
+  installed_at?: string | null;
+  // Server-computed via name-pattern heuristic (kernel, libc, systemd,
+  // Microsoft.*, etc.). The PackagesTab uses this to default-hide OS
+  // baseline noise so operators see real application packages.
+  is_system?: boolean;
+}
+
 export interface NodeService {
   id: string;
   node_id: string;
@@ -1599,6 +1612,11 @@ export class APIClient {
   async listNodeServices(nodeId: string): Promise<{ data: NodeService[] }> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<{ data: NodeService[] }>(`/api/v1/nodes/${encoded}/services`);
+  }
+
+  async listNodePackages(nodeId: string): Promise<{ data: NodePackage[] }> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request<{ data: NodePackage[] }>(`/api/v1/nodes/${encoded}/packages`);
   }
 
   async getAIConfig(tenantId: string): Promise<AIConfigResponse> {

@@ -1922,6 +1922,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && segments[1] == "packages" {
+		s.handleNodePackages(w, r, nodeID)
+		return
+	}
+
 	if len(segments) == 2 && segments[1] == "repair" {
 		s.handleNodeRepair(w, r, nodeID)
 		return
