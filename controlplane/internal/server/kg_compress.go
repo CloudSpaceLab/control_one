@@ -132,6 +132,9 @@ func compressForQuery(sections []kgSection, question string, budget int) string 
 		if _, dup := seenIdx[i]; dup {
 			continue
 		}
+		if sec.Kind == kgSectionLookup {
+			continue
+		}
 		scoredRest = append(scoredRest, scored{section: sec, score: overlapScore(sec.Tokens, qTokens)})
 	}
 	sort.SliceStable(scoredRest, func(i, j int) bool {
@@ -217,7 +220,7 @@ func extractForcedIdentifiers(question string) []string {
 // UUID/IP regex match against its node id / public ip, or by its
 // hostname appearing as a substring in the question text.
 func sectionMatchesIdentifiers(sec kgSection, qLower string, forced []string) bool {
-	if sec.Kind != kgSectionNode {
+	if sec.Kind != kgSectionNode && sec.Kind != kgSectionLookup {
 		return false
 	}
 	for _, f := range forced {

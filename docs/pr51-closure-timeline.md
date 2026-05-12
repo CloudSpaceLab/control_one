@@ -8,6 +8,12 @@
 **Start date:** 2026-05-11
 **Projected end:** 2026-09-04
 
+## 2026-05-12 Closure Update
+
+This is now the historical delivery plan for merged PR [#51](https://github.com/CloudSpaceLab/control_one/pull/51). The active closure execution plan is [`docs/plans/2026-05-12-pr51-closure.md`](./plans/2026-05-12-pr51-closure.md).
+
+Sprint 4 reconciliation is complete as of 2026-05-12: #55, #57, #59, #61, #62, #63, #64, #65, #66, and #68 are merged; #56, #58, and #60 are closed as superseded by #68; #67 is closed as a duplicate of current `main`. The remaining PR #51 follow-up should be tracked in the GitHub issue created from the active closure plan, not by reopening PR #51.
+
 PR #51 shipped two strategic docs anchored to the owner's three-pillar lens but no delivery plan: no calendar, no worktree breakdown, no dependency graph, no projected tag. This document is the plan. Scope: full **P0 + P1 + P1.5 + P2 + P3** (~15 working weeks), modeled as parallel worktrees per sprint, executed via a `/loop`-driven coordinator that dispatches per-worktree subagents across **three Claude tiers (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) and three frontier providers (Anthropic, OpenAI, Google)** behind a unified Go router introduced in Sprint 5.
 
 **P1.5 (Sprint 6) is the investigation event-capture layer** — without it, the MCP/`tool_use` surface from S5 can reason but the evidence base is shallow. Concrete target: when "server disk space starts depreciating fast because a log is accumulating MBs fast" happens in production, the investigation surface should be able to answer, in one chat turn, the full timeline — connection-rate doubling on port 80 (15→30 cps), 2 TB transferred in the spike window, CPU 20→99%, memory 60→99%, three log files growing 30 MB → 13 GB, the app/db log lines that explain the cause — and (when safe gates pass) auto-de-escalate via smart log truncation or rogue-connection/process kill before the host locks out.
@@ -186,19 +192,19 @@ All other 37 rows route to Anthropic per the L1/L2/L3 model column.
 
 | Worktree | Branch | Pillar | Source | Effort | Model | PR | Status | Merge SHA |
 |---|---|---|---|---|---|---|---|---|
-| `c1-aml-auth-fix` | `fix/c1-s4-aml-auth` | 🛡️ | bugs §4 #1 | 4–6 h | L1 Haiku | — | pending | — |
-| `c1-sanctions-https` | `fix/c1-s4-sanctions-https` | 🛡️ | bugs §4 #2 | 2–3 h | L1 Haiku | — | pending | — |
-| `c1-sanctions-dob-refuse` | `fix/c1-s4-sanctions-dob` | 🛡️ | bugs §4 #3 | 2 h | L1 Haiku | — | pending | — |
-| `c1-openreplay-decision` | `fix/c1-s4-openreplay` | 🏛️ | bugs §4 #4 | 1 h–1 d | L1 Haiku | — | pending | — |
-| `c1-recommendations-bridge` | `fix/c1-s4-recos-bridge` | 💚 | bugs §1.3 | 1 d | L2 Sonnet | — | pending | — |
-| `c1-calibration-metric-contract` | `fix/c1-s4-calibration` | 💚 | bugs §1.1 | 2–3 d | **L3 Opus** | — | pending | — |
-| `c1-connections-doublefilter` | `fix/c1-s4-connections` | 💚 | bugs §1.2 | 1 d | L2 Sonnet | — | pending | — |
-| `c1-patch-approval-gate` | `fix/c1-s4-patch-gate` | 🛡️ | bugs §3.1 | 4–6 h or 2–3 d | L2 Sonnet | — | pending | — |
-| `c1-patch-node-selector` | `fix/c1-s4-patch-selector` | 🛡️ | bugs §3.3 #2 | 4–6 h | L2 Sonnet | — | pending | — |
-| `c1-packages-on-node-tab` | `fix/c1-s4-packages-tab` | 🛡️ | bugs §3.3 #3 | 6–8 h | L2 Sonnet | — | pending | — |
-| `c1-heartbeat-action-prefix` | `fix/c1-s4-hb-prefix` | 🛡️ | bugs §3.3 #5 | 2–3 h | L1 Haiku | — | pending | — |
-| `c1-kg-compress` | `fix/c1-s4-kg-compress` | 🔬 | bugs §2 option A + §11 D5 | 3 d | **L3 Opus** | — | pending | — |
-| `c1-compliance-row-nav` | `fix/c1-s4-compliance-nav` | 🔬 | bugs §1.5 | 30 min | L1 Haiku | — | pending | — |
+| `c1-aml-auth-fix` | `fix/c1-s4-aml-auth` | 🛡️ | bugs §4 #1 | 4–6 h | L1 Haiku | [#60](https://github.com/CloudSpaceLab/control_one/pull/60) | superseded by #68 | closed 2026-05-12 |
+| `c1-sanctions-https` | `fix/c1-s4-sanctions-https` | 🛡️ | bugs §4 #2 | 2–3 h | L1 Haiku | [#58](https://github.com/CloudSpaceLab/control_one/pull/58) | superseded by #68 | closed 2026-05-12 |
+| `c1-sanctions-dob-refuse` | `fix/c1-s4-sanctions-dob` | 🛡️ | bugs §4 #3 | 2 h | L1 Haiku | [#56](https://github.com/CloudSpaceLab/control_one/pull/56) | superseded by #68 | closed 2026-05-12 |
+| `c1-openreplay-decision` | `fix/c1-s4-openreplay` | 🏛️ | bugs §4 #4 | 1 h–1 d | L1 Haiku | [#59](https://github.com/CloudSpaceLab/control_one/pull/59) | merged | 2026-05-10 |
+| `c1-recommendations-bridge` | `fix/c1-s4-recos-bridge` | 💚 | bugs §1.3 | 1 d | L2 Sonnet | [#64](https://github.com/CloudSpaceLab/control_one/pull/64) | merged | 2026-05-12 |
+| `c1-calibration-metric-contract` | `fix/c1-s4-calibration` | 💚 | bugs §1.1 | 2–3 d | **L3 Opus** | [#61](https://github.com/CloudSpaceLab/control_one/pull/61) | merged | 2026-05-10 |
+| `c1-connections-doublefilter` | `fix/c1-s4-connections` | 💚 | bugs §1.2 | 1 d | L2 Sonnet | [#62](https://github.com/CloudSpaceLab/control_one/pull/62) | merged | 2026-05-11 |
+| `c1-patch-approval-gate` | `fix/c1-s4-patch-gate` | 🛡️ | bugs §3.1 | 4–6 h or 2–3 d | L2 Sonnet | [#65](https://github.com/CloudSpaceLab/control_one/pull/65) | merged | 2026-05-10 |
+| `c1-patch-node-selector` | `fix/c1-s4-patch-selector` | 🛡️ | bugs §3.3 #2 | 4–6 h | L2 Sonnet | [#66](https://github.com/CloudSpaceLab/control_one/pull/66) | merged | 2026-05-11 |
+| `c1-packages-on-node-tab` | `fix/c1-s4-packages-tab` | 🛡️ | bugs §3.3 #3 | 6–8 h | L2 Sonnet | [#63](https://github.com/CloudSpaceLab/control_one/pull/63) | merged | 2026-05-12 |
+| `c1-heartbeat-action-prefix` | `fix/c1-s4-hb-prefix` | 🛡️ | bugs §3.3 #5 | 2–3 h | L1 Haiku | [#57](https://github.com/CloudSpaceLab/control_one/pull/57) | merged | 2026-05-10 |
+| `c1-kg-compress` | `fix/c1-s4-kg-compress` | 🔬 | bugs §2 option A + §11 D5 | 3 d | **L3 Opus** | closure branch | implemented | 2026-05-12 |
+| `c1-compliance-row-nav` | `fix/c1-s4-compliance-nav` | 🔬 | bugs §1.5 | 30 min | L1 Haiku | [#55](https://github.com/CloudSpaceLab/control_one/pull/55) | merged | 2026-05-10 |
 
 **S4 tier mix:** L1 ×6 / L2 ×5 / L3 ×2. Calibration + KG-compress carry the Opus seats — both are cross-cutting (agent↔server metric-name contract / `/ai/ask` context shape) where wrong-shape merges block S5 (calibration → operator-mode) and S7 (KG-compress → KG-B) respectively.
 

@@ -1237,6 +1237,10 @@ type fakeStore struct {
 	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
 	nodePackages         map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
+	nodeServices         map[uuid.UUID][]storage.NodeService
+	firewallStates       map[uuid.UUID]storage.NodeFirewallState
+	nodeHealthScores     map[uuid.UUID]storage.NodeHealthScore
+	alerts               []storage.Alert
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -3650,8 +3654,32 @@ func (f *fakeStore) CreateAlert(_ context.Context, _ storage.CreateAlertParams) 
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) GetAlert(_ context.Context, _ uuid.UUID) (*storage.Alert, error) { return nil, nil }
-func (f *fakeStore) ListAlerts(_ context.Context, _ storage.AlertFilter, _, _ int) ([]storage.Alert, int, error) {
-	return nil, 0, nil
+func (f *fakeStore) ListAlerts(_ context.Context, filter storage.AlertFilter, limit, offset int) ([]storage.Alert, int, error) {
+	var out []storage.Alert
+	for _, alert := range f.alerts {
+		if filter.TenantID != uuid.Nil && alert.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && (!alert.NodeID.Valid || alert.NodeID.UUID != filter.NodeID) {
+			continue
+		}
+		if filter.State != "" && alert.State != filter.State {
+			continue
+		}
+		if filter.Severity != "" && alert.Severity != filter.Severity {
+			continue
+		}
+		out = append(out, alert)
+	}
+	total := len(out)
+	if offset > total {
+		offset = total
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
 }
 func (f *fakeStore) AckAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error     { return nil }
 func (f *fakeStore) ResolveAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error { return nil }
@@ -3986,10 +4014,20 @@ func (f *fakeStore) UpsertNodeInventorySync(_ context.Context, _ storage.NodeInv
 func (f *fakeStore) TouchNodeInventorySync(_ context.Context, _ uuid.UUID, _ string) (int64, error) {
 	return 0, nil
 }
-func (f *fakeStore) UpsertNodeFirewallState(_ context.Context, _ storage.NodeFirewallState) error {
+func (f *fakeStore) UpsertNodeFirewallState(_ context.Context, st storage.NodeFirewallState) error {
+	if f.firewallStates == nil {
+		f.firewallStates = map[uuid.UUID]storage.NodeFirewallState{}
+	}
+	f.firewallStates[st.NodeID] = st
 	return nil
 }
-func (f *fakeStore) GetNodeFirewallState(_ context.Context, _ uuid.UUID) (*storage.NodeFirewallState, error) {
+func (f *fakeStore) GetNodeFirewallState(_ context.Context, id uuid.UUID) (*storage.NodeFirewallState, error) {
+	if f.firewallStates != nil {
+		if st, ok := f.firewallStates[id]; ok {
+			copy := st
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -4227,7 +4265,13 @@ func (f *fakeStore) DeleteComplianceReview(_ context.Context, _ uuid.UUID) error
 }
 
 // Predictive server downtime stubs (Use Case 5 / PR 31)
-func (f *fakeStore) GetNodeHealthScore(_ context.Context, _ uuid.UUID) (*storage.NodeHealthScore, error) {
+func (f *fakeStore) GetNodeHealthScore(_ context.Context, id uuid.UUID) (*storage.NodeHealthScore, error) {
+	if f.nodeHealthScores != nil {
+		if score, ok := f.nodeHealthScores[id]; ok {
+			copy := score
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 func (f *fakeStore) UpsertNodeHealthScore(_ context.Context, _ storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error) {
@@ -4548,14 +4592,29 @@ func (f *fakeStore) CountRemediationsSince(_ context.Context, _ uuid.UUID, _ tim
 }
 
 // Listening-services inventory (Phase 1 of /round-up knowledge graph).
-func (f *fakeStore) ReplaceNodeServices(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ []storage.NodeService) error {
+func (f *fakeStore) ReplaceNodeServices(_ context.Context, nodeID uuid.UUID, _ uuid.UUID, services []storage.NodeService) error {
+	if f.nodeServices == nil {
+		f.nodeServices = map[uuid.UUID][]storage.NodeService{}
+	}
+	f.nodeServices[nodeID] = append([]storage.NodeService(nil), services...)
 	return nil
 }
-func (f *fakeStore) ListNodeServicesForNode(_ context.Context, _ uuid.UUID) ([]storage.NodeService, error) {
+func (f *fakeStore) ListNodeServicesForNode(_ context.Context, nodeID uuid.UUID) ([]storage.NodeService, error) {
+	if f.nodeServices != nil {
+		return append([]storage.NodeService(nil), f.nodeServices[nodeID]...), nil
+	}
 	return nil, nil
 }
-func (f *fakeStore) ListNodeServicesForTenant(_ context.Context, _ uuid.UUID) ([]storage.NodeService, error) {
-	return nil, nil
+func (f *fakeStore) ListNodeServicesForTenant(_ context.Context, tenantID uuid.UUID) ([]storage.NodeService, error) {
+	var out []storage.NodeService
+	for _, services := range f.nodeServices {
+		for _, svc := range services {
+			if tenantID == uuid.Nil || svc.TenantID == tenantID {
+				out = append(out, svc)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) CountRuleTriggersBetween(_ context.Context, _ uuid.UUID, _ time.Time, _ time.Time) (map[string]int, error) {

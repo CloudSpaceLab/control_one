@@ -1927,6 +1927,16 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && segments[1] == "documentation" {
+		s.handleNodeDocumentation(w, r, nodeID, false)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "documentation.md" {
+		s.handleNodeDocumentation(w, r, nodeID, true)
+		return
+	}
+
 	if len(segments) == 2 && segments[1] == "repair" {
 		s.handleNodeRepair(w, r, nodeID)
 		return

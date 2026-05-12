@@ -313,6 +313,7 @@ const (
 	kgSectionBaseline kgSectionKind = iota
 	kgSectionMajority
 	kgSectionNode
+	kgSectionLookup
 )
 
 // kgSection is the canonical building block emitted by buildKGSections.
@@ -432,6 +433,9 @@ func (s *Server) buildKGSections(ctx context.Context, tenantID uuid.UUID) ([]kgS
 			}
 		}
 		sections = append(sections, majoritySection(k.os, k.arch, k.agent, domState, majority))
+		for _, n := range majority {
+			sections = append(sections, lookupNodeSection(n))
+		}
 		for _, n := range outliers {
 			sections = append(sections, fullNodeSection(n, servicesByNode[n.ID]))
 		}
@@ -489,6 +493,28 @@ func majoritySection(os, arch, agent, state string, members []storage.Node) kgSe
 	md := b.String()
 	return kgSection{
 		Kind:     kgSectionMajority,
+		Tokens:   tokenizeForKG(md),
+		Markdown: md,
+	}
+}
+
+// lookupNodeSection is a compact exact-match index for nodes represented by a
+// majority summary. It is skipped during normal packing and only included when
+// a question names the node by UUID, hostname, or public IP.
+func lookupNodeSection(n storage.Node) kgSection {
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s\n\n", nodeDisplayName(n))
+	fmt.Fprintf(&b, "- **id:** `%s`\n", n.ID.String())
+	fmt.Fprintf(&b, "- **state:** %s\n", n.State)
+	if v := n.PublicIP.String; v != "" {
+		fmt.Fprintf(&b, "- **public ip:** %s\n", v)
+	}
+	md := b.String()
+	return kgSection{
+		Kind:     kgSectionLookup,
+		Hostname: n.Hostname,
+		NodeID:   n.ID.String(),
+		PublicIP: n.PublicIP.String,
 		Tokens:   tokenizeForKG(md),
 		Markdown: md,
 	}
