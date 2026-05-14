@@ -1,19 +1,20 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -153,18 +154,20 @@ func (s *Server) handleAITest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ai config not set", http.StatusBadRequest)
 		return
 	}
-	if cfg.Provider != "anthropic" {
-		http.Error(w, "only anthropic is wired in this version", http.StatusBadRequest)
+	client, err := s.aiClientForConfig(*cfg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("provider error: %v", err), http.StatusBadRequest)
 		return
 	}
-	out, err := anthropicMessage(r.Context(), *cfg, []anthropicMessageBlock{
-		{Type: "text", Text: "Reply with exactly: ok"},
-	}, nil)
+	out, err := client.Generate(r.Context(), llm.Request{
+		Messages:  []llm.Message{llm.TextMessage(llm.RoleUser, "Reply with exactly: ok")},
+		MaxTokens: 32,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": out})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": llm.TextFromMessage(out.Message)})
 }
 
 // ── /api/v1/ai/ask ────────────────────────────────────────────────────────
@@ -174,8 +177,10 @@ type aiAskRequest struct {
 }
 
 type aiAskResponse struct {
-	Answer    string   `json:"answer"`
-	Citations []string `json:"citations,omitempty"`
+	Answer     string             `json:"answer"`
+	Citations  []string           `json:"citations,omitempty"`
+	ToolTrace  []aiToolTraceEntry `json:"tool_trace,omitempty"`
+	Confidence string             `json:"confidence,omitempty"`
 }
 
 func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
@@ -217,8 +222,9 @@ func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ai config not set; configure provider + key in Settings → AI", http.StatusBadRequest)
 		return
 	}
-	if cfg.Provider != "anthropic" {
-		http.Error(w, "only anthropic is wired in this version", http.StatusBadRequest)
+	client, err := s.aiClientForConfig(*cfg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("provider error: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -235,130 +241,14 @@ func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	kg := compressForQuery(sections, body.Question, 8192)
 
-	systemBlocks := []anthropicMessageBlock{
-		{
-			Type: "text",
-			Text: "You are a CISO assistant for the Control One security platform. " +
-				"Answer questions strictly from the GROUNDED CONTEXT below. " +
-				"When you reference a node, append [node:<hostname>] inline. " +
-				"When you reference an IP, append [ip:<addr>]. " +
-				"If the context does not answer the question, say so plainly. " +
-				"Be concise — security operators value brevity.",
-		},
-		{
-			Type:         "text",
-			Text:         "GROUNDED CONTEXT (knowledge graph for this tenant):\n\n" + kg,
-			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
-		},
-	}
-
-	userBlocks := []anthropicMessageBlock{
-		{Type: "text", Text: body.Question},
-	}
-
-	answer, err := anthropicMessage(r.Context(), *cfg, userBlocks, systemBlocks)
+	resp, err := s.runAIAskToolLoop(r.Context(), principal, tenantID, client, strings.TrimSpace(body.Question), kg)
 	if err != nil {
-		s.logger.Error("anthropic call", zap.Error(err))
+		s.logger.Error("ai ask tool loop", zap.Error(err))
 		http.Error(w, fmt.Sprintf("provider error: %v", err), http.StatusBadGateway)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, aiAskResponse{Answer: answer})
-}
-
-// ── Anthropic HTTP wrapper ────────────────────────────────────────────────
-
-type anthropicCacheControl struct {
-	Type string `json:"type"`
-}
-
-type anthropicMessageBlock struct {
-	Type         string                 `json:"type"`
-	Text         string                 `json:"text,omitempty"`
-	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
-}
-
-type anthropicMessageObj struct {
-	Role    string                  `json:"role"`
-	Content []anthropicMessageBlock `json:"content"`
-}
-
-type anthropicRequest struct {
-	Model     string                  `json:"model"`
-	MaxTokens int                     `json:"max_tokens"`
-	System    []anthropicMessageBlock `json:"system,omitempty"`
-	Messages  []anthropicMessageObj   `json:"messages"`
-}
-
-type anthropicResponse struct {
-	Content []anthropicMessageBlock `json:"content"`
-	Error   *struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-// anthropicMessage POSTs to /v1/messages and returns the concatenated text
-// of the response. Honors cfg.BaseURL for self-hosted / proxy setups.
-func anthropicMessage(ctx context.Context, cfg storage.AIConfig, userBlocks, systemBlocks []anthropicMessageBlock) (string, error) {
-	base := strings.TrimRight(cfg.BaseURL, "/")
-	if base == "" {
-		base = "https://api.anthropic.com"
-	}
-	model := cfg.Model
-	if model == "" {
-		model = "claude-sonnet-4-6"
-	}
-
-	req := anthropicRequest{
-		Model:     model,
-		MaxTokens: 1024,
-		System:    systemBlocks,
-		Messages:  []anthropicMessageObj{{Role: "user", Content: userBlocks}},
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return "", fmt.Errorf("marshal: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", cfg.APIKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("post: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", fmt.Errorf("read body: %w", err)
-	}
-
-	var out anthropicResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", fmt.Errorf("decode (status %d): %w", resp.StatusCode, err)
-	}
-	if out.Error != nil {
-		return "", fmt.Errorf("anthropic error: %s — %s", out.Error.Type, out.Error.Message)
-	}
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("anthropic status %d: %s", resp.StatusCode, string(raw))
-	}
-
-	var b strings.Builder
-	for _, blk := range out.Content {
-		if blk.Type == "text" {
-			b.WriteString(blk.Text)
-		}
-	}
-	return b.String(), nil
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // tenantIDFromQuery resolves the tenant id from ?tenant_id=. Required for
@@ -374,4 +264,107 @@ func tenantIDFromQuery(r *http.Request, _ any) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("invalid tenant_id")
 	}
 	return id, nil
+}
+
+func (s *Server) aiClientForConfig(cfg storage.AIConfig) (llm.Client, error) {
+	if s.aiClientFactory != nil {
+		return s.aiClientFactory(cfg)
+	}
+	return llm.NewClient(llm.ProviderConfig{
+		Provider: cfg.Provider,
+		Model:    cfg.Model,
+		BaseURL:  cfg.BaseURL,
+		APIKey:   cfg.APIKey,
+	})
+}
+
+func (s *Server) runAIAskToolLoop(ctx context.Context, principal any, tenantID uuid.UUID, client llm.Client, question, kg string) (aiAskResponse, error) {
+	authPrincipal, _ := principal.(*auth.Principal)
+	loopCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	system := "You are a CISO assistant for the Control One security platform. " +
+		"Answer questions strictly from the grounded context and tool results below. " +
+		"When you use a tool result, cite its citation id inline like [tool:node_documentation:1]. " +
+		"If evidence is unavailable, say which evidence is unavailable. " +
+		"Never claim that an operator action executed unless a tool result says it executed. " +
+		"Be concise; security operators value brevity.\n\n" +
+		"GROUNDED CONTEXT (compressed knowledge graph for this tenant):\n\n" + kg
+	messages := []llm.Message{llm.TextMessage(llm.RoleUser, question)}
+	tools := s.aiToolSpecs()
+	var traces []aiToolTraceEntry
+	var citations []string
+	citationSeq := 0
+
+	for step := 0; step < 12; step++ {
+		resp, err := client.Generate(loopCtx, llm.Request{System: system, Messages: messages, Tools: tools, MaxTokens: 1024})
+		if err != nil {
+			return aiAskResponse{}, err
+		}
+		messages = append(messages, resp.Message)
+		calls := llm.ToolCalls(resp.Message)
+		if resp.StopReason != llm.StopToolUse || len(calls) == 0 {
+			answer := llm.TextFromMessage(resp.Message)
+			if strings.TrimSpace(answer) == "" {
+				answer = "No answer was produced."
+			}
+			return aiAskResponse{Answer: answer, Citations: citations, ToolTrace: traces, Confidence: confidenceFromTrace(traces)}, nil
+		}
+
+		resultBlocks := make([]llm.ContentBlock, 0, len(calls))
+		for _, call := range calls {
+			start := time.Now()
+			exec, err := s.executeAITool(loopCtx, authPrincipal, tenantID, call)
+			trace := aiToolTraceEntry{Name: call.Name, DurationMS: time.Since(start).Milliseconds()}
+			if err != nil {
+				trace.OK = false
+				trace.Error = err.Error()
+				traces = append(traces, trace)
+				resultBlocks = append(resultBlocks, llm.ContentBlock{
+					Type: llm.ContentToolResult,
+					ToolResult: &llm.ToolResult{
+						ToolCallID: call.ID,
+						Content:    `{"error":` + strconv.Quote(err.Error()) + `}`,
+						IsError:    true,
+					},
+				})
+				continue
+			}
+			citationSeq++
+			exec.Citation.ID = fmt.Sprintf("tool:%s:%d", call.Name, citationSeq)
+			payload, err := encodeToolPayload(exec)
+			if err != nil {
+				return aiAskResponse{}, err
+			}
+			trace.OK = true
+			trace.CitationID = exec.Citation.ID
+			traces = append(traces, trace)
+			citations = append(citations, exec.Citation.ID)
+			s.recordAudit(loopCtx, authPrincipal, tenantID, "ai.tool_call", "ai_tool", call.Name, map[string]any{
+				"tool":        call.Name,
+				"citation_id": exec.Citation.ID,
+			})
+			resultBlocks = append(resultBlocks, llm.ContentBlock{
+				Type: llm.ContentToolResult,
+				ToolResult: &llm.ToolResult{
+					ToolCallID: call.ID,
+					Content:    payload,
+				},
+			})
+		}
+		messages = append(messages, llm.Message{Role: llm.RoleTool, Content: resultBlocks})
+	}
+	return aiAskResponse{}, fmt.Errorf("tool-use loop exceeded 12 steps")
+}
+
+func confidenceFromTrace(traces []aiToolTraceEntry) string {
+	if len(traces) == 0 {
+		return "context_only"
+	}
+	for _, trace := range traces {
+		if !trace.OK {
+			return "partial"
+		}
+	}
+	return "grounded"
 }
