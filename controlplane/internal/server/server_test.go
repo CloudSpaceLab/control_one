@@ -1241,6 +1241,7 @@ type fakeStore struct {
 	firewallStates       map[uuid.UUID]storage.NodeFirewallState
 	nodeHealthScores     map[uuid.UUID]storage.NodeHealthScore
 	alerts               []storage.Alert
+	aiConfig             *storage.AIConfig
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -4626,9 +4627,15 @@ func (f *fakeStore) GetSecurityEventSeries(_ context.Context, _ uuid.UUID, _ tim
 }
 
 // Ask CISO LLM config (Phase 2).
-func (f *fakeStore) GetAIConfig(_ context.Context, _ uuid.UUID) (*storage.AIConfig, error) {
+func (f *fakeStore) GetAIConfig(_ context.Context, tenantID uuid.UUID) (*storage.AIConfig, error) {
+	if f.aiConfig != nil && (tenantID == uuid.Nil || f.aiConfig.TenantID == tenantID) {
+		copy := *f.aiConfig
+		return &copy, nil
+	}
 	return nil, nil
 }
-func (f *fakeStore) UpsertAIConfig(_ context.Context, _ storage.AIConfig) error {
+func (f *fakeStore) UpsertAIConfig(_ context.Context, cfg storage.AIConfig) error {
+	copy := cfg
+	f.aiConfig = &copy
 	return nil
 }

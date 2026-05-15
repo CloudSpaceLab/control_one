@@ -29,6 +29,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
@@ -850,6 +851,10 @@ type Server struct {
 	// amlClient proxies AML/KYC screening to CloudSpaceLab/aml-service.
 	// nil means aml.base_url is not configured or failed validation.
 	amlClient amlScreener
+	// aiClientFactory lets tests inject deterministic tool-use transcripts.
+	// Production builds the provider client from the tenant AI config.
+	aiClientFactory func(storage.AIConfig) (llm.Client, error)
+	aiClock         func() time.Time
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
