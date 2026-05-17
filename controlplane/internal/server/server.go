@@ -1942,6 +1942,11 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && isNodeEventCaptureSegment(segments[1]) {
+		s.handleNodeEventCapture(w, r, nodeID, segments[1])
+		return
+	}
+
 	if len(segments) == 2 && segments[1] == "repair" {
 		s.handleNodeRepair(w, r, nodeID)
 		return
@@ -1962,6 +1967,15 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Allow", "GET, PATCH, DELETE")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func isNodeEventCaptureSegment(segment string) bool {
+	switch segment {
+	case "flow-delta", "file-growth-delta", "resource-delta", "log-tail", "root-cause-findings":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -96,6 +96,41 @@ func (s *Server) aiInvestigationTools() map[string]aiInvestigationTool {
 			Run: s.runOperatorProposalTool,
 		},
 		{
+			Name:        "flow_delta",
+			Description: "Return connection-rate and bandwidth deltas for a node over a time window.",
+			MinRole:     roleViewer,
+			Schema:      eventCaptureToolSchema(),
+			Run:         s.runFlowDeltaTool,
+		},
+		{
+			Name:        "file_growth_delta",
+			Description: "Return fastest growing files for a node over a time window.",
+			MinRole:     roleViewer,
+			Schema:      eventCaptureToolSchema(),
+			Run:         s.runFileGrowthDeltaTool,
+		},
+		{
+			Name:        "resource_delta",
+			Description: "Return CPU, memory, disk, and load deltas for a node over a time window.",
+			MinRole:     roleViewer,
+			Schema:      eventCaptureToolSchema(),
+			Run:         s.runResourceDeltaTool,
+		},
+		{
+			Name:        "log_tail",
+			Description: "Return bounded, redacted log excerpts for a node over a time window.",
+			MinRole:     roleViewer,
+			Schema:      eventCaptureToolSchema(),
+			Run:         s.runLogTailTool,
+		},
+		{
+			Name:        "root_cause_findings",
+			Description: "Return deterministic root-cause findings for a node and incident window.",
+			MinRole:     roleViewer,
+			Schema:      eventCaptureToolSchema(),
+			Run:         s.runRootCauseFindingsTool,
+		},
+		{
 			Name:        "operator_execute_action",
 			Description: "Reserved for confirmed operator-mode execution. It is gated to admins and currently refuses all execution.",
 			MinRole:     roleAdmin,
@@ -139,6 +174,19 @@ func nodeIDToolSchema() map[string]any {
 		"required": []string{"node_id"},
 		"properties": map[string]any{
 			"node_id": map[string]any{"type": "string"},
+		},
+	}
+}
+
+func eventCaptureToolSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []string{"node_id"},
+		"properties": map[string]any{
+			"node_id": map[string]any{"type": "string"},
+			"since":   map[string]any{"type": "string", "description": "RFC3339 start time"},
+			"until":   map[string]any{"type": "string", "description": "RFC3339 end time"},
+			"q":       map[string]any{"type": "string", "description": "Optional search term for logs"},
 		},
 	}
 }
@@ -263,10 +311,44 @@ func (s *Server) runOperatorProposalTool(ctx context.Context, tc aiToolContext, 
 		"node_id":               nodeID,
 		"reason":                reason,
 		"requires_confirmation": true,
+		"dry_run":               true,
 		"execute_tool":          "operator_execute_action",
 		"created_at":            tc.Now.Format(time.RFC3339),
 	}
 	return aiToolExecution{Citation: llm.Citation{Tool: "operator_propose_action", Label: "operator proposal", Detail: action}, Payload: proposal}, nil
+}
+
+func (s *Server) runFlowDeltaTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {
+	return s.runEventCaptureTool(ctx, tc, input, "flow_delta", "flow-delta", "flow delta")
+}
+
+func (s *Server) runFileGrowthDeltaTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {
+	return s.runEventCaptureTool(ctx, tc, input, "file_growth_delta", "file-growth-delta", "file growth")
+}
+
+func (s *Server) runResourceDeltaTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {
+	return s.runEventCaptureTool(ctx, tc, input, "resource_delta", "resource-delta", "resource delta")
+}
+
+func (s *Server) runLogTailTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {
+	return s.runEventCaptureTool(ctx, tc, input, "log_tail", "log-tail", "log tail")
+}
+
+func (s *Server) runRootCauseFindingsTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {
+	return s.runEventCaptureTool(ctx, tc, input, "root_cause_findings", "root-cause-findings", "root cause findings")
+}
+
+func (s *Server) runEventCaptureTool(ctx context.Context, tc aiToolContext, input map[string]any, toolName, kind, label string) (aiToolExecution, error) {
+	nodeID, err := s.nodeIDFromToolInput(ctx, tc.TenantID, input)
+	if err != nil {
+		return aiToolExecution{}, err
+	}
+	filter := eventCaptureFilterFromToolInput(tc.TenantID, nodeID, input)
+	payload, err := s.eventCapturePayload(ctx, kind, filter)
+	if err != nil {
+		return aiToolExecution{}, err
+	}
+	return aiToolExecution{Citation: llm.Citation{Tool: toolName, Label: label, Detail: nodeID.String()}, Payload: payload}, nil
 }
 
 func (s *Server) runOperatorExecuteTool(context.Context, aiToolContext, map[string]any) (aiToolExecution, error) {
