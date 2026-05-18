@@ -9,7 +9,27 @@ import { useTenant } from '@/providers/TenantProvider';
 import type { AIConfigResponse } from '@/lib/api';
 
 const PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic (Claude)' },
+  {
+    value: 'anthropic',
+    label: 'Anthropic (Claude)',
+    defaultModel: 'claude-sonnet-4-6',
+    basePlaceholder: 'https://api.anthropic.com',
+    keyPlaceholder: 'sk-ant-...',
+  },
+  {
+    value: 'openai',
+    label: 'OpenAI',
+    defaultModel: 'gpt-4o-mini',
+    basePlaceholder: 'https://api.openai.com',
+    keyPlaceholder: 'sk-...',
+  },
+  {
+    value: 'google',
+    label: 'Google Gemini',
+    defaultModel: 'gemini-2.5-flash',
+    basePlaceholder: 'https://generativelanguage.googleapis.com',
+    keyPlaceholder: 'AIza...',
+  },
 ];
 
 export function AISettingsTab(): JSX.Element {
@@ -24,6 +44,7 @@ export function AISettingsTab(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; message: string } | null>(null);
+  const providerMeta = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[0];
 
   useEffect(() => {
     if (!currentTenantId) return;
@@ -117,7 +138,11 @@ export function AISettingsTab(): JSX.Element {
                 <select
                   className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground"
                   value={provider}
-                  onChange={(e) => setProvider(e.target.value)}
+                  onChange={(e) => {
+                    const next = PROVIDERS.find((p) => p.value === e.target.value) ?? PROVIDERS[0];
+                    setProvider(next.value);
+                    setModel(next.defaultModel);
+                  }}
                 >
                   {PROVIDERS.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
@@ -131,7 +156,7 @@ export function AISettingsTab(): JSX.Element {
                 <Input
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.anthropic.com"
+                  placeholder={providerMeta.basePlaceholder}
                 />
               </Field>
               <Field label={cfg?.has_api_key ? 'API key (set — leave blank to keep)' : 'API key'}>
@@ -139,7 +164,7 @@ export function AISettingsTab(): JSX.Element {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={cfg?.has_api_key ? '••••••••' : 'sk-ant-...'}
+                  placeholder={cfg?.has_api_key ? '••••••••' : providerMeta.keyPlaceholder}
                   autoComplete="off"
                 />
               </Field>

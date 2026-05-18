@@ -11,22 +11,6 @@ import (
 	"time"
 )
 
-type ProviderConfig struct {
-	Provider string
-	Model    string
-	BaseURL  string
-	APIKey   string
-}
-
-func NewClient(cfg ProviderConfig) (Client, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
-	case "", "anthropic":
-		return &AnthropicClient{Config: cfg, HTTPClient: &http.Client{Timeout: 60 * time.Second}}, nil
-	default:
-		return nil, ErrUnsupportedProvider
-	}
-}
-
 type AnthropicClient struct {
 	Config     ProviderConfig
 	HTTPClient *http.Client
@@ -136,10 +120,10 @@ func (c *AnthropicClient) Generate(ctx context.Context, req Request) (Response, 
 		return Response{}, fmt.Errorf("decode (status %d): %w", resp.StatusCode, err)
 	}
 	if out.Error != nil {
-		return Response{}, fmt.Errorf("anthropic error: %s - %s", out.Error.Type, out.Error.Message)
+		return Response{}, ProviderError{Provider: "anthropic", StatusCode: resp.StatusCode, Message: fmt.Sprintf("%s - %s", out.Error.Type, out.Error.Message)}
 	}
 	if resp.StatusCode >= 400 {
-		return Response{}, fmt.Errorf("anthropic status %d: %s", resp.StatusCode, string(raw))
+		return Response{}, ProviderError{Provider: "anthropic", StatusCode: resp.StatusCode, Body: string(raw)}
 	}
 
 	msg := Message{Role: RoleAssistant, Content: fromAnthropicBlocks(out.Content)}
