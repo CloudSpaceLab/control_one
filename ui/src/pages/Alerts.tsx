@@ -18,7 +18,7 @@ import {
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
-import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import type { Alert, CorrelationRule } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -97,9 +97,8 @@ function basename(path: string): string {
 
 export function Alerts(): JSX.Element {
   const client = useApiClient();
-  const { data: tenants } = useTenants({ limit: 50, offset: 0 });
+  const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
   const [pageTab, setPageTab] = useState<PageTab>('alerts');
-  const [tenantId, setTenantId] = useState('');
   const [state, setState] = useState<typeof STATE_FILTERS[number]>('open');
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(false);
@@ -115,12 +114,13 @@ export function Alerts(): JSX.Element {
   const [newRuleSeverity, setNewRuleSeverity] = useState('medium');
   const [creatingRule, setCreatingRule] = useState(false);
 
-  useEffect(() => {
-    if (!tenantId && tenants[0]?.id) setTenantId(tenants[0].id);
-  }, [tenants, tenantId]);
+  const tenantId = currentTenantId ?? '';
 
   const refresh = useCallback(async () => {
-    if (!tenantId) return;
+    if (!tenantId) {
+      setAlerts([]);
+      return;
+    }
     setLoading(true);
     try {
       const resp = await client.listAlerts({ tenantId, state, limit: 100, offset: 0 });
@@ -443,7 +443,7 @@ export function Alerts(): JSX.Element {
               <FilterSelect
                 label="Tenant"
                 value={tenantId}
-                onChange={(v) => setTenantId(v)}
+                onChange={(v) => setCurrentTenantId(v)}
                 options={tenants.map((t) => ({ label: t.name, value: t.id }))}
               />
               <FilterSelect

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Eyebrow, Panel, SectionHeader } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { useTenant } from '@/providers/TenantProvider';
 import { entityRoute } from '@/lib/entity';
 import { classifyValue } from '@/lib/entity';
 import type { SavedSearch } from '@/lib/api';
@@ -14,6 +15,7 @@ import type { EntityType } from '@/components/kit';
 
 export function InvestigateHome(): JSX.Element {
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const navigate = useNavigate();
   const [recents] = useLocalStorage<string[]>('co.search.recents', []);
   const [query, setQuery] = useState('');
@@ -39,8 +41,9 @@ export function InvestigateHome(): JSX.Element {
   const showIpCta = detection.type === 'ip' && query.trim().length > 0;
 
   const savedQ = useQuery({
-    queryKey: ['saved-searches'],
-    queryFn: () => client.listSavedSearches(),
+    queryKey: ['saved-searches', currentTenantId],
+    queryFn: () => client.listSavedSearches({ tenantId: currentTenantId }),
+    enabled: !!currentTenantId,
   });
 
   const examples: { type: EntityType; value: string; label: string }[] = [
