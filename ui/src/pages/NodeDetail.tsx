@@ -27,14 +27,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useApiClient } from '@/hooks/useApiClient';
+import { useJobs } from '@/hooks/useJobs';
 import { useNode } from '@/hooks/useNode';
 import { useToast } from '@/providers/ToastProvider';
 import type {
   AgentUpdateResponse,
+  Job,
   NodeHealthRiskLevel,
   TelemetryMetric,
   UpdateNodePayload,
 } from '@/lib/api';
+import {
+  agentUpdateNodeId,
+  agentUpdateStatusLabel,
+  agentUpdateStatusTone,
+  agentUpdateTargetVersion,
+} from '@/lib/agentUpdateJobs';
 import type { StateTone } from '@/components/kit/types';
 import { formatBytes, formatDuration, formatTs } from '@/lib/format';
 import {
@@ -116,6 +124,14 @@ function riskTone(risk?: NodeHealthRiskLevel): StateTone {
     default:
       return 'unknown';
   }
+}
+
+function formatAgentUpdateTime(job?: Job | null): string {
+  if (!job) return 'Never queued';
+  if (job.finished_at) return `Finished ${formatTs(job.finished_at)}`;
+  if (job.started_at) return `Started ${formatTs(job.started_at)}`;
+  if (job.scheduled_at) return `Scheduled ${formatTs(job.scheduled_at)}`;
+  return `Queued ${formatTs(job.created_at)}`;
 }
 
 function riskLabel(risk: NodeHealthRiskLevel | undefined, score: number, calibratingSamples?: number): string {
@@ -1296,6 +1312,29 @@ function SettingsTab({
   const [showRegen, setShowRegen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [agentUpdating, setAgentUpdating] = useState(false);
+  const {
+    data: agentUpdateJobs,
+    loading: agentUpdateJobsLoading,
+    refresh: refreshAgentUpdateJobs,
+  } = useJobs({
+    tenantId: node.tenant_id,
+    type: 'agent.update',
+    limit: 50,
+    pollIntervalMs: 5_000,
+  });
+
+  const latestAgentUpdateJob = useMemo(() => {
+    return agentUpdateJobs
+      .filter((job) => agentUpdateNodeId(job) === node.id)
+      .sort((a, b) => {
+        const aTime = new Date(a.finished_at ?? a.updated_at ?? a.started_at ?? a.created_at).getTime() || 0;
+        const bTime = new Date(b.finished_at ?? b.updated_at ?? b.started_at ?? b.created_at).getTime() || 0;
+        return bTime - aTime;
+      })[0];
+  }, [agentUpdateJobs, node.id]);
+
+  const agentUpdateActive = latestAgentUpdateJob?.status === 'queued' || latestAgentUpdateJob?.status === 'running';
+  const agentUpdateTarget = agentUpdateTargetVersion(latestAgentUpdateJob);
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1321,16 +1360,34 @@ function SettingsTab({
           Trigger an agent update or retire / delete the node. Retire keeps the
           history; delete removes everything.
         </p>
+        <div className="mt-3 rounded-md border border-border-subtle bg-surface px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-muted">Latest self-update</p>
+              <p className="mt-1 text-sm text-text-secondary">{formatAgentUpdateTime(latestAgentUpdateJob)}</p>
+            </div>
+            <StatusTag tone={agentUpdateJobsLoading ? 'unknown' : agentUpdateStatusTone(latestAgentUpdateJob?.status)}>
+              {agentUpdateJobsLoading ? 'checking' : agentUpdateStatusLabel(latestAgentUpdateJob?.status)}
+            </StatusTag>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2 text-[0.65rem] text-text-muted">
+            <span className="font-mono">current {node.agent_version ?? '-'}</span>
+            {agentUpdateTarget && <span className="font-mono">target {agentUpdateTarget}</span>}
+            {latestAgentUpdateJob?.id && <span className="font-mono">job {latestAgentUpdateJob.id}</span>}
+          </div>
+        </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"
             size="md"
-            disabled={agentUpdating}
+            disabled={agentUpdating || agentUpdateActive}
             onClick={async () => {
               setAgentUpdating(true);
               try {
                 const resp: AgentUpdateResponse = await api.updateAgent(node.id);
                 showToast(`Agent update queued (job ${resp.job_id})`, 'success');
+                refreshAgentUpdateJobs();
+                onChanged();
               } catch (err) {
                 showToast(err instanceof Error ? err.message : 'agent update failed', 'error');
               } finally {
@@ -1338,7 +1395,7 @@ function SettingsTab({
               }
             }}
           >
-            <RefreshCw className="h-4 w-4" /> Update agent
+            <RefreshCw className={`h-4 w-4 ${agentUpdating || agentUpdateActive ? 'animate-spin' : ''}`} /> Update agent
           </Button>
           <Button
             variant="ghost"
