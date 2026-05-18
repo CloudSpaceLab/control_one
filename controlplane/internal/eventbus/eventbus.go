@@ -154,4 +154,5 @@ const (
 	TopicSecurityEvent      = "security.event"
 	TopicHealthIncident     = "health.incident"
 	TopicDashboardTick      = "dashboard.tick"
+	TopicEventsAnomaly      = "events.anomaly"
 )

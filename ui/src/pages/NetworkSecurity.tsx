@@ -9,6 +9,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { ArrowRight, Ban, Download, Filter, Globe2, Network, RefreshCw, Search, ShieldAlert, ShieldCheck, Sparkles, XCircle } from 'lucide-react';
+import { describeIPBehaviorFinding, ipBehaviorConfidence } from '../lib/ipBehaviorPresentation';
 import type {
   ActiveBlock,
   BehavioralAnomaly,
@@ -215,6 +216,10 @@ function IPBehaviorPanel(): JSX.Element {
       finding: countryTopFinding(country, findings),
     }))
     .sort((a, b) => b.score - a.score || b.country.request_count - a.country.request_count);
+  const topRankedCountry = rankedCountries[0];
+  const topFindingPresentation = topRankedCountry?.finding
+    ? describeIPBehaviorFinding(topRankedCountry.finding, { countryLabel: countryLabel(topRankedCountry.country), maxSignals: 3 })
+    : null;
   const selectedCountry = selectedCountryDetail ?? visibleCountries.find((c) => c.country_code === selectedCountryCode) ?? visibleCountries[0] ?? null;
   const selectedCountryBaseline = selectedCountry ? findCountryBaseline(selectedCountry, baselines, filters) : null;
   const selectedCountryInsight = selectedCountry ? countryBaselineInsight(selectedCountry, selectedCountryBaseline, filters.timeWindow) : null;
@@ -491,9 +496,9 @@ function IPBehaviorPanel(): JSX.Element {
           <Globe2 className="h-4 w-4 shrink-0" />
           <span className="truncate">
             {rankedCountries.length > 0
-              ? rankedCountries[0].score > 0
-                ? `${countryLabel(rankedCountries[0].country)} has the top backend IP finding`
-                : `${countryLabel(rankedCountries[0].country)} has the most requests; no backend IP finding`
+              ? topFindingPresentation
+                ? `${countryLabel(rankedCountries[0].country)} has a ${topFindingPresentation.confidence}% ${topFindingPresentation.categoryLabel.toLowerCase()} signal`
+                : `${countryLabel(rankedCountries[0].country)} has the most requests; no open IP behavior finding`
               : 'No web.request rollups in this window'}
           </span>
         </div>
@@ -518,7 +523,7 @@ function IPBehaviorPanel(): JSX.Element {
                 <div className="truncate text-sm font-semibold">{countryLabel(country)}</div>
                 <div className="text-xs text-text-secondary">{country.country_code || 'unmapped'}</div>
               </div>
-              <StatusTag tone={riskTone(score)}>score {score}</StatusTag>
+              <StatusTag tone={riskTone(score)}>{score > 0 ? `${score}% confidence` : 'no finding'}</StatusTag>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs text-text-secondary">
               <span>{formatNumber(country.request_count)} req</span>
@@ -546,7 +551,7 @@ function IPBehaviorPanel(): JSX.Element {
                 <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
                   <tr>
                     <th className="px-3 py-2">Country</th>
-                    <th className="px-3 py-2">Risk</th>
+                    <th className="px-3 py-2">Confidence</th>
                     <th className="px-3 py-2">Unique IPs</th>
                     <th className="px-3 py-2">Requests</th>
                     <th className="px-3 py-2">Bytes out</th>
@@ -571,7 +576,7 @@ function IPBehaviorPanel(): JSX.Element {
                           <div className="font-medium">{countryLabel(country)}</div>
                           <div className="text-xs text-text-secondary">{country.country_code || 'unmapped'}</div>
                         </td>
-                        <td className="px-3 py-2"><StatusTag tone={riskTone(score)}>{severityLabel(score, finding)}</StatusTag></td>
+                        <td className="px-3 py-2"><StatusTag tone={riskTone(score)}>{score > 0 ? `${score}% ${severityLabel(score, finding)}` : 'normal'}</StatusTag></td>
                         <td className="px-3 py-2">{formatNumber(country.unique_source_ips)}</td>
                         <td className="px-3 py-2">{formatNumber(country.request_count)}</td>
                         <td className="px-3 py-2">{formatBytes(country.bytes_out)}</td>
@@ -591,25 +596,61 @@ function IPBehaviorPanel(): JSX.Element {
 
         <div className="space-y-4">
           <div className="rounded border border-border p-3">
-            <div className="mb-3 text-sm font-medium">Unusual now</div>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">Unusual now</div>
+                <div className="text-xs text-text-muted">100% confidence findings open critical alerts automatically.</div>
+              </div>
+              <StatusTag tone={rankedCountries.some((row) => row.score >= 100) ? 'critical' : rankedCountries.some((row) => row.score >= 70) ? 'warning' : 'healthy'}>
+                {rankedCountries.filter((row) => row.score >= 50).length}
+              </StatusTag>
+            </div>
             {rankedCountries.filter((row) => row.score >= 50).length === 0 ? (
               <p className="text-sm text-text-secondary">Current traffic has no suspicious baseline, status, or bytes deviation.</p>
             ) : (
               <div className="space-y-2">
-                {rankedCountries.filter((row) => row.score >= 50).slice(0, 5).map(({ country, finding, score }) => (
-                  <button
-                    key={`${country.country_code}-${country.last_seen_at}`}
-                    type="button"
-                    className="w-full rounded border border-border p-2 text-left hover:bg-hover"
-                    onClick={() => selectCountry(country)}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">{countryLabel(country)}</span>
-                      <StatusTag tone={riskTone(score)}>{severityLabel(score, finding)}</StatusTag>
-                    </div>
-                    <p className="mt-1 text-xs text-text-secondary">{finding?.reason || countryBackendReason(country, findings)}</p>
-                  </button>
-                ))}
+                {rankedCountries.filter((row) => row.score >= 50).slice(0, 5).map(({ country, finding, score }) => {
+                  const presentation = describeIPBehaviorFinding(finding, { countryLabel: countryLabel(country), maxSignals: 4 });
+                  return (
+                    <button
+                      key={`${country.country_code}-${country.last_seen_at}`}
+                      type="button"
+                      className="w-full rounded border border-border bg-elevated p-3 text-left transition hover:border-border-strong hover:bg-hover"
+                      onClick={() => selectCountry(country)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{countryLabel(country)}</div>
+                          <div className="truncate font-mono text-xs text-text-muted">{presentation.source}</div>
+                        </div>
+                        <StatusTag tone={riskTone(score)}>{score}%</StatusTag>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <StatusTag tone={riskTone(score)}>{presentation.categoryLabel}</StatusTag>
+                        {presentation.alertLabel && (
+                          <StatusTag tone={score >= 100 ? 'critical' : 'warning'} icon={score >= 100 ? <ShieldAlert className="h-3 w-3" /> : undefined}>
+                            {presentation.alertLabel}
+                          </StatusTag>
+                        )}
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-xs leading-5 text-text-secondary">{presentation.summary}</p>
+                      {presentation.signals.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {presentation.signals.map((signal) => (
+                            <span key={signal} className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-text-secondary">
+                              {signal}
+                            </span>
+                          ))}
+                          {presentation.hiddenSignalCount > 0 && (
+                            <span className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-text-muted">
+                              +{presentation.hiddenSignalCount} more
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -644,7 +685,7 @@ function IPBehaviorPanel(): JSX.Element {
               <div className="mt-3 space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono">{profile.source_ip}</span>
-                  <StatusTag tone={riskTone(profileScore)}>score {profileScore}</StatusTag>
+                  <StatusTag tone={riskTone(profileScore)}>{profileScore}% confidence</StatusTag>
                 </div>
                 <div className="rounded border border-border p-2">
                   <div className="mb-1 flex items-center justify-between gap-2">
@@ -854,25 +895,12 @@ function countryTopFinding(country: IPBehaviorCountrySummary, findings: Behavior
     .sort((a, b) => findingScore(b) - findingScore(a))[0];
 }
 
-function countryBackendReason(country: IPBehaviorCountrySummary, findings: BehavioralAnomaly[]): string {
-  const finding = countryTopFinding(country, findings);
-  if (finding?.reason) return finding.reason;
-  return `${countryLabel(country)} has no open backend anomaly finding.`;
-}
-
 function maxBackendScore(findings: BehavioralAnomaly[]): number {
   return Math.max(0, ...findings.map((finding) => findingScore(finding)));
 }
 
 function findingScore(finding?: BehavioralAnomaly): number {
-  if (!finding) return 0;
-  if (Number.isFinite(finding.observed_value)) {
-    return Math.max(0, Math.min(100, Math.round(finding.observed_value)));
-  }
-  if (Number.isFinite(finding.z_score)) {
-    return Math.max(0, Math.min(100, Math.round(finding.z_score * 20)));
-  }
-  return 0;
+  return ipBehaviorConfidence(finding);
 }
 
 function countryBaselineInsight(country: IPBehaviorCountrySummary, baseline?: IPBehaviorBaseline | null, windowKey: TimeWindowKey = '1h'): { tone: StateTone; label: string; description: string } {

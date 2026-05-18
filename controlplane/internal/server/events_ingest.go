@@ -512,7 +512,7 @@ func eventTopicFor(t string) string {
 	case strings.HasPrefix(t, "bastion."):
 		return "events.bastion"
 	case strings.HasPrefix(t, "anomaly."):
-		return "events.anomaly"
+		return eventbus.TopicEventsAnomaly
 	case t == "log.spike":
 		return "events.log_spike"
 	case t == "log.line":

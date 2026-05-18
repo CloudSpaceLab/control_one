@@ -19,6 +19,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -934,6 +935,9 @@ func (s *Server) detectIPBehaviorBatch(ctx context.Context, tenantID, nodeID uui
 			DedupKey:      dedup,
 		})
 		s.recordIPBehaviorFinding(ctx, tenantID, nodeID, dedup, b, score, sev, category, msg, details)
+		if score >= 100 {
+			s.openIPBehaviorConfidenceAlert(ctx, tenantID, nodeID, dedup, b, score, sev, category, msg, details)
+		}
 	}
 	return out
 }
@@ -1226,6 +1230,201 @@ func (s *Server) recordIPBehaviorFinding(ctx context.Context, tenantID, nodeID u
 	if err != nil {
 		s.logger.Warn("record ip behavior finding", zap.Error(err))
 	}
+}
+
+func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, nodeID uuid.UUID, findingDedup string, b *ipBehaviorBucket, score int, severity, category, reason string, evidence map[string]any) {
+	if s == nil || s.store == nil || b == nil || score < 100 {
+		return
+	}
+	if severity == "" {
+		severity = "critical"
+	}
+	alertDedup := fmt.Sprintf("anomaly.ip_behavior.auto:%s:%s:%s", nodeID.String(), b.srcIP, category)
+	var nodeArg *uuid.UUID
+	if nodeID != uuid.Nil {
+		nodeArg = &nodeID
+	}
+	contextPayload := map[string]any{
+		"event_type":           "anomaly.ip_behavior",
+		"finding_dedup_key":    findingDedup,
+		"score":                score,
+		"confidence":           score,
+		"category":             category,
+		"src_ip":               b.srcIP,
+		"country_code":         b.countryCode,
+		"country":              b.country,
+		"asn":                  b.asn,
+		"app":                  b.app,
+		"server_group":         b.serverGroup,
+		"auto_alert_threshold": 100,
+	}
+	for key, value := range evidence {
+		if _, exists := contextPayload[key]; !exists {
+			contextPayload[key] = value
+		}
+	}
+	title := fmt.Sprintf("100%% confidence %s from %s", ipBehaviorAlertCategoryLabel(category), firstNonEmptyIPBehavior(b.srcIP, "unknown source"))
+	summary := ipBehaviorAlertSummary(category, b, score, reason, evidence)
+	alert, err := s.store.CreateAlert(ctx, storage.CreateAlertParams{
+		TenantID: tenantID,
+		NodeID:   nodeArg,
+		Source:   "ip_behavior",
+		Severity: severity,
+		Title:    title,
+		Summary:  summary,
+		DedupKey: alertDedup,
+		Context:  contextPayload,
+	})
+	if err != nil {
+		if errors.Is(err, storage.ErrAlertDeduped) {
+			return
+		}
+		if s.logger != nil {
+			s.logger.Warn("open ip behavior confidence alert", zap.Error(err), zap.String("src_ip", b.srcIP), zap.Int("score", score))
+		}
+		return
+	}
+	if alert == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"alert_id":   alert.ID.String(),
+		"severity":   alert.Severity,
+		"source":     alert.Source,
+		"title":      alert.Title,
+		"confidence": score,
+		"src_ip":     b.srcIP,
+		"category":   category,
+	})
+	s.publishEvent(eventbus.Event{
+		Topic:    eventbus.TopicAlertOpened,
+		TenantID: tenantID,
+		NodeID:   nodeArg,
+		Payload:  payload,
+	})
+}
+
+func ipBehaviorAlertSummary(category string, b *ipBehaviorBucket, score int, reason string, evidence map[string]any) string {
+	signals := ipBehaviorAlertSignals(reason, evidence)
+	if len(signals) == 0 {
+		signals = append(signals, "behavior exceeded learned network baselines")
+	}
+	if len(signals) > 3 {
+		signals = signals[:3]
+	}
+	location := firstNonEmptyIPBehavior(b.country, b.countryCode, "unknown country")
+	app := firstNonEmptyIPBehavior(b.app, b.serverGroup, "web traffic")
+	return fmt.Sprintf("%s in %s for %s reached %d%% confidence: %s.", ipBehaviorAlertCategoryLabel(category), location, app, score, strings.Join(signals, ", "))
+}
+
+func ipBehaviorAlertSignals(reason string, evidence map[string]any) []string {
+	out := make([]string, 0, 6)
+	if evidence != nil {
+		if count := int(int64FromServerAny(evidence["request_count"])); count > 0 {
+			window := firstNonEmptyIPBehavior(stringFromMapAny(evidence, "window"), "current window")
+			out = append(out, fmt.Sprintf("%d requests in %s", count, window))
+		}
+		if statuses, ok := evidence["status_counts"].(map[string]any); ok {
+			auth := int(int64FromServerAny(statuses["401"]) + int64FromServerAny(statuses["403"]))
+			serverErrors := int(int64FromServerAny(statuses["500"]) + int64FromServerAny(statuses["502"]) + int64FromServerAny(statuses["503"]) + int64FromServerAny(statuses["5xx"]))
+			if auth > 0 {
+				out = append(out, fmt.Sprintf("%d auth failures", auth))
+			}
+			if serverErrors > 0 {
+				out = append(out, fmt.Sprintf("%d server errors", serverErrors))
+			}
+		}
+		if bytesOut := int(int64FromServerAny(evidence["bytes_out"])); bytesOut >= 1024*1024 {
+			out = append(out, fmt.Sprintf("%d MiB outbound", bytesOut/(1024*1024)))
+		}
+	}
+	for _, raw := range strings.Split(ipBehaviorReasonBody(reason), ";") {
+		signal := ipBehaviorHumanAlertReason(strings.TrimSpace(raw))
+		if signal == "" || stringSliceContainsFold(out, signal) {
+			continue
+		}
+		out = append(out, signal)
+		if len(out) >= 6 {
+			break
+		}
+	}
+	return out
+}
+
+func ipBehaviorReasonBody(reason string) string {
+	if idx := strings.Index(reason, ":"); idx >= 0 {
+		return reason[idx+1:]
+	}
+	return reason
+}
+
+func ipBehaviorHumanAlertReason(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	lower := strings.ToLower(reason)
+	if strings.Contains(lower, "behavior is being evaluated as a baseline dimension") {
+		return ""
+	}
+	if strings.HasPrefix(lower, "request burst:") {
+		return strings.TrimSpace(strings.TrimPrefix(reason, "request burst:"))
+	}
+	if strings.HasPrefix(lower, "auth failure spike:") {
+		return strings.TrimSpace(strings.TrimPrefix(reason, "auth failure spike:"))
+	}
+	if strings.HasPrefix(lower, "server error spike:") {
+		return strings.TrimSpace(strings.TrimPrefix(reason, "server error spike:"))
+	}
+	if strings.Contains(lower, "sensitive/admin path probing") {
+		return "admin path probing"
+	}
+	if strings.Contains(lower, "previously inactive hour") {
+		return "inactive-hour traffic"
+	}
+	if strings.Contains(lower, "previously inactive weekday") {
+		return "inactive weekday traffic"
+	}
+	if strings.Contains(lower, "auth failure ratio") {
+		return "auth failures exceeded learned baseline"
+	}
+	if strings.Contains(lower, "server-error ratio") {
+		return "server errors exceeded learned baseline"
+	}
+	if strings.Contains(lower, "request rate") {
+		return "request rate exceeded learned baseline"
+	}
+	if strings.Contains(lower, "bytes out") {
+		return "bytes out exceeded learned baseline"
+	}
+	return reason
+}
+
+func ipBehaviorAlertCategoryLabel(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "credential_attack":
+		return "credential attack"
+	case "exploit_attempt":
+		return "exploit attempt"
+	case "exfiltration_risk":
+		return "exfiltration risk"
+	case "scanner_probe":
+		return "scanner probe"
+	case "slow_distributed_attack":
+		return "distributed attack"
+	case "webshell_callback":
+		return "webshell callback"
+	case "partner_drift":
+		return "partner drift"
+	default:
+		return "IP behavior anomaly"
+	}
+}
+
+func stringFromMapAny(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (s *Server) handleIPBehaviorOverview(w http.ResponseWriter, r *http.Request) {
