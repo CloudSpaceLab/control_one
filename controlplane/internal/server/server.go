@@ -969,6 +969,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
 	s.baseRouter.HandleFunc("/api/v1/ai/test", s.handleAITest)
 	s.baseRouter.HandleFunc("/api/v1/ai/ask", s.handleAIAsk)
+	s.baseRouter.HandleFunc("/api/v1/ai/investigations", s.handleAIInvestigations)
+	s.baseRouter.HandleFunc("/api/v1/ai/operator/proposals", s.handleAIOperatorProposals)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)

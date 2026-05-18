@@ -1247,6 +1247,8 @@ type fakeStore struct {
 	resourceDeltas       []ResourceDeltaRow
 	logTailRows          []LogTailRow
 	rootCauseFindings    []RootCauseFinding
+	aiInvestigations     []storage.AIInvestigation
+	aiOperatorProposals  []storage.AIOperatorProposal
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -4693,4 +4695,144 @@ func (f *fakeStore) ListRootCauseFindings(_ context.Context, filter EventCapture
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeStore) CreateAIInvestigation(_ context.Context, params storage.CreateAIInvestigationParams) (*storage.AIInvestigation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := uuid.New()
+	now := time.Now().UTC()
+	dedup := strings.TrimSpace(params.TriggerDedupKey)
+	if dedup == "" {
+		dedup = id.String()
+	}
+	for i := range f.aiInvestigations {
+		if f.aiInvestigations[i].TenantID == params.TenantID && f.aiInvestigations[i].TriggerDedupKey == dedup {
+			f.aiInvestigations[i].TriggerEventType = params.TriggerEventType
+			f.aiInvestigations[i].Severity = params.Severity
+			f.aiInvestigations[i].Summary = params.Summary
+			f.aiInvestigations[i].Evidence = append([]byte(nil), params.Evidence...)
+			f.aiInvestigations[i].UpdatedAt = now
+			copy := f.aiInvestigations[i]
+			return &copy, nil
+		}
+	}
+	row := storage.AIInvestigation{
+		ID:               id,
+		TenantID:         params.TenantID,
+		NodeID:           params.NodeID,
+		TriggerType:      firstNonEmpty(params.TriggerType, "manual"),
+		TriggerEventType: firstNonEmpty(params.TriggerEventType, params.TriggerType),
+		TriggerDedupKey:  dedup,
+		Severity:         firstNonEmpty(params.Severity, "info"),
+		Summary:          firstNonEmpty(params.Summary, params.TriggerEventType),
+		Evidence:         append([]byte(nil), params.Evidence...),
+		Status:           params.Status,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if row.Status == "" {
+		row.Status = storage.AIInvestigationStatusOpen
+	}
+	f.aiInvestigations = append(f.aiInvestigations, row)
+	copy := row
+	return &copy, nil
+}
+
+func (f *fakeStore) ListAIInvestigations(_ context.Context, filter storage.ListAIInvestigationsFilter, limit, offset int) ([]storage.AIInvestigation, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]storage.AIInvestigation, 0, len(f.aiInvestigations))
+	for _, row := range f.aiInvestigations {
+		if filter.TenantID != uuid.Nil && row.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && row.NodeID != filter.NodeID {
+			continue
+		}
+		if filter.Status != "" && row.Status != filter.Status {
+			continue
+		}
+		if filter.TriggerType != "" && row.TriggerType != filter.TriggerType {
+			continue
+		}
+		if filter.TriggerEventType != "" && row.TriggerEventType != filter.TriggerEventType {
+			continue
+		}
+		out = append(out, row)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	total := len(out)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return out[offset:end], total, nil
+}
+
+func (f *fakeStore) CreateAIOperatorProposal(_ context.Context, params storage.CreateAIOperatorProposalParams) (*storage.AIOperatorProposal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := uuid.New()
+	now := time.Now().UTC()
+	var createdBy *uuid.UUID
+	if params.CreatedBy != uuid.Nil {
+		v := params.CreatedBy
+		createdBy = &v
+	}
+	row := storage.AIOperatorProposal{
+		ID:           id,
+		TenantID:     params.TenantID,
+		NodeID:       params.NodeID,
+		Action:       params.Action,
+		Reason:       params.Reason,
+		Status:       params.Status,
+		DryRun:       true,
+		ApprovalKind: firstNonEmpty(params.ApprovalKind, "manual"),
+		ApprovalPath: params.ApprovalPath,
+		SourceTool:   firstNonEmpty(params.SourceTool, "operator_propose_action"),
+		Metadata:     append([]byte(nil), params.Metadata...),
+		CreatedBy:    createdBy,
+		CreatedAt:    now,
+	}
+	if row.Status == "" {
+		row.Status = storage.AIOperatorProposalStatusProposed
+	}
+	f.aiOperatorProposals = append(f.aiOperatorProposals, row)
+	copy := row
+	return &copy, nil
+}
+
+func (f *fakeStore) ListAIOperatorProposals(_ context.Context, filter storage.ListAIOperatorProposalsFilter, limit, offset int) ([]storage.AIOperatorProposal, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]storage.AIOperatorProposal, 0, len(f.aiOperatorProposals))
+	for _, row := range f.aiOperatorProposals {
+		if filter.TenantID != uuid.Nil && row.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && row.NodeID != filter.NodeID {
+			continue
+		}
+		if filter.Status != "" && row.Status != filter.Status {
+			continue
+		}
+		if filter.Action != "" && row.Action != filter.Action {
+			continue
+		}
+		out = append(out, row)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	total := len(out)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return out[offset:end], total, nil
 }

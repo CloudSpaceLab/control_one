@@ -321,6 +321,7 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 				anomalies[i].TS = time.Now().UTC()
 			}
 		}
+		s.persistAnomalyInvestigations(ctx, tenantID, nodeID, anomalies)
 		events = append(events, anomalies...)
 	}
 	dorisStatus := ""
