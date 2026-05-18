@@ -297,6 +297,7 @@ func (s *Server) runOperatorProposalTool(ctx context.Context, tc aiToolContext, 
 		return aiToolExecution{}, errors.New("action and reason are required")
 	}
 	nodeID := strings.TrimSpace(stringFromToolInput(input, "node_id"))
+	var parsedNodeID uuid.UUID
 	if nodeID != "" {
 		parsed, err := uuid.Parse(nodeID)
 		if err != nil {
@@ -305,7 +306,9 @@ func (s *Server) runOperatorProposalTool(ctx context.Context, tc aiToolContext, 
 		if _, err := s.ensureNodeInTenant(ctx, tc.TenantID, parsed); err != nil {
 			return aiToolExecution{}, err
 		}
+		parsedNodeID = parsed
 	}
+	approvalKind, approvalPath := approvalRouteForOperatorAction(action)
 	proposal := map[string]any{
 		"action":                action,
 		"node_id":               nodeID,
@@ -313,7 +316,37 @@ func (s *Server) runOperatorProposalTool(ctx context.Context, tc aiToolContext, 
 		"requires_confirmation": true,
 		"dry_run":               true,
 		"execute_tool":          "operator_execute_action",
+		"approval_kind":         approvalKind,
+		"approval_path":         approvalPath,
 		"created_at":            tc.Now.Format(time.RFC3339),
+	}
+	if backend := s.aiOperatorBackend(); backend != nil {
+		metadata, _ := json.Marshal(map[string]any{
+			"requires_confirmation": true,
+			"execute_tool":          "operator_execute_action",
+		})
+		var createdBy uuid.UUID
+		if tc.Principal != nil {
+			createdBy = principalUserID(s, ctx, tc.Principal)
+		}
+		row, err := backend.CreateAIOperatorProposal(ctx, storage.CreateAIOperatorProposalParams{
+			TenantID:     tc.TenantID,
+			NodeID:       parsedNodeID,
+			Action:       action,
+			Reason:       reason,
+			Status:       storage.AIOperatorProposalStatusProposed,
+			DryRun:       true,
+			ApprovalKind: approvalKind,
+			ApprovalPath: approvalPath,
+			SourceTool:   "operator_propose_action",
+			Metadata:     metadata,
+			CreatedBy:    createdBy,
+		})
+		if err != nil {
+			return aiToolExecution{}, err
+		}
+		proposal["proposal_id"] = row.ID.String()
+		proposal["status"] = row.Status
 	}
 	return aiToolExecution{Citation: llm.Citation{Tool: "operator_propose_action", Label: "operator proposal", Detail: action}, Payload: proposal}, nil
 }
