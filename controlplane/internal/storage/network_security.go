@@ -113,6 +113,33 @@ func (s *Store) SetNodeFirewallRuleJobID(ctx context.Context, ruleID, jobID uuid
 	return nil
 }
 
+// QueueNodeFirewallRuleRemoval reuses an applied block row for a delete job.
+// The heartbeat dispatcher looks at the linked job type, so action remains the
+// original block shape while status returns to pending until the agent confirms
+// removal.
+func (s *Store) QueueNodeFirewallRuleRemoval(ctx context.Context, ruleID, jobID uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if ruleID == uuid.Nil || jobID == uuid.Nil {
+		return errors.New("rule_id and job_id required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE node_firewall_rules
+		SET status = 'pending',
+		    job_id = $2,
+		    error = NULL,
+		    requested_at = NOW(),
+		    removed_at = NULL
+		WHERE id = $1
+		  AND status IN ('pending','applied','failed')
+	`, ruleID, jobID)
+	if err != nil {
+		return fmt.Errorf("queue node firewall removal: %w", err)
+	}
+	return nil
+}
+
 // MarkNodeFirewallRuleApplied records a successful agent-side apply.
 func (s *Store) MarkNodeFirewallRuleApplied(ctx context.Context, ruleID uuid.UUID) error {
 	if s.db == nil {

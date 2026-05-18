@@ -70,6 +70,8 @@ Control One delivers a unified control plane and node agent for regulated indust
 - Secrets centrally managed via Vault/KMS with short-lived tokens.  
 - Audit logging for all configuration changes, provisioning actions, access approvals, and session replay usage.  
 - Encryption at rest for databases, telemetry storage, and session archives.
+- Enforcement provider boundaries for firewall, webserver, Fail2Ban-style, and future WAF/proxy integrations are captured in `docs/enforcement-integrations.md`.
+- IP behavior/API contracts and agent event/job contracts are captured in `docs/ip-behavior-api-contracts.md` and `docs/agent-event-contracts.md`.
 
 ## Tenancy & RBAC Model
 - **Isolation**: Every resource (nodes, jobs, policies, telemetry artifacts) is owned by a tenant. Tenant context is enforced via database foreign keys and middleware lookups.  

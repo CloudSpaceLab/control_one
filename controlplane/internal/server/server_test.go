@@ -1241,6 +1241,13 @@ type fakeStore struct {
 	firewallStates       map[uuid.UUID]storage.NodeFirewallState
 	nodeHealthScores     map[uuid.UUID]storage.NodeHealthScore
 	alerts               []storage.Alert
+	securityCounts       storage.SecurityEventCounts
+	healthCounts         storage.SecurityEventCounts
+	activeBlocks         []storage.ActiveBlock
+	patchDeployments     []storage.PatchDeployment
+	ipBehaviorCountries  []storage.IPBehaviorCountrySummary
+	ipBehaviorFindings   []storage.IPBehaviorFinding
+	webserverInstances   []storage.WebserverInstance
 	aiConfig             *storage.AIConfig
 	flowDeltas           []FlowDeltaRow
 	fileGrowthDeltas     []FileGrowthDeltaRow
@@ -3619,14 +3626,14 @@ func (f *fakeStore) ListSecurityEvents(_ context.Context, _ storage.SecurityEven
 	return nil, 0, nil
 }
 func (f *fakeStore) CountSecurityEvents(_ context.Context, _ storage.SecurityEventFilter) (storage.SecurityEventCounts, error) {
-	return storage.SecurityEventCounts{}, nil
+	return f.securityCounts, nil
 }
 func (f *fakeStore) CreateHealthIncident(_ context.Context, _ storage.CreateHealthIncidentParams) (*storage.HealthIncident, error) {
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) ResolveHealthIncident(_ context.Context, _ uuid.UUID) error { return nil }
 func (f *fakeStore) CountOpenHealthIncidents(_ context.Context, _ uuid.UUID) (storage.SecurityEventCounts, error) {
-	return storage.SecurityEventCounts{}, nil
+	return f.healthCounts, nil
 }
 func (f *fakeStore) CreateRuleTrigger(_ context.Context, _ storage.CreateRuleTriggerParams) (*storage.RuleTrigger, error) {
 	return nil, errors.New("not implemented")
@@ -4061,8 +4068,21 @@ func (f *fakeStore) ListPendingNodeFirewallRules(_ context.Context, _ uuid.UUID)
 func (f *fakeStore) ListNodeFirewallRulesForEntityAction(_ context.Context, _ uuid.UUID) ([]storage.NodeFirewallRule, error) {
 	return nil, nil
 }
-func (f *fakeStore) ListActiveBlocks(_ context.Context, _ uuid.UUID, _, _ int, _ bool) ([]storage.ActiveBlock, error) {
-	return nil, nil
+func (f *fakeStore) ListActiveBlocks(_ context.Context, tenantID uuid.UUID, limit, offset int, _ bool) ([]storage.ActiveBlock, error) {
+	var out []storage.ActiveBlock
+	for _, block := range f.activeBlocks {
+		if tenantID == uuid.Nil || block.TenantID == tenantID {
+			out = append(out, block)
+		}
+	}
+	if offset > len(out) {
+		offset = len(out)
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 func (f *fakeStore) GetNodeFirewallRuleByJobID(_ context.Context, _ uuid.UUID) (*storage.NodeFirewallRule, error) {
 	return nil, nil
@@ -4080,8 +4100,21 @@ func (f *fakeStore) UpsertAgentRolloutState(_ context.Context, _ uuid.UUID, _ st
 func (f *fakeStore) CreatePatchDeployment(_ context.Context, _ storage.PatchDeployment) (*storage.PatchDeployment, error) {
 	return nil, nil
 }
-func (f *fakeStore) ListPatchDeployments(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.PatchDeployment, error) {
-	return nil, nil
+func (f *fakeStore) ListPatchDeployments(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.PatchDeployment, error) {
+	var out []storage.PatchDeployment
+	for _, deployment := range f.patchDeployments {
+		if tenantID == uuid.Nil || deployment.TenantID == tenantID {
+			out = append(out, deployment)
+		}
+	}
+	if offset > len(out) {
+		offset = len(out)
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 func (f *fakeStore) GetPatchDeployment(_ context.Context, _ uuid.UUID) (*storage.PatchDeployment, error) {
 	return nil, nil
@@ -4623,6 +4656,78 @@ func (f *fakeStore) ListNodeServicesForTenant(_ context.Context, tenantID uuid.U
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeStore) ListIPBehaviorCountries(_ context.Context, tenantID uuid.UUID, _ time.Time, countryCode string) ([]storage.IPBehaviorCountrySummary, error) {
+	var out []storage.IPBehaviorCountrySummary
+	// Test rows do not carry tenant_id, so tenant filtering is validated in
+	// dedicated IP behavior API tests.
+	_ = tenantID
+	for _, country := range f.ipBehaviorCountries {
+		if countryCode != "" && !strings.EqualFold(country.CountryCode, countryCode) {
+			continue
+		}
+		out = append(out, country)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetIPBehaviorIPProfile(_ context.Context, _ uuid.UUID, _ string, _ time.Time) (*storage.IPBehaviorIPProfile, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListIPBehaviorBaselines(_ context.Context, _ uuid.UUID, _ string, _ int, _ int) ([]storage.IPBehaviorBaseline, int, error) {
+	return nil, 0, nil
+}
+
+func (f *fakeStore) ListIPBehaviorFindings(_ context.Context, filter storage.IPBehaviorFindingFilter, limit, offset int) ([]storage.IPBehaviorFinding, int, error) {
+	var out []storage.IPBehaviorFinding
+	for _, finding := range f.ipBehaviorFindings {
+		if filter.TenantID != uuid.Nil && finding.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.SourceIP != "" && (!finding.SourceIP.Valid || finding.SourceIP.String != filter.SourceIP) {
+			continue
+		}
+		if filter.Resolved != nil {
+			resolved := finding.Status == "resolved" || finding.Status == "suppressed"
+			if resolved != *filter.Resolved {
+				continue
+			}
+		}
+		out = append(out, finding)
+	}
+	total := len(out)
+	if offset > len(out) {
+		offset = len(out)
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
+}
+
+func (f *fakeStore) ListWebserverInstances(_ context.Context, tenantID uuid.UUID, nodeID uuid.UUID, limit, offset int) ([]storage.WebserverInstance, int, error) {
+	var out []storage.WebserverInstance
+	for _, instance := range f.webserverInstances {
+		if tenantID != uuid.Nil && instance.TenantID != tenantID {
+			continue
+		}
+		if nodeID != uuid.Nil && instance.NodeID != nodeID {
+			continue
+		}
+		out = append(out, instance)
+	}
+	total := len(out)
+	if offset > len(out) {
+		offset = len(out)
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
 }
 
 func (f *fakeStore) CountRuleTriggersBetween(_ context.Context, _ uuid.UUID, _ time.Time, _ time.Time) (map[string]int, error) {

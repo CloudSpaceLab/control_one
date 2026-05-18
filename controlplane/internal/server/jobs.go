@@ -252,6 +252,17 @@ func (s *Server) configureJobIntegrations() {
 	if _, exists := s.jobHandlers[JobTypeSquidConfigureClient]; !exists {
 		s.jobHandlers[JobTypeSquidConfigureClient] = s.handleSquidHeartbeatJob
 	}
+	for _, jobType := range []string{
+		JobTypeWebserverInventoryScan,
+		JobTypeWebserverConfigPlan,
+		JobTypeWebserverConfigApply,
+		JobTypeWebserverBlocklistUpdate,
+		JobTypeWebserverConfigRollback,
+	} {
+		if _, exists := s.jobHandlers[jobType]; !exists {
+			s.jobHandlers[jobType] = s.handleWebserverHeartbeatJob
+		}
+	}
 }
 
 // handleFinacleShiftRotateJob is the worker entry point for finacle.shift_rotate

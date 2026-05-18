@@ -129,7 +129,6 @@ func (s *Store) ListThreatFeeds(ctx context.Context, f ThreatFeedFilter) ([]Thre
 	if f.Enabled != nil {
 		where = append(where, fmt.Sprintf("enabled = $%d", idx))
 		args = append(args, *f.Enabled)
-		idx++
 	}
 	q := threatFeedSelectSQL + ` WHERE ` + strings.Join(where, " AND ") + ` ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)

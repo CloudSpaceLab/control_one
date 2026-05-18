@@ -41,6 +41,7 @@ type tenantFilterPolicy struct {
 	FileSizeMinBytes        int64    `json:"file_size_min_bytes"`
 	AllowlistCIDRs          []string `json:"allowlist_cidrs"`
 	DenylistCIDRs           []string `json:"denylist_cidrs"`
+	TrustedProxyCIDRs       []string `json:"trusted_proxy_cidrs"`
 	DBQueryTextCapture      bool     `json:"db_query_text_capture"`
 	ForensicMode            bool     `json:"forensic_mode"`
 }
@@ -140,6 +141,9 @@ func policySignature(p *tenantFilterPolicy) uint64 {
 		mixStr(s)
 	}
 	for _, s := range p.DenylistCIDRs {
+		mixStr(s)
+	}
+	for _, s := range p.TrustedProxyCIDRs {
 		mixStr(s)
 	}
 	return h

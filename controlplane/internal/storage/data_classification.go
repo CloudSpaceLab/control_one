@@ -67,7 +67,7 @@ func (s *Store) ListDataClassificationRules(ctx context.Context, tenantID uuid.U
 	if err != nil {
 		return nil, fmt.Errorf("list data classification rules: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []DataClassificationRule
 	for rows.Next() {
@@ -240,7 +240,7 @@ func (s *Store) ListColumnClassifications(ctx context.Context, tenantID uuid.UUI
 	if err != nil {
 		return nil, 0, fmt.Errorf("list column classifications: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ColumnClassification
 	for rows.Next() {
@@ -326,7 +326,7 @@ func (s *Store) ListPIIFindings(ctx context.Context, tenantID uuid.UUID, resolve
 	if err != nil {
 		return nil, 0, fmt.Errorf("list pii findings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []PIIFinding
 	for rows.Next() {

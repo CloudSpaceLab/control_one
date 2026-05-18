@@ -45,7 +45,7 @@ ORDER BY qs.last_execution_time DESC;
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]queryState, 0, 64)
 	for rows.Next() {
 		var s queryState
@@ -101,7 +101,7 @@ WHERE r.session_id > 50
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]queryState, 0, 16)
 	for rows.Next() {
 		var s queryState

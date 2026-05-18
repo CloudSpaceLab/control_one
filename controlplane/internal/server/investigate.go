@@ -681,7 +681,7 @@ func (s *Server) savedSearchesUpdate(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	userID := principalUserID(s, r.Context(), principal)
-	if existing.OwnerUserID != userID && !(existing.Shared && hasRole(principal, roleAdmin)) {
+	if existing.OwnerUserID != userID && (!existing.Shared || !hasRole(principal, roleAdmin)) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
@@ -721,7 +721,7 @@ func (s *Server) savedSearchesDelete(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	userID := principalUserID(s, r.Context(), principal)
-	if existing.OwnerUserID != userID && !(existing.Shared && hasRole(principal, roleAdmin)) {
+	if existing.OwnerUserID != userID && (!existing.Shared || !hasRole(principal, roleAdmin)) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}

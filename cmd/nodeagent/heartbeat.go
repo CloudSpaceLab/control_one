@@ -23,17 +23,19 @@ import (
 // fields are optional and gated by delta logic to avoid resending unchanged
 // data on every interval.
 type heartbeatPayload struct {
-	AgentVersion string `json:"agent_version"`
+	AgentVersion string   `json:"agent_version"`
+	Capabilities []string `json:"capabilities,omitempty"`
 
 	// Inventory fields. PackageHash is always sent when collection succeeds;
 	// OSPackages is the full list and is only included when the hash changed,
 	// 24h have elapsed since the last full sync, or the server explicitly
 	// requested a full inventory on the previous response.
-	OSPackages    []PackageInfo `json:"os_packages,omitempty"`
-	PackageHash   string        `json:"package_hash,omitempty"`
-	PackageCount  int           `json:"package_count,omitempty"`
-	KernelVersion string        `json:"kernel_version,omitempty"`
-	OSVersion     string        `json:"os_version,omitempty"`
+	OSPackages     []PackageInfo   `json:"os_packages,omitempty"`
+	PackageHash    string          `json:"package_hash,omitempty"`
+	PackageCount   int             `json:"package_count,omitempty"`
+	KernelVersion  string          `json:"kernel_version,omitempty"`
+	OSVersion      string          `json:"os_version,omitempty"`
+	ServerPurposes []ServerPurpose `json:"server_purposes,omitempty"`
 
 	// Firewall snapshot — small, sent in full each heartbeat.
 	FirewallState *FirewallState `json:"firewall_state,omitempty"`
@@ -64,6 +66,7 @@ type heartbeatAckResponse struct {
 	Activated              bool             `json:"activated"`
 	Reason                 *string          `json:"reason,omitempty"`
 	EventFilters           *json.RawMessage `json:"event_filters,omitempty"`
+	NetworkPolicy          *json.RawMessage `json:"network_policy,omitempty"`
 	PendingActions         []string         `json:"pending_actions,omitempty"`
 	FullInventoryRequested bool             `json:"full_inventory_requested,omitempty"`
 }
@@ -154,7 +157,10 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 // network blip should not clutter the operator console. The response body is
 // parsed only for informational logging.
 func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, selfUpdater SelfUpdater) error {
-	payload := heartbeatPayload{AgentVersion: heartbeatAgentVersion()}
+	payload := heartbeatPayload{
+		AgentVersion: heartbeatAgentVersion(),
+		Capabilities: heartbeatAgentCapabilities(),
+	}
 	enrichHeartbeatPayload(&payload, log)
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -198,6 +204,9 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 	if applyFilters != nil && ack.EventFilters != nil {
 		applyFilters(*ack.EventFilters)
 	}
+	if ack.NetworkPolicy != nil {
+		log.Info("network isolation policy received", zap.ByteString("policy", *ack.NetworkPolicy))
+	}
 
 	// Dispatch pending actions instructed by the control plane.
 	for _, action := range ack.PendingActions {
@@ -224,6 +233,15 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// Squid actions are short-lived but still go async to avoid
 			// blocking the heartbeat path on slow apt-get installs.
 			go executeSquidAction(ctx, client, log, action)
+		case strings.HasPrefix(action, "webserver.inventory_scan:"),
+			strings.HasPrefix(action, "webserver.config_plan:"),
+			strings.HasPrefix(action, "webserver.config_apply:"),
+			strings.HasPrefix(action, "webserver.blocklist_update:"),
+			strings.HasPrefix(action, "webserver.config_rollback:"):
+			// Webserver control uses managed snippets plus validation/reload
+			// receipts; run it off the heartbeat path and report completion
+			// in the next completed_actions drain.
+			go executeWebserverAction(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {
@@ -235,6 +253,17 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 		log.Debug("server requested full inventory on next heartbeat")
 	}
 	return nil
+}
+
+func heartbeatAgentCapabilities() []string {
+	return []string{
+		"firewall_control.v1",
+		"patch_management.v1",
+		"event_filters.v1",
+		"webserver_control.v1",
+		"server_purpose_inventory.v1",
+		"connection_lifecycle_headers.v1",
+	}
 }
 
 // enrichHeartbeatPayload adds os_packages / firewall_state / kernel + os
@@ -266,6 +295,7 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 	payload.PackageCount = len(pkgs)
 	payload.KernelVersion = kernelVersion()
 	payload.OSVersion = osVersion()
+	payload.ServerPurposes = inferServerPurposesFromPackages(pkgs)
 
 	agentInventoryCache.mu.Lock()
 	defer agentInventoryCache.mu.Unlock()

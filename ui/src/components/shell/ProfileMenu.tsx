@@ -1,4 +1,14 @@
-import { Building2, KeyRound, LogOut, Rocket, Settings, User as UserIcon } from 'lucide-react';
+import {
+  Boxes,
+  Building2,
+  KeyRound,
+  LogOut,
+  PackageCheck,
+  Rocket,
+  Server,
+  Settings,
+  User as UserIcon,
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/providers/AuthProvider';
 import { useRolePick } from '@/hooks/useRolePick';
@@ -28,7 +38,7 @@ export function ProfileMenu() {
           {initial}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align="end" className="w-64">
         <DropdownMenuLabel>
           <div className="flex flex-col gap-0.5">
             <span className="font-display text-sm text-foreground normal-case tracking-normal">
@@ -65,10 +75,30 @@ export function ProfileMenu() {
             </DropdownMenuItem>
           </>
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-[0.6rem]">Enrollment</DropdownMenuLabel>
         <DropdownMenuItem asChild>
           <Link to="/onboard">
             <Rocket className="h-4 w-4" />
             Onboarding
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/fleet-enroll">
+            <Server className="h-4 w-4" />
+            Bulk server enrollment
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/hypervisors">
+            <Boxes className="h-4 w-4" />
+            Hypervisors and cloud
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/offline-bundle">
+            <PackageCheck className="h-4 w-4" />
+            Offline bundles
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>

@@ -17,7 +17,6 @@ package procmon
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"sort"
 	"sync"
@@ -302,18 +301,11 @@ func xxhashFile(path string) (string, error) {
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			h.Write(buf[:n])
+			_, _ = h.Write(buf[:n])
 		}
 		if err != nil {
 			break
 		}
 	}
 	return fmt.Sprintf("%016x", h.Sum64()), nil
-}
-
-// fnvHash is an alternative if xxhash is unavailable; kept for safety.
-func fnvHash(b []byte) string {
-	h := fnv.New64a()
-	_, _ = h.Write(b)
-	return fmt.Sprintf("%016x", h.Sum64())
 }

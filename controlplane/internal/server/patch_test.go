@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,12 +164,12 @@ func TestPatchDeploy_ApprovalRequired_ParksRow(t *testing.T) {
 	}
 
 	// The approval row should be pending.
-	store.fakeStore.mu.Lock()
-	defer store.fakeStore.mu.Unlock()
-	if len(store.fakeStore.patchApprovals) != 1 {
-		t.Fatalf("expected 1 pending patch_approval, got %d", len(store.fakeStore.patchApprovals))
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.patchApprovals) != 1 {
+		t.Fatalf("expected 1 pending patch_approval, got %d", len(store.patchApprovals))
 	}
-	for _, a := range store.fakeStore.patchApprovals {
+	for _, a := range store.patchApprovals {
 		if a.Status != storage.ApprovalStatusPending {
 			t.Fatalf("approval status = %q, want pending", a.Status)
 		}
@@ -317,10 +318,48 @@ func TestPatchDeploy_ApprovalNotRequired_DispatchesImmediately(t *testing.T) {
 
 	// And no patch_approvals row was written — confirms the gate was a
 	// no-op for this tenant.
-	store.fakeStore.mu.Lock()
-	defer store.fakeStore.mu.Unlock()
-	if len(store.fakeStore.patchApprovals) != 0 {
-		t.Fatalf("expected 0 patch_approvals on legacy path, got %d", len(store.fakeStore.patchApprovals))
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.patchApprovals) != 0 {
+		t.Fatalf("expected 0 patch_approvals on legacy path, got %d", len(store.patchApprovals))
+	}
+}
+
+func TestPatchSafetyGatesRespectNodeIsolation(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := newPatchTestStore(tenantID, nodeID)
+	store.remediationConfigs = map[uuid.UUID]storage.TenantRemediationConfig{
+		tenantID: {
+			TenantID:              tenantID,
+			MinApprovalSeverity:   "high",
+			CriticalOverride:      true,
+			PatchRequiresApproval: false,
+		},
+	}
+	srv := newPatchTestServer(store)
+
+	store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeAirgapped}
+	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeDirect, nil, nil); gate.Allowed || !strings.Contains(gate.Reason, "airgapped") {
+		t.Fatalf("expected airgapped direct patch to be blocked, got %#v", gate)
+	}
+	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeAirgapped, nil, nil); !gate.Allowed {
+		t.Fatalf("expected airgapped patch mode to be allowed, got %#v", gate)
+	}
+
+	store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeWhitelist}
+	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeDirect, nil, nil); gate.Allowed || !strings.Contains(gate.Reason, "whitelist-only") {
+		t.Fatalf("expected whitelist direct patch without allow app to be blocked, got %#v", gate)
+	}
+
+	store.nodes[0].Labels = map[string]any{
+		isolationModeLabel:      isolationModeWhitelist,
+		isolationAllowAppsLabel: []any{"control-one-agent", "patch"},
+	}
+	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeDirect, nil, nil); !gate.Allowed {
+		t.Fatalf("expected whitelist node with patch allowed to pass, got %#v", gate)
 	}
 }
 

@@ -18,9 +18,8 @@ import type {
 
 // PatchManagement is the operator console for fleet OS-package patching.
 // Wave C extends the page with Squid proxy management, maintenance window
-// scheduling, and per-node mode configuration on top of the direct-mode
-// MVP shipped in PR #30. S4 Wave-2 (PR #65 + this PR) adds the approval
-// gate, per-node selector and the approval queue.
+// scheduling, per-node mode configuration, approval gates, per-node selection,
+// and the approval queue.
 type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals';
 
 export function PatchManagement(): JSX.Element {

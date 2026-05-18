@@ -19,6 +19,10 @@ const (
 	windowsServiceDescription = "Control One endpoint agent: enrollment, compliance, and remediation."
 )
 
+func init() {
+	uninstallServiceHook = uninstallService
+}
+
 // installService registers the Control One agent with the Windows Service
 // Control Manager and starts it. If the service already exists its config is
 // refreshed in place so repeated installs are idempotent.
@@ -73,12 +77,7 @@ func installService(configPath string) error {
 
 // uninstallService stops the service (waiting briefly for the transition) and
 // marks it for deletion from the SCM. A missing service is treated as a
-// successful no-op so repeated uninstalls don't surface noisy errors. The CLI
-// subcommand that exposes this to operators is wired up by the
-// installer-hardening worktree (feat/installer-idempotent-signed); this
-// worktree only contributes the platform primitive.
-//
-//nolint:unused // wired up from the `uninstall` subcommand in a sibling worktree
+// successful no-op so repeated uninstalls don't surface noisy errors.
 func uninstallService() error {
 	m, err := mgr.Connect()
 	if err != nil {

@@ -10,25 +10,27 @@ import (
 
 // Config captures control plane service settings.
 type Config struct {
-	HTTP          HTTPConfig          `mapstructure:"http"`
-	TLS           TLSConfig           `mapstructure:"tls"`
-	Observability ObservabilityConfig `mapstructure:"observability"`
-	Database      DatabaseConfig      `mapstructure:"database"`
-	Worker        WorkerConfig        `mapstructure:"worker"`
-	Jobs          JobsConfig          `mapstructure:"jobs"`
-	Auth          AuthConfig          `mapstructure:"auth"`
-	Registration  RegistrationConfig  `mapstructure:"registration"`
-	Enrollment    EnrollmentConfig    `mapstructure:"enrollment"`
-	Agent         AgentConfig         `mapstructure:"agent"`
-	Remediation   RemediationConfig   `mapstructure:"remediation"`
-	Secrets       SecretsConfig       `mapstructure:"secrets"`
-	WebAuthn      WebAuthnConfig      `mapstructure:"webauthn"`
-	Doris         DorisConfig         `mapstructure:"doris"`
-	Bastion       BastionConfig       `mapstructure:"bastion"`
-	LDAP          LDAPConfig          `mapstructure:"ldap"`
-	IPIntel       IPIntelConfig       `mapstructure:"ipintel"`
-	Policy        PolicyConfig        `mapstructure:"policy"`
-	AML           AMLConfig           `mapstructure:"aml"`
+	HTTP           HTTPConfig           `mapstructure:"http"`
+	TLS            TLSConfig            `mapstructure:"tls"`
+	Observability  ObservabilityConfig  `mapstructure:"observability"`
+	Database       DatabaseConfig       `mapstructure:"database"`
+	Worker         WorkerConfig         `mapstructure:"worker"`
+	Jobs           JobsConfig           `mapstructure:"jobs"`
+	Auth           AuthConfig           `mapstructure:"auth"`
+	Registration   RegistrationConfig   `mapstructure:"registration"`
+	Enrollment     EnrollmentConfig     `mapstructure:"enrollment"`
+	Agent          AgentConfig          `mapstructure:"agent"`
+	Remediation    RemediationConfig    `mapstructure:"remediation"`
+	Secrets        SecretsConfig        `mapstructure:"secrets"`
+	WebAuthn       WebAuthnConfig       `mapstructure:"webauthn"`
+	Doris          DorisConfig          `mapstructure:"doris"`
+	Bastion        BastionConfig        `mapstructure:"bastion"`
+	LDAP           LDAPConfig           `mapstructure:"ldap"`
+	IPIntel        IPIntelConfig        `mapstructure:"ipintel"`
+	IPBehavior     IPBehaviorConfig     `mapstructure:"ip_behavior"`
+	OfflineContent OfflineContentConfig `mapstructure:"offline_content"`
+	Policy         PolicyConfig         `mapstructure:"policy"`
+	AML            AMLConfig            `mapstructure:"aml"`
 }
 
 // AMLConfig points Control One at the existing CloudSpaceLab/aml-service.
@@ -66,6 +68,30 @@ type IPIntelConfig struct {
 	CacheTTL         time.Duration `mapstructure:"cache_ttl"`
 	HTTPTimeout      time.Duration `mapstructure:"http_timeout"`
 	AbuseScoreCutoff int           `mapstructure:"abuse_score_cutoff"` // chip emitted when score ≥ this; default 25
+}
+
+// IPBehaviorConfig controls web request behavioral intelligence. Counters use
+// memory by default for dev and airgapped single-node deployments, and Redis
+// when multiple control-plane replicas need a shared current window.
+type IPBehaviorConfig struct {
+	Counters IPBehaviorCountersConfig `mapstructure:"counters"`
+}
+
+type IPBehaviorCountersConfig struct {
+	Backend       string `mapstructure:"backend"` // memory | redis
+	RedisAddress  string `mapstructure:"redis_address"`
+	RedisDB       int    `mapstructure:"redis_db"`
+	RedisPassword string `mapstructure:"redis_password"`
+}
+
+// OfflineContentConfig controls signed content bundles for airgapped
+// deployments. Bundles can carry geo/IP intelligence, threat feeds, detection
+// rules, parser profiles, and webserver adapter templates.
+type OfflineContentConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	RootDir        string `mapstructure:"root_dir"`
+	PublicKeyFile  string `mapstructure:"public_key_file"`
+	MaxBundleBytes int64  `mapstructure:"max_bundle_bytes"`
 }
 
 // LDAPConfig mirrors auth.LDAPConfig so viper can unmarshal directly. See
@@ -144,6 +170,26 @@ type RemediationConfig struct {
 	// leases are swept by the storage layer on the next acquire attempt so a
 	// stuck job never wedges a node forever.
 	LeaseTTL time.Duration `mapstructure:"lease_ttl"`
+	// MaxBlockChangesPerHour caps IP block proposal churn per tenant. It is
+	// checked before proposal creation and before approval so a bad feed or
+	// compromised operator token cannot flood enforcement jobs.
+	MaxBlockChangesPerHour int `mapstructure:"max_block_changes_per_hour"`
+	// MaxBlockChangesPerServerGroupPerHour caps block churn for a named server
+	// group inside one tenant, preventing a noisy group from consuming the
+	// whole tenant allowance.
+	MaxBlockChangesPerServerGroupPerHour int `mapstructure:"max_block_changes_per_server_group_per_hour"`
+	// MaxGlobalBlockChangesPerHour caps block proposal churn across all tenants.
+	// It is a last-resort guard for shared threat-feed mistakes.
+	MaxGlobalBlockChangesPerHour int `mapstructure:"max_global_block_changes_per_hour"`
+	// BlockCanaryEnabled makes tenant/fleet scoped block approvals dispatch a
+	// canary wave per server group before fleet-wide promotion.
+	BlockCanaryEnabled bool `mapstructure:"block_canary_enabled"`
+	// BlockCanaryNodesPerServerGroup controls the size of that first wave.
+	BlockCanaryNodesPerServerGroup int `mapstructure:"block_canary_nodes_per_server_group"`
+	// WebserverFailureCircuitThreshold trips the webserver enforcement circuit
+	// after this many failed block/config actions within WebserverFailureCircuitWindow.
+	WebserverFailureCircuitThreshold int           `mapstructure:"webserver_failure_circuit_threshold"`
+	WebserverFailureCircuitWindow    time.Duration `mapstructure:"webserver_failure_circuit_window"`
 }
 
 // HTTPConfig defines HTTP server settings.
@@ -342,11 +388,18 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("remediation.max_concurrent_per_tenant", 10)
 	v.SetDefault("remediation.lease_ttl", 10*time.Minute)
+	v.SetDefault("remediation.max_block_changes_per_hour", 100)
+	v.SetDefault("remediation.max_block_changes_per_server_group_per_hour", 25)
+	v.SetDefault("remediation.max_global_block_changes_per_hour", 1000)
+	v.SetDefault("remediation.block_canary_enabled", false)
+	v.SetDefault("remediation.block_canary_nodes_per_server_group", 1)
+	v.SetDefault("remediation.webserver_failure_circuit_threshold", 3)
+	v.SetDefault("remediation.webserver_failure_circuit_window", time.Hour)
 
 	v.SetDefault("registration.bootstrap_tokens", []string{})
 	v.SetDefault("aml.timeout", 10*time.Second)
-	v.BindEnv("aml.base_url", "AML_SERVICE_BASE_URL")
-	v.BindEnv("aml.api_key", "AML_SERVICE_API_KEY")
+	_ = v.BindEnv("aml.base_url", "AML_SERVICE_BASE_URL")
+	_ = v.BindEnv("aml.api_key", "AML_SERVICE_API_KEY")
 
 	v.SetDefault("auth.oidc.enabled", false)
 	v.SetDefault("auth.oidc.username_claim", "email")
@@ -359,8 +412,23 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ipintel.cache_ttl", time.Hour)
 	v.SetDefault("ipintel.http_timeout", 5*time.Second)
 	v.SetDefault("ipintel.abuse_score_cutoff", 25)
-	v.BindEnv("ipintel.ipquery_base_url", "IPQUERY_BASE_URL")
-	v.BindEnv("ipintel.abuseipdb_api_key", "ABUSEIPDB_API_KEY")
+	_ = v.BindEnv("ipintel.ipquery_base_url", "IPQUERY_BASE_URL")
+	_ = v.BindEnv("ipintel.abuseipdb_api_key", "ABUSEIPDB_API_KEY")
+
+	v.SetDefault("ip_behavior.counters.backend", "memory")
+	v.SetDefault("ip_behavior.counters.redis_address", "")
+	v.SetDefault("ip_behavior.counters.redis_db", 0)
+	v.SetDefault("ip_behavior.counters.redis_password", "")
+	_ = v.BindEnv("ip_behavior.counters.backend", "IP_BEHAVIOR_COUNTERS_BACKEND")
+	_ = v.BindEnv("ip_behavior.counters.redis_address", "IP_BEHAVIOR_REDIS_ADDRESS")
+	_ = v.BindEnv("ip_behavior.counters.redis_password", "IP_BEHAVIOR_REDIS_PASSWORD")
+
+	v.SetDefault("offline_content.enabled", false)
+	v.SetDefault("offline_content.root_dir", "data/offline-content")
+	v.SetDefault("offline_content.max_bundle_bytes", int64(256*1024*1024))
+	_ = v.BindEnv("offline_content.enabled", "OFFLINE_CONTENT_ENABLED")
+	_ = v.BindEnv("offline_content.root_dir", "OFFLINE_CONTENT_ROOT_DIR")
+	_ = v.BindEnv("offline_content.public_key_file", "OFFLINE_CONTENT_PUBLIC_KEY_FILE")
 }
 
 func applyFallbacks(cfg *Config) {
@@ -391,8 +459,37 @@ func applyFallbacks(cfg *Config) {
 	if cfg.Remediation.LeaseTTL <= 0 {
 		cfg.Remediation.LeaseTTL = 10 * time.Minute
 	}
+	if cfg.Remediation.MaxBlockChangesPerHour <= 0 {
+		cfg.Remediation.MaxBlockChangesPerHour = 100
+	}
+	if cfg.Remediation.MaxBlockChangesPerServerGroupPerHour <= 0 {
+		cfg.Remediation.MaxBlockChangesPerServerGroupPerHour = 25
+	}
+	if cfg.Remediation.MaxGlobalBlockChangesPerHour <= 0 {
+		cfg.Remediation.MaxGlobalBlockChangesPerHour = 1000
+	}
+	if cfg.Remediation.BlockCanaryNodesPerServerGroup <= 0 {
+		cfg.Remediation.BlockCanaryNodesPerServerGroup = 1
+	}
+	if cfg.Remediation.WebserverFailureCircuitThreshold <= 0 {
+		cfg.Remediation.WebserverFailureCircuitThreshold = 3
+	}
+	if cfg.Remediation.WebserverFailureCircuitWindow <= 0 {
+		cfg.Remediation.WebserverFailureCircuitWindow = time.Hour
+	}
 	if cfg.AML.Timeout <= 0 {
 		cfg.AML.Timeout = 10 * time.Second
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.IPBehavior.Counters.Backend), "redis") && strings.TrimSpace(cfg.IPBehavior.Counters.RedisAddress) == "" {
+		cfg.IPBehavior.Counters.RedisAddress = cfg.Worker.Asynq.RedisAddress
+		cfg.IPBehavior.Counters.RedisDB = cfg.Worker.Asynq.RedisDB
+		cfg.IPBehavior.Counters.RedisPassword = cfg.Worker.Asynq.RedisPassword
+	}
+	if cfg.OfflineContent.RootDir == "" {
+		cfg.OfflineContent.RootDir = "data/offline-content"
+	}
+	if cfg.OfflineContent.MaxBundleBytes <= 0 {
+		cfg.OfflineContent.MaxBundleBytes = 256 * 1024 * 1024
 	}
 }
 
@@ -419,6 +516,22 @@ func Validate(cfg *Config) error {
 	if backend := strings.ToLower(strings.TrimSpace(cfg.Worker.Backend)); backend == "asynq" || cfg.Worker.Asynq.Enabled {
 		if strings.TrimSpace(cfg.Worker.Asynq.RedisAddress) == "" {
 			return fmt.Errorf("worker.asynq.redis_address is required when asynq backend is enabled")
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.IPBehavior.Counters.Backend)) {
+	case "", "memory", "redis":
+	default:
+		return fmt.Errorf("ip_behavior.counters.backend must be memory or redis")
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.IPBehavior.Counters.Backend), "redis") && strings.TrimSpace(cfg.IPBehavior.Counters.RedisAddress) == "" {
+		return fmt.Errorf("ip_behavior.counters.redis_address is required when redis counters are enabled")
+	}
+	if cfg.OfflineContent.Enabled {
+		if strings.TrimSpace(cfg.OfflineContent.RootDir) == "" {
+			return fmt.Errorf("offline_content.root_dir is required when offline content is enabled")
+		}
+		if strings.TrimSpace(cfg.OfflineContent.PublicKeyFile) == "" {
+			return fmt.Errorf("offline_content.public_key_file is required when offline content is enabled")
 		}
 	}
 

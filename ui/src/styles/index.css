@@ -5,7 +5,7 @@
  *   3. tailwindcss  — utility engine
  *   4. @theme inline — bridge tokens → Tailwind utilities
  *   5. base.css     — typography + reset
- *   6. legacy.css   — old selectors kept temporarily until pages migrate
+ *   6. legacy.css   — temporary login/session/toast bridge
  */
 
 @import "./tokens.css";

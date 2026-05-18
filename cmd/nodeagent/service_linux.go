@@ -14,6 +14,10 @@ const (
 	sysvScriptPath   = "/etc/init.d/controlone-agent"
 )
 
+func init() {
+	uninstallServiceHook = uninstallService
+}
+
 // installService registers the Control One agent with the host init system
 // (systemd by default; OpenRC and SysV init are also supported when systemd
 // is absent) and starts it.
@@ -35,8 +39,6 @@ func installService(configPath string) error {
 
 // uninstallService stops the agent and removes whichever init integration is
 // in use. Missing units/scripts are tolerated so the call stays idempotent.
-//
-//nolint:unused // wired up from the `uninstall` subcommand in a sibling worktree
 func uninstallService() error {
 	switch detectInitSystem() {
 	case initOpenRC:

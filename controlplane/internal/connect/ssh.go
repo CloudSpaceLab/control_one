@@ -64,7 +64,7 @@ func (c *SSHConnector) Test(ctx context.Context, t Target) (*Probe, error) {
 		return nil, fmt.Errorf("ssh handshake: %w", err)
 	}
 	client := ssh.NewClient(sshConn, chans, reqs)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	probe := &Probe{
 		Reachable: true,
@@ -166,7 +166,7 @@ func runOnce(client *ssh.Client, cmd string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	out, err := sess.CombinedOutput(cmd)
 	if err != nil {
 		return "", false

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,6 +118,60 @@ func TestAIAskToolRBACDeniesOperatorAdminTool(t *testing.T) {
 	}
 	if !foundDeniedResult {
 		t.Fatalf("expected denied tool result in second request: %+v", second.Messages)
+	}
+}
+
+func TestAIAskToolRejectsCrossTenantNodeEvidence(t *testing.T) {
+	t.Setenv("FEATURE_AI_ASK", "true")
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	otherTenantID := uuid.New()
+	otherNodeID := uuid.New()
+	store := sprint5AIStore(tenantID, nodeID)
+	store.nodes = append(store.nodes, storage.Node{
+		ID:       otherNodeID,
+		TenantID: otherTenantID,
+		Hostname: "other-bank-core-api",
+		State:    storage.NodeStateActive,
+	})
+	client := &scriptedLLMClient{responses: []llm.Response{
+		{
+			StopReason: llm.StopToolUse,
+			Message: llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				{Type: llm.ContentToolCall, ToolCall: &llm.ToolCall{ID: "toolu_1", Name: "node_documentation", Input: map[string]any{"node_id": otherNodeID.String()}}},
+			}},
+		},
+		{StopReason: llm.StopEndTurn, Message: llm.TextMessage(llm.RoleAssistant, "I cannot access that node from this tenant.")},
+	}}
+	srv := sprint5AIServer(store, client)
+
+	body := bytes.NewBufferString(`{"question":"inspect another tenant node ` + otherNodeID.String() + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ai/ask?tenant_id="+tenantID.String(), body)
+	req.Header.Set("Authorization", "Bearer operator-token")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(client.requests) < 2 {
+		t.Fatalf("expected tool result request, got %d LLM requests", len(client.requests))
+	}
+	foundTenantDeniedResult := false
+	for _, msg := range client.requests[1].Messages {
+		for _, block := range msg.Content {
+			if block.ToolResult != nil && block.ToolResult.IsError && strings.Contains(block.ToolResult.Content, "outside requested tenant") {
+				foundTenantDeniedResult = true
+			}
+		}
+	}
+	if !foundTenantDeniedResult {
+		t.Fatalf("expected cross-tenant denial in tool result: %+v", client.requests[1].Messages)
+	}
+	for _, log := range store.auditLogs {
+		if log.Action == "ai.tool_call" && strings.Contains(fmt.Sprint(log.Metadata["result_preview"]), "other-bank-core-api") {
+			t.Fatalf("cross-tenant node details leaked into AI audit: %#v", log)
+		}
 	}
 }
 

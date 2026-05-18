@@ -7,6 +7,7 @@ import {
   Key,
   Lock,
   Network,
+  PackageCheck,
   Plus,
   Server,
   ShieldCheck,
@@ -217,7 +218,26 @@ export function Onboard(): JSX.Element {
       <SectionHeader
         eyebrow="ONBOARDING"
         title="Add servers to Control One"
-        description="Single host or pull a fleet from a hypervisor — both reuse the existing fleet-enrol job pipeline so onboarding stays consistent across paths."
+        description="Enroll one host, import a fleet from infrastructure, or prepare an offline bundle. All paths use the same node labels, tenant scope, and job tracking."
+        actions={
+          <>
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/fleet-enroll">
+                <Server className="h-4 w-4" /> Bulk hosts
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/hypervisors">
+                <Boxes className="h-4 w-4" /> Hypervisors
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/offline-bundle">
+                <PackageCheck className="h-4 w-4" /> Offline bundle
+              </Link>
+            </Button>
+          </>
+        }
       />
 
       <OnboardAIPanel />
@@ -542,7 +562,7 @@ export function Onboard(): JSX.Element {
                   size="md"
                   asChild
                 >
-                  <Link to="/fleet-enroll">Open bulk enrol →</Link>
+                  <Link to="/fleet-enroll">Open bulk enrollment</Link>
                 </Button>
                 <Button
                   variant="primary"
@@ -564,7 +584,7 @@ export function Onboard(): JSX.Element {
                     to={`/fleet-enroll?job_id=${jobId}`}
                     className="ml-2 underline hover:text-state-healthy/80"
                   >
-                    Watch progress →
+                    Watch progress
                   </Link>
                 </div>
               )}
@@ -574,7 +594,7 @@ export function Onboard(): JSX.Element {
           {!result && !test.isPending && (
             <EmptyState
               title="Run a test"
-              description="Fill the form above and click Test connection. Successful probes unlock the enrolment step."
+              description="Fill the form above and click Test connection. Successful probes unlock enrollment."
               icon={<Terminal />}
             />
           )}
@@ -589,16 +609,16 @@ function HypervisorPathCard(): JSX.Element {
     <Panel
       padding="md"
       eyebrow="HYPERVISOR / CLOUD ACCOUNT"
-      title="Bulk-enrol from a hypervisor or cloud account"
+      title="Enroll from a hypervisor or cloud account"
       toneAccent="accent"
     >
       <p className="text-sm text-text-secondary">
-        Register a vCenter, libvirt, AWS, or Azure account once — Control One enumerates running
-        VMs and enrols them as a fleet. Existing tooling lives at{' '}
+        Register vCenter, libvirt, AWS, or Azure once. Control One enumerates running
+        VMs and enrolls them as a fleet. Existing tooling lives at{' '}
         <Link to="/hypervisors" className="text-brand-400 underline">
           /hypervisors
         </Link>
-        . The single-server wizard reuses the same fleet-enrol pipeline, so groups, labels and
+        . The single-server wizard reuses the same fleet-enroll pipeline, so groups, labels, and
         agents stay consistent across both paths.
       </p>
       <ul className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -623,7 +643,7 @@ function HypervisorPathCard(): JSX.Element {
       <div className="mt-3 flex justify-end">
         <Button asChild variant="primary" size="md" shimmer>
           <Link to="/hypervisors">
-            Go to /hypervisors <ArrowRight className="h-4 w-4" />
+            Open hypervisor enrollment <ArrowRight className="h-4 w-4" />
           </Link>
         </Button>
       </div>

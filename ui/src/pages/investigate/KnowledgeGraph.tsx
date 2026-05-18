@@ -41,7 +41,7 @@ export function KnowledgeGraph(): JSX.Element {
       );
       setServices(all.flat());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'load failed');
+      setError(err instanceof Error ? err.message : 'Service inventory failed to load');
     } finally {
       setLoading(false);
     }
@@ -142,7 +142,7 @@ export function KnowledgeGraph(): JSX.Element {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'download failed');
+      setError(err instanceof Error ? err.message : 'Knowledge graph download failed');
     }
   };
 
@@ -185,7 +185,7 @@ export function KnowledgeGraph(): JSX.Element {
       ) : services.length === 0 ? (
         <EmptyState
           title="No services reported yet"
-          description="The agent collector for listening services lands in a follow-up. Once it ships, services and probed URLs across every node will appear here."
+          description={nodes.length === 0 ? 'No enrolled nodes are available for this tenant.' : 'No node agent has reported listening services for this tenant. Check agent version, service discovery permissions, and heartbeat freshness.'}
         />
       ) : (
         <DataTable

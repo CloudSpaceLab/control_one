@@ -359,10 +359,11 @@ function ShiftCard({ cfg, onEdit }: { cfg: FinacleShiftConfig; onEdit: () => voi
 
 // ShiftTimeline renders the shift bands as colour-coded rectangles on a 0-24h
 // SVG axis. Click handling is left to the parent's edit drawer.
+const SHIFT_TIMELINE_TONES = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7'];
+
 function ShiftTimeline({ shifts }: { shifts: FinacleShiftBand[] }): JSX.Element {
   const width = 720;
   const height = 48;
-  const tones = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7'];
 
   const bands = useMemo(() => {
     return shifts.map((b, i) => {
@@ -373,7 +374,7 @@ function ShiftTimeline({ shifts }: { shifts: FinacleShiftBand[] }): JSX.Element 
       // case suffices for the visual; we clamp end to start when invalid.
       const x = (startMin / totalMins) * width;
       const w = Math.max(((endMin - startMin) / totalMins) * width, 2);
-      return { band: b, x, w, tone: tones[i % tones.length] };
+      return { band: b, x, w, tone: SHIFT_TIMELINE_TONES[i % SHIFT_TIMELINE_TONES.length] };
     });
   }, [shifts]);
 

@@ -95,7 +95,9 @@ func TestWriterFlushesOnInterval(t *testing.T) {
 	c := &Client{cfg: Config{HTTPEndpoint: server.URL, Database: "co"}, http: &http.Client{Timeout: 5 * time.Second}}
 
 	w := NewWriter(c, WriterOptions{FlushInterval: 100 * time.Millisecond})
-	w.Enqueue("x", []map[string]any{{"a": 1}, {"a": 2}})
+	if err := w.Enqueue("x", []map[string]any{{"a": 1}, {"a": 2}}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 	time.Sleep(250 * time.Millisecond)
 	_ = w.Close()
 	if pushed != 2 {
@@ -115,7 +117,9 @@ func TestWriterFlushesOnSize(t *testing.T) {
 	defer server.Close()
 	c := &Client{cfg: Config{HTTPEndpoint: server.URL, Database: "co"}, http: &http.Client{Timeout: 5 * time.Second}}
 	w := NewWriter(c, WriterOptions{FlushInterval: time.Hour, MaxBatchRows: 3})
-	w.Enqueue("x", []map[string]any{{"a": 1}, {"a": 2}, {"a": 3}})
+	if err := w.Enqueue("x", []map[string]any{{"a": 1}, {"a": 2}, {"a": 3}}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 	time.Sleep(50 * time.Millisecond)
 	_ = w.Close()
 	if pushed != 3 {

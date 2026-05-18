@@ -2,6 +2,7 @@ package correlation
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -94,5 +95,72 @@ func TestEngineFiltersByEventType(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.alerts) != 0 {
 		t.Fatal("health event should not match security-only rule")
+	}
+}
+
+func TestEngineCopiesEventEvidenceIntoAlertContext(t *testing.T) {
+	tenant := uuid.New()
+	node := uuid.New()
+	rule := storage.CorrelationRule{
+		ID: uuid.New(), TenantID: tenant, Name: "ip behavior finding",
+		EventTypes:    []string{"events.anomaly"},
+		WindowSeconds: 60, Threshold: 1, Dimension: "node_id", Severity: "high", Enabled: true,
+	}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(16), nil)
+
+	payload, err := json.Marshal(map[string]any{
+		"type":           "anomaly.ip_behavior",
+		"message":        "credential stuffing behavior from 203.0.113.10 scored 82",
+		"severity":       "high",
+		"src_ip":         "203.0.113.10",
+		"correlation_id": "corr-1",
+		"details": map[string]any{
+			"parser_profile": "temenos-t24",
+			"source_file":    "/opt/temenos/logs/access.log",
+			"app":            "Core Banking API",
+			"server_group":   "Core Banking",
+			"country_code":   "NG",
+			"status_counts":  map[string]any{"401": 42},
+			"evidence_refs": []map[string]any{{
+				"type":           "web.request",
+				"parser_profile": "temenos-t24",
+				"source_file":    "/opt/temenos/logs/access.log",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	eng.handle(context.Background(), eventbus.Event{
+		Topic: "events.anomaly", TenantID: tenant, NodeID: &node, Timestamp: time.Now(), Payload: payload,
+	})
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.alerts) != 1 {
+		t.Fatalf("want 1 alert, got %d", len(store.alerts))
+	}
+	ctx := store.alerts[0].Context
+	for key, want := range map[string]string{
+		"event_type":     "anomaly.ip_behavior",
+		"event_message":  "credential stuffing behavior from 203.0.113.10 scored 82",
+		"src_ip":         "203.0.113.10",
+		"parser_profile": "temenos-t24",
+		"source_file":    "/opt/temenos/logs/access.log",
+		"app":            "Core Banking API",
+		"server_group":   "Core Banking",
+		"country_code":   "NG",
+	} {
+		if got, _ := ctx[key].(string); got != want {
+			t.Fatalf("context[%s] = %#v, want %q", key, ctx[key], want)
+		}
+	}
+	if _, ok := ctx["status_counts"].(map[string]any); !ok {
+		t.Fatalf("status_counts missing from context: %#v", ctx["status_counts"])
+	}
+	if refs, ok := ctx["evidence_refs"].([]any); !ok || len(refs) != 1 {
+		t.Fatalf("evidence_refs missing from context: %#v", ctx["evidence_refs"])
 	}
 }

@@ -47,7 +47,7 @@ export function ControlPosturePanel({
   error,
   tenantSelected,
 }: ControlPosturePanelProps): JSX.Element {
-  const coverage = posture?.coverage ?? [];
+  const coverage = useMemo(() => posture?.coverage ?? [], [posture?.coverage]);
 
   const counts = useMemo(() => {
     let pass = 0,

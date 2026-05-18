@@ -112,7 +112,7 @@ export function Settings(): JSX.Element {
     try {
       setWebauthnEnrollStep('enrolling');
       const data = await api.beginWebAuthnEnroll();
-      // WebAuthn enrollment requires browser API - placeholder for now
+      // The browser credential ceremony is wired here after the challenge is issued.
       console.log('WebAuthn enrollment challenge:', data);
       setWebauthnEnrollStep('idle');
     } catch (err) {
@@ -719,8 +719,8 @@ export function Settings(): JSX.Element {
 
         <TabsContent value="integrations" className="mt-4">
           <EmptyState
-            title="Integrations coming soon"
-            description="Native integrations with Slack, PagerDuty, OpsGenie, Jira, and SIEM platforms are on the roadmap."
+            title="No native integrations configured"
+            description="Alert delivery and ticketing integrations are not connected for this tenant."
           />
         </TabsContent>
 

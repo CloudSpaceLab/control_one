@@ -31,6 +31,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
@@ -785,6 +786,7 @@ type Server struct {
 	complianceEngine        *compliance.Engine
 	complianceScheduler     *ComplianceScheduler
 	retentionScheduler      *RetentionScheduler
+	ipBlockExpiryScheduler  *IPBlockExpiryScheduler
 	reviewReminderScheduler *ReviewReminderScheduler
 	healthScheduler         *HealthScheduler
 	agentSigningOnce        sync.Once
@@ -825,12 +827,18 @@ type Server struct {
 	// Per-(tenant, node) token-bucket rate limiter for /events/ingest. Lazily
 	// initialised on first request.
 	ingestLimiter *rateLimiterRegistry
+	// Rolling current windows used by anomaly.ip_behavior scoring.
+	ipBehaviorWindowsOnce sync.Once
+	ipBehaviorWindows     ipBehaviorCurrentWindowStore
 	// LDAP authenticator — nil when LDAP is disabled in config. Login flow
 	// falls through to it after local password verify fails.
 	ldapProvider *auth.LDAPProvider
 	// ipIntel handles geo + ASN + reputation lookups for Investigate.
 	// nil when no provider is configured; handler degrades gracefully.
 	ipIntel *ipintel.Service
+	// offlineContent exposes signed airgapped content bundles to enrichment,
+	// detectors, and operator status views.
+	offlineContentRoot string
 	// connectRegistry powers the operator "onboard a server" wizard. Lazy
 	// because most servers never invoke it; tests inject a stub via
 	// connectRegistryOverride to skip real network calls.
@@ -899,9 +907,6 @@ func (s *Server) startBehavioralRollup() {
 		return
 	}
 	interval := time.Hour
-	if s.cfg != nil && s.cfg.Jobs.Compliance.ScheduleEnabled {
-		// Reuse compliance schedule as a "jobs enabled" signal for now.
-	}
 	rollup := behavioral.NewRollup(behavioralStoreAdapter{s.store}, s.logger, interval, 30)
 	ctx, cancel := context.WithCancel(context.Background())
 	go rollup.Run(ctx)
@@ -915,6 +920,15 @@ type behavioralStoreAdapter struct {
 
 func (a behavioralStoreAdapter) AggregatePortObservations(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]storage.PortObservationStats, error) {
 	return a.store.AggregatePortObservations(ctx, tenantID, since)
+}
+func (a behavioralStoreAdapter) AggregateIPBehaviorBaselineStats(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]storage.IPBehaviorBaselineStats, error) {
+	store, ok := a.store.(interface {
+		AggregateIPBehaviorBaselineStats(context.Context, uuid.UUID, time.Time) ([]storage.IPBehaviorBaselineStats, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return store.AggregateIPBehaviorBaselineStats(ctx, tenantID, since)
 }
 func (a behavioralStoreAdapter) UpsertBehavioralBaseline(ctx context.Context, tenantID uuid.UUID, nodeID *uuid.UUID, signalType, dimension string, baseline map[string]any, windowDays int) error {
 	return a.store.UpsertBehavioralBaseline(ctx, tenantID, nodeID, signalType, dimension, baseline, windowDays)
@@ -992,6 +1006,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/compliance/summary", s.handleComplianceSummary)
 	s.baseRouter.HandleFunc("/api/v1/compliance/export", s.handleComplianceExport)
 	s.baseRouter.HandleFunc("/api/v1/telemetry", s.handleTelemetryIngest)
+	s.baseRouter.HandleFunc("/api/v1/logs", s.handleLogIngest)
 	s.baseRouter.HandleFunc("/api/v1/heartbeat", s.handleAgentLivenessHeartbeat)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/metrics", s.handleTelemetryMetrics)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/logs", s.handleTelemetryLogs)
@@ -1044,6 +1059,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/health/at-risk", s.handleAtRiskFleet)
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
+	s.baseRouter.HandleFunc("/api/v1/control-room/overview", s.handleControlRoomOverview)
 	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
 	s.baseRouter.HandleFunc("/api/v1/metrics/mttd", s.handleMetricsMTTD)
 	s.baseRouter.HandleFunc("/api/v1/metrics/mttr", s.handleMetricsMTTR)
@@ -1093,6 +1109,18 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/connections", s.handleConnectionsList)
 	s.baseRouter.HandleFunc("/api/v1/connections/", s.handleConnectionDetail)
 	s.baseRouter.HandleFunc("/api/v1/connections/top-talkers", s.handleTopTalkers)
+	s.baseRouter.HandleFunc("/api/v1/behavioral/baselines", s.handleBehavioralBaselines)
+	s.baseRouter.HandleFunc("/api/v1/behavioral/anomalies", s.handleBehavioralAnomalies)
+	s.baseRouter.HandleFunc("/api/v1/behavioral/anomalies/", s.handleBehavioralAnomalyResource)
+	s.baseRouter.HandleFunc("/api/v1/ip-behavior/overview", s.handleIPBehaviorOverview)
+	s.baseRouter.HandleFunc("/api/v1/ip-behavior/countries", s.handleIPBehaviorCountries)
+	s.baseRouter.HandleFunc("/api/v1/ip-behavior/countries/", s.handleIPBehaviorCountryDetail)
+	s.baseRouter.HandleFunc("/api/v1/ip-behavior/ips/", s.handleIPBehaviorIPProfile)
+	s.baseRouter.HandleFunc("/api/v1/ip-behavior/baselines", s.handleIPBehaviorBaselines)
+	s.baseRouter.HandleFunc("/api/v1/offline-bundles", s.handleOfflineBundles)
+	s.baseRouter.HandleFunc("/api/v1/offline-bundles/", s.handleOfflineBundleSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/webservers", s.handleWebservers)
+	s.baseRouter.HandleFunc("/api/v1/webservers/", s.handleWebserverSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/fleet/health", s.handleFleetHealth)
 	// SIEM Investigate / entity-search surface (Phase Investigate).
 	s.baseRouter.HandleFunc("/api/v1/search", s.handleInvestigateSearch)
@@ -1100,6 +1128,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/saved-searches", s.handleSavedSearchesCollection)
 	s.baseRouter.HandleFunc("/api/v1/saved-searches/", s.handleSavedSearchSubroute)
 	// Network security — operator-driven IP block enforcement (PR 3).
+	s.baseRouter.HandleFunc("/api/v1/network/block-proposals", s.handleBlockProposals)
+	s.baseRouter.HandleFunc("/api/v1/network/block-proposals/asn", s.handleCreateASNBlockProposals)
+	s.baseRouter.HandleFunc("/api/v1/network/block-proposals/", s.handleBlockProposalSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/network/active-blocks", s.handleListActiveBlocks)
 	s.baseRouter.HandleFunc("/api/v1/network/blocks/", s.handleNetworkBlocksSubroute)
 	// Patch management — fleet OS package patching (PR 4).
@@ -1953,6 +1984,10 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		s.handleNodeRepair(w, r, nodeID)
 		return
 	}
+	if len(segments) == 2 && segments[1] == "isolation" {
+		s.handleNodeIsolation(w, r, nodeID)
+		return
+	}
 
 	if len(segments) != 1 {
 		http.NotFound(w, r)
@@ -2051,15 +2086,40 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 		node.PublicIP = toNullString(req.PublicIP)
 	}
 
-	updated, err := s.store.UpdateNode(r.Context(), node)
-	if err != nil {
-		s.logger.Error("update node", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+	updated := node
+	if req.hasNodeFieldUpdate() {
+		updated, err = s.store.UpdateNode(r.Context(), node)
+		if err != nil {
+			s.logger.Error("update node", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if updated == nil {
+			http.NotFound(w, r)
+			return
+		}
 	}
-	if updated == nil {
-		http.NotFound(w, r)
-		return
+	if req.Labels != nil {
+		labels := map[string]any{}
+		for key, value := range *req.Labels {
+			labels[key] = value
+		}
+		if err := s.store.UpdateNodeLabels(r.Context(), nodeID, labels); err != nil {
+			s.logger.Error("update node labels", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		refreshed, gerr := s.store.GetNode(r.Context(), nodeID)
+		if gerr != nil {
+			s.logger.Error("get node after label update", zap.Error(gerr))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if refreshed == nil {
+			http.NotFound(w, r)
+			return
+		}
+		updated = refreshed
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2069,6 +2129,69 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 	s.recordAudit(r.Context(), principal, updated.TenantID, "node.update", "node", nodeID.String(), map[string]any{
 		"hostname": updated.Hostname,
 	})
+}
+
+func (s *Server) handleNodeIsolation(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	var req nodeIsolationRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC()
+	posture, err := req.validate(now)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	actor := strings.TrimSpace(principal.Email)
+	if actor == "" {
+		actor = strings.TrimSpace(principal.Name)
+	}
+	labels := applyNodeIsolationLabels(node.Labels, posture, actor, now)
+	if err := s.store.UpdateNodeLabels(r.Context(), nodeID, labels); err != nil {
+		s.logger.Error("update node isolation", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	refreshed, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node after isolation update", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if refreshed == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.recordAudit(r.Context(), principal, refreshed.TenantID, "node.isolation.update", "node", nodeID.String(), map[string]any{
+		"mode":                 posture.Mode,
+		"expires_at":           formatOptionalTime(posture.ExpiresAt),
+		"allowed_applications": posture.AllowedApplications,
+		"allowlist_cidrs":      posture.AllowlistCIDRs,
+		"reason":               posture.Reason,
+	})
+	writeJSON(w, http.StatusOK, nodeResponseFromModel(*refreshed))
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
@@ -2167,20 +2290,25 @@ func nodeResponseFromModel(n storage.Node) nodeResponse {
 }
 
 type updateNodeRequest struct {
-	Hostname *string `json:"hostname"`
-	OS       *string `json:"os"`
-	Arch     *string `json:"arch"`
-	PublicIP *string `json:"public_ip"`
+	Hostname *string         `json:"hostname"`
+	OS       *string         `json:"os"`
+	Arch     *string         `json:"arch"`
+	PublicIP *string         `json:"public_ip"`
+	Labels   *map[string]any `json:"labels"`
 }
 
 func (r updateNodeRequest) validate() error {
-	if r.Hostname == nil && r.OS == nil && r.Arch == nil && r.PublicIP == nil {
+	if r.Hostname == nil && r.OS == nil && r.Arch == nil && r.PublicIP == nil && r.Labels == nil {
 		return fmt.Errorf("at least one field must be provided")
 	}
 	if r.Hostname != nil && strings.TrimSpace(*r.Hostname) == "" {
 		return fmt.Errorf("hostname cannot be empty")
 	}
 	return nil
+}
+
+func (r updateNodeRequest) hasNodeFieldUpdate() bool {
+	return r.Hostname != nil || r.OS != nil || r.Arch != nil || r.PublicIP != nil
 }
 
 func toNullString(value *string) sql.NullString {
@@ -2360,6 +2488,12 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true, eventBus: eventbus.New(64)}
 	serverRef = s
+	if cfg.OfflineContent.Enabled {
+		if _, err := offlinebundle.LoadPublicKeyFile(cfg.OfflineContent.PublicKeyFile); err != nil {
+			logger.Warn("offline content public key unavailable", zap.Error(err), zap.String("path", cfg.OfflineContent.PublicKeyFile))
+		}
+		s.offlineContentRoot = cfg.OfflineContent.RootDir
+	}
 	if client, err := amlservice.NewClient(amlservice.Config{
 		BaseURL:            cfg.AML.BaseURL,
 		APIKey:             cfg.AML.APIKey,
@@ -2376,7 +2510,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	// a Postgres-backed cache when *storage.Store is available; falls back
 	// to an in-memory cache otherwise (tests + minimal deployments).
 	if enabled, primary := ipintel.Validate(cfg.IPIntel); enabled {
-		var cache ipintel.Cache = ipintel.NewMemCache()
+		cache := ipintel.NewMemCache()
 		if concrete, ok := store.(*storage.Store); ok && concrete != nil {
 			cache = storage.NewIPIntelCache(concrete.DB())
 		}
@@ -2457,6 +2591,15 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 			logger.Error("start retention scheduler", zap.Error(err))
 		} else {
 			s.retentionScheduler = retention
+		}
+	}
+
+	if store != nil {
+		ipBlocks := NewIPBlockExpiryScheduler(s)
+		if err := ipBlocks.Start("* * * * *"); err != nil {
+			logger.Error("start ip block expiry scheduler", zap.Error(err))
+		} else {
+			s.ipBlockExpiryScheduler = ipBlocks
 		}
 	}
 
@@ -2548,8 +2691,14 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.retentionScheduler != nil {
 		s.retentionScheduler.Stop()
 	}
+	if s.ipBlockExpiryScheduler != nil {
+		s.ipBlockExpiryScheduler.Stop()
+	}
 	if s.healthScheduler != nil {
 		s.healthScheduler.Stop()
+	}
+	if closer, ok := s.ipBehaviorWindows.(interface{ Close() error }); ok {
+		_ = closer.Close()
 	}
 	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

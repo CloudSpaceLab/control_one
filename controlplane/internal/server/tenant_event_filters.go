@@ -64,6 +64,7 @@ func (s *Server) handleTenantEventFilters(w http.ResponseWriter, r *http.Request
 			FileSizeMinBytes        *int64    `json:"file_size_min_bytes"`
 			AllowlistCIDRs          *[]string `json:"allowlist_cidrs"`
 			DenylistCIDRs           *[]string `json:"denylist_cidrs"`
+			TrustedProxyCIDRs       *[]string `json:"trusted_proxy_cidrs"`
 			DBQueryTextCapture      *bool     `json:"db_query_text_capture"`
 			ForensicMode            *bool     `json:"forensic_mode"`
 		}
@@ -101,6 +102,7 @@ func applyTenantEventFilters(f *storage.TenantEventFilters, b struct {
 	FileSizeMinBytes        *int64    `json:"file_size_min_bytes"`
 	AllowlistCIDRs          *[]string `json:"allowlist_cidrs"`
 	DenylistCIDRs           *[]string `json:"denylist_cidrs"`
+	TrustedProxyCIDRs       *[]string `json:"trusted_proxy_cidrs"`
 	DBQueryTextCapture      *bool     `json:"db_query_text_capture"`
 	ForensicMode            *bool     `json:"forensic_mode"`
 }) {
@@ -133,6 +135,9 @@ func applyTenantEventFilters(f *storage.TenantEventFilters, b struct {
 	}
 	if b.DenylistCIDRs != nil {
 		f.DenylistCIDRs = *b.DenylistCIDRs
+	}
+	if b.TrustedProxyCIDRs != nil {
+		f.TrustedProxyCIDRs = *b.TrustedProxyCIDRs
 	}
 	if b.DBQueryTextCapture != nil {
 		f.DBQueryTextCapture = *b.DBQueryTextCapture

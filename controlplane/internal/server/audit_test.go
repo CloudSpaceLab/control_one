@@ -59,12 +59,12 @@ func TestRecordAuditAsyncSurvivesRequestContextCancellation(t *testing.T) {
 		t.Fatal("audit write never completed — recordAudit goroutine likely died on cancelled context")
 	}
 
-	store.fakeStore.mu.Lock()
-	defer store.fakeStore.mu.Unlock()
-	if len(store.fakeStore.auditLogs) != 1 {
-		t.Fatalf("expected 1 audit log, got %d", len(store.fakeStore.auditLogs))
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.auditLogs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(store.auditLogs))
 	}
-	if got := store.fakeStore.auditLogs[0].Action; got != "test.action" {
+	if got := store.auditLogs[0].Action; got != "test.action" {
 		t.Fatalf("unexpected action: %q", got)
 	}
 }

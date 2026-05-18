@@ -1,4 +1,5 @@
-import { Menu } from 'lucide-react';
+import { Menu, Rocket } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { LiveBadge, type LiveState } from '@/components/kit';
@@ -34,6 +35,12 @@ export function TopBar({ liveState = 'live', mobileNav }: TopBarProps) {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <Button asChild variant="secondary" size="sm" className="h-9 px-2 sm:px-3">
+          <Link to="/onboard" aria-label="Open enrollment" title="Open enrollment">
+            <Rocket className="h-4 w-4" />
+            <span className="hidden sm:inline">Enroll</span>
+          </Link>
+        </Button>
         <TenantSwitcher />
         <LiveBadge state={liveState} />
         <ThemeToggle />

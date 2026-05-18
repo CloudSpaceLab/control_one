@@ -21,6 +21,7 @@ import (
 // dispatch-path safety gates halt or defer a remediation.
 const (
 	EventRemediationManualOnlySkipped    = "remediation.manual_only_skipped"
+	EventRemediationIsolationSkipped     = "remediation.isolation_skipped"
 	EventRemediationChangeWindowDeferred = "remediation.change_window_deferred"
 	EventRemediationCircuitBreakerTrip   = "remediation.circuit_breaker_tripped"
 	EventRemediationCircuitBreakerAcked  = "remediation.circuit_breaker_acked"
@@ -97,6 +98,7 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 		)
 		return nil
 	}
+	now := time.Now().UTC()
 
 	// ---------------------------------------------------------------------
 	// Gate 1: opt-out label. Reads from node.Labels which is populated by
@@ -112,6 +114,37 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 				zap.Error(err),
 			)
 		} else if node != nil && node.Labels != nil {
+			posture := nodeIsolationPostureFromNode(*node, now)
+			if posture.Active && posture.Mode == isolationModeAirgapped {
+				s.logger.Info("auto-remediation skipped: node is airgapped",
+					zap.String("node_id", nodeID.String()),
+					zap.String("rule_id", result.RuleID),
+				)
+				s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationIsolationSkipped, map[string]any{
+					"tenant_id": tenantID.String(),
+					"node_id":   nodeID.String(),
+					"rule_id":   result.RuleID,
+					"severity":  result.Severity,
+					"mode":      posture.Mode,
+					"reason":    "node is airgapped",
+				})
+				return nil
+			}
+			if posture.Active && posture.Mode == isolationModeWhitelist && !stringSliceContainsFold(posture.AllowedApplications, "remediation") {
+				s.logger.Info("auto-remediation skipped: node is whitelist-only",
+					zap.String("node_id", nodeID.String()),
+					zap.String("rule_id", result.RuleID),
+				)
+				s.emitRemediationSafetyEvent(ctx, tenantID, EventRemediationIsolationSkipped, map[string]any{
+					"tenant_id": tenantID.String(),
+					"node_id":   nodeID.String(),
+					"rule_id":   result.RuleID,
+					"severity":  result.Severity,
+					"mode":      posture.Mode,
+					"reason":    "node is whitelist-only; remediation application is not allowlisted",
+				})
+				return nil
+			}
 			if val, ok := node.Labels["remediation"]; ok {
 				if str, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(str), "manual-only") {
 					s.logger.Info("auto-remediation skipped: node labelled manual-only",
@@ -151,7 +184,6 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 	// deferred to the next opening unless critical_override + severity=critical
 	// lets it run immediately.
 	// ---------------------------------------------------------------------
-	now := time.Now().UTC()
 	// enqueueAt remains zero (immediate) unless we explicitly defer below.
 	// Storing zero lets dispatchRemediationTask call worker.Enqueue() instead
 	// of EnqueueAt(now) — semantically "run as soon as a worker picks it up"

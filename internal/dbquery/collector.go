@@ -61,8 +61,6 @@ type Manager struct {
 	stream      *eventstream.Stream
 	log         *zap.Logger
 	opts        Options
-	mu          sync.Mutex
-	stopFn      []context.CancelFunc
 	captureText atomic.Bool
 }
 

@@ -89,7 +89,7 @@ func tryUFW() (FirewallState, bool) {
 		if line == "" || strings.HasPrefix(line, "Status:") || strings.HasPrefix(line, "Logging:") {
 			continue
 		}
-		if strings.HasPrefix(line, "Default:") || strings.HasPrefix(line, "New profiles:") {
+		if strings.HasPrefix(line, "New profiles:") {
 			continue
 		}
 		if strings.HasPrefix(line, "To") || strings.HasPrefix(line, "--") {

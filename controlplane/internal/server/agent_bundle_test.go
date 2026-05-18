@@ -231,6 +231,38 @@ func TestAgentBundleWindowsYieldsPowerShellInstaller(t *testing.T) {
 	}
 }
 
+func TestAgentBundleDarwinYieldsBashInstaller(t *testing.T) {
+	t.Parallel()
+
+	token := "cot_bundle_darwin"
+	srv, plaintext := newBundleTestServer(t, "darwin", "arm64", hashToken(t, token), token)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/bundle?os=darwin&arch=arm64&token="+plaintext, nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentBundle(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	entries := readBundle(t, rec.Body.Bytes())
+
+	if _, ok := entries["install-offline.sh"]; !ok {
+		t.Fatalf("expected install-offline.sh entry; have %v", keysOf(entries))
+	}
+	if _, ok := entries["controlone-agent"]; !ok {
+		t.Fatalf("expected controlone-agent entry; have %v", keysOf(entries))
+	}
+
+	var manifest bundleManifest
+	if err := json.Unmarshal(entries["manifest.json"], &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if manifest.OS != "darwin" || manifest.Arch != "arm64" {
+		t.Fatalf("manifest OS/arch = %s/%s", manifest.OS, manifest.Arch)
+	}
+}
+
 func TestAgentBundleRequiresBinaryForRequestedPlatform(t *testing.T) {
 	t.Parallel()
 

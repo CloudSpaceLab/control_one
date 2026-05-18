@@ -13,7 +13,6 @@ import (
 type fakeSource struct {
 	mu      sync.Mutex
 	batches [][]LogRecord
-	cursor  time.Time
 	exhaust int32
 }
 

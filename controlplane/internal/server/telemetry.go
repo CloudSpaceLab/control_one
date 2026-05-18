@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/metrics"
 )
@@ -52,6 +56,30 @@ type agentMetricsIngestRequest struct {
 	NodeID    string         `json:"node_id"`
 	Timestamp string         `json:"timestamp"`
 	Metrics   map[string]any `json:"metrics"`
+}
+
+type agentLogIngestRequest struct {
+	NodeID        string            `json:"node_id"`
+	Program       string            `json:"program"`
+	CollectorType string            `json:"collector_type"`
+	Count         int               `json:"count"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Paths         []string          `json:"paths,omitempty"`
+	JournalUnits  []string          `json:"journal_units,omitempty"`
+	EventChannels []string          `json:"event_channels,omitempty"`
+	Entries       []agentLogEntry   `json:"entries"`
+}
+
+type agentLogEntry struct {
+	Timestamp        string            `json:"timestamp"`
+	Program          string            `json:"program"`
+	Message          string            `json:"message"`
+	Severity         string            `json:"severity"`
+	OriginalSeverity string            `json:"original_severity,omitempty"`
+	Source           string            `json:"source,omitempty"`
+	Hostname         string            `json:"hostname,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
+	Fields           map[string]any    `json:"fields,omitempty"`
 }
 
 // metricUnits maps the well-known agent metric names emitted by
@@ -174,6 +202,117 @@ func (s *Server) handleAgentLivenessHeartbeat(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleLogIngest accepts the agent's structured log batch payload on
+// POST /api/v1/logs. It persists queryable telemetry_logs and derives
+// normalized log.line/web.request events for the unified event pipeline.
+func (s *Server) handleLogIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal == nil || principal.Type != "agent" {
+		http.Error(w, "agent principal required", http.StatusForbidden)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	tenantID, nodeID, err := s.tenantNodeForAgent(r.Context(), principal)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	defer func() { _ = r.Body.Close() }()
+	var body agentLogIngestRequest
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&body); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	if len(body.Entries) == 0 {
+		http.Error(w, "entries required", http.StatusBadRequest)
+		return
+	}
+	if len(body.Entries) > 5000 {
+		http.Error(w, "batch exceeds 5000 log entries", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	ipCache := map[string]map[string]any{}
+	trustedProxyCIDRs := s.tenantTrustedProxyCIDRs(r.Context(), tenantID)
+	logRows := make([]storage.CreateTelemetryLogParams, 0, len(body.Entries))
+	events := make([]IngestedEvent, 0, len(body.Entries)*2)
+	for i := range body.Entries {
+		entry := &body.Entries[i]
+		ts := parseLogTimestamp(entry.Timestamp)
+		program := firstNonEmpty(entry.Program, body.Program, "generic")
+		labels := mergeStringLabels(body.Labels, entry.Labels)
+		source := firstNonEmpty(entry.Source, firstString(body.Paths), firstString(body.JournalUnits), firstString(body.EventChannels), body.CollectorType)
+		level := firstNonEmpty(entry.Severity, "info")
+		logRows = append(logRows, storage.CreateTelemetryLogParams{
+			TenantID:   tenantID,
+			NodeID:     nodeID,
+			LogLevel:   level,
+			LogMessage: entry.Message,
+			LogSource:  stringPtrOrNil(source),
+			LogProgram: stringPtrOrNil(program),
+			Labels:     labels,
+			Timestamp:  ts,
+		})
+
+		details := map[string]any{
+			"program":        program,
+			"collector_type": body.CollectorType,
+			"source":         source,
+			"hostname":       entry.Hostname,
+			"labels":         labels,
+			"fields":         entry.Fields,
+		}
+		if entry.OriginalSeverity != "" {
+			details["original_severity"] = entry.OriginalSeverity
+		}
+		correlationID := fmt.Sprintf("log:%s:%d:%s", nodeID, ts.UnixNano(), hashString(entry.Message))
+		logLine := IngestedEvent{
+			Type:          "log.line",
+			TS:            ts,
+			NodeID:        nodeID.String(),
+			TenantID:      tenantID.String(),
+			Severity:      level,
+			CorrelationID: correlationID,
+			Message:       entry.Message,
+			Details:       details,
+			DedupKey:      fmt.Sprintf("log.line:%s:%s:%d", nodeID, program, ts.UnixNano()),
+		}
+		if ip := firstNonEmpty(fieldString(entry.Fields, "remote_ip"), fieldString(entry.Fields, "client"), fieldString(entry.Fields, "src_ip")); net.ParseIP(ip) != nil {
+			logLine.SrcIP = ip
+		}
+		events = append(events, logLine)
+		if webEvent, ok := s.webRequestFromLog(r.Context(), tenantID, nodeID, program, source, labels, entry, ipCache, trustedProxyCIDRs); ok {
+			events = append(events, webEvent)
+		}
+	}
+
+	if err := s.store.CreateTelemetryLogs(r.Context(), logRows); err != nil {
+		s.logger.Error("ingest telemetry logs", zap.Error(err), zap.Int("rows", len(logRows)))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	dorisStatus, fanoutErr := s.fanOutEvents(r.Context(), tenantID, nodeID, events)
+	if fanoutErr != nil {
+		s.logger.Warn("fanout log-derived events", zap.Error(fanoutErr), zap.String("doris_status", dorisStatus))
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"rows":         len(logRows),
+		"events":       len(events),
+		"doris_status": dorisStatus,
+	})
 }
 
 // metricToFloat coerces a JSON-decoded value (already float64 from
@@ -463,33 +602,6 @@ func (s *Server) handleTelemetryNodeSubroutes(w http.ResponseWriter, r *http.Req
 // handleLegacyHeartbeat accepts POST /api/v1/heartbeat from agent telemetry
 // service. The payload is acknowledged but not persisted — node liveness is
 // tracked via POST /api/v1/nodes/:id/heartbeat which drives the state machine.
-func (s *Server) handleLegacyHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-	// Drain body so the connection is reusable.
-	_, _ = io.Copy(io.Discard, r.Body)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
-// handleLegacyTelemetry accepts POST /api/v1/telemetry from agent telemetry
-// service. The payload is acknowledged but not currently persisted.
-func (s *Server) handleLegacyTelemetry(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-	_, _ = io.Copy(io.Discard, r.Body)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
 func newTelemetryMetricResponse(m storage.TelemetryMetric) telemetryMetricResponse {
 	resp := telemetryMetricResponse{
 		ID:          m.ID.String(),
@@ -546,4 +658,500 @@ func newTelemetryLogResponse(l storage.TelemetryLog) telemetryLogResponse {
 		resp.Labels = make(map[string]string)
 	}
 	return resp
+}
+
+func (s *Server) webRequestFromLog(ctx context.Context, tenantID, nodeID uuid.UUID, program, source string, labels map[string]string, entry *agentLogEntry, ipCache map[string]map[string]any, trustedProxies []string) (IngestedEvent, bool) {
+	fields := entry.Fields
+	if fields == nil {
+		return IngestedEvent{}, false
+	}
+	xffChain := firstNonEmpty(fieldString(fields, "xff_chain"), fieldString(fields, "x_forwarded_for"), fieldString(fields, "xff"))
+	clientDecision, ok := resolveWebRequestClientIP(
+		firstNonEmpty(fieldString(fields, "remote_ip"), fieldString(fields, "client"), fieldString(fields, "src_ip")),
+		fieldString(fields, "real_client_ip"),
+		xffChain,
+		trustedProxies,
+	)
+	if !ok {
+		return IngestedEvent{}, false
+	}
+	remoteIP := clientDecision.ClientIP
+	status := fieldInt(fields, "status")
+	if status == 0 {
+		status = fieldInt(fields, "status_code")
+	}
+	if status == 0 {
+		return IngestedEvent{}, false
+	}
+	request := fieldString(fields, "request")
+	method, path := splitHTTPReq(request)
+	if method == "" {
+		method = fieldString(fields, "method")
+	}
+	if path == "" {
+		path = firstNonEmpty(fieldString(fields, "path"), fieldString(fields, "uri"), fieldString(fields, "request_uri"))
+	}
+	bytesOut := fieldInt64(fields, "bytes")
+	if bytesOut == 0 {
+		bytesOut = fieldInt64(fields, "body_bytes_sent")
+	}
+	durationMS := durationMillis(fields)
+	refHost := referrerHost(fieldString(fields, "referrer"))
+	ua := fieldString(fields, "user_agent")
+	if ua == "" {
+		ua = fieldString(fields, "agent")
+	}
+	pathTemplate := pathTemplate(path)
+	details := map[string]any{
+		"webserver_kind":   strings.ToLower(program),
+		"parser_profile":   strings.ToLower(program),
+		"source_file":      source,
+		"socket_ip":        clientDecision.SocketIP,
+		"client_ip_source": clientDecision.Source,
+		"method":           method,
+		"path":             path,
+		"path_template":    pathTemplate,
+		"path_hash":        hashString(path),
+		"status_code":      status,
+		"status_family":    fmt.Sprintf("%dxx", status/100),
+		"bytes_out":        bytesOut,
+		"request":          request,
+		"referrer_host":    refHost,
+		"user_agent_hash":  hashString(ua),
+		"trusted_proxy":    clientDecision.TrustedProxy,
+		"labels":           labels,
+	}
+	if clientDecision.RejectedXFF {
+		details["xff_spoof_rejected"] = true
+	}
+	if len(trustedProxies) > 0 {
+		details["trusted_proxy_cidrs_configured"] = len(trustedProxies)
+	}
+	for _, key := range []string{"server_group", "app", "vhost", "environment", "criticality"} {
+		if v := strings.TrimSpace(labels[key]); v != "" {
+			details[key] = v
+		}
+	}
+	if clientDecision.XFFChain != "" {
+		details["xff_chain"] = clientDecision.XFFChain
+	}
+	if upstream := fieldString(fields, "upstream_status"); upstream != "" {
+		details["upstream_status"] = upstream
+	}
+	copyFirstWebRequestField(details, fields, "request_id", "request_id", "x_request_id", "http_x_request_id")
+	copyFirstWebRequestField(details, fields, "correlation_id", "correlation_id", "x_correlation_id", "http_x_correlation_id")
+	copyFirstWebRequestField(details, fields, "response_request_id", "response_request_id", "sent_http_x_request_id", "res_x_request_id", "upstream_http_x_request_id")
+	copyFirstWebRequestField(details, fields, "response_correlation_id", "response_correlation_id", "sent_http_x_correlation_id", "res_x_correlation_id")
+	copyFirstWebRequestField(details, fields, "traceparent", "traceparent", "http_traceparent")
+	copyFirstWebRequestField(details, fields, "upstream_response_time", "upstream_response_time")
+	copyFirstWebRequestField(details, fields, "proxy_host", "proxy_host")
+	copyFirstWebRequestField(details, fields, "frontend", "frontend", "haproxy_frontend")
+	copyFirstWebRequestField(details, fields, "backend", "backend", "haproxy_backend")
+	copyFirstWebRequestField(details, fields, "upstream_server", "server", "upstream_server")
+	copyFirstWebRequestField(details, fields, "termination_state", "termination_state")
+	copyFirstWebRequestField(details, fields, "captured_request_headers", "captured_request_headers")
+	copyFirstWebRequestField(details, fields, "captured_response_headers", "captured_response_headers")
+	copyFirstWebRequestField(details, fields, "tls_sni", "tls_sni", "sni")
+	if bytesIn := firstPositiveFieldInt64(fields, "request_bytes", "bytes_in", "body_bytes_received"); bytesIn > 0 {
+		details["bytes_in"] = bytesIn
+	}
+	if port := firstPositiveFieldInt64(fields, "local_port", "server_port", "remote_port"); port > 0 {
+		details["port"] = port
+	}
+	enrich := s.lookupIPBehaviorEnrichment(ctx, remoteIP, ipCache)
+	for k, v := range enrich {
+		details[k] = v
+	}
+	threatScore := 0
+	if v, ok := enrich["reputation_score"].(int); ok {
+		threatScore = v
+	}
+	ts := parseLogTimestamp(entry.Timestamp)
+	return IngestedEvent{
+		Type:          "web.request",
+		TS:            ts,
+		NodeID:        nodeID.String(),
+		TenantID:      tenantID.String(),
+		Severity:      severityFromHTTPStatusCode(status),
+		CorrelationID: fmt.Sprintf("log:%s:%d:%s", nodeID, ts.UnixNano(), hashString(entry.Message)),
+		ProcessName:   strings.ToLower(program),
+		SrcIP:         remoteIP,
+		BytesOut:      bytesOut,
+		DurationMS:    durationMS,
+		ThreatScore:   threatScore,
+		Message:       fmt.Sprintf("%d %s %s", status, method, path),
+		Details:       details,
+		DedupKey:      fmt.Sprintf("web.request:%s:%s:%d:%s", nodeID, remoteIP, ts.UnixNano(), hashString(entry.Message)),
+	}, true
+}
+
+type webRequestClientIPDecision struct {
+	ClientIP     string
+	SocketIP     string
+	XFFChain     string
+	Source       string
+	TrustedProxy bool
+	RejectedXFF  bool
+}
+
+func (s *Server) tenantTrustedProxyCIDRs(ctx context.Context, tenantID uuid.UUID) []string {
+	if s == nil || s.store == nil || tenantID == uuid.Nil {
+		return nil
+	}
+	filters, err := s.store.GetTenantEventFilters(ctx, tenantID)
+	if err != nil || filters == nil {
+		return nil
+	}
+	return filters.TrustedProxyCIDRs
+}
+
+func resolveWebRequestClientIP(socketIP, realClientIP, xffChain string, trustedProxyCIDRs []string) (webRequestClientIPDecision, bool) {
+	socket := cleanHeaderIP(socketIP)
+	realClient := cleanHeaderIP(realClientIP)
+	source := "socket"
+	if socket == "" {
+		socket = realClient
+		source = "real_client_ip_fallback"
+	}
+	if socket == "" || net.ParseIP(socket) == nil {
+		return webRequestClientIPDecision{}, false
+	}
+	decision := webRequestClientIPDecision{
+		ClientIP: socket,
+		SocketIP: socket,
+		XFFChain: strings.TrimSpace(xffChain),
+		Source:   source,
+	}
+	xffIPs := validHeaderIPChain(xffChain)
+	trustedSocket := ipInCIDRList(socket, trustedProxyCIDRs)
+	if trustedSocket {
+		if chosen := clientIPFromTrustedProxyChain(socket, xffIPs, trustedProxyCIDRs); chosen != "" {
+			decision.ClientIP = chosen
+			decision.Source = "xff_chain"
+			decision.TrustedProxy = true
+			return decision, true
+		}
+		if realClient != "" && realClient != socket {
+			decision.ClientIP = realClient
+			decision.Source = "real_client_ip"
+			decision.TrustedProxy = true
+			return decision, true
+		}
+	}
+	if len(xffIPs) > 0 || (realClient != "" && realClient != socket && source != "real_client_ip_fallback") {
+		decision.RejectedXFF = true
+	}
+	return decision, true
+}
+
+func clientIPFromTrustedProxyChain(socket string, xffIPs []string, trustedProxyCIDRs []string) string {
+	if len(xffIPs) == 0 {
+		return ""
+	}
+	// Walk right-to-left through the proxy chain, trusting only the configured
+	// suffix. This avoids accepting user-supplied leftmost spoof values.
+	for i := len(xffIPs) - 1; i >= 0; i-- {
+		if !ipInCIDRList(xffIPs[i], trustedProxyCIDRs) {
+			return xffIPs[i]
+		}
+	}
+	if cleanHeaderIP(socket) != "" && !ipInCIDRList(socket, trustedProxyCIDRs) {
+		return cleanHeaderIP(socket)
+	}
+	return xffIPs[0]
+}
+
+func validHeaderIPChain(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if ip := cleanHeaderIP(part); ip != "" {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+func cleanHeaderIP(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.EqualFold(raw, "unknown") {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "for=") {
+		raw = strings.TrimSpace(raw[4:])
+	}
+	raw = strings.Trim(raw, `"' `)
+	if ip := net.ParseIP(strings.Trim(raw, "[]")); ip != nil {
+		return ip.String()
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
+}
+
+func ipInCIDRList(ipValue string, cidrs []string) bool {
+	ip := net.ParseIP(strings.TrimSpace(ipValue))
+	if ip == nil {
+		return false
+	}
+	for _, raw := range cidrs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if candidate := net.ParseIP(raw); candidate != nil && candidate.Equal(ip) {
+			return true
+		}
+		_, network, err := net.ParseCIDR(raw)
+		if err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, ip string, cache map[string]map[string]any) map[string]any {
+	if cache == nil {
+		cache = map[string]map[string]any{}
+	}
+	if cached, ok := cache[ip]; ok {
+		return cached
+	}
+	out := map[string]any{}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() {
+		cache[ip] = out
+		return out
+	}
+	if root := s.offlineContentRootDir(); root != "" {
+		if enriched, ok, err := offlinebundle.LookupIP(root, ip); err == nil && ok && enriched != nil {
+			out["country"] = enriched.Country
+			out["country_code"] = enriched.CountryCode
+			out["region"] = enriched.Region
+			out["asn"] = enriched.ASN
+			out["isp"] = enriched.ISP
+			out["usage_type"] = enriched.UsageType
+			out["is_tor"] = enriched.IsTor
+			out["reputation_score"] = enriched.ReputationScore
+			out["content_source"] = enriched.Source
+			out["content_bundle_id"] = enriched.BundleID
+			out["content_bundle_version"] = enriched.BundleVersion
+			out["content_version"] = enriched.ContentVersion
+			out["content_stale"] = enriched.Stale
+			if len(enriched.ThreatFeeds) > 0 {
+				out["threat_feeds"] = enriched.ThreatFeeds
+			}
+			cache[ip] = out
+			return out
+		}
+	}
+	if s.ipIntel == nil || !s.ipIntel.Enabled() {
+		cache[ip] = out
+		return out
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	enriched, err := s.ipIntel.Lookup(lookupCtx, ip)
+	if err != nil || enriched == nil {
+		cache[ip] = out
+		return out
+	}
+	out["country"] = enriched.Geo.Country
+	out["country_code"] = enriched.Geo.CountryCode
+	out["region"] = enriched.Geo.Region
+	out["asn"] = enriched.Geo.ASN
+	out["isp"] = firstNonEmpty(enriched.Geo.ISP, enriched.Geo.Org)
+	out["usage_type"] = enriched.UsageType
+	out["is_tor"] = enriched.IsTor
+	out["reputation_score"] = enriched.ReputationScore
+	cache[ip] = out
+	return out
+}
+
+func parseLogTimestamp(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Now().UTC()
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.000", "2006-01-02 15:04:05"} {
+		if ts, err := time.Parse(layout, raw); err == nil {
+			return ts.UTC()
+		}
+	}
+	return time.Now().UTC()
+}
+
+func mergeStringLabels(a, b map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range a {
+		if strings.TrimSpace(v) != "" {
+			out[k] = v
+		}
+	}
+	for k, v := range b {
+		if strings.TrimSpace(v) != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func stringPtrOrNil(s string) *string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	v := strings.TrimSpace(s)
+	return &v
+}
+
+func firstString(values []string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func fieldString(fields map[string]any, key string) string {
+	if fields == nil {
+		return ""
+	}
+	if v, ok := fields[key]; ok {
+		switch x := v.(type) {
+		case string:
+			return strings.TrimSpace(x)
+		case fmt.Stringer:
+			return strings.TrimSpace(x.String())
+		}
+	}
+	return ""
+}
+
+func fieldInt(fields map[string]any, key string) int {
+	return int(fieldInt64(fields, key))
+}
+
+func fieldInt64(fields map[string]any, key string) int64 {
+	if fields == nil {
+		return 0
+	}
+	v, ok := fields[key]
+	if !ok {
+		return 0
+	}
+	switch x := v.(type) {
+	case int:
+		return int64(x)
+	case int64:
+		return x
+	case float64:
+		return int64(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return n
+	case string:
+		if x == "-" {
+			return 0
+		}
+		n, _ := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		return n
+	}
+	return 0
+}
+
+func copyFirstWebRequestField(dst, fields map[string]any, dstKey string, sourceKeys ...string) {
+	for _, key := range sourceKeys {
+		if v := fieldString(fields, key); v != "" && v != "-" {
+			dst[dstKey] = v
+			return
+		}
+	}
+}
+
+func firstPositiveFieldInt64(fields map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if v := fieldInt64(fields, key); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func durationMillis(fields map[string]any) int64 {
+	for _, key := range []string{"duration_ms", "request_time_ms", "duration"} {
+		if v := fieldInt64(fields, key); v > 0 {
+			return v
+		}
+	}
+	if us := fieldInt64(fields, "duration_us"); us > 0 {
+		return us / 1000
+	}
+	if sec := fieldString(fields, "request_time"); sec != "" {
+		f, _ := strconv.ParseFloat(sec, 64)
+		return int64(f * 1000)
+	}
+	return 0
+}
+
+func splitHTTPReq(req string) (string, string) {
+	parts := strings.Fields(req)
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return strings.ToUpper(parts[0]), parts[1]
+}
+
+func pathTemplate(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if u, err := url.Parse(path); err == nil && u.Path != "" {
+		path = u.Path
+	}
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		if _, err := strconv.ParseInt(seg, 10, 64); err == nil || looksLikeUUID(seg) {
+			segments[i] = ":id"
+		}
+	}
+	return strings.Join(segments, "/")
+}
+
+func looksLikeUUID(s string) bool {
+	return len(s) == 36 && strings.Count(s, "-") == 4
+}
+
+func referrerHost(raw string) string {
+	if raw == "" || raw == "-" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+func severityFromHTTPStatusCode(status int) string {
+	switch {
+	case status >= 500:
+		return "error"
+	case status >= 400:
+		return "warning"
+	case status >= 300:
+		return "notice"
+	default:
+		return "info"
+	}
 }

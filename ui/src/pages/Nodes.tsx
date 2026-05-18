@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Server, AlertTriangle, RefreshCw, LayoutGrid, List,
   Activity, Shield, ChevronRight, Globe, MapPin,
+  Wifi, WifiOff,
 } from 'lucide-react';
 import { SectionHeader, Panel, KpiTile, StatusTag, EmptyState, DataTable, LiveBadge } from '../components/kit';
 import type { StateTone } from '../components/kit/types';
@@ -18,6 +19,7 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useToast } from '../providers/ToastProvider';
 import type {
   AtRiskFleetResponse,
+  NetworkIsolationMode,
   NodeHealthRiskLevel,
   NodeHealthScore,
   NodeSummary,
@@ -256,6 +258,82 @@ function isOnline(node: NodeSummary): boolean {
   return Date.now() - new Date(node.last_seen_at).getTime() < 5 * 60 * 1000;
 }
 
+interface NodeIsolationView {
+  mode: NetworkIsolationMode;
+  active: boolean;
+  expired: boolean;
+  expiresAt?: string;
+  hasAllowlist: boolean;
+}
+
+function nodeIsolationView(node: NodeSummary): NodeIsolationView {
+  const rawMode = normalizeNodeIsolationMode(nodeLabelString(node, 'control_one.isolation.mode', 'connectivity_mode'));
+  const expiresAt = nodeLabelString(node, 'control_one.isolation.expires_at', 'connectivity_mode_until') || undefined;
+  const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : Number.NaN;
+  const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now();
+  const mode = expired ? 'online' : rawMode;
+  const hasAllowlist = nodeLabelList(node, 'control_one.isolation.allowed_applications', 'allowed_applications').length > 0
+    || nodeLabelList(node, 'control_one.isolation.allowlist_cidrs', 'allowlist_cidrs').length > 0;
+  return {
+    mode,
+    active: !expired && mode !== 'online',
+    expired,
+    expiresAt,
+    hasAllowlist,
+  };
+}
+
+function normalizeNodeIsolationMode(value: string): NetworkIsolationMode {
+  switch (value.trim().toLowerCase()) {
+    case 'airgap':
+    case 'airgapped':
+    case 'offline':
+    case 'isolated':
+    case 'local_only':
+      return 'airgapped';
+    case 'whitelist':
+    case 'allowlist':
+    case 'whitelist_only':
+    case 'allowlist_only':
+    case 'locked_down':
+      return 'whitelist';
+    default:
+      return 'online';
+  }
+}
+
+function nodeLabelString(node: NodeSummary, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = node.labels?.[key];
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  }
+  return '';
+}
+
+function nodeLabelList(node: NodeSummary, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = node.labels?.[key];
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+    if (typeof value === 'string') return value.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function nodeIsolationTone(isolation: NodeIsolationView): StateTone {
+  if (isolation.expired) return 'warning';
+  if (isolation.mode === 'airgapped') return 'healthy';
+  if (isolation.mode === 'whitelist') return isolation.hasAllowlist ? 'healthy' : 'warning';
+  return 'unknown';
+}
+
+function nodeIsolationLabel(isolation: NodeIsolationView): string {
+  if (isolation.expired) return 'expired';
+  if (isolation.mode === 'airgapped') return 'airgapped';
+  if (isolation.mode === 'whitelist') return 'whitelist-only';
+  return 'online';
+}
+
 function worstState(states: NodeState[]): NodeState {
   const order: NodeState[] = ['critical', 'degraded', 'warning', 'unknown', 'healthy'];
   for (const s of order) {
@@ -271,6 +349,22 @@ function formatLastSeen(val?: string): string {
   if (ago < 3_600_000) return `${Math.floor(ago / 60_000)}m ago`;
   if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h ago`;
   return `${Math.floor(ago / 86_400_000)}d ago`;
+}
+
+function formatRelativeTime(val?: string): string {
+  if (!val) return 'no timer';
+  const date = new Date(val);
+  if (Number.isNaN(date.getTime())) return val;
+  const diff = date.getTime() - Date.now();
+  const abs = Math.abs(diff);
+  const value = abs < 60_000
+    ? 'less than 1m'
+    : abs < 3_600_000
+      ? `${Math.floor(abs / 60_000)}m`
+      : abs < 86_400_000
+        ? `${Math.floor(abs / 3_600_000)}h`
+        : `${Math.floor(abs / 86_400_000)}d`;
+  return diff >= 0 ? `in ${value}` : `${value} ago`;
 }
 
 // ── Pulsing health dot ─────────────────────────────────────────────────────
@@ -741,6 +835,7 @@ export function Nodes(): JSX.Element {
   const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
+  const [isolationUpdatingId, setIsolationUpdatingId] = useState<string | null>(null);
 
   // Fetch nodes scoped to the active tenant. Without a tenant filter the
   // server returns every tenant's nodes, so callers must pass currentTenantId.
@@ -905,6 +1000,25 @@ export function Nodes(): JSX.Element {
     return groups;
   }, [filteredNodes]);
 
+  const handleQuickAirgap = async (node: NodeSummary, isolation: NodeIsolationView) => {
+    const currentlyAirgapped = isolation.active && isolation.mode === 'airgapped';
+    setIsolationUpdatingId(node.id);
+    try {
+      await api.setNodeIsolation(
+        node.id,
+        currentlyAirgapped
+          ? { mode: 'online' }
+          : { mode: 'airgapped', duration_seconds: 60 * 60, reason: 'Operator quick airgap from fleet list' },
+      );
+      showToast(currentlyAirgapped ? `${node.hostname} returned online.` : `${node.hostname} airgapped for 1 hour.`, 'success');
+      reload();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update network isolation.', 'error');
+    } finally {
+      setIsolationUpdatingId(null);
+    }
+  };
+
   // Table columns
   type NodeRow = (typeof nodes)[number];
   const tableColumns: ColumnDef<NodeRow>[] = [
@@ -955,6 +1069,19 @@ export function Nodes(): JSX.Element {
       },
     },
     {
+      header: 'Isolation',
+      id: 'isolation',
+      cell: ({ row }) => {
+        const isolation = nodeIsolationView(row.original);
+        const timer = isolation.expiresAt ? `Expires ${formatRelativeTime(isolation.expiresAt)}` : 'No timer';
+        return (
+          <StatusTag tone={nodeIsolationTone(isolation)} title={timer}>
+            {nodeIsolationLabel(isolation)}
+          </StatusTag>
+        );
+      },
+    },
+    {
       header: 'Last seen',
       id: 'last_seen',
       cell: ({ row }) => <span className="text-xs text-text-muted">{formatLastSeen(row.original.last_seen_at)}</span>,
@@ -962,16 +1089,31 @@ export function Nodes(): JSX.Element {
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => (
-        <div className="flex items-center gap-1">
-          <Button type="button" variant="secondary" size="sm" onClick={() => navigate(`/nodes/${row.original.id}`)}>
-            Open
-          </Button>
-          <Button type="button" variant="ghost" size="sm" title="Queue agent update" onClick={() => setAgentUpdateNodeId(row.original.id)}>
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      ),
+      cell: ({ row }) => {
+        const isolation = nodeIsolationView(row.original);
+        const airgapped = isolation.active && isolation.mode === 'airgapped';
+        return (
+          <div className="flex items-center gap-1">
+            <Button type="button" variant="secondary" size="sm" onClick={() => navigate(`/nodes/${row.original.id}`)}>
+              Open
+            </Button>
+            <Button
+              type="button"
+              variant={airgapped ? 'secondary' : 'ghost'}
+              size="sm"
+              title={airgapped ? 'Return online' : 'Airgap for 1 hour'}
+              aria-label={airgapped ? `Return ${row.original.hostname} online` : `Airgap ${row.original.hostname} for 1 hour`}
+              disabled={isolationUpdatingId === row.original.id}
+              onClick={() => handleQuickAirgap(row.original, isolation)}
+            >
+              {airgapped ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" title="Queue agent update" onClick={() => setAgentUpdateNodeId(row.original.id)}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        );
+      },
     },
   ];
 
@@ -999,6 +1141,12 @@ export function Nodes(): JSX.Element {
         description={`${pagination.total} agent${pagination.total === 1 ? '' : 's'} across ${tenantGroups.size} group${tenantGroups.size === 1 ? '' : 's'}`}
         actions={
           <div className="flex items-center gap-2">
+            <Button asChild type="button" variant="secondary" size="sm">
+              <Link to="/onboard">
+                <Server className="h-3.5 w-3.5" />
+                Onboard
+              </Link>
+            </Button>
             <LiveBadge />
             <Button type="button" variant="ghost" size="sm" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />

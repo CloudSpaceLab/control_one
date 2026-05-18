@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -81,6 +82,9 @@ var allowedEventTypes = map[string]bool{
 	"log.line":     true,
 	"log.spike":    true,
 	"rule.trigger": true,
+	// Web request intelligence
+	"web.request": true,
+	"web.error":   true,
 	// Behavioural anomaly detectors (Phase F)
 	"anomaly.new_destination":    true,
 	"anomaly.long_connection":    true,
@@ -91,12 +95,16 @@ var allowedEventTypes = map[string]bool{
 	"anomaly.executable_dropped": true,
 	"anomaly.new_db_query":       true,
 	"anomaly.db_query_high_rows": true,
+	"anomaly.ip_behavior":        true,
 	// Long-running DB query (Phase G)
 	"db.query.long_running": true,
 	// Compatibility shims for older event flavours
-	"security.event":    true,
-	"health.incident":   true,
-	"compliance.result": true,
+	"security.event":                      true,
+	"health.incident":                     true,
+	"compliance.result":                   true,
+	"remediation.webserver_block.applied": true,
+	"remediation.webserver_block.failed":  true,
+	"webserver.config.changed":            true,
 }
 
 // rateLimiterRegistry keeps a token-bucket per (tenant, node). Idle entries
@@ -233,6 +241,10 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("event_type %q not allowed", ev.Type), http.StatusBadRequest)
 			return
 		}
+		if err := validateIngestedEventContract(&ev); err != nil {
+			http.Error(w, fmt.Sprintf("bad event at row %d: %v", len(events)+1, err), http.StatusBadRequest)
+			return
+		}
 		if ev.TS.IsZero() {
 			ev.TS = time.Now().UTC()
 		}
@@ -302,6 +314,67 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func validateIngestedEventContract(ev *IngestedEvent) error {
+	if ev == nil {
+		return errors.New("event required")
+	}
+	switch ev.Type {
+	case "web.request":
+		if net.ParseIP(strings.TrimSpace(ev.SrcIP)) == nil {
+			return errors.New("web.request requires valid src_ip")
+		}
+		if ev.BytesIn < 0 || ev.BytesOut < 0 || ev.DurationMS < 0 {
+			return errors.New("web.request counters cannot be negative")
+		}
+		if ev.Details != nil {
+			if status := detailInt(ev.Details, "status_code"); status != 0 && (status < 100 || status > 599) {
+				return errors.New("web.request status_code must be a valid HTTP status")
+			}
+		}
+	case "web.error":
+		if strings.TrimSpace(ev.Message) == "" && len(ev.Details) == 0 {
+			return errors.New("web.error requires message or details")
+		}
+	case "anomaly.ip_behavior":
+		if net.ParseIP(strings.TrimSpace(ev.SrcIP)) == nil {
+			return errors.New("anomaly.ip_behavior requires valid src_ip")
+		}
+		if strings.TrimSpace(ev.Severity) == "" {
+			return errors.New("anomaly.ip_behavior requires severity")
+		}
+		if strings.TrimSpace(ev.DedupKey) == "" {
+			return errors.New("anomaly.ip_behavior requires dedup_key")
+		}
+	case "remediation.webserver_block.applied", "remediation.webserver_block.failed", "webserver.config.changed":
+		if strings.TrimSpace(ev.CorrelationID) == "" && strings.TrimSpace(ev.DedupKey) == "" {
+			return fmt.Errorf("%s requires correlation_id or dedup_key", ev.Type)
+		}
+	}
+	if strings.TrimSpace(ev.CorrelationID) == "" && strings.TrimSpace(ev.DedupKey) != "" {
+		ev.CorrelationID = ev.DedupKey
+	}
+	return nil
+}
+
+func detailInt(details map[string]any, key string) int {
+	if details == nil {
+		return 0
+	}
+	switch v := details[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
 // fanOutEvents writes the batch to Doris (when configured), increments the
 // Postgres hourly rollup, and publishes each event on the in-memory bus for
 // correlation engine consumers. Runs Phase F anomaly detectors first so any
@@ -333,6 +406,7 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 		lineageRows := make([]map[string]any, 0)
 		fileRows := make([]map[string]any, 0)
 		dbRows := make([]map[string]any, 0)
+		webRows := make([]map[string]any, 0)
 		for i := range events {
 			ev := &events[i]
 			row := eventToDorisRow(tenantID, nodeID, ev)
@@ -346,6 +420,8 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 				fileRows = append(fileRows, eventToFileRow(tenantID, nodeID, ev))
 			case "db.query":
 				dbRows = append(dbRows, eventToDBQueryRow(tenantID, nodeID, ev))
+			case "web.request", "web.error":
+				webRows = append(webRows, eventToWebRequestRow(tenantID, nodeID, ev))
 			}
 		}
 		if err := s.dorisWriter.EnqueueNonBlocking("events", dorisRows); err != nil {
@@ -377,6 +453,12 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 					zap.Int("rows", len(dbRows)), zap.Error(eerr))
 			}
 		}
+		if len(webRows) > 0 {
+			if eerr := s.dorisWriter.EnqueueNonBlocking("web_requests", webRows); eerr != nil {
+				s.logger.Warn("doris enqueue web_requests",
+					zap.Int("rows", len(webRows)), zap.Error(eerr))
+			}
+		}
 		if dorisErr != nil {
 			dorisStatus = "pending"
 		} else {
@@ -387,6 +469,7 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 	}
 
 	// Postgres hourly rollup.
+	s.recordIPBehaviorRollups(ctx, tenantID, nodeID, events)
 	rollups := buildRollupBuckets(tenantID, nodeID, events)
 	for _, b := range rollups {
 		if err := s.store.IncrementHourlyRollup(ctx, b.tenantID, b.nodeID, b.eventType, b.hour, b.cnt, b.bytesIn, b.bytesOut, b.sevMax); err != nil {
@@ -424,12 +507,16 @@ func eventTopicFor(t string) string {
 		return "events.file"
 	case t == "db.query":
 		return "events.db"
+	case t == "web.request" || t == "web.error":
+		return "events.web"
 	case strings.HasPrefix(t, "bastion."):
 		return "events.bastion"
 	case strings.HasPrefix(t, "anomaly."):
 		return "events.anomaly"
 	case t == "log.spike":
 		return "events.log_spike"
+	case t == "log.line":
+		return "events.log_line"
 	case t == "db.query.long_running":
 		return "events.db.long_running"
 	case t == "rule.trigger":
@@ -638,6 +725,50 @@ func eventToDBQueryRow(tenantID, nodeID uuid.UUID, ev *IngestedEvent) map[string
 		"ended_at":       detailsString(ev.Details, "ended_at", ""),
 		"tables_touched": detailsString(ev.Details, "tables_touched", ""),
 	}
+}
+
+func eventToWebRequestRow(tenantID, nodeID uuid.UUID, ev *IngestedEvent) map[string]any {
+	row := map[string]any{
+		"event_date":       ev.TS.UTC().Format("2006-01-02"),
+		"tenant_id":        tenantID.String(),
+		"node_id":          nodeID.String(),
+		"ts":               ev.TS.UTC().Format("2006-01-02 15:04:05.000"),
+		"correlation_id":   ev.CorrelationID,
+		"webserver_kind":   detailsString(ev.Details, "webserver_kind", ev.ProcessName),
+		"server_group":     detailsString(ev.Details, "server_group", ""),
+		"app":              detailsString(ev.Details, "app", detailsString(ev.Details, "vhost", "")),
+		"vhost":            detailsString(ev.Details, "vhost", ""),
+		"src_ip":           ev.SrcIP,
+		"socket_ip":        detailsString(ev.Details, "socket_ip", ""),
+		"xff_chain":        detailsString(ev.Details, "xff_chain", ""),
+		"country_code":     detailsString(ev.Details, "country_code", ""),
+		"country":          detailsString(ev.Details, "country", ""),
+		"asn":              detailsString(ev.Details, "asn", ""),
+		"isp":              detailsString(ev.Details, "isp", ""),
+		"reputation_score": ev.ThreatScore,
+		"method":           detailsString(ev.Details, "method", ""),
+		"path_template":    detailsString(ev.Details, "path_template", ""),
+		"path_hash":        detailsString(ev.Details, "path_hash", ""),
+		"status_code":      detailsInt(ev.Details, "status_code"),
+		"status_family":    detailsString(ev.Details, "status_family", ""),
+		"bytes_out":        ev.BytesOut,
+		"bytes_in":         ev.BytesIn,
+		"duration_ms":      ev.DurationMS,
+		"upstream_status":  detailsString(ev.Details, "upstream_status", ""),
+		"user_agent_hash":  detailsString(ev.Details, "user_agent_hash", ""),
+		"referrer_host":    detailsString(ev.Details, "referrer_host", ""),
+		"source_file":      detailsString(ev.Details, "source_file", ""),
+		"parser_profile":   detailsString(ev.Details, "parser_profile", ""),
+		"message":          ev.Message,
+	}
+	if len(ev.Details) > 0 {
+		raw, _ := json.Marshal(ev.Details)
+		if len(raw) > 4096 {
+			raw = raw[:4096]
+		}
+		row["details_json"] = string(raw)
+	}
+	return row
 }
 
 func detailsString(d map[string]any, key, fallback string) string {

@@ -1,15 +1,13 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { Dashboard } from './Dashboard';
+import { ControlRoom } from './ControlRoom';
 import * as useApiClientModule from '../hooks/useApiClient';
 import * as useTenantModule from '../providers/TenantProvider';
-import * as useTenantsModule from '../hooks/useTenants';
+import type { ControlRoomOverview } from '../lib/api';
 
-// Mobile test stub: uses matchMedia overrides + a 375px viewport to confirm
-// the dashboard still renders its 5 section titles. The actual CSS grid
-// collapse is verified by visual regression in another environment; this test
-// guards against JS-side regressions (hooks that crash on narrow viewports).
+// Breakpoint smoke: jsdom cannot validate the visual grid, but this keeps the
+// Control Room render path honest across the viewport sizes operators use.
 
 const viewports = [
   { label: 'mobile-375', width: 375, height: 667 },
@@ -17,65 +15,75 @@ const viewports = [
   { label: 'desktop-1280', width: 1280, height: 900 },
 ];
 
-const overview = {
+const overview: ControlRoomOverview = {
+  tenant_id: 'tenant-1',
   generated_at: new Date().toISOString(),
-  node_counts: { total: 1, healthy: 1, offline: 0 },
-  security_event_counts: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
-  health_incident_counts: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
-  compliance_summary: { total: 0, passed: 0, failed: 0 },
-  rule_trigger_counts_24h: {},
-  remediations_applied_24h: 0,
+  period: '24h',
+  lanes: [
+    lane('server-health', 'Server Health', 'healthy', 'All monitored servers responding'),
+    lane('security', 'Security', 'healthy', 'No critical findings'),
+    lane('app-db-health', 'App/DB Health', 'healthy', 'Log capture healthy'),
+    lane('exposure', 'Current Exposure', 'warning', '1 public listener'),
+    lane('ip-behavior', 'Connection/IP Behavior', 'healthy', 'Traffic matches baseline'),
+    lane('patch-posture', 'Patch Posture', 'warning', '1 patch approval pending'),
+  ],
+  top_incidents: [],
+  stale_warnings: [],
+  ip_behavior: {
+    request_count: 0,
+    bytes_out: 0,
+    countries: [],
+    findings: [],
+  },
+  webservers: {
+    total: 0,
+    capture_ready: 0,
+    enforce_ready: 0,
+    instances: [],
+  },
+  isolation: {
+    online: 3,
+    whitelist: 0,
+    airgapped: 0,
+    protected: 0,
+    whitelist_gaps: 0,
+    expired: 0,
+    expiring_soon: 0,
+    nodes: [],
+  },
+  firewall: {
+    enabled: 0,
+    disabled: 0,
+    unknown: 0,
+    default_deny: 0,
+    stale: 0,
+    nodes: [],
+  },
+  pending_actions: [],
 };
 
-describe('Dashboard at multiple breakpoints', () => {
+function lane(id: string, title: string, tone: ControlRoomOverview['lanes'][number]['tone'], summary: string): ControlRoomOverview['lanes'][number] {
+  return {
+    id,
+    title,
+    tone,
+    score: tone === 'healthy' ? 95 : 62,
+    summary,
+    primary_metric: { label: 'Status', value: summary, tone },
+    secondary_metric: { label: 'Open', value: '0', tone },
+    metrics: [],
+    items: [],
+    drilldown: `/control-room/${id}`,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+describe('Control Room at multiple breakpoints', () => {
   beforeEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useApiClientModule, 'useApiClient') as any).mockReturnValue({
-      getDashboardOverview: vi.fn().mockResolvedValue(overview),
-      getRiskScore: vi.fn().mockResolvedValue({
-        score: 88,
-        max_score: 100,
-        percent: 88,
-        trend_direction: 'stable',
-        trend_delta: 0,
-        components: [],
-        calculated_at: new Date().toISOString(),
-      }),
-      getMTTDMetrics: vi.fn().mockResolvedValue({
-        severity: 'critical',
-        mean_minutes: 240,
-        median_minutes: 180,
-        p95_minutes: 360,
-        event_count: 3,
-        period: '7d',
-        calculated_at: new Date().toISOString(),
-      }),
-      getMTTRMetrics: vi.fn().mockResolvedValue({
-        severity: 'critical',
-        mean_minutes: 720,
-        median_minutes: 600,
-        p95_minutes: 1440,
-        remediation_count: 2,
-        period: '7d',
-        calculated_at: new Date().toISOString(),
-      }),
-      getRemediationVelocity: vi.fn().mockResolvedValue({
-        period: '30d',
-        period_count: 30,
-        remediations: 7,
-        avg_per_period: 0.23,
-        trend_direction: 'stable',
-        trend_percent: 0,
-      }),
-      getFindingsAging: vi.fn().mockResolvedValue({
-        severity: 'critical',
-        less_than_7_days: 1,
-        days_7_to_30: 1,
-        days_30_to_90: 0,
-        over_90_days: 0,
-        total_open: 2,
-      }),
-      streamEvents: vi.fn().mockReturnValue(() => undefined),
+      getControlRoomOverview: vi.fn().mockResolvedValue(overview),
+      setNodeIsolation: vi.fn(),
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useTenantModule, 'useTenant') as any).mockReturnValue({
@@ -86,14 +94,6 @@ describe('Dashboard at multiple breakpoints', () => {
       refresh: vi.fn(),
       loading: false,
       error: null,
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (vi.spyOn(useTenantsModule, 'useTenants') as any).mockReturnValue({
-      data: [{ id: 'tenant-1', name: 't', created_at: '', updated_at: '' }],
-      pagination: { total: 1, count: 1, limit: 1, offset: 0, nextOffset: null, prevOffset: null },
-      loading: false,
-      error: null,
-      refresh: vi.fn(),
     });
   });
 
@@ -120,11 +120,11 @@ describe('Dashboard at multiple breakpoints', () => {
 
       render(
         <MemoryRouter>
-          <Dashboard />
+          <ControlRoom />
         </MemoryRouter>,
       );
-      expect(await screen.findByText(/Security events/)).toBeInTheDocument();
-      expect(screen.getByText(/Compliance alerts/)).toBeInTheDocument();
+      expect(await screen.findByText(/Connection\/IP Behavior/)).toBeInTheDocument();
+      expect(screen.getByText(/Patch Posture/)).toBeInTheDocument();
     });
   });
 });

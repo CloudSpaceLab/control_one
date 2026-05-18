@@ -57,6 +57,44 @@ function stateTone(state: string): StateTone {
   }
 }
 
+export function alertContextPills(alert: Alert): Array<{ label: string; value: string; tone: StateTone }> {
+  const ctx = alert.context ?? {};
+  const pills: Array<{ label: string; value: string; tone: StateTone }> = [];
+  addContextPill(pills, 'Signal', contextString(ctx, 'event_type'), 'info');
+  addContextPill(pills, 'App', contextString(ctx, 'application_name', 'app', 'vhost'), 'healthy');
+  addContextPill(pills, 'Parser', contextString(ctx, 'parser_profile'), 'info');
+  addContextPill(pills, 'Log', basename(contextString(ctx, 'source_file')), 'unknown');
+  addContextPill(pills, 'Group', contextString(ctx, 'server_group'), 'warning');
+  const country = contextString(ctx, 'country_code', 'country');
+  const asn = contextString(ctx, 'asn');
+  addContextPill(pills, 'Origin', [country, asn ? `ASN ${asn}` : ''].filter(Boolean).join(' / '), 'degraded');
+  return pills.slice(0, 6);
+}
+
+function addContextPill(
+  pills: Array<{ label: string; value: string; tone: StateTone }>,
+  label: string,
+  value: string,
+  tone: StateTone,
+) {
+  if (!value || pills.some((pill) => pill.value === value)) return;
+  pills.push({ label, value, tone });
+}
+
+function contextString(ctx: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = ctx[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function basename(path: string): string {
+  if (!path) return '';
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
 export function Alerts(): JSX.Element {
   const client = useApiClient();
   const { data: tenants } = useTenants({ limit: 50, offset: 0 });
@@ -171,14 +209,26 @@ export function Alerts(): JSX.Element {
     {
       id: 'title',
       header: 'Title',
-      cell: ({ row }) => (
-        <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-foreground">{row.original.title}</span>
-          {row.original.summary ? (
-            <span className="text-xs text-text-muted">{row.original.summary}</span>
-          ) : null}
-        </div>
-      ),
+      cell: ({ row }) => {
+        const pills = alertContextPills(row.original);
+        return (
+          <div className="flex flex-col gap-1">
+            <span className="font-medium text-foreground">{row.original.title}</span>
+            {row.original.summary ? (
+              <span className="text-xs text-text-muted">{row.original.summary}</span>
+            ) : null}
+            {pills.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {pills.map((pill) => (
+                  <StatusTag key={`${pill.label}:${pill.value}`} tone={pill.tone} className="max-w-[220px] truncate">
+                    {pill.label}: {pill.value}
+                  </StatusTag>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       accessorKey: 'source',

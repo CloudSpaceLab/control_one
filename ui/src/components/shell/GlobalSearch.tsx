@@ -1,10 +1,10 @@
 import {
   Activity,
   AlertTriangle,
-  Boxes,
   Building2,
   FileText,
   Hash,
+  KeyRound,
   Network,
   Search,
   Server,
@@ -30,33 +30,18 @@ import { cn } from '@/lib/utils';
 import type { EntityType } from '@/components/kit';
 
 const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string }[] = [
-  { label: 'Dashboard', route: '/', icon: <Activity />, group: 'Pages' },
+  { label: 'Control Room', route: '/', icon: <Activity />, group: 'Pages' },
   { label: 'Alerts', route: '/alerts', icon: <AlertTriangle />, group: 'Pages' },
   { label: 'Investigate', route: '/investigate', icon: <Search />, group: 'Pages' },
-  { label: 'Saved searches', route: '/investigate/saved', icon: <FileText />, group: 'Pages' },
-  { label: 'Rules', route: '/rules', icon: <ShieldAlert />, group: 'Pages' },
-  { label: 'Network security', route: '/security/network', icon: <Network />, group: 'Pages' },
+  { label: 'Servers', route: '/nodes', icon: <Server />, group: 'Pages' },
+  { label: 'Network & exposure', route: '/security/network', icon: <Network />, group: 'Pages' },
+  { label: 'Patch posture', route: '/infrastructure/patch', icon: <ShieldAlert />, group: 'Pages' },
   { label: 'Compliance', route: '/compliance', icon: <FileText />, group: 'Pages' },
+  { label: 'Access', route: '/access', icon: <KeyRound />, group: 'Pages' },
   { label: 'Audit log', route: '/audit', icon: <FileText />, group: 'Pages' },
-  { label: 'Telemetry', route: '/telemetry', icon: <Activity />, group: 'Pages' },
-  { label: 'Recommendations', route: '/recommendations', icon: <ShieldAlert />, group: 'Pages' },
-  { label: 'Sessions', route: '/sessions', icon: <Terminal />, group: 'Pages' },
-  { label: 'Knowledge graph', route: '/investigate/knowledge-graph', icon: <Search />, group: 'Pages' },
-  { label: 'Patch management', route: '/infrastructure/patch', icon: <ShieldAlert />, group: 'Pages' },
-  { label: 'Just-in-time access', route: '/access', icon: <UserIcon />, group: 'Pages' },
-  { label: 'Nodes', route: '/nodes', icon: <Server />, group: 'Pages' },
-  { label: 'Fleet enrol', route: '/fleet-enroll', icon: <Server />, group: 'Pages' },
-  { label: 'Hypervisors', route: '/hypervisors', icon: <Boxes />, group: 'Pages' },
-  { label: 'Templates', route: '/templates', icon: <FileText />, group: 'Pages' },
-  { label: 'Jobs', route: '/jobs', icon: <Activity />, group: 'Pages' },
-  { label: 'Tenants', route: '/tenants', icon: <Building2 />, group: 'Pages' },
-  { label: 'Users', route: '/users', icon: <UserIcon />, group: 'Pages' },
-  { label: 'Roles & permissions', route: '/roles', icon: <UserIcon />, group: 'Pages' },
-  { label: 'Secrets', route: '/secrets', icon: <FileText />, group: 'Pages' },
-  { label: 'Settings', route: '/settings', icon: <FileText />, group: 'Pages' },
 ];
 
-const QUICK_NAV_ROUTES = ['/', '/alerts', '/rules', '/nodes', '/settings', '/investigate'];
+const QUICK_NAV_ROUTES = ['/', '/alerts', '/investigate', '/nodes', '/security/network', '/infrastructure/patch'];
 
 // Discoverability prompts shown under the empty state.
 const EXAMPLE_QUERIES = ['8.8.8.8', '139.162.40.237', 'admin@', 'sshd'];
@@ -135,7 +120,7 @@ export function GlobalSearch({ trigger }: { trigger?: ReactNode }) {
       {triggerNode}
       <CommandDialog open={open} onOpenChange={setOpen}>
         <CommandInput
-          placeholder="Paste an IP, hash, hostname, user, or ask…"
+          placeholder="Paste an IP, hash, hostname, or user"
           value={query}
           onValueChange={setQuery}
           onPaste={(e) => {

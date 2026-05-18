@@ -98,6 +98,6 @@ func (s *Stream) Dropped() uint64 {
 
 // Close shuts the stream. After Close, Publish silently drops.
 func (s *Stream) Close() {
-	defer func() { recover() }() // double-close is a no-op
+	defer func() { _ = recover() }() // double-close is a no-op
 	close(s.out)
 }

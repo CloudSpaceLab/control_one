@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Download, FileText, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import {
@@ -23,6 +24,15 @@ import { classifyValue } from '../lib/entity';
 import type { AuditLog } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 import { AuditReports } from './AuditReports';
+
+type AuditTab = 'logs' | 'reports';
+
+const AUDIT_TABS = ['logs', 'reports'] as const;
+
+function auditTabFromParams(params: URLSearchParams): AuditTab {
+  const value = params.get('tab');
+  return AUDIT_TABS.includes(value as AuditTab) ? (value as AuditTab) : 'logs';
+}
 
 function formatDate(value?: string): string {
   if (!value) return '—';
@@ -75,7 +85,8 @@ function exportToCSV(logs: AuditLog[]): void {
 }
 
 export function Audit(): JSX.Element {
-  const [tab, setTab] = useState<'logs' | 'reports'>('logs');
+  const [params, setParams] = useSearchParams();
+  const [tab, setTab] = useState<AuditTab>(() => auditTabFromParams(params));
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>();
   const [actorTypeFilter, setActorTypeFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('');
@@ -93,6 +104,21 @@ export function Audit(): JSX.Element {
     limit,
     offset,
   });
+
+  useEffect(() => {
+    const next = auditTabFromParams(params);
+    setTab((current) => (current === next ? current : next));
+  }, [params]);
+
+  const onTabChange = (value: string) => {
+    if (!AUDIT_TABS.includes(value as AuditTab)) return;
+    const next = value as AuditTab;
+    setTab(next);
+    const updated = new URLSearchParams(params);
+    if (next === 'logs') updated.delete('tab');
+    else updated.set('tab', next);
+    setParams(updated, { replace: true });
+  };
 
   const uniqueActions = useMemo(() => {
     const a = new Set<string>();
@@ -221,7 +247,7 @@ export function Audit(): JSX.Element {
         }
       />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'logs' | 'reports')}>
+      <Tabs value={tab} onValueChange={onTabChange}>
         <TabsList>
           <TabsTrigger value="logs">Audit Log</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>

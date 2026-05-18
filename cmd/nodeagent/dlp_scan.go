@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
@@ -83,7 +82,7 @@ func (s *DLPScanner) FetchRules(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fetch dlp rules: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -122,7 +121,7 @@ func (s *DLPScanner) ScanFile(path string) ([]DLPScanResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Skip binary files based on extension
 	ext := strings.ToLower(filepath.Ext(path))
@@ -305,7 +304,7 @@ func (s *DLPScanner) ReportFindings(ctx context.Context, report *DLPScanReport) 
 	if err != nil {
 		return fmt.Errorf("send findings: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -346,17 +345,4 @@ func (s *DLPScanner) RunAsync(ctx context.Context) {
 			s.log.Error("dlp scan failed", zap.Error(err))
 		}
 	}()
-}
-
-// createPIIFindingPayload converts scan results to the expected API format.
-func createPIIFindingPayload(nodeID, tenantID uuid.UUID, result DLPScanResult) map[string]interface{} {
-	return map[string]interface{}{
-		"node_id":     nodeID.String(),
-		"tenant_id":   tenantID.String(),
-		"severity":    result.Severity,
-		"details":     fmt.Sprintf("PII detected: %s in %s at line %d", result.PIIType, result.Path, result.LineNumber),
-		"source_path": result.Path,
-		"pii_type":    result.PIIType,
-		"rule_id":     result.RuleID,
-	}
 }

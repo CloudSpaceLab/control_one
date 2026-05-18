@@ -1,18 +1,15 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 )
 
 // Threat-feed CRUD lets operators manage which IP/abuse data sources the
@@ -285,63 +282,4 @@ func (s *Server) updateThreatFeed(w http.ResponseWriter, r *http.Request, id uui
 		return
 	}
 	writeJSON(w, http.StatusOK, newThreatFeedResponse(*updated))
-}
-
-// threatFeedSourceProvider adapts the Server's store + sealer into the
-// threatintel.SourceProvider interface so the manager picks up CRUD changes
-// on every refresh tick.
-type threatFeedSourceProvider struct {
-	srv *Server
-}
-
-func (p threatFeedSourceProvider) Sources(ctx context.Context) ([]threatintel.ProvidedSource, error) {
-	if p.srv == nil || p.srv.store == nil {
-		return nil, nil
-	}
-	enabled := true
-	feeds, err := p.srv.store.ListThreatFeeds(ctx, storage.ThreatFeedFilter{Enabled: &enabled})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]threatintel.ProvidedSource, 0, len(feeds))
-	for _, f := range feeds {
-		var apiKey string
-		if len(f.APIKeySealed) > 0 && p.srv.sealer != nil {
-			plain, err := p.srv.sealer.Open(f.APIKeySealed, f.Nonce)
-			if err != nil {
-				if p.srv.logger != nil {
-					p.srv.logger.Warn("threat feed unseal", zap.String("feed", f.Name), zap.Error(err))
-				}
-				continue
-			}
-			apiKey = string(plain)
-		}
-		url := ""
-		if f.URL.Valid {
-			url = f.URL.String
-		}
-		category := ""
-		if f.Category.Valid {
-			category = f.Category.String
-		}
-		src, err := threatintel.SourceFromConfig(f.FeedType, url, apiKey, category)
-		if err != nil {
-			continue
-		}
-		out = append(out, threatintel.ProvidedSource{ID: f.ID.String(), Source: src})
-	}
-	return out, nil
-}
-
-func (p threatFeedSourceProvider) OnRefresh(ctx context.Context, feedID, status, errMsg string, count int) {
-	if p.srv == nil || p.srv.store == nil {
-		return
-	}
-	id, err := uuid.Parse(feedID)
-	if err != nil {
-		return
-	}
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_ = p.srv.store.RecordThreatFeedRefresh(cctx, id, status, errMsg, count)
 }
