@@ -92,7 +92,7 @@ func (s *Server) handleCreateComplianceEvidence(w http.ResponseWriter, r *http.R
 	// Handle optional file upload
 	file, header, fileErr := r.FormFile("file")
 	if fileErr == nil {
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		evidenceID := uuid.New()
 		ev.ID = evidenceID
@@ -109,7 +109,7 @@ func (s *Server) handleCreateComplianceEvidence(w http.ResponseWriter, r *http.R
 			http.Error(w, "failed to create file", http.StatusInternalServerError)
 			return
 		}
-		defer dest.Close()
+		defer func() { _ = dest.Close() }()
 
 		hasher := sha256.New()
 		written, err := io.Copy(io.MultiWriter(dest, hasher), file)

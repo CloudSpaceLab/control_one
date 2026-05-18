@@ -170,6 +170,191 @@ export interface DashboardOverview {
   compliance_series?: ComplianceSeriesPoint[];
 }
 
+export type ControlRoomTone = 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown';
+
+export interface ControlRoomMetric {
+  label: string;
+  value: string;
+  tone: ControlRoomTone;
+  hint?: string;
+  drilldown?: string;
+}
+
+export interface ControlRoomDrilldownItem {
+  label: string;
+  value: string;
+  tone: ControlRoomTone;
+  hint?: string;
+  drilldown?: string;
+}
+
+export interface ControlRoomLane {
+  id: 'server-health' | 'security' | 'app-db-health' | 'exposure' | 'ip-behavior' | 'patch-posture' | string;
+  title: string;
+  tone: ControlRoomTone;
+  score: number;
+  summary: string;
+  primary_metric: ControlRoomMetric;
+  secondary_metric: ControlRoomMetric;
+  drilldown: string;
+  updated_at: string;
+  metrics: ControlRoomMetric[];
+  items?: ControlRoomDrilldownItem[];
+}
+
+export interface ControlRoomIncident {
+  id: string;
+  title: string;
+  severity: string;
+  source: string;
+  summary?: string;
+  drilldown?: string;
+  opened_at?: string;
+}
+
+export interface ControlRoomStaleWarning {
+  id: string;
+  tone: ControlRoomTone;
+  message: string;
+  drilldown?: string;
+}
+
+export interface ControlRoomIPFinding {
+  id: string;
+  source_ip?: string;
+  country_code?: string;
+  asn?: string;
+  category: string;
+  severity: string;
+  score: number;
+  reason: string;
+  evidence?: Record<string, unknown>;
+  last_seen_at: string;
+  drilldown: string;
+}
+
+export interface ControlRoomIPBehavior {
+  request_count: number;
+  bytes_out: number;
+  countries: IPBehaviorCountrySummary[];
+  findings: ControlRoomIPFinding[];
+}
+
+export interface ControlRoomWebserver {
+  id: string;
+  node_id: string;
+  kind: string;
+  version?: string;
+  service: string;
+  config_path?: string;
+  log_path?: string;
+  error_log_path?: string;
+  capture_ready: boolean;
+  enforce_ready: boolean;
+  vhosts?: Record<string, unknown>[];
+  capabilities?: Record<string, unknown>;
+  last_action?: ControlRoomWebserverAction;
+  last_receipt?: ControlRoomWebserverReceipt;
+  observed_at: string;
+}
+
+export interface ControlRoomWebserverAction {
+  id: string;
+  job_id?: string;
+  action: string;
+  status: string;
+  result?: Record<string, unknown>;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ControlRoomWebserverReceipt {
+  id: string;
+  action: string;
+  validation_status: string;
+  reload_status: string;
+  rollback_ref?: string;
+  checksum_before?: string;
+  checksum_after?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ControlRoomWebservers {
+  total: number;
+  capture_ready: number;
+  enforce_ready: number;
+  instances: ControlRoomWebserver[];
+}
+
+export interface ControlRoomIsolationNode {
+  id: string;
+  hostname: string;
+  mode: NetworkIsolationMode | string;
+  active: boolean;
+  expired: boolean;
+  local_only: boolean;
+  expires_at?: string;
+  reason?: string;
+  allowed_applications?: string[];
+  allowlist_cidrs?: string[];
+  updated_at?: string;
+}
+
+export interface ControlRoomIsolation {
+  online: number;
+  whitelist: number;
+  airgapped: number;
+  protected: number;
+  whitelist_gaps: number;
+  expired: number;
+  expiring_soon: number;
+  nodes: ControlRoomIsolationNode[];
+}
+
+export interface ControlRoomFirewallNode {
+  node_id: string;
+  hostname: string;
+  firewall_type?: string;
+  known: boolean;
+  enabled: boolean;
+  default_deny: boolean;
+  stale: boolean;
+  observed_at?: string;
+}
+
+export interface ControlRoomFirewall {
+  enabled: number;
+  disabled: number;
+  unknown: number;
+  default_deny: number;
+  stale: number;
+  nodes: ControlRoomFirewallNode[];
+}
+
+export interface ControlRoomAction {
+  id: string;
+  label: string;
+  tone: ControlRoomTone;
+  count: number;
+  drilldown: string;
+}
+
+export interface ControlRoomOverview {
+  tenant_id: string;
+  generated_at: string;
+  period: string;
+  lanes: ControlRoomLane[];
+  top_incidents: ControlRoomIncident[];
+  stale_warnings: ControlRoomStaleWarning[];
+  ip_behavior: ControlRoomIPBehavior;
+  webservers: ControlRoomWebservers;
+  isolation: ControlRoomIsolation;
+  firewall: ControlRoomFirewall;
+  pending_actions: ControlRoomAction[];
+}
+
 // History + framework series
 export interface RiskScorePoint { ts: string; score: number; }
 export interface RiskScoreHistory { points: RiskScorePoint[]; }
@@ -693,6 +878,18 @@ export interface UpdateNodePayload {
   os?: string;
   arch?: string;
   public_ip?: string;
+  labels?: Record<string, unknown>;
+}
+
+export type NetworkIsolationMode = 'online' | 'whitelist' | 'airgapped';
+
+export interface NodeIsolationPayload {
+  mode: NetworkIsolationMode;
+  duration_seconds?: number;
+  expires_at?: string;
+  reason?: string;
+  allowed_applications?: string[];
+  allowlist_cidrs?: string[];
 }
 
 export interface APIClientOptions {
@@ -1582,6 +1779,14 @@ export class APIClient {
     });
   }
 
+  async setNodeIsolation(nodeId: string, payload: NodeIsolationPayload): Promise<Node> {
+    const encoded = encodeURIComponent(nodeId);
+    return this.request<Node>(`/api/v1/nodes/${encoded}/isolation`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async deleteNode(nodeId: string): Promise<void> {
     const encoded = encodeURIComponent(nodeId);
     await this.request<void>(`/api/v1/nodes/${encoded}`, { method: 'DELETE' });
@@ -2202,6 +2407,14 @@ export class APIClient {
     return this.request<DashboardOverview>(path);
   }
 
+  async getControlRoomOverview(tenantId?: string | null, period?: string): Promise<ControlRoomOverview> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    if (period) search.set('period', period);
+    const qs = search.toString();
+    return this.request<ControlRoomOverview>(`/api/v1/control-room/overview${qs ? `?${qs}` : ''}`);
+  }
+
   // ---- Executive Risk Dashboard Metrics -------------------------------------------
   async getRiskScore(tenantId?: string): Promise<RiskScore> {
     const search = new URLSearchParams();
@@ -2382,6 +2595,213 @@ export class APIClient {
     return this.request<EntityActionResponse>(
       `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions`,
       { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async getIPBehaviorOverview(params: { tenantId: string; since?: string }): Promise<IPBehaviorOverview> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    return this.request<IPBehaviorOverview>(`/api/v1/ip-behavior/overview?${search.toString()}`);
+  }
+
+  async listIPBehaviorCountries(params: { tenantId: string; since?: string }): Promise<{ countries: IPBehaviorCountrySummary[]; since: string }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    return this.request<{ countries: IPBehaviorCountrySummary[]; since: string }>(
+      `/api/v1/ip-behavior/countries?${search.toString()}`,
+    );
+  }
+
+  async getIPBehaviorCountryDetail(params: { tenantId: string; code: string; since?: string }): Promise<IPBehaviorCountrySummary> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    return this.request<IPBehaviorCountrySummary>(
+      `/api/v1/ip-behavior/countries/${encodeURIComponent(params.code)}?${search.toString()}`,
+    );
+  }
+
+  async getIPBehaviorIPProfile(params: { tenantId: string; ip: string; since?: string }): Promise<IPBehaviorIPProfile> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.since) search.set('since', params.since);
+    return this.request<IPBehaviorIPProfile>(
+      `/api/v1/ip-behavior/ips/${encodeURIComponent(params.ip)}?${search.toString()}`,
+    );
+  }
+
+  async listIPBehaviorBaselines(params: {
+    tenantId: string;
+    dimension?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<IPBehaviorBaseline>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.dimension) search.set('dimension', params.dimension);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return this.request<PaginatedResponse<IPBehaviorBaseline>>(`/api/v1/ip-behavior/baselines?${search.toString()}`);
+  }
+
+  async createBlockProposal(payload: {
+    tenant_id: string;
+    ip_cidr: string;
+    reason: string;
+    score?: number;
+    ttl_seconds?: number;
+    scope?: string;
+    target_type?: string;
+    target_id?: string;
+    server_group?: string;
+    app?: string;
+    vhost?: string;
+    enforcement?: string;
+    finding_id?: string;
+    protected_override?: boolean;
+    protected_override_reason?: string;
+  }): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>('/api/v1/network/block-proposals', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async createASNBlockProposals(payload: {
+    tenant_id: string;
+    asn: string;
+    since?: string;
+    limit?: number;
+    reason: string;
+    score?: number;
+    ttl_seconds?: number;
+    scope?: string;
+    target_type?: string;
+    server_group?: string;
+    app?: string;
+    vhost?: string;
+    enforcement?: string;
+    protected_override?: boolean;
+    protected_override_reason?: string;
+  }): Promise<ASNBlockProposalsResponse> {
+    return this.request<ASNBlockProposalsResponse>('/api/v1/network/block-proposals/asn', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listBlockProposals(params: {
+    tenantId: string;
+    status?: string;
+    ipCidr?: string;
+    serverGroup?: string;
+    app?: string;
+    vhost?: string;
+    findingId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<IPBlockProposal>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.status) search.set('status', params.status);
+    if (params.ipCidr) search.set('ip_cidr', params.ipCidr);
+    if (params.serverGroup) search.set('server_group', params.serverGroup);
+    if (params.app) search.set('app', params.app);
+    if (params.vhost) search.set('vhost', params.vhost);
+    if (params.findingId) search.set('finding_id', params.findingId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return this.request<PaginatedResponse<IPBlockProposal>>(`/api/v1/network/block-proposals?${search.toString()}`);
+  }
+
+  async approveBlockProposal(id: string): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async promoteBlockProposal(id: string): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectBlockProposal(id: string, reason?: string): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async rollbackBlockProposal(id: string, reason?: string): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async listWebserverInstances(params: { tenantId: string; nodeId?: string; limit?: number; offset?: number }): Promise<PaginatedResponse<WebserverInstance>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.nodeId) search.set('node_id', params.nodeId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return this.request<PaginatedResponse<WebserverInstance>>(`/api/v1/webservers?${search.toString()}`);
+  }
+
+  async createWebserverInventoryScan(payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+    return this.request<WebserverConfigActionResponse>('/api/v1/webservers/inventory', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async planWebserverConfig(instanceId: string, payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+    return this.request<WebserverConfigActionResponse>(
+      `/api/v1/webservers/${encodeURIComponent(instanceId)}/config/plan`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async applyWebserverConfig(instanceId: string, payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+    return this.request<WebserverConfigActionResponse>(
+      `/api/v1/webservers/${encodeURIComponent(instanceId)}/config/apply`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async rollbackWebserverConfig(instanceId: string, payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+    return this.request<WebserverConfigActionResponse>(
+      `/api/v1/webservers/${encodeURIComponent(instanceId)}/config/rollback`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  }
+
+  async listWebserverConfigActions(params: {
+    tenantId: string;
+    instanceId: string;
+    limit?: number;
+  }): Promise<PaginatedResponse<WebserverConfigActionHistory>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    return this.request<PaginatedResponse<WebserverConfigActionHistory>>(
+      `/api/v1/webservers/${encodeURIComponent(params.instanceId)}/config/actions?${search.toString()}`,
+    );
+  }
+
+  async listWebserverConfigReceipts(params: {
+    tenantId: string;
+    instanceId: string;
+    limit?: number;
+  }): Promise<PaginatedResponse<WebserverConfigReceipt>> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    return this.request<PaginatedResponse<WebserverConfigReceipt>>(
+      `/api/v1/webservers/${encodeURIComponent(params.instanceId)}/config/receipts?${search.toString()}`,
     );
   }
 
@@ -2832,6 +3252,41 @@ export class APIClient {
     return `${this.baseUrl}/api/v1/agent/bundle?${search.toString()}`;
   }
 
+  async listOfflineContentBundles(params: {
+    tenantId: string;
+    bundleId?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: OfflineContentBundle[]; pagination: PaginationMeta }> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.bundleId) search.set('bundle_id', params.bundleId);
+    if (params.status) search.set('status', params.status);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return this.request<{ items: OfflineContentBundle[]; pagination: PaginationMeta }>(
+      `/api/v1/offline-bundles?${search.toString()}`,
+    );
+  }
+
+  async importOfflineContentBundle(tenantId: string, bundle: Blob): Promise<OfflineContentBundle> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<OfflineContentBundle>(`/api/v1/offline-bundles?${search.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: bundle,
+    });
+  }
+
+  async rollbackOfflineContentBundle(tenantId: string, bundleId: string, sequence: number): Promise<OfflineContentBundle> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<OfflineContentBundle>(`/api/v1/offline-bundles/${encodeURIComponent(bundleId)}/rollback?${search.toString()}`, {
+      method: 'POST',
+      body: JSON.stringify({ bundle_id: bundleId, sequence }),
+    });
+  }
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
@@ -2924,15 +3379,28 @@ export class APIClient {
     return this.request<PaginatedResponse<BehavioralBaseline>>(`/api/v1/behavioral/baselines${qs ? `?${qs}` : ''}`);
   }
 
-  async listAnomalies(params: { tenantId?: string; baselineId?: string; resolved?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<BehavioralAnomaly>> {
+  async listAnomalies(params: { tenantId?: string; baselineId?: string; sourceIp?: string; resolved?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<BehavioralAnomaly>> {
     const search = new URLSearchParams();
     if (params.tenantId) search.set('tenant_id', params.tenantId);
     if (params.baselineId) search.set('baseline_id', params.baselineId);
+    if (params.sourceIp) search.set('src_ip', params.sourceIp);
     if (typeof params.resolved === 'boolean') search.set('resolved', String(params.resolved));
     if (typeof params.limit === 'number') search.set('limit', String(params.limit));
     if (typeof params.offset === 'number') search.set('offset', String(params.offset));
     const qs = search.toString();
     return this.request<PaginatedResponse<BehavioralAnomaly>>(`/api/v1/behavioral/anomalies${qs ? `?${qs}` : ''}`);
+  }
+
+  async suppressAnomaly(id: string): Promise<BehavioralAnomaly> {
+    return this.request<BehavioralAnomaly>(`/api/v1/behavioral/anomalies/${encodeURIComponent(id)}/suppress`, {
+      method: 'POST',
+    });
+  }
+
+  async resolveAnomaly(id: string): Promise<BehavioralAnomaly> {
+    return this.request<BehavioralAnomaly>(`/api/v1/behavioral/anomalies/${encodeURIComponent(id)}/resolve`, {
+      method: 'POST',
+    });
   }
 
   // ── Correlation rules ─────────────────────────────────────────────────
@@ -3624,6 +4092,190 @@ export interface ActiveBlock {
   NodesRemoved: number;
 }
 
+export interface IPBlockProposal {
+  id: string;
+  tenant_id: string;
+  finding_id?: string;
+  entity_action_id?: string;
+  ip_cidr: string;
+  scope: string;
+  target_type: string;
+  target_id?: string;
+  server_group: string;
+  app: string;
+  vhost: string;
+  enforcement: string;
+  status: 'proposed' | 'approved' | 'canary' | 'dispatching' | 'active' | 'failed' | 'expired' | 'removed' | 'denied' | 'rejected' | 'rolled_back';
+  reason: string;
+  score: number;
+  expires_at?: string;
+  approved_by?: string;
+  approved_at?: string;
+  last_error?: string;
+  protected_override: boolean;
+  protected_override_reason?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ASNBlockProposalSkipped {
+  source_ip: string;
+  reason: string;
+}
+
+export interface ASNBlockProposalsResponse {
+  asn: string;
+  total_candidates: number;
+  created: IPBlockProposal[];
+  skipped: ASNBlockProposalSkipped[];
+  limit: number;
+  generated_at: string;
+}
+
+export interface IPBehaviorCountrySummary {
+  country_code: string;
+  country: string;
+  unique_source_ips: number;
+  request_count: number;
+  bytes_out: number;
+  status_counts: Record<string, number>;
+  first_seen_at: string;
+  last_seen_at: string;
+  top_asns?: string[];
+  top_apps?: string[];
+  server_groups?: string[];
+}
+
+export interface IPBehaviorOverview {
+  tenant_id: string;
+  since: string;
+  request_count: number;
+  bytes_out: number;
+  status_counts: Record<string, number>;
+  top_countries: IPBehaviorCountrySummary[];
+  generated_at: string;
+}
+
+export interface IPBehaviorIPProfile {
+  source_ip: string;
+  countries: string[];
+  asns: string[];
+  isps?: string[];
+  apps?: string[];
+  server_groups?: string[];
+  node_ids?: string[];
+  history?: IPBehaviorHistoryPoint[];
+  request_count: number;
+  bytes_out: number;
+  status_counts: Record<string, number>;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface IPBehaviorHistoryPoint {
+  hour_ts: string;
+  request_count: number;
+  bytes_out: number;
+  status_counts: Record<string, number>;
+}
+
+export interface IPBehaviorBaseline {
+  id?: string;
+  tenant_id?: string;
+  dimension?: string;
+  dimension_key?: string;
+  baseline?: Record<string, unknown>;
+  window_days?: number;
+  sample_count?: number;
+  computed_at?: string;
+  ID?: string;
+  TenantID?: string;
+  Dimension?: string;
+  DimensionKey?: string;
+  Baseline?: Record<string, unknown>;
+  WindowDays?: number;
+  SampleCount?: number;
+  ComputedAt?: string;
+}
+
+export interface WebserverInstance {
+  ID: string;
+  TenantID: string;
+  NodeID: string;
+  Kind: string;
+  Version: string;
+  ServiceName: string;
+  ConfigPath: string;
+  AccessLogPath: string;
+  ErrorLogPath: string;
+  VHosts?: Record<string, unknown>[];
+  Capabilities?: Record<string, unknown>;
+  ObservedAt: string;
+}
+
+export interface WebserverConfigActionResponse {
+  job_id: string;
+  action_id: string;
+  status: string;
+  created_at?: string;
+}
+
+export interface WebserverConfigActionHistory {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  webserver_instance_id?: string;
+  job_id?: string;
+  action: string;
+  status: string;
+  policy?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebserverConfigReceipt {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  webserver_instance_id?: string;
+  action_id?: string;
+  action: string;
+  checksum_before?: string;
+  checksum_after?: string;
+  validation_status: string;
+  reload_status: string;
+  rollback_ref?: string;
+  diff?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface WebserverConfigActionPayload {
+  tenant_id: string;
+  node_id: string;
+  policy?: Record<string, unknown>;
+}
+
+export interface OfflineContentBundle {
+  id?: string;
+  tenant_id?: string;
+  bundle_id: string;
+  version: string;
+  sequence: number;
+  status: string;
+  public_key_fingerprint: string;
+  manifest_sha256: string;
+  storage_path: string;
+  contents: Array<Record<string, unknown>>;
+  warnings: string[];
+  error?: string;
+  imported_at: string;
+  issued_at?: string;
+  expires_at?: string;
+}
+
 export interface NodeFirewallRule {
   ID: string;
   EntityActionID: string;
@@ -3838,6 +4490,7 @@ export interface TenantEventFilters {
   file_size_min_bytes: number;
   allowlist_cidrs: string[];
   denylist_cidrs: string[];
+  trusted_proxy_cidrs: string[];
   db_query_text_capture: boolean;
   forensic_mode: boolean;
 }
@@ -3951,12 +4604,19 @@ export interface BehavioralAnomaly {
   tenant_id: string;
   baseline_id: string;
   node_id?: string;
+  source_ip?: string;
+  country_code?: string;
+  asn?: string;
   metric: string;
+  severity?: string;
+  status?: string;
+  reason?: string;
   observed_value: number;
   z_score: number;
   resolved: boolean;
   resolved_at?: string;
   created_at: string;
+  last_seen_at?: string;
 }
 
 export interface CorrelationRule {

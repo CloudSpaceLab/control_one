@@ -650,6 +650,49 @@ func TestTriggerAutoRemediation_OptOutLabelSkips(t *testing.T) {
 	}
 }
 
+func TestTriggerAutoRemediation_IsolationSkips(t *testing.T) {
+	t.Parallel()
+
+	ruleID := "rule-isolation"
+	script := &storage.RemediationScript{
+		ID:            uuid.New(),
+		RuleID:        ruleID,
+		Platform:      "all",
+		ScriptType:    "bash",
+		ScriptContent: "echo fix",
+		Enabled:       true,
+	}
+	store := newTestStoreWithScript(ruleID, script)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store.nodes = append(store.nodes, storage.Node{
+		ID:       nodeID,
+		TenantID: tenantID,
+		Hostname: "n-airgap",
+		Labels: map[string]any{
+			isolationModeLabel: isolationModeAirgapped,
+		},
+	})
+
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+
+	result := compliance.Result{RuleID: ruleID, Passed: false, Severity: "medium"}
+	jobID := srv.triggerAutoRemediation(context.Background(), tenantID, nodeID, result, true)
+	if jobID != nil {
+		t.Fatalf("expected nil jobID when node is airgapped, got %s", jobID)
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.tasks) != 0 {
+		t.Fatalf("expected 0 enqueued tasks, got %d", len(queue.tasks))
+	}
+}
+
 // TestTriggerAutoRemediation_ChangeWindowDeferred verifies gate 2: outside the
 // tenant's change windows a non-critical result is deferred to the next open.
 func TestTriggerAutoRemediation_ChangeWindowDeferred(t *testing.T) {

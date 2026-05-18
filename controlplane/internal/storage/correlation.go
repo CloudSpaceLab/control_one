@@ -174,10 +174,19 @@ func (s *Store) UpsertBehavioralBaseline(ctx context.Context, tenantID uuid.UUID
 		windowDays = 30
 	}
 	_, err = s.db.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE behavioral_baselines
+			SET baseline = $5, window_days = $6, computed_at = NOW()
+			WHERE tenant_id = $1
+			  AND signal_type = $3
+			  AND dimension = $4
+			  AND (($2::uuid IS NULL AND node_id IS NULL) OR node_id = $2)
+			RETURNING id
+		)
 		INSERT INTO behavioral_baselines (id, tenant_id, node_id, signal_type, dimension, baseline, window_days, computed_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, NOW())
-		ON CONFLICT (tenant_id, node_id, signal_type, dimension) DO UPDATE
-		  SET baseline = EXCLUDED.baseline, window_days = EXCLUDED.window_days, computed_at = EXCLUDED.computed_at
+		SELECT gen_random_uuid(), $1, $2, $3, $4, $5, $6, NOW()
+		WHERE NOT EXISTS (SELECT 1 FROM updated)
+		ON CONFLICT DO NOTHING
 	`, tenantID, nodeArg, signalType, dimension, blob, windowDays)
 	return err
 }
@@ -214,6 +223,92 @@ func (s *Store) ListBehavioralBaselines(ctx context.Context, tenantID uuid.UUID,
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListBehavioralBaselinesPage(ctx context.Context, tenantID uuid.UUID, nodeID uuid.UUID, limit, offset int) ([]BehavioralBaseline, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	where := []string{"TRUE"}
+	args := []any{}
+	if tenantID != uuid.Nil {
+		args = append(args, tenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if nodeID != uuid.Nil {
+		args = append(args, nodeID)
+		where = append(where, fmt.Sprintf("node_id = $%d", len(args)))
+	}
+	whereSQL := strings.Join(where, " AND ")
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM behavioral_baselines WHERE `+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, node_id, signal_type, dimension, baseline, window_days, computed_at
+		FROM behavioral_baselines
+		WHERE `+whereSQL+fmt.Sprintf(" ORDER BY computed_at DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []BehavioralBaseline
+	for rows.Next() {
+		var b BehavioralBaseline
+		var raw []byte
+		if err := rows.Scan(&b.ID, &b.TenantID, &b.NodeID, &b.SignalType, &b.Dimension, &raw, &b.WindowDays, &b.ComputedAt); err != nil {
+			return nil, 0, err
+		}
+		m, err := decodeJSONBMap(raw)
+		if err != nil {
+			return nil, 0, err
+		}
+		b.Baseline = m
+		out = append(out, b)
+	}
+	return out, total, rows.Err()
+}
+
+func (s *Store) GetBehavioralBaseline(ctx context.Context, tenantID uuid.UUID, nodeID *uuid.UUID, signalType, dimension string) (*BehavioralBaseline, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if tenantID == uuid.Nil || strings.TrimSpace(signalType) == "" || strings.TrimSpace(dimension) == "" {
+		return nil, errors.New("tenant_id, signal_type, dimension required")
+	}
+	var nodeArg any
+	nodeClause := "node_id IS NULL"
+	if nodeID != nil && *nodeID != uuid.Nil {
+		nodeArg = *nodeID
+		nodeClause = "node_id = $4"
+	}
+	args := []any{tenantID, strings.TrimSpace(signalType), strings.TrimSpace(dimension)}
+	if nodeArg != nil {
+		args = append(args, nodeArg)
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, node_id, signal_type, dimension, baseline, window_days, computed_at
+		FROM behavioral_baselines
+		WHERE tenant_id = $1 AND signal_type = $2 AND dimension = $3 AND `+nodeClause+`
+	`, args...)
+	var b BehavioralBaseline
+	var raw []byte
+	if err := row.Scan(&b.ID, &b.TenantID, &b.NodeID, &b.SignalType, &b.Dimension, &raw, &b.WindowDays, &b.ComputedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	m, err := decodeJSONBMap(raw)
+	if err != nil {
+		return nil, err
+	}
+	b.Baseline = m
+	return &b, nil
 }
 
 // ---------- port_observations ----------

@@ -25,6 +25,7 @@ type TenantEventFilters struct {
 	FileSizeMinBytes        int64     `json:"file_size_min_bytes"`
 	AllowlistCIDRs          []string  `json:"allowlist_cidrs"`
 	DenylistCIDRs           []string  `json:"denylist_cidrs"`
+	TrustedProxyCIDRs       []string  `json:"trusted_proxy_cidrs"`
 	DBQueryTextCapture      bool      `json:"db_query_text_capture"`
 	ForensicMode            bool      `json:"forensic_mode"`
 	UpdatedAt               time.Time `json:"updated_at"`
@@ -41,6 +42,9 @@ func DefaultTenantEventFilters(tenantID uuid.UUID) TenantEventFilters {
 		CaptureDBQueries:        true,
 		ThreatMatchFull:         true,
 		FilePathsWatch:          []string{"/etc/", "/var/lib/", "/var/log/", "/opt/", "/home/", "/root/"},
+		AllowlistCIDRs:          []string{},
+		DenylistCIDRs:           []string{},
+		TrustedProxyCIDRs:       []string{},
 		DBQueryTextCapture:      true,
 	}
 }
@@ -56,7 +60,7 @@ func (s *Store) GetTenantEventFilters(ctx context.Context, tenantID uuid.UUID) (
 		SELECT tenant_id, capture_external, capture_internal_summary, capture_listening_changes,
 		       capture_files, capture_db_queries, threat_match_full,
 		       file_paths_watch, file_size_min_bytes,
-		       allowlist_cidrs, denylist_cidrs,
+		       allowlist_cidrs, denylist_cidrs, trusted_proxy_cidrs,
 		       db_query_text_capture, forensic_mode, updated_at
 		FROM tenant_event_filters WHERE tenant_id = $1
 	`, tenantID)
@@ -64,7 +68,7 @@ func (s *Store) GetTenantEventFilters(ctx context.Context, tenantID uuid.UUID) (
 	err := row.Scan(&f.TenantID, &f.CaptureExternal, &f.CaptureInternalSummary, &f.CaptureListeningChanges,
 		&f.CaptureFiles, &f.CaptureDBQueries, &f.ThreatMatchFull,
 		pq.Array(&f.FilePathsWatch), &f.FileSizeMinBytes,
-		pq.Array(&f.AllowlistCIDRs), pq.Array(&f.DenylistCIDRs),
+		pq.Array(&f.AllowlistCIDRs), pq.Array(&f.DenylistCIDRs), pq.Array(&f.TrustedProxyCIDRs),
 		&f.DBQueryTextCapture, &f.ForensicMode, &f.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -89,10 +93,10 @@ func (s *Store) UpsertTenantEventFilters(ctx context.Context, f TenantEventFilte
 			tenant_id, capture_external, capture_internal_summary, capture_listening_changes,
 			capture_files, capture_db_queries, threat_match_full,
 			file_paths_watch, file_size_min_bytes,
-			allowlist_cidrs, denylist_cidrs,
+			allowlist_cidrs, denylist_cidrs, trusted_proxy_cidrs,
 			db_query_text_capture, forensic_mode, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			capture_external = EXCLUDED.capture_external,
 			capture_internal_summary = EXCLUDED.capture_internal_summary,
@@ -104,13 +108,14 @@ func (s *Store) UpsertTenantEventFilters(ctx context.Context, f TenantEventFilte
 			file_size_min_bytes = EXCLUDED.file_size_min_bytes,
 			allowlist_cidrs = EXCLUDED.allowlist_cidrs,
 			denylist_cidrs = EXCLUDED.denylist_cidrs,
+			trusted_proxy_cidrs = EXCLUDED.trusted_proxy_cidrs,
 			db_query_text_capture = EXCLUDED.db_query_text_capture,
 			forensic_mode = EXCLUDED.forensic_mode,
 			updated_at = NOW()
 	`, f.TenantID, f.CaptureExternal, f.CaptureInternalSummary, f.CaptureListeningChanges,
 		f.CaptureFiles, f.CaptureDBQueries, f.ThreatMatchFull,
 		pq.Array(f.FilePathsWatch), f.FileSizeMinBytes,
-		pq.Array(f.AllowlistCIDRs), pq.Array(f.DenylistCIDRs),
+		pq.Array(f.AllowlistCIDRs), pq.Array(f.DenylistCIDRs), pq.Array(f.TrustedProxyCIDRs),
 		f.DBQueryTextCapture, f.ForensicMode)
 	return err
 }

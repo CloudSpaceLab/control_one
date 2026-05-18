@@ -355,6 +355,13 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	// Gate 1 — opt-out label.
 	if nodeID != uuid.Nil {
 		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil && node.Labels != nil {
+			posture := nodeIsolationPostureFromNode(*node, now)
+			if posture.Active && posture.Mode == isolationModeAirgapped && mode != patchModeAirgapped {
+				return patchGateResult{Reason: "node is airgapped; use airgapped patch mode or clear the isolation timer"}
+			}
+			if posture.Active && posture.Mode == isolationModeWhitelist && mode == patchModeDirect && windowID == nil && !stringSliceContainsFold(posture.AllowedApplications, "patch") {
+				return patchGateResult{Reason: "node is whitelist-only; patch requires an allowed patch application, proxy, airgapped mode, or a maintenance window"}
+			}
 			if val, ok := node.Labels["remediation"]; ok {
 				if str, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(str), "manual-only") {
 					return patchGateResult{Reason: "node labelled remediation=manual-only"}
@@ -431,6 +438,15 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	// All four gates passed.
 	_ = compliance.Result{} // keep the import live for the gate type.
 	return patchGateResult{Allowed: true}
+}
+
+func stringSliceContainsFold(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Request) {

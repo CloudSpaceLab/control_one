@@ -141,7 +141,7 @@ func (s *Store) ListSavedSearches(ctx context.Context, tenantID, userID uuid.UUI
 	if err != nil {
 		return nil, 0, fmt.Errorf("list saved searches: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]SavedSearch, 0, limit)
 	for rows.Next() {
@@ -275,7 +275,7 @@ func (s *Store) ListEntityTags(ctx context.Context, tenantID uuid.UUID, entityTy
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []EntityTag
 	for rows.Next() {
 		var t EntityTag
@@ -349,7 +349,7 @@ func (s *Store) ListAssetCIDRs(ctx context.Context, tenantID uuid.UUID) ([]net.I
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []net.IPNet
 	for rows.Next() {
 		var raw string
@@ -444,7 +444,7 @@ func (s *Store) EntityLifecycle(ctx context.Context, f LifecycleFilter, limit in
 					Metadata:  meta,
 				})
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 
@@ -486,7 +486,7 @@ func (s *Store) EntityLifecycle(ctx context.Context, f LifecycleFilter, limit in
 					Metadata:  meta,
 				})
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 
@@ -526,7 +526,7 @@ func (s *Store) EntityLifecycle(ctx context.Context, f LifecycleFilter, limit in
 					Metadata:  meta,
 				})
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 
@@ -558,7 +558,7 @@ func (s *Store) EntityLifecycle(ctx context.Context, f LifecycleFilter, limit in
 					RawID:     id,
 				})
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 
@@ -590,7 +590,7 @@ func (s *Store) EntityLifecycle(ctx context.Context, f LifecycleFilter, limit in
 					RawID:     id,
 				})
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 

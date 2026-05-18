@@ -75,7 +75,7 @@ ORDER BY updated_at DESC`, tenantID, userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]CustomDashboard, 0, 8)
 	for rows.Next() {
 		var d CustomDashboard
@@ -122,7 +122,7 @@ ORDER BY sort_order`, dashboardID)
 	if err != nil {
 		return &d, err
 	}
-	defer wrows.Close()
+	defer func() { _ = wrows.Close() }()
 	for wrows.Next() {
 		var w DashboardWidget
 		var specTxt string

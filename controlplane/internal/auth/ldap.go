@@ -113,7 +113,7 @@ func (p *LDAPProvider) Authenticate(ctx context.Context, login, password string)
 	if err != nil {
 		return nil, fmt.Errorf("ldap dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	conn.SetTimeout(p.cfg.Timeout)
 
 	if p.cfg.BindDN != "" {
@@ -217,7 +217,7 @@ func (p *LDAPProvider) dial() (*ldap.Conn, error) {
 	}
 	if p.cfg.StartTLS {
 		if err := conn.StartTLS(tlsCfg); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, fmt.Errorf("starttls: %w", err)
 		}
 	}

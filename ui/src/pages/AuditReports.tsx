@@ -171,11 +171,11 @@ export function AuditReports(): JSX.Element {
       </div>
 
       {loading ? (
-        <div className="text-muted-foreground text-sm py-4">Loading...</div>
+        <div className="text-muted-foreground text-sm py-4">Loading report history.</div>
       ) : reports.length === 0 ? (
         <EmptyState
-          title="No reports yet"
-          description="Generate your first compliance audit report below."
+          title="No generated reports"
+          description="No compliance report files exist for the selected tenant."
         />
       ) : (
         <DataTable columns={columns} rows={reports} />

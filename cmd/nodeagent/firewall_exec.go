@@ -136,22 +136,7 @@ func executeFirewallAction(ctx context.Context, client *api.Client, log *zap.Log
 		return
 	}
 
-	rule := firewall.Rule{
-		Source:    detail.Source,
-		Dest:      detail.Dest,
-		Port:      detail.Port,
-		Protocol:  detail.Protocol,
-		Direction: firewall.DirectionIn,
-		Action:    firewall.ActionBlock,
-		Tag:       detail.Tag,
-		Comment:   detail.Reason,
-	}
-	if strings.EqualFold(detail.Direction, "out") {
-		rule.Direction = firewall.DirectionOut
-	}
-	if strings.EqualFold(detail.Action, "allow") {
-		rule.Action = firewall.ActionAllow
-	}
+	rule := firewallRuleFromAction(jobType, detail)
 
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -185,6 +170,29 @@ func executeFirewallAction(ctx context.Context, client *api.Client, log *zap.Log
 		JobID:  jobID,
 		Status: "succeeded",
 	})
+}
+
+func firewallRuleFromAction(jobType string, detail firewallActionDetail) firewall.Rule {
+	rule := firewall.Rule{
+		Source:    detail.Source,
+		Dest:      detail.Dest,
+		Port:      detail.Port,
+		Protocol:  detail.Protocol,
+		Direction: firewall.DirectionIn,
+		Action:    firewall.ActionBlock,
+		Tag:       detail.Tag,
+		Comment:   detail.Reason,
+	}
+	if strings.EqualFold(detail.Direction, "out") {
+		rule.Direction = firewall.DirectionOut
+	}
+	// A delete job removes the previously installed rule shape. In the IP
+	// block path that means removing the original block/drop rule, not trying
+	// to remove an allow/accept rule that was never installed.
+	if jobType != "firewall.rule_delete" && strings.EqualFold(detail.Action, "allow") {
+		rule.Action = firewall.ActionAllow
+	}
+	return rule
 }
 
 // fetchFirewallJobDetail GETs /api/v1/jobs/:id and decodes the payload.

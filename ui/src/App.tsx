@@ -6,8 +6,9 @@ import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
 import { Skeleton } from './components/ui/skeleton';
 
-// Eager — every authenticated visit lands on the dashboard.
-import { DashboardRouter } from './pages/role-dashboards';
+// Eager: every authenticated visit lands on the Control Room.
+import { ControlRoom } from './pages/ControlRoom';
+import { ControlRoomDrilldown } from './pages/ControlRoomDrilldown';
 
 // Lazy — split each feature area into its own chunk.
 const InvestigateHome = lazy(() => import('./pages/investigate').then((m) => ({ default: m.InvestigateHome })));
@@ -29,11 +30,10 @@ const Compliance = lazy(() => import('./pages/Compliance').then((m) => ({ defaul
 const Rules = lazy(() => import('./pages/Rules').then((m) => ({ default: m.Rules })));
 const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
 const Access = lazy(() => import('./pages/Access').then((m) => ({ default: m.Access })));
-const Reports = lazy(() => import('./pages/Reports').then((m) => ({ default: m.Reports })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
 const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
+const WebserverAutoControl = lazy(() => import('./pages/WebserverAutoControl').then((m) => ({ default: m.WebserverAutoControl })));
 const PatchManagement = lazy(() => import('./pages/PatchManagement').then((m) => ({ default: m.PatchManagement })));
-const Dashboards = lazy(() => import('./pages/Dashboards').then((m) => ({ default: m.Dashboards })));
 const Roles = lazy(() => import('./pages/Roles').then((m) => ({ default: m.Roles })));
 const Audit = lazy(() => import('./pages/Audit').then((m) => ({ default: m.Audit })));
 const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
@@ -42,7 +42,6 @@ const Secrets = lazy(() => import('./pages/Secrets').then((m) => ({ default: m.S
 const OfflineBundle = lazy(() => import('./pages/OfflineBundle').then((m) => ({ default: m.OfflineBundle })));
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const Onboard = lazy(() => import('./pages/Onboard').then((m) => ({ default: m.Onboard })));
-const Behavioral = lazy(() => import('./pages/Behavioral').then((m) => ({ default: m.Behavioral })));
 const DataSecurity = lazy(() => import('./pages/DataSecurity').then((m) => ({ default: m.DataSecurity })));
 const TrustCenter = lazy(() => import('./pages/TrustCenter').then((m) => ({ default: m.TrustCenter })));
 const WhistleblowerIntake = lazy(() => import('./pages/WhistleblowerIntake').then((m) => ({ default: m.WhistleblowerIntake })));
@@ -105,13 +104,15 @@ export function App(): JSX.Element {
         path="/"
         element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace />}
       >
-        <Route index element={<DashboardRouter />} />
+        <Route index element={<ControlRoom />} />
         <Route
           path="*"
           element={
             <Suspense fallback={<PageFallback />}>
               <Routes>
                 <Route path="onboard" element={<Onboard />} />
+                <Route path="control-room" element={<ControlRoom />} />
+                <Route path="control-room/:laneId" element={<ControlRoomDrilldown />} />
                 <Route path="search" element={<SearchResults />} />
                 <Route path="investigate" element={<InvestigateHome />} />
                 <Route path="investigate/saved" element={<SavedSearches />} />
@@ -132,9 +133,10 @@ export function App(): JSX.Element {
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="access" element={<Access />} />
                 <Route path="recommendations" element={<Navigate to="/rules?tab=drafts" replace />} />
-                <Route path="reports" element={<Reports />} />
+                <Route path="reports" element={<Navigate to="/compliance?tab=reports" replace />} />
                 {/* Network Security (PR 3) — consolidated tab surface. */}
                 <Route path="security/network" element={<NetworkSecurity />} />
+                <Route path="security/webservers" element={<WebserverAutoControl />} />
                 {/* Patch Management (PR 4) */}
                 <Route path="infrastructure/patch" element={<PatchManagement />} />
                 {/* Legacy routes redirect to the consolidated page, mapping their
@@ -142,7 +144,7 @@ export function App(): JSX.Element {
                 <Route path="threat-feeds" element={<Navigate to="/security/network?tab=threats" replace />} />
                 <Route path="connections" element={<Navigate to="/security/network?tab=connections" replace />} />
                 <Route path="sessions" element={<Sessions />} />
-                <Route path="dashboards" element={<Dashboards />} />
+                <Route path="dashboards" element={<Navigate to="/control-room" replace />} />
                 <Route path="roles" element={<Roles />} />
                 <Route path="audit" element={<Audit />} />
                 <Route path="users" element={<Users />} />
@@ -150,7 +152,7 @@ export function App(): JSX.Element {
                 <Route path="secrets" element={<Secrets />} />
                 <Route path="offline-bundle" element={<OfflineBundle />} />
                 <Route path="settings" element={<Settings />} />
-                <Route path="behavioral" element={<Behavioral />} />
+                <Route path="behavioral" element={<Navigate to="/security/network?tab=ip-behavior" replace />} />
                 <Route path="data-security" element={<DataSecurity />} />
                 <Route path="compliance-evidence" element={<Navigate to="/compliance?tab=evidence" replace />} />
                 <Route path="audit-reports" element={<Navigate to="/audit?tab=reports" replace />} />

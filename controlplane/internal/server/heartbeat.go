@@ -38,18 +38,20 @@ const (
 // Everything is optional — the essential signal is that the agent called us,
 // using a client cert whose CN matches the node id.
 type heartbeatRequest struct {
-	AgentVersion string `json:"agent_version"`
+	AgentVersion string   `json:"agent_version"`
+	Capabilities []string `json:"capabilities,omitempty"`
 
 	// Inventory + firewall snapshot fields. Optional. Old agents send none of
 	// these; new agents send firewall every heartbeat and os_packages only
 	// when the hash changed, 24h elapsed, or the server requested a full
 	// inventory on the previous response.
-	OSPackages    []heartbeatPackage      `json:"os_packages,omitempty"`
-	PackageHash   string                  `json:"package_hash,omitempty"`
-	PackageCount  int                     `json:"package_count,omitempty"`
-	KernelVersion string                  `json:"kernel_version,omitempty"`
-	OSVersion     string                  `json:"os_version,omitempty"`
-	FirewallState *heartbeatFirewallState `json:"firewall_state,omitempty"`
+	OSPackages     []heartbeatPackage       `json:"os_packages,omitempty"`
+	PackageHash    string                   `json:"package_hash,omitempty"`
+	PackageCount   int                      `json:"package_count,omitempty"`
+	KernelVersion  string                   `json:"kernel_version,omitempty"`
+	OSVersion      string                   `json:"os_version,omitempty"`
+	ServerPurposes []heartbeatServerPurpose `json:"server_purposes,omitempty"`
+	FirewallState  *heartbeatFirewallState  `json:"firewall_state,omitempty"`
 
 	// CompletedActions reports the outcome of pending_actions the agent
 	// processed since the last heartbeat. Only firewall.* actions use it
@@ -80,6 +82,12 @@ type heartbeatPackage struct {
 	InstalledAt string `json:"installed_at,omitempty"`
 }
 
+type heartbeatServerPurpose struct {
+	Purpose    string   `json:"purpose"`
+	Confidence int      `json:"confidence"`
+	Evidence   []string `json:"evidence,omitempty"`
+}
+
 // heartbeatFirewallState mirrors the agent-side payload. Translated into
 // storage.NodeFirewallState before persisting.
 type heartbeatFirewallState struct {
@@ -96,6 +104,7 @@ type heartbeatResponse struct {
 	Activated              bool                        `json:"activated"`
 	Reason                 *string                     `json:"reason,omitempty"`
 	EventFilters           *storage.TenantEventFilters `json:"event_filters,omitempty"`
+	NetworkPolicy          *nodeNetworkPolicy          `json:"network_policy,omitempty"`
 	PendingActions         []string                    `json:"pending_actions,omitempty"`
 	FullInventoryRequested bool                        `json:"full_inventory_requested,omitempty"`
 }
@@ -174,6 +183,20 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 			s.logger.Warn("update agent version", zap.Error(verr))
 		}
 	}
+	if len(body.Capabilities) > 0 {
+		if updated, uerr := s.updateNodeAgentCapabilities(r.Context(), node, body.Capabilities); uerr != nil {
+			s.logger.Warn("update agent capabilities", zap.Error(uerr))
+		} else if updated != nil {
+			node = updated
+		}
+	}
+	if len(body.ServerPurposes) > 0 {
+		if updated, perr := s.updateNodeServerPurposes(r.Context(), node, body.ServerPurposes); perr != nil {
+			s.logger.Warn("update server purposes", zap.Error(perr))
+		} else if updated != nil {
+			node = updated
+		}
+	}
 
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
@@ -191,6 +214,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		State:                  resultState,
 		LastSeenAt:             lastSeen,
 		Activated:              activated,
+		NetworkPolicy:          nodeNetworkPolicyFromPosture(nodeIsolationPostureFromNode(*node, time.Now().UTC())),
 		FullInventoryRequested: fullInventoryRequested,
 	}
 	// Deliver tenant capture-filter policy back to the agent so collectors
@@ -236,7 +260,9 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 				continue
 			}
 			actionType := JobTypeFirewallRuleAdd
-			if rule.Action == "allow" {
+			if job, jerr := s.store.GetJob(r.Context(), *rule.JobID); jerr == nil && job != nil && strings.TrimSpace(job.Type) != "" {
+				actionType = job.Type
+			} else if rule.Action == "allow" {
 				actionType = JobTypeFirewallRuleDelete
 			}
 			resp.PendingActions = append(resp.PendingActions, actionType+":"+rule.JobID.String())
@@ -282,7 +308,124 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	} else if !errors.Is(perr, sql.ErrNoRows) {
 		s.logger.Warn("list pending patch states", zap.Error(perr))
 	}
+	s.appendPendingWebserverActions(r.Context(), nodeID, node, &resp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) updateNodeAgentCapabilities(ctx context.Context, node *storage.Node, capabilities []string) (*storage.Node, error) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil {
+		return node, nil
+	}
+	normalized := normalizeAgentCapabilities(capabilities)
+	if len(normalized) == 0 {
+		return node, nil
+	}
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	labels["agent.capabilities"] = normalized
+	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
+		return node, err
+	}
+	updated := *node
+	updated.Labels = labels
+	return &updated, nil
+}
+
+func normalizeAgentCapabilities(capabilities []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability == "" {
+			continue
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		out = append(out, capability)
+	}
+	return out
+}
+
+func (s *Server) updateNodeServerPurposes(ctx context.Context, node *storage.Node, purposes []heartbeatServerPurpose) (*storage.Node, error) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil {
+		return node, nil
+	}
+	normalized, evidence := normalizeServerPurposes(purposes)
+	if len(normalized) == 0 {
+		return node, nil
+	}
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	labels["agent.server_purposes"] = normalized
+	labels["agent.server_purpose_evidence"] = evidence
+	labels["agent.primary_purpose"] = normalized[0]
+	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
+		return node, err
+	}
+	updated := *node
+	updated.Labels = labels
+	return &updated, nil
+}
+
+func normalizeServerPurposes(purposes []heartbeatServerPurpose) ([]string, []map[string]any) {
+	seen := map[string]struct{}{}
+	names := make([]string, 0, len(purposes))
+	evidence := make([]map[string]any, 0, len(purposes))
+	for _, purpose := range purposes {
+		name := strings.ToLower(strings.TrimSpace(purpose.Purpose))
+		if name == "" {
+			continue
+		}
+		name = strings.ReplaceAll(name, " ", "_")
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		confidence := purpose.Confidence
+		if confidence < 0 {
+			confidence = 0
+		}
+		if confidence > 100 {
+			confidence = 100
+		}
+		names = append(names, name)
+		evidence = append(evidence, map[string]any{
+			"purpose":    name,
+			"confidence": confidence,
+			"evidence":   sanitizeStringSlice(purpose.Evidence, 12),
+		})
+	}
+	return names, evidence
+}
+
+func sanitizeStringSlice(values []string, limit int) []string {
+	if limit <= 0 {
+		limit = len(values)
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
@@ -340,6 +483,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
 				}
 			}
+			s.refreshBlockProposalEnforcementStatusByEntityAction(ctx, rule.EntityActionID)
 		case JobTypePatchDeployDirect, JobTypePatchDeployProxy, JobTypePatchDeployAirgapped:
 			ps, perr := s.store.GetNodePatchStateByJobID(ctx, jobID)
 			if perr != nil {
@@ -378,6 +522,8 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			}
 			// Roll up the parent deployment if every node has finished.
 			s.maybeRollupPatchDeployment(ctx, ps.DeploymentID)
+		case JobTypeWebserverInventoryScan, JobTypeWebserverConfigPlan, JobTypeWebserverConfigApply, JobTypeWebserverBlocklistUpdate, JobTypeWebserverConfigRollback:
+			s.processWebserverCompletedAction(ctx, jobID, c)
 		default:
 			// Ignore unknown actions (forward-compat with future action types).
 			continue

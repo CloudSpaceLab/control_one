@@ -62,8 +62,6 @@ type tlogRecord struct {
 	Raw    json.RawMessage `json:"-"`
 }
 
-var commandRegex = regexp.MustCompile(`(?m)^[\$\#>]\s+(.+)$`)
-
 func decodeLine(line string, seq int) (Event, bool) {
 	var rec tlogRecord
 	if err := json.Unmarshal([]byte(line), &rec); err != nil {

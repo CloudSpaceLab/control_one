@@ -11,7 +11,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
 
 type adminSelfHealthResponse struct {
@@ -436,12 +435,3 @@ func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────
-
-// workerStatusCheck returns the worker status when the queue implements
-// workerStatusProvider; returns a zero Status otherwise.
-func workerStatus(q TaskQueue) worker.Status {
-	if wsp, ok := q.(workerStatusProvider); ok {
-		return wsp.Status()
-	}
-	return worker.Status{}
-}

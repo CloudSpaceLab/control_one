@@ -20,6 +20,10 @@ type apacheFormatter struct{}
 func (apacheFormatter) Format(raw RawLog, source config.LogSourceConfig) (StructuredLog, error) {
 	msg := strings.TrimSpace(raw.Message)
 
+	if structured, ok := formatJSONAccessLog(raw, source, "apache"); ok {
+		return structured, nil
+	}
+
 	if match := apacheAccessRegex.FindStringSubmatch(msg); match != nil {
 		fields := captureGroups(apacheAccessRegex, match)
 		ts, err := time.Parse("02/Jan/2006:15:04:05 -0700", fields["ts"])

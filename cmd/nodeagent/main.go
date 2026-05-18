@@ -194,9 +194,6 @@ func main() {
 	}
 
 	telemetrySvc := telemetry.New(client, log, hooksService)
-	if cfg.TelemetryPrefs.CollectLogs && len(cfg.TelemetryPrefs.LogSources) > 0 {
-		telemetrySvc.StartLogCollection(ctx, state.NodeID, cfg.TelemetryPrefs.LogSources)
-	}
 	if len(cfg.TelemetryPrefs.Triggers) > 0 {
 		telemetrySvc.LoadTriggers(cfg.TelemetryPrefs.Triggers)
 	}
@@ -254,6 +251,9 @@ func main() {
 	// the eventstream so log.spike events land in Doris/UI, not just the
 	// local hooks subsystem.
 	telemetrySvc.WithEventStream(eventStream)
+	if cfg.TelemetryPrefs.CollectLogs {
+		telemetrySvc.StartLogCollection(ctx, state.NodeID, cfg.TelemetryPrefs.LogSources)
+	}
 
 	meshMgr := mesh.New(log, client, mesh.Options{
 		Enabled:        cfg.Mesh.Enabled,

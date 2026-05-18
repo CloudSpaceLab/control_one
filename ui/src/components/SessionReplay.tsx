@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
+import { Button } from '@/components/ui/button';
 import { useApiClient } from '../hooks/useApiClient';
 import { Badge } from './Badge';
 import type { SessionEvent } from '../lib/api';
@@ -172,17 +173,19 @@ export function SessionReplay({ sessionId, onClose }: SessionReplayProps): JSX.E
           </p>
         </div>
         <div className="session-replay__controls">
-          <button
+          <Button
             type="button"
-            className="primary-button"
+            variant="primary"
+            size="sm"
             disabled={cursor >= events.length}
             onClick={() => setPlaying((p) => !p)}
           >
             {playing ? 'Pause' : 'Play'}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="secondary-button"
+            variant="secondary"
+            size="sm"
             onClick={() => {
               setPlaying(false);
               termRef.current?.reset();
@@ -190,7 +193,7 @@ export function SessionReplay({ sessionId, onClose }: SessionReplayProps): JSX.E
             }}
           >
             Restart
-          </button>
+          </Button>
           <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} aria-label="Playback speed">
             <option value={1}>1×</option>
             <option value={2}>2×</option>
@@ -198,13 +201,13 @@ export function SessionReplay({ sessionId, onClose }: SessionReplayProps): JSX.E
             <option value={8}>8×</option>
             <option value={1000}>Skip</option>
           </select>
-          <button type="button" className="secondary-button" onClick={downloadTranscript}>
+          <Button type="button" variant="secondary" size="sm" onClick={downloadTranscript}>
             Download transcript
-          </button>
+          </Button>
           {onClose ? (
-            <button type="button" className="secondary-button" onClick={onClose} aria-label="Close replay">
+            <Button type="button" variant="ghost" size="sm" onClick={onClose} aria-label="Close replay">
               Close
-            </button>
+            </Button>
           ) : null}
         </div>
       </header>

@@ -151,6 +151,16 @@ export function Hypervisors(): JSX.Element {
   const [submittingCred, setSubmittingCred] = useState(false);
   const [submittingHost, setSubmittingHost] = useState(false);
 
+  useEffect(() => {
+    if (!currentTenantId) return;
+    setCredentialForm((form) =>
+      form.tenant_id ? form : { ...form, tenant_id: currentTenantId },
+    );
+    setHostForm((form) =>
+      form.tenant_id ? form : { ...form, tenant_id: currentTenantId },
+    );
+  }, [currentTenantId]);
+
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
       setCredentials([]);

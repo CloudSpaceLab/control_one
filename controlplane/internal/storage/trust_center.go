@@ -97,7 +97,7 @@ func (s *Store) ListSubprocessors(ctx context.Context, tenantID string) ([]Subpr
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var sp Subprocessor
 		if err := rows.Scan(&sp.ID, &sp.TenantID, &sp.Name, &sp.Purpose, &sp.Location, pq.Array(&sp.DataTypes), &sp.DPAInPlace, &sp.SOC2, &sp.ISO27001, &sp.CreatedAt); err != nil {
@@ -138,7 +138,7 @@ func (s *Store) ListCertifications(ctx context.Context, tenantID string) ([]Cert
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var c Certification
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Type, &c.Scope, &c.IssuedAt, &c.ExpiresAt, &c.Auditor, &c.ReportURL, &c.Status); err != nil {
@@ -180,7 +180,7 @@ func (s *Store) ListFAQItems(ctx context.Context, tenantID string) ([]SecurityFA
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var f SecurityFAQItem
 		if err := rows.Scan(&f.ID, &f.TenantID, &f.Question, &f.Answer, &f.Category, &f.OrderIdx, &f.CreatedAt); err != nil {
@@ -225,7 +225,7 @@ func (s *Store) ListIncidentReports(ctx context.Context, tenantID string, limit 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var i IncidentReport
 		if err := rows.Scan(&i.ID, &i.TenantID, &i.IncidentID, &i.Title, &i.Summary, &i.Severity, &i.Status, &i.StartedAt, &i.ResolvedAt, &i.PublishedAt, &i.ReportURL); err != nil {

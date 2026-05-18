@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/digitalocean/go-libvirt"
+	"github.com/digitalocean/go-libvirt/socket/dialers"
 	"github.com/google/uuid"
 	"github.com/kdomanski/iso9660"
 	"go.uber.org/zap"
@@ -152,7 +153,7 @@ func dialLibvirt(ctx context.Context, endpoint string) (*libvirt.Libvirt, error)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	client := libvirt.New(conn)
+	client := libvirt.NewWithDialer(dialers.NewAlreadyConnected(conn))
 	if err := client.Connect(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("libvirt connect: %w", err)

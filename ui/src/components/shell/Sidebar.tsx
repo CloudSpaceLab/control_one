@@ -2,20 +2,14 @@ import { useEffect, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
-  Boxes,
   FileText,
   KeyRound,
-  Layers,
-  MessageSquare,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
   Server,
   ShieldAlert,
-  Sparkles,
-  Terminal,
-  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 import { Link, NavLink } from 'react-router-dom';
@@ -45,13 +39,14 @@ interface NavGroupDef {
   items: NavItemDef[];
 }
 
-// Five-group IA. Items inside a group are ordered by frequency, not alphabetically.
+// Primary IA is intentionally narrow: daily operators land on the control room,
+// then drill into evidence/configuration from the relevant lane or detail page.
 // Settings / Tenants / Secrets / Onboard live in the ProfileMenu, not the sidebar.
 const NAV_GROUPS: NavGroupDef[] = [
   {
     label: 'Home',
     items: [
-      { to: '/', label: 'Dashboard', icon: Activity },
+      { to: '/', label: 'Control Room', icon: Activity },
       { to: '/alerts', label: 'Alerts', icon: AlertTriangle },
     ],
   },
@@ -59,70 +54,32 @@ const NAV_GROUPS: NavGroupDef[] = [
     label: 'Investigate',
     items: [
       { to: '/investigate', label: 'Search & lifecycle', icon: Search },
-      { to: '/investigate/saved', label: 'Saved searches', icon: FileText },
-      {
-        to: '/investigate/knowledge-graph',
-        label: 'Knowledge graph',
-        icon: Sparkles,
-      },
-      { to: '/sessions', label: 'Session replay', icon: Terminal },
-      { to: '/ask', label: 'Ask', icon: MessageSquare, flag: 'ai_ask' },
     ],
   },
   {
-    label: 'Fleet',
+    label: 'Operations',
     items: [
       {
         to: '/nodes',
-        label: 'Nodes',
+        label: 'Servers',
         icon: Server,
         badge: <NodeStatusBadge />,
       },
-      { to: '/fleet-enroll', label: 'Enroll', icon: Server, roles: ['admin', 'operator'] },
-      { to: '/hypervisors', label: 'Hypervisors', icon: Boxes, roles: ['admin'] },
-      { to: '/templates', label: 'Templates', icon: FileText, roles: ['admin', 'operator'] },
+      { to: '/security/network', label: 'Network & exposure', icon: Network },
       {
         to: '/infrastructure/patch',
-        label: 'Patch management',
+        label: 'Patch posture',
         icon: ShieldAlert,
         roles: ['admin', 'operator'],
       },
-      { to: '/jobs', label: 'Jobs', icon: Workflow },
     ],
   },
   {
-    label: 'Posture',
+    label: 'Governance',
     items: [
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
-      { to: '/rules', label: 'Rules', icon: ShieldAlert, roles: ['admin', 'operator'] },
-      { to: '/security/network', label: 'Network security', icon: Network },
-      { to: '/recommendations', label: 'Recommendations', icon: ShieldAlert },
-      { to: '/behavioral', label: 'Behavioral', icon: Activity },
-      { to: '/data-security', label: 'Data security', icon: KeyRound },
-      {
-        to: '/misconduct',
-        label: 'Misconduct & whistleblowing',
-        icon: ShieldAlert,
-        roles: ['investigator', 'admin'],
-      },
+      { to: '/access', label: 'Access', icon: KeyRound },
       { to: '/audit', label: 'Audit log', icon: FileText },
-      { to: '/telemetry', label: 'Telemetry', icon: Activity },
-      { to: '/reports', label: 'Reports', icon: FileText },
-      { to: '/dashboards', label: 'Custom dashboards', icon: Layers },
-    ],
-  },
-  {
-    label: 'Access',
-    items: [
-      { to: '/access', label: 'Just-in-time', icon: KeyRound },
-      {
-        to: '/access/finacle',
-        label: 'Finacle profiles',
-        icon: KeyRound,
-        roles: ['admin', 'operator'],
-      },
-      { to: '/users', label: 'Users', icon: KeyRound, roles: ['admin'] },
-      { to: '/roles', label: 'Roles', icon: KeyRound, roles: ['admin'] },
     ],
   },
 ];

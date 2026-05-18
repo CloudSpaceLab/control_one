@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/CloudSpaceLab/control_one/internal/appcatalog"
 )
 
 // PackageInfo is one OS package the agent reports during a full inventory
@@ -19,6 +21,12 @@ type PackageInfo struct {
 	Source      string `json:"source"` // apt | dpkg | rpm | winget | other
 	Arch        string `json:"arch,omitempty"`
 	InstalledAt string `json:"installed_at,omitempty"` // RFC3339; empty when unknown
+}
+
+type ServerPurpose struct {
+	Purpose    string   `json:"purpose"`
+	Confidence int      `json:"confidence"`
+	Evidence   []string `json:"evidence,omitempty"`
 }
 
 // collectInventory enumerates installed packages and returns them along with
@@ -62,14 +70,14 @@ func hashPackages(pkgs []PackageInfo) string {
 	})
 	h := sha256.New()
 	for _, p := range cp {
-		h.Write([]byte(p.Source))
-		h.Write([]byte{0})
-		h.Write([]byte(p.Name))
-		h.Write([]byte{0})
-		h.Write([]byte(p.Version))
-		h.Write([]byte{0})
-		h.Write([]byte(p.Arch))
-		h.Write([]byte{0x1e}) // record separator
+		_, _ = h.Write([]byte(p.Source))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(p.Name))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(p.Version))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(p.Arch))
+		_, _ = h.Write([]byte{0x1e}) // record separator
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -209,4 +217,37 @@ func containsDigit(s string) bool {
 		}
 	}
 	return false
+}
+
+func inferServerPurposesFromPackages(pkgs []PackageInfo) []ServerPurpose {
+	names := make([]string, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		names = append(names, pkg.Name)
+	}
+	detected := appcatalog.ResolvePackagePurposes(names)
+	out := make([]ServerPurpose, 0, len(detected))
+	for _, row := range detected {
+		out = append(out, ServerPurpose{Purpose: row.Purpose, Confidence: row.Confidence, Evidence: row.Evidence})
+	}
+	return out
+}
+
+func packageMatchesPurpose(name, pattern string) bool {
+	return appcatalog.PackageMatches(name, pattern)
+}
+
+func appendLimitedEvidence(existing []string, next string) []string {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return existing
+	}
+	for _, value := range existing {
+		if strings.EqualFold(value, next) {
+			return existing
+		}
+	}
+	if len(existing) >= 6 {
+		return existing
+	}
+	return append(existing, next)
 }

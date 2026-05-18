@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
@@ -174,11 +173,11 @@ func (s *Server) handleTOTPEnrollBegin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "seal failed", http.StatusInternalServerError)
 		return
 	}
-	label := s.cfg.HTTP.Address
-	if label == "" {
-		label = "ControlOne"
+	issuer := strings.TrimSpace(s.cfg.HTTP.Address)
+	if issuer == "" {
+		issuer = "ControlOne"
 	}
-	uri := mfa.ProvisioningURI("ControlOne", principal.Email, secret)
+	uri := mfa.ProvisioningURI(issuer, principal.Email, secret)
 
 	factor, err := s.store.CreateMFAFactor(r.Context(), storage.CreateMFAFactorParams{
 		UserID:       userID,
@@ -458,6 +457,10 @@ func (s *Server) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("issue token: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if _, _, ok := s.verifyStepUpToken(token); !ok {
+		http.Error(w, "issued step-up token failed validation", http.StatusInternalServerError)
+		return
+	}
 	s.recordAudit(r.Context(), principal, uuid.Nil, "auth.step_up.verify", "step_up", challenge.ID.String(), map[string]any{
 		"action": challenge.Action,
 		"factor": factor.FactorType,
@@ -466,8 +469,8 @@ func (s *Server) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // issueStepUpToken returns an opaque base64 token tying (user, action) to an
-// expiry. It is HMAC-signed by the secrets sealer so verification needs no
-// extra DB lookup; callers verify via verifyStepUpToken.
+// expiry. It is sealed by the secrets sealer so verification needs no extra
+// DB lookup.
 func (s *Server) issueStepUpToken(userID uuid.UUID, action string) (string, time.Time, error) {
 	expires := time.Now().UTC().Add(5 * time.Minute)
 	payload := fmt.Sprintf("%s|%s|%d", userID.String(), action, expires.Unix())
@@ -768,30 +771,4 @@ func (s *Server) handleWebAuthnStepUpBegin(w http.ResponseWriter, r *http.Reques
 		"expires_at":   formatTime(stored.ExpiresAt),
 		"options":      options,
 	})
-}
-
-// requireStepUp returns true when the request has a valid X-Step-Up-Token
-// header for the given action. Mutating handlers call this before performing
-// sensitive operations (delete tenant, approve high-risk request, rotate CA).
-func (s *Server) requireStepUp(w http.ResponseWriter, r *http.Request, principal *auth.Principal, action string) bool {
-	token := strings.TrimSpace(r.Header.Get("X-Step-Up-Token"))
-	if token == "" {
-		http.Error(w, "step-up required", http.StatusPreconditionRequired)
-		return false
-	}
-	uid, tokenAction, ok := s.verifyStepUpToken(token)
-	if !ok {
-		http.Error(w, "step-up invalid", http.StatusUnauthorized)
-		return false
-	}
-	if tokenAction != action {
-		http.Error(w, "step-up scope mismatch", http.StatusForbidden)
-		return false
-	}
-	expected := s.userIDForPrincipalCtx(r.Context(), principal)
-	if expected != uuid.Nil && uid != expected {
-		http.Error(w, "step-up user mismatch", http.StatusForbidden)
-		return false
-	}
-	return true
 }

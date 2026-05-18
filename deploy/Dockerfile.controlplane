@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1.7
+# Multi-stage build for the Control One control plane binary.
+
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+
+# Cache deps first.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the rest and build.
+COPY . .
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN go build -trimpath -ldflags="-s -w" -o /out/controlplane ./controlplane/cmd/controlplane
+RUN go build -trimpath -ldflags="-s -w" -o /out/bootstrap-admin ./controlplane/cmd/bootstrap-admin
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/controlplane     /usr/local/bin/controlplane
+COPY --from=build /out/bootstrap-admin  /usr/local/bin/bootstrap-admin
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+USER nonroot:nonroot
+EXPOSE 8443 9090
+ENTRYPOINT ["/usr/local/bin/controlplane"]
+CMD ["--config", "/etc/control-one/controlplane.yaml"]

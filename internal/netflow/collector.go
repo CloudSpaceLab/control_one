@@ -242,7 +242,7 @@ func makeConnID(ev ConnectionEvent) string {
 	src := ipString(ev.SrcIP)
 	dst := ipString(ev.DstIP)
 	h := sha1.New()
-	fmt.Fprintf(h, "%s:%d|%s:%d|%s|%d", src, ev.SrcPort, dst, ev.DstPort, ev.Protocol, ev.StartedAt.UnixNano())
+	_, _ = fmt.Fprintf(h, "%s:%d|%s:%d|%s|%d", src, ev.SrcPort, dst, ev.DstPort, ev.Protocol, ev.StartedAt.UnixNano())
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 

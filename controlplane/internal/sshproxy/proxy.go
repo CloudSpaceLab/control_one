@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -245,8 +246,10 @@ func splitAddr(a net.Addr) (string, int) {
 	if err != nil {
 		return a.String(), 0
 	}
-	p := 0
-	fmt.Sscanf(port, "%d", &p)
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return host, 0
+	}
 	return host, p
 }
 

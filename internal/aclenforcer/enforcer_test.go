@@ -29,7 +29,7 @@ func TestRegexAllow(t *testing.T) {
 		t.Fatal("regex allow should match")
 	}
 	if d := e.Evaluate("ops", "systemctl reboot now"); d.Allowed && d.Reason != "default" {
-		// default-permit when no rule references the command is still expected
+		t.Fatalf("default-permit should explain unmatched command: %+v", d)
 	}
 }
 

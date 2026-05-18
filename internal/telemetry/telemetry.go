@@ -219,6 +219,7 @@ func (s *Service) sleepWithBackoff(ctx context.Context, d time.Duration) {
 
 func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.LogSourceConfig, formatter logs.Formatter, rawCh <-chan logs.RawLog) {
 	batch := make([]logs.StructuredLog, 0, source.BatchSize)
+	maxRetained := maxRetainedLogBatch(source.BatchSize)
 	flushInterval := source.FlushInterval
 	if flushInterval <= 0 {
 		flushInterval = time.Second * 5
@@ -237,6 +238,7 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 				"count":   len(batch),
 				"error":   err.Error(),
 			})
+			return
 		} else {
 			s.publishHook(ctx, "telemetry.logs.forwarded", nodeID, map[string]any{
 				"program": source.Program,
@@ -278,6 +280,13 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 			}
 			s.evaluateTriggers(ctx, nodeID, entry)
 			batch = append(batch, entry)
+			if dropped := trimLogRetryBacklog(&batch, maxRetained); dropped > 0 {
+				s.publishHook(ctx, "telemetry.logs.dropped", nodeID, map[string]any{
+					"program": source.Program,
+					"count":   dropped,
+					"reason":  "retry_backlog_full",
+				})
+			}
 			if spiked, baseline, current := s.spike.Record(source.Program, int64(len(entry.Message)), time.Now()); spiked {
 				details := map[string]any{
 					"program":            source.Program,
@@ -307,6 +316,30 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 			flushTimer.Reset(flushInterval)
 		}
 	}
+}
+
+func maxRetainedLogBatch(batchSize int) int {
+	if batchSize <= 0 {
+		return 1000
+	}
+	max := batchSize * 4
+	if max < batchSize {
+		max = batchSize
+	}
+	if max > 5000 {
+		max = 5000
+	}
+	return max
+}
+
+func trimLogRetryBacklog(batch *[]logs.StructuredLog, maxRetained int) int {
+	if batch == nil || maxRetained <= 0 || len(*batch) <= maxRetained {
+		return 0
+	}
+	dropped := len(*batch) - maxRetained
+	copy((*batch)[0:], (*batch)[dropped:])
+	*batch = (*batch)[:maxRetained]
+	return dropped
 }
 
 func (s *Service) sendLogBatch(ctx context.Context, nodeID string, source config.LogSourceConfig, batch []logs.StructuredLog) error {

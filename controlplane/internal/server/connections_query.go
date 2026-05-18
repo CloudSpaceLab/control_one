@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -241,20 +240,3 @@ func parseLimitDefault(r *http.Request, def, max int) int {
 	}
 	return def
 }
-
-// uuidPtr is a tiny helper to read query-string UUIDs without panicking on
-// bad input. Returns the zero UUID on parse error.
-func uuidPtr(s string) uuid.UUID {
-	u, _ := uuid.Parse(s)
-	return u
-}
-
-// jsonOptional avoids exporting "" instead of null in struct literals.
-func jsonOptional(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-var _ = json.NewEncoder // ensure encoding/json stays imported

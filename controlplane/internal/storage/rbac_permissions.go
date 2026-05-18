@@ -35,7 +35,7 @@ FROM permissions ORDER BY category, name`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]Permission, 0, 32)
 	for rows.Next() {
 		var p Permission
@@ -59,7 +59,7 @@ ORDER BY r.name`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]RolePermissions, 0, 8)
 	for rows.Next() {
 		var r RolePermissions
@@ -144,7 +144,7 @@ WHERE ur.user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]string, 0, 16)
 	for rows.Next() {
 		var name string

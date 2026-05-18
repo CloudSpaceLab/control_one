@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Download, FileText, Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -37,6 +37,13 @@ import { Frameworks } from './Frameworks';
 import { AuditReports } from './AuditReports';
 
 type Tab = 'posture' | 'policies' | 'evidence' | 'frameworks' | 'reports';
+
+const COMPLIANCE_TABS = ['posture', 'policies', 'evidence', 'frameworks', 'reports'] as const;
+
+function complianceTabFromParams(params: URLSearchParams): Tab {
+  const value = params.get('tab');
+  return COMPLIANCE_TABS.includes(value as Tab) ? (value as Tab) : 'posture';
+}
 
 // ── Templates for common compliance rule types ────────────────────────────────
 const RULE_TYPES = [
@@ -138,7 +145,23 @@ function exportToCSV(results: ComplianceResult[]): void {
 }
 
 export function Compliance(): JSX.Element {
-  const [tab, setTab] = useState<Tab>('posture');
+  const [params, setParams] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(() => complianceTabFromParams(params));
+
+  useEffect(() => {
+    const next = complianceTabFromParams(params);
+    setTab((current) => (current === next ? current : next));
+  }, [params]);
+
+  const onTabChange = (value: string) => {
+    if (!COMPLIANCE_TABS.includes(value as Tab)) return;
+    const next = value as Tab;
+    setTab(next);
+    const updated = new URLSearchParams(params);
+    if (next === 'posture') updated.delete('tab');
+    else updated.set('tab', next);
+    setParams(updated, { replace: true });
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -147,7 +170,7 @@ export function Compliance(): JSX.Element {
         title="Compliance"
         description="Define policies, run evaluations, prove continuous control."
       />
-      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+      <Tabs value={tab} onValueChange={onTabChange}>
         <TabsList>
           <TabsTrigger value="posture">Posture</TabsTrigger>
           <TabsTrigger value="policies">Policies</TabsTrigger>

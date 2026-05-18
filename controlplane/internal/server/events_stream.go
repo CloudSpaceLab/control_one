@@ -79,7 +79,7 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, ": connected tenant=%s\n\n", tenantID)
+	_, _ = fmt.Fprintf(w, ": connected tenant=%s\n\n", tenantID)
 	flusher.Flush()
 
 	sub := s.eventBus.Subscribe(tenantID, topics, nodeFilter)

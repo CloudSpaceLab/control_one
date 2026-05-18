@@ -62,6 +62,15 @@ func TestValidateRequiresEssentials(t *testing.T) {
 		}
 	})
 
+	t.Run("ip behavior redis counters require redis address", func(t *testing.T) {
+		cfg := base()
+		cfg.IPBehavior.Counters.Backend = "redis"
+		cfg.IPBehavior.Counters.RedisAddress = ""
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("expected error for missing ip behavior redis address")
+		}
+	})
+
 	t.Run("oidc requires issuer and client id", func(t *testing.T) {
 		cfg := base()
 		cfg.Auth.OIDC.Enabled = true
@@ -80,4 +89,60 @@ func TestValidateRequiresEssentials(t *testing.T) {
 			t.Fatalf("expected config to validate, got %v", err)
 		}
 	})
+}
+
+func TestApplyFallbacksSetsEnforcementSafetyDefaults(t *testing.T) {
+	cfg := &Config{}
+	applyFallbacks(cfg)
+	if cfg.Remediation.MaxBlockChangesPerHour != 100 {
+		t.Fatalf("MaxBlockChangesPerHour = %d, want 100", cfg.Remediation.MaxBlockChangesPerHour)
+	}
+	if cfg.Remediation.MaxBlockChangesPerServerGroupPerHour != 25 {
+		t.Fatalf("MaxBlockChangesPerServerGroupPerHour = %d, want 25", cfg.Remediation.MaxBlockChangesPerServerGroupPerHour)
+	}
+	if cfg.Remediation.MaxGlobalBlockChangesPerHour != 1000 {
+		t.Fatalf("MaxGlobalBlockChangesPerHour = %d, want 1000", cfg.Remediation.MaxGlobalBlockChangesPerHour)
+	}
+	if cfg.Remediation.BlockCanaryNodesPerServerGroup != 1 {
+		t.Fatalf("BlockCanaryNodesPerServerGroup = %d, want 1", cfg.Remediation.BlockCanaryNodesPerServerGroup)
+	}
+	if cfg.Remediation.WebserverFailureCircuitThreshold != 3 {
+		t.Fatalf("WebserverFailureCircuitThreshold = %d, want 3", cfg.Remediation.WebserverFailureCircuitThreshold)
+	}
+	if cfg.Remediation.WebserverFailureCircuitWindow != time.Hour {
+		t.Fatalf("WebserverFailureCircuitWindow = %s, want 1h", cfg.Remediation.WebserverFailureCircuitWindow)
+	}
+	if cfg.OfflineContent.RootDir != "data/offline-content" {
+		t.Fatalf("OfflineContent.RootDir = %q, want default data/offline-content", cfg.OfflineContent.RootDir)
+	}
+	if cfg.OfflineContent.MaxBundleBytes != 256*1024*1024 {
+		t.Fatalf("OfflineContent.MaxBundleBytes = %d, want 256MiB", cfg.OfflineContent.MaxBundleBytes)
+	}
+}
+
+func TestValidateOfflineContentRequiresSigningKey(t *testing.T) {
+	cfg := &Config{
+		HTTP: HTTPConfig{Address: ":0"},
+		Database: DatabaseConfig{
+			URL: "postgres://localhost/db",
+		},
+		Worker: WorkerConfig{
+			Concurrency:  1,
+			QueueSize:    1,
+			MaxAttempts:  1,
+			RetryBackoff: time.Second,
+		},
+		Auth: AuthConfig{RBAC: RBACConfig{DefaultRole: "viewer"}},
+		OfflineContent: OfflineContentConfig{
+			Enabled: true,
+			RootDir: "data/offline-content",
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected offline_content.public_key_file validation error")
+	}
+	cfg.OfflineContent.PublicKeyFile = "offline-content.pub"
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected offline content config to validate with key path, got %v", err)
+	}
 }

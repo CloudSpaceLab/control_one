@@ -131,15 +131,17 @@ func (s *Server) dispatchFirewallRule(
 
 	// Build job payload.
 	jobType := JobTypeFirewallRuleAdd
+	payloadAction := action
 	if action == "allow" {
 		// "allow" in this context means "remove the previous block rule".
 		jobType = JobTypeFirewallRuleDelete
+		payloadAction = "block"
 	}
 	payload := firewallJobPayload{
 		NodeFirewallRuleID: rule.ID.String(),
 		NodeID:             nodeID.String(),
 		EntityActionID:     entityActionID.String(),
-		Action:             action,
+		Action:             payloadAction,
 		Direction:          "in",
 		Source:             source,
 		Tag:                tag,

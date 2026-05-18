@@ -116,7 +116,7 @@ func (s *Scanner) ScanColumn(ctx context.Context, col Column) (*ScanResult, erro
 			zap.Error(err))
 		return result, nil // Return empty result on query failure
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var samples []string
 	var minLen, maxLen int
@@ -241,7 +241,7 @@ func (s *Scanner) getTableColumns(ctx context.Context, dbName, schemaName, table
 	if err != nil {
 		return nil, fmt.Errorf("query table columns: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var columns []Column
 	for rows.Next() {

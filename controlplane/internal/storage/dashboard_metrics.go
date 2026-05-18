@@ -551,7 +551,7 @@ func (s *Store) GetRiskScoreHistory(ctx context.Context, tenantID uuid.UUID, day
 	if err != nil {
 		return nil, fmt.Errorf("query risk-score history: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	points := make([]RiskScorePoint, 0, days)
 	for rows.Next() {
@@ -607,7 +607,7 @@ func (s *Store) GetRemediationVelocityHistory(ctx context.Context, tenantID uuid
 	if err != nil {
 		return nil, fmt.Errorf("query remediation velocity history: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	points := make([]RemediationVelocityPoint, 0, days)
 	for rows.Next() {
@@ -652,7 +652,7 @@ func (s *Store) GetComplianceByFramework(ctx context.Context, tenantID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("query compliance by framework: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	summaries := []FrameworkComplianceSummary{}
 	for rows.Next() {

@@ -125,7 +125,7 @@ func (s *Store) ListComplianceEvidence(ctx context.Context, tenantID uuid.UUID, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("list compliance evidence: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ComplianceEvidence
 	for rows.Next() {
@@ -225,7 +225,7 @@ func (s *Store) ListAuditReports(ctx context.Context, tenantID uuid.UUID, limit,
 	if err != nil {
 		return nil, 0, fmt.Errorf("list audit reports: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []AuditReport
 	for rows.Next() {
@@ -300,7 +300,7 @@ func (s *Store) ListComplianceReviews(ctx context.Context, tenantID uuid.UUID, l
 	if err != nil {
 		return nil, 0, fmt.Errorf("list compliance reviews: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ComplianceReview
 	for rows.Next() {

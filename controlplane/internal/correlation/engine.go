@@ -7,6 +7,7 @@ package correlation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -32,14 +33,13 @@ type windowKey struct {
 
 // Engine consumes events and opens alerts when correlation rules fire.
 type Engine struct {
-	store     AlertCreator
-	log       *zap.Logger
-	bus       *eventbus.Bus
-	mu        sync.Mutex
-	windows   map[windowKey][]time.Time
-	rulesOnce sync.Map // tenantID -> lastFetch
-	cache     sync.Map // tenantID -> []storage.CorrelationRule
-	cacheTTL  time.Duration
+	store    AlertCreator
+	log      *zap.Logger
+	bus      *eventbus.Bus
+	mu       sync.Mutex
+	windows  map[windowKey][]time.Time
+	cache    sync.Map // tenantID -> []storage.CorrelationRule
+	cacheTTL time.Duration
 }
 
 func New(store AlertCreator, bus *eventbus.Bus, log *zap.Logger) *Engine {
@@ -130,6 +130,9 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"hits":      hits,
 		"window_s":  r.WindowSeconds,
 	}
+	for key, value := range eventContext(ev) {
+		ctxPayload[key] = value
+	}
 	dedup := r.ID.String() + "/" + dim
 	var nodeArg *uuid.UUID
 	if r.Dimension == "node_id" {
@@ -169,6 +172,109 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			Payload:  payload,
 		})
 	}
+}
+
+func eventContext(ev eventbus.Event) map[string]any {
+	out := map[string]any{
+		"event_topic": ev.Topic,
+	}
+	if ev.Timestamp.IsZero() {
+		out["event_timestamp"] = time.Now().UTC().Format(time.RFC3339)
+	} else {
+		out["event_timestamp"] = ev.Timestamp.UTC().Format(time.RFC3339)
+	}
+	if len(ev.Payload) == 0 {
+		return out
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		out["event_payload_error"] = err.Error()
+		return out
+	}
+	copyStringKeys(out, payload, map[string]string{
+		"type":           "event_type",
+		"message":        "event_message",
+		"severity":       "event_severity",
+		"correlation_id": "correlation_id",
+		"dedup_key":      "event_dedup_key",
+		"src_ip":         "src_ip",
+		"dst_ip":         "dst_ip",
+		"process_name":   "process_name",
+		"user_name":      "user_name",
+		"protocol":       "protocol",
+	})
+	copyNumberKeys(out, payload, map[string]string{
+		"src_port":     "src_port",
+		"dst_port":     "dst_port",
+		"bytes_in":     "bytes_in",
+		"bytes_out":    "bytes_out",
+		"duration_ms":  "duration_ms",
+		"threat_score": "threat_score",
+	})
+	details, _ := payload["details"].(map[string]any)
+	copyStringKeys(out, details, map[string]string{
+		"parser_profile":       "parser_profile",
+		"source_file":          "source_file",
+		"program":              "program",
+		"collector_type":       "collector_type",
+		"app":                  "app",
+		"vhost":                "vhost",
+		"server_group":         "server_group",
+		"webserver_kind":       "webserver_kind",
+		"country_code":         "country_code",
+		"country":              "country",
+		"asn":                  "asn",
+		"application_type":     "application_type",
+		"application_name":     "application_name",
+		"application_category": "application_category",
+		"application_root":     "application_root",
+		"coverage_state":       "coverage_state",
+		"request_id":           "request_id",
+		"traceparent":          "traceparent",
+	})
+	copyNumberKeys(out, details, map[string]string{
+		"score":       "score",
+		"status_code": "status_code",
+	})
+	for _, key := range []string{"reasons", "status_counts", "top_paths", "evidence_refs", "host_correlation", "baselines"} {
+		if value, ok := details[key]; ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func copyStringKeys(dst map[string]any, src map[string]any, keys map[string]string) {
+	for from, to := range keys {
+		if value, ok := stringFromAny(src[from]); ok {
+			dst[to] = value
+		}
+	}
+}
+
+func copyNumberKeys(dst map[string]any, src map[string]any, keys map[string]string) {
+	for from, to := range keys {
+		if value, ok := src[from]; ok {
+			switch n := value.(type) {
+			case float64, float32, int, int64, int32, json.Number:
+				dst[to] = n
+			}
+		}
+	}
+}
+
+func stringFromAny(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		if v != "" {
+			return v, true
+		}
+	case fmt.Stringer:
+		if s := v.String(); s != "" {
+			return s, true
+		}
+	}
+	return "", false
 }
 
 type cachedRules struct {

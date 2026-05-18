@@ -20,6 +20,10 @@ type nginxFormatter struct{}
 func (nginxFormatter) Format(raw RawLog, source config.LogSourceConfig) (StructuredLog, error) {
 	message := strings.TrimSpace(raw.Message)
 
+	if structured, ok := formatJSONAccessLog(raw, source, "nginx"); ok {
+		return structured, nil
+	}
+
 	if match := nginxAccessRegex.FindStringSubmatch(message); match != nil {
 		fields := captureGroups(nginxAccessRegex, match)
 		ts, err := time.Parse("02/Jan/2006:15:04:05 -0700", fields["ts"])

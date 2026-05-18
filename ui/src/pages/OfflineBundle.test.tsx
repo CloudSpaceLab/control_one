@@ -43,7 +43,7 @@ const sampleTokens: EnrollmentToken[] = [
   },
 ];
 
-function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBundleDownloadUrl'> {
+function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBundleDownloadUrl' | 'listOfflineContentBundles' | 'importOfflineContentBundle' | 'rollbackOfflineContentBundle'> {
   return {
     listEnrollmentTokens: vi.fn().mockResolvedValue({
       data: sampleTokens,
@@ -59,6 +59,12 @@ function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBun
     buildBundleDownloadUrl: vi.fn((options: { os: string; arch: string; token: string }) => {
       return `https://cp.example.com/api/v1/agent/bundle?os=${options.os}&arch=${options.arch}&token=${options.token}`;
     }),
+    listOfflineContentBundles: vi.fn().mockResolvedValue({
+      items: [],
+      pagination: { total: 0, count: 0, limit: 25, offset: 0, nextOffset: null, prevOffset: null },
+    }),
+    importOfflineContentBundle: vi.fn(),
+    rollbackOfflineContentBundle: vi.fn(),
   };
 }
 

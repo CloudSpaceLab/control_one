@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/CloudSpaceLab/control_one/internal/appcatalog"
 	"github.com/CloudSpaceLab/control_one/internal/config"
 )
 
@@ -15,8 +16,7 @@ type Preset struct {
 }
 
 var (
-	presetRegistry     = map[string]Preset{}
-	defaultPresetOrder = []string{"nginx", "apache", "mysql", "postgresql", "redis", "kafka"}
+	presetRegistry = map[string]Preset{}
 )
 
 func RegisterPreset(name string, preset Preset) {
@@ -29,7 +29,7 @@ func RegisterPreset(name string, preset Preset) {
 func PrepareSources(userSources []config.LogSourceConfig) []config.LogSourceConfig {
 	merged := make(map[string]config.LogSourceConfig)
 
-	for _, name := range defaultPresetOrder {
+	for _, name := range appcatalog.DefaultLogProgramOrder() {
 		if preset, ok := presetRegistry[name]; ok {
 			for _, src := range preset.Sources {
 				merged[strings.ToLower(src.Program)] = applyPathResolution(src)
@@ -45,7 +45,13 @@ func PrepareSources(userSources []config.LogSourceConfig) []config.LogSourceConf
 
 		base, ok := merged[key]
 		if !ok {
-			base = config.LogSourceConfig{Program: user.Program}
+			if preset, presetOK := presetRegistry[key]; presetOK && len(preset.Sources) > 0 {
+				base = applyPathResolution(preset.Sources[0])
+			} else if profile, profileOK := appcatalog.LogProfileForProgram(user.Program); profileOK {
+				base = logSourceFromCatalogProfile(profile)
+			} else {
+				base = config.LogSourceConfig{Program: user.Program}
+			}
 		}
 
 		merged[key] = applyPathResolution(mergeLogSource(base, user))
@@ -136,11 +142,20 @@ func resolvePaths(program string, explicit []string) []string {
 }
 
 func presetPathCandidates(program string) []string {
+	if paths := appcatalog.LogPathCandidates(program, runtime.GOOS); len(paths) > 0 {
+		return paths
+	}
 	switch strings.ToLower(program) {
 	case "nginx":
 		return nginxDefaultPaths()
 	case "apache":
 		return apacheDefaultPaths()
+	case "lighttpd":
+		return lighttpdDefaultPaths()
+	case "tomcat":
+		return tomcatDefaultPaths()
+	case "haproxy":
+		return haproxyDefaultPaths()
 	case "mysql":
 		return mysqlDefaultPaths()
 	case "postgresql":
@@ -166,6 +181,27 @@ func apacheDefaultPaths() []string {
 		return []string{"C:/Program Files/Apache Group/Apache2/logs/access.log", "C:/Program Files/Apache Group/Apache2/logs/error.log"}
 	}
 	return []string{"/var/log/apache2/access.log", "/var/log/apache2/error.log"}
+}
+
+func lighttpdDefaultPaths() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"C:/lighttpd/logs/access.log", "C:/lighttpd/logs/error.log"}
+	}
+	return []string{"/var/log/lighttpd/access.log", "/var/log/lighttpd/error.log"}
+}
+
+func tomcatDefaultPaths() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"C:/Program Files/Apache Software Foundation/Tomcat/logs/localhost_access_log.txt", "C:/Program Files/Apache Software Foundation/Tomcat/logs/catalina.out"}
+	}
+	return []string{"/var/log/tomcat/localhost_access_log.txt", "/var/log/tomcat9/localhost_access_log.txt", "/opt/tomcat/logs/localhost_access_log.txt", "/opt/tomcat/logs/catalina.out"}
+}
+
+func haproxyDefaultPaths() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"C:/haproxy/logs/haproxy.log"}
+	}
+	return []string{"/var/log/haproxy.log", "/var/log/haproxy/haproxy.log"}
 }
 
 func mysqlDefaultPaths() []string {
@@ -237,6 +273,8 @@ func dedupeStrings(values []string) []string {
 }
 
 func init() {
+	registerCatalogPresets()
+
 	RegisterPreset("nginx", Preset{
 		Name: "nginx",
 		Sources: []config.LogSourceConfig{
@@ -262,6 +300,42 @@ func init() {
 				Type:      "file",
 				Paths:     apacheDefaultPaths(),
 				Formatter: "apache",
+			},
+		},
+	})
+
+	RegisterPreset("lighttpd", Preset{
+		Name: "lighttpd",
+		Sources: []config.LogSourceConfig{
+			{
+				Program:   "lighttpd",
+				Type:      "file",
+				Paths:     lighttpdDefaultPaths(),
+				Formatter: "apache",
+			},
+		},
+	})
+
+	RegisterPreset("tomcat", Preset{
+		Name: "tomcat",
+		Sources: []config.LogSourceConfig{
+			{
+				Program:   "tomcat",
+				Type:      "file",
+				Paths:     tomcatDefaultPaths(),
+				Formatter: "apache",
+			},
+		},
+	})
+
+	RegisterPreset("haproxy", Preset{
+		Name: "haproxy",
+		Sources: []config.LogSourceConfig{
+			{
+				Program:   "haproxy",
+				Type:      "file",
+				Paths:     haproxyDefaultPaths(),
+				Formatter: "haproxy",
 			},
 		},
 	})
@@ -360,4 +434,26 @@ func init() {
 			},
 		},
 	})
+}
+
+func registerCatalogPresets() {
+	for _, profile := range appcatalog.DefaultLogProfiles() {
+		if strings.TrimSpace(profile.Program) == "" {
+			continue
+		}
+		RegisterPreset(profile.Program, Preset{Name: profile.Program, Sources: []config.LogSourceConfig{logSourceFromCatalogProfile(profile)}})
+	}
+}
+
+func logSourceFromCatalogProfile(profile appcatalog.LogProfile) config.LogSourceConfig {
+	return config.LogSourceConfig{
+		Program:   profile.Program,
+		Type:      "file",
+		Paths:     appcatalog.LogPathCandidates(profile.Program, runtime.GOOS),
+		Formatter: appcatalog.LogFormatter(profile.Program),
+		Labels: map[string]string{
+			"parser_profile":  profile.Program,
+			"catalog_version": profile.CatalogVersion,
+		},
+	}
 }

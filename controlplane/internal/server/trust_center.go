@@ -141,7 +141,9 @@ func (s *Server) handleTrustCenterPublic(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
 }
 
 // TrustCenterAdmin handlers (authenticated) for managing trust center content
@@ -214,7 +216,9 @@ func (s *Server) listSubprocessors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"data": list}); err != nil {
+		s.logger.Warn("encode subprocessors", zap.Error(err))
+	}
 }
 
 func (s *Server) createSubprocessor(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +257,9 @@ func (s *Server) createSubprocessor(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(sp)
+	if err := json.NewEncoder(w).Encode(sp); err != nil {
+		s.logger.Warn("encode subprocessor", zap.Error(err))
+	}
 }
 
 func (s *Server) handleSubprocessorResource(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +314,7 @@ func (s *Server) listCertifications(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
 }
 
 func (s *Server) createCertification(w http.ResponseWriter, r *http.Request) {
@@ -347,7 +353,7 @@ func (s *Server) createCertification(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(c)
+	_ = json.NewEncoder(w).Encode(c)
 }
 
 func (s *Server) handleCertificationResource(w http.ResponseWriter, r *http.Request) {
@@ -400,7 +406,7 @@ func (s *Server) listFAQ(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
 }
 
 func (s *Server) createFAQ(w http.ResponseWriter, r *http.Request) {
@@ -436,7 +442,7 @@ func (s *Server) createFAQ(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(f)
+	_ = json.NewEncoder(w).Encode(f)
 }
 
 func (s *Server) handleFAQResource(w http.ResponseWriter, r *http.Request) {
@@ -489,7 +495,7 @@ func (s *Server) listIncidents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": list})
 }
 
 func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
@@ -529,7 +535,7 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(i)
+	_ = json.NewEncoder(w).Encode(i)
 }
 
 func (s *Server) handleIncidentResource(w http.ResponseWriter, r *http.Request) {

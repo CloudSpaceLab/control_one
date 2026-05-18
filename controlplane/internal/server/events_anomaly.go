@@ -48,6 +48,7 @@ func (s *Server) detectAnomalies(ctx context.Context, tenantID, nodeID uuid.UUID
 			out = append(out, s.detectDBQueryAnomalies(ctx, tenantID, nodeID, ev)...)
 		}
 	}
+	out = append(out, s.detectIPBehaviorBatch(ctx, tenantID, nodeID, events)...)
 	return out
 }
 

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -126,6 +128,51 @@ func TestHeartbeatActivatesAfterFirstScan(t *testing.T) {
 	}
 	if store.nodes[0].State != storage.NodeStateActive {
 		t.Fatalf("node state not persisted as active: %s", store.nodes[0].State)
+	}
+}
+
+func TestHeartbeatReturnsNetworkIsolationPolicy(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	expires := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:       nodeID,
+			TenantID: tenantID,
+			Hostname: "locked-host",
+			State:    storage.NodeStateActive,
+			Labels: map[string]any{
+				isolationModeLabel:       isolationModeWhitelist,
+				isolationExpiresAtLabel:  expires,
+				isolationAllowAppsLabel:  []any{"control-one-agent", "patch"},
+				isolationAllowCIDRsLabel: []any{"10.0.0.0/8"},
+			},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	var resp heartbeatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.NetworkPolicy == nil {
+		t.Fatalf("expected network policy in heartbeat response")
+	}
+	if resp.NetworkPolicy.Mode != isolationModeWhitelist || !resp.NetworkPolicy.Active {
+		t.Fatalf("unexpected network policy: %#v", resp.NetworkPolicy)
+	}
+	if len(resp.NetworkPolicy.AllowedApplications) != 2 || resp.NetworkPolicy.AllowedApplications[1] != "patch" {
+		t.Fatalf("expected allowed applications in network policy, got %#v", resp.NetworkPolicy.AllowedApplications)
 	}
 }
 
@@ -436,6 +483,57 @@ func TestHeartbeatPendingActionsUseJobTypePrefix(t *testing.T) {
 		if job.Status != storage.JobStatusRunning {
 			t.Errorf("job %s status = %s, want running", jobID, job.Status)
 		}
+	}
+}
+
+func TestHeartbeatPersistsServerPurposeLabels(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "purpose-host",
+			State:     storage.NodeStateActive,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Labels:    map[string]any{"existing": "kept"},
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	body := []byte(`{
+		"agent_version":"dev",
+		"server_purposes":[
+			{"purpose":"DB Node","confidence":92,"evidence":["postgresql-16"]},
+			{"purpose":"load_balancer","confidence":90,"evidence":["haproxy"]}
+		]
+	}`)
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	labels := store.nodes[0].Labels
+	if labels["existing"] != "kept" {
+		t.Fatalf("existing labels were not preserved: %#v", labels)
+	}
+	purposes, ok := labels["agent.server_purposes"].([]string)
+	if !ok || len(purposes) != 2 || purposes[0] != "db_node" || purposes[1] != "load_balancer" {
+		t.Fatalf("server purposes not normalized/persisted: %#v", labels["agent.server_purposes"])
+	}
+	if labels["agent.primary_purpose"] != "db_node" {
+		t.Fatalf("primary purpose = %#v, want db_node", labels["agent.primary_purpose"])
+	}
+	if evidence, ok := labels["agent.server_purpose_evidence"].([]map[string]any); !ok || len(evidence) != 2 {
+		t.Fatalf("purpose evidence not persisted: %#v", labels["agent.server_purpose_evidence"])
 	}
 }
 

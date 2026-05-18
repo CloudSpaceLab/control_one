@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -77,7 +76,7 @@ func (p *ipqueryProvider) Lookup(ctx context.Context, ip string) (*Enrichment, e
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode == http.StatusNotFound {
 		// Treat as a benign "no data" rather than a hard error.
 		return &Enrichment{Addr: ip, Source: "ipquery", FetchedAt: time.Now().UTC()}, nil
@@ -180,7 +179,7 @@ func (p *abuseIPDBProvider) Lookup(ctx context.Context, ip string) (*Enrichment,
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 64*1024))
 	if res.StatusCode == http.StatusTooManyRequests {
@@ -235,11 +234,4 @@ func severityFromScore(score int) string {
 	default:
 		return "info"
 	}
-}
-
-// ParseFloat is exported so tests can compose synthetic responses without
-// re-importing strconv. Internal use only.
-func parseFloat(s string) float64 {
-	f, _ := strconv.ParseFloat(s, 64)
-	return f
 }
