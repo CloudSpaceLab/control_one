@@ -14,6 +14,7 @@ import {
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
+import { describeIPBehaviorFinding } from '../lib/ipBehaviorPresentation';
 import type {
   ControlRoomAction,
   ControlRoomFirewallNode,
@@ -554,7 +555,10 @@ function recommendedAction(lane: ControlRoomLane, overview: ControlRoomOverview)
   if (lane.tone === 'healthy') return 'No operator action is waiting for this lane.';
   if (lane.id === 'ip-behavior') {
     const finding = overview.ip_behavior.findings[0];
-    return finding ? `Review ${finding.source_ip || finding.country_code || 'top source'}: score ${finding.score}, ${finding.reason}.` : 'Review open IP findings.';
+    if (!finding) return 'Review open IP findings.';
+    const presentation = describeIPBehaviorFinding(finding, { countryLabel: finding.country_code, maxSignals: 3 });
+    const signals = presentation.signals.length > 0 ? `: ${presentation.signals.slice(0, 3).join(', ')}` : '';
+    return `Review ${presentation.source}: ${presentation.confidence}% confidence ${presentation.categoryLabel.toLowerCase()}${signals}.`;
   }
   if (lane.id === 'patch-posture') return 'Review failed deployments and pending approvals before the next maintenance window.';
   if (lane.id === 'exposure') return 'Review public listeners that lack airgap, whitelist mode, or default-deny firewall protection.';

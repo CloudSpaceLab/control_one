@@ -1099,16 +1099,29 @@ func controlRoomAlertIncidents(alerts []storage.Alert) []controlRoomIncident {
 func controlRoomIPIncidents(findings []controlRoomIPFinding) []controlRoomIncident {
 	out := make([]controlRoomIncident, 0, len(findings))
 	for _, finding := range findings {
-		title := firstNonEmptyIPBehavior(finding.Category, "IP behavior anomaly")
+		title := ipBehaviorAlertCategoryLabel(firstNonEmptyIPBehavior(finding.Category, "ip_behavior"))
 		if finding.SourceIP != "" {
 			title += " from " + finding.SourceIP
 		}
 		out = append(out, controlRoomIncident{
 			ID: finding.ID, Title: title, Severity: finding.Severity, Source: "ip_behavior",
-			Summary: finding.Reason, Drilldown: finding.Drilldown, OpenedAt: finding.LastSeenAt,
+			Summary: controlRoomIPFindingSummary(finding), Drilldown: finding.Drilldown, OpenedAt: finding.LastSeenAt,
 		})
 	}
 	return out
+}
+
+func controlRoomIPFindingSummary(finding controlRoomIPFinding) string {
+	signals := ipBehaviorAlertSignals(finding.Reason, finding.Evidence)
+	source := firstNonEmptyIPBehavior(finding.SourceIP, finding.CountryCode, finding.ASN, "unknown source")
+	category := ipBehaviorAlertCategoryLabel(finding.Category)
+	if len(signals) == 0 {
+		return fmt.Sprintf("%s from %s reached %d%% confidence.", category, source, finding.Score)
+	}
+	if len(signals) > 3 {
+		signals = signals[:3]
+	}
+	return fmt.Sprintf("%s from %s reached %d%% confidence: %s.", category, source, finding.Score, strings.Join(signals, ", "))
 }
 
 func controlRoomPatchIncidents(deployments []storage.PatchDeployment) []controlRoomIncident {
@@ -1224,8 +1237,8 @@ func ipFindingItems(findings []controlRoomIPFinding) []controlRoomDrilldownItem 
 			label = firstNonEmptyIPBehavior(finding.CountryCode, "unknown source")
 		}
 		out = append(out, controlRoomDrilldownItem{
-			Label: label, Value: fmt.Sprintf("%d", finding.Score), Tone: severityTone(finding.Severity),
-			Hint: firstNonEmptyIPBehavior(finding.Reason, finding.Category), Drilldown: finding.Drilldown,
+			Label: label, Value: fmt.Sprintf("%d%%", finding.Score), Tone: severityTone(finding.Severity),
+			Hint: controlRoomIPFindingSummary(finding), Drilldown: finding.Drilldown,
 		})
 	}
 	return out
@@ -1344,9 +1357,9 @@ func exposureItems(nodes []storage.Node, services []storage.NodeService, activeB
 		}
 		out = append(out, controlRoomDrilldownItem{
 			Label:     firstNonEmptyIPBehavior(finding.CountryCode, finding.ASN, "ip anomaly"),
-			Value:     fmt.Sprintf("%d", finding.Score),
+			Value:     fmt.Sprintf("%d%%", finding.Score),
 			Tone:      severityTone(finding.Severity),
-			Hint:      firstNonEmptyIPBehavior(finding.Reason, finding.Category),
+			Hint:      controlRoomIPFindingSummary(finding),
 			Drilldown: finding.Drilldown,
 		})
 	}
