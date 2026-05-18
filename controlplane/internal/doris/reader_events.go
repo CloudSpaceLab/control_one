@@ -150,6 +150,46 @@ func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID st
 	return out, rows.Err()
 }
 
+// ListConnectionsForTenant returns recent fleet-wide connections for a tenant.
+// The caller decides whether to display internal/listener rows; this method
+// keeps the analytic query broad enough for operator drilldown and UI filters.
+func (c *Client) ListConnectionsForTenant(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]ConnectionRow, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("doris client unavailable")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	q := withLimit(`
+		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
+		FROM process_connections
+		WHERE tenant_id = ?
+		  AND started_at <= ?
+		  AND (ended_at IS NULL OR ended_at >= ?)
+		ORDER BY threat_match DESC, started_at DESC
+	`, limit)
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+	rows, err := c.db.QueryContext(qctx, q, tenantID, until, since)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ConnectionRow, 0, limit)
+	for rows.Next() {
+		r, err := scanConnectionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ConnectionLifetime returns the full record for a single conn_id (matches
 // open + close + state_change rolls).
 func (c *Client) ConnectionLifetime(ctx context.Context, tenantID, connID string) (*ConnectionRow, error) {

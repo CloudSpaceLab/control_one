@@ -10,6 +10,7 @@ import { Loader, Eyebrow } from '@/components/kit';
 import { Badge } from '@/components/Badge';
 import EventTimeline from '@/components/EventTimeline';
 import { useApiClient } from '@/hooks/useApiClient';
+import { useTenant } from '@/providers/TenantProvider';
 import { formatBytes, formatDuration, formatTs } from '@/lib/format';
 import type { ConnectionDetail } from '@/lib/api';
 
@@ -21,20 +22,23 @@ export interface ConnectionDetailSheetProps {
 
 export function ConnectionDetailSheet({ connId, onClose }: ConnectionDetailSheetProps) {
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const [detail, setDetail] = useState<ConnectionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!connId) {
+    if (!connId || !currentTenantId) {
       setDetail(null);
+      setLoading(false);
+      setError(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
     client
-      .getConnectionDetail(connId)
+      .getConnectionDetail(connId, { tenantId: currentTenantId })
       .then((d) => {
         if (!cancelled) setDetail(d);
       })
@@ -47,7 +51,7 @@ export function ConnectionDetailSheet({ connId, onClose }: ConnectionDetailSheet
     return () => {
       cancelled = true;
     };
-  }, [client, connId]);
+  }, [client, connId, currentTenantId]);
 
   return (
     <Sheet open={!!connId} onOpenChange={(open) => !open && onClose()}>

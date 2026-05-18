@@ -39,10 +39,6 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
 	nodeID := strings.TrimSpace(r.URL.Query().Get("node_id"))
-	if ip == "" && nodeID == "" {
-		http.Error(w, "ip or node_id is required", http.StatusBadRequest)
-		return
-	}
 	since, until := parseTimeWindow(r, 24*time.Hour)
 	limit := parseLimitDefault(r, 100, 1000)
 
@@ -54,8 +50,10 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		}
 		openOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("open_only")), "true")
 		rows, err = s.dorisClient.ListConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly)
-	} else {
+	} else if ip != "" {
 		rows, err = s.dorisClient.ListConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
+	} else {
+		rows, err = s.dorisClient.ListConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit)
 	}
 	if err != nil {
 		s.logger.Warn("doris list connections", zap.Error(err))
