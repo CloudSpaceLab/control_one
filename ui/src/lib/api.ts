@@ -3400,8 +3400,11 @@ export class APIClient {
     return Array.isArray(resp) ? resp : resp.data ?? [];
   }
 
-  async getConnectionDetail(connID: string): Promise<ConnectionDetail> {
-    return this.request<ConnectionDetail>(`/api/v1/connections/${encodeURIComponent(connID)}`);
+  async getConnectionDetail(connID: string, params: { tenantId?: string | null } = {}): Promise<ConnectionDetail> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const q = search.toString();
+    return this.request<ConnectionDetail>(`/api/v1/connections/${encodeURIComponent(connID)}${q ? `?${q}` : ''}`);
   }
 
   async listTopTalkers(params: { tenantId?: string; since?: string; limit?: number } = {}): Promise<TopTalker[]> {

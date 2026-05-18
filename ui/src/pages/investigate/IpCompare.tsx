@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
@@ -9,6 +9,7 @@ import {
   SectionHeader,
 } from '@/components/kit';
 import { useConnectionDetail } from '@/hooks/useConnectionsByIp';
+import { useTenant } from '@/providers/TenantProvider';
 import { formatBytes, formatDuration, formatTs } from '@/lib/format';
 import type { ConnectionDetail } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -18,9 +19,10 @@ export function IpCompare(): JSX.Element {
   const [params] = useSearchParams();
   const a = params.get('a') ?? '';
   const b = params.get('b') ?? '';
+  const { currentTenantId } = useTenant();
 
-  const aQ = useConnectionDetail(a);
-  const bQ = useConnectionDetail(b);
+  const aQ = useConnectionDetail(a, currentTenantId);
+  const bQ = useConnectionDetail(b, currentTenantId);
 
   const loading = aQ.isLoading || bQ.isLoading;
   const error = aQ.error || bQ.error;

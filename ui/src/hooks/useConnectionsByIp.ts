@@ -25,11 +25,11 @@ export function useConnectionsByIp({
   });
 }
 
-export function useConnectionDetail(connId: string | null | undefined) {
+export function useConnectionDetail(connId: string | null | undefined, tenantId?: string | null) {
   const api = useApiClient();
   return useQuery<ConnectionDetail>({
-    queryKey: ['connection.detail', connId],
-    queryFn: () => api.getConnectionDetail(connId ?? ''),
-    enabled: !!connId,
+    queryKey: ['connection.detail', tenantId, connId],
+    queryFn: () => api.getConnectionDetail(connId ?? '', { tenantId }),
+    enabled: !!connId && !!tenantId,
   });
 }

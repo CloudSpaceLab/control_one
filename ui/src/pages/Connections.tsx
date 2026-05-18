@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, RefreshCw } from 'lucide-react';
 import {
   Alert,
   DataTable,
@@ -16,15 +16,12 @@ import { Input } from '@/components/ui/input';
 import { ConnectionDetailSheet } from '@/components/investigate/ConnectionDetailSheet';
 import { entityRoute } from '@/lib/entity';
 import { formatBytes, formatDuration, formatTs, isIpv4 } from '@/lib/format';
+import { connectionPeerIp, hasConnectionShape, isPublicIP } from '@/lib/network';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useTenant } from '@/providers/TenantProvider';
 import type { ConnectionRow } from '@/lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
-// Connections — full lifecycle table. Click a row → forensic timeline sheet
-// keyed by correlation_id. When the user types a complete IP and submits
-// (Enter / Investigate IP →), we redirect to the canonical IP investigate
-// page (cross-node aggregate view + side-by-side compare).
 export function Connections(): JSX.Element {
   const client = useApiClient();
   const navigate = useNavigate();
@@ -34,27 +31,31 @@ export function Connections(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ipInput, setIpInput] = useState('');
-  const [appliedIp, setAppliedIp] = useState('');
   const [threatOnly, setThreatOnly] = useState(false);
+  const [includeInternal, setIncludeInternal] = useState(false);
   const [openConnId, setOpenConnId] = useState<string | null>(null);
+  const since = useMemo(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), []);
 
   const refresh = useCallback(async () => {
-    if (!appliedIp) return;
+    if (!currentTenantId) {
+      setRows([]);
+      return;
+    }
     setLoading(true);
     try {
       const resp = await client.listConnections({
-        tenantId: currentTenantId ?? undefined,
-        ip: appliedIp,
-        limit: 200,
+        tenantId: currentTenantId,
+        since,
+        limit: 500,
       });
-      setRows(threatOnly ? resp.filter((r) => r.threat_match) : resp);
+      setRows(resp);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'load failed');
     } finally {
       setLoading(false);
     }
-  }, [client, currentTenantId, appliedIp, threatOnly]);
+  }, [client, currentTenantId, since]);
 
   useEffect(() => {
     refresh();
@@ -64,21 +65,30 @@ export function Connections(): JSX.Element {
     e.preventDefault();
     const value = ipInput.trim();
     if (isIpv4(value)) {
-      // Canonical IP investigate page handles cross-node aggregation, compare,
-      // and lifecycle drill-in — funnel users there instead of duplicating.
       navigate(entityRoute('ip', value));
       return;
     }
-    setAppliedIp(value);
+    void refresh();
   };
+
+  const shapedRows = useMemo(() => rows.filter(hasConnectionShape), [rows]);
+  const filteredRows = useMemo(
+    () => shapedRows.filter((row) => !threatOnly || row.threat_match),
+    [shapedRows, threatOnly],
+  );
+  const visibleRows = useMemo(
+    () => filteredRows.filter((row) => includeInternal || isPublicIP(connectionPeerIp(row))),
+    [filteredRows, includeInternal],
+  );
+  const hiddenRows = Math.max(0, filteredRows.length - visibleRows.length);
 
   const totals = useMemo(
     () => ({
-      bytesOut: rows.reduce((s, r) => s + (r.bytes_out ?? 0), 0),
-      bytesIn: rows.reduce((s, r) => s + (r.bytes_in ?? 0), 0),
-      threatHits: rows.filter((r) => r.threat_match).length,
+      bytesOut: visibleRows.reduce((s, r) => s + (r.bytes_out ?? 0), 0),
+      bytesIn: visibleRows.reduce((s, r) => s + (r.bytes_in ?? 0), 0),
+      threatHits: visibleRows.filter((r) => r.threat_match).length,
     }),
-    [rows],
+    [visibleRows],
   );
 
   const columns = useMemo<ColumnDef<ConnectionRow>[]>(
@@ -87,8 +97,17 @@ export function Connections(): JSX.Element {
         header: 'Started',
         accessorKey: 'started_at',
         cell: ({ row }) => (
-          <span className="font-mono text-xs text-text-secondary tabular-nums">
+          <span className="font-mono text-xs tabular-nums text-text-secondary">
             {formatTs(row.original.started_at)}
+          </span>
+        ),
+      },
+      {
+        header: 'Node',
+        accessorKey: 'node_id',
+        cell: ({ row }) => (
+          <span className="font-mono text-xs text-text-secondary">
+            {row.original.node_id ? row.original.node_id.slice(0, 8) : '-'}
           </span>
         ),
       },
@@ -97,19 +116,19 @@ export function Connections(): JSX.Element {
         accessorKey: 'process_name',
         cell: ({ row }) => (
           <span>
-            {row.original.process_name ?? '—'}
-            {row.original.pid && (
+            {row.original.process_name ?? '-'}
+            {row.original.pid ? (
               <span className="ml-1 font-mono text-[0.7rem] text-text-muted">
                 pid {row.original.pid}
               </span>
-            )}
+            ) : null}
           </span>
         ),
       },
       {
         header: 'User',
         accessorKey: 'user_name',
-        cell: ({ row }) => row.original.user_name ?? '—',
+        cell: ({ row }) => row.original.user_name ?? '-',
       },
       {
         header: 'Source',
@@ -119,9 +138,9 @@ export function Connections(): JSX.Element {
             className="inline-flex items-center gap-1 font-mono text-xs"
             onClick={(e) => e.stopPropagation()}
           >
-            {row.original.src_ip ?? '—'}
+            {row.original.src_ip ?? '-'}
             {row.original.src_port ? `:${row.original.src_port}` : ''}
-            {row.original.src_ip && <IpActionMenu ip={row.original.src_ip} />}
+            {row.original.src_ip && isPublicIP(row.original.src_ip) ? <IpActionMenu ip={row.original.src_ip} /> : null}
           </span>
         ),
       },
@@ -133,9 +152,9 @@ export function Connections(): JSX.Element {
             className="inline-flex items-center gap-1 font-mono text-xs"
             onClick={(e) => e.stopPropagation()}
           >
-            {row.original.dst_ip ?? '—'}
+            {row.original.dst_ip ?? '-'}
             {row.original.dst_port ? `:${row.original.dst_port}` : ''}
-            {row.original.dst_ip && <IpActionMenu ip={row.original.dst_ip} />}
+            {row.original.dst_ip && isPublicIP(row.original.dst_ip) ? <IpActionMenu ip={row.original.dst_ip} /> : null}
           </span>
         ),
       },
@@ -174,9 +193,9 @@ export function Connections(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="DETECT & RESPOND · NETWORK FORENSICS"
+        eyebrow="DETECT & RESPOND - NETWORK FORENSICS"
         title="Connections"
-        description="Every external connection across every node — process, user, bytes, duration, threat. Click a row to see correlated files, queries, and log events; type an IP to pivot to the cross-node investigate view."
+        description="Recent external connections across every node. Click a row for the forensic timeline, or enter a full IP to pivot to the cross-node investigation view."
       />
 
       <form
@@ -187,7 +206,7 @@ export function Connections(): JSX.Element {
       >
         <Input
           type="search"
-          placeholder="IP address (8.8.8.8) — Enter to investigate cross-node"
+          placeholder="IP address, e.g. 8.8.8.8"
           value={ipInput}
           onChange={(e) => setIpInput(e.target.value)}
           className="max-w-md"
@@ -201,13 +220,24 @@ export function Connections(): JSX.Element {
           />
           Threat-match only
         </label>
-        <Button type="submit" variant="secondary" size="md">
+        <label className="inline-flex select-none items-center gap-2 text-sm text-text-secondary">
+          <input
+            type="checkbox"
+            checked={includeInternal}
+            onChange={(e) => setIncludeInternal(e.target.checked)}
+            className="accent-brand-500"
+          />
+          Include internal
+        </label>
+        <Button type="submit" variant="secondary" size="md" disabled={loading}>
           {isIpv4(ipInput.trim()) ? (
             <>
               Investigate IP <ArrowRight className="h-4 w-4" />
             </>
           ) : (
-            'Refresh'
+            <>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </>
           )}
         </Button>
       </form>
@@ -215,16 +245,8 @@ export function Connections(): JSX.Element {
       {error && <Alert variant="critical">{error}</Alert>}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiTile
-          label="Total bytes out"
-          value={formatBytes(totals.bytesOut)}
-          tone="warning"
-        />
-        <KpiTile
-          label="Total bytes in"
-          value={formatBytes(totals.bytesIn)}
-          tone="healthy"
-        />
+        <KpiTile label="Total bytes out" value={formatBytes(totals.bytesOut)} tone="warning" />
+        <KpiTile label="Total bytes in" value={formatBytes(totals.bytesIn)} tone="healthy" />
         <KpiTile
           label="Threat hits"
           value={String(totals.threatHits)}
@@ -232,20 +254,23 @@ export function Connections(): JSX.Element {
         />
       </div>
 
-      {rows.length === 0 && !loading && !appliedIp ? (
+      {!includeInternal && hiddenRows > 0 && (
+        <p className="text-xs text-text-muted">
+          Showing external peers only; {hiddenRows} internal, listener, or incomplete row{hiddenRows === 1 ? '' : 's'} hidden.
+        </p>
+      )}
+
+      {visibleRows.length === 0 && !loading ? (
         <EmptyState
-          title="Enter an IP to load connections"
-          description="Type a source or destination IP and press Enter — you'll be sent to the cross-node investigate view, with side-by-side compare for any two lifecycles."
-        />
-      ) : rows.length === 0 && !loading ? (
-        <EmptyState
-          title="No connections found"
-          description="Nothing matches the current filter in this window."
+          title={includeInternal ? 'No connections found' : 'No external connections found'}
+          description={includeInternal
+            ? 'No recent connection rows matched the current filters.'
+            : 'Recent rows were internal, listener-only, incomplete, or filtered out. Toggle Include internal to inspect them.'}
         />
       ) : (
         <DataTable
           columns={columns}
-          rows={rows}
+          rows={visibleRows}
           rowKey={(r) => r.conn_id}
           loading={loading}
           onRowClick={(r) => setOpenConnId(r.conn_id)}
