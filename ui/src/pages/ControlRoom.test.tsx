@@ -210,7 +210,7 @@ describe('ControlRoom', () => {
     expect(screen.getAllByText(/Security confidence/i).length).toBeGreaterThan(0);
     expect(screen.getByText('Connection/IP Behavior')).toBeInTheDocument();
     expect(screen.getByText('Patch Posture')).toBeInTheDocument();
-    expect(screen.getAllByText('91').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('91%').length).toBeGreaterThan(0);
     expect(screen.getByText(/webserver auto-control/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/network isolation/i)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/network isolation/i));
