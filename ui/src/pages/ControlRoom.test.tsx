@@ -69,11 +69,12 @@ const overview: ControlRoomOverview = {
         source_ip: '203.0.113.10',
         country_code: 'NG',
         asn: 'AS64500',
-        category: 'credential_stuffing',
+        category: 'credential_attack',
         severity: 'critical',
         score: 91,
-        reason: '401 spike after new-country traffic',
-        evidence: {},
+        reason:
+          'credential_attack behavior from 203.0.113.10 scored 91: country/country-app behavior is being evaluated as a baseline dimension; request burst: 21 requests in 1m; auth failure spike: 21 401/403 responses',
+        evidence: { request_count: 21, window: '1m', status_counts: { '401': 21 } },
         last_seen_at: '2026-05-18T09:55:00Z',
         drilldown: '/security/network?tab=ip-behavior&ip=203.0.113.10',
       },
@@ -211,6 +212,9 @@ describe('ControlRoom', () => {
     expect(screen.getByText('Connection/IP Behavior')).toBeInTheDocument();
     expect(screen.getByText('Patch Posture')).toBeInTheDocument();
     expect(screen.getAllByText('91%').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/91% confidence/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/baseline dimension/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scored 91:/i)).not.toBeInTheDocument();
     expect(screen.getByText(/webserver auto-control/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/network isolation/i)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/network isolation/i));
