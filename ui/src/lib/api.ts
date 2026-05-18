@@ -422,6 +422,7 @@ export interface AdminCapacity {
 export interface ClassificationChip {
   label: string;
   tone?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown';
+  severity?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown' | string;
 }
 
 export interface SearchHit {
