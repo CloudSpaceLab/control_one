@@ -231,23 +231,3 @@ func inferServerPurposesFromPackages(pkgs []PackageInfo) []ServerPurpose {
 	}
 	return out
 }
-
-func packageMatchesPurpose(name, pattern string) bool {
-	return appcatalog.PackageMatches(name, pattern)
-}
-
-func appendLimitedEvidence(existing []string, next string) []string {
-	next = strings.TrimSpace(next)
-	if next == "" {
-		return existing
-	}
-	for _, value := range existing {
-		if strings.EqualFold(value, next) {
-			return existing
-		}
-	}
-	if len(existing) >= 6 {
-		return existing
-	}
-	return append(existing, next)
-}

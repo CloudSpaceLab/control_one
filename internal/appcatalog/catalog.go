@@ -688,10 +688,6 @@ func dep(file string, tokens ...string) DependencyHint {
 	return DependencyHint{File: file, Any: tokens}
 }
 
-func depEv(file, evidence string, tokens ...string) DependencyHint {
-	return DependencyHint{File: file, Any: tokens, Evidence: evidence}
-}
-
 func lp(program, formatter string, auto bool, paths ...string) LogProfile {
 	return LogProfile{Program: program, Formatter: formatter, CatalogVersion: CatalogVersion(), AutoCollect: auto, Paths: paths}
 }

@@ -1036,14 +1036,6 @@ func classifyApplicationRoot(hint map[string]any) map[string]any {
 	return out
 }
 
-func applicationTypeFromPath(path string) (string, []string) {
-	detected := appcatalog.DetectRootWithFS(path, fileExists, readFileForDetection)
-	if detected.ProfileID == "" {
-		return "unknown", nil
-	}
-	return detected.ProfileID, detected.Evidence
-}
-
 func readFileForDetection(path string) ([]byte, bool) {
 	data, err := os.ReadFile(path)
 	return data, err == nil

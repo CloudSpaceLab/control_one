@@ -11,6 +11,10 @@ import (
 
 const launchdServiceLabel = "com.cloudspacelab.controlone"
 
+func init() {
+	uninstallServiceHook = uninstallService
+}
+
 // installService registers the Control One agent as a launchd service on
 // macOS. When executed as root (EUID 0) the plist is written to
 // /Library/LaunchDaemons/ so the agent runs system-wide; otherwise it is
@@ -73,11 +77,7 @@ func installService(configPath string) error {
 
 // uninstallService unloads and deletes the launchd plist. Missing plists are
 // tolerated so repeated uninstalls succeed. The CLI subcommand that exposes
-// this to operators is wired up by the installer-hardening worktree
-// (feat/installer-idempotent-signed); this worktree only contributes the
-// platform primitive.
-//
-//nolint:unused // wired up from the `uninstall` subcommand in a sibling worktree
+// this to operators calls uninstallServiceHook, which is wired during init.
 func uninstallService() error {
 	plistPath, err := launchdPlistPath()
 	if err != nil {
