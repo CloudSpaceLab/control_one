@@ -83,7 +83,11 @@ func (p *serverThreatFeedProvider) Sources(ctx context.Context) ([]threatintel.P
 					zap.String("feed_type", feed.FeedType),
 					zap.Error(err))
 			}
-			p.store.RecordThreatFeedRefresh(ctx, feed.ID, "error", err.Error(), 0)
+			if recErr := p.store.RecordThreatFeedRefresh(ctx, feed.ID, "error", err.Error(), 0); recErr != nil && p.log != nil {
+				p.log.Warn("record threat feed source error",
+					zap.String("feed_id", feed.ID.String()),
+					zap.Error(recErr))
+			}
 			continue
 		}
 		out = append(out, threatintel.ProvidedSource{
