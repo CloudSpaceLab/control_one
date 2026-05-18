@@ -662,29 +662,45 @@ func newExposureLane(nodes []storage.Node, services []storage.NodeService, publi
 	if unprotectedPublic < 0 {
 		unprotectedPublic = 0
 	}
-	tone := "healthy"
-	if unprotectedPublic > 0 || unprotectedWeb > 0 || unprotectedCritical > 0 || isolation.WhitelistGap > 0 || firewall.Disabled > 0 || firewall.Unknown > 0 {
-		tone = "warning"
-	}
-	if unprotectedCritical > 0 {
-		tone = "critical"
-	}
+	publicFirewallUnknown := publicFirewallStateCount(services, isolation, firewall, "unknown")
+	publicFirewallOff := publicFirewallStateCount(services, isolation, firewall, "off")
+	publicFirewallStale := publicFirewallStateCount(services, isolation, firewall, "stale")
+	publicFirewallWeak := publicFirewallStateCount(services, isolation, firewall, "weak")
+	publicFirewallGaps := publicFirewallUnknown + publicFirewallOff + publicFirewallStale + publicFirewallWeak
+	confidence := exposureConfidenceScore{
+		PublicListeners:       publicServices,
+		ProtectedListeners:    protectedListeners,
+		UnprotectedListeners:  unprotectedPublic,
+		UnprotectedWeb:        unprotectedWeb,
+		UnprotectedCritical:   unprotectedCritical,
+		WhitelistGaps:         isolation.WhitelistGap,
+		PublicFirewallUnknown: publicFirewallUnknown,
+		PublicFirewallOff:     publicFirewallOff,
+		PublicFirewallStale:   publicFirewallStale,
+		PublicFirewallWeak:    publicFirewallWeak,
+		RiskySources:          riskySources,
+		ActiveBlocks:          active,
+	}.score()
+	tone := exposureConfidenceTone(confidence)
+	gaps := unprotectedPublic + unprotectedWeb + unprotectedCritical + isolation.WhitelistGap + publicFirewallGaps
 	return controlRoomLane{
-		ID: "exposure", Title: "Current Exposure", Tone: tone, Score: clampScore(100 - unprotectedPublic*8 - unprotectedWeb*10 - unprotectedCritical*20 - isolation.WhitelistGap*10 - firewall.Disabled*8 - firewall.Unknown*5),
-		Summary:         fmt.Sprintf("%d public listeners, %d protected by isolation/firewall, %d active blocks", publicServices, protectedNodes, active),
-		PrimaryMetric:   controlRoomMetric{Label: "Public listeners", Value: fmt.Sprintf("%d", publicServices), Tone: countTone(publicServices, "warning"), Drilldown: "/connections"},
-		SecondaryMetric: controlRoomMetric{Label: "Active blocks", Value: fmt.Sprintf("%d", active), Tone: countTone(active, "info"), Drilldown: "/security/network?tab=blocks"},
+		ID: "exposure", Title: "Exposure Confidence", Tone: tone, Score: confidence,
+		Summary:         fmt.Sprintf("%d%% confidence: %d exposure gaps, %d protected nodes, %d active blocks", confidence, gaps, protectedNodes, active),
+		PrimaryMetric:   controlRoomMetric{Label: "Security confidence", Value: fmt.Sprintf("%d%%", confidence), Tone: tone, Hint: exposureConfidenceHint(confidence), Drilldown: "/control-room/exposure"},
+		SecondaryMetric: controlRoomMetric{Label: "Exposure gaps", Value: fmt.Sprintf("%d", gaps), Tone: countTone(gaps, "warning"), Drilldown: "/control-room/exposure"},
 		Drilldown:       "/security/network", UpdatedAt: formatTime(now),
 		Metrics: []controlRoomMetric{
+			{Label: "Public listeners", Value: fmt.Sprintf("%d", publicServices), Tone: countTone(unprotectedPublic, "warning"), Drilldown: "/connections"},
 			{Label: "Protected listeners", Value: fmt.Sprintf("%d", protectedListeners), Tone: "healthy", Drilldown: "/control-room/exposure"},
 			{Label: "Web block ready", Value: fmt.Sprintf("%d/%d", webservers.EnforceReady, webservers.Total), Tone: countTone(unprotectedWeb, "warning"), Drilldown: "/security/webservers"},
 			{Label: "Unprotected web", Value: fmt.Sprintf("%d", unprotectedWeb), Tone: countTone(unprotectedWeb, "warning"), Drilldown: "/security/webservers"},
+			{Label: "Critical gaps", Value: fmt.Sprintf("%d", unprotectedCritical), Tone: countTone(unprotectedCritical, "critical"), Drilldown: "/control-room/exposure"},
 			{Label: "Isolation protected", Value: fmt.Sprintf("%d", isolation.Protected), Tone: "healthy", Drilldown: "/control-room/exposure"},
 			{Label: "Firewall default deny", Value: fmt.Sprintf("%d", firewall.DefaultDeny), Tone: countTone(firewall.Enabled-firewall.DefaultDeny, "info"), Drilldown: "/security/network?tab=firewall"},
 			{Label: "Whitelist-only", Value: fmt.Sprintf("%d", isolation.Whitelist), Tone: "healthy", Drilldown: "/control-room/exposure"},
 			{Label: "Whitelist gaps", Value: fmt.Sprintf("%d", isolation.WhitelistGap), Tone: countTone(isolation.WhitelistGap, "warning"), Drilldown: "/control-room/exposure"},
 			{Label: "Airgapped", Value: fmt.Sprintf("%d", isolation.Airgapped), Tone: "healthy", Drilldown: "/control-room/exposure"},
-			{Label: "Firewall unknown/off", Value: fmt.Sprintf("%d", firewall.Unknown+firewall.Disabled), Tone: countTone(firewall.Unknown+firewall.Disabled, "warning"), Drilldown: "/security/network?tab=firewall"},
+			{Label: "Public firewall gaps", Value: fmt.Sprintf("%d", publicFirewallGaps), Tone: countTone(publicFirewallGaps, "warning"), Drilldown: "/security/network?tab=firewall"},
 			{Label: "Risky countries/ASNs", Value: fmt.Sprintf("%d", riskySources), Tone: countTone(riskySources, "warning"), Drilldown: "/security/network?tab=ip-behavior"},
 			{Label: "Exposed vhosts", Value: fmt.Sprintf("%d", vhostCount), Tone: countTone(vhostCount, "info"), Drilldown: "/security/webservers"},
 		},
@@ -814,9 +830,13 @@ func protectedPublicServiceCount(services []storage.NodeService, isolation contr
 			protectedNodes[node.NodeID] = struct{}{}
 		}
 	}
+	airgapped := isolationNodeModeSet(isolation, isolationModeAirgapped)
 	count := 0
 	for _, svc := range services {
 		if !isPublicListener(svc.ListenAddr) {
+			continue
+		}
+		if _, ok := airgapped[svc.NodeID.String()]; ok {
 			continue
 		}
 		if _, ok := protectedNodes[svc.NodeID.String()]; ok {
@@ -824,6 +844,121 @@ func protectedPublicServiceCount(services []storage.NodeService, isolation contr
 		}
 	}
 	return count
+}
+
+type exposureConfidenceScore struct {
+	PublicListeners       int
+	ProtectedListeners    int
+	UnprotectedListeners  int
+	UnprotectedWeb        int
+	UnprotectedCritical   int
+	WhitelistGaps         int
+	PublicFirewallUnknown int
+	PublicFirewallOff     int
+	PublicFirewallStale   int
+	PublicFirewallWeak    int
+	RiskySources          int
+	ActiveBlocks          int
+}
+
+func (s exposureConfidenceScore) score() int {
+	penalty := 0
+	penalty += s.UnprotectedListeners * 8
+	penalty += s.UnprotectedWeb * 7
+	penalty += s.UnprotectedCritical * 30
+	penalty += s.WhitelistGaps * 12
+	penalty += s.PublicFirewallUnknown * 6
+	penalty += s.PublicFirewallStale * 6
+	penalty += s.PublicFirewallWeak * 8
+	penalty += s.PublicFirewallOff * 10
+	penalty += s.RiskySources * 5
+	bonus := s.ActiveBlocks * 2
+	if bonus > 6 {
+		bonus = 6
+	}
+	return clampScore(100 - penalty + bonus)
+}
+
+func exposureConfidenceTone(score int) string {
+	switch {
+	case score < 50:
+		return "critical"
+	case score < 75:
+		return "warning"
+	case score < 90:
+		return "info"
+	default:
+		return "healthy"
+	}
+}
+
+func exposureConfidenceHint(score int) string {
+	switch {
+	case score < 50:
+		return "Immediate containment review"
+	case score < 75:
+		return "Reduce exposure gaps"
+	case score < 90:
+		return "Mostly protected"
+	default:
+		return "Strong exposure posture"
+	}
+}
+
+func publicFirewallStateCount(services []storage.NodeService, isolation controlRoomIsolation, firewall controlRoomFirewall, state string) int {
+	publicNodes := publicServiceNodeIDsExcludingAirgapped(services, isolation)
+	if len(publicNodes) == 0 {
+		return 0
+	}
+	count := 0
+	seen := map[string]struct{}{}
+	for _, node := range firewall.Nodes {
+		if _, ok := publicNodes[node.NodeID]; !ok {
+			continue
+		}
+		seen[node.NodeID] = struct{}{}
+		switch state {
+		case "unknown":
+			if !node.Known {
+				count++
+			}
+		case "off":
+			if node.Known && !node.Enabled {
+				count++
+			}
+		case "stale":
+			if node.Known && node.Enabled && node.Stale {
+				count++
+			}
+		case "weak":
+			if node.Known && node.Enabled && !node.Stale && !node.DefaultDeny {
+				count++
+			}
+		}
+	}
+	if state == "unknown" {
+		for nodeID := range publicNodes {
+			if _, ok := seen[nodeID]; !ok {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func publicServiceNodeIDsExcludingAirgapped(services []storage.NodeService, isolation controlRoomIsolation) map[string]struct{} {
+	out := map[string]struct{}{}
+	airgapped := isolationNodeModeSet(isolation, isolationModeAirgapped)
+	for _, svc := range services {
+		nodeID := svc.NodeID.String()
+		if _, ok := airgapped[nodeID]; ok {
+			continue
+		}
+		if isPublicListener(svc.ListenAddr) {
+			out[nodeID] = struct{}{}
+		}
+	}
+	return out
 }
 
 func newControlRoomIsolation(nodes []storage.Node, now time.Time) controlRoomIsolation {

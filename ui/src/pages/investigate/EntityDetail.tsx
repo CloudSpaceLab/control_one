@@ -13,6 +13,7 @@ import {
 } from '@/components/investigate';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useRolePick } from '@/hooks/useRolePick';
+import { useTenant } from '@/providers/TenantProvider';
 import { toast } from 'sonner';
 import { ENTITY_TYPE_LABELS } from '@/lib/entity';
 import type { EntityType } from '@/components/kit';
@@ -31,6 +32,7 @@ const VALID_TYPES: EntityType[] = [
 export function EntityDetail(): JSX.Element {
   const { type, id } = useParams<{ type: string; id: string }>();
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const { isAdmin, isOperator } = useRolePick();
   const canMutate = isAdmin || isOperator;
   const [tab, setTab] = useState(type === 'ip' ? 'connections' : 'timeline');
@@ -76,9 +78,9 @@ export function EntityDetail(): JSX.Element {
   });
 
   const ipEnrichQ = useQuery<IpEnrichment>({
-    queryKey: ['entity.ip.enrich', id],
-    queryFn: () => client.enrichIp(id ?? ''),
-    enabled: !!id && safeType === 'ip',
+    queryKey: ['entity.ip.enrich', id, currentTenantId],
+    queryFn: () => client.enrichIp(id ?? '', currentTenantId),
+    enabled: !!id && safeType === 'ip' && !!currentTenantId,
   });
 
   const onAction = async (action: 'block' | 'allow' | 'quarantine') => {

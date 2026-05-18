@@ -205,6 +205,7 @@ wizard:
 	// 6. Write state file
 	stateContent, _ := json.MarshalIndent(map[string]any{
 		"node_id":       enrollResp.NodeID,
+		"tenant_id":     enrollResp.TenantID,
 		"registered_at": time.Now().UTC(),
 	}, "", "  ")
 	if err := os.WriteFile(filepath.Join(dataDir, "state.json"), stateContent, 0600); err != nil {

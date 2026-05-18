@@ -151,9 +151,14 @@ export function Alerts(): JSX.Element {
   // Correlation rules
   useEffect(() => {
     let cancelled = false;
+    if (!tenantId) {
+      setRules([]);
+      setRulesLoading(false);
+      return () => { cancelled = true; };
+    }
     setRulesLoading(true);
     client
-      .listCorrelationRules({ tenantId: tenantId || undefined })
+      .listCorrelationRules({ tenantId })
       .then((r) => { if (!cancelled) setRules(r.data ?? []); })
       .catch(() => { if (!cancelled) setRules([]); })
       .finally(() => { if (!cancelled) setRulesLoading(false); });
