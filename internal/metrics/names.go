@@ -29,8 +29,8 @@
 // net.packet_loss_pct, net.icmp_latency_p99). The intersection was EMPTY,
 // so calibration's min(samples) gate evaluated to 0 forever.
 //
-// Resolution: the 9 currently-emitted names are CANONICAL because they are
-// what production nodes actually produce today. The 8 aspirational signals
+// Resolution: the currently-emitted host metric names are CANONICAL because
+// they are what production nodes actually produce today. The 8 aspirational signals
 // from healthSignalsCatalog are demoted to OptionalSignals — names that
 // MAY arrive once the corresponding collectors ship (Linux PSI, smartctl,
 // ICMP probe, /proc/vmstat oom_kill). The predictive engine treats Optional
@@ -52,6 +52,8 @@ const (
 	MetricMemoryTotalBytes  = "memory_total_bytes"
 	MetricDiskUsagePercent  = "disk_usage_percent"
 	MetricDiskTotalBytes    = "disk_total_bytes"
+	MetricDiskUsedBytes     = "disk_used_bytes"
+	MetricDiskFreeBytes     = "disk_free_bytes"
 	MetricLoad1             = "load1"
 	MetricLoad5             = "load5"
 	MetricLoad15            = "load15"
@@ -67,6 +69,8 @@ var CoreEmitted = []string{
 	MetricMemoryTotalBytes,
 	MetricDiskUsagePercent,
 	MetricDiskTotalBytes,
+	MetricDiskUsedBytes,
+	MetricDiskFreeBytes,
 	MetricLoad1,
 	MetricLoad5,
 	MetricLoad15,
@@ -111,7 +115,7 @@ func Units(name string) string {
 	case MetricCPUUsagePercent, MetricMemoryUsedPercent, MetricDiskUsagePercent,
 		MetricHostIowaitPct, MetricHostSwapUsedPct, MetricNetPacketLossPct:
 		return "percent"
-	case MetricMemoryTotalBytes, MetricDiskTotalBytes:
+	case MetricMemoryTotalBytes, MetricDiskTotalBytes, MetricDiskUsedBytes, MetricDiskFreeBytes:
 		return "bytes"
 	case MetricNetIcmpLatencyP99:
 		return "ms"

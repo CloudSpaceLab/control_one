@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -30,12 +31,7 @@ func (s *Service) AddInterval(name string, interval time.Duration, job func()) (
 	}
 
 	spec := "@every " + interval.String()
-	wrap := func() {
-		s.log.Debug("job start", zap.String("job", name))
-		start := time.Now()
-		job()
-		s.log.Debug("job done", zap.String("job", name), zap.Duration("duration", time.Since(start)))
-	}
+	wrap := s.wrapJob(name, job)
 
 	id, err := s.runner.AddFunc(spec, wrap)
 	if err != nil {
@@ -44,6 +40,21 @@ func (s *Service) AddInterval(name string, interval time.Duration, job func()) (
 
 	s.log.Info("job scheduled", zap.String("job", name), zap.String("spec", spec))
 	return id, nil
+}
+
+func (s *Service) wrapJob(name string, job func()) func() {
+	var running atomic.Bool
+	return func() {
+		if !running.CompareAndSwap(false, true) {
+			s.log.Warn("job skipped: previous run still active", zap.String("job", name))
+			return
+		}
+		defer running.Store(false)
+		s.log.Debug("job start", zap.String("job", name))
+		start := time.Now()
+		job()
+		s.log.Debug("job done", zap.String("job", name), zap.Duration("duration", time.Since(start)))
+	}
 }
 
 // Start asynchronously starts the scheduler.

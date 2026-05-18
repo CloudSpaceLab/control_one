@@ -55,12 +55,15 @@ func DefaultFilterConfig() FilterConfig {
 
 // Filter implements smart-filter for the netflow Manager.
 type Filter struct {
-	cfg  FilterConfig
-	mu   sync.Mutex
-	roll map[summaryKey]*summaryBucket
+	cfg        FilterConfig
+	mu         sync.Mutex
+	roll       map[summaryKey]*summaryBucket
+	maxBuckets int
+	evicted    uint64
 }
 
 type summaryKey struct {
+	netns   string
 	pid     int
 	dstPort uint16
 	minute  int64
@@ -80,7 +83,15 @@ type summaryBucket struct {
 
 // NewFilter constructs a Filter from a config.
 func NewFilter(cfg FilterConfig) *Filter {
-	return &Filter{cfg: cfg, roll: make(map[summaryKey]*summaryBucket)}
+	return NewFilterWithLimit(cfg, 4096)
+}
+
+// NewFilterWithLimit constructs a Filter with a hard cap on summary buckets.
+func NewFilterWithLimit(cfg FilterConfig, maxBuckets int) *Filter {
+	if maxBuckets <= 0 {
+		maxBuckets = 4096
+	}
+	return &Filter{cfg: cfg, roll: make(map[summaryKey]*summaryBucket), maxBuckets: maxBuckets}
 }
 
 // Decide returns the verdict for a single event. May mutate the event (e.g.
@@ -129,6 +140,7 @@ func (f *Filter) fold(ev *ConnectionEvent) {
 		bucketTS = time.Now().UTC()
 	}
 	key := summaryKey{
+		netns:   ev.NetNS,
 		pid:     ev.PID,
 		dstPort: ev.DstPort,
 		minute:  bucketTS.Truncate(time.Minute).Unix(),
@@ -137,11 +149,15 @@ func (f *Filter) fold(ev *ConnectionEvent) {
 	defer f.mu.Unlock()
 	b, ok := f.roll[key]
 	if !ok {
+		if len(f.roll) >= f.maxBuckets {
+			f.evictOldestLocked()
+		}
 		b = &summaryBucket{
 			dst:      ev.DstIP,
 			process:  ev.Process,
 			user:     ev.User,
 			first:    bucketTS,
+			last:     bucketTS,
 			protocol: ev.Protocol,
 		}
 		f.roll[key] = b
@@ -151,6 +167,21 @@ func (f *Filter) fold(ev *ConnectionEvent) {
 	b.count++
 	if ev.LastDataAt.After(b.last) {
 		b.last = ev.LastDataAt
+	}
+}
+
+func (f *Filter) evictOldestLocked() {
+	var oldest summaryKey
+	found := false
+	for k := range f.roll {
+		if !found || k.minute < oldest.minute {
+			oldest = k
+			found = true
+		}
+	}
+	if found {
+		delete(f.roll, oldest)
+		f.evicted++
 	}
 }
 
@@ -170,6 +201,7 @@ func (f *Filter) Drain(age time.Duration) []ConnectionEvent {
 		}
 		out = append(out, ConnectionEvent{
 			Kind:       "summary",
+			NetNS:      k.netns,
 			PID:        k.pid,
 			Process:    b.process,
 			User:       b.user,
@@ -186,6 +218,25 @@ func (f *Filter) Drain(age time.Duration) []ConnectionEvent {
 		delete(f.roll, k)
 	}
 	return out
+}
+
+type FilterStats struct {
+	SummaryBuckets  int    `json:"summary_buckets"`
+	SummaryEvicted  uint64 `json:"summary_evicted"`
+	MaxSummarySlots int    `json:"max_summary_slots"`
+}
+
+func (f *Filter) Stats() FilterStats {
+	if f == nil {
+		return FilterStats{}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return FilterStats{
+		SummaryBuckets:  len(f.roll),
+		SummaryEvicted:  f.evicted,
+		MaxSummarySlots: f.maxBuckets,
+	}
 }
 
 // isExternal returns true when ip is not in private / loopback / link-local

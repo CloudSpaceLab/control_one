@@ -18,7 +18,7 @@ import (
 type PackageInfo struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
-	Source      string `json:"source"` // apt | dpkg | rpm | winget | other
+	Source      string `json:"source"` // apt | dpkg | rpm | registry | lslpp | other
 	Arch        string `json:"arch,omitempty"`
 	InstalledAt string `json:"installed_at,omitempty"` // RFC3339; empty when unknown
 }
@@ -41,6 +41,8 @@ func collectInventory() ([]PackageInfo, string, error) {
 		return collectLinuxPackages()
 	case "windows":
 		return collectWindowsPackages()
+	case "aix":
+		return collectAIXPackages()
 	case "darwin":
 		// No first-class brew/macports collector yet — return empty rather
 		// than fabricating data. Agent omits OSPackages on this path.
@@ -152,71 +154,6 @@ func parseRpmQA(out string) []PackageInfo {
 		pkgs = append(pkgs, p)
 	}
 	return pkgs
-}
-
-// collectWindowsPackages uses winget to enumerate installed packages. winget
-// is present on Windows 10 1809+ and Windows Server 2022+; on older systems
-// the lookup fails silently and we omit OSPackages from the heartbeat.
-func collectWindowsPackages() ([]PackageInfo, string, error) {
-	if _, err := exec.LookPath("winget"); err != nil {
-		return nil, "", nil
-	}
-	out, err := exec.Command("winget", "list", "--accept-source-agreements").Output()
-	if err != nil {
-		return nil, "", err
-	}
-	pkgs := parseWingetList(string(out))
-	return pkgs, hashPackages(pkgs), nil
-}
-
-// parseWingetList is intentionally tolerant — winget's plain-text output is
-// not a stable contract. We split on whitespace and capture name + version
-// best-effort, skipping the header rows. Lines that don't match a name+version
-// pair are dropped.
-func parseWingetList(out string) []PackageInfo {
-	lines := strings.Split(out, "\n")
-	pkgs := make([]PackageInfo, 0, len(lines))
-	for _, raw := range lines {
-		line := strings.TrimRight(raw, "\r ")
-		if line == "" {
-			continue
-		}
-		// Skip header / separator rows
-		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "Name") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		// Heuristic: name occupies fields[:n-2], version is the last field that
-		// looks like a version (contains a digit), id is fields[n-2]. winget's
-		// output is column-aligned, not tab-separated, so we accept some
-		// imprecision rather than over-engineering a parser.
-		version := fields[len(fields)-1]
-		if !containsDigit(version) {
-			continue
-		}
-		name := strings.Join(fields[:len(fields)-2], " ")
-		if name == "" {
-			name = fields[0]
-		}
-		pkgs = append(pkgs, PackageInfo{
-			Source:  "winget",
-			Name:    name,
-			Version: version,
-		})
-	}
-	return pkgs
-}
-
-func containsDigit(s string) bool {
-	for _, r := range s {
-		if r >= '0' && r <= '9' {
-			return true
-		}
-	}
-	return false
 }
 
 func inferServerPurposesFromPackages(pkgs []PackageInfo) []ServerPurpose {

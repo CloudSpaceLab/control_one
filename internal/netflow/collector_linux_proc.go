@@ -17,11 +17,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// procBackend polls /proc/net/{tcp,tcp6,udp,udp6} every PollInterval. For
-// each currently-established (TCP) or recently-active (UDP) socket it
-// resolves the owning PID by walking /proc/[pid]/fd/ until it finds a
-// matching socket inode. State diffs across snapshots produce open / close
-// / state_change events with the same shape eBPF emits.
+// procBackend polls /proc/{pid}/net/{tcp,tcp6,udp,udp6} once per unique
+// network namespace every PollInterval. For each currently-established (TCP)
+// or recently-active (UDP) socket it resolves the owning PID by walking
+// /proc/[pid]/fd/ until it finds a matching socket inode. State diffs across
+// snapshots produce open / close / state_change events with the same shape
+// eBPF emits.
 //
 // Bytes accounting on Linux without eBPF is best-effort: /proc/[pid]/io has
 // rchar/wchar but those are *all* I/O, not per-socket. We export 0 unless
@@ -57,7 +58,14 @@ func (p *procBackend) Run(ctx context.Context, out chan<- ConnectionEvent) error
 		now := time.Now().UTC()
 		// Open: present now, absent before.
 		for k, s := range curr {
-			if _, ok := prev[k]; ok {
+			if prevState, ok := prev[k]; ok {
+				s.startedAt = prevState.startedAt
+				if s.pid == 0 {
+					s.pid = prevState.pid
+					s.process = prevState.process
+					s.user = prevState.user
+				}
+				curr[k] = s
 				continue
 			}
 			out <- p.connEvent("open", k, s, now)
@@ -79,6 +87,7 @@ func (p *procBackend) Run(ctx context.Context, out chan<- ConnectionEvent) error
 }
 
 type procSockKey struct {
+	netns   string
 	proto   string
 	srcIP   string
 	srcPort uint16
@@ -99,30 +108,33 @@ type procSockState struct {
 func (p *procBackend) snapshot() (map[procSockKey]procSockState, error) {
 	out := map[procSockKey]procSockState{}
 	now := time.Now().UTC()
-	for _, file := range []struct {
-		path  string
-		proto string
-	}{
-		{"/proc/net/tcp", "tcp"},
-		{"/proc/net/tcp6", "tcp"},
-		{"/proc/net/udp", "udp"},
-		{"/proc/net/udp6", "udp"},
-	} {
-		entries, err := readProcNet(file.path, file.proto)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			out[procSockKey{
-				proto:   file.proto,
-				srcIP:   e.srcIP,
-				srcPort: e.srcPort,
-				dstIP:   e.dstIP,
-				dstPort: e.dstPort,
-			}] = procSockState{
-				state:     e.state,
-				inode:     e.inode,
-				startedAt: now,
+	for _, src := range procNetSources("/proc") {
+		for _, file := range []struct {
+			name  string
+			proto string
+		}{
+			{"tcp", "tcp"},
+			{"tcp6", "tcp"},
+			{"udp", "udp"},
+			{"udp6", "udp"},
+		} {
+			entries, err := readProcNetFromSource(src, file.name, file.proto)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				out[procSockKey{
+					netns:   src.netns,
+					proto:   file.proto,
+					srcIP:   e.srcIP,
+					srcPort: e.srcPort,
+					dstIP:   e.dstIP,
+					dstPort: e.dstPort,
+				}] = procSockState{
+					state:     e.state,
+					inode:     e.inode,
+					startedAt: now,
+				}
 			}
 		}
 	}
@@ -138,7 +150,9 @@ func (p *procBackend) connEvent(kind string, k procSockKey, s procSockState, now
 	srcIP := net.ParseIP(k.srcIP)
 	dstIP := net.ParseIP(k.dstIP)
 	direction := "outbound"
-	if srcIP != nil && (srcIP.IsUnspecified() || srcIP.IsPrivate() || srcIP.IsLoopback()) && !isExternal(dstIP) {
+	if strings.EqualFold(s.state, "LISTEN") {
+		direction = "listening"
+	} else if srcIP != nil && (srcIP.IsUnspecified() || srcIP.IsPrivate() || srcIP.IsLoopback()) && !isExternal(dstIP) {
 		direction = "inbound"
 	}
 	ev := ConnectionEvent{
@@ -146,6 +160,7 @@ func (p *procBackend) connEvent(kind string, k procSockKey, s procSockState, now
 		PID:       s.pid,
 		Process:   s.process,
 		User:      s.user,
+		NetNS:     k.netns,
 		SrcIP:     srcIP,
 		SrcPort:   k.srcPort,
 		DstIP:     dstIP,
@@ -172,6 +187,74 @@ type procNetEntry struct {
 	dstPort uint16
 	state   string
 	inode   uint64
+}
+
+type procNetSource struct {
+	netns string
+	dirs  []string
+}
+
+func procNetSources(root string) []procNetSource {
+	byNS := map[string][]string{}
+	order := []string{}
+	add := func(ns, dir string, first bool) {
+		if ns == "" {
+			ns = dir
+		}
+		if _, ok := byNS[ns]; !ok {
+			order = append(order, ns)
+		}
+		if first {
+			byNS[ns] = append([]string{dir}, byNS[ns]...)
+			return
+		}
+		byNS[ns] = append(byNS[ns], dir)
+	}
+
+	selfNS := "self"
+	if link, err := os.Readlink(filepath.Join(root, "self", "ns", "net")); err == nil {
+		selfNS = link
+	}
+	add(selfNS, filepath.Join(root, "net"), true)
+
+	procs, err := os.ReadDir(root)
+	if err == nil {
+		for _, ent := range procs {
+			if !ent.IsDir() {
+				continue
+			}
+			pid := ent.Name()
+			if _, err := strconv.Atoi(pid); err != nil {
+				continue
+			}
+			ns, err := os.Readlink(filepath.Join(root, pid, "ns", "net"))
+			if err != nil {
+				continue
+			}
+			add(ns, filepath.Join(root, pid, "net"), false)
+		}
+	}
+
+	out := make([]procNetSource, 0, len(order))
+	for _, ns := range order {
+		out = append(out, procNetSource{netns: ns, dirs: byNS[ns]})
+	}
+	return out
+}
+
+func readProcNetFromSource(src procNetSource, name, proto string) ([]procNetEntry, error) {
+	var lastErr error
+	for _, dir := range src.dirs {
+		entries, err := readProcNet(filepath.Join(dir, name), proto)
+		if err == nil {
+			return entries, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, os.ErrNotExist
 }
 
 func readProcNet(path, proto string) ([]procNetEntry, error) {
@@ -284,11 +367,16 @@ func tcpStateName(hex string) string {
 // inode in the supplied map. Single-pass keeps the cost O(open FDs on
 // host), which is the cheapest correct approach.
 func resolveProcInodes(socks map[procSockKey]procSockState) {
-	inodeIndex := make(map[uint64][]*procSockState, len(socks))
+	type procInodeKey struct {
+		netns string
+		inode uint64
+	}
+	inodeIndex := make(map[procInodeKey][]*procSockState, len(socks))
 	keys := make([]procSockKey, 0, len(socks))
 	for k, s := range socks {
 		st := s
-		inodeIndex[s.inode] = append(inodeIndex[s.inode], &st)
+		idx := procInodeKey{netns: k.netns, inode: s.inode}
+		inodeIndex[idx] = append(inodeIndex[idx], &st)
 		socks[k] = st
 		keys = append(keys, k)
 	}
@@ -303,6 +391,10 @@ func resolveProcInodes(socks map[procSockKey]procSockState) {
 		}
 		name := ent.Name()
 		pid, err := strconv.Atoi(name)
+		if err != nil {
+			continue
+		}
+		netns, err := os.Readlink(filepath.Join("/proc", name, "ns", "net"))
 		if err != nil {
 			continue
 		}
@@ -325,7 +417,7 @@ func resolveProcInodes(socks map[procSockKey]procSockState) {
 			if err != nil {
 				continue
 			}
-			matches, ok := inodeIndex[inode]
+			matches, ok := inodeIndex[procInodeKey{netns: netns, inode: inode}]
 			if !ok {
 				continue
 			}
@@ -341,7 +433,7 @@ func resolveProcInodes(socks map[procSockKey]procSockState) {
 	// Replace updated state in the result map.
 	for _, k := range keys {
 		s := socks[k]
-		if list, ok := inodeIndex[s.inode]; ok && len(list) > 0 {
+		if list, ok := inodeIndex[procInodeKey{netns: k.netns, inode: s.inode}]; ok && len(list) > 0 {
 			s.pid = list[0].pid
 			s.process = list[0].process
 			s.user = list[0].user

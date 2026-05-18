@@ -212,12 +212,17 @@ secrets:
     - production
     - shared-services
 
-  collect_logs: true
+agent_runtime:
+  profile: auto
+
+telemetry_prefs:
+  # Log collection is opt-in; empty log_sources means collect no logs.
+  collect_logs: false
   log_namespaces:
     - system
     - application
     - security
-  # log_sources may be omitted to use baked-in presets. Provide entries only when overrides are required.
+  # Set collect_logs: true and provide explicit sources when log ingestion is required.
   log_sources:
     - program: nginx
       paths:

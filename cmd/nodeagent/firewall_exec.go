@@ -165,6 +165,7 @@ func executeFirewallAction(ctx context.Context, client *api.Client, log *zap.Log
 		zap.String("job_id", jobID),
 		zap.String("source", detail.Source),
 	)
+	invalidateFirewallCache()
 	enqueueCompletedAction(completedAction{
 		Action: jobType,
 		JobID:  jobID,

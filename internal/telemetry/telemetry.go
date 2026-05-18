@@ -133,6 +133,12 @@ func (s *Service) SendCompliance(ctx context.Context, nodeID string, results []s
 
 // StartLogCollection spins up collectors for configured log sources once.
 func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources []config.LogSourceConfig) {
+	prepared := logs.PrepareSources(sources)
+	if len(prepared) == 0 {
+		s.log.Info("log collection not started: no explicit log sources configured")
+		return
+	}
+
 	s.logsMu.Lock()
 	if s.logsActive {
 		s.logsMu.Unlock()
@@ -140,8 +146,6 @@ func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources
 	}
 	s.logsActive = true
 	s.logsMu.Unlock()
-
-	prepared := logs.PrepareSources(sources)
 
 	for _, src := range prepared {
 		source := src

@@ -78,6 +78,8 @@ func CollectHostMetrics() map[string]any {
 	if diskStat != nil {
 		out[metrics.MetricDiskUsagePercent] = diskStat.UsedPercent
 		out[metrics.MetricDiskTotalBytes] = diskStat.Total
+		out[metrics.MetricDiskUsedBytes] = diskStat.Used
+		out[metrics.MetricDiskFreeBytes] = diskStat.Free
 	}
 	if loadStat != nil {
 		out[metrics.MetricLoad1] = loadStat.Load1

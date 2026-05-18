@@ -19,4 +19,9 @@ func TestSystemdUnitRestartsAfterSuccessfulSelfUpdate(t *testing.T) {
 	if strings.Contains(unit, "Restart=on-failure") {
 		t.Fatalf("unit must not use Restart=on-failure because successful self-update exits 0:\n%s", unit)
 	}
+	for _, want := range []string{"CPUWeight=20", "IOWeight=20", "Nice=5", "OOMPolicy=continue"} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit missing low-resource hint %q:\n%s", want, unit)
+		}
+	}
 }

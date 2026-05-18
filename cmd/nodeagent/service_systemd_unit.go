@@ -14,6 +14,10 @@ ExecStart=%s --config %s
 Restart=always
 RestartSec=10
 LimitNOFILE=65536
+CPUWeight=20
+IOWeight=20
+Nice=5
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target
