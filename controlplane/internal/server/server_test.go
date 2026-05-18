@@ -1242,6 +1242,11 @@ type fakeStore struct {
 	nodeHealthScores     map[uuid.UUID]storage.NodeHealthScore
 	alerts               []storage.Alert
 	aiConfig             *storage.AIConfig
+	flowDeltas           []FlowDeltaRow
+	fileGrowthDeltas     []FileGrowthDeltaRow
+	resourceDeltas       []ResourceDeltaRow
+	logTailRows          []LogTailRow
+	rootCauseFindings    []RootCauseFinding
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -4638,4 +4643,54 @@ func (f *fakeStore) UpsertAIConfig(_ context.Context, cfg storage.AIConfig) erro
 	copy := cfg
 	f.aiConfig = &copy
 	return nil
+}
+
+func (f *fakeStore) ListFlowDeltas(_ context.Context, filter EventCaptureFilter) ([]FlowDeltaRow, error) {
+	out := make([]FlowDeltaRow, 0, len(f.flowDeltas))
+	for _, row := range f.flowDeltas {
+		if row.TenantID == filter.TenantID && row.NodeID == filter.NodeID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListFileGrowthDeltas(_ context.Context, filter EventCaptureFilter) ([]FileGrowthDeltaRow, error) {
+	out := make([]FileGrowthDeltaRow, 0, len(f.fileGrowthDeltas))
+	for _, row := range f.fileGrowthDeltas {
+		if row.TenantID == filter.TenantID && row.NodeID == filter.NodeID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListResourceDeltas(_ context.Context, filter EventCaptureFilter) ([]ResourceDeltaRow, error) {
+	out := make([]ResourceDeltaRow, 0, len(f.resourceDeltas))
+	for _, row := range f.resourceDeltas {
+		if row.TenantID == filter.TenantID && row.NodeID == filter.NodeID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListLogTail(_ context.Context, filter EventCaptureFilter) ([]LogTailRow, error) {
+	out := make([]LogTailRow, 0, len(f.logTailRows))
+	for _, row := range f.logTailRows {
+		if row.TenantID == filter.TenantID && row.NodeID == filter.NodeID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListRootCauseFindings(_ context.Context, filter EventCaptureFilter) ([]RootCauseFinding, error) {
+	out := make([]RootCauseFinding, 0, len(f.rootCauseFindings))
+	for _, row := range f.rootCauseFindings {
+		if row.TenantID == filter.TenantID && row.NodeID == filter.NodeID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
 }
