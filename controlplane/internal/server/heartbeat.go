@@ -463,6 +463,13 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 				if errMsg == "" {
 					errMsg = "agent reported update failure"
 				}
+				if agentUpdateAlreadyCurrent(errMsg) {
+					if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent already on current or newer release; update skipped safely", map[string]any{"skipped": "already_current", "agent_error": errMsg}); jerr != nil {
+						s.logger.Warn("agent update job mark already-current",
+							zap.String("job_id", jobID.String()), zap.Error(jerr))
+					}
+					continue
+				}
 				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg}); jerr != nil {
 					s.logger.Warn("agent update job mark failed",
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
@@ -555,6 +562,11 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			continue
 		}
 	}
+}
+
+func agentUpdateAlreadyCurrent(errMsg string) bool {
+	msg := strings.ToLower(strings.TrimSpace(errMsg))
+	return strings.Contains(msg, "downgrade refused") && strings.Contains(msg, "<= current")
 }
 
 func (s *Server) retireAgentUpdateJobsFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) {

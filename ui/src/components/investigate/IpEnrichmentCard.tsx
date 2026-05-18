@@ -69,13 +69,19 @@ export function IpEnrichmentCard({ enrichment, loading }: IpEnrichmentCardProps)
           <div className="grid grid-cols-2 gap-3">
             <Field label="Country" value={enrichment.geo?.country ?? '-'} icon={<Globe className="h-3.5 w-3.5" />} />
             <Field label="City" value={enrichment.geo?.city ?? '-'} />
-            <Field label="ASN" value={enrichment.geo?.asn ? `AS${enrichment.geo.asn}` : '-'} mono />
+            <Field label="ASN" value={formatAsn(enrichment.geo?.asn)} mono />
             <Field label="Org" value={enrichment.geo?.org ?? '-'} />
           </div>
         </div>
       )}
     </Panel>
   );
+}
+
+function formatAsn(asn?: string): string {
+  const trimmed = asn?.trim();
+  if (!trimmed) return '-';
+  return trimmed.toUpperCase().startsWith('AS') ? trimmed : `AS${trimmed}`;
 }
 
 function Field({ label, value, icon, mono = false }: { label: string; value: string; icon?: JSX.Element; mono?: boolean }) {

@@ -217,7 +217,14 @@ func (s *Server) handleEntityOverview(w http.ResponseWriter, r *http.Request, en
 	// Tack on classification chips for IPs.
 	if entityType == EntityTypeIP {
 		assets, _ := ib.ListAssetCIDRs(r.Context(), tenantID)
-		chips := ClassifyIP(entityID, assets, nil)
+		var threatFeedRows []TFRow
+		if ip := net.ParseIP(entityID); ip != nil {
+			if matches := s.threatIntelIPMatches(tenantID, ip); len(matches) > 0 {
+				_, rows, _ := threatIndicatorsToEnrichment(matches)
+				threatFeedRows = append(threatFeedRows, rows...)
+			}
+		}
+		chips := ClassifyIP(entityID, assets, threatFeedRows)
 		// Prepend NODE chip when IP is a registered agent.
 		if s.store != nil {
 			if nodes, err := s.store.FindNodesByPublicIP(r.Context(), entityID); err == nil && len(nodes) > 0 {
