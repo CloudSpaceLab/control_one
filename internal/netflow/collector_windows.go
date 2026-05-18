@@ -4,6 +4,7 @@ package netflow
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"syscall"
@@ -148,7 +149,7 @@ func snapshotTCP(family uint32) ([]winNetConn, error) {
 	if len(buf) < 4 {
 		return nil, nil
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
+	count := binary.LittleEndian.Uint32(buf[:4])
 	if family == afInet {
 		return parseTCP4Rows(buf, count), nil
 	}
@@ -163,7 +164,7 @@ func snapshotUDP(family uint32) ([]winNetConn, error) {
 	if len(buf) < 4 {
 		return nil, nil
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
+	count := binary.LittleEndian.Uint32(buf[:4])
 	if family == afInet {
 		return parseUDP4Rows(buf, count), nil
 	}
@@ -203,10 +204,10 @@ func callSizedTable(proc *windows.LazyProc, family, tableClass uint32) ([]byte, 
 
 func parseTCP4Rows(buf []byte, count uint32) []winNetConn {
 	rowSize := unsafe.Sizeof(mibTCPRowOwnerPID{})
-	base := uintptr(unsafe.Pointer(&buf[4]))
-	out := make([]winNetConn, 0, count)
-	for i := uint32(0); i < count; i++ {
-		row := (*mibTCPRowOwnerPID)(unsafe.Pointer(base + uintptr(i)*rowSize))
+	limit := boundedWindowsTableRows(buf, rowSize, count)
+	out := make([]winNetConn, 0, limit)
+	for i := 0; i < limit; i++ {
+		row := windowsTableRowAt[mibTCPRowOwnerPID](buf, rowSize, i)
 		out = append(out, winNetConn{
 			LocalAddress:  ipv4FromDWORD(row.LocalAddr),
 			LocalPort:     ntohs32(row.LocalPort),
@@ -222,10 +223,10 @@ func parseTCP4Rows(buf []byte, count uint32) []winNetConn {
 
 func parseTCP6Rows(buf []byte, count uint32) []winNetConn {
 	rowSize := unsafe.Sizeof(mibTCP6RowOwnerPID{})
-	base := uintptr(unsafe.Pointer(&buf[4]))
-	out := make([]winNetConn, 0, count)
-	for i := uint32(0); i < count; i++ {
-		row := (*mibTCP6RowOwnerPID)(unsafe.Pointer(base + uintptr(i)*rowSize))
+	limit := boundedWindowsTableRows(buf, rowSize, count)
+	out := make([]winNetConn, 0, limit)
+	for i := 0; i < limit; i++ {
+		row := windowsTableRowAt[mibTCP6RowOwnerPID](buf, rowSize, i)
 		out = append(out, winNetConn{
 			LocalAddress:  append(net.IP(nil), row.LocalAddr[:]...),
 			LocalPort:     ntohs32(row.LocalPort),
@@ -241,10 +242,10 @@ func parseTCP6Rows(buf []byte, count uint32) []winNetConn {
 
 func parseUDP4Rows(buf []byte, count uint32) []winNetConn {
 	rowSize := unsafe.Sizeof(mibUDPRowOwnerPID{})
-	base := uintptr(unsafe.Pointer(&buf[4]))
-	out := make([]winNetConn, 0, count)
-	for i := uint32(0); i < count; i++ {
-		row := (*mibUDPRowOwnerPID)(unsafe.Pointer(base + uintptr(i)*rowSize))
+	limit := boundedWindowsTableRows(buf, rowSize, count)
+	out := make([]winNetConn, 0, limit)
+	for i := 0; i < limit; i++ {
+		row := windowsTableRowAt[mibUDPRowOwnerPID](buf, rowSize, i)
 		out = append(out, winNetConn{
 			LocalAddress:  ipv4FromDWORD(row.LocalAddr),
 			LocalPort:     ntohs32(row.LocalPort),
@@ -258,10 +259,10 @@ func parseUDP4Rows(buf []byte, count uint32) []winNetConn {
 
 func parseUDP6Rows(buf []byte, count uint32) []winNetConn {
 	rowSize := unsafe.Sizeof(mibUDP6RowOwnerPID{})
-	base := uintptr(unsafe.Pointer(&buf[4]))
-	out := make([]winNetConn, 0, count)
-	for i := uint32(0); i < count; i++ {
-		row := (*mibUDP6RowOwnerPID)(unsafe.Pointer(base + uintptr(i)*rowSize))
+	limit := boundedWindowsTableRows(buf, rowSize, count)
+	out := make([]winNetConn, 0, limit)
+	for i := 0; i < limit; i++ {
+		row := windowsTableRowAt[mibUDP6RowOwnerPID](buf, rowSize, i)
 		out = append(out, winNetConn{
 			LocalAddress:  append(net.IP(nil), row.LocalAddr[:]...),
 			LocalPort:     ntohs32(row.LocalPort),
@@ -271,6 +272,22 @@ func parseUDP6Rows(buf []byte, count uint32) []winNetConn {
 		})
 	}
 	return out
+}
+
+func boundedWindowsTableRows(buf []byte, rowSize uintptr, count uint32) int {
+	if len(buf) <= 4 || rowSize == 0 {
+		return 0
+	}
+	maxRows := (len(buf) - 4) / int(rowSize)
+	if count < uint32(maxRows) {
+		return int(count)
+	}
+	return maxRows
+}
+
+func windowsTableRowAt[T any](buf []byte, rowSize uintptr, index int) *T {
+	offset := 4 + index*int(rowSize)
+	return (*T)(unsafe.Pointer(unsafe.Add(unsafe.Pointer(unsafe.SliceData(buf)), offset)))
 }
 
 func (w *winBackend) event(kind string, c winNetConn, now time.Time) ConnectionEvent {
