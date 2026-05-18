@@ -81,6 +81,7 @@ export function Connections(): JSX.Element {
     [filteredRows, includeInternal],
   );
   const hiddenRows = Math.max(0, filteredRows.length - visibleRows.length);
+  const incompleteRows = Math.max(0, rows.length - shapedRows.length);
 
   const totals = useMemo(
     () => ({
@@ -256,7 +257,12 @@ export function Connections(): JSX.Element {
 
       {!includeInternal && hiddenRows > 0 && (
         <p className="text-xs text-text-muted">
-          Showing external peers only; {hiddenRows} internal, listener, or incomplete row{hiddenRows === 1 ? '' : 's'} hidden.
+          Showing external peers only; {hiddenRows} internal or listener row{hiddenRows === 1 ? '' : 's'} hidden.
+        </p>
+      )}
+      {incompleteRows > 0 && (
+        <p className="text-xs text-text-muted">
+          Suppressed {incompleteRows} incomplete placeholder row{incompleteRows === 1 ? '' : 's'} with no usable peer, process, or port.
         </p>
       )}
 
