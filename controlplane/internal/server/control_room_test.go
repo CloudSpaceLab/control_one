@@ -48,7 +48,13 @@ func TestControlRoomOverviewReturnsSixBankingLanes(t *testing.T) {
 	}
 	findingID := uuid.New()
 	store.ipBehaviorFindings = []storage.IPBehaviorFinding{
-		{ID: findingID, TenantID: tenantID, SourceIP: sql.NullString{String: "203.0.113.10", Valid: true}, CountryCode: "NG", Category: "credential_attack", Severity: "critical", Score: 91, Status: "open", Reason: "401 burst outside baseline", LastSeenAt: now, FirstSeenAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Minute), UpdatedAt: now},
+		{
+			ID: findingID, TenantID: tenantID, SourceIP: sql.NullString{String: "203.0.113.10", Valid: true}, CountryCode: "NG",
+			Category: "credential_attack", Severity: "critical", Score: 91, Status: "open",
+			Reason:     "credential_attack behavior from 203.0.113.10 scored 91: country/country-app behavior is being evaluated as a baseline dimension; request burst: 21 requests in 1m; auth failure spike: 21 401/403 responses",
+			Evidence:   map[string]any{"request_count": 21, "window": "1m", "status_counts": map[string]any{"401": 21}},
+			LastSeenAt: now, FirstSeenAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Minute), UpdatedAt: now,
+		},
 	}
 	store.webserverInstances = []storage.WebserverInstance{
 		{
@@ -107,6 +113,11 @@ func TestControlRoomOverviewReturnsSixBankingLanes(t *testing.T) {
 	}
 	if len(resp.IPBehavior.Findings) != 1 || resp.IPBehavior.Findings[0].Score != 91 {
 		t.Fatalf("expected backend IP finding score, got %#v", resp.IPBehavior.Findings)
+	}
+	for _, incident := range resp.TopIncidents {
+		if strings.Contains(incident.Summary, "baseline dimension") {
+			t.Fatalf("control room incident leaked scoring internals: %#v", incident)
+		}
 	}
 	if len(resp.Webservers.Instances) != 1 || resp.Webservers.CaptureReady != 1 || resp.Webservers.EnforceReady != 1 {
 		t.Fatalf("expected webserver summary, got %#v", resp.Webservers)
