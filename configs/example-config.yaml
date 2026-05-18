@@ -100,8 +100,12 @@ hardening:
     - pci-dss
   allow_overrides: false
 
+agent_runtime:
+  profile: auto
+
 telemetry_prefs:
-  collect_logs: true
+  # Log collection is opt-in; empty log_sources means collect no logs.
+  collect_logs: false
   log_namespaces:
     - system
     - application

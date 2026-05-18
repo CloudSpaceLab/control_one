@@ -27,15 +27,10 @@ func RegisterPreset(name string, preset Preset) {
 }
 
 func PrepareSources(userSources []config.LogSourceConfig) []config.LogSourceConfig {
-	merged := make(map[string]config.LogSourceConfig)
-
-	for _, name := range appcatalog.DefaultLogProgramOrder() {
-		if preset, ok := presetRegistry[name]; ok {
-			for _, src := range preset.Sources {
-				merged[strings.ToLower(src.Program)] = applyPathResolution(src)
-			}
-		}
+	if len(userSources) == 0 {
+		return nil
 	}
+	merged := make(map[string]config.LogSourceConfig)
 
 	for _, user := range userSources {
 		key := strings.ToLower(strings.TrimSpace(user.Program))

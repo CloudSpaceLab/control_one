@@ -26,6 +26,11 @@ type heartbeatPayload struct {
 	AgentVersion    string   `json:"agent_version"`
 	Capabilities    []string `json:"capabilities,omitempty"`
 	AgentReleaseSeq int      `json:"agent_release_seq,omitempty"`
+	RuntimeProfile  string   `json:"agent_runtime_profile,omitempty"`
+
+	CollectorState   []collectorStateReport  `json:"collector_state,omitempty"`
+	CollectorBudget  []collectorBudgetReport `json:"collector_budget,omitempty"`
+	AgentSelfMetrics *agentSelfMetrics       `json:"agent_self_metrics,omitempty"`
 
 	// Inventory fields. PackageHash is always sent when collection succeeds;
 	// OSPackages is the full list and is only included when the hash changed,
@@ -159,8 +164,12 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 // parsed only for informational logging.
 func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, selfUpdater SelfUpdater) error {
 	payload := heartbeatPayload{
-		AgentVersion: heartbeatAgentVersion(),
-		Capabilities: heartbeatAgentCapabilities(),
+		AgentVersion:     heartbeatAgentVersion(),
+		Capabilities:     heartbeatAgentCapabilities(),
+		RuntimeProfile:   heartbeatRuntimeProfile(),
+		CollectorState:   heartbeatCollectorState(),
+		CollectorBudget:  heartbeatCollectorBudgets(),
+		AgentSelfMetrics: collectAgentSelfMetrics(),
 	}
 	if selfUpdater != nil {
 		payload.AgentReleaseSeq = selfUpdater.CurrentReleaseSeq()
@@ -264,7 +273,7 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 }
 
 func heartbeatAgentCapabilities() []string {
-	return []string{
+	base := []string{
 		"firewall_control.v1",
 		"patch_management.v1",
 		"event_filters.v1",
@@ -273,6 +282,7 @@ func heartbeatAgentCapabilities() []string {
 		"connection_lifecycle_headers.v1",
 		"agent_update_job_status.v1",
 	}
+	return append(base, heartbeatRuntimeCapabilities()...)
 }
 
 // enrichHeartbeatPayload adds os_packages / firewall_state / kernel + os
@@ -281,7 +291,7 @@ func heartbeatAgentCapabilities() []string {
 // missing fields are fine, blocked heartbeats are not.
 func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 	// Firewall is always sent in full — it's small and changes meaningfully.
-	st := collectFirewall()
+	st := cachedFirewallSnapshot()
 	payload.FirewallState = &st
 
 	// Drain any completed firewall actions accumulated since the last
@@ -290,7 +300,7 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 		payload.CompletedActions = drained
 	}
 
-	pkgs, hash, err := collectInventory()
+	pkgs, hash, kernel, osVer, purposes, err := cachedInventorySnapshot()
 	if err != nil {
 		log.Debug("collect inventory failed; omitting", zap.Error(err))
 		return
@@ -302,9 +312,9 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 	}
 	payload.PackageHash = hash
 	payload.PackageCount = len(pkgs)
-	payload.KernelVersion = kernelVersion()
-	payload.OSVersion = osVersion()
-	payload.ServerPurposes = inferServerPurposesFromPackages(pkgs)
+	payload.KernelVersion = kernel
+	payload.OSVersion = osVer
+	payload.ServerPurposes = purposes
 
 	agentInventoryCache.mu.Lock()
 	defer agentInventoryCache.mu.Unlock()
@@ -340,6 +350,18 @@ func kernelVersion() string {
 			return ""
 		}
 		return strings.TrimSpace(string(out))
+	case "aix":
+		out, err := exec.Command("uname", "-v").Output()
+		if err != nil {
+			return ""
+		}
+		ver := strings.TrimSpace(string(out))
+		relOut, _ := exec.Command("uname", "-r").Output()
+		rel := strings.TrimSpace(string(relOut))
+		if rel != "" {
+			return ver + "." + rel
+		}
+		return ver
 	case "windows":
 		out, err := exec.Command("cmd", "/c", "ver").Output()
 		if err != nil {
@@ -375,6 +397,12 @@ func osVersion() string {
 		return "macOS " + strings.TrimSpace(string(out))
 	case "windows":
 		return kernelVersion()
+	case "aix":
+		out, err := exec.Command("oslevel", "-s").Output()
+		if err != nil {
+			return kernelVersion()
+		}
+		return "AIX " + strings.TrimSpace(string(out))
 	default:
 		return ""
 	}

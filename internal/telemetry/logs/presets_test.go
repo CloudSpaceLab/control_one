@@ -33,6 +33,12 @@ func TestExplicitCatalogPresetCarriesParserMetadata(t *testing.T) {
 	}
 }
 
+func TestEmptySourcesDoNotAutoloadCatalogPresets(t *testing.T) {
+	if got := PrepareSources(nil); len(got) != 0 {
+		t.Fatalf("empty log_sources must not autoload presets: %#v", got)
+	}
+}
+
 func TestExplicitOfflineCatalogPresetResolvesWithoutPackageInit(t *testing.T) {
 	root := t.TempDir()
 	activeCatalogDir := filepath.Join(root, "active", "app_catalog")

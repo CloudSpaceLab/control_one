@@ -142,6 +142,12 @@ function numericLabel(node: import('@/lib/api').Node, keys: string[]): number | 
   return null;
 }
 
+function boundedBytes(value: number | null, total: number | null): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const floor = Math.max(0, value);
+  return total != null && Number.isFinite(total) ? Math.min(total, floor) : floor;
+}
+
 export function NodeDetail(): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -181,7 +187,18 @@ export function NodeDetail(): JSX.Element {
   const cpuCount = latestValue(telemetry, 'cpu_count') ?? numericLabel(node, ['cpu_count', 'cpu_cores', 'cores']);
   const memTotal = latestValue(telemetry, 'memory_total_bytes') ?? numericLabel(node, ['memory_total_bytes', 'total_ram_bytes', 'ram_bytes']);
   const diskTotal = latestValue(telemetry, 'disk_total_bytes') ?? numericLabel(node, ['disk_total_bytes', 'disk_size_bytes', 'root_disk_bytes']);
-  const diskFree = latestValue(telemetry, 'disk_free_bytes') ?? numericLabel(node, ['disk_free_bytes', 'free_disk_bytes', 'root_disk_free_bytes']);
+  const diskUsedMetric = latestValue(telemetry, 'disk_used_bytes') ?? numericLabel(node, ['disk_used_bytes', 'used_disk_bytes', 'root_disk_used_bytes']);
+  const diskFreeMetric = latestValue(telemetry, 'disk_free_bytes') ?? numericLabel(node, ['disk_free_bytes', 'free_disk_bytes', 'root_disk_free_bytes']);
+  const diskUsedFromPercent =
+    diskTotal != null && diskLatest != null ? boundedBytes((diskTotal * diskLatest) / 100, diskTotal) : null;
+  const diskUsed = boundedBytes(
+    diskUsedMetric ?? (diskTotal != null && diskFreeMetric != null ? diskTotal - diskFreeMetric : diskUsedFromPercent),
+    diskTotal,
+  );
+  const diskFree = boundedBytes(
+    diskFreeMetric ?? (diskTotal != null && diskUsed != null ? diskTotal - diskUsed : null),
+    diskTotal,
+  );
 
   const calibratingSamples =
     health?.risk_level === 'calibrating'
@@ -251,6 +268,7 @@ export function NodeDetail(): JSX.Element {
             cpuCount={cpuCount}
             memTotal={memTotal}
             diskTotal={diskTotal}
+            diskUsed={diskUsed}
             diskFree={diskFree}
             telemetryLoading={loading}
           />
@@ -294,6 +312,7 @@ interface OverviewProps {
   cpuCount: number | null;
   memTotal: number | null;
   diskTotal: number | null;
+  diskUsed: number | null;
   diskFree: number | null;
   telemetryLoading: boolean;
 }
@@ -305,7 +324,7 @@ function fmtBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskLatest, cpuCount, memTotal, diskTotal, diskFree, telemetryLoading }: OverviewProps) {
+function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskLatest, cpuCount, memTotal, diskTotal, diskUsed, diskFree, telemetryLoading }: OverviewProps) {
   const calibratingSamples =
     health?.risk_level === 'calibrating'
       ? (health.components as { calibrating_samples?: number })?.calibrating_samples
@@ -345,7 +364,7 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
           <Vital label="Total RAM" value={memTotal != null ? fmtBytes(memTotal) : '—'} />
           <Vital label="Disk size" value={diskTotal != null ? fmtBytes(diskTotal) : '—'} />
           <Vital label="Disk free" value={diskFree != null ? fmtBytes(diskFree) : '—'} />
-          <Vital label="Disk used" value={diskTotal != null && diskFree != null ? fmtBytes(Math.max(0, diskTotal - diskFree)) : '—'} />
+          <Vital label="Disk used" value={diskUsed != null ? fmtBytes(diskUsed) : '—'} />
         </dl>
       </Panel>
 
@@ -490,7 +509,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
       const resp = await api.listConnections({
         tenantId,
         nodeId,
-        openOnly: true,
+        openOnly: false,
         since,
         limit: 250,
       });
@@ -590,24 +609,24 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     return { total, threatPct, topProto, topProc };
   }, [visibleRows]);
 
-  // Bandwidth: byte rate across the lifetime of the connection. For still-
-  // open rows (duration_ms === 0 or undefined) we cannot compute a rate,
-  // so we surface a dash and expose the total in a tooltip via title.
+  // Bandwidth: byte rate across the lifetime of the connection. For rows
+  // without a duration we cannot compute a rate, so expose the total instead.
   const bandwidthFor = useCallback((row: import('@/lib/api').ConnectionRow): { label: string; tooltip: string } => {
     const total = (row.bytes_in ?? 0) + (row.bytes_out ?? 0);
     const ms = row.duration_ms ?? 0;
     if (ms <= 0) {
-      return { label: '—', tooltip: `${formatBytes(total)} transferred (connection still active)` };
+      const suffix = row.ended_at ? '' : ' (connection still active)';
+      return { label: '—', tooltip: `${formatBytes(total)} transferred${suffix}` };
     }
     const rate = total / (ms / 1000);
     return { label: `${formatBytes(rate)}/s`, tooltip: `${formatBytes(total)} over ${formatDuration(ms)}` };
   }, []);
 
-  // Status derived from closed_reason. A null/empty closed_reason on an
-  // openOnly query means the connection is still alive.
+  // Status derived from closed_reason and ended_at. Summary rows can have an
+  // ended_at because it marks the observation window, not necessarily a close.
   const statusFor = useCallback((row: import('@/lib/api').ConnectionRow): { label: string; tone: StateTone } => {
     const reason = (row.closed_reason ?? '').toLowerCase();
-    if (!reason) return { label: 'Open', tone: 'healthy' };
+    if (!reason) return row.ended_at ? { label: 'Observed', tone: 'unknown' } : { label: 'Open', tone: 'healthy' };
     if (reason === 'normal') return { label: 'Closed (normal)', tone: 'unknown' };
     if (reason === 'rst') return { label: 'Closed (RST)', tone: 'warning' };
     if (reason === 'timeout') return { label: 'Closed (timeout)', tone: 'degraded' };
@@ -642,7 +661,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
       <Panel
         padding="md"
         eyebrow="NETWORK"
-        title="Open connections"
+        title="Connections"
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -664,7 +683,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
           <p className="text-sm text-text-muted">
             {listeningOnly
               ? 'No listening sockets reported in the current 24h window.'
-              : 'No open connections in the current 24h window.'}
+              : 'No connection activity reported in the current 24h window.'}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -688,7 +707,9 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
                 {visibleRows.map((row) => {
                   const ip = peerIp(row);
                   const port = row.direction === 'inbound' ? row.src_port : row.dst_port;
-                  const age = row.duration_ms ?? (Date.now() - new Date(row.started_at).getTime());
+                  const started = new Date(row.started_at).getTime();
+                  const ended = row.ended_at ? new Date(row.ended_at).getTime() : Date.now();
+                  const age = row.duration_ms ?? (Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0);
                   const bandwidth = bandwidthFor(row);
                   const status = statusFor(row);
                   // Long-lived connections (>1h) frequently indicate a

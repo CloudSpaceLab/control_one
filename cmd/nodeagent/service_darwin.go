@@ -52,6 +52,14 @@ func installService(configPath string) error {
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>5</integer>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
     <key>StandardOutPath</key>
     <string>/var/log/control-one/nodeagent/stdout.log</string>
     <key>StandardErrorPath</key>

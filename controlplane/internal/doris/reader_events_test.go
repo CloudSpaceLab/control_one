@@ -53,7 +53,7 @@ func TestListConnectionsForNodeQuery_NoRFC1918Strip(t *testing.T) {
 			}
 
 			// The only allowed filters are tenant_id, node_id, time
-			// window, optionally ended_at, and a LIMIT/ORDER. Anything
+			// window overlap, optionally ended_at, and a LIMIT/ORDER. Anything
 			// that smells like an RFC1918 strip is a regression.
 			lower := strings.ToLower(q)
 			for _, bad := range forbiddenSubstrings {
@@ -63,13 +63,24 @@ func TestListConnectionsForNodeQuery_NoRFC1918Strip(t *testing.T) {
 				}
 			}
 
-			// open_only=true must add ended_at IS NULL, false must not.
-			hasEndedAt := strings.Contains(q, "ended_at IS NULL")
-			if tc.openOnly && !hasEndedAt {
+			// open_only=true must add a strict open predicate. open_only=false
+			// uses overlap semantics, which intentionally includes open rows
+			// via "(ended_at IS NULL OR ended_at >= ?)".
+			hasStrictOpenPredicate := strings.Contains(q, "AND ended_at IS NULL")
+			if tc.openOnly && !hasStrictOpenPredicate {
 				t.Errorf("openOnly=true but query lacks ended_at IS NULL: %s", q)
 			}
-			if !tc.openOnly && hasEndedAt {
-				t.Errorf("openOnly=false but query contains ended_at IS NULL: %s", q)
+			if !tc.openOnly && hasStrictOpenPredicate {
+				t.Errorf("openOnly=false but query contains a strict open-only predicate: %s", q)
+			}
+			if strings.Contains(q, "started_at >= ?") {
+				t.Errorf("query uses start-only window and would hide long-lived open connections: %s", q)
+			}
+			if tc.openOnly && !strings.Contains(q, "started_at <= ?") {
+				t.Errorf("openOnly=true must bound future rows with started_at <= ?: %s", q)
+			}
+			if !tc.openOnly && !strings.Contains(q, "(ended_at IS NULL OR ended_at >= ?)") {
+				t.Errorf("openOnly=false must use overlap semantics: %s", q)
 			}
 		})
 	}

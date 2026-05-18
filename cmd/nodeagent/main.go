@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/access"
+	"github.com/CloudSpaceLab/control_one/internal/agentruntime"
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/config"
@@ -122,6 +123,16 @@ func main() {
 	defer logger.Sync(log)
 	logger.ReplaceGlobals(log)
 
+	runtimeSettings := agentruntime.Resolve(cfg.AgentRuntime.Profile)
+	log.Info("agent runtime profile selected",
+		zap.String("requested_profile", runtimeSettings.RequestedProfile),
+		zap.String("active_profile", runtimeSettings.ActiveProfile),
+		zap.String("goos", runtimeSettings.GOOS),
+		zap.Bool("procmon", runtimeSettings.ProcmonEnabled),
+		zap.Bool("netflow", runtimeSettings.NetflowEnabled),
+		zap.Bool("fileaccess_default", runtimeSettings.FileAccessDefaultEnabled),
+	)
+
 	hooksService := hooks.NewService(log, cfg.Hooks)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,10 +220,28 @@ func main() {
 	})
 	go batcher.Run(ctx)
 
-	procCollector := procmon.New(eventStream, log, procmon.Options{})
-	go procCollector.Run(ctx)
+	collectors := newCollectorRuntime(ctx, log)
+
+	if runtimeSettings.ProcmonEnabled {
+		procCollector := procmon.New(eventStream, log, procmon.Options{
+			Interval: runtimeSettings.ProcmonInterval,
+			TopK:     runtimeSettings.ProcmonTopK,
+			NodeID:   state.NodeID,
+			TenantID: state.TenantID,
+		})
+		collectors.Register("procmon", procCollector.Run, func() string { return "gopsutil" })
+		collectors.Start("procmon")
+	} else {
+		collectors.MarkDisabled("procmon", "runtime profile disabled", func() string { return "none" })
+	}
 
 	netflowMgr := netflow.NewManager(eventStream, log, netflow.Options{
+		NodeID:            state.NodeID,
+		TenantID:          state.TenantID,
+		PollInterval:      runtimeSettings.NetflowPollInterval,
+		SummaryDrainEvery: runtimeSettings.NetflowDrainEvery,
+		SummaryAge:        runtimeSettings.NetflowSummaryAge,
+		MaxSummaryBuckets: runtimeSettings.NetflowMaxBuckets,
 		FilterCfg: netflow.FilterConfig{
 			CaptureExternal:         true,
 			CaptureInternalSummary:  true,
@@ -220,13 +249,36 @@ func main() {
 			AlwaysCaptureThreat:     true,
 		},
 	})
-	go netflowMgr.Run(ctx)
+	if runtimeSettings.NetflowEnabled {
+		collectors.Register("netflow", netflowMgr.Run, netflowMgr.Name)
+		collectors.Start("netflow")
+	} else {
+		collectors.MarkDisabled("netflow", "runtime profile disabled", netflowMgr.Name)
+	}
 
-	fileMgr := fileaccess.NewManager(eventStream, log, fileaccess.Options{})
-	go fileMgr.Run(ctx)
+	fileMgr := fileaccess.NewManager(eventStream, log, fileaccess.Options{
+		NodeID:    state.NodeID,
+		TenantID:  state.TenantID,
+		FilterCfg: fileaccess.DefaultFilterConfig(),
+	})
+	collectors.Register("fileaccess", fileMgr.Run, func() string { return "policy-gated" })
+	if runtimeSettings.FileAccessDefaultEnabled {
+		collectors.Start("fileaccess")
+	}
 
-	dbMgr := dbquery.NewManager(eventStream, log, dbquery.Options{})
-	go dbMgr.Run(ctx)
+	dbMgr := dbquery.NewManager(eventStream, log, dbquery.Options{
+		NodeID:   state.NodeID,
+		TenantID: state.TenantID,
+	})
+	collectors.Register("dbquery", dbMgr.Run, func() string { return "policy-gated" })
+	if runtimeSettings.DBQueryDefaultEnabled {
+		collectors.Start("dbquery")
+	}
+
+	configureHeartbeatRuntime(runtimeSettings, eventStream, collectors.Snapshot, func() (int, uint64) {
+		stats := netflowMgr.Stats()
+		return stats.SummaryBuckets, stats.SummaryEvicted
+	})
 
 	// Bastion SSH tunnel — when enabled the agent listens for
 	// mTLS-authenticated bastion connections and forwards bytes to local
@@ -513,11 +565,13 @@ func main() {
 		}
 	}
 
-	if _, err := sched.AddInterval("heartbeat", cfg.Intervals.Heartbeat, func() {
-		telemetrySvc.SendHeartbeat(ctx, state.NodeID, uuid.NewString())
-		emitHook(ctx, hooksService, log, "telemetry.heartbeat.sent", state.NodeID, nil)
-	}); err != nil {
-		log.Fatal("schedule heartbeat", zap.Error(err))
+	if runtimeSettings.LegacyTelemetryHeartbeat {
+		if _, err := sched.AddInterval("heartbeat", cfg.Intervals.Heartbeat, func() {
+			telemetrySvc.SendHeartbeat(ctx, state.NodeID, uuid.NewString())
+			emitHook(ctx, hooksService, log, "telemetry.heartbeat.sent", state.NodeID, nil)
+		}); err != nil {
+			log.Fatal("schedule heartbeat", zap.Error(err))
+		}
 	}
 
 	// Control-plane heartbeat — POSTs to /api/v1/nodes/:id/heartbeat so the
@@ -526,12 +580,19 @@ func main() {
 	// 1.7/1.8. Distinct from the telemetry heartbeat above: that one writes
 	// to the telemetry table; this one drives the node state machine.
 	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
-		makeFilterApplier(log.Named("policy"), netflowMgr, fileMgr, dbMgr),
+		makeFilterApplier(log.Named("policy"), collectors, netflowMgr, fileMgr, dbMgr),
 		NewDefaultSelfUpdater(state.NodeID, filepath.Dir(cfg.StateFile)))
 
 	// Service inventory — feeds node_services and the per-tenant knowledge
 	// graph. Independent loop: a slow ss/lsof scan must never delay liveness.
-	startServiceCollector(ctx, client, log, state.NodeID, cfg.Intervals.Services)
+	if runtimeSettings.ServicesInterval > 0 {
+		collectors.Register("services", func(cctx context.Context) {
+			runServiceCollector(cctx, client, log, state.NodeID, runtimeSettings.ServicesInterval)
+		}, func() string { return runtime.GOOS })
+		collectors.Start("services")
+	} else {
+		collectors.MarkDisabled("services", "runtime profile disabled", func() string { return "none" })
+	}
 
 	// DLP scanner - periodically scan for PII based on rules from control plane
 	if cfg.DLP.Enabled && cfg.Intervals.DLP > 0 {

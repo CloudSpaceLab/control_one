@@ -2,6 +2,7 @@ package doris
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -78,7 +79,7 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 // buildListConnectionsForNodeQuery composes the SQL for ListConnectionsForNode.
 //
 // It is deliberately *single-layer*: the only filtering applied is on
-// (tenant_id, node_id, time window, optional ended_at IS NULL). The peer-IP
+// (tenant_id, node_id, time window overlap, optional ended_at IS NULL). The peer-IP
 // classification (RFC1918 vs external) lives ONE layer further out — at the
 // agent's `internal/netflow/filter.go` capture-policy boundary — and is NOT
 // re-applied here. Re-applying it would double-strip internal flows on
@@ -86,9 +87,20 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 // want "external only" should pass an explicit predicate via a future
 // parameter instead of post-filtering rows in the UI.
 func buildListConnectionsForNodeQuery(limit int, openOnly bool) string {
-	openClause := ""
 	if openOnly {
-		openClause = " AND ended_at IS NULL"
+		return withLimit(`
+		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
+		FROM process_connections
+		WHERE tenant_id = ?
+		  AND node_id = ?
+		  AND started_at <= ?
+		  AND ended_at IS NULL
+		ORDER BY threat_match DESC, started_at DESC
+	`, limit)
 	}
 	return withLimit(`
 		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
@@ -99,7 +111,8 @@ func buildListConnectionsForNodeQuery(limit int, openOnly bool) string {
 		FROM process_connections
 		WHERE tenant_id = ?
 		  AND node_id = ?
-		  AND started_at >= ? AND started_at <= ?`+openClause+`
+		  AND started_at <= ?
+		  AND (ended_at IS NULL OR ended_at >= ?)
 		ORDER BY threat_match DESC, started_at DESC
 	`, limit)
 }
@@ -115,7 +128,13 @@ func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID st
 	q := buildListConnectionsForNodeQuery(limit, openOnly)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, nodeID, since, until)
+	var rows *sql.Rows
+	var err error
+	if openOnly {
+		rows, err = c.db.QueryContext(qctx, q, tenantID, nodeID, until)
+	} else {
+		rows, err = c.db.QueryContext(qctx, q, tenantID, nodeID, until, since)
+	}
 	if err != nil {
 		return nil, err
 	}

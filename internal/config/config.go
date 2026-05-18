@@ -73,6 +73,10 @@ type Config struct {
 		Triggers         []LogTriggerConfig `mapstructure:"triggers"`
 	} `mapstructure:"telemetry_prefs"`
 
+	AgentRuntime struct {
+		Profile string `mapstructure:"profile"`
+	} `mapstructure:"agent_runtime"`
+
 	Wizard struct {
 		Enabled                  bool          `mapstructure:"enabled"`
 		AutoGenerateCertificates bool          `mapstructure:"auto_generate_certificates"`
@@ -433,13 +437,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("hardening.profiles", []string{"baseline"})
 	v.SetDefault("hardening.allow_overrides", false)
 
-	v.SetDefault("telemetry_prefs.collect_logs", true)
+	v.SetDefault("telemetry_prefs.collect_logs", false)
 	v.SetDefault("telemetry_prefs.log_namespaces", []string{"system", "application"})
 	v.SetDefault("telemetry_prefs.file_integrity", false)
 	v.SetDefault("telemetry_prefs.metrics_interval", defaultTelemetryMetrics.String())
 	v.SetDefault("telemetry_prefs.activity_interval", defaultTelemetryActivity.String())
 	v.SetDefault("telemetry_prefs.log_sources", []map[string]any{})
 	v.SetDefault("telemetry_prefs.triggers", []map[string]any{})
+	v.SetDefault("agent_runtime.profile", "auto")
 
 	v.SetDefault("wizard.enabled", true)
 	v.SetDefault("wizard.auto_generate_certificates", true)
@@ -585,6 +590,9 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.TelemetryPrefs.ActivityInterval == 0 {
 		cfg.TelemetryPrefs.ActivityInterval = defaultTelemetryActivity
+	}
+	if strings.TrimSpace(cfg.AgentRuntime.Profile) == "" {
+		cfg.AgentRuntime.Profile = "auto"
 	}
 	if cfg.Wizard.CertValidity == 0 {
 		cfg.Wizard.CertValidity = defaultWizardCertValidity

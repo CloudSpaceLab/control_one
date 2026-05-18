@@ -67,7 +67,7 @@ type Manager struct {
 // NewManager wires the manager. Run() spawns collectors.
 func NewManager(stream *eventstream.Stream, log *zap.Logger, opts Options) *Manager {
 	m := &Manager{stream: stream, log: log, opts: opts}
-	m.captureText.Store(true) // default-on; the heartbeat policy can flip it.
+	m.captureText.Store(false)
 	return m
 }
 

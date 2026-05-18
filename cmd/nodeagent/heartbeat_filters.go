@@ -57,6 +57,7 @@ type tenantFilterPolicy struct {
 // 60s saying "nothing changed".
 func makeFilterApplier(
 	log *zap.Logger,
+	collectors *collectorRuntime,
 	netMgr *netflow.Manager,
 	fileMgr *fileaccess.Manager,
 	dbMgr *dbquery.Manager,
@@ -73,7 +74,7 @@ func makeFilterApplier(
 		changed := prev != sig
 
 		// Netflow filter — atomic swap inside the manager.
-		if netMgr != nil {
+		if netMgr != nil && (prev == 0 || changed) {
 			netMgr.SetFilter(netflow.FilterConfig{
 				CaptureExternal:         p.CaptureExternal,
 				CaptureInternalSummary:  p.CaptureInternalSummary,
@@ -87,9 +88,15 @@ func makeFilterApplier(
 		if fileMgr != nil {
 			fileMgr.UpdateFilter(p.FilePathsWatch, p.ForensicMode)
 		}
+		if collectors != nil {
+			collectors.SetEnabled("fileaccess", p.CaptureFiles || p.ForensicMode, "policy disabled capture_files")
+		}
 		// DB query — text capture toggle.
 		if dbMgr != nil {
 			dbMgr.SetCaptureQueryText(p.DBQueryTextCapture)
+		}
+		if collectors != nil {
+			collectors.SetEnabled("dbquery", p.CaptureDBQueries || p.ForensicMode, "policy disabled capture_db_queries")
 		}
 
 		if changed {

@@ -169,6 +169,13 @@ intervals:
   scan: %ds
   telemetry: %ds
 
+agent_runtime:
+  profile: auto
+
+telemetry_prefs:
+  collect_logs: false
+  log_sources: []
+
 scanner:
   enabled: true
   use_real_scan: true

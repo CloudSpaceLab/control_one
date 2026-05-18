@@ -5,8 +5,8 @@
 //
 //   - Linux ≥5.4 with CAP_BPF: cilium/ebpf tcplife (collector_linux_ebpf.go)
 //   - Linux fallback: /proc/net/tcp{,6} polling (collector_linux_proc.go)
-//   - Windows: PowerShell Get-NetTCPConnection polling (collector_windows.go)
-//   - Darwin: lsof + nettop polling (collector_darwin.go)
+//   - Windows: native IP Helper API polling (collector_windows.go)
+//   - Darwin: forensic-only lsof polling when enabled (collector_darwin.go)
 //
 // Smart filter (filter.go) decides per-event whether full lifecycle data is
 // emitted (non-RFC1918 / threat-intel match / listening-port change) or
@@ -34,6 +34,7 @@ type ConnectionEvent struct {
 	Process       string
 	User          string
 	Cmdline       string
+	NetNS         string
 	SrcIP         net.IP
 	SrcPort       uint16
 	DstIP         net.IP
@@ -70,6 +71,12 @@ type Options struct {
 	FilterCfg FilterConfig
 	// PollInterval drives polling backends. eBPF backends ignore this.
 	PollInterval time.Duration
+	// SummaryDrainEvery controls how often internal-flow summaries are flushed.
+	SummaryDrainEvery time.Duration
+	// SummaryAge controls how old a bucket must be before it is emitted.
+	SummaryAge time.Duration
+	// MaxSummaryBuckets bounds memory used by the internal-flow aggregator.
+	MaxSummaryBuckets int
 }
 
 // Manager picks the best available collector and forwards filtered events
@@ -90,11 +97,20 @@ func NewManager(stream *eventstream.Stream, log *zap.Logger, opts Options) *Mana
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 5 * time.Second
 	}
+	if opts.SummaryDrainEvery <= 0 {
+		opts.SummaryDrainEvery = 30 * time.Second
+	}
+	if opts.SummaryAge <= 0 {
+		opts.SummaryAge = 90 * time.Second
+	}
+	if opts.MaxSummaryBuckets <= 0 {
+		opts.MaxSummaryBuckets = 4096
+	}
 	return &Manager{
 		stream: stream,
 		log:    log,
 		opts:   opts,
-		filter: NewFilter(opts.FilterCfg),
+		filter: NewFilterWithLimit(opts.FilterCfg, opts.MaxSummaryBuckets),
 		stopCh: make(chan struct{}),
 	}
 }
@@ -102,7 +118,7 @@ func NewManager(stream *eventstream.Stream, log *zap.Logger, opts Options) *Mana
 // SetFilter swaps the filter atomically. Used by the heartbeat policy
 // channel to hot-reload tenant settings without restarting the agent.
 func (m *Manager) SetFilter(cfg FilterConfig) {
-	f := NewFilter(cfg)
+	f := NewFilterWithLimit(cfg, m.opts.MaxSummaryBuckets)
 	m.mu.Lock()
 	m.filter = f
 	m.mu.Unlock()
@@ -139,16 +155,29 @@ func (m *Manager) Run(ctx context.Context) {
 		m.log.Info("netflow collector running", zap.String("backend", col.Name()))
 	}
 
+	drain := time.NewTicker(m.opts.SummaryDrainEvery)
+	defer drain.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
+			m.drainSummaries(0)
 			return
+		case <-drain.C:
+			m.drainSummaries(m.opts.SummaryAge)
 		case ev, ok := <-out:
 			if !ok {
+				m.drainSummaries(0)
 				return
 			}
 			m.handle(ev)
 		}
+	}
+}
+
+func (m *Manager) drainSummaries(age time.Duration) {
+	for _, ev := range m.Filter().Drain(age) {
+		m.handle(ev)
 	}
 }
 
@@ -162,22 +191,39 @@ func (m *Manager) Name() string {
 	return m.chosen.Name()
 }
 
+func (m *Manager) Stats() FilterStats {
+	return m.Filter().Stats()
+}
+
 func (m *Manager) handle(ev ConnectionEvent) {
 	if m.stream == nil {
 		return
 	}
-	verdict := m.Filter().Decide(&ev)
-	switch verdict {
-	case FilterDrop:
-		return
-	case FilterSummary:
-		// Aggregator inside Filter buffers + flushes summary events itself
-		// via Tick(); nothing to publish here.
-		return
+	if ev.Kind != "summary" {
+		verdict := m.Filter().Decide(&ev)
+		switch verdict {
+		case FilterDrop:
+			return
+		case FilterSummary:
+			// Aggregator inside Filter buffers + flushes summary events itself.
+			return
+		}
 	}
 	connID := makeConnID(ev)
 	stream := m.stream
 
+	details := map[string]any{
+		"state":           ev.State,
+		"direction":       ev.Direction,
+		"cmdline":         ev.Cmdline,
+		"packets_in":      int64(ev.PacketsIn),
+		"packets_out":     int64(ev.PacketsOut),
+		"bytes_in_delta":  int64(ev.BytesInDelta),
+		"bytes_out_delta": int64(ev.BytesOutDelta),
+	}
+	if ev.NetNS != "" {
+		details["netns"] = ev.NetNS
+	}
 	streamEv := eventstream.Event{
 		TS:          ev.StartedAt,
 		NodeID:      m.opts.NodeID,
@@ -196,15 +242,7 @@ func (m *Manager) handle(ev ConnectionEvent) {
 		Severity:    "info",
 		ThreatFeed:  ev.ThreatFeed,
 		ThreatScore: ev.ThreatScore,
-		Details: map[string]any{
-			"state":           ev.State,
-			"direction":       ev.Direction,
-			"cmdline":         ev.Cmdline,
-			"packets_in":      int64(ev.PacketsIn),
-			"packets_out":     int64(ev.PacketsOut),
-			"bytes_in_delta":  int64(ev.BytesInDelta),
-			"bytes_out_delta": int64(ev.BytesOutDelta),
-		},
+		Details:     details,
 	}
 	if !ev.EndedAt.IsZero() {
 		streamEv.Details["ended_at"] = ev.EndedAt.Format("2006-01-02 15:04:05.000")
@@ -231,7 +269,7 @@ func (m *Manager) handle(ev ConnectionEvent) {
 		streamEv.DedupKey = fmt.Sprintf("conn.state:%s:%s:%d", connID, ev.State, ev.LastDataAt.UnixNano())
 	default:
 		streamEv.Type = "conn.summary"
-		streamEv.DedupKey = fmt.Sprintf("conn.summary:%d:%d:%d", ev.PID, ev.DstPort, ev.StartedAt.Unix())
+		streamEv.DedupKey = fmt.Sprintf("conn.summary:%s", connID)
 	}
 	stream.Publish(streamEv)
 }
@@ -242,7 +280,7 @@ func makeConnID(ev ConnectionEvent) string {
 	src := ipString(ev.SrcIP)
 	dst := ipString(ev.DstIP)
 	h := sha1.New()
-	_, _ = fmt.Fprintf(h, "%s:%d|%s:%d|%s|%d", src, ev.SrcPort, dst, ev.DstPort, ev.Protocol, ev.StartedAt.UnixNano())
+	_, _ = fmt.Fprintf(h, "%s|%s:%d|%s:%d|%s|%d", ev.NetNS, src, ev.SrcPort, dst, ev.DstPort, ev.Protocol, ev.StartedAt.UnixNano())
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
