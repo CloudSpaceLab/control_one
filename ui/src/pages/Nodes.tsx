@@ -15,15 +15,23 @@ import { useTenant } from '@/providers/TenantProvider';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useFleetSummary } from '../hooks/useFleetSummary';
+import { useJobs } from '../hooks/useJobs';
 import { useApiClient } from '../hooks/useApiClient';
 import { useToast } from '../providers/ToastProvider';
 import type {
   AtRiskFleetResponse,
+  Job,
   NetworkIsolationMode,
   NodeHealthRiskLevel,
   NodeHealthScore,
   NodeSummary,
 } from '../lib/api';
+import {
+  agentUpdateStatusLabel,
+  agentUpdateStatusTone,
+  agentUpdateTargetVersion,
+  latestAgentUpdateByNode,
+} from '../lib/agentUpdateJobs';
 import { WORLD_COUNTRY_PATHS, projectGeoCoordinates } from '../lib/worldMap';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -367,6 +375,14 @@ function formatRelativeTime(val?: string): string {
   return diff >= 0 ? `in ${value}` : `${value} ago`;
 }
 
+function formatAgentUpdateTime(job?: Job | null): string {
+  if (!job) return 'Never queued';
+  if (job.finished_at) return `Finished ${formatRelativeTime(job.finished_at)}`;
+  if (job.started_at) return `Started ${formatRelativeTime(job.started_at)}`;
+  if (job.scheduled_at) return `Scheduled ${formatRelativeTime(job.scheduled_at)}`;
+  return `Queued ${formatRelativeTime(job.created_at)}`;
+}
+
 // ── Pulsing health dot ─────────────────────────────────────────────────────
 
 function PulsingDot({ state, size = 10 }: { state: NodeState; size?: number }) {
@@ -645,11 +661,12 @@ function NodeWorldMap({
 interface NodeCardProps {
   node: NodeSummary;
   health: NodeHealthScore | null | undefined;
+  agentJob?: Job;
   tenantName: string;
   onClick: () => void;
 }
 
-function NodeCard({ node, health, tenantName, onClick }: NodeCardProps) {
+function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps) {
   const state: NodeState = health
     ? riskToState(health.risk_level)
     : isOnline(node)
@@ -712,6 +729,15 @@ function NodeCard({ node, health, tenantName, onClick }: NodeCardProps) {
           <span className="font-mono">{node.agent_version}</span>
         )}
       </div>
+
+      {agentJob && (
+        <div className="flex items-center justify-between gap-2 border-t border-border-subtle pt-2 text-[0.6rem]">
+          <span className="text-text-muted">Agent update</span>
+          <StatusTag tone={agentUpdateStatusTone(agentJob.status)} title={formatAgentUpdateTime(agentJob)}>
+            {agentUpdateStatusLabel(agentJob.status)}
+          </StatusTag>
+        </div>
+      )}
     </motion.button>
   );
 }
@@ -723,11 +749,12 @@ interface TenantGroupRowProps {
   tenantName: string;
   nodes: NodeSummary[];
   healthMap: Record<string, NodeHealthScore | null>;
+  agentJobsByNode: Map<string, Job>;
   activeRegion: RegionKey | null;
   onNodeClick: (nodeId: string) => void;
 }
 
-function TenantGroupRow({ tenantName, nodes, healthMap, onNodeClick }: TenantGroupRowProps) {
+function TenantGroupRow({ tenantName, nodes, healthMap, agentJobsByNode, onNodeClick }: TenantGroupRowProps) {
   const [expanded, setExpanded] = useState(false);
 
   const states = nodes.map((n) => {
@@ -805,6 +832,7 @@ function TenantGroupRow({ tenantName, nodes, healthMap, onNodeClick }: TenantGro
                   key={node.id}
                   node={node}
                   health={healthMap[node.id]}
+                  agentJob={agentJobsByNode.get(node.id)}
                   tenantName={tenantName}
                   onClick={() => onNodeClick(node.id)}
                 />
@@ -818,6 +846,110 @@ function TenantGroupRow({ tenantName, nodes, healthMap, onNodeClick }: TenantGro
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
+
+interface AgentUpdateRolloutPanelProps {
+  nodes: NodeSummary[];
+  jobsByNode: Map<string, Job>;
+  loading: boolean;
+  onQueue: (nodeId: string) => void;
+}
+
+function AgentUpdateRolloutPanel({ nodes, jobsByNode, loading, onQueue }: AgentUpdateRolloutPanelProps) {
+  if (nodes.length === 0) return null;
+
+  const rows = nodes
+    .map((node) => {
+      const job = jobsByNode.get(node.id);
+      const status = (job?.status ?? 'not_queued').toLowerCase();
+      const active = status === 'queued' || status === 'running';
+      const failed = status === 'failed' || status === 'cancelled';
+      const priority = active ? 0 : failed ? 1 : status === 'not_queued' ? 2 : 3;
+      const updated = new Date(job?.updated_at ?? job?.created_at ?? 0).getTime() || 0;
+      return { node, job, status, active, priority, updated };
+    })
+    .sort((a, b) => a.priority - b.priority || b.updated - a.updated || a.node.hostname.localeCompare(b.node.hostname));
+
+  const activeCount = rows.filter((row) => row.active).length;
+  const failedCount = rows.filter((row) => row.status === 'failed' || row.status === 'cancelled').length;
+  const updatedCount = rows.filter((row) => row.status === 'succeeded').length;
+  const neverQueuedCount = rows.filter((row) => row.status === 'not_queued').length;
+  const visibleRows = rows.slice(0, 6);
+
+  return (
+    <Panel
+      padding="md"
+      eyebrow="AGENT ROLLOUT"
+      title="Self-update status"
+      toneAccent={failedCount > 0 ? 'critical' : activeCount > 0 ? 'warning' : 'brand'}
+      actions={
+        <StatusTag tone={loading ? 'unknown' : activeCount > 0 ? 'warning' : failedCount > 0 ? 'critical' : 'healthy'}>
+          {loading ? 'checking' : activeCount > 0 ? `${activeCount} active` : 'idle'}
+        </StatusTag>
+      }
+    >
+      <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+          <div className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted">updated</div>
+          <div className="mt-1 font-mono text-lg font-semibold text-state-healthy">{updatedCount}</div>
+        </div>
+        <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+          <div className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted">queued/running</div>
+          <div className="mt-1 font-mono text-lg font-semibold text-state-warning">{activeCount}</div>
+        </div>
+        <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+          <div className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted">attention</div>
+          <div className="mt-1 font-mono text-lg font-semibold text-state-critical">{failedCount}</div>
+        </div>
+        <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+          <div className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted">not queued</div>
+          <div className="mt-1 font-mono text-lg font-semibold text-text-secondary">{neverQueuedCount}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+        {visibleRows.map(({ node, job, active }) => {
+          const target = agentUpdateTargetVersion(job);
+          return (
+            <div
+              key={node.id}
+              className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-foreground">{node.hostname}</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[0.65rem] text-text-muted">
+                  <span className="font-mono">agent {node.agent_version ?? '-'}</span>
+                  {target && <span className="font-mono">target {target}</span>}
+                  <span>{formatAgentUpdateTime(job)}</span>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <StatusTag tone={agentUpdateStatusTone(job?.status)}>
+                  {agentUpdateStatusLabel(job?.status)}
+                </StatusTag>
+                <Button
+                  type="button"
+                  variant={active ? 'ghost' : 'secondary'}
+                  size="sm"
+                  disabled={active}
+                  onClick={() => onQueue(node.id)}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${active ? 'animate-spin' : ''}`} />
+                  Update
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {rows.length > visibleRows.length && (
+        <div className="text-xs text-text-muted">
+          Showing {visibleRows.length} of {rows.length} visible nodes.
+        </div>
+      )}
+    </Panel>
+  );
+}
 
 type ViewMode = 'overview' | 'table';
 
@@ -845,12 +977,27 @@ export function Nodes(): JSX.Element {
   });
   const { data: fleetSnap, loading: snapLoading } = useFleetSummary({ tenantId: currentTenantId ?? undefined, intervalMs: 30_000 });
   const { data: tenants } = useTenants();
+  const {
+    data: agentUpdateJobs,
+    loading: agentUpdateJobsLoading,
+    refresh: refreshAgentUpdateJobs,
+  } = useJobs({
+    tenantId: currentTenantId ?? undefined,
+    type: 'agent.update',
+    limit: 100,
+    pollIntervalMs: 10_000,
+  });
 
   const tenantNames = useMemo(() => {
     const m = new Map<string, string>();
     for (const t of tenants) m.set(t.id, t.name);
     return m;
   }, [tenants]);
+
+  const latestAgentJobsByNode = useMemo(
+    () => latestAgentUpdateByNode(agentUpdateJobs),
+    [agentUpdateJobs],
+  );
 
   // Bulk-fetch per-node health scores
   useEffect(() => {
@@ -1082,6 +1229,18 @@ export function Nodes(): JSX.Element {
       },
     },
     {
+      header: 'Agent update',
+      id: 'agent_update',
+      cell: ({ row }) => {
+        const job = latestAgentJobsByNode.get(row.original.id);
+        return (
+          <StatusTag tone={agentUpdateStatusTone(job?.status)} title={formatAgentUpdateTime(job)}>
+            {agentUpdateStatusLabel(job?.status)}
+          </StatusTag>
+        );
+      },
+    },
+    {
       header: 'Last seen',
       id: 'last_seen',
       cell: ({ row }) => <span className="text-xs text-text-muted">{formatLastSeen(row.original.last_seen_at)}</span>,
@@ -1123,6 +1282,8 @@ export function Nodes(): JSX.Element {
     try {
       await api.updateAgent(agentUpdateNodeId);
       showToast('Agent update queued.', 'success');
+      refreshAgentUpdateJobs();
+      reload();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to queue agent update.', 'error');
     } finally {
@@ -1190,6 +1351,13 @@ export function Nodes(): JSX.Element {
           icon={<Shield />}
         />
       </div>
+
+      <AgentUpdateRolloutPanel
+        nodes={filteredNodes}
+        jobsByNode={latestAgentJobsByNode}
+        loading={agentUpdateJobsLoading}
+        onQueue={setAgentUpdateNodeId}
+      />
 
       {/* At-risk alert banner */}
       {atRiskFleet && atRiskFleet.total_count > 0 && (
@@ -1339,6 +1507,7 @@ export function Nodes(): JSX.Element {
                     tenantName={tenantNames.get(tenantId) ?? tenantId}
                     nodes={tenantNodes}
                     healthMap={healthMap}
+                    agentJobsByNode={latestAgentJobsByNode}
                     activeRegion={activeRegion}
                     onNodeClick={(id) => navigate(`/nodes/${id}`)}
                   />
