@@ -1,4 +1,4 @@
-import { Globe, Shield } from 'lucide-react';
+import { Globe, Shield, ShieldAlert } from 'lucide-react';
 import { Panel, PostureBar, StatusTag } from '@/components/kit';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { IpEnrichment } from '@/lib/api';
@@ -9,6 +9,10 @@ export interface IpEnrichmentCardProps {
 }
 
 export function IpEnrichmentCard({ enrichment, loading }: IpEnrichmentCardProps) {
+  const score = enrichment?.reputation_score ?? 0;
+  const hasThreatFeeds = Boolean(enrichment?.threat_feeds?.length);
+  const confidenceTone = score >= 90 || hasThreatFeeds ? 'critical' : score >= 50 ? 'warning' : 'info';
+
   return (
     <Panel padding="md" eyebrow="ENRICHMENT" title="IP intelligence" toneAccent="accent">
       {loading ? (
@@ -17,39 +21,57 @@ export function IpEnrichmentCard({ enrichment, loading }: IpEnrichmentCardProps)
         <p className="text-sm text-text-muted">No enrichment yet.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Country" value={enrichment.geo?.country ?? '—'} icon={<Globe className="h-3.5 w-3.5" />} />
-            <Field label="City" value={enrichment.geo?.city ?? '—'} />
-            <Field label="ASN" value={enrichment.geo?.asn ? `AS${enrichment.geo.asn}` : '—'} mono />
-            <Field label="Org" value={enrichment.geo?.org ?? '—'} />
+          <div className="rounded-md border border-border-subtle bg-surface px-3 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+                  <ShieldAlert className="h-3.5 w-3.5" /> Blacklist confidence
+                </div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="font-mono text-2xl font-semibold tabular-nums text-foreground">
+                    {score.toFixed(0)}
+                  </span>
+                  <span className="font-mono text-xs uppercase tracking-wider text-text-muted">/ 100</span>
+                </div>
+              </div>
+              <StatusTag tone={confidenceTone}>
+                {hasThreatFeeds ? 'Listed' : score > 0 ? 'Risk signal' : 'No feed hit'}
+              </StatusTag>
+            </div>
+            <div className="mt-2">
+              <PostureBar score={score} ariaLabel="Blacklist confidence score" />
+            </div>
+            {enrichment.source && (
+              <div className="mt-2 font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+                Source: {enrichment.source}
+              </div>
+            )}
           </div>
 
-          {enrichment.reputation_score !== undefined && (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-mono uppercase tracking-wider text-text-muted">Reputation</span>
-                <span className="font-mono tabular-nums text-foreground">
-                  {enrichment.reputation_score.toFixed(0)} / 100
-                </span>
-              </div>
-              <PostureBar score={enrichment.reputation_score} ariaLabel="Reputation score" />
-            </div>
-          )}
-
-          {enrichment.threat_feeds && enrichment.threat_feeds.length > 0 && (
+          {hasThreatFeeds && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5 font-mono text-[0.65rem] uppercase tracking-wider text-state-critical">
                 <Shield className="h-3.5 w-3.5" /> Threat feed matches
               </div>
               <ul className="flex flex-wrap gap-1.5">
-                {enrichment.threat_feeds.map((tf, i) => (
-                  <li key={i}>
-                    <StatusTag tone="critical">{tf.feed}{tf.severity ? ` · ${tf.severity}` : ''}</StatusTag>
+                {enrichment.threat_feeds?.map((tf, i) => (
+                  <li key={`${tf.feed}-${i}`}>
+                    <StatusTag tone="critical">
+                      {tf.feed}
+                      {tf.severity ? ` - ${tf.severity}` : ''}
+                    </StatusTag>
                   </li>
                 ))}
               </ul>
             </div>
           )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Country" value={enrichment.geo?.country ?? '-'} icon={<Globe className="h-3.5 w-3.5" />} />
+            <Field label="City" value={enrichment.geo?.city ?? '-'} />
+            <Field label="ASN" value={enrichment.geo?.asn ? `AS${enrichment.geo.asn}` : '-'} mono />
+            <Field label="Org" value={enrichment.geo?.org ?? '-'} />
+          </div>
         </div>
       )}
     </Panel>

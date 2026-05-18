@@ -35,6 +35,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
@@ -836,6 +837,10 @@ type Server struct {
 	// ipIntel handles geo + ASN + reputation lookups for Investigate.
 	// nil when no provider is configured; handler degrades gracefully.
 	ipIntel *ipintel.Service
+	// threatIntel keeps built-in and operator-configured bad-IP feeds hot so
+	// Investigate, web-log enrichment, and auto-blocking share one verdict.
+	threatIntel     *threatintel.Manager
+	threatIntelStop context.CancelFunc
 	// offlineContent exposes signed airgapped content bundles to enrichment,
 	// detectors, and operator status views.
 	offlineContentRoot string
@@ -2669,6 +2674,7 @@ func (s *Server) Start() error {
 	s.startEnrollmentReaper()
 	s.startCorrelationEngine()
 	s.startBehavioralRollup()
+	s.startThreatIntelManager()
 
 	if !s.cfg.TLS.Enabled {
 		return s.http.ListenAndServe()
@@ -2696,6 +2702,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	if s.healthScheduler != nil {
 		s.healthScheduler.Stop()
+	}
+	if s.threatIntelStop != nil {
+		s.threatIntelStop()
 	}
 	if closer, ok := s.ipBehaviorWindows.(interface{ Close() error }); ok {
 		_ = closer.Close()

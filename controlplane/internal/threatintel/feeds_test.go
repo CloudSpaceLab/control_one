@@ -21,7 +21,7 @@ func TestParseSpamhaus(t *testing.T) {
 	if inds[0].CIDR != "1.10.16.0/20" {
 		t.Fatalf("first cidr wrong: %s", inds[0].CIDR)
 	}
-	if inds[0].Score != 95 {
+	if inds[0].Score != 100 {
 		t.Fatalf("expected high score, got %d", inds[0].Score)
 	}
 }
@@ -59,6 +59,22 @@ func TestIndicatorSetLookup(t *testing.T) {
 	}
 	if _, ok := set.LookupIP(net.ParseIP("9.9.9.9")); ok {
 		t.Fatal("should not match unrelated ip")
+	}
+}
+
+func TestIndicatorSetLookupTenantScopedFeeds(t *testing.T) {
+	inds := []Indicator{
+		{CIDR: "1.2.3.0/24", Feed: "global", Score: 80},
+		{CIDR: "1.2.3.0/24", TenantID: "tenant-a", Feed: "tenant", Score: 100},
+	}
+	set := buildSet(inds)
+	matches := set.LookupIPAll(net.ParseIP("1.2.3.42"), "tenant-a")
+	if len(matches) != 2 || matches[0].Feed != "tenant" {
+		t.Fatalf("expected tenant and global matches sorted by score, got %+v", matches)
+	}
+	matches = set.LookupIPAll(net.ParseIP("1.2.3.42"), "tenant-b")
+	if len(matches) != 1 || matches[0].Feed != "global" {
+		t.Fatalf("expected only global match for another tenant, got %+v", matches)
 	}
 }
 

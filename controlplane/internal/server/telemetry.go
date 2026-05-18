@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/metrics"
@@ -758,7 +759,7 @@ func (s *Server) webRequestFromLog(ctx context.Context, tenantID, nodeID uuid.UU
 	if port := firstPositiveFieldInt64(fields, "local_port", "server_port", "remote_port"); port > 0 {
 		details["port"] = port
 	}
-	enrich := s.lookupIPBehaviorEnrichment(ctx, remoteIP, ipCache)
+	enrich := s.lookupIPBehaviorEnrichment(ctx, tenantID, remoteIP, ipCache)
 	for k, v := range enrich {
 		details[k] = v
 	}
@@ -766,6 +767,7 @@ func (s *Server) webRequestFromLog(ctx context.Context, tenantID, nodeID uuid.UU
 	if v, ok := enrich["reputation_score"].(int); ok {
 		threatScore = v
 	}
+	threatFeed := firstThreatFeedName(enrich["threat_feeds"])
 	ts := parseLogTimestamp(entry.Timestamp)
 	return IngestedEvent{
 		Type:          "web.request",
@@ -778,6 +780,7 @@ func (s *Server) webRequestFromLog(ctx context.Context, tenantID, nodeID uuid.UU
 		SrcIP:         remoteIP,
 		BytesOut:      bytesOut,
 		DurationMS:    durationMS,
+		ThreatFeed:    threatFeed,
 		ThreatScore:   threatScore,
 		Message:       fmt.Sprintf("%d %s %s", status, method, path),
 		Details:       details,
@@ -916,7 +919,7 @@ func ipInCIDRList(ipValue string, cidrs []string) bool {
 	return false
 }
 
-func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, ip string, cache map[string]map[string]any) map[string]any {
+func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, tenantID uuid.UUID, ip string, cache map[string]map[string]any) map[string]any {
 	if cache == nil {
 		cache = map[string]map[string]any{}
 	}
@@ -947,11 +950,13 @@ func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, ip string, cach
 			if len(enriched.ThreatFeeds) > 0 {
 				out["threat_feeds"] = enriched.ThreatFeeds
 			}
+			s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
 			cache[ip] = out
 			return out
 		}
 	}
 	if s.ipIntel == nil || !s.ipIntel.Enabled() {
+		s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
 		cache[ip] = out
 		return out
 	}
@@ -959,6 +964,7 @@ func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, ip string, cach
 	defer cancel()
 	enriched, err := s.ipIntel.Lookup(lookupCtx, ip)
 	if err != nil || enriched == nil {
+		s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
 		cache[ip] = out
 		return out
 	}
@@ -970,8 +976,56 @@ func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, ip string, cach
 	out["usage_type"] = enriched.UsageType
 	out["is_tor"] = enriched.IsTor
 	out["reputation_score"] = enriched.ReputationScore
+	if len(enriched.ThreatFeeds) > 0 {
+		out["threat_feeds"] = enriched.ThreatFeeds
+	}
+	s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
 	cache[ip] = out
 	return out
+}
+
+func (s *Server) mergeThreatIntelIntoBehaviorEnrichment(tenantID uuid.UUID, ip net.IP, out map[string]any) {
+	if out == nil || ip == nil {
+		return
+	}
+	matches := s.threatIntelIPMatches(tenantID, ip)
+	if len(matches) == 0 {
+		return
+	}
+	hits, _, score := threatIndicatorsToEnrichment(matches)
+	if len(hits) > 0 {
+		out["threat_feeds"] = mergeBehaviorThreatFeeds(out["threat_feeds"], hits)
+	}
+	if current, ok := out["reputation_score"].(int); !ok || score > current {
+		out["reputation_score"] = score
+	}
+}
+
+func mergeBehaviorThreatFeeds(existing any, extra []ipintel.ThreatFeedHit) []ipintel.ThreatFeedHit {
+	base := []ipintel.ThreatFeedHit{}
+	switch feeds := existing.(type) {
+	case []ipintel.ThreatFeedHit:
+		base = append(base, feeds...)
+	case []offlinebundle.ThreatFeedHit:
+		for _, feed := range feeds {
+			base = append(base, ipintel.ThreatFeedHit{Feed: feed.Feed, Severity: feed.Severity})
+		}
+	}
+	return mergeIPThreatFeedHits(base, extra)
+}
+
+func firstThreatFeedName(value any) string {
+	switch feeds := value.(type) {
+	case []ipintel.ThreatFeedHit:
+		if len(feeds) > 0 {
+			return feeds[0].Feed
+		}
+	case []offlinebundle.ThreatFeedHit:
+		if len(feeds) > 0 {
+			return feeds[0].Feed
+		}
+	}
+	return ""
 }
 
 func parseLogTimestamp(raw string) time.Time {
