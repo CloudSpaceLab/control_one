@@ -857,6 +857,10 @@ function buildQuickQuestions(
   const patch = lanes.get('patch-posture');
   const security = lanes.get('security');
   const app = lanes.get('app-db-health');
+  const topIPFinding = overview.ip_behavior.findings[0];
+  const topIPFindingPresentation = topIPFinding
+    ? describeIPBehaviorFinding(topIPFinding, { countryLabel: topIPFinding.country_code, maxSignals: 3 })
+    : null;
   return [
     {
       label: 'Broken',
@@ -876,7 +880,7 @@ function buildQuickQuestions(
       label: 'Attack signals',
       value: ip?.primary_metric.value ?? '0',
       tone: ip?.tone ?? 'unknown',
-      hint: overview.ip_behavior.findings[0]?.reason || ip?.summary || 'No IP findings',
+      hint: topIPFindingPresentation?.summary || ip?.summary || 'No IP findings',
       icon: <Globe2 />,
     },
     {
