@@ -489,9 +489,75 @@ function ActivityTab({ nodeId, tenantId }: ActivityProps) {
 }
 
 function peerIp(row: import('@/lib/api').ConnectionRow): string {
-  if (row.direction === 'inbound') return row.src_ip ?? row.dst_ip ?? '';
-  if (row.direction === 'outbound') return row.dst_ip ?? row.src_ip ?? '';
-  return row.dst_ip && row.dst_ip !== '0.0.0.0' ? row.dst_ip : row.src_ip ?? '';
+  if (row.direction === 'inbound') return normalizePeerAddress(row.src_ip) || normalizePeerAddress(row.dst_ip);
+  if (row.direction === 'outbound') return normalizePeerAddress(row.dst_ip) || normalizePeerAddress(row.src_ip);
+  return normalizePeerAddress(row.dst_ip) || normalizePeerAddress(row.src_ip);
+}
+
+function normalizePeerAddress(value?: string | null): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed || trimmed === '-' || trimmed === '*' || trimmed === '0.0.0.0' || trimmed === '::') return '';
+  return trimmed.replace(/^\[/, '').replace(/\]$/, '');
+}
+
+function parseIPv4(ip: string): number[] | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  const nums = parts.map((part) => Number(part));
+  if (nums.some((n, idx) => !/^\d+$/.test(parts[idx]) || !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return nums;
+}
+
+function isPublicIP(ip: string): boolean {
+  const normalized = normalizePeerAddress(ip).toLowerCase();
+  if (!normalized) return false;
+  if (normalized.startsWith('::ffff:')) {
+    return isPublicIP(normalized.slice('::ffff:'.length));
+  }
+  const v4 = parseIPv4(normalized);
+  if (v4) {
+    const [a, b, c] = v4;
+    if (a === 0 || a === 10 || a === 127 || a === 255) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 192 && b === 0 && c === 2) return false;
+    if (a === 198 && (b === 18 || b === 19)) return false;
+    if (a === 198 && b === 51 && c === 100) return false;
+    if (a === 203 && b === 0 && c === 113) return false;
+    if (a >= 224) return false;
+    return true;
+  }
+  if (!normalized.includes(':')) return false;
+  if (
+    normalized === '::1' ||
+    normalized.startsWith('fe80:') ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('ff') ||
+    normalized.startsWith('2001:db8:')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isListeningConnection(row: import('@/lib/api').ConnectionRow): boolean {
+  const direction = (row.direction ?? '').toLowerCase();
+  if (direction === 'listening' || direction === 'listen') return true;
+  return direction === 'inbound' && !normalizePeerAddress(row.src_ip) && !normalizePeerAddress(row.dst_ip);
+}
+
+function hasConnectionShape(row: import('@/lib/api').ConnectionRow): boolean {
+  if (peerIp(row)) return true;
+  if (!isListeningConnection(row)) return false;
+  return Boolean(row.src_port || row.dst_port || row.process_name || row.protocol);
+}
+
+function connectionServicePort(row: import('@/lib/api').ConnectionRow): number | undefined {
+  if (row.direction === 'inbound' || isListeningConnection(row)) return row.dst_port ?? row.src_port;
+  return row.dst_port ?? row.src_port;
 }
 
 function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string }) {
@@ -526,18 +592,33 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     refresh();
   }, [refresh]);
 
-  // The server is the canonical filter for connection visibility — see
-  // `controlplane/internal/doris/reader_events.go` `ListConnectionsForNode`.
-  // We previously stripped RFC1918 peers and zero-byte rows here, which
-  // double-filtered the result and emptied the panel on dev/internal nodes
-  // where most peers are private (bugs §1.2). Display whatever the server
-  // returns; an "External only" toggle can be reintroduced server-side when
-  // operators ask for it.
-  const filteredRows = rows;
+  // Keep the first view security-relevant: placeholder listener rows and
+  // private/loopback chatter stay out of the default table unless requested.
+  const shapedRows = useMemo(() => rows.filter(hasConnectionShape), [rows]);
+
+  const [listeningOnly, setListeningOnly] = useState(false);
+  const [includeInternal, setIncludeInternal] = useState(false);
+
+  // Listening sockets are typically modelled as direction === 'listening',
+  // but some agent versions report them via the absence of a peer or via
+  // an explicit state field. Accept any reasonable signal so the toggle
+  // stays useful across heterogeneous fleets.
+  const isListening = useCallback((row: import('@/lib/api').ConnectionRow): boolean => {
+    return isListeningConnection(row);
+  }, []);
+
+  const visibleRows = useMemo(
+    () => {
+      if (listeningOnly) return shapedRows.filter(isListening);
+      return shapedRows.filter((row) => includeInternal || isPublicIP(peerIp(row)));
+    },
+    [includeInternal, isListening, listeningOnly, shapedRows],
+  );
+  const hiddenRows = Math.max(0, rows.length - visibleRows.length);
 
   useEffect(() => {
     let cancelled = false;
-    const ips = Array.from(new Set(filteredRows.map(peerIp).filter(Boolean))).filter((ip) => !countries[ip]);
+    const ips = Array.from(new Set(visibleRows.map(peerIp).filter(isPublicIP))).filter((ip) => !countries[ip]);
     if (ips.length === 0) return;
     Promise.all(
       ips.slice(0, 25).map((ip) =>
@@ -556,27 +637,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     return () => {
       cancelled = true;
     };
-  }, [api, countries, filteredRows, tenantId]);
-
-  const [listeningOnly, setListeningOnly] = useState(false);
-
-  // Listening sockets are typically modelled as direction === 'listening',
-  // but some agent versions report them via the absence of a peer or via
-  // an explicit state field. Accept any reasonable signal so the toggle
-  // stays useful across heterogeneous fleets.
-  const isListening = useCallback((row: import('@/lib/api').ConnectionRow): boolean => {
-    const direction = (row.direction ?? '').toLowerCase();
-    if (direction === 'listening' || direction === 'listen') return true;
-    // Heuristic fallback: inbound row with no remote peer is effectively a
-    // server-side listening socket.
-    if (direction === 'inbound' && (!row.src_ip || row.src_ip === '0.0.0.0') && !row.dst_ip) return true;
-    return false;
-  }, []);
-
-  const visibleRows = useMemo(
-    () => (listeningOnly ? filteredRows.filter(isListening) : filteredRows),
-    [filteredRows, listeningOnly, isListening],
-  );
+  }, [api, countries, tenantId, visibleRows]);
 
   // KPIs derived from the currently visible rows so the strip reflects
   // whatever the operator is looking at (listening-only flip included).
@@ -672,6 +733,15 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
             >
               Listening only
             </Button>
+            <Button
+              variant={includeInternal ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setIncludeInternal((v) => !v)}
+              aria-pressed={includeInternal}
+              disabled={listeningOnly}
+            >
+              Include internal
+            </Button>
             <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
@@ -679,11 +749,18 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
+        {!listeningOnly && hiddenRows > 0 && (
+          <p className="mb-3 text-xs text-text-muted">
+            Showing external peers only; {hiddenRows} internal, listener, or incomplete row{hiddenRows === 1 ? '' : 's'} hidden.
+          </p>
+        )}
         {!loading && visibleRows.length === 0 ? (
           <p className="text-sm text-text-muted">
             {listeningOnly
               ? 'No listening sockets reported in the current 24h window.'
-              : 'No connection activity reported in the current 24h window.'}
+              : includeInternal
+              ? 'No connection activity reported in the current 24h window.'
+              : 'No external connection activity reported in the current 24h window.'}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -706,7 +783,8 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
               <tbody className="divide-y divide-border-subtle">
                 {visibleRows.map((row) => {
                   const ip = peerIp(row);
-                  const port = row.direction === 'inbound' ? row.src_port : row.dst_port;
+                  const port = connectionServicePort(row);
+                  const country = ip ? (isPublicIP(ip) ? countries[ip] ?? 'Looking up...' : 'Internal') : '-';
                   const started = new Date(row.started_at).getTime();
                   const ended = row.ended_at ? new Date(row.ended_at).getTime() : Date.now();
                   const age = row.duration_ms ?? (Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0);
@@ -727,7 +805,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
                       onClick={() => setOpenConnId(row.conn_id)}
                     >
                       <td className="px-3 py-2 font-mono text-xs text-foreground">{ip || '-'}</td>
-                      <td className="px-3 py-2 text-text-secondary">{countries[ip] ?? 'Looking up...'}</td>
+                      <td className="px-3 py-2 text-text-secondary">{country}</td>
                       <td className="px-3 py-2 capitalize text-text-secondary">{row.direction ?? '-'}</td>
                       <td className="px-3 py-2 font-mono text-xs uppercase text-text-secondary">
                         {row.protocol ?? '-'}

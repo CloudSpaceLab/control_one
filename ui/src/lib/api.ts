@@ -691,6 +691,44 @@ export interface ThreatFeed {
   updated_at: string;
 }
 
+export interface ThreatIntelIndicatorSample {
+  feed?: string;
+  category?: string;
+  ip?: string;
+  cidr?: string;
+  score: number;
+  first_seen?: string;
+  evidence?: string;
+}
+
+export interface ThreatIntelSourceSummary {
+  feed: string;
+  category?: string;
+  scope: 'global' | 'tenant';
+  tenant_id?: string;
+  indicators: number;
+  max_score: number;
+  sample?: ThreatIntelIndicatorSample[];
+}
+
+export interface ThreatIntelLookupResult {
+  ip: string;
+  listed: boolean;
+  score: number;
+  feeds: string[];
+  matches: ThreatIntelIndicatorSample[];
+}
+
+export interface ThreatIntelSummary {
+  available: boolean;
+  generated_at?: string;
+  total_indicators: number;
+  global_indicators: number;
+  tenant_indicators: number;
+  sources: ThreatIntelSourceSummary[];
+  lookup?: ThreatIntelLookupResult;
+}
+
 export interface CreateThreatFeedPayload {
   tenant_id: string;
   name: string;
@@ -3174,6 +3212,13 @@ export class APIClient {
     const search = new URLSearchParams();
     search.set('tenant_id', tenantId);
     return this.request<{ data: ThreatFeed[] }>(`/api/v1/threat-feeds?${search.toString()}`);
+  }
+
+  async getThreatIntelSummary(params: { tenantId: string; ip?: string }): Promise<ThreatIntelSummary> {
+    const search = new URLSearchParams();
+    search.set('tenant_id', params.tenantId);
+    if (params.ip) search.set('ip', params.ip);
+    return this.request<ThreatIntelSummary>(`/api/v1/threat-intel/summary?${search.toString()}`);
   }
 
   async createThreatFeed(payload: CreateThreatFeedPayload): Promise<ThreatFeed> {

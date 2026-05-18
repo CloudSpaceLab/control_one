@@ -106,8 +106,24 @@ export function EntityDetail(): JSX.Element {
       return;
     }
     try {
-      await client.entityAction(safeType, id ?? '', { action }, { tenantId: currentTenantId });
-      toast.success(`${action} action queued`);
+      const payload =
+        safeType === 'ip' && (action === 'block' || action === 'allow')
+          ? { action, scope: 'fleet' as const, reason: `Manual ${action} from investigation` }
+          : { action };
+      const resp = await client.entityAction(safeType, id ?? '', payload, { tenantId: currentTenantId });
+      if (safeType === 'ip' && (action === 'block' || action === 'allow')) {
+        const verb = action === 'block' ? 'Block' : 'Allow';
+        const dispatched = resp.nodes_dispatched ?? 0;
+        if (dispatched > 0) {
+          toast.success(`${verb} dispatched to ${dispatched} server${dispatched === 1 ? '' : 's'}`);
+        } else {
+          toast.warning(`${verb} recorded, but no enrolled server received it`);
+        }
+      } else {
+        toast.success(`${action} action queued`);
+      }
+      void detailQ.refetch();
+      void lifecycleQ.refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     }
