@@ -29,7 +29,7 @@ export interface EntityHeaderProps {
 }
 
 export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMutate = false }: EntityHeaderProps) {
-  const chips: ClassificationChip[] = detail?.classification ?? [];
+  const chips = classificationChips(detail);
 
   return (
     <header className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-elevated p-5 shadow-[var(--shadow-panel)]">
@@ -44,7 +44,7 @@ export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMu
               <span className="text-xs text-text-muted">Loading classification…</span>
             )}
             {chips.map((c, i) => (
-              <StatusTag key={i} tone={SEV_TO_TONE[c.tone ?? 'info'] ?? 'info'}>{c.label}</StatusTag>
+              <StatusTag key={i} tone={SEV_TO_TONE[c.tone ?? c.severity ?? 'info'] ?? 'info'}>{c.label}</StatusTag>
             ))}
             {!loading && chips.length === 0 && (
               <StatusTag tone="unknown">UNCLASSIFIED</StatusTag>
@@ -94,6 +94,12 @@ export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMu
       </div>
     </header>
   );
+}
+
+function classificationChips(detail?: EntityDetail): ClassificationChip[] {
+  if (Array.isArray(detail?.classification)) return detail.classification;
+  const fromMeta = detail?.meta?.classification;
+  return Array.isArray(fromMeta) ? (fromMeta as ClassificationChip[]) : [];
 }
 
 function Stat({ label, value, mono = false }: { label: string; value: string | number; mono?: boolean }) {
