@@ -378,6 +378,7 @@ func (s *Server) controlRoomIPBehavior(ctx context.Context, tenantID uuid.UUID, 
 			findings = rows
 		}
 	}
+	s.backfillIPBehaviorConfidenceAlerts(ctx, findings)
 	return countries, findings
 }
 

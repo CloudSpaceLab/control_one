@@ -1672,6 +1672,64 @@ func TestDetectIPBehaviorOpensAlertAtFullConfidence(t *testing.T) {
 	}
 }
 
+func TestBackfillIPBehaviorConfidenceAlerts(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &ipBehaviorFindingCaptureStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store}
+	now := time.Date(2026, 5, 18, 18, 17, 0, 0, time.UTC)
+
+	s.backfillIPBehaviorConfidenceAlerts(context.Background(), []storage.IPBehaviorFinding{
+		{
+			ID:          uuid.New(),
+			TenantID:    tenantID,
+			NodeID:      uuid.NullUUID{UUID: nodeID, Valid: true},
+			DedupKey:    "anomaly.ip_behavior:legacy",
+			SourceIP:    sql.NullString{String: "102.89.69.217/32", Valid: true},
+			CountryCode: "NG",
+			ASN:         "AS29465",
+			Category:    "credential_attack",
+			Severity:    "critical",
+			Score:       100,
+			Status:      "open",
+			Reason:      "credential_attack behavior from 102.89.69.217 scored 100: country/country-app behavior is being evaluated as a baseline dimension; request burst: 21 requests in 1m; auth failure spike: 21 401/403 responses",
+			Evidence: map[string]any{
+				"app":           "nginx",
+				"country":       "Nigeria",
+				"request_count": 21,
+				"window":        "1m",
+				"status_counts": map[string]any{"401": 21},
+				"dedup_scope":   []string{"tenant", "src_ip"},
+				"corroborating": 3,
+				"score":         100,
+			},
+			LastSeenAt: now,
+		},
+		{ID: uuid.New(), TenantID: tenantID, Score: 90, Status: "open", SourceIP: sql.NullString{String: "203.0.113.90/32", Valid: true}},
+		{ID: uuid.New(), TenantID: tenantID, Score: 100, Status: "resolved", SourceIP: sql.NullString{String: "203.0.113.100/32", Valid: true}},
+	})
+
+	if len(store.alerts) != 1 {
+		t.Fatalf("alerts = %d, want 1", len(store.alerts))
+	}
+	alert := store.alerts[0]
+	if alert.Source != "ip_behavior" || alert.Severity != "critical" {
+		t.Fatalf("alert source/severity = %s/%s, want ip_behavior/critical", alert.Source, alert.Severity)
+	}
+	if !strings.Contains(alert.Title, "100% confidence credential attack") {
+		t.Fatalf("alert title missing confidence/category: %q", alert.Title)
+	}
+	if strings.Contains(alert.Title, "/32") {
+		t.Fatalf("alert title should use normalized host IP: %q", alert.Title)
+	}
+	if strings.Contains(strings.ToLower(alert.Summary), "baseline dimension") {
+		t.Fatalf("alert summary exposes scoring internals: %q", alert.Summary)
+	}
+	if alert.Context["finding_dedup_key"] != "anomaly.ip_behavior:legacy" || alert.Context["country"] != "Nigeria" {
+		t.Fatalf("alert context missing finding details: %#v", alert.Context)
+	}
+}
+
 type ipBehaviorFindingCaptureStore struct {
 	*fakeStore
 	findings []storage.UpsertIPBehaviorFindingParams

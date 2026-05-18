@@ -104,6 +104,7 @@ func (s *Server) handleBehavioralAnomalies(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	s.backfillIPBehaviorConfidenceAlerts(r.Context(), rows)
 	resp := make([]behavioralAnomalyResponse, 0, len(rows))
 	for _, row := range rows {
 		resp = append(resp, newBehavioralAnomalyResponse(row))

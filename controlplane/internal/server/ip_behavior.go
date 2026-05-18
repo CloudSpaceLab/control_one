@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -172,6 +173,8 @@ var ipBehaviorCurrentWindows = []struct {
 	{label: "15m", size: 15 * time.Minute},
 	{label: "1h", size: time.Hour},
 }
+
+var ipBehaviorReasonSourcePattern = regexp.MustCompile(`\bfrom\s+([^\s]+)\s+scored\b`)
 
 const ipBehaviorWindowResolution = time.Minute
 
@@ -1302,6 +1305,109 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 		NodeID:   nodeArg,
 		Payload:  payload,
 	})
+}
+
+func (s *Server) backfillIPBehaviorConfidenceAlerts(ctx context.Context, findings []storage.IPBehaviorFinding) {
+	for _, finding := range findings {
+		s.openIPBehaviorFindingConfidenceAlert(ctx, finding)
+	}
+}
+
+func (s *Server) openIPBehaviorFindingConfidenceAlert(ctx context.Context, finding storage.IPBehaviorFinding) {
+	if finding.Score < 100 {
+		return
+	}
+	if finding.Status != "" && !strings.EqualFold(finding.Status, "open") {
+		return
+	}
+	nodeID := uuid.Nil
+	if finding.NodeID.Valid {
+		nodeID = finding.NodeID.UUID
+	}
+	b := ipBehaviorBucketFromFinding(finding)
+	if b.srcIP == "" {
+		return
+	}
+	s.openIPBehaviorConfidenceAlert(
+		ctx,
+		finding.TenantID,
+		nodeID,
+		finding.DedupKey,
+		b,
+		finding.Score,
+		firstNonEmptyIPBehavior(finding.Severity, severityFromIPBehaviorScore(finding.Score)),
+		firstNonEmptyIPBehavior(finding.Category, "ip_behavior"),
+		finding.Reason,
+		finding.Evidence,
+	)
+}
+
+func ipBehaviorBucketFromFinding(finding storage.IPBehaviorFinding) *ipBehaviorBucket {
+	evidence := finding.Evidence
+	if evidence == nil {
+		evidence = map[string]any{}
+	}
+	b := &ipBehaviorBucket{
+		srcIP:       "",
+		countryCode: finding.CountryCode,
+		country:     stringFromMapAny(evidence, "country"),
+		asn:         firstNonEmptyIPBehavior(finding.ASN, stringFromMapAny(evidence, "asn")),
+		app:         stringFromMapAny(evidence, "app"),
+		serverGroup: stringFromMapAny(evidence, "server_group"),
+		windowLabel: firstNonEmptyIPBehavior(stringFromMapAny(evidence, "window"), "current window"),
+		lastTS:      finding.LastSeenAt,
+		count:       int(int64FromServerAny(evidence["request_count"])),
+		bytesIn:     int64FromServerAny(evidence["bytes_in"]),
+		bytesOut:    int64FromServerAny(evidence["bytes_out"]),
+		statuses:    map[int]int{},
+		paths:       map[string]int{},
+	}
+	if finding.SourceIP.Valid {
+		b.srcIP = normalizeIPBehaviorAlertSource(finding.SourceIP.String)
+	}
+	if b.srcIP == "" {
+		b.srcIP = normalizeIPBehaviorAlertSource(firstNonEmptyIPBehavior(stringFromMapAny(evidence, "src_ip"), sourceIPFromIPBehaviorReason(finding.Reason)))
+	}
+	if b.country == "" {
+		b.country = firstNonEmptyIPBehavior(stringFromMapAny(evidence, "country_name"), b.countryCode)
+	}
+	if rawStatuses, ok := evidence["status_counts"].(map[string]any); ok {
+		for rawCode, rawCount := range rawStatuses {
+			code, err := strconv.Atoi(rawCode)
+			if err != nil {
+				continue
+			}
+			b.statuses[code] = int(int64FromServerAny(rawCount))
+		}
+	}
+	return b
+}
+
+func sourceIPFromIPBehaviorReason(reason string) string {
+	match := ipBehaviorReasonSourcePattern.FindStringSubmatch(reason)
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func normalizeIPBehaviorAlertSource(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	ip, ipNet, err := net.ParseCIDR(value)
+	if err != nil {
+		return value
+	}
+	ones, bits := ipNet.Mask.Size()
+	if ones == bits {
+		return ip.String()
+	}
+	return ipNet.String()
 }
 
 func ipBehaviorAlertSummary(category string, b *ipBehaviorBucket, score int, reason string, evidence map[string]any) string {
