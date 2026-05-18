@@ -12,6 +12,7 @@ import {
 import { Button } from '../ui/button';
 import { useApiClient } from '../../hooks/useApiClient';
 import { useTenant } from '../../providers/TenantProvider';
+import { entityRoute } from '../../lib/entity';
 import { toast } from 'sonner';
 
 // IpActionMenu is the consolidated context menu wherever an IP appears in the
@@ -46,7 +47,7 @@ export function IpActionMenu({ ip, trigger, onActionTaken }: IpActionMenuProps):
     }
     setBusy(busyKey);
     try {
-      const resp = await client.entityAction('ip', ip, { action, scope });
+      const resp = await client.entityAction('ip', ip, { action, scope }, { tenantId: currentTenantId });
       const dispatched = resp.nodes_dispatched ?? 0;
       const verb = action === 'block' ? 'Block' : 'Unblock';
       if (dispatched === 0) {
@@ -103,7 +104,7 @@ export function IpActionMenu({ ip, trigger, onActionTaken }: IpActionMenuProps):
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link to={`/investigate/entity/ip/${encodeURIComponent(ip)}`} className="flex items-center">
+          <Link to={entityRoute('ip', ip)} className="flex items-center">
             <ExternalLink className="mr-2 h-4 w-4" />
             View in Investigate
           </Link>

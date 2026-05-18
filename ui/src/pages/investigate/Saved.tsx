@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { DataTable, EmptyState, Panel, SectionHeader, StatusTag } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
+import { useTenant } from '@/providers/TenantProvider';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { SavedSearch } from '@/lib/api';
@@ -11,16 +12,18 @@ import type { SavedSearch } from '@/lib/api';
 export function SavedSearches(): JSX.Element {
   const client = useApiClient();
   const qc = useQueryClient();
+  const { currentTenantId } = useTenant();
 
   const savedQ = useQuery({
-    queryKey: ['saved-searches'],
-    queryFn: () => client.listSavedSearches(),
+    queryKey: ['saved-searches', currentTenantId],
+    queryFn: () => client.listSavedSearches({ tenantId: currentTenantId }),
+    enabled: !!currentTenantId,
   });
 
   const del = useMutation({
     mutationFn: (id: string) => client.deleteSavedSearch(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['saved-searches'] });
+      qc.invalidateQueries({ queryKey: ['saved-searches', currentTenantId] });
       toast.success('Saved search deleted');
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),

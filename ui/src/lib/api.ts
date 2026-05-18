@@ -2513,6 +2513,7 @@ export class APIClient {
   // ── Investigate / search ───────────────────────────────────────────────
   async investigateSearch(params: {
     q: string;
+    tenantId?: string | null;
     types?: string[];
     since?: string;
     until?: string;
@@ -2521,6 +2522,7 @@ export class APIClient {
   }): Promise<InvestigateSearchResult> {
     const search = new URLSearchParams();
     search.set('q', params.q);
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
     if (params.types?.length) search.set('types', params.types.join(','));
     if (params.since) search.set('since', params.since);
     if (params.until) search.set('until', params.until);
@@ -2529,16 +2531,20 @@ export class APIClient {
     return this.request<InvestigateSearchResult>(`/api/v1/search?${search.toString()}`);
   }
 
-  async getEntity(type: string, id: string): Promise<EntityDetail> {
-    return this.request<EntityDetail>(`/api/v1/entities/${type}/${encodeURIComponent(id)}`);
+  async getEntity(type: string, id: string, params: { tenantId?: string | null } = {}): Promise<EntityDetail> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const qs = search.toString();
+    return this.request<EntityDetail>(`/api/v1/entities/${type}/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`);
   }
 
   async getEntityLifecycle(
     type: string,
     id: string,
-    params: { since?: string; until?: string; sources?: string[]; cursor?: string; limit?: number } = {},
+    params: { tenantId?: string | null; since?: string; until?: string; sources?: string[]; cursor?: string; limit?: number } = {},
   ): Promise<EntityLifecycle> {
     const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
     if (params.since) search.set('since', params.since);
     if (params.until) search.set('until', params.until);
     if (params.sources?.length) search.set('sources', params.sources.join(','));
@@ -2550,8 +2556,11 @@ export class APIClient {
     );
   }
 
-  async getEntityRelated(type: string, id: string): Promise<EntityRelated> {
-    return this.request<EntityRelated>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/related`);
+  async getEntityRelated(type: string, id: string, params: { tenantId?: string | null } = {}): Promise<EntityRelated> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const qs = search.toString();
+    return this.request<EntityRelated>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/related${qs ? `?${qs}` : ''}`);
   }
 
   async enrichIp(addr: string, tenantId?: string | null): Promise<IpEnrichment> {
@@ -2561,14 +2570,20 @@ export class APIClient {
     return this.request<IpEnrichment>(`/api/v1/entities/ip/${encodeURIComponent(addr)}/enrich${qs ? `?${qs}` : ''}`);
   }
 
-  async listSavedSearches(): Promise<{ items: SavedSearch[] }> {
+  async listSavedSearches(params: { tenantId?: string | null } = {}): Promise<{ items: SavedSearch[] }> {
     // Backend returns PaginatedResponse { data: [...] } but consumers expect { items: [...] }.
-    const resp = await this.request<PaginatedResponse<SavedSearch>>('/api/v1/saved-searches');
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const qs = search.toString();
+    const resp = await this.request<PaginatedResponse<SavedSearch>>(`/api/v1/saved-searches${qs ? `?${qs}` : ''}`);
     return { items: resp.data ?? [] };
   }
 
-  async createSavedSearch(payload: SavedSearchInput): Promise<SavedSearch> {
-    return this.request<SavedSearch>('/api/v1/saved-searches', {
+  async createSavedSearch(payload: SavedSearchInput, params: { tenantId?: string | null } = {}): Promise<SavedSearch> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const qs = search.toString();
+    return this.request<SavedSearch>(`/api/v1/saved-searches${qs ? `?${qs}` : ''}`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -2578,8 +2593,11 @@ export class APIClient {
     await this.request<unknown>(`/api/v1/saved-searches/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  async addEntityTag(type: string, id: string, tag: string): Promise<void> {
-    await this.request<unknown>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/tags`, {
+  async addEntityTag(type: string, id: string, tag: string, params: { tenantId?: string | null } = {}): Promise<void> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const qs = search.toString();
+    await this.request<unknown>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/tags${qs ? `?${qs}` : ''}`, {
       method: 'POST',
       body: JSON.stringify({ tag }),
     });
@@ -2594,9 +2612,13 @@ export class APIClient {
       ttl?: number;
       scope?: 'fleet' | 'affected';
     },
+    params: { tenantId?: string | null } = {},
   ): Promise<EntityActionResponse> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    const qs = search.toString();
     return this.request<EntityActionResponse>(
-      `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions`,
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions${qs ? `?${qs}` : ''}`,
       { method: 'POST', body: JSON.stringify(payload) },
     );
   }

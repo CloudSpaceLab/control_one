@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmptyState, Eyebrow, Panel, SectionHeader, StatusTag, type StateTone } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
+import { useTenant } from '@/providers/TenantProvider';
 import { entityRoute, ENTITY_TYPE_LABELS } from '@/lib/entity';
 import type { EntityType } from '@/components/kit';
 import type { ClassificationChip, InvestigateSearchResult } from '@/lib/api';
@@ -24,6 +25,7 @@ export function SearchResults(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const [tab, setTab] = useState('all');
   const [refineQuery, setRefineQuery] = useState(q);
 
@@ -41,9 +43,9 @@ export function SearchResults(): JSX.Element {
   };
 
   const searchQ = useQuery<InvestigateSearchResult>({
-    queryKey: ['search', q],
-    queryFn: () => client.investigateSearch({ q, limit: 200 }),
-    enabled: q.length > 0,
+    queryKey: ['search', currentTenantId, q],
+    queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q, limit: 200 }),
+    enabled: q.length > 0 && !!currentTenantId,
   });
 
   const items = searchQ.data?.items ?? [];
