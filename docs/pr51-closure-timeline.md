@@ -14,6 +14,12 @@ This is now the historical delivery plan for merged PR [#51](https://github.com/
 
 Sprint 4 reconciliation is complete as of 2026-05-12: #55, #57, #59, #61, #62, #63, #64, #65, #66, and #68 are merged; #56, #58, and #60 are closed as superseded by #68; #67 is closed as a duplicate of current `main`. The remaining PR #51 follow-up should be tracked in the GitHub issue created from the active closure plan, not by reopening PR #51.
 
+## 2026-05-18 Sprint 5/6 Recovery Update
+
+Sprint 5 merged into `main` through PR [#73](https://github.com/CloudSpaceLab/control_one/pull/73). Sprint 6 then merged into the already-merged Sprint 5 branch through PR [#74](https://github.com/CloudSpaceLab/control_one/pull/74), so the Sprint 6 event-capture commit was absent from `main` until recovery PR [#119](https://github.com/CloudSpaceLab/control_one/pull/119) merged on 2026-05-18.
+
+Current interpretation: PR #73 and PR #119 are accepted as umbrella merges, not as proof that every planned Sprint 5 and Sprint 6 worktree below satisfies its original exit criteria. The detailed reconciliation lives in [`docs/plans/2026-05-18-sprint-recovery-audit.md`](./plans/2026-05-18-sprint-recovery-audit.md). New implementation work should start from that audit rather than from the stale `pending` values in the historical tables.
+
 PR #51 shipped two strategic docs anchored to the owner's three-pillar lens but no delivery plan: no calendar, no worktree breakdown, no dependency graph, no projected tag. This document is the plan. Scope: full **P0 + P1 + P1.5 + P2 + P3** (~15 working weeks), modeled as parallel worktrees per sprint, executed via a `/loop`-driven coordinator that dispatches per-worktree subagents across **three Claude tiers (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) and three frontier providers (Anthropic, OpenAI, Google)** behind a unified Go router introduced in Sprint 5.
 
 **P1.5 (Sprint 6) is the investigation event-capture layer** — without it, the MCP/`tool_use` surface from S5 can reason but the evidence base is shallow. Concrete target: when "server disk space starts depreciating fast because a log is accumulating MBs fast" happens in production, the investigation surface should be able to answer, in one chat turn, the full timeline — connection-rate doubling on port 80 (15→30 cps), 2 TB transferred in the spike window, CPU 20→99%, memory 60→99%, three log files growing 30 MB → 13 GB, the app/db log lines that explain the cause — and (when safe gates pass) auto-de-escalate via smart log truncation or rogue-connection/process kill before the host locks out.
@@ -260,22 +266,22 @@ All other rows are independent — parallel-safe.
 | 2 | +900 s | 15 min (DAG watch) | MCP day-1 merges → dispatch `c1-tooluse-loop` | `1 merged / 6 in-progress` |
 | 3..7 | per day | 30 min cadence between MCP days | Day-2 → day-3 → day-4 → day-5 chain merges sequentially | (chain) |
 | … | … | … | CVE/KEV + agent-fatal + process-tree + tests land in parallel | … |
-| N | exit | — | All 10 merged + Operator-mode auto-investigates a real anomaly emit | `10 merged → SprintGate` |
+| N | exit | — | All 11 reconciled + Operator-mode auto-investigates a real anomaly emit | `11 reconciled → SprintGate` |
 
 ### Worktrees
 
 | Worktree | Branch | Pillar | Source | Effort | Model | PR | Status | Merge SHA |
 |---|---|---|---|---|---|---|---|---|
-| `c1-llm-router` | `feat/c1-s5-llm-router` | 🔬 | new (multi-provider) | 1 d | **L3 Opus** | — | pending | — |
-| `c1-mcp-wrapper` | `feat/c1-s5-mcp-wrapper` | 🔬 | gap §6 day 1 | 1 d | **L3 Opus** | — | pending | — |
-| `c1-tooluse-loop` | `feat/c1-s5-tooluse-loop` | 🔬 | gap §6 day 2 | 1 d | **L3 Opus** | — | pending | — |
-| `c1-streaming-citations` | `feat/c1-s5-stream-cite` | 🔬 | gap §6 day 3 | 1 d | L2 Sonnet | — | pending | — |
-| `c1-tool-rbac` | `feat/c1-s5-tool-rbac` | 🔬 | gap §6 day 4 | 1 d | L2 Sonnet | — | pending | — |
-| `c1-operator-mode` | `feat/c1-s5-operator-mode` | 🛡️🚦💚 | gap §6 day 5 | 1 d | L2 Sonnet | — | pending | — |
-| `c1-cve-kev-osv` | `feat/c1-s5-cve-kev` | 🛡️ | gap §5 Attacks | ~13 d | **L3 Opus** | — | pending | — |
+| `c1-llm-router` | `feat/c1-s5-llm-router` | 🔬 | new (multi-provider) | 1 d | **L3 Opus** | #73 | partial: Anthropic-only client | `10976d1` |
+| `c1-mcp-wrapper` | `feat/c1-s5-mcp-wrapper` | 🔬 | gap §6 day 1 | 1 d | **L3 Opus** | #73 | partial: internal tool registry, no MCP transport | `10976d1` |
+| `c1-tooluse-loop` | `feat/c1-s5-tooluse-loop` | 🔬 | gap §6 day 2 | 1 d | **L3 Opus** | #73 | merged | `10976d1` |
+| `c1-streaming-citations` | `feat/c1-s5-stream-cite` | 🔬 | gap §6 day 3 | 1 d | L2 Sonnet | #73 | partial: citations yes, streaming no | `10976d1` |
+| `c1-tool-rbac` | `feat/c1-s5-tool-rbac` | 🔬 | gap §6 day 4 | 1 d | L2 Sonnet | #73 | partial: role gates present, policy coverage pending | `10976d1` |
+| `c1-operator-mode` | `feat/c1-s5-operator-mode` | 🛡️🚦💚 | gap §6 day 5 | 1 d | L2 Sonnet | #73 | partial: proposal-only, no anomaly trigger persistence | `10976d1` |
+| `c1-cve-kev-osv` | `feat/c1-s5-cve-kev` | 🛡️ | gap §5 Attacks | ~13 d | **L3 Opus** | — | pending follow-up | — |
 | `c1-agent-fatal-cleanup` | `fix/c1-s5-agent-fatal` | 💚 | bugs §5 #5 | 3 d | L2 Sonnet | — | pending | — |
 | `c1-process-tree-hydrate` | `fix/c1-s5-process-tree` | 🔬 | bugs §5 #6 | 2 d | L2 Sonnet | — | pending | — |
-| `c1-critical-test-coverage` | `test/c1-s5-coverage` | 🏛️ | bugs §5 #9 | 4 d | L2 Sonnet | — | pending | — |
+| `c1-critical-test-coverage` | `test/c1-s5-coverage` | 🏛️ | bugs §5 #9 | 4 d | L2 Sonnet | #73 | partial: AI tests added, full critical list pending | `10976d1` |
 | `c1-trivy-cve-detail` | `fix/c1-s5-trivy-detail` | 🛡️ | bugs §5 #10 | 1 d | L1 Haiku | — | pending | — |
 
 **S5 tier mix:** L1 ×1 / L2 ×6 / L3 ×4. Four Opus seats reserved for genuinely architectural work: the LLM router (new Go package abstracting Anthropic + OpenAI + Google SDKs), MCP wrapper (new Go package + transport choice), the `tool_use` loop refactor in `ai_ask.go` (new control flow with stop-reason parsing), and the CVE/KEV/OSV pipeline (new feed integration with KEV+EPSS prioritization, Gemini-primary). Day-3..day-5 of the MCP chain are mechanical extensions of the day-1/day-2 architecture, hence Sonnet.
@@ -314,7 +320,7 @@ Same six rules as S4. Additional:
 
 ### Sprint exit gate
 
-- All 10 worktrees merged
+- All 11 worktrees reconciled
 - Architectural test from gap doc §6: `curl /ai/ask` with a complex investigation question completes via multi-tool loop, citations resolve, no fabrications
 - Operator-mode catches a real production anomaly emit and writes a verdict
 - Test coverage on 4 critical untested modules (`ai_ask`, `compliance_evidence`, `dlp_scan`, `anomaly_baselines`) is non-zero
@@ -357,13 +363,13 @@ The synthesizer (`c1-root-cause-synth`) routes to **Google Gemini 2.5 Pro** for 
 
 | Worktree | Branch | Pillar | Type | Effort | Model | PR | Status | Merge SHA |
 |---|---|---|---|---|---|---|---|---|
-| `c1-fs-watcher` | `feat/c1-s6-fs-watcher` | 💚🔬 | extends `collector_file.go` | 1.5 d | L2 Sonnet | — | pending | — |
-| `c1-flowrate-aggregator` | `feat/c1-s6-flowrate` | 🚦🔬 | new Doris MV over `process_connections` | 1 d | L1 Haiku | — | pending | — |
-| `c1-bandwidth-rollups` | `feat/c1-s6-bandwidth` | 🚦🔬 | new Doris MV over `process_connections` | 0.5 d | L1 Haiku | — | pending | — |
-| `c1-resource-delta-tool` | `feat/c1-s6-delta-tool` | 🔬 | extends `investigate.go` window query | 1 d | L1 Haiku | — | pending | — |
-| `c1-log-tail-tool` | `feat/c1-s6-log-tail` | 🔬 | new query handler over existing log ingest | 1 d | L2 Sonnet | — | pending | — |
-| `c1-root-cause-synth` | `feat/c1-s6-rc-synth` | 🔬 | **net-new orchestration** | 3 d | **L3 Opus** *(Gemini 2.5 Pro primary, Opus 4.7 fallback)* | — | pending | — |
-| `c1-auto-deescalate` | `feat/c1-s6-deescalate` | 🛡️🔬 | **net-new agent capability**; default OFF per `tenant.auto_deescalate` | 4 d | **L3 Opus** | — | pending | — |
+| `c1-fs-watcher` | `feat/c1-s6-fs-watcher` | 💚🔬 | extends `collector_file.go` | 1.5 d | L2 Sonnet | — | pending follow-up | — |
+| `c1-flowrate-aggregator` | `feat/c1-s6-flowrate` | 🚦🔬 | new Doris MV over `process_connections` | 1 d | L1 Haiku | #119 | partial: on-read delta from Doris rows, no MV | `424a946` |
+| `c1-bandwidth-rollups` | `feat/c1-s6-bandwidth` | 🚦🔬 | new Doris MV over `process_connections` | 0.5 d | L1 Haiku | #119 | partial: byte sums from connection rows, no rollup | `424a946` |
+| `c1-resource-delta-tool` | `feat/c1-s6-delta-tool` | 🔬 | extends `investigate.go` window query | 1 d | L1 Haiku | #119 | partial: tool exists, fixture/gate pending | `424a946` |
+| `c1-log-tail-tool` | `feat/c1-s6-log-tail` | 🔬 | new query handler over existing log ingest | 1 d | L2 Sonnet | #119 | partial: query exists, redaction/RBAC pending | `424a946` |
+| `c1-root-cause-synth` | `feat/c1-s6-rc-synth` | 🔬 | **net-new orchestration** | 3 d | **L3 Opus** *(Gemini 2.5 Pro primary, Opus 4.7 fallback)* | #119 | partial: deterministic in-request synthesis, no durable worker | `424a946` |
+| `c1-auto-deescalate` | `feat/c1-s6-deescalate` | 🛡️🔬 | **net-new agent capability**; default OFF per `tenant.auto_deescalate` | 4 d | **L3 Opus** | #73/#119 | partial: proposal-only, execution refused | `424a946` |
 
 **S6 tier mix:** L1 ×3 / L2 ×2 / L3 ×2. Two Opus seats reserved for the genuinely architectural rows: the synthesizer (composes 5 evidence streams into one verdict over Gemini long-context) and auto-de-escalate (safety-critical — rogue-process kill must never miss the PID-allowlist guard).
 
@@ -558,18 +564,18 @@ Same six rules as prior sprints. Additional per-row:
 
 | Worktree | Branch | Pillar | Source | Effort | Model | PR | Status | Merge SHA |
 |---|---|---|---|---|---|---|---|---|
-| `c1-kg-tool-shaped` | `feat/c1-s6-kg-tools` | 🔬 | bugs §2 option B | 1 wk | **L3 Opus** | — | pending | — |
-| `c1-dashboard-scalability` | `fix/c1-s6-dash-scale` | 🚦 | bugs §5 #8 | 2 d | L2 Sonnet | — | pending | — |
-| `c1-vendor-update-endpoint` | `feat/c1-s6-vendor-update` | 🏛️ | bugs §5 #11 | 1 d | L1 Haiku | — | pending | — |
-| `c1-evidence-s3-backend` | `feat/c1-s6-evidence-s3` | 🏛️ | bugs §5 #12 | 2 d | L2 Sonnet | — | pending | — |
-| `c1-evidence-metadata-jsonb` | `fix/c1-s6-evidence-meta` | 🏛️ | bugs §5 #13 | 1 d | L1 Haiku | — | pending | — |
-| `c1-dead-handler-cleanup` | `chore/c1-s6-dead-handlers` | 🏛️ | bugs §6 #15–16 | 0.5 d | L1 Haiku | — | pending | — |
-| `c1-ingest-version-tolerance` | `fix/c1-s6-ingest-version` | 🏛️ | bugs §6 #17 | 1 d | L2 Sonnet | — | pending | — |
-| `c1-snapshots-overlay` | `feat/c1-s6-snapshots` | 🔬 | gap §3 Probo | 2 d | L2 Sonnet | — | pending | — |
-| `c1-asset-criticality-overlay` | `feat/c1-s6-asset-crit` | 💚 | gap §3 Probo | 1 d | L2 Sonnet | — | pending | — |
-| `c1-findings-overlay` | `feat/c1-s6-findings` | 🛡️ | gap §3 Probo | 2 d | L2 Sonnet | — | pending | — |
+| `c1-kg-tool-shaped` | `feat/c1-s7-kg-tools` | 🔬 | bugs §2 option B | 1 wk | **L3 Opus** | — | pending | — |
+| `c1-dashboard-scalability` | `fix/c1-s7-dash-scale` | 🚦 | bugs §5 #8 | 2 d | L2 Sonnet | — | pending | — |
+| `c1-vendor-update-endpoint` | `feat/c1-s7-vendor-update` | 🏛️ | bugs §5 #11 | 1 d | L1 Haiku | — | pending | — |
+| `c1-evidence-s3-backend` | `feat/c1-s7-evidence-s3` | 🏛️ | bugs §5 #12 | 2 d | L2 Sonnet | — | pending | — |
+| `c1-evidence-metadata-jsonb` | `fix/c1-s7-evidence-meta` | 🏛️ | bugs §5 #13 | 1 d | L1 Haiku | — | pending | — |
+| `c1-dead-handler-cleanup` | `chore/c1-s7-dead-handlers` | 🏛️ | bugs §6 #15–16 | 0.5 d | L1 Haiku | — | pending | — |
+| `c1-ingest-version-tolerance` | `fix/c1-s7-ingest-version` | 🏛️ | bugs §6 #17 | 1 d | L2 Sonnet | — | pending | — |
+| `c1-snapshots-overlay` | `feat/c1-s7-snapshots` | 🔬 | gap §3 Probo | 2 d | L2 Sonnet | — | pending | — |
+| `c1-asset-criticality-overlay` | `feat/c1-s7-asset-crit` | 💚 | gap §3 Probo | 1 d | L2 Sonnet | — | pending | — |
+| `c1-findings-overlay` | `feat/c1-s7-findings` | 🛡️ | gap §3 Probo | 2 d | L2 Sonnet | — | pending | — |
 
-**S6 tier mix:** L1 ×3 / L2 ×6 / L3 ×1. KG tool-shaped is the lone Opus seat — it deletes the KG-A code path and rewires `ai_ask.go` to compose tool calls instead of stuffing a markdown blob into the system prompt. The Probo cherry-picks (snapshots / asset criticality / findings) are pattern-matches against existing entity overlays in the repo, hence Sonnet.
+**S7 tier mix:** L1 ×3 / L2 ×6 / L3 ×1. KG tool-shaped is the lone Opus seat — it deletes the KG-A code path and rewires `ai_ask.go` to compose tool calls instead of stuffing a markdown blob into the system prompt. The Probo cherry-picks (snapshots / asset criticality / findings) are pattern-matches against existing entity overlays in the repo, hence Sonnet.
 
 ### Hard-gate DAG (cross-sprint)
 
