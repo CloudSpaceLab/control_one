@@ -42,7 +42,7 @@ export function EntityDetail(): JSX.Element {
   const [tab, setTab] = useState(type === 'ip' ? 'connections' : 'timeline');
   const [cursor, setCursor] = useState<string | undefined>();
   const [accumulated, setAccumulated] = useState<LifecycleItem[]>([]);
-  const ipSince = useMemo(() => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), [id]);
+  const ipSince = useMemo(() => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), []);
 
   const safeType = (VALID_TYPES.includes(type as EntityType) ? type : 'ip') as EntityType;
 
