@@ -128,8 +128,12 @@ function riskTone(risk?: NodeHealthRiskLevel): StateTone {
 
 function formatAgentUpdateTime(job?: Job | null): string {
   if (!job) return 'Never queued';
-  if (job.finished_at) return `Finished ${formatTs(job.finished_at)}`;
-  if (job.started_at) return `Started ${formatTs(job.started_at)}`;
+  const status = (job.status ?? '').toLowerCase();
+  const terminalAt = job.finished_at ?? job.updated_at ?? job.created_at;
+  if (status === 'succeeded') return `Updated ${formatTs(terminalAt)}`;
+  if (status === 'failed') return `Failed ${formatTs(terminalAt)}`;
+  if (status === 'cancelled') return `Cancelled ${formatTs(terminalAt)}`;
+  if (status === 'running') return `Started ${formatTs(job.started_at ?? job.updated_at ?? job.created_at)}`;
   if (job.scheduled_at) return `Scheduled ${formatTs(job.scheduled_at)}`;
   return `Queued ${formatTs(job.created_at)}`;
 }

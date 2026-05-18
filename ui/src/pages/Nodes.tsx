@@ -377,8 +377,12 @@ function formatRelativeTime(val?: string): string {
 
 function formatAgentUpdateTime(job?: Job | null): string {
   if (!job) return 'Never queued';
-  if (job.finished_at) return `Finished ${formatRelativeTime(job.finished_at)}`;
-  if (job.started_at) return `Started ${formatRelativeTime(job.started_at)}`;
+  const status = (job.status ?? '').toLowerCase();
+  const terminalAt = job.finished_at ?? job.updated_at ?? job.created_at;
+  if (status === 'succeeded') return `Updated ${formatRelativeTime(terminalAt)}`;
+  if (status === 'failed') return `Failed ${formatRelativeTime(terminalAt)}`;
+  if (status === 'cancelled') return `Cancelled ${formatRelativeTime(terminalAt)}`;
+  if (status === 'running') return `Started ${formatRelativeTime(job.started_at ?? job.updated_at ?? job.created_at)}`;
   if (job.scheduled_at) return `Scheduled ${formatRelativeTime(job.scheduled_at)}`;
   return `Queued ${formatRelativeTime(job.created_at)}`;
 }
