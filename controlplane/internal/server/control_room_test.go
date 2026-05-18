@@ -274,6 +274,44 @@ func TestControlRoomDefaultDenyFirewallReducesCriticalExposure(t *testing.T) {
 	}
 }
 
+func TestControlRoomOverviewEmitsEmptyArrays(t *testing.T) {
+	srv, store := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := store.tenants[0].ID
+
+	rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/control-room/overview?tenant_id="+tenantID.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TopIncidents == nil {
+		t.Fatal("top_incidents encoded as null; expected []")
+	}
+	if resp.StaleWarnings == nil {
+		t.Fatal("stale_warnings encoded as null; expected []")
+	}
+	if resp.IPBehavior.Countries == nil {
+		t.Fatal("ip_behavior.countries encoded as null; expected []")
+	}
+	if resp.IPBehavior.Findings == nil {
+		t.Fatal("ip_behavior.findings encoded as null; expected []")
+	}
+	if resp.Webservers.Instances == nil {
+		t.Fatal("webservers.instances encoded as null; expected []")
+	}
+	if resp.Isolation.Nodes == nil {
+		t.Fatal("isolation.nodes encoded as null; expected []")
+	}
+	if resp.Firewall.Nodes == nil {
+		t.Fatal("firewall.nodes encoded as null; expected []")
+	}
+	if resp.PendingActions == nil {
+		t.Fatal("pending_actions encoded as null; expected []")
+	}
+}
+
 func controlRoomMetricDrilldown(lane controlRoomLane, label string) string {
 	for _, metric := range lane.Metrics {
 		if metric.Label == label {

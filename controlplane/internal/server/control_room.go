@@ -268,9 +268,13 @@ func periodDuration(period string) time.Duration {
 
 func (s *Server) buildControlRoomOverview(ctx context.Context, tenantID uuid.UUID, period string, since, now time.Time) controlRoomOverviewResponse {
 	resp := controlRoomOverviewResponse{
-		TenantID:    tenantID.String(),
-		GeneratedAt: formatTime(now),
-		Period:      period,
+		TenantID:       tenantID.String(),
+		GeneratedAt:    formatTime(now),
+		Period:         period,
+		Lanes:          make([]controlRoomLane, 0, 6),
+		TopIncidents:   make([]controlRoomIncident, 0),
+		StaleWarnings:  make([]controlRoomStaleWarning, 0),
+		PendingActions: make([]controlRoomAction, 0),
 	}
 
 	nodes, nodeTotal, err := s.store.ListNodes(ctx, tenantID, "", 500, 0)
@@ -355,7 +359,7 @@ func (s *Server) buildControlRoomOverview(ctx context.Context, tenantID uuid.UUI
 }
 
 func (s *Server) controlRoomIPBehavior(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]storage.IPBehaviorCountrySummary, []storage.IPBehaviorFinding) {
-	var countries []storage.IPBehaviorCountrySummary
+	countries := make([]storage.IPBehaviorCountrySummary, 0)
 	if store, ok := s.store.(ipBehaviorQueryStore); ok {
 		rows, err := store.ListIPBehaviorCountries(ctx, tenantID, since, "")
 		if err != nil {
@@ -364,7 +368,7 @@ func (s *Server) controlRoomIPBehavior(ctx context.Context, tenantID uuid.UUID, 
 			countries = rows
 		}
 	}
-	var findings []storage.IPBehaviorFinding
+	findings := make([]storage.IPBehaviorFinding, 0)
 	if store, ok := s.store.(ipBehaviorFindingPageStore); ok {
 		resolved := false
 		rows, _, err := store.ListIPBehaviorFindings(ctx, storage.IPBehaviorFindingFilter{TenantID: tenantID, Resolved: &resolved}, 10, 0)
@@ -378,14 +382,15 @@ func (s *Server) controlRoomIPBehavior(ctx context.Context, tenantID uuid.UUID, 
 }
 
 func (s *Server) controlRoomWebservers(ctx context.Context, tenantID uuid.UUID) controlRoomWebservers {
+	empty := controlRoomWebservers{Instances: make([]controlRoomWebserver, 0)}
 	store, ok := s.store.(controlRoomWebserverListStore)
 	if !ok {
-		return controlRoomWebservers{}
+		return empty
 	}
 	rows, _, err := store.ListWebserverInstances(ctx, tenantID, uuid.Nil, 100, 0)
 	if err != nil {
 		s.logger.Warn("control room webservers", zap.Error(err))
-		return controlRoomWebservers{}
+		return empty
 	}
 	out := controlRoomWebservers{Total: len(rows), Instances: make([]controlRoomWebserver, 0, len(rows))}
 	for _, row := range rows {
@@ -544,6 +549,9 @@ func (s *Server) controlRoomWebserverLastReceipt(ctx context.Context, tenantID, 
 }
 
 func newControlRoomIPBehavior(countries []storage.IPBehaviorCountrySummary, findings []storage.IPBehaviorFinding) controlRoomIPBehavior {
+	if countries == nil {
+		countries = make([]storage.IPBehaviorCountrySummary, 0)
+	}
 	out := controlRoomIPBehavior{Countries: countries, Findings: make([]controlRoomIPFinding, 0, len(findings))}
 	for _, country := range countries {
 		out.RequestCount += country.RequestCount
