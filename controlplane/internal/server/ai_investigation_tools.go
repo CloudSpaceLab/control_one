@@ -119,7 +119,7 @@ func (s *Server) aiInvestigationTools() map[string]aiInvestigationTool {
 		{
 			Name:        "log_tail",
 			Description: "Return bounded, redacted log excerpts for a node over a time window.",
-			MinRole:     roleViewer,
+			MinRole:     roleOperator,
 			Schema:      eventCaptureToolSchema(),
 			Run:         s.runLogTailTool,
 		},
@@ -381,7 +381,62 @@ func (s *Server) runEventCaptureTool(ctx context.Context, tc aiToolContext, inpu
 	if err != nil {
 		return aiToolExecution{}, err
 	}
+	if toolName == "root_cause_findings" {
+		if err := s.persistRootCauseFindings(ctx, filter, payload); err != nil {
+			return aiToolExecution{}, err
+		}
+	}
 	return aiToolExecution{Citation: llm.Citation{Tool: toolName, Label: label, Detail: nodeID.String()}, Payload: payload}, nil
+}
+
+func (s *Server) persistRootCauseFindings(ctx context.Context, filter EventCaptureFilter, payload any) error {
+	backend := s.aiOperatorBackend()
+	if backend == nil {
+		return nil
+	}
+	findings, ok := payload.([]RootCauseFinding)
+	if !ok || len(findings) == 0 {
+		return nil
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"kind":     "root-cause-findings",
+		"since":    filter.Since.Format(time.RFC3339),
+		"until":    filter.Until.Format(time.RFC3339),
+		"findings": findings,
+	})
+	if err != nil {
+		return err
+	}
+	summary := strings.TrimSpace(findings[0].Summary)
+	if summary == "" {
+		summary = "root cause finding"
+	}
+	dedup := fmt.Sprintf("root-cause:%s:%s:%s", filter.NodeID, filter.Since.Format(time.RFC3339), filter.Until.Format(time.RFC3339))
+	_, err = backend.CreateAIInvestigation(ctx, storage.CreateAIInvestigationParams{
+		TenantID:         filter.TenantID,
+		NodeID:           filter.NodeID,
+		TriggerType:      "root_cause",
+		TriggerEventType: "sprint6.event_capture",
+		TriggerDedupKey:  dedup,
+		Severity:         rootCauseSeverity(findings[0].Confidence),
+		Summary:          summary,
+		Evidence:         evidence,
+		Status:           storage.AIInvestigationStatusOpen,
+	})
+	return err
+}
+
+func rootCauseSeverity(confidence string) string {
+	switch strings.ToLower(strings.TrimSpace(confidence)) {
+	case "high":
+		return "warning"
+	case "medium":
+		return "info"
+	case "low":
+		return "info"
+	default:
+		return "info"
+	}
 }
 
 func (s *Server) runOperatorExecuteTool(context.Context, aiToolContext, map[string]any) (aiToolExecution, error) {

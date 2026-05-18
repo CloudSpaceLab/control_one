@@ -52,6 +52,14 @@ type agentMetricsIngestRequest struct {
 	NodeID    string         `json:"node_id"`
 	Timestamp string         `json:"timestamp"`
 	Metrics   map[string]any `json:"metrics"`
+	Samples   []metricSample `json:"samples"`
+}
+
+type metricSample struct {
+	Name   string            `json:"name"`
+	Value  any               `json:"value"`
+	Unit   string            `json:"unit"`
+	Labels map[string]string `json:"labels"`
 }
 
 // metricUnits maps the well-known agent metric names emitted by
@@ -117,7 +125,7 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows := make([]storage.CreateTelemetryMetricParams, 0, len(body.Metrics))
+	rows := make([]storage.CreateTelemetryMetricParams, 0, len(body.Metrics)+len(body.Samples))
 	for name, raw := range body.Metrics {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -137,6 +145,31 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 			Timestamp:   ts,
 		}
 		if unit, known := metricUnits[name]; known && unit != "" {
+			u := unit
+			row.MetricUnit = &u
+		}
+		rows = append(rows, row)
+	}
+	for _, sample := range body.Samples {
+		name := strings.TrimSpace(sample.Name)
+		if name == "" {
+			continue
+		}
+		val, ok := metricToFloat(sample.Value)
+		if !ok {
+			continue
+		}
+		row := storage.CreateTelemetryMetricParams{
+			TenantID:    tenantID,
+			NodeID:      nodeID,
+			MetricName:  name,
+			MetricValue: val,
+			Labels:      sample.Labels,
+			Timestamp:   ts,
+		}
+		if unit := strings.TrimSpace(sample.Unit); unit != "" {
+			row.MetricUnit = &unit
+		} else if unit, known := metricUnits[name]; known && unit != "" {
 			u := unit
 			row.MetricUnit = &u
 		}

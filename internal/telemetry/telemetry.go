@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -20,6 +21,8 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/scanner"
 	"github.com/CloudSpaceLab/control_one/internal/telemetry/logs"
 )
+
+const metricFileSizeBytes = "file.size.bytes"
 
 // Service encapsulates telemetry operations towards the control plane.
 type Service struct {
@@ -52,6 +55,13 @@ type compiledTrigger struct {
 	re      *regexp.Regexp
 	lastRun time.Time
 	runs    int
+}
+
+type metricSample struct {
+	Name   string            `json:"name"`
+	Value  any               `json:"value"`
+	Unit   string            `json:"unit,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // SendHeartbeat notifies the control plane that the node is alive.
@@ -103,6 +113,18 @@ func (s *Service) SendMetrics(ctx context.Context, nodeID string, metrics map[st
 	if err := s.postJSON(ctx, "/api/v1/telemetry", payload); err != nil {
 		s.log.Warn("send metrics failed", zap.Error(err))
 	}
+}
+
+func (s *Service) sendMetricSamples(ctx context.Context, nodeID string, samples []metricSample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	payload := map[string]any{
+		"node_id":   nodeID,
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"samples":   samples,
+	}
+	return s.postJSON(ctx, "/api/v1/telemetry", payload)
 }
 
 // SendCompliance reports compliance scan results.
@@ -159,7 +181,70 @@ func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources
 
 		formatter := logs.GetFormatter(source.Formatter)
 		go s.consumeLogs(ctx, nodeID, source, formatter, rawCh)
+		if len(source.Paths) > 0 {
+			go s.runFileSizeSampler(ctx, nodeID, source)
+		}
 	}
+}
+
+func (s *Service) runFileSizeSampler(ctx context.Context, nodeID string, source config.LogSourceConfig) {
+	interval := source.PollInterval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	s.sendFileSizeMetrics(ctx, nodeID, source)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sendFileSizeMetrics(ctx, nodeID, source)
+		}
+	}
+}
+
+func (s *Service) sendFileSizeMetrics(ctx context.Context, nodeID string, source config.LogSourceConfig) {
+	samples := fileSizeMetricSamples(source)
+	if len(samples) == 0 {
+		return
+	}
+	if err := s.sendMetricSamples(ctx, nodeID, samples); err != nil {
+		s.log.Debug("send file-size metrics failed", zap.String("program", source.Program), zap.Error(err))
+	}
+}
+
+func fileSizeMetricSamples(source config.LogSourceConfig) []metricSample {
+	samples := make([]metricSample, 0, len(source.Paths))
+	for _, path := range source.Paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		labels := make(map[string]string, len(source.Labels)+3)
+		for key, value := range source.Labels {
+			if strings.TrimSpace(key) == "" {
+				continue
+			}
+			labels[key] = value
+		}
+		labels["path"] = path
+		labels["program"] = source.Program
+		labels["source"] = "file"
+		samples = append(samples, metricSample{
+			Name:   metricFileSizeBytes,
+			Value:  float64(info.Size()),
+			Unit:   "bytes",
+			Labels: labels,
+		})
+	}
+	return samples
 }
 
 func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source config.LogSourceConfig, out chan<- logs.RawLog) {

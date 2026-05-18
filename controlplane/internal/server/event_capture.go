@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,19 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	metricnames "github.com/CloudSpaceLab/control_one/internal/metrics"
 )
+
+const (
+	metricFileSizeBytes     = "file.size.bytes"
+	maxLogTailRows          = 20
+	maxLogTailMessageBytes  = 2048
+	maxLogTailResponseBytes = 16 * 1024
+)
+
+var secretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(password|passwd|pwd)\s*=\s*[^,\s;]+`),
+	regexp.MustCompile(`(?i)(api[_-]?key|secret|token)\s*=\s*[^,\s;]+`),
+	regexp.MustCompile(`(?i)bearer\s+[a-z0-9._~+/=-]+`),
+}
 
 type FlowDeltaRow struct {
 	TenantID    uuid.UUID `json:"tenant_id"`
@@ -57,11 +71,14 @@ type LogTailRow struct {
 }
 
 type RootCauseFinding struct {
-	TenantID    uuid.UUID `json:"tenant_id"`
-	NodeID      uuid.UUID `json:"node_id"`
-	Summary     string    `json:"summary"`
-	Confidence  string    `json:"confidence"`
-	EvidenceIDs []string  `json:"evidence_ids"`
+	TenantID          uuid.UUID `json:"tenant_id"`
+	NodeID            uuid.UUID `json:"node_id"`
+	Summary           string    `json:"summary"`
+	Confidence        string    `json:"confidence"`
+	EvidenceIDs       []string  `json:"evidence_ids"`
+	RecommendedAction string    `json:"recommended_action,omitempty"`
+	ApprovalKind      string    `json:"approval_kind,omitempty"`
+	ApprovalPath      string    `json:"approval_path,omitempty"`
 }
 
 type EventCaptureFilter struct {
@@ -97,7 +114,11 @@ func (s *Server) handleNodeEventCapture(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	roles := []string{roleViewer, roleOperator, roleAdmin}
+	if kind == "log-tail" {
+		roles = []string{roleOperator, roleAdmin}
+	}
+	if _, ok := s.authorize(w, r, roles...); !ok {
 		return
 	}
 	tenantID, ok := tenantFromQuery(w, r)
@@ -164,9 +185,17 @@ func (s *Server) eventCapturePayload(ctx context.Context, kind string, filter Ev
 		case "resource-delta":
 			return store.ListResourceDeltas(ctx, filter)
 		case "log-tail":
-			return store.ListLogTail(ctx, filter)
+			rows, err := store.ListLogTail(ctx, filter)
+			if err != nil {
+				return nil, err
+			}
+			return sanitizeLogTailRows(rows), nil
 		case "root-cause-findings":
-			return store.ListRootCauseFindings(ctx, filter)
+			rows, err := store.ListRootCauseFindings(ctx, filter)
+			if err != nil {
+				return nil, err
+			}
+			return enrichRootCauseFindings(rows), nil
 		default:
 			return nil, fmt.Errorf("unknown event capture kind %s", kind)
 		}
@@ -273,8 +302,78 @@ func rollupFlowDeltas(filter EventCaptureFilter, current, previous []doris.Conne
 	return out
 }
 
-func (s *Server) listFileGrowthDeltas(context.Context, EventCaptureFilter) ([]FileGrowthDeltaRow, error) {
-	return []FileGrowthDeltaRow{}, nil
+func (s *Server) listFileGrowthDeltas(ctx context.Context, filter EventCaptureFilter) ([]FileGrowthDeltaRow, error) {
+	if s == nil || s.store == nil {
+		return []FileGrowthDeltaRow{}, nil
+	}
+	rows, _, err := s.store.ListTelemetryMetrics(ctx, storage.TelemetryMetricFilter{
+		TenantID:   filter.TenantID,
+		NodeID:     filter.NodeID,
+		MetricName: metricFileSizeBytes,
+		Since:      &filter.Since,
+		Until:      &filter.Until,
+	}, 5000, 0)
+	if err != nil {
+		return nil, err
+	}
+	return fileGrowthDeltasFromTelemetryMetrics(filter, rows), nil
+}
+
+func fileGrowthDeltasFromTelemetryMetrics(filter EventCaptureFilter, metrics []storage.TelemetryMetric) []FileGrowthDeltaRow {
+	type span struct {
+		first storage.TelemetryMetric
+		last  storage.TelemetryMetric
+		seen  bool
+	}
+	byPath := map[string]*span{}
+	for _, metric := range metrics {
+		if metric.TenantID != filter.TenantID || metric.NodeID != filter.NodeID || metric.MetricName != metricFileSizeBytes {
+			continue
+		}
+		path := strings.TrimSpace(firstNonEmpty(metric.Labels["path"], metric.Labels["file_path"], metric.Labels["name"]))
+		if path == "" {
+			continue
+		}
+		item := byPath[path]
+		if item == nil {
+			item = &span{first: metric, last: metric, seen: true}
+			byPath[path] = item
+			continue
+		}
+		if metric.Timestamp.Before(item.first.Timestamp) {
+			item.first = metric
+		}
+		if metric.Timestamp.After(item.last.Timestamp) {
+			item.last = metric
+		}
+	}
+	out := make([]FileGrowthDeltaRow, 0, len(byPath))
+	for path, item := range byPath {
+		if !item.seen {
+			continue
+		}
+		start := int64(item.first.MetricValue)
+		end := int64(item.last.MetricValue)
+		if end < start {
+			continue
+		}
+		out = append(out, FileGrowthDeltaRow{
+			TenantID:   filter.TenantID,
+			NodeID:     filter.NodeID,
+			Path:       path,
+			StartBytes: start,
+			EndBytes:   end,
+			Since:      item.first.Timestamp,
+			Until:      item.last.Timestamp,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].EndBytes-out[i].StartBytes > out[j].EndBytes-out[j].StartBytes
+	})
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out
 }
 
 func (s *Server) listResourceDeltas(ctx context.Context, filter EventCaptureFilter) ([]ResourceDeltaRow, error) {
@@ -343,7 +442,7 @@ func (s *Server) listLogTail(ctx context.Context, filter EventCaptureFilter) ([]
 				Timestamp: row.Timestamp,
 			})
 		}
-		return out, nil
+		return sanitizeLogTailRows(out), nil
 	}
 	if s == nil || s.store == nil {
 		return []LogTailRow{}, nil
@@ -368,7 +467,7 @@ func (s *Server) listLogTail(ctx context.Context, filter EventCaptureFilter) ([]
 			Timestamp: row.Timestamp,
 		})
 	}
-	return out, nil
+	return sanitizeLogTailRows(out), nil
 }
 
 func (s *Server) listRootCauseFindings(ctx context.Context, filter EventCaptureFilter) ([]RootCauseFinding, error) {
@@ -393,11 +492,14 @@ func (s *Server) listRootCauseFindings(ctx context.Context, filter EventCaptureF
 		return []RootCauseFinding{}, nil
 	}
 	return []RootCauseFinding{{
-		TenantID:    filter.TenantID,
-		NodeID:      filter.NodeID,
-		Summary:     summary,
-		Confidence:  rootCauseConfidence(flows, files, resources, logs),
-		EvidenceIDs: rootCauseEvidenceIDs(flows, files, resources, logs),
+		TenantID:          filter.TenantID,
+		NodeID:            filter.NodeID,
+		Summary:           summary,
+		Confidence:        rootCauseConfidence(flows, files, resources, logs),
+		EvidenceIDs:       rootCauseEvidenceIDs(flows, files, resources, logs),
+		RecommendedAction: recommendedRootCauseAction(files, logs),
+		ApprovalKind:      "remediation",
+		ApprovalPath:      "/api/v1/remediation/approvals",
 	}}, nil
 }
 
@@ -461,6 +563,102 @@ func rootCauseEvidenceIDs(flows []FlowDeltaRow, files []FileGrowthDeltaRow, reso
 		ids = append(ids, "log-tail")
 	}
 	return ids
+}
+
+func enrichRootCauseFindings(findings []RootCauseFinding) []RootCauseFinding {
+	out := make([]RootCauseFinding, 0, len(findings))
+	for _, finding := range findings {
+		finding.EvidenceIDs = canonicalEvidenceIDs(finding.EvidenceIDs)
+		if finding.RecommendedAction == "" {
+			finding.RecommendedAction = "review and remediate the cited evidence through the approval workflow"
+		}
+		if finding.ApprovalKind == "" {
+			finding.ApprovalKind = "remediation"
+		}
+		if finding.ApprovalPath == "" {
+			finding.ApprovalPath = "/api/v1/remediation/approvals"
+		}
+		out = append(out, finding)
+	}
+	return out
+}
+
+func canonicalEvidenceIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		canonical := strings.ToLower(strings.TrimSpace(id))
+		switch canonical {
+		case "flow":
+			canonical = "flow-delta"
+		case "files", "file", "file-growth":
+			canonical = "file-growth-delta"
+		case "resources", "resource":
+			canonical = "resource-delta"
+		case "logs", "log":
+			canonical = "log-tail"
+		}
+		if canonical == "" {
+			continue
+		}
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		out = append(out, canonical)
+	}
+	return out
+}
+
+func recommendedRootCauseAction(files []FileGrowthDeltaRow, logs []LogTailRow) string {
+	if len(files) > 0 {
+		return "archive and rotate " + files[0].Path + " through remediation approval"
+	}
+	if len(logs) > 0 {
+		return "review noisy log source " + logs[0].Source + " through remediation approval"
+	}
+	return "review and remediate the cited evidence through the approval workflow"
+}
+
+func sanitizeLogTailRows(rows []LogTailRow) []LogTailRow {
+	out := make([]LogTailRow, 0, minInt(len(rows), maxLogTailRows))
+	totalBytes := 0
+	for _, row := range rows {
+		if len(out) >= maxLogTailRows || totalBytes >= maxLogTailResponseBytes {
+			break
+		}
+		row.Message = redactLogMessage(row.Message)
+		if len(row.Message) > maxLogTailMessageBytes {
+			row.Message = row.Message[:maxLogTailMessageBytes] + "...[truncated]"
+		}
+		totalBytes += len(row.Message)
+		out = append(out, row)
+	}
+	return out
+}
+
+func redactLogMessage(message string) string {
+	out := message
+	for _, pattern := range secretPatterns {
+		out = pattern.ReplaceAllStringFunc(out, func(match string) string {
+			if idx := strings.Index(match, "="); idx >= 0 {
+				return strings.TrimSpace(match[:idx+1]) + "[REDACTED]"
+			}
+			fields := strings.Fields(match)
+			if len(fields) > 0 {
+				return fields[0] + " [REDACTED]"
+			}
+			return "[REDACTED]"
+		})
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func firstNonEmpty(values ...string) string {

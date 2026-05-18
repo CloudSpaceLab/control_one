@@ -1223,32 +1223,34 @@ type fakeStore struct {
 	// nodeLabels mirrors the nodes.labels JSONB column introduced by
 	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
 	// assert label propagation without depending on A's merge. Keyed by node id.
-	nodeLabels           map[uuid.UUID]map[string]any
-	leases               map[uuid.UUID]storage.RemediationLease
-	enrollmentTokens     map[string]storage.EnrollmentToken // keyed by token hash
-	remediationConfigs   map[uuid.UUID]storage.TenantRemediationConfig
-	eventFilters         map[uuid.UUID]storage.TenantEventFilters
-	knownDestinations    map[string]int64
-	knownExeHashes       map[string]int64
-	knownQueryHashes     map[string]int64
-	remediationApprovals map[uuid.UUID]storage.RemediationApproval
-	patchApprovals       map[uuid.UUID]storage.PatchApproval
-	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
-	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
-	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
-	nodePackages         map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
-	nodeServices         map[uuid.UUID][]storage.NodeService
-	firewallStates       map[uuid.UUID]storage.NodeFirewallState
-	nodeHealthScores     map[uuid.UUID]storage.NodeHealthScore
-	alerts               []storage.Alert
-	aiConfig             *storage.AIConfig
-	flowDeltas           []FlowDeltaRow
-	fileGrowthDeltas     []FileGrowthDeltaRow
-	resourceDeltas       []ResourceDeltaRow
-	logTailRows          []LogTailRow
-	rootCauseFindings    []RootCauseFinding
-	aiInvestigations     []storage.AIInvestigation
-	aiOperatorProposals  []storage.AIOperatorProposal
+	nodeLabels             map[uuid.UUID]map[string]any
+	leases                 map[uuid.UUID]storage.RemediationLease
+	enrollmentTokens       map[string]storage.EnrollmentToken // keyed by token hash
+	remediationConfigs     map[uuid.UUID]storage.TenantRemediationConfig
+	eventFilters           map[uuid.UUID]storage.TenantEventFilters
+	knownDestinations      map[string]int64
+	knownExeHashes         map[string]int64
+	knownQueryHashes       map[string]int64
+	remediationApprovals   map[uuid.UUID]storage.RemediationApproval
+	patchApprovals         map[uuid.UUID]storage.PatchApproval
+	circuitBreakers        map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
+	remediationFailRates   map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
+	nodeCertHistory        map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+	nodePackages           map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
+	nodeServices           map[uuid.UUID][]storage.NodeService
+	firewallStates         map[uuid.UUID]storage.NodeFirewallState
+	nodeHealthScores       map[uuid.UUID]storage.NodeHealthScore
+	alerts                 []storage.Alert
+	aiConfig               *storage.AIConfig
+	flowDeltas             []FlowDeltaRow
+	fileGrowthDeltas       []FileGrowthDeltaRow
+	resourceDeltas         []ResourceDeltaRow
+	logTailRows            []LogTailRow
+	rootCauseFindings      []RootCauseFinding
+	aiInvestigations       []storage.AIInvestigation
+	aiOperatorProposals    []storage.AIOperatorProposal
+	telemetryMetricRows    []storage.TelemetryMetric
+	telemetryMetricCreates []storage.CreateTelemetryMetricParams
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -2097,7 +2099,27 @@ func (f *fakeStore) UpdateRollout(_ context.Context, id uuid.UUID, params storag
 }
 
 func (f *fakeStore) ListTelemetryMetrics(_ context.Context, filter storage.TelemetryMetricFilter, limit, offset int) ([]storage.TelemetryMetric, int, error) {
-	return nil, 0, nil
+	out := make([]storage.TelemetryMetric, 0, len(f.telemetryMetricRows))
+	for _, row := range f.telemetryMetricRows {
+		if filter.TenantID != uuid.Nil && row.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && row.NodeID != filter.NodeID {
+			continue
+		}
+		if strings.TrimSpace(filter.MetricName) != "" && row.MetricName != strings.TrimSpace(filter.MetricName) {
+			continue
+		}
+		if filter.Since != nil && row.Timestamp.Before(*filter.Since) {
+			continue
+		}
+		if filter.Until != nil && row.Timestamp.After(*filter.Until) {
+			continue
+		}
+		out = append(out, row)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Timestamp.After(out[j].Timestamp) })
+	return out, len(out), nil
 }
 
 func (f *fakeStore) ListTelemetryLogs(_ context.Context, filter storage.TelemetryLogFilter, limit, offset int) ([]storage.TelemetryLog, int, error) {
@@ -2105,6 +2127,7 @@ func (f *fakeStore) ListTelemetryLogs(_ context.Context, filter storage.Telemetr
 }
 
 func (f *fakeStore) CreateTelemetryMetrics(_ context.Context, metrics []storage.CreateTelemetryMetricParams) error {
+	f.telemetryMetricCreates = append(f.telemetryMetricCreates, metrics...)
 	return nil
 }
 
