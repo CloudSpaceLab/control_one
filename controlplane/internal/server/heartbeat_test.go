@@ -537,6 +537,112 @@ func TestHeartbeatPersistsServerPurposeLabels(t *testing.T) {
 	}
 }
 
+func TestHeartbeatDispatchesAgentUpdateJobIDForCapableAgent(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	jobID := uuid.New()
+	payload, _ := json.Marshal(map[string]string{"node_id": nodeID.String(), "target_version": "main-test"})
+	base := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "agent-host",
+			State:     storage.NodeStateActive,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Labels:    map[string]any{},
+		}},
+		jobs: map[uuid.UUID]*storage.Job{
+			jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeAgentUpdate, Status: storage.JobStatusQueued, Payload: payload, CreatedAt: time.Now()},
+		},
+	}
+	store := &agentUpdatePendingStore{fakeStore: base, pending: base.jobs[jobID]}
+	cfg := &config.Config{HTTP: config.HTTPConfig{Address: ":0"}}
+	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
+	t.Cleanup(func() { srv.stopEnrollmentReaper() })
+
+	body, _ := json.Marshal(map[string]any{
+		"agent_version": "dev",
+		"capabilities":  []string{agentCapabilityUpdateJobStatus},
+	})
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	var resp heartbeatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := JobTypeAgentUpdate + ":" + jobID.String()
+	if len(resp.PendingActions) != 1 || resp.PendingActions[0] != want {
+		t.Fatalf("pending_actions = %#v, want [%s]", resp.PendingActions, want)
+	}
+	if got := base.jobs[jobID].Status; got != storage.JobStatusRunning {
+		t.Fatalf("job status = %s, want running", got)
+	}
+}
+
+func TestHeartbeatAgentUpdateCompletionMarksJobSucceeded(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	jobID := uuid.New()
+	store := &fakeStore{jobs: map[uuid.UUID]*storage.Job{
+		jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeAgentUpdate, Status: storage.JobStatusRunning},
+	}}
+	srv := &Server{logger: zap.NewNop(), store: store}
+
+	srv.processHeartbeatCompletedActions(context.Background(), uuid.New(), []heartbeatCompletedAction{{
+		Action:   JobTypeAgentUpdate,
+		JobID:    jobID.String(),
+		Status:   "succeeded",
+		Metadata: map[string]any{"release_seq": float64(5)},
+	}})
+
+	if got := store.jobs[jobID].Status; got != storage.JobStatusSucceeded {
+		t.Fatalf("job status = %s, want succeeded", got)
+	}
+}
+
+func TestHeartbeatReleaseSeqRetiresRunningAgentUpdateJob(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	jobID := uuid.New()
+	payload, _ := json.Marshal(map[string]string{"node_id": nodeID.String(), "target_version": "legacy"})
+	store := &fakeStore{jobs: map[uuid.UUID]*storage.Job{
+		jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeAgentUpdate, Status: storage.JobStatusRunning, Payload: payload},
+	}}
+	srv := &Server{logger: zap.NewNop(), store: store}
+	node := &storage.Node{ID: nodeID, TenantID: tenantID}
+
+	srv.retireAgentUpdateJobsFromHeartbeat(context.Background(), node, heartbeatRequest{
+		AgentVersion:    "dev (linux/amd64)",
+		AgentReleaseSeq: 5,
+	})
+
+	if got := store.jobs[jobID].Status; got != storage.JobStatusSucceeded {
+		t.Fatalf("job status = %s, want succeeded", got)
+	}
+}
+
+type agentUpdatePendingStore struct {
+	*fakeStore
+	pending *storage.Job
+}
+
+func (s *agentUpdatePendingStore) GetPendingAgentUpdateJob(_ context.Context, _ uuid.UUID) (*storage.Job, error) {
+	return s.pending, nil
+}
+
 // patchCompletionStore wraps fakeStore to (a) return a known
 // node_patch_state for any job_id and (b) record which state IDs were marked
 // applied or failed. This lets the consumer-side test observe whether the

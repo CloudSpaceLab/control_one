@@ -32,14 +32,17 @@ const reaperScanInterval = time.Minute
 const (
 	EventEnrollmentCompleted = "enrollment.completed"
 	EventEnrollmentTimedOut  = "enrollment.timed_out"
+
+	agentCapabilityUpdateJobStatus = "agent_update_job_status.v1"
 )
 
 // heartbeatRequest is the body of POST /api/v1/nodes/:id/heartbeat.
 // Everything is optional — the essential signal is that the agent called us,
 // using a client cert whose CN matches the node id.
 type heartbeatRequest struct {
-	AgentVersion string   `json:"agent_version"`
-	Capabilities []string `json:"capabilities,omitempty"`
+	AgentVersion    string   `json:"agent_version"`
+	Capabilities    []string `json:"capabilities,omitempty"`
+	AgentReleaseSeq int      `json:"agent_release_seq,omitempty"`
 
 	// Inventory + firewall snapshot fields. Optional. Old agents send none of
 	// these; new agents send firewall every heartbeat and os_packages only
@@ -54,8 +57,7 @@ type heartbeatRequest struct {
 	FirewallState  *heartbeatFirewallState  `json:"firewall_state,omitempty"`
 
 	// CompletedActions reports the outcome of pending_actions the agent
-	// processed since the last heartbeat. Only firewall.* actions use it
-	// today; agent_update has its own retirement path.
+	// processed since the last heartbeat.
 	CompletedActions []heartbeatCompletedAction `json:"completed_actions,omitempty"`
 }
 
@@ -201,6 +203,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
 	s.processHeartbeatCompletedActions(r.Context(), nodeID, body.CompletedActions)
+	s.retireAgentUpdateJobsFromHeartbeat(r.Context(), node, body)
 
 	activated, resultState := s.maybeActivatePendingNode(r.Context(), node)
 
@@ -240,7 +243,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 	// Check for queued self-update and signal the agent.
 	if pendingJob, jerr := s.store.GetPendingAgentUpdateJob(r.Context(), nodeID); jerr == nil && pendingJob != nil {
-		resp.PendingActions = append(resp.PendingActions, "agent_update")
+		action := JobTypeAgentUpdate
+		if nodeAdvertisesCapability(node, agentCapabilityUpdateJobStatus) {
+			action += ":" + pendingJob.ID.String()
+		}
+		resp.PendingActions = append(resp.PendingActions, action)
 		// Transition job to running so it won't appear again on the next heartbeat
 		// until the agent confirms completion (or the job times out).
 		if uerr := s.store.UpdateJobStatus(r.Context(), pendingJob.ID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
@@ -429,8 +436,7 @@ func sanitizeStringSlice(values []string, limit int) []string {
 }
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
-// dispatched on previous heartbeats. Currently only firewall.rule_add /
-// firewall.rule_delete use this — agent_update has its own retirement path.
+// dispatched on previous heartbeats.
 func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UUID, completed []heartbeatCompletedAction) {
 	if len(completed) == 0 {
 		return
@@ -442,6 +448,26 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			continue
 		}
 		switch c.Action {
+		case JobTypeAgentUpdate:
+			if c.Status == "succeeded" {
+				fields := map[string]any{}
+				if seq := metadataInt(c.Metadata, "release_seq"); seq > 0 {
+					fields["release_seq"] = seq
+				}
+				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusSucceeded, "agent reported update success", fields); jerr != nil {
+					s.logger.Warn("agent update job mark succeeded",
+						zap.String("job_id", jobID.String()), zap.Error(jerr))
+				}
+			} else {
+				errMsg := strings.TrimSpace(c.Error)
+				if errMsg == "" {
+					errMsg = "agent reported update failure"
+				}
+				if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg}); jerr != nil {
+					s.logger.Warn("agent update job mark failed",
+						zap.String("job_id", jobID.String()), zap.Error(jerr))
+				}
+			}
 		case JobTypeFirewallRuleAdd, JobTypeFirewallRuleDelete:
 			rule, rerr := s.store.GetNodeFirewallRuleByJobID(ctx, jobID)
 			if rerr != nil {
@@ -529,6 +555,55 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			continue
 		}
 	}
+}
+
+func (s *Server) retireAgentUpdateJobsFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil || body.AgentReleaseSeq <= 0 {
+		return
+	}
+	const pageSize = 100
+	var running []storage.Job
+	for offset := 0; ; offset += pageSize {
+		jobs, total, err := s.store.ListJobs(ctx, node.TenantID, JobTypeAgentUpdate, storage.JobStatusRunning, pageSize, offset)
+		if err != nil {
+			s.logger.Warn("list running agent update jobs",
+				zap.String("node_id", node.ID.String()),
+				zap.Error(err))
+			return
+		}
+		running = append(running, jobs...)
+		if offset+len(jobs) >= total || len(jobs) == 0 {
+			break
+		}
+	}
+	for _, job := range running {
+		if !agentUpdateJobTargetsNode(job, node.ID) {
+			continue
+		}
+		fields := map[string]any{"release_seq": body.AgentReleaseSeq}
+		if strings.TrimSpace(body.AgentVersion) != "" {
+			fields["agent_version"] = body.AgentVersion
+		}
+		if err := s.store.UpdateJobStatus(ctx, job.ID, storage.JobStatusSucceeded, "agent heartbeat confirmed updated release", fields); err != nil {
+			s.logger.Warn("agent update job mark confirmed",
+				zap.String("job_id", job.ID.String()),
+				zap.String("node_id", node.ID.String()),
+				zap.Error(err))
+		}
+	}
+}
+
+func agentUpdateJobTargetsNode(job storage.Job, nodeID uuid.UUID) bool {
+	if nodeID == uuid.Nil || len(job.Payload) == 0 {
+		return false
+	}
+	var payload struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(payload.NodeID), nodeID.String())
 }
 
 // metadataInt is a tiny helper for plucking JSON-decoded numbers out of a

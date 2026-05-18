@@ -23,8 +23,9 @@ import (
 // fields are optional and gated by delta logic to avoid resending unchanged
 // data on every interval.
 type heartbeatPayload struct {
-	AgentVersion string   `json:"agent_version"`
-	Capabilities []string `json:"capabilities,omitempty"`
+	AgentVersion    string   `json:"agent_version"`
+	Capabilities    []string `json:"capabilities,omitempty"`
+	AgentReleaseSeq int      `json:"agent_release_seq,omitempty"`
 
 	// Inventory fields. PackageHash is always sent when collection succeeds;
 	// OSPackages is the full list and is only included when the hash changed,
@@ -161,6 +162,9 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 		AgentVersion: heartbeatAgentVersion(),
 		Capabilities: heartbeatAgentCapabilities(),
 	}
+	if selfUpdater != nil {
+		payload.AgentReleaseSeq = selfUpdater.CurrentReleaseSeq()
+	}
 	enrichHeartbeatPayload(&payload, log)
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -211,9 +215,13 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 	// Dispatch pending actions instructed by the control plane.
 	for _, action := range ack.PendingActions {
 		switch {
-		case action == "agent_update" && selfUpdater != nil:
+		case (action == agentUpdateJob || strings.HasPrefix(action, agentUpdateJob+":")) && selfUpdater != nil:
+			jobID := ""
+			if _, rawID, ok := strings.Cut(action, ":"); ok {
+				jobID = rawID
+			}
 			log.Info("control plane requested agent self-update")
-			go selfUpdater.TriggerUpdate(ctx, client, log)
+			go selfUpdater.TriggerUpdate(ctx, client, log, jobID)
 		case strings.HasPrefix(action, "firewall.rule_add:"),
 			strings.HasPrefix(action, "firewall.rule_delete:"):
 			// Run synchronously — completion gets reported on the *next*
@@ -263,6 +271,7 @@ func heartbeatAgentCapabilities() []string {
 		"webserver_control.v1",
 		"server_purpose_inventory.v1",
 		"connection_lifecycle_headers.v1",
+		"agent_update_job_status.v1",
 	}
 }
 

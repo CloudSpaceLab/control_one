@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -99,4 +100,54 @@ func TestSendHeartbeatTransmitsPayload(t *testing.T) {
 	} else if gotPayload.FirewallState.Type == "" {
 		t.Errorf("firewall_state.type is empty, expected at least \"none\"")
 	}
+}
+
+func TestSendHeartbeatReportsReleaseSeqAndDispatchesAgentUpdateJob(t *testing.T) {
+	update := &fakeSelfUpdater{seq: 7, called: make(chan string, 1)}
+	var gotPayload heartbeatPayload
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotPayload)
+		ack := heartbeatAckResponse{
+			NodeID:         "11111111-1111-1111-1111-111111111111",
+			State:          "active",
+			LastSeenAt:     "2026-05-05T00:00:00Z",
+			PendingActions: []string{agentUpdateJob + ":job-123"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ack)
+	}))
+	defer srv.Close()
+
+	client, err := api.NewClient(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatalf("api.NewClient: %v", err)
+	}
+
+	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, update); err != nil {
+		t.Fatalf("sendHeartbeat: %v", err)
+	}
+	if gotPayload.AgentReleaseSeq != 7 {
+		t.Fatalf("agent_release_seq = %d, want 7", gotPayload.AgentReleaseSeq)
+	}
+	select {
+	case got := <-update.called:
+		if got != "job-123" {
+			t.Fatalf("TriggerUpdate jobID = %q, want job-123", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TriggerUpdate was not called")
+	}
+}
+
+type fakeSelfUpdater struct {
+	seq    int
+	called chan string
+}
+
+func (f *fakeSelfUpdater) CurrentReleaseSeq() int { return f.seq }
+
+func (f *fakeSelfUpdater) TriggerUpdate(_ context.Context, _ *api.Client, _ *zap.Logger, jobID string) {
+	f.called <- jobID
 }
