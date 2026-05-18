@@ -48,6 +48,20 @@ func TestIPBehaviorScoringRequiresCorroboration(t *testing.T) {
 	if score < 70 || category != "credential_attack" || corroborating == 0 {
 		t.Fatalf("expected high credential attack score, score=%d category=%s corroborating=%d", score, category, corroborating)
 	}
+
+	knownBad := &ipBehaviorBucket{
+		srcIP:       "45.135.193.156",
+		countryCode: "DE",
+		lastTS:      time.Date(2026, 5, 18, 18, 0, 0, 0, time.UTC),
+		count:       1,
+		threatScore: 100,
+		statuses:    map[int]int{403: 1},
+		paths:       map[string]int{"/.env": 1},
+	}
+	score, category, _, corroborating = scoreIPBehaviorBucket(knownBad)
+	if score != 100 || category != "known_malicious_source" || corroborating == 0 {
+		t.Fatalf("expected known bad source to reach 100 confidence, score=%d category=%s corroborating=%d", score, category, corroborating)
+	}
 }
 
 func TestDetectIPBehaviorUsesCurrentWindowsAcrossBatches(t *testing.T) {

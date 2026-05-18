@@ -991,9 +991,13 @@ func scoreIPBehaviorBucketWithBaselines(b *ipBehaviorBucket, baselines []storage
 		reasons = append(reasons, fmt.Sprintf("large outbound transfer: %d MiB", b.bytesOut/(1024*1024)))
 	}
 	if b.threatScore > 0 {
-		score += 25
+		if b.threatScore >= 90 && b.threatScore > score {
+			score = b.threatScore
+		} else {
+			score += 25
+		}
 		corroborating++
-		reasons = append(reasons, fmt.Sprintf("IP reputation score %d", b.threatScore))
+		reasons = append(reasons, fmt.Sprintf("known threat intelligence confidence %d", b.threatScore))
 	}
 	if bucketSuspiciousPathHits(b) >= 3 {
 		score += 10
@@ -1033,6 +1037,8 @@ func scoreIPBehaviorBucketWithBaselines(b *ipBehaviorBucket, baselines []storage
 	switch {
 	case ipBehaviorWebshellCorrelation(b):
 		category = "webshell_callback"
+	case b.threatScore >= 90:
+		category = "known_malicious_source"
 	case b.trustedPartner && (baselineCategory != "" || baselineScore > 0):
 		category = "partner_drift"
 	case authFailures >= 5 || b.authSuccessAfterFailure > 0:
@@ -1280,6 +1286,7 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 	})
 	if err != nil {
 		if errors.Is(err, storage.ErrAlertDeduped) {
+			s.ensureAutoBlockForConfidenceAlert(ctx, tenantID, nodeID, b, score, category, summary)
 			return
 		}
 		if s.logger != nil {
@@ -1305,6 +1312,109 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 		NodeID:   nodeArg,
 		Payload:  payload,
 	})
+	s.ensureAutoBlockForConfidenceAlert(ctx, tenantID, nodeID, b, score, category, summary)
+}
+
+func (s *Server) ensureAutoBlockForConfidenceAlert(ctx context.Context, tenantID, nodeID uuid.UUID, b *ipBehaviorBucket, score int, category, summary string) {
+	if s == nil || s.store == nil || tenantID == uuid.Nil || nodeID == uuid.Nil || b == nil || score < 100 {
+		return
+	}
+	if strings.TrimSpace(b.srcIP) == "" || net.ParseIP(b.srcIP) == nil {
+		return
+	}
+	if !strings.EqualFold(category, "known_malicious_source") && b.threatScore < 100 {
+		return
+	}
+	store, ok := s.store.(ipBlockProposalStore)
+	if !ok {
+		return
+	}
+	cidr := exactCIDRForIP(b.srcIP)
+	if cidr == "" {
+		return
+	}
+	if protected := s.protectedIPBlockReason(ctx, tenantID, cidr); protected != "" {
+		if s.logger != nil {
+			s.logger.Warn("skip automatic threat-intel block for protected target", zap.String("ip_cidr", cidr), zap.String("reason", protected))
+		}
+		return
+	}
+	if status, msg := s.blockProposalSafetyViolation(ctx, tenantID, b.serverGroup); status != 0 {
+		if s.logger != nil {
+			s.logger.Warn("skip automatic threat-intel block: safety gate", zap.Int("status", status), zap.String("reason", msg), zap.String("ip_cidr", cidr))
+		}
+		return
+	}
+	if query, ok := s.store.(ipBlockProposalQueryStore); ok {
+		rows, _, err := query.ListIPBlocklistEntries(ctx, storage.IPBlocklistEntryFilter{
+			TenantID:   tenantID,
+			IPCIDR:     cidr,
+			TargetType: "node",
+			TargetID:   nodeID,
+		}, 20, 0)
+		if err == nil {
+			for _, row := range rows {
+				switch strings.ToLower(strings.TrimSpace(row.Status)) {
+				case "proposed", "approved", "canary", "dispatching", "active":
+					return
+				}
+			}
+		}
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	reason := strings.TrimSpace(summary)
+	if reason == "" {
+		reason = fmt.Sprintf("100%% confidence known malicious source %s", cidr)
+	}
+	entry, err := store.CreateIPBlocklistEntry(ctx, storage.CreateIPBlocklistEntryParams{
+		TenantID:    tenantID,
+		IPCIDR:      cidr,
+		Scope:       "node",
+		TargetType:  "node",
+		TargetID:    &nodeID,
+		ServerGroup: b.serverGroup,
+		App:         b.app,
+		Enforcement: "firewall",
+		Reason:      "Auto-block: " + reason,
+		Score:       score,
+		ExpiresAt:   &expiresAt,
+	})
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("create automatic threat-intel block", zap.String("ip_cidr", cidr), zap.Error(err))
+		}
+		return
+	}
+	action, err := s.recordBlockProposalEntityAction(ctx, entry, nil, now)
+	if err != nil {
+		_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "record entity action: "+err.Error())
+		return
+	}
+	if _, err := store.SetIPBlocklistEntryEntityAction(ctx, entry.ID, action.ID); err != nil && s.logger != nil {
+		s.logger.Warn("link automatic threat-intel block action", zap.String("block_entry_id", entry.ID.String()), zap.Error(err))
+	}
+	if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "dispatching", nil, ""); err != nil && s.logger != nil {
+		s.logger.Warn("mark automatic threat-intel block dispatching", zap.String("block_entry_id", entry.ID.String()), zap.Error(err))
+	}
+	if dispatched, err := s.dispatchBlockProposalToNode(ctx, entry, action.ID, nodeID); err != nil {
+		_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
+		if s.logger != nil {
+			s.logger.Warn("dispatch automatic threat-intel block", zap.String("ip_cidr", cidr), zap.Error(err))
+		}
+	} else if dispatched == 0 {
+		_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "no firewall dispatch target")
+	} else {
+		s.recordAudit(ctx, s.systemActor(), tenantID, "network.block_proposal.auto_dispatched", "ip_blocklist_entry", entry.ID.String(), map[string]any{
+			"ip_cidr":      cidr,
+			"node_id":      nodeID.String(),
+			"score":        score,
+			"category":     category,
+			"expires_at":   expiresAt.Format(time.RFC3339),
+			"dispatches":   dispatched,
+			"threat_score": b.threatScore,
+		})
+	}
 }
 
 func (s *Server) backfillIPBehaviorConfidenceAlerts(ctx context.Context, findings []storage.IPBehaviorFinding) {
@@ -1521,6 +1631,8 @@ func ipBehaviorAlertCategoryLabel(category string) string {
 		return "webshell callback"
 	case "partner_drift":
 		return "partner drift"
+	case "known_malicious_source":
+		return "known malicious source"
 	default:
 		return "IP behavior anomaly"
 	}

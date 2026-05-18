@@ -493,6 +493,7 @@ export interface IpEnrichment {
   };
   threat_feeds?: { feed: string; severity?: string; first_seen?: string }[];
   reputation_score?: number;
+  source?: string;
 }
 
 export interface SavedSearch {

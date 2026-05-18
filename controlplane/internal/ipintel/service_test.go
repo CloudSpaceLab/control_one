@@ -185,6 +185,51 @@ func TestServiceFallsBackToSecondary(t *testing.T) {
 	}
 }
 
+func TestServiceMergesWeakPrimaryWithSecondary(t *testing.T) {
+	cfg := config.IPIntelConfig{
+		Enabled:        true,
+		IpqueryBaseURL: "https://ipq.example",
+		AbuseIPDBKey:   "k",
+		CacheTTL:       0,
+		HTTPTimeout:    time.Second,
+	}
+	svc := New(cfg, NewMemCache())
+	primaryDoer := &stubDoer{resp: makeJSONResp(200, map[string]any{
+		"ip":       "45.135.193.156",
+		"isp":      map[string]any{"asn": "AS51396", "org": "Pfcloud UG"},
+		"location": map[string]any{"country": "Germany", "country_code": "DE", "city": "Langen"},
+		"risk":     map[string]any{"abuse_confidence_score": 0, "total_reports": 0},
+	})}
+	secondaryDoer := &stubDoer{resp: makeJSONResp(200, map[string]any{
+		"data": map[string]any{
+			"ipAddress":            "45.135.193.156",
+			"abuseConfidenceScore": 100,
+			"countryCode":          "DE",
+			"totalReports":         1083,
+			"lastReportedAt":       "2026-05-18T18:00:02Z",
+		},
+	})}
+	svc.primary = NewIpqueryProvider(cfg.IpqueryBaseURL, primaryDoer)
+	svc.secondary = NewAbuseIPDBProvider(cfg.AbuseIPDBKey, secondaryDoer)
+
+	got, err := svc.Lookup(context.Background(), "45.135.193.156")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if got.Geo.City != "Langen" || got.Geo.ASN != "AS51396" {
+		t.Fatalf("primary geo was not preserved: %+v", got.Geo)
+	}
+	if got.ReputationScore != 100 || got.TotalReports != 1083 {
+		t.Fatalf("secondary abuse score not merged: %+v", got)
+	}
+	if len(got.ThreatFeeds) != 1 || got.ThreatFeeds[0].Feed != "abuseipdb" {
+		t.Fatalf("secondary threat feed not merged: %+v", got.ThreatFeeds)
+	}
+	if got.Source != "ipquery+abuseipdb" {
+		t.Fatalf("source = %q", got.Source)
+	}
+}
+
 func TestSeverityFromScore(t *testing.T) {
 	cases := []struct {
 		s int

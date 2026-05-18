@@ -484,6 +484,19 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 				zap.Error(err))
 		}
 	}
+	if matches := s.threatIntelIPMatches(tenantID, ip); len(matches) > 0 {
+		hits, rows, score := threatIndicatorsToEnrichment(matches)
+		resp.ThreatFeeds = mergeIPThreatFeedHits(resp.ThreatFeeds, hits)
+		threatFeedRows = append(threatFeedRows, rows...)
+		if score > resp.ReputationScore {
+			resp.ReputationScore = score
+		}
+		if resp.Source == "" {
+			resp.Source = "threat_feeds"
+		} else if !strings.Contains(resp.Source, "threat_feeds") {
+			resp.Source += "+threat_feeds"
+		}
+	}
 
 	resp.Classification = ClassifyIP(addr, assets, threatFeedRows)
 	if resp.IsTor {

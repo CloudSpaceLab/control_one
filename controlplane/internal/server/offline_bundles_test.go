@@ -57,7 +57,7 @@ func TestOfflineBundleImportRecordsAuditAndEnablesOfflineEnrichment(t *testing.T
 	if len(store.audits) != 1 || store.audits[0].Status != "imported" {
 		t.Fatalf("audits = %#v, want imported audit", store.audits)
 	}
-	enrich := s.lookupIPBehaviorEnrichment(context.Background(), "203.0.113.42", map[string]map[string]any{})
+	enrich := s.lookupIPBehaviorEnrichment(context.Background(), uuid.Nil, "203.0.113.42", map[string]map[string]any{})
 	if enrich["country_code"] != "NG" || enrich["asn"] != "AS64500" || enrich["content_bundle_id"] != "c1-bank" {
 		t.Fatalf("offline enrichment = %#v, want NG/AS64500 provenance", enrich)
 	}

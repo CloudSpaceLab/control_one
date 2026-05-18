@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ import (
 
 // Indicator represents one bad IP / CIDR with provenance.
 type Indicator struct {
+	TenantID  string // empty means global / built-in source
 	IP        string // single IP if no /n
 	CIDR      string // canonical CIDR string when source supplied a netblock
 	Feed      string // feed identifier
@@ -49,21 +51,53 @@ type Indicator struct {
 type IndicatorSet struct {
 	Updated time.Time
 	cidrs   []*net.IPNet
-	hits    map[string]Indicator // CIDR string → Indicator (for surface)
+	hits    map[string][]Indicator // CIDR string -> matching indicators
 }
 
 // LookupIP returns the matching Indicator if the IP falls in any feed CIDR.
 func (s *IndicatorSet) LookupIP(ip net.IP) (Indicator, bool) {
-	if s == nil || ip == nil {
+	matches := s.LookupIPAll(ip, "")
+	if len(matches) == 0 {
 		return Indicator{}, false
 	}
+	return matches[0], true
+}
+
+// LookupIPAll returns every indicator that applies to ip. tenantID filters
+// tenant-owned feeds while still allowing global built-in sources.
+func (s *IndicatorSet) LookupIPAll(ip net.IP, tenantID string) []Indicator {
+	if s == nil || ip == nil {
+		return nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	out := []Indicator{}
+	seen := map[string]struct{}{}
 	for _, n := range s.cidrs {
 		if n.Contains(ip) {
-			ind, ok := s.hits[n.String()]
-			return ind, ok
+			for _, ind := range s.hits[n.String()] {
+				indTenant := strings.TrimSpace(ind.TenantID)
+				if indTenant != "" && tenantID != "" && indTenant != tenantID {
+					continue
+				}
+				if indTenant != "" && tenantID == "" {
+					continue
+				}
+				dedupe := strings.Join([]string{indTenant, ind.Feed, ind.CIDR, ind.IP}, "|")
+				if _, ok := seen[dedupe]; ok {
+					continue
+				}
+				seen[dedupe] = struct{}{}
+				out = append(out, ind)
+			}
 		}
 	}
-	return Indicator{}, false
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].Feed < out[j].Feed
+	})
+	return out
 }
 
 // All returns every indicator (caller must not mutate).
@@ -72,8 +106,8 @@ func (s *IndicatorSet) All() []Indicator {
 		return nil
 	}
 	out := make([]Indicator, 0, len(s.hits))
-	for _, ind := range s.hits {
-		out = append(out, ind)
+	for _, inds := range s.hits {
+		out = append(out, inds...)
 	}
 	return out
 }
@@ -110,8 +144,9 @@ type SourceProvider interface {
 // ProvidedSource pairs a Source with the database id of the row that defined
 // it so refresh outcomes can be written back.
 type ProvidedSource struct {
-	ID     string
-	Source Source
+	ID       string
+	TenantID string
+	Source   Source
 }
 
 // Manager orchestrates feed pulls + caching.
@@ -200,6 +235,11 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 				m.cfg.Provider.OnRefresh(ctx, ps.ID, "error", err.Error(), 0)
 				continue
 			}
+			if tenantID := strings.TrimSpace(ps.TenantID); tenantID != "" {
+				for i := range inds {
+					inds[i].TenantID = tenantID
+				}
+			}
 			all = append(all, inds...)
 			m.cfg.Provider.OnRefresh(ctx, ps.ID, "ok", "", len(inds))
 		}
@@ -234,8 +274,9 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 }
 
 func buildSet(inds []Indicator) *IndicatorSet {
-	hits := make(map[string]Indicator, len(inds))
+	hits := make(map[string][]Indicator, len(inds))
 	cidrs := make([]*net.IPNet, 0, len(inds))
+	cidrSeen := map[string]struct{}{}
 	for _, ind := range inds {
 		canonical := ind.CIDR
 		if canonical == "" && ind.IP != "" {
@@ -254,15 +295,24 @@ func buildSet(inds []Indicator) *IndicatorSet {
 			continue
 		}
 		key := n.String()
-		if existing, ok := hits[key]; ok {
-			// Pick the higher score / earlier first_seen.
-			if ind.Score > existing.Score {
-				hits[key] = ind
+		ind.CIDR = key
+		merged := false
+		for i, existing := range hits[key] {
+			if existing.TenantID == ind.TenantID && existing.Feed == ind.Feed && existing.Category == ind.Category {
+				if ind.Score > existing.Score || existing.FirstSeen.IsZero() || (!ind.FirstSeen.IsZero() && ind.FirstSeen.Before(existing.FirstSeen)) {
+					hits[key][i] = ind
+				}
+				merged = true
+				break
 			}
+		}
+		if !merged {
+			hits[key] = append(hits[key], ind)
+		}
+		if _, ok := cidrSeen[key]; ok {
 			continue
 		}
-		ind.CIDR = key
-		hits[key] = ind
+		cidrSeen[key] = struct{}{}
 		cidrs = append(cidrs, n)
 	}
 	return &IndicatorSet{Updated: time.Now().UTC(), cidrs: cidrs, hits: hits}
@@ -472,7 +522,7 @@ func parseSpamhaus(body []byte, feed string) []Indicator {
 		if len(parts) == 2 {
 			ev = strings.TrimSpace(parts[1])
 		}
-		out = append(out, Indicator{CIDR: cidr, Feed: feed, Category: "drop", Score: 95, FirstSeen: now, Evidence: ev})
+		out = append(out, Indicator{CIDR: cidr, Feed: feed, Category: "drop", Score: 100, FirstSeen: now, Evidence: ev})
 	}
 	return out
 }

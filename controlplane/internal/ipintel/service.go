@@ -76,6 +76,12 @@ func (s *Service) Lookup(ctx context.Context, ip string) (*Enrichment, error) {
 	if s.cache != nil && s.cfg.CacheTTL > 0 {
 		if hit, ok, err := s.cache.Get(ctx, ip); err == nil && ok {
 			hit.Source = "cache"
+			if s.secondary != nil && shouldCheckSecondary(hit, s.AbuseScoreCutoff()) {
+				if secondary, secErr := s.secondary.Lookup(ctx, ip); secErr == nil && secondary != nil {
+					hit = mergeEnrichment(hit, secondary)
+					_ = s.cache.Put(ctx, ip, hit, s.cfg.CacheTTL)
+				}
+			}
 			return hit, nil
 		}
 	}
@@ -84,6 +90,10 @@ func (s *Service) Lookup(ctx context.Context, ip string) (*Enrichment, error) {
 		out, err := s.primary.Lookup(ctx, ip)
 		if err != nil && s.secondary != nil {
 			out, err = s.secondary.Lookup(ctx, ip)
+		} else if err == nil && s.secondary != nil && shouldCheckSecondary(out, s.AbuseScoreCutoff()) {
+			if secondary, secErr := s.secondary.Lookup(ctx, ip); secErr == nil && secondary != nil {
+				out = mergeEnrichment(out, secondary)
+			}
 		}
 		return out, err
 	})
@@ -94,6 +104,110 @@ func (s *Service) Lookup(ctx context.Context, ip string) (*Enrichment, error) {
 		_ = s.cache.Put(ctx, ip, v, s.cfg.CacheTTL)
 	}
 	return v, nil
+}
+
+func shouldCheckSecondary(e *Enrichment, cutoff int) bool {
+	if e == nil {
+		return true
+	}
+	if e.ReputationScore <= 0 {
+		return true
+	}
+	return e.ReputationScore < cutoff && len(e.ThreatFeeds) == 0
+}
+
+func mergeEnrichment(primary, secondary *Enrichment) *Enrichment {
+	if primary == nil {
+		return secondary
+	}
+	if secondary == nil {
+		return primary
+	}
+	out := *primary
+	if out.Addr == "" {
+		out.Addr = secondary.Addr
+	}
+	if out.Geo.Country == "" {
+		out.Geo.Country = secondary.Geo.Country
+	}
+	if out.Geo.CountryCode == "" {
+		out.Geo.CountryCode = secondary.Geo.CountryCode
+	}
+	if out.Geo.City == "" {
+		out.Geo.City = secondary.Geo.City
+	}
+	if out.Geo.Region == "" {
+		out.Geo.Region = secondary.Geo.Region
+	}
+	if out.Geo.Latitude == 0 {
+		out.Geo.Latitude = secondary.Geo.Latitude
+	}
+	if out.Geo.Longitude == 0 {
+		out.Geo.Longitude = secondary.Geo.Longitude
+	}
+	if out.Geo.Timezone == "" {
+		out.Geo.Timezone = secondary.Geo.Timezone
+	}
+	if out.Geo.ASN == "" {
+		out.Geo.ASN = secondary.Geo.ASN
+	}
+	if out.Geo.Org == "" {
+		out.Geo.Org = secondary.Geo.Org
+	}
+	if out.Geo.ISP == "" {
+		out.Geo.ISP = secondary.Geo.ISP
+	}
+	if secondary.ReputationScore > out.ReputationScore {
+		out.ReputationScore = secondary.ReputationScore
+	}
+	if out.UsageType == "" {
+		out.UsageType = secondary.UsageType
+	}
+	out.IsTor = out.IsTor || secondary.IsTor
+	if secondary.TotalReports > out.TotalReports {
+		out.TotalReports = secondary.TotalReports
+	}
+	if out.LastReportedAt == "" {
+		out.LastReportedAt = secondary.LastReportedAt
+	}
+	out.ThreatFeeds = mergeThreatFeedHits(out.ThreatFeeds, secondary.ThreatFeeds)
+	if primary.Source != "" && secondary.Source != "" && primary.Source != secondary.Source {
+		out.Source = primary.Source + "+" + secondary.Source
+	} else if out.Source == "" {
+		out.Source = secondary.Source
+	}
+	if out.FetchedAt.IsZero() || (!secondary.FetchedAt.IsZero() && secondary.FetchedAt.After(out.FetchedAt)) {
+		out.FetchedAt = secondary.FetchedAt
+	}
+	return &out
+}
+
+func mergeThreatFeedHits(a, b []ThreatFeedHit) []ThreatFeedHit {
+	if len(a) == 0 {
+		return append([]ThreatFeedHit(nil), b...)
+	}
+	out := append([]ThreatFeedHit(nil), a...)
+	seen := map[string]int{}
+	for i, hit := range out {
+		seen[hit.Feed] = i
+	}
+	for _, hit := range b {
+		if hit.Feed == "" {
+			continue
+		}
+		if i, ok := seen[hit.Feed]; ok {
+			if out[i].Severity == "" {
+				out[i].Severity = hit.Severity
+			}
+			if out[i].FirstSeen == "" {
+				out[i].FirstSeen = hit.FirstSeen
+			}
+			continue
+		}
+		seen[hit.Feed] = len(out)
+		out = append(out, hit)
+	}
+	return out
 }
 
 // AbuseScoreCutoff returns the threshold the UI should treat as "flag".
