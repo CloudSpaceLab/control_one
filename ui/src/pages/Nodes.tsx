@@ -831,7 +831,7 @@ export function Nodes(): JSX.Element {
   const [activeRegion, setActiveRegion] = useState<RegionKey | null>(null);
   const [hostnameFilter, setHostnameFilter] = useState('');
   const [healthMap, setHealthMap] = useState<Record<string, NodeHealthScore | null>>({});
-  const [ipGeoMap, setIPGeoMap] = useState<Record<string, IPGeoPoint>>({});
+  const [ipGeoMap, setIPGeoMap] = useState<Record<string, IPGeoPoint | null>>({});
   const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
@@ -944,7 +944,7 @@ export function Nodes(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    if (!useNodeMap) return;
+    if (!useNodeMap || !currentTenantId) return;
 
     const ips = Array.from(
       new Set(
@@ -953,14 +953,14 @@ export function Nodes(): JSX.Element {
           .map((node) => node.public_ip)
           .filter((ip): ip is string => Boolean(ip)),
       ),
-    ).filter((ip) => !ipGeoMap[ip]);
+    ).filter((ip) => !(ip in ipGeoMap));
 
     if (ips.length === 0) return;
 
     Promise.all(
       ips.slice(0, 24).map(async (ip) => {
         try {
-          const enrichment = await api.enrichIp(ip);
+          const enrichment = await api.enrichIp(ip, currentTenantId);
           const lat = enrichment.geo?.latitude;
           const lon = enrichment.geo?.longitude;
           if (lat == null || lon == null || !Number.isFinite(lat) || !Number.isFinite(lon)) {
@@ -978,7 +978,7 @@ export function Nodes(): JSX.Element {
       setIPGeoMap((prev) => {
         const next = { ...prev };
         for (const [ip, geo] of entries) {
-          if (geo) next[ip] = geo;
+          next[ip] = geo;
         }
         return next;
       });
@@ -987,7 +987,7 @@ export function Nodes(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [api, filteredNodes, ipGeoMap, useNodeMap]);
+  }, [api, currentTenantId, filteredNodes, ipGeoMap, useNodeMap]);
 
   // Filtered tenant groups (respects activeRegion + hostnameFilter)
   const filteredTenantGroups = useMemo(() => {

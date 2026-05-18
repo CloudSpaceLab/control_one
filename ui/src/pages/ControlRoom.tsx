@@ -23,6 +23,7 @@ import {
   EmptyState,
   KpiTile,
   Panel,
+  PostureBar,
   SectionHeader,
   StatusTag,
   TimeRangePills,
@@ -34,7 +35,6 @@ import type {
   ControlRoomAction,
   ControlRoomIncident,
   ControlRoomLane,
-  ControlRoomMetric,
   ControlRoomOverview,
   ControlRoomIsolationNode,
   ControlRoomTone,
@@ -240,17 +240,27 @@ export function ControlRoom(): JSX.Element {
         />
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-6">
-        {loading && !overview
-          ? Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-64 rounded-lg xl:col-span-2" />)
-          : overview?.lanes.map((lane) => (
-              <LaneCard key={lane.id} lane={lane} className="xl:col-span-2" />
-            ))}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+        <ExposureConfidencePanel
+          lane={laneByID.get('exposure')}
+          loading={loading && !overview}
+          className="xl:col-span-5"
+        />
+        <SignalMapPanel
+          lanes={overview?.lanes ?? []}
+          loading={loading && !overview}
+          className="xl:col-span-4"
+        />
+        <ActionQueuePanel
+          overview={overview}
+          totalPending={totalPending}
+          loading={loading && !overview}
+          className="xl:col-span-3"
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4">
         <Panel
-          className="xl:col-span-2"
           eyebrow="UNUSUAL NOW"
           title="Connection/IP behavior"
           toneAccent={TONE_ACCENT[overview?.lanes.find((lane) => lane.id === 'ip-behavior')?.tone ?? 'unknown']}
@@ -331,37 +341,6 @@ export function ControlRoom(): JSX.Element {
                   </p>
                 </Link>
               ))}
-            </div>
-          ) : null}
-        </Panel>
-
-        <Panel eyebrow="PENDING ACTIONS" title="Action queue" toneAccent={totalPending > 0 ? 'warning' : 'healthy'}>
-          {loading && !overview ? (
-            <Skeleton className="h-48 rounded-lg" />
-          ) : overview && overview.pending_actions.some((action) => action.count > 0) ? (
-            <div className="flex flex-col gap-2">
-              {overview.pending_actions.map((action) => (
-                <ActionRow key={action.id} action={action} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              tone="success"
-              icon={<ShieldCheck />}
-              title="No approvals waiting"
-              description="Patch approvals, block proposals, and enforcement queues are clear."
-            />
-          )}
-          {overview?.stale_warnings.length ? (
-            <div className="rounded-lg border border-border-subtle bg-surface p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Stale data</p>
-              <div className="flex flex-col gap-2">
-                {overview.stale_warnings.slice(0, 3).map((warning) => (
-                  <Link key={warning.id} to={warning.drilldown || '/nodes'} className="text-xs text-text-secondary hover:text-foreground">
-                    {warning.message}
-                  </Link>
-                ))}
-              </div>
             </div>
           ) : null}
         </Panel>
@@ -478,81 +457,226 @@ export function ControlRoom(): JSX.Element {
   );
 }
 
-function LaneCard({ lane, className }: { lane: ControlRoomLane; className?: string }) {
-  const laneDetail = controlRoomLaneDetailPath(lane.id);
+function ExposureConfidencePanel({ lane, loading, className }: { lane?: ControlRoomLane; loading: boolean; className?: string }) {
+  const confidence = lane?.score ?? 0;
+  const publicListeners = lane ? metricByLabel(lane, 'Public listeners') : undefined;
+  const protectedListeners = lane ? metricByLabel(lane, 'Protected listeners') : undefined;
+  const criticalGaps = lane ? metricByLabel(lane, 'Critical gaps') : undefined;
+  const firewallGaps = lane ? metricByLabel(lane, 'Public firewall gaps') : undefined;
+  const webReady = lane ? metricByLabel(lane, 'Web block ready') : undefined;
+
   return (
-    <section
-      className={cn(
-        'flex min-w-0 flex-col gap-3 rounded-lg border border-border-subtle bg-elevated p-4 shadow-[var(--shadow-panel)]',
-        'transition hover:border-border-strong hover:bg-hover',
-        className,
-      )}
+    <Panel
+      className={className}
+      eyebrow="NETWORK EXPOSURE"
+      title="Security confidence"
+      toneAccent={TONE_ACCENT[lane?.tone ?? 'unknown']}
+      actions={
+        <Button asChild variant="ghost" size="sm">
+          <Link to="/control-room/exposure">
+            Details
+            <ArrowRight />
+          </Link>
+        </Button>
+      }
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className={cn('mt-0.5 rounded-md border border-border-subtle bg-surface p-2 text-text-muted [&_svg]:h-4 [&_svg]:w-4', toneText(lane.tone))}>
-            {LANE_ICONS[lane.id] ?? <Activity />}
+      {loading ? (
+        <Skeleton className="h-72 rounded-lg" />
+      ) : lane ? (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-[11rem_1fr]">
+          <div className="flex items-center justify-center">
+            <ConfidenceDial score={confidence} tone={normalizeTone(lane.tone)} />
           </div>
-          <div className="min-w-0">
-            <Link to={laneDetail} className="font-display text-base font-semibold text-foreground hover:underline">
-              {lane.title}
-            </Link>
-            <p className="mt-1 text-sm text-text-secondary">{lane.summary}</p>
+          <div className="flex min-w-0 flex-col gap-4">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusTag tone={normalizeTone(lane.tone)}>{lane.primary_metric.hint || exposureConfidenceLabel(confidence)}</StatusTag>
+                <span className="font-mono text-xs text-text-muted">{lane.primary_metric.value}</span>
+              </div>
+              <p className="mt-2 text-sm text-text-secondary">{lane.summary}</p>
+            </div>
+            <PostureBar score={confidence} ariaLabel={`Network exposure security confidence ${confidence}%`} showLabels />
+            <div className="grid grid-cols-2 gap-2">
+              <MetricText label={publicListeners?.label ?? 'Public listeners'} value={publicListeners?.value ?? '0'} />
+              <MetricText label={protectedListeners?.label ?? 'Protected'} value={protectedListeners?.value ?? '0'} />
+              <MetricText label={criticalGaps?.label ?? 'Critical gaps'} value={criticalGaps?.value ?? '0'} />
+              <MetricText label={firewallGaps?.label ?? 'Firewall gaps'} value={firewallGaps?.value ?? '0'} />
+            </div>
+            {webReady ? (
+              <div className="rounded-md border border-border-subtle bg-surface px-3 py-2 text-xs text-text-secondary">
+                Web enforcement readiness: <span className="font-mono text-foreground">{webReady.value}</span>
+              </div>
+            ) : null}
+            {lane.items?.length ? (
+              <div className="flex flex-col gap-2">
+                {lane.items.slice(0, 3).map((item) => (
+                  <Link
+                    key={`${item.label}:${item.value}`}
+                    to={item.drilldown || lane.drilldown}
+                    className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface px-3 py-2 text-xs hover:bg-hover"
+                  >
+                    <span className="min-w-0 truncate text-text-secondary">{item.hint || item.label}</span>
+                    <span className={cn('font-mono font-semibold tabular-nums', toneText(item.tone))}>{item.value}</span>
+                  </Link>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
-        <StatusTag tone={normalizeTone(lane.tone)}>{lane.score}</StatusTag>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <MetricLink metric={lane.primary_metric} laneId={lane.id} strong />
-        <MetricLink metric={lane.secondary_metric} laneId={lane.id} strong />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        {lane.metrics.map((metric) => (
-          <MetricLink key={`${lane.id}:${metric.label}`} metric={metric} laneId={lane.id} />
-        ))}
-      </div>
-
-      {lane.items?.length ? (
-        <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
-          {lane.items.slice(0, 3).map((item) => (
-            <Link
-              key={`${lane.id}:${item.label}:${item.value}`}
-              to={item.drilldown || lane.drilldown}
-              className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-surface"
-            >
-              <span className="min-w-0 truncate text-text-secondary">{item.hint || item.label}</span>
-              <span className={cn('font-mono font-semibold tabular-nums', toneText(item.tone))}>{item.value}</span>
-            </Link>
-          ))}
-        </div>
-      ) : null}
-
-      <Link to={laneDetail} className="mt-auto inline-flex items-center gap-1 text-xs font-medium text-brand-400 hover:underline">
-        View details
-        <ArrowRight className="h-3 w-3" />
-      </Link>
-    </section>
+      ) : (
+        <EmptyState icon={<ShieldQuestion />} title="No exposure score" description="Exposure confidence appears after inventory reports listeners and firewall state." />
+      )}
+    </Panel>
   );
 }
 
-function MetricLink({ metric, laneId, strong = false }: { metric: ControlRoomMetric; laneId: string; strong?: boolean }) {
-  const content = (
-    <div className="rounded-lg border border-border-subtle bg-surface p-3">
-      <p className="text-xs text-text-muted">{metric.label}</p>
-      <p className={cn('mt-1 font-mono font-semibold tabular-nums text-foreground', strong ? 'text-xl' : 'text-base')}>
-        {metric.value}
-      </p>
-      {metric.hint ? <p className="mt-1 text-xs text-text-muted">{metric.hint}</p> : null}
-    </div>
-  );
-  const to = controlRoomLaneDetailPath(laneId, metric.label);
+function SignalMapPanel({ lanes, loading, className }: { lanes: ControlRoomLane[]; loading: boolean; className?: string }) {
+  const groups = [
+    { label: 'Protect', ids: ['exposure', 'security', 'ip-behavior'] },
+    { label: 'Operate', ids: ['server-health', 'app-db-health', 'patch-posture'] },
+  ];
+
   return (
-    <Link to={to} className="block transition hover:-translate-y-0.5">
-      {content}
+    <Panel className={className} eyebrow="SIGNAL MAP" title="Organized control lanes" toneAccent="accent">
+      {loading ? (
+        <Skeleton className="h-72 rounded-lg" />
+      ) : lanes.length > 0 ? (
+        <div className="flex flex-col gap-4">
+          {groups.map((group) => {
+            const rows = group.ids
+              .map((id) => lanes.find((lane) => lane.id === id))
+              .filter((lane): lane is ControlRoomLane => Boolean(lane));
+            if (rows.length === 0) return null;
+            return (
+              <div key={group.label} className="flex flex-col gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">{group.label}</p>
+                {rows.map((lane) => (
+                  <SignalLaneRow key={lane.id} lane={lane} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState title="No lanes yet" description="Control lanes appear after the overview endpoint responds." />
+      )}
+    </Panel>
+  );
+}
+
+function SignalLaneRow({ lane }: { lane: ControlRoomLane }) {
+  return (
+    <Link
+      to={controlRoomLaneDetailPath(lane.id)}
+      className="grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 transition hover:border-border-strong hover:bg-hover"
+    >
+      <span className={cn('rounded-md border border-border-subtle bg-elevated p-2 text-text-muted [&_svg]:h-4 [&_svg]:w-4', toneText(lane.tone))}>
+        {LANE_ICONS[lane.id] ?? <Activity />}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium text-foreground">{lane.title}</span>
+        <span className="block truncate text-xs text-text-muted">{lane.primary_metric.label}: {lane.primary_metric.value}</span>
+        <PostureBar score={lane.score} ariaLabel={`${lane.title} score ${lane.score}`} className="mt-2" />
+      </span>
+      <StatusTag tone={normalizeTone(lane.tone)}>{lane.score}</StatusTag>
     </Link>
   );
+}
+
+function ActionQueuePanel({
+  overview,
+  totalPending,
+  loading,
+  className,
+}: {
+  overview: ControlRoomOverview | null;
+  totalPending: number;
+  loading: boolean;
+  className?: string;
+}) {
+  return (
+    <Panel className={className} eyebrow="ACTION QUEUE" title="Operator decisions" toneAccent={totalPending > 0 ? 'warning' : 'healthy'}>
+      {loading ? (
+        <Skeleton className="h-72 rounded-lg" />
+      ) : overview && overview.pending_actions.some((action) => action.count > 0) ? (
+        <div className="flex flex-col gap-2">
+          {overview.pending_actions.map((action) => (
+            <ActionRow key={action.id} action={action} />
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          tone="success"
+          icon={<ShieldCheck />}
+          title="No approvals waiting"
+          description="Patch approvals, block proposals, and enforcement queues are clear."
+        />
+      )}
+      {overview?.stale_warnings.length ? (
+        <div className="rounded-lg border border-border-subtle bg-surface p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Stale data</p>
+          <div className="flex flex-col gap-2">
+            {overview.stale_warnings.slice(0, 3).map((warning) => (
+              <Link key={warning.id} to={warning.drilldown || '/nodes'} className="text-xs text-text-secondary hover:text-foreground">
+                {warning.message}
+              </Link>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+function ConfidenceDial({ score, tone }: { score: number; tone: StateTone }) {
+  const clamped = Math.max(0, Math.min(100, score));
+  return (
+    <div
+      className="relative grid h-40 w-40 shrink-0 place-items-center rounded-full border border-border-subtle"
+      style={{
+        background: `conic-gradient(${toneColor(tone)} ${clamped * 3.6}deg, var(--bg-surface-2) 0deg)`,
+      }}
+      role="img"
+      aria-label={`Security confidence ${clamped}%`}
+    >
+      <div className="grid h-28 w-28 place-items-center rounded-full border border-border-subtle bg-elevated text-center shadow-[var(--shadow-panel)]">
+        <div>
+          <div className="font-mono text-3xl font-semibold tabular-nums text-foreground">{clamped}%</div>
+          <div className="mt-1 text-xs text-text-muted">{exposureConfidenceLabel(clamped)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function metricByLabel(lane: ControlRoomLane, label: string) {
+  if (lane.primary_metric.label === label) return lane.primary_metric;
+  if (lane.secondary_metric.label === label) return lane.secondary_metric;
+  return lane.metrics.find((metric) => metric.label === label);
+}
+
+function exposureConfidenceLabel(score: number): string {
+  if (score < 50) return 'urgent';
+  if (score < 75) return 'needs work';
+  if (score < 90) return 'steady';
+  return 'strong';
+}
+
+function toneColor(tone: StateTone): string {
+  switch (tone) {
+    case 'healthy':
+      return 'var(--state-healthy)';
+    case 'warning':
+      return 'var(--state-warning)';
+    case 'degraded':
+      return 'var(--state-degraded)';
+    case 'critical':
+      return 'var(--state-critical)';
+    case 'info':
+      return 'var(--state-info)';
+    default:
+      return 'var(--state-unknown)';
+  }
 }
 
 function ActionRow({ action }: { action: ControlRoomAction }) {

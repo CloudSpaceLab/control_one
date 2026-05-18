@@ -14,7 +14,19 @@ const overview: ControlRoomOverview = {
     lane('server-health', 'Server Health', 'warning', '1 health incident'),
     lane('security', 'Security', 'critical', '3 security events'),
     lane('app-db-health', 'App/DB Health', 'warning', '2 app/web, 1 DB'),
-    lane('exposure', 'Current Exposure', 'warning', '4 public listeners'),
+    {
+      ...lane('exposure', 'Exposure Confidence', 'warning', '72% confidence: 3 exposure gaps, 2 protected nodes, 1 active block'),
+      score: 72,
+      primary_metric: { label: 'Security confidence', value: '72%', tone: 'warning', hint: 'Reduce exposure gaps', drilldown: '/control-room/exposure' },
+      secondary_metric: { label: 'Exposure gaps', value: '3', tone: 'warning', drilldown: '/control-room/exposure' },
+      metrics: [
+        { label: 'Public listeners', value: '4', tone: 'warning', drilldown: '/connections' },
+        { label: 'Protected listeners', value: '1', tone: 'healthy', drilldown: '/control-room/exposure' },
+        { label: 'Critical gaps', value: '1', tone: 'critical', drilldown: '/control-room/exposure' },
+        { label: 'Public firewall gaps', value: '1', tone: 'warning', drilldown: '/security/network?tab=firewall' },
+        { label: 'Web block ready', value: '1/1', tone: 'healthy', drilldown: '/security/webservers' },
+      ],
+    },
     {
       ...lane('ip-behavior', 'Connection/IP Behavior', 'critical', '2 requests from 1 country'),
       items: [{ label: '203.0.113.10', value: '91', tone: 'critical', hint: '401 spike', drilldown: '/security/network?tab=ip-behavior&ip=203.0.113.10' }],
@@ -194,7 +206,8 @@ describe('ControlRoom', () => {
 
     expect(screen.getByText('Security')).toBeInTheDocument();
     expect(screen.getByText('App/DB Health')).toBeInTheDocument();
-    expect(screen.getByText('Current Exposure')).toBeInTheDocument();
+    expect(screen.getByText('Exposure Confidence')).toBeInTheDocument();
+    expect(screen.getAllByText(/Security confidence/i).length).toBeGreaterThan(0);
     expect(screen.getByText('Connection/IP Behavior')).toBeInTheDocument();
     expect(screen.getByText('Patch Posture')).toBeInTheDocument();
     expect(screen.getAllByText('91').length).toBeGreaterThan(0);

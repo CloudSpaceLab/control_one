@@ -22,7 +22,8 @@ import (
 // SelfUpdater can be triggered to download a new agent binary and atomically
 // replace the running process. Implemented as an interface so tests can stub.
 type SelfUpdater interface {
-	TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger)
+	TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger, jobID string)
+	CurrentReleaseSeq() int
 }
 
 // DefaultSelfUpdater is the production implementation. nodeID + dataDir are
@@ -57,6 +58,8 @@ type updateManifest struct {
 	TargetVersion string `json:"target_version"`
 	Paused        bool   `json:"paused"`
 }
+
+const agentUpdateJob = "agent.update"
 
 // rolloutBucket maps a node id to a stable bucket in [0, 100). The agent
 // proceeds with a self-update only when bucket < manifest.rollout_pct, which
@@ -223,17 +226,28 @@ func savePrevBinary(exe string) error {
 // saves the running binary as <exe>.prev for operator-driven rollback,
 // atomically replaces the executable, then exits so the service manager
 // restarts with the new binary.
-func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger) {
+func (u *DefaultSelfUpdater) CurrentReleaseSeq() int {
+	return currentReleaseSeqFromState(loadAgentState(u.dataDir))
+}
+
+func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger, jobID string) {
 	// Single-flight guard.
 	select {
 	case u.inFlight <- struct{}{}:
 		defer func() { <-u.inFlight }()
 	default:
+		reportAgentUpdateFailed(jobID, "self-update already in progress")
 		log.Info("self-update already in progress, skipping")
 		return
 	}
 
 	log.Info("starting agent self-update", zap.String("node_id", u.nodeID))
+	fail := func(message string, err error) {
+		if err != nil {
+			message = message + ": " + err.Error()
+		}
+		reportAgentUpdateFailed(jobID, message)
+	}
 
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
@@ -246,17 +260,20 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	}
 	manifestResp, err := client.Do(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
+		fail("fetch update manifest", err)
 		log.Error("fetch update manifest", zap.Error(err))
 		return
 	}
 	defer func() { _ = manifestResp.Body.Close() }()
 	if manifestResp.StatusCode != http.StatusOK {
+		fail(fmt.Sprintf("update manifest unavailable (status %d)", manifestResp.StatusCode), nil)
 		log.Error("update manifest unavailable", zap.Int("status", manifestResp.StatusCode))
 		return
 	}
 
 	var manifest updateManifest
 	if err := json.NewDecoder(manifestResp.Body).Decode(&manifest); err != nil {
+		fail("decode update manifest", err)
 		log.Error("decode update manifest", zap.Error(err))
 		return
 	}
@@ -266,6 +283,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	currentSeq := currentReleaseSeqFromState(state)
 	bucket := rolloutBucket(u.nodeID)
 	if reason := shouldUpdate(manifest, currentSeq, bucket); reason != "" {
+		fail("self-update skipped: "+reason, nil)
 		log.Info("self-update skipped",
 			zap.String("reason", reason),
 			zap.Int("manifest_seq", manifest.ReleaseSeq),
@@ -286,6 +304,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	// Resolve the running executable.
 	exe, err := os.Executable()
 	if err != nil {
+		fail("resolve executable path", err)
 		log.Error("resolve executable path", zap.Error(err))
 		return
 	}
@@ -294,6 +313,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	// the same filesystem (rename(2) is atomic only within an FS).
 	tmp, err := os.CreateTemp(filepath.Dir(exe), "controlone-agent-update-*")
 	if err != nil {
+		fail("create temp file for update", err)
 		log.Error("create temp file for update", zap.Error(err))
 		return
 	}
@@ -304,12 +324,14 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		fmt.Sprintf("/api/v1/agent/binary?os=%s&arch=%s", osName, arch), nil)
 	if err != nil {
 		_ = tmp.Close()
+		fail("download agent binary", err)
 		log.Error("download agent binary", zap.Error(err))
 		return
 	}
 	defer func() { _ = dlResp.Body.Close() }()
 	if dlResp.StatusCode != http.StatusOK {
 		_ = tmp.Close()
+		fail(fmt.Sprintf("download binary non-200 (status %d)", dlResp.StatusCode), nil)
 		log.Error("download binary non-200", zap.Int("status", dlResp.StatusCode))
 		return
 	}
@@ -317,6 +339,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	hasher := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), dlResp.Body); err != nil {
 		_ = tmp.Close()
+		fail("write update binary", err)
 		log.Error("write update binary", zap.Error(err))
 		return
 	}
@@ -324,6 +347,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	// boot doesn't leave a partial executable on disk.
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
+		fail("fsync update binary", err)
 		log.Error("fsync update binary", zap.Error(err))
 		return
 	}
@@ -333,11 +357,13 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	// cannot prove integrity, and silently accepting an unverified binary
 	// hands an upgrade primitive to anything that can MITM the download.
 	if manifest.SHA256 == "" {
+		fail("update manifest missing sha256", nil)
 		log.Error("update manifest missing sha256; refusing to apply")
 		return
 	}
 	actual := hex.EncodeToString(hasher.Sum(nil))
 	if actual != manifest.SHA256 {
+		fail("update binary checksum mismatch", nil)
 		log.Error("update binary checksum mismatch",
 			zap.String("expected", manifest.SHA256),
 			zap.String("actual", actual))
@@ -346,6 +372,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	log.Info("update binary checksum verified")
 
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		fail("chmod update binary", err)
 		log.Error("chmod update binary", zap.Error(err))
 		return
 	}
@@ -370,6 +397,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 
 	// Atomic replace.
 	if err := os.Rename(tmpPath, exe); err != nil {
+		fail("replace binary", err)
 		log.Error("replace binary", zap.Error(err))
 		return
 	}
@@ -388,7 +416,59 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		zap.String("path", exe),
 		zap.Int("release_seq", manifest.ReleaseSeq))
 
+	reportAgentUpdateSucceeded(ctx, client, log, u.nodeID, jobID, manifest.ReleaseSeq)
+
 	// Exit cleanly. Service managers must be configured to restart the agent
 	// after a successful handoff so the freshly replaced binary is launched.
 	os.Exit(0)
+}
+
+func reportAgentUpdateFailed(jobID, message string) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "self-update failed"
+	}
+	enqueueCompletedAction(completedAction{
+		Action: agentUpdateJob,
+		JobID:  jobID,
+		Status: "failed",
+		Error:  message,
+	})
+}
+
+func reportAgentUpdateSucceeded(ctx context.Context, client *api.Client, log *zap.Logger, nodeID, jobID string, releaseSeq int) {
+	jobID = strings.TrimSpace(jobID)
+	nodeID = strings.TrimSpace(nodeID)
+	if jobID == "" || nodeID == "" || client == nil {
+		return
+	}
+	payload := heartbeatPayload{
+		AgentVersion:    heartbeatAgentVersion(),
+		Capabilities:    heartbeatAgentCapabilities(),
+		AgentReleaseSeq: releaseSeq,
+		CompletedActions: []completedAction{{
+			Action:   agentUpdateJob,
+			JobID:    jobID,
+			Status:   "succeeded",
+			Metadata: map[string]any{"release_seq": releaseSeq},
+		}},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Warn("marshal self-update completion heartbeat", zap.Error(err))
+		return
+	}
+	resp, err := client.Do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/heartbeat", body)
+	if err != nil {
+		log.Warn("post self-update completion heartbeat", zap.Error(err))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		log.Warn("self-update completion heartbeat rejected", zap.Int("status", resp.StatusCode))
+	}
 }

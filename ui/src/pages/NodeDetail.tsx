@@ -522,7 +522,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     if (ips.length === 0) return;
     Promise.all(
       ips.slice(0, 25).map((ip) =>
-        api.enrichIp(ip)
+        api.enrichIp(ip, tenantId)
           .then((enrichment) => [ip, enrichment.geo?.country ?? enrichment.geo?.country_code ?? 'Unknown'] as const)
           .catch(() => [ip, 'Unknown'] as const),
       ),

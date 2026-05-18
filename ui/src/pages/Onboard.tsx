@@ -84,15 +84,15 @@ export function Onboard(): JSX.Element {
   // Auto country lookup once we know the host is reachable. Uses the
   // existing ipintel pipeline (akyriako/ipquery + AbuseIPDB fallback).
   const enrichQ = useQuery<IpEnrichment | null>({
-    queryKey: ['onboard.enrich', host, result?.ok],
+    queryKey: ['onboard.enrich', host, result?.ok, enrolTenantId ?? currentTenantId],
     queryFn: async () => {
       try {
-        return await client.enrichIp(host);
+        return await client.enrichIp(host, enrolTenantId ?? currentTenantId);
       } catch {
         return null;
       }
     },
-    enabled: !!result?.ok && /^[\d.:a-fA-F]+$/.test(host),
+    enabled: !!result?.ok && !!(enrolTenantId ?? currentTenantId) && /^[\d.:a-fA-F]+$/.test(host),
     staleTime: 5 * 60_000,
   });
 

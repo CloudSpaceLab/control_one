@@ -2554,8 +2554,11 @@ export class APIClient {
     return this.request<EntityRelated>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/related`);
   }
 
-  async enrichIp(addr: string): Promise<IpEnrichment> {
-    return this.request<IpEnrichment>(`/api/v1/entities/ip/${encodeURIComponent(addr)}/enrich`);
+  async enrichIp(addr: string, tenantId?: string | null): Promise<IpEnrichment> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    const qs = search.toString();
+    return this.request<IpEnrichment>(`/api/v1/entities/ip/${encodeURIComponent(addr)}/enrich${qs ? `?${qs}` : ''}`);
   }
 
   async listSavedSearches(): Promise<{ items: SavedSearch[] }> {

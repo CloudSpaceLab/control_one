@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,6 +120,9 @@ func TestControlRoomOverviewReturnsSixBankingLanes(t *testing.T) {
 	if got := controlRoomMetricDrilldown(lanes["exposure"], "Web block ready"); got != "/security/webservers" {
 		t.Fatalf("expected exposure web block metric to drill into webserver control, got %q", got)
 	}
+	if lanes["exposure"].PrimaryMetric.Label != "Security confidence" || !strings.HasSuffix(lanes["exposure"].PrimaryMetric.Value, "%") {
+		t.Fatalf("expected exposure primary metric to be security confidence, got %#v", lanes["exposure"].PrimaryMetric)
+	}
 	if resp.Isolation.Whitelist != 1 {
 		t.Fatalf("expected whitelist isolation posture, got %#v", resp.Isolation)
 	}
@@ -164,8 +168,11 @@ func TestControlRoomExposureIgnoresAirgappedListeners(t *testing.T) {
 	for _, lane := range resp.Lanes {
 		lanes[lane.ID] = lane
 	}
-	if got := lanes["exposure"].PrimaryMetric.Value; got != "0" {
-		t.Fatalf("expected airgapped public listener to be excluded, got public listeners=%s", got)
+	if got := lanes["exposure"].PrimaryMetric.Value; got != "100%" {
+		t.Fatalf("expected airgapped listener to produce full exposure confidence, got %s", got)
+	}
+	if got := controlRoomMetricDrilldown(lanes["exposure"], "Public listeners"); got != "/connections" {
+		t.Fatalf("expected public listener evidence metric to drill into connections, got %q", got)
 	}
 	if got := lanes["server-health"].Metrics[0].Value; got != "0" {
 		t.Fatalf("expected airgapped stale heartbeat to be excluded from offline count, got %s", got)

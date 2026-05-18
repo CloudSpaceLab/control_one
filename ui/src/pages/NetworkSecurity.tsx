@@ -265,7 +265,7 @@ function IPBehaviorPanel(): JSX.Element {
     try {
       const [nextProfile, enrichment] = await Promise.all([
         client.getIPBehaviorIPProfile({ tenantId: currentTenantId, ip: target, since }),
-        client.enrichIp(target).catch(() => null),
+        client.enrichIp(target, currentTenantId).catch(() => null),
       ]);
       setProfile(nextProfile);
       setIpEnrichment(enrichment);

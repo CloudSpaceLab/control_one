@@ -1,7 +1,9 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -313,31 +315,43 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if tenantParam == "" {
+	nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id"))
+	var parsedTenantID uuid.UUID
+	if tenantParam != "" {
+		parsedTenantID, err = uuid.Parse(tenantParam)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		filter.TenantID = parsedTenantID
+	} else if nodeParam == "" {
 		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
 		return
 	}
-	parsedTenantID, err := uuid.Parse(tenantParam)
-	if err != nil {
-		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-		return
-	}
-	filter.TenantID = parsedTenantID
 
 	if enabledParam := strings.TrimSpace(r.URL.Query().Get("enabled")); enabledParam != "" {
 		enabled := parseBoolQuery(enabledParam)
 		filter.Enabled = &enabled
 	}
 
-	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
-		if filter.TenantID == uuid.Nil {
-			http.Error(w, "tenant_id is required when node_id is provided", http.StatusBadRequest)
-			return
-		}
+	if nodeParam != "" {
 		nodeID, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
 			return
+		}
+		if filter.TenantID == uuid.Nil {
+			node, err := s.store.GetNode(r.Context(), nodeID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, "node not found", http.StatusNotFound)
+					return
+				}
+				s.logger.Error("lookup node for effective policies", zap.Error(err))
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			filter.TenantID = node.TenantID
 		}
 		effective, err := s.store.GetEffectivePolicies(r.Context(), filter.TenantID, nodeID)
 		if err != nil {
