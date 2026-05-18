@@ -4616,6 +4616,7 @@ export interface BehavioralAnomaly {
   reason?: string;
   observed_value: number;
   z_score: number;
+  evidence?: Record<string, unknown>;
   resolved: boolean;
   resolved_at?: string;
   created_at: string;

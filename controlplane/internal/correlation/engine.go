@@ -64,6 +64,7 @@ func (e *Engine) Run(ctx context.Context) {
 		eventbus.TopicRuleTriggered,
 		eventbus.TopicComplianceFired,
 		eventbus.TopicRemediationApplied,
+		eventbus.TopicEventsAnomaly,
 	}, nil)
 	defer sub.Close()
 	for {

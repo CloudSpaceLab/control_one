@@ -1635,9 +1635,47 @@ func TestDetectIPBehaviorIncludesCrossDomainEvidence(t *testing.T) {
 	}
 }
 
+func TestDetectIPBehaviorOpensAlertAtFullConfidence(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &ipBehaviorFindingCaptureStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store}
+	start := time.Date(2026, 5, 17, 4, 0, 0, 0, time.UTC)
+
+	events := make([]IngestedEvent, 0, 12)
+	for i := 0; i < 12; i++ {
+		events = append(events, makeIPBehaviorWebRequest(start.Add(time.Duration(i)*time.Second), "203.0.113.55", "/admin/login", 401, 5*1024*1024))
+	}
+
+	got := s.detectIPBehaviorBatch(context.Background(), tenantID, nodeID, events)
+	if len(got) != 1 {
+		t.Fatalf("deduplicated anomalies = %d, want 1", len(got))
+	}
+	if got[0].Details["score"] != 100 {
+		t.Fatalf("score = %v, want 100", got[0].Details["score"])
+	}
+	if len(store.alerts) != 1 {
+		t.Fatalf("alerts = %d, want 1", len(store.alerts))
+	}
+	alert := store.alerts[0]
+	if alert.Source != "ip_behavior" || alert.Severity != "critical" {
+		t.Fatalf("alert source/severity = %s/%s, want ip_behavior/critical", alert.Source, alert.Severity)
+	}
+	if !strings.Contains(alert.Title, "100% confidence") {
+		t.Fatalf("alert title missing confidence: %q", alert.Title)
+	}
+	if strings.Contains(strings.ToLower(alert.Summary), "baseline dimension") {
+		t.Fatalf("alert summary exposes scoring internals: %q", alert.Summary)
+	}
+	if alert.Context["confidence"] != 100 || alert.Context["finding_dedup_key"] == "" {
+		t.Fatalf("alert context missing confidence/dedup: %#v", alert.Context)
+	}
+}
+
 type ipBehaviorFindingCaptureStore struct {
 	*fakeStore
 	findings []storage.UpsertIPBehaviorFindingParams
+	alerts   []storage.CreateAlertParams
 }
 
 func (f *ipBehaviorFindingCaptureStore) UpsertIPBehaviorFinding(_ context.Context, p storage.UpsertIPBehaviorFindingParams) (*storage.IPBehaviorFinding, error) {
@@ -1656,5 +1694,20 @@ func (f *ipBehaviorFindingCaptureStore) UpsertIPBehaviorFinding(_ context.Contex
 		Evidence:    p.Evidence,
 		FirstSeenAt: p.SeenAt,
 		LastSeenAt:  p.SeenAt,
+	}, nil
+}
+
+func (f *ipBehaviorFindingCaptureStore) CreateAlert(_ context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
+	f.alerts = append(f.alerts, p)
+	return &storage.Alert{
+		ID:       uuid.New(),
+		TenantID: p.TenantID,
+		Source:   p.Source,
+		Severity: p.Severity,
+		Title:    p.Title,
+		Summary:  sql.NullString{String: p.Summary, Valid: p.Summary != ""},
+		DedupKey: sql.NullString{String: p.DedupKey, Valid: p.DedupKey != ""},
+		Context:  p.Context,
+		OpenedAt: time.Now().UTC(),
 	}, nil
 }

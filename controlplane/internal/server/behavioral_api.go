@@ -210,23 +210,24 @@ func newBehavioralBaselineResponse(row storage.BehavioralBaseline) behavioralBas
 }
 
 type behavioralAnomalyResponse struct {
-	ID            string  `json:"id"`
-	TenantID      string  `json:"tenant_id"`
-	BaselineID    string  `json:"baseline_id"`
-	NodeID        *string `json:"node_id,omitempty"`
-	SourceIP      *string `json:"source_ip,omitempty"`
-	CountryCode   string  `json:"country_code,omitempty"`
-	ASN           string  `json:"asn,omitempty"`
-	Metric        string  `json:"metric"`
-	Severity      string  `json:"severity"`
-	Status        string  `json:"status"`
-	Reason        string  `json:"reason"`
-	ObservedValue float64 `json:"observed_value"`
-	ZScore        float64 `json:"z_score"`
-	Resolved      bool    `json:"resolved"`
-	ResolvedAt    *string `json:"resolved_at,omitempty"`
-	CreatedAt     string  `json:"created_at"`
-	LastSeenAt    string  `json:"last_seen_at"`
+	ID            string         `json:"id"`
+	TenantID      string         `json:"tenant_id"`
+	BaselineID    string         `json:"baseline_id"`
+	NodeID        *string        `json:"node_id,omitempty"`
+	SourceIP      *string        `json:"source_ip,omitempty"`
+	CountryCode   string         `json:"country_code,omitempty"`
+	ASN           string         `json:"asn,omitempty"`
+	Metric        string         `json:"metric"`
+	Severity      string         `json:"severity"`
+	Status        string         `json:"status"`
+	Reason        string         `json:"reason"`
+	ObservedValue float64        `json:"observed_value"`
+	ZScore        float64        `json:"z_score"`
+	Evidence      map[string]any `json:"evidence,omitempty"`
+	Resolved      bool           `json:"resolved"`
+	ResolvedAt    *string        `json:"resolved_at,omitempty"`
+	CreatedAt     string         `json:"created_at"`
+	LastSeenAt    string         `json:"last_seen_at"`
 }
 
 func newBehavioralAnomalyResponse(row storage.IPBehaviorFinding) behavioralAnomalyResponse {
@@ -259,6 +260,7 @@ func newBehavioralAnomalyResponse(row storage.IPBehaviorFinding) behavioralAnoma
 		Reason:        row.Reason,
 		ObservedValue: float64(row.Score),
 		ZScore:        float64(row.Score) / 20,
+		Evidence:      row.Evidence,
 		Resolved:      row.Status == "resolved" || row.Status == "suppressed",
 		ResolvedAt:    resolvedAt,
 		CreatedAt:     row.FirstSeenAt.UTC().Format(time.RFC3339),

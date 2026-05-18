@@ -31,9 +31,11 @@ import {
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
+import { describeIPBehaviorFinding } from '../lib/ipBehaviorPresentation';
 import type {
   ControlRoomAction,
   ControlRoomIncident,
+  ControlRoomIPFinding,
   ControlRoomLane,
   ControlRoomOverview,
   ControlRoomIsolationNode,
@@ -276,35 +278,10 @@ export function ControlRoom(): JSX.Element {
           {loading && !overview ? (
             <Skeleton className="h-48 rounded-lg" />
           ) : overview && overview.ip_behavior.findings.length > 0 ? (
-            <div className="overflow-x-auto rounded-lg border border-border-subtle">
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-text-secondary">
-                  <tr>
-                    <th className="px-3 py-2">Source</th>
-                    <th className="px-3 py-2">Reason</th>
-                    <th className="px-3 py-2">Score</th>
-                    <th className="px-3 py-2">Severity</th>
-                    <th className="px-3 py-2">Last seen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.ip_behavior.findings.slice(0, 6).map((finding) => (
-                    <tr key={finding.id} className="border-t border-border-subtle">
-                      <td className="px-3 py-2">
-                        <Link to={finding.drilldown} className="font-mono text-xs text-brand-400 hover:underline">
-                          {finding.source_ip || finding.country_code || finding.asn || 'unknown'}
-                        </Link>
-                      </td>
-                      <td className="max-w-[32rem] px-3 py-2 text-text-secondary">{finding.reason || finding.category}</td>
-                      <td className="px-3 py-2 font-mono tabular-nums">{finding.score}</td>
-                      <td className="px-3 py-2">
-                        <StatusTag tone={severityToTone(finding.severity)}>{finding.severity}</StatusTag>
-                      </td>
-                      <td className="px-3 py-2 text-xs text-text-muted">{formatDateTime(finding.last_seen_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+              {overview.ip_behavior.findings.slice(0, 6).map((finding) => (
+                <IPBehaviorFindingCard key={finding.id} finding={finding} />
+              ))}
             </div>
           ) : (
             <EmptyState
@@ -454,6 +431,44 @@ export function ControlRoom(): JSX.Element {
         </Panel>
       </div>
     </div>
+  );
+}
+
+function IPBehaviorFindingCard({ finding }: { finding: ControlRoomIPFinding }) {
+  const presentation = describeIPBehaviorFinding(finding, { countryLabel: finding.country_code, maxSignals: 3 });
+  const confidenceTone = severityToTone(finding.severity);
+  return (
+    <Link
+      to={finding.drilldown}
+      className="block rounded-lg border border-border-subtle bg-surface p-3 transition hover:border-border-strong hover:bg-hover"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-foreground">{presentation.categoryLabel}</p>
+          <p className="truncate font-mono text-xs text-text-muted">{presentation.source}</p>
+        </div>
+        <StatusTag tone={confidenceTone}>{presentation.confidence}%</StatusTag>
+      </div>
+      <p className="mt-2 line-clamp-2 text-xs leading-5 text-text-secondary">{presentation.summary}</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {presentation.alertLabel && (
+          <StatusTag tone={presentation.confidence >= 100 ? 'critical' : 'warning'} icon={presentation.confidence >= 100 ? <AlertTriangle className="h-3 w-3" /> : undefined}>
+            {presentation.alertLabel}
+          </StatusTag>
+        )}
+        {presentation.signals.map((signal) => (
+          <span key={signal} className="rounded border border-border-subtle bg-elevated px-2 py-0.5 text-[11px] text-text-secondary">
+            {signal}
+          </span>
+        ))}
+        {presentation.hiddenSignalCount > 0 && (
+          <span className="rounded border border-border-subtle bg-elevated px-2 py-0.5 text-[11px] text-text-muted">
+            +{presentation.hiddenSignalCount} more
+          </span>
+        )}
+      </div>
+      <div className="mt-3 text-[11px] text-text-muted">Last seen {formatDateTime(finding.last_seen_at)}</div>
+    </Link>
   );
 }
 
