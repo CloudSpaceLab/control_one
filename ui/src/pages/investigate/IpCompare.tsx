@@ -160,7 +160,7 @@ function DiffStrip({ a, b }: { a: ConnectionDetail; b: ConnectionDetail }) {
   );
 }
 
-function Term({ label, children }: { label: string; children: React.ReactNode }) {
+function Term({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
       <dt className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">{label}</dt>
