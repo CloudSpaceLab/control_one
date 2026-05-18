@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { Panel, SectionHeader, EmptyState, DataTable, StatusTag, SelectField } from '../components/kit';
+import { KpiTile } from '../components/kit';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ConfirmModal } from '../components/ConfirmModal';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { CreateThreatFeedPayload, ThreatFeed, ThreatFeedType } from '../lib/api';
+import { Database, RefreshCw, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
+import type { CreateThreatFeedPayload, ThreatFeed, ThreatFeedType, ThreatIntelSummary } from '../lib/api';
 
 interface FeedTypeMeta {
   type: ThreatFeedType;
@@ -102,6 +104,17 @@ function emptyForm(tenantId: string): CreateThreatFeedPayload {
   };
 }
 
+function formatCount(value?: number): string {
+  return new Intl.NumberFormat().format(value ?? 0);
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString();
+}
+
 export function ThreatFeeds(): JSX.Element {
   const client = useApiClient();
   const { data: tenants } = useTenants({ limit: 50, offset: 0 });
@@ -112,6 +125,10 @@ export function ThreatFeeds(): JSX.Element {
   const [form, setForm] = useState<CreateThreatFeedPayload>(emptyForm(''));
   const [submitting, setSubmitting] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [summary, setSummary] = useState<ThreatIntelSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [ipQuery, setIpQuery] = useState('');
 
   useEffect(() => {
     if (!tenantId && tenants[0]?.id) setTenantId(tenants[0].id);
@@ -121,18 +138,28 @@ export function ThreatFeeds(): JSX.Element {
     setForm((prev) => ({ ...prev, tenant_id: tenantId }));
   }, [tenantId]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (lookupIP?: string) => {
     if (!tenantId) return;
     setLoading(true);
-    try {
-      const resp = await client.listThreatFeeds(tenantId);
-      setFeeds(resp.data);
+    setSummaryLoading(true);
+    const [feedsResp, summaryResp] = await Promise.allSettled([
+      client.listThreatFeeds(tenantId),
+      client.getThreatIntelSummary({ tenantId, ip: lookupIP?.trim() || undefined }),
+    ]);
+    if (feedsResp.status === 'fulfilled') {
+      setFeeds(feedsResp.value.data);
       setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'load failed');
-    } finally {
-      setLoading(false);
+    } else {
+      setError(feedsResp.reason instanceof Error ? feedsResp.reason.message : 'load failed');
     }
+    if (summaryResp.status === 'fulfilled') {
+      setSummary(summaryResp.value);
+      setSummaryError(null);
+    } else {
+      setSummaryError(summaryResp.reason instanceof Error ? summaryResp.reason.message : 'blacklist summary failed');
+    }
+    setLoading(false);
+    setSummaryLoading(false);
   }, [client, tenantId]);
 
   useEffect(() => {
@@ -147,7 +174,7 @@ export function ThreatFeeds(): JSX.Element {
     try {
       await client.createThreatFeed({ ...form, tenant_id: tenantId });
       setForm(emptyForm(tenantId));
-      refresh();
+      refresh(summary?.lookup?.ip);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'create failed');
     } finally {
@@ -157,14 +184,19 @@ export function ThreatFeeds(): JSX.Element {
 
   const toggleEnabled = async (feed: ThreatFeed) => {
     await client.updateThreatFeed(feed.id, { enabled: !feed.enabled });
-    refresh();
+    refresh(summary?.lookup?.ip);
   };
 
   const remove = async () => {
     if (!confirmId) return;
     await client.deleteThreatFeed(confirmId);
     setConfirmId(null);
-    refresh();
+    refresh(summary?.lookup?.ip);
+  };
+
+  const checkIP = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await refresh(ipQuery);
   };
 
   const meta = FEED_META[form.feed_type];
@@ -292,6 +324,169 @@ export function ThreatFeeds(): JSX.Element {
           </SelectField>
         }
       />
+
+      <Panel
+        padding="md"
+        eyebrow="RUNTIME BLACKLIST"
+        title="Current blacklist database"
+        toneAccent={summary?.lookup?.listed ? 'critical' : 'brand'}
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => refresh(summary?.lookup?.ip)}
+            disabled={summaryLoading}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${summaryLoading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
+        }
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <KpiTile
+            label="Indicators loaded"
+            value={summary?.available ? formatCount(summary.total_indicators) : 'pending'}
+            tone={summary?.available ? 'healthy' : 'warning'}
+            icon={<Database />}
+            loading={summaryLoading && !summary}
+          />
+          <KpiTile
+            label="Active sources"
+            value={summary?.available ? String(summary.sources.length) : '0'}
+            tone={(summary?.sources.length ?? 0) > 0 ? 'brand' : 'warning'}
+            loading={summaryLoading && !summary}
+          />
+          <KpiTile
+            label="Global indicators"
+            value={summary?.available ? formatCount(summary.global_indicators) : '0'}
+            tone="unknown"
+            loading={summaryLoading && !summary}
+          />
+          <KpiTile
+            label="Tenant indicators"
+            value={summary?.available ? formatCount(summary.tenant_indicators) : '0'}
+            tone={summary?.tenant_indicators ? 'brand' : 'unknown'}
+            loading={summaryLoading && !summary}
+          />
+        </div>
+
+        <form onSubmit={checkIP} className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+          <Input
+            value={ipQuery}
+            onChange={(e) => setIpQuery(e.target.value)}
+            placeholder="Check an IP, e.g. 45.135.193.156"
+            aria-label="Check IP against current blacklist database"
+            className="md:max-w-sm"
+          />
+          <Button type="submit" variant="primary" disabled={!ipQuery.trim() || summaryLoading}>
+            <Search className="h-3.5 w-3.5" /> Check IP
+          </Button>
+          {summary?.generated_at && (
+            <span className="font-mono text-xs text-text-muted">
+              refreshed {formatDateTime(summary.generated_at)}
+            </span>
+          )}
+        </form>
+
+        {summaryError && <p className="mt-3 text-sm text-state-critical">{summaryError}</p>}
+
+        {summary?.lookup && (
+          <div className="mt-4 rounded-md border border-border-subtle bg-surface p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {summary.lookup.listed ? (
+                  <ShieldAlert className="h-4 w-4 text-state-critical" />
+                ) : (
+                  <ShieldCheck className="h-4 w-4 text-state-healthy" />
+                )}
+                <span className="font-mono text-sm font-semibold text-foreground">{summary.lookup.ip}</span>
+                <StatusTag tone={summary.lookup.listed ? 'critical' : 'healthy'}>
+                  {summary.lookup.listed ? 'LISTED' : 'NOT LISTED'}
+                </StatusTag>
+              </div>
+              <span className="font-mono text-xs text-text-muted">
+                Confidence {summary.lookup.score}/100
+              </span>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-2">
+              <div
+                className={`h-full ${summary.lookup.listed ? 'bg-state-critical' : 'bg-state-healthy'}`}
+                style={{ width: `${Math.max(0, Math.min(summary.lookup.score, 100))}%` }}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {summary.lookup.feeds.length > 0 ? summary.lookup.feeds.map((feed) => (
+                <StatusTag key={feed} tone="critical">{feed}</StatusTag>
+              )) : (
+                <span className="text-xs text-text-muted">No matching feed entries.</span>
+              )}
+            </div>
+            {summary.lookup.matches.length > 0 && (
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="border-b border-border-subtle uppercase tracking-wider text-text-muted">
+                    <tr>
+                      <th className="px-2 py-1">Feed</th>
+                      <th className="px-2 py-1">Match</th>
+                      <th className="px-2 py-1">Score</th>
+                      <th className="px-2 py-1">First seen</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-subtle">
+                    {summary.lookup.matches.map((match, idx) => (
+                      <tr key={`${match.feed ?? 'feed'}-${match.cidr ?? match.ip ?? idx}`}>
+                        <td className="px-2 py-1 font-medium text-foreground">{match.feed ?? 'unknown'}</td>
+                        <td className="px-2 py-1 font-mono text-text-secondary">{match.cidr || match.ip || '-'}</td>
+                        <td className="px-2 py-1 font-mono text-text-secondary">{match.score}</td>
+                        <td className="px-2 py-1 font-mono text-text-secondary">{formatDateTime(match.first_seen)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {summary?.available ? (
+          <div className="mt-4 overflow-x-auto rounded-md border border-border-subtle">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-surface-2 text-xs uppercase tracking-wider text-text-muted">
+                <tr>
+                  <th className="px-3 py-2">Source</th>
+                  <th className="px-3 py-2">Scope</th>
+                  <th className="px-3 py-2">Indicators</th>
+                  <th className="px-3 py-2">Max confidence</th>
+                  <th className="px-3 py-2">Sample</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-subtle">
+                {summary.sources.map((source) => (
+                  <tr key={`${source.scope}-${source.feed}-${source.category ?? ''}`}>
+                    <td className="px-3 py-2">
+                      <span className="font-medium text-foreground">{source.feed}</span>
+                      {source.category && <span className="ml-2 text-xs text-text-muted">{source.category}</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      <StatusTag tone={source.scope === 'global' ? 'info' : 'healthy'}>{source.scope}</StatusTag>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-secondary">{formatCount(source.indicators)}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-secondary">{source.max_score}/100</td>
+                    <td className="px-3 py-2">
+                      <span className="font-mono text-xs text-text-muted">
+                        {(source.sample ?? []).slice(0, 3).map((item) => item.cidr || item.ip).filter(Boolean).join(', ') || '-'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-text-muted">
+            Blacklist cache is still warming up. It appears here after the next successful threat-intel refresh.
+          </p>
+        )}
+      </Panel>
 
       <Panel padding="md" eyebrow="ADD SOURCE" title="Register a threat feed" toneAccent="brand">
         <form onSubmit={submit} className="flex flex-col gap-4">

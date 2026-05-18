@@ -1110,6 +1110,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/mfa/webauthn/step-up/begin", s.handleWebAuthnStepUpBegin)
 	s.baseRouter.HandleFunc("/api/v1/threat-feeds", s.handleThreatFeedsCollection)
 	s.baseRouter.HandleFunc("/api/v1/threat-feeds/", s.handleThreatFeedSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/threat-intel/summary", s.handleThreatIntelSummary)
 	s.baseRouter.HandleFunc("/api/v1/events/ingest", s.handleEventsIngest)
 	s.baseRouter.HandleFunc("/api/v1/connections", s.handleConnectionsList)
 	s.baseRouter.HandleFunc("/api/v1/connections/", s.handleConnectionDetail)

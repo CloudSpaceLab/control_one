@@ -1,6 +1,6 @@
 import { Ban, Check, Copy, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Eyebrow, StatusTag, type StateTone } from '@/components/kit';
+import { Eyebrow, IpActionMenu, StatusTag, type StateTone } from '@/components/kit';
 import {
   HoverCard,
   HoverCardContent,
@@ -65,16 +65,27 @@ export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMu
               <Button variant="secondary" size="sm" onClick={onTag}>
                 <Tag className="h-3.5 w-3.5" /> Tag
               </Button>
-              <HoverCard>
-                <HoverCardTrigger asChild>
-                  <Button variant="danger" size="sm" onClick={() => onAction?.('block')}>
-                    <Ban className="h-3.5 w-3.5" /> Block
-                  </Button>
-                </HoverCardTrigger>
-                <HoverCardContent className="w-56 text-xs">
-                  Blocks this entity at the policy layer. Emits an audit row and a remediation event.
-                </HoverCardContent>
-              </HoverCard>
+              {type === 'ip' ? (
+                <IpActionMenu
+                  ip={id}
+                  trigger={
+                    <Button variant="danger" size="sm">
+                      <Ban className="h-3.5 w-3.5" /> Block
+                    </Button>
+                  }
+                />
+              ) : (
+                <HoverCard>
+                  <HoverCardTrigger asChild>
+                    <Button variant="danger" size="sm" onClick={() => onAction?.('block')}>
+                      <Ban className="h-3.5 w-3.5" /> Block
+                    </Button>
+                  </HoverCardTrigger>
+                  <HoverCardContent className="w-56 text-xs">
+                    Blocks this entity at the policy layer. Emits an audit row and a remediation event.
+                  </HoverCardContent>
+                </HoverCard>
+              )}
               <Button variant="ghost" size="sm" onClick={() => onAction?.('allow')}>
                 <Check className="h-3.5 w-3.5" /> Allow
               </Button>
