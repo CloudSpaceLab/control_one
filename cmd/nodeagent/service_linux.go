@@ -87,21 +87,7 @@ func detectInitSystem() initSystem {
 }
 
 func installSystemd(binaryPath, configPath string) error {
-	unit := fmt.Sprintf(`[Unit]
-Description=Control One Node Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%s --config %s
-Restart=on-failure
-RestartSec=10
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-`, binaryPath, configPath)
+	unit := systemdUnit(binaryPath, configPath)
 
 	if err := os.WriteFile(systemdUnitPath, []byte(unit), 0644); err != nil {
 		return fmt.Errorf("write service file: %w", err)

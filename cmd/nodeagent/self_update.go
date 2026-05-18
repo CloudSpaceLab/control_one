@@ -388,7 +388,7 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 		zap.String("path", exe),
 		zap.Int("release_seq", manifest.ReleaseSeq))
 
-	// Exit cleanly — systemd/OpenRC/SCM will restart us because we're
-	// configured with Restart=on-success (or equivalent).
+	// Exit cleanly. Service managers must be configured to restart the agent
+	// after a successful handoff so the freshly replaced binary is launched.
 	os.Exit(0)
 }
