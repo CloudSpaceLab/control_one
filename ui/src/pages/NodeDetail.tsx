@@ -549,7 +549,9 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     },
     [includeInternal, isListening, listeningOnly, shapedRows],
   );
-  const hiddenRows = Math.max(0, rows.length - visibleRows.length);
+  const externalHiddenRows =
+    !listeningOnly && !includeInternal ? Math.max(0, shapedRows.length - visibleRows.length) : 0;
+  const incompleteRows = Math.max(0, rows.length - shapedRows.length);
 
   useEffect(() => {
     let cancelled = false;
@@ -684,9 +686,14 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
-        {!listeningOnly && hiddenRows > 0 && (
+        {externalHiddenRows > 0 && (
           <p className="mb-3 text-xs text-text-muted">
-            Showing external peers only; {hiddenRows} internal, listener, or incomplete row{hiddenRows === 1 ? '' : 's'} hidden.
+            Showing external peers only; {externalHiddenRows} internal or listener row{externalHiddenRows === 1 ? '' : 's'} hidden.
+          </p>
+        )}
+        {incompleteRows > 0 && (
+          <p className="mb-3 text-xs text-text-muted">
+            Suppressed {incompleteRows} incomplete placeholder row{incompleteRows === 1 ? '' : 's'} with no usable peer, process, or port.
           </p>
         )}
         {!loading && visibleRows.length === 0 ? (
