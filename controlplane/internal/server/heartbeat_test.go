@@ -611,6 +611,32 @@ func TestHeartbeatAgentUpdateCompletionMarksJobSucceeded(t *testing.T) {
 	}
 }
 
+func TestHeartbeatAgentUpdateAlreadyCurrentIsSucceeded(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	jobID := uuid.New()
+	store := &fakeStore{jobs: map[uuid.UUID]*storage.Job{
+		jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeAgentUpdate, Status: storage.JobStatusRunning},
+	}}
+	srv := &Server{logger: zap.NewNop(), store: store}
+
+	srv.processHeartbeatCompletedActions(context.Background(), uuid.New(), []heartbeatCompletedAction{{
+		Action: JobTypeAgentUpdate,
+		JobID:  jobID.String(),
+		Status: "failed",
+		Error:  "self-update skipped: downgrade refused (manifest seq 4 <= current 4)",
+	}})
+
+	if got := store.jobs[jobID].Status; got != storage.JobStatusSucceeded {
+		t.Fatalf("job status = %s, want succeeded", got)
+	}
+	events := store.events[jobID]
+	if len(events) != 1 || events[0].Message != "agent already on current or newer release; update skipped safely" {
+		t.Fatalf("events = %#v, want already-current success event", events)
+	}
+}
+
 func TestHeartbeatReleaseSeqRetiresRunningAgentUpdateJob(t *testing.T) {
 	t.Parallel()
 
