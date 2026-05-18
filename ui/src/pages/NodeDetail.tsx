@@ -556,7 +556,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     return () => {
       cancelled = true;
     };
-  }, [api, countries, filteredRows]);
+  }, [api, countries, filteredRows, tenantId]);
 
   const [listeningOnly, setListeningOnly] = useState(false);
 
