@@ -78,8 +78,8 @@ export function IpEnrichmentCard({ enrichment, loading }: IpEnrichmentCardProps)
   );
 }
 
-function formatAsn(asn?: string): string {
-  const trimmed = asn?.trim();
+function formatAsn(asn?: string | number | null): string {
+  const trimmed = asn == null ? '' : String(asn).trim();
   if (!trimmed) return '-';
   return trimmed.toUpperCase().startsWith('AS') ? trimmed : `AS${trimmed}`;
 }
