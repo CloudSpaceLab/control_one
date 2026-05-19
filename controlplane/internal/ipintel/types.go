@@ -1,15 +1,18 @@
 // Package ipintel orchestrates IP enrichment lookups (geolocation, ASN,
-// reputation) for the Investigate surface. It supports two providers:
+// reputation) for background refresh jobs and explicit cache fills. Request
+// handlers should use threatintel's local feed snapshot plus LookupCached so
+// investigation pivots do not spend external reputation API quota. The service
+// supports two providers:
 //
-//   - akyriako/ipquery — self-hosted REST service that bundles geo + ASN +
+//   - akyriako/ipquery - self-hosted REST service that bundles geo + ASN +
 //     AbuseIPDB risk into one response. Used when Config.IpqueryBaseURL is
 //     set; preferred since it gives the richest payload in one round-trip.
-//   - AbuseIPDB direct — used standalone when IpqueryBaseURL is empty but
+//   - AbuseIPDB direct - used standalone when IpqueryBaseURL is empty but
 //     AbuseIPDBKey is set. Returns risk-only (no geo / ASN).
 //
 // The Service caches successful lookups in Postgres (ip_enrichment_cache)
-// for Config.CacheTTL so repeat investigations don't burn through external
-// rate limits. Failures are not cached.
+// for Config.CacheTTL so cached geo/reputation can be reused without live
+// provider calls. Failures are not cached.
 package ipintel
 
 import (

@@ -955,29 +955,23 @@ func (s *Server) lookupIPBehaviorEnrichment(ctx context.Context, tenantID uuid.U
 			return out
 		}
 	}
-	if s.ipIntel == nil || !s.ipIntel.Enabled() {
-		s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
-		cache[ip] = out
-		return out
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
-	defer cancel()
-	enriched, err := s.ipIntel.Lookup(lookupCtx, ip)
-	if err != nil || enriched == nil {
-		s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
-		cache[ip] = out
-		return out
-	}
-	out["country"] = enriched.Geo.Country
-	out["country_code"] = enriched.Geo.CountryCode
-	out["region"] = enriched.Geo.Region
-	out["asn"] = enriched.Geo.ASN
-	out["isp"] = firstNonEmpty(enriched.Geo.ISP, enriched.Geo.Org)
-	out["usage_type"] = enriched.UsageType
-	out["is_tor"] = enriched.IsTor
-	out["reputation_score"] = enriched.ReputationScore
-	if len(enriched.ThreatFeeds) > 0 {
-		out["threat_feeds"] = enriched.ThreatFeeds
+	if s.ipIntel != nil {
+		lookupCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		defer cancel()
+		if enriched, ok, err := s.ipIntel.LookupCached(lookupCtx, ip); err == nil && ok && enriched != nil {
+			out["country"] = enriched.Geo.Country
+			out["country_code"] = enriched.Geo.CountryCode
+			out["region"] = enriched.Geo.Region
+			out["asn"] = enriched.Geo.ASN
+			out["isp"] = firstNonEmpty(enriched.Geo.ISP, enriched.Geo.Org)
+			out["usage_type"] = enriched.UsageType
+			out["is_tor"] = enriched.IsTor
+			out["reputation_score"] = enriched.ReputationScore
+			out["content_source"] = enriched.Source
+			if len(enriched.ThreatFeeds) > 0 {
+				out["threat_feeds"] = enriched.ThreatFeeds
+			}
+		}
 	}
 	s.mergeThreatIntelIntoBehaviorEnrichment(tenantID, parsed, out)
 	cache[ip] = out

@@ -18,9 +18,9 @@ type Cache interface {
 	Put(ctx context.Context, ip string, e *Enrichment, ttl time.Duration) error
 }
 
-// Service is the unified entry point used by the HTTP handler. It picks a
-// provider based on config, applies cache + single-flight, and returns a
-// canonical Enrichment.
+// Service is the unified entry point for cached enrichment and explicit
+// provider refreshes. It picks a provider based on config, applies cache +
+// single-flight, and returns a canonical Enrichment.
 type Service struct {
 	cfg       config.IPIntelConfig
 	primary   Provider // ipquery or abuseipdb
@@ -62,6 +62,24 @@ func (s *Service) Enabled() bool { return s.primary != nil }
 // surface a friendly empty enrichment, not a 500.
 var ErrDisabled = errors.New("ipintel: disabled (no provider configured)")
 
+// LookupCached returns an enrichment entry only when it already exists in the
+// local cache. It never calls an external provider, so request-path callers can
+// safely use it without spending IP reputation API quota.
+func (s *Service) LookupCached(ctx context.Context, ip string) (*Enrichment, bool, error) {
+	if parsed := net.ParseIP(ip); parsed == nil {
+		return nil, false, errors.New("ipintel: invalid ip")
+	}
+	if s == nil || s.cache == nil || s.cfg.CacheTTL <= 0 {
+		return nil, false, nil
+	}
+	hit, ok, err := s.cache.Get(ctx, ip)
+	if err != nil || !ok || hit == nil {
+		return nil, ok, err
+	}
+	hit.Source = "cache"
+	return hit, true, nil
+}
+
 // Lookup returns enrichment for ip, hitting cache first, then the primary
 // provider, falling back to the secondary on hard errors. Successful
 // lookups are cached for cfg.CacheTTL.
@@ -74,8 +92,7 @@ func (s *Service) Lookup(ctx context.Context, ip string) (*Enrichment, error) {
 	}
 
 	if s.cache != nil && s.cfg.CacheTTL > 0 {
-		if hit, ok, err := s.cache.Get(ctx, ip); err == nil && ok {
-			hit.Source = "cache"
+		if hit, ok, err := s.LookupCached(ctx, ip); err == nil && ok {
 			if s.secondary != nil && shouldCheckSecondary(hit, s.AbuseScoreCutoff()) {
 				if secondary, secErr := s.secondary.Lookup(ctx, ip); secErr == nil && secondary != nil {
 					hit = mergeEnrichment(hit, secondary)

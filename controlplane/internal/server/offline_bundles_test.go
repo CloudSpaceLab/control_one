@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,8 +23,10 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 )
 
 func TestOfflineBundleImportRecordsAuditAndEnablesOfflineEnrichment(t *testing.T) {
@@ -96,6 +99,50 @@ func TestOfflineBundleImportRejectsInvalidSignatureAndAudits(t *testing.T) {
 	}
 	if len(store.audits) != 1 || store.audits[0].Status != "rejected" {
 		t.Fatalf("audits = %#v, want rejected audit", store.audits)
+	}
+}
+
+func TestIPBehaviorEnrichmentUsesLocalThreatIntelWithoutLiveLookup(t *testing.T) {
+	tenantID := uuid.New()
+	var providerCalls int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&providerCalls, 1)
+		http.Error(w, "unexpected live lookup", http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	mgr := threatintel.New(threatintel.Config{
+		RefreshInterval: time.Hour,
+		HTTPTimeout:     time.Second,
+		Sources: []threatintel.Source{staticThreatSource{indicators: []threatintel.Indicator{{
+			TenantID:  tenantID.String(),
+			IP:        "45.135.193.156",
+			Feed:      "abuseipdb",
+			Category:  "abuse",
+			Score:     100,
+			FirstSeen: time.Date(2026, 5, 18, 18, 0, 2, 0, time.UTC),
+		}}}},
+	}, zap.NewNop())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Start(ctx)
+	waitThreatIntelCurrent(t, mgr)
+
+	s := &Server{
+		logger:      zap.NewNop(),
+		threatIntel: mgr,
+		ipIntel: ipintel.New(config.IPIntelConfig{
+			Enabled:        true,
+			IpqueryBaseURL: upstream.URL,
+			CacheTTL:       time.Minute,
+			HTTPTimeout:    time.Second,
+		}, ipintel.NewMemCache()),
+	}
+	enrich := s.lookupIPBehaviorEnrichment(context.Background(), tenantID, "45.135.193.156", map[string]map[string]any{})
+	if got := atomic.LoadInt32(&providerCalls); got != 0 {
+		t.Fatalf("request-path enrichment called live provider %d time(s)", got)
+	}
+	if enrich["reputation_score"] != 100 || firstThreatFeedName(enrich["threat_feeds"]) != "abuseipdb" {
+		t.Fatalf("expected local blacklist enrichment, got %#v", enrich)
 	}
 }
 

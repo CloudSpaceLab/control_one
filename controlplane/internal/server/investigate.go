@@ -454,13 +454,27 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 		ThreatFeeds: []ipintel.ThreatFeedHit{},
 	}
 
-	// Live enrichment via ipquery / AbuseIPDB. Failures degrade silently —
-	// classification (RFC1918 / asset / threat-feed catalog) still works.
 	var threatFeedRows []TFRow
+	// Blacklist reputation is resolved from the local threat-intel snapshot.
+	// The manager refreshes RBL/provider datasets in the background; investigate
+	// requests should not burn one-off AbuseIPDB checks for every IP pivot.
+	if matches := s.threatIntelIPMatches(tenantID, ip); len(matches) > 0 {
+		hits, rows, score := threatIndicatorsToEnrichment(matches)
+		resp.ThreatFeeds = mergeIPThreatFeedHits(resp.ThreatFeeds, hits)
+		threatFeedRows = append(threatFeedRows, rows...)
+		if score > resp.ReputationScore {
+			resp.ReputationScore = score
+		}
+		resp.Source = "threat_feeds"
+	}
+
+	// Cached geo/reputation enrichments are still useful, but this endpoint now
+	// reads only the local cache. Live provider refresh belongs in background
+	// jobs or explicit feed syncs, not the investigation request path.
 	if s.ipIntel != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
 		defer cancel()
-		if e, err := s.ipIntel.Lookup(ctx, addr); err == nil && e != nil {
+		if e, ok, err := s.ipIntel.LookupCached(ctx, addr); err == nil && ok && e != nil {
 			resp.Geo = ipGeoBlock{
 				Country:     e.Geo.Country,
 				CountryCode: e.Geo.CountryCode,
@@ -473,38 +487,32 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 				Org:         e.Geo.Org,
 				ISP:         e.Geo.ISP,
 			}
-			resp.ThreatFeeds = e.ThreatFeeds
-			resp.ReputationScore = e.ReputationScore
+			resp.ThreatFeeds = mergeIPThreatFeedHits(resp.ThreatFeeds, e.ThreatFeeds)
+			if e.ReputationScore > resp.ReputationScore {
+				resp.ReputationScore = e.ReputationScore
+			}
 			resp.UsageType = e.UsageType
 			resp.IsTor = e.IsTor
-			resp.TotalReports = e.TotalReports
+			if e.TotalReports > resp.TotalReports {
+				resp.TotalReports = e.TotalReports
+			}
 			resp.LastReportedAt = e.LastReportedAt
-			resp.Source = e.Source
+			if resp.Source == "" {
+				resp.Source = e.Source
+			} else if e.Source != "" && !strings.Contains(resp.Source, e.Source) {
+				resp.Source += "+" + e.Source
+			}
 			// Convert threat-feed hits into the legacy TFRow shape consumed
 			// by ClassifyIP so the chip set reflects external feeds too.
 			for _, t := range e.ThreatFeeds {
 				threatFeedRows = append(threatFeedRows, TFRow{Feed: t.Feed, Severity: t.Severity})
 			}
-		} else if err != nil && !errors.Is(err, ipintel.ErrDisabled) {
-			s.logger.Warn("ipintel lookup failed",
+		} else if err != nil {
+			s.logger.Warn("ipintel cache lookup failed",
 				zap.String("addr", addr),
 				zap.Error(err))
 		}
 	}
-	if matches := s.threatIntelIPMatches(tenantID, ip); len(matches) > 0 {
-		hits, rows, score := threatIndicatorsToEnrichment(matches)
-		resp.ThreatFeeds = mergeIPThreatFeedHits(resp.ThreatFeeds, hits)
-		threatFeedRows = append(threatFeedRows, rows...)
-		if score > resp.ReputationScore {
-			resp.ReputationScore = score
-		}
-		if resp.Source == "" {
-			resp.Source = "threat_feeds"
-		} else if !strings.Contains(resp.Source, "threat_feeds") {
-			resp.Source += "+threat_feeds"
-		}
-	}
-
 	resp.Classification = ClassifyIP(addr, assets, threatFeedRows)
 	if resp.IsTor {
 		resp.Classification = append(resp.Classification, ClassificationChip{Label: "TOR", Severity: "critical"})

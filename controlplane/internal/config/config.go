@@ -55,12 +55,13 @@ type PolicyConfig struct {
 	PublicKeyFile string `mapstructure:"public_key_file"`
 }
 
-// IPIntelConfig governs the IP enrichment pipeline that backs Investigate
-// /api/v1/entities/ip/{addr}/enrich. When IpqueryBaseURL is set the service
-// calls a self-hosted akyriako/ipquery instance for combined geo + ASN +
-// risk lookups; otherwise it falls back to AbuseIPDB-only when an API key
+// IPIntelConfig governs external IP enrichment cache fills. Request-path
+// blacklist checks use the local threat-intel snapshot first and read only
+// cached enrichment from this service. When IpqueryBaseURL is set the service
+// can call a self-hosted akyriako/ipquery instance for combined geo + ASN +
+// risk lookups; otherwise it can fall back to AbuseIPDB-only when an API key
 // is configured. Results are cached in Postgres (ip_enrichment_cache) for
-// CacheTTL — set to 0 to disable caching, default 1h.
+// CacheTTL; set to 0 to disable caching, default 1h.
 type IPIntelConfig struct {
 	Enabled          bool          `mapstructure:"enabled"`
 	IpqueryBaseURL   string        `mapstructure:"ipquery_base_url"`

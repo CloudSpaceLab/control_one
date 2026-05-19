@@ -146,6 +146,40 @@ func TestServiceCachesSuccess(t *testing.T) {
 	}
 }
 
+func TestServiceLookupCachedDoesNotCallProvider(t *testing.T) {
+	cache := NewMemCache()
+	if err := cache.Put(context.Background(), "8.8.8.8", &Enrichment{
+		Addr:            "8.8.8.8",
+		ReputationScore: 77,
+		Source:          "abuseipdb",
+	}, time.Minute); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	doer := &stubDoer{resp: makeJSONResp(500, map[string]any{})}
+	cfg := config.IPIntelConfig{
+		Enabled:        true,
+		IpqueryBaseURL: "https://ipq.example",
+		CacheTTL:       time.Minute,
+		HTTPTimeout:    time.Second,
+	}
+	svc := New(cfg, cache)
+	svc.primary = NewIpqueryProvider(cfg.IpqueryBaseURL, doer)
+
+	got, ok, err := svc.LookupCached(context.Background(), "8.8.8.8")
+	if err != nil {
+		t.Fatalf("cached lookup: %v", err)
+	}
+	if !ok || got == nil {
+		t.Fatal("expected cached enrichment")
+	}
+	if got.Source != "cache" || got.ReputationScore != 77 {
+		t.Fatalf("unexpected cached enrichment: %+v", got)
+	}
+	if doer.last != nil {
+		t.Fatalf("LookupCached called provider: %s", doer.last.URL.String())
+	}
+}
+
 func TestServiceDisabledWithoutProvider(t *testing.T) {
 	svc := New(config.IPIntelConfig{Enabled: true}, nil)
 	if svc.Enabled() {
