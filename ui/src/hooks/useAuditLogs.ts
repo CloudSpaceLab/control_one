@@ -50,6 +50,26 @@ export function useAuditLogs(params: ListAuditLogsParams = {}): UseAuditLogsResu
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!normalizedParams.tenant_id) {
+      setState({
+        data: [],
+        pagination: {
+          total: 0,
+          count: 0,
+          limit: normalizedParams.limit ?? 0,
+          offset: normalizedParams.offset ?? 0,
+          nextOffset: null,
+          prevOffset: null,
+        },
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     api
