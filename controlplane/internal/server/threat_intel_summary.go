@@ -138,6 +138,7 @@ func (s *Server) handleThreatIntelSummary(w http.ResponseWriter, r *http.Request
 			Matches: make([]threatIntelIndicatorSample, 0, len(matches)),
 		}
 		seenFeeds := map[string]struct{}{}
+		seenMatches := map[string]struct{}{}
 		for _, ind := range matches {
 			if ind.Score > lookup.Score {
 				lookup.Score = ind.Score
@@ -149,6 +150,16 @@ func (s *Server) handleThreatIntelSummary(w http.ResponseWriter, r *http.Request
 					lookup.Feeds = append(lookup.Feeds, feed)
 				}
 			}
+			matchKey := strings.Join([]string{
+				feed,
+				strings.TrimSpace(ind.CIDR),
+				strings.TrimSpace(ind.IP),
+				strings.TrimSpace(ind.Category),
+			}, "|")
+			if _, ok := seenMatches[matchKey]; ok {
+				continue
+			}
+			seenMatches[matchKey] = struct{}{}
 			lookup.Matches = append(lookup.Matches, newThreatIntelIndicatorSample(ind))
 		}
 		sort.Strings(lookup.Feeds)
