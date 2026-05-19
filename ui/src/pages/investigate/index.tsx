@@ -22,7 +22,13 @@ export function InvestigateHome(): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const rememberSearch = (value: string) => {
-    setRecents((prev) => [value, ...prev.filter((item) => item !== value)].slice(0, 25));
+    const next = [value, ...recents.filter((item) => item !== value)].slice(0, 25);
+    setRecents(next);
+    try {
+      window.localStorage.setItem('co.search.recents', JSON.stringify(next));
+    } catch {
+      // Ignore private-mode and quota errors; the in-memory state still updates.
+    }
   };
 
   const handleSearch = () => {
