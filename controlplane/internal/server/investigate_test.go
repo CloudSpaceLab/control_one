@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -15,6 +16,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 )
 
 // ----- Type-detection table-driven test -----
@@ -277,6 +279,52 @@ func TestIPEnrich_ClassifiesPublic(t *testing.T) {
 	}
 }
 
+func TestIPEnrich_UsesLocalThreatIntelSnapshot(t *testing.T) {
+	srv := newInvestigateServer(t)
+	tenantID := uuid.New()
+	mgr := threatintel.New(threatintel.Config{
+		RefreshInterval: time.Hour,
+		HTTPTimeout:     time.Second,
+		Sources: []threatintel.Source{staticThreatSource{indicators: []threatintel.Indicator{{
+			TenantID:  tenantID.String(),
+			IP:        "45.135.193.156",
+			Feed:      "abuseipdb",
+			Category:  "abuse",
+			Score:     100,
+			FirstSeen: time.Date(2026, 5, 18, 18, 0, 2, 0, time.UTC),
+		}}}},
+	}, zap.NewNop())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Start(ctx)
+	waitThreatIntelCurrent(t, mgr)
+	srv.threatIntel = mgr
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/entities/ip/45.135.193.156/enrich?tenant_id="+tenantID.String(), nil)
+	req = withPrincipal(req, viewerPrincipal())
+	rec := httptest.NewRecorder()
+	srv.handleEntitySubroutes(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp ipEnrichResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ReputationScore != 100 {
+		t.Fatalf("expected local blacklist score 100, got %+v", resp)
+	}
+	if resp.Source != "threat_feeds" {
+		t.Fatalf("expected threat feed source, got %q", resp.Source)
+	}
+	if len(resp.ThreatFeeds) != 1 || resp.ThreatFeeds[0].Feed != "abuseipdb" {
+		t.Fatalf("expected abuseipdb threat feed hit, got %+v", resp.ThreatFeeds)
+	}
+	if !containsChip(resp.Classification, "BLACKLISTED:abuseipdb") {
+		t.Fatalf("expected blacklist chip, got %+v", resp.Classification)
+	}
+}
+
 func TestProcessTree_DegradesGracefully(t *testing.T) {
 	t.Parallel()
 	srv := newInvestigateServer(t)
@@ -289,5 +337,31 @@ func TestProcessTree_DegradesGracefully(t *testing.T) {
 	}
 }
 
-// silence unused import if context-helpers shift later.
-var _ = context.Background
+type staticThreatSource struct {
+	indicators []threatintel.Indicator
+}
+
+func (s staticThreatSource) Name() string {
+	return "test-local"
+}
+
+func (s staticThreatSource) Fetch(context.Context, *http.Client) ([]threatintel.Indicator, error) {
+	return append([]threatintel.Indicator(nil), s.indicators...), nil
+}
+
+func waitThreatIntelCurrent(t *testing.T, mgr *threatintel.Manager) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for threat intel snapshot")
+		case <-tick.C:
+			if mgr.Current() != nil {
+				return
+			}
+		}
+	}
+}
