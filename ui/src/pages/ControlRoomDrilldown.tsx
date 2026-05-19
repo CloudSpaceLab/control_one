@@ -781,7 +781,14 @@ function publicListenerIsGap(listener: ControlRoomPublicListener): boolean {
 
 function publicListenerName(listener: ControlRoomPublicListener): string {
   const service = listener.service_kind || listener.process || 'listener';
-  return `${service} on ${listener.listen_addr}:${listener.port}`;
+  return `${service} on ${formatListenAddress(listener.listen_addr, listener.port)}`;
+}
+
+function formatListenAddress(addr: string, port: number): string {
+  const trimmed = addr.trim();
+  if (trimmed === '::' || trimmed === '[::]') return `[::]:${port}`;
+  if (trimmed.includes(':') && !trimmed.startsWith('[')) return `[${trimmed}]:${port}`;
+  return `${trimmed || '0.0.0.0'}:${port}`;
 }
 
 interface AppDBApplicationRow {
