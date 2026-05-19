@@ -27,6 +27,7 @@ func (s *Server) startThreatIntelManager() {
 	mgr := threatintel.New(threatintel.Config{
 		RefreshInterval: threatIntelRefreshInterval,
 		HTTPTimeout:     30 * time.Second,
+		SnapshotDir:     s.threatIntelSnapshotDir(),
 		Sources:         s.staticThreatIntelSources(),
 		Provider:        provider,
 	}, s.logger)
@@ -43,10 +44,21 @@ func (s *Server) staticThreatIntelSources() []threatintel.Source {
 		threatintel.FireHOLLevel1{},
 		threatintel.TorExitNodes{},
 	}
-	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.IPIntel.AbuseIPDBKey) != "" {
-		sources = append(sources, threatintel.AbuseIPDBBlocklist{APIKey: s.cfg.IPIntel.AbuseIPDBKey})
+	abuseKey := ""
+	if s != nil && s.cfg != nil {
+		abuseKey = strings.TrimSpace(s.cfg.IPIntel.AbuseIPDBKey)
+	}
+	if abuseKey != "" || threatintel.SnapshotExists(s.threatIntelSnapshotDir(), "static", "abuseipdb") {
+		sources = append(sources, threatintel.AbuseIPDBBlocklist{APIKey: abuseKey})
 	}
 	return sources
+}
+
+func (s *Server) threatIntelSnapshotDir() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.cfg.ThreatIntel.SnapshotDir)
 }
 
 type serverThreatFeedProvider struct {
@@ -75,6 +87,7 @@ func (p *serverThreatFeedProvider) Sources(ctx context.Context) ([]threatintel.P
 			nullStringValue(feed.URL),
 			apiKey,
 			nullStringValue(feed.Category),
+			feed.ScoreFloor,
 		)
 		if err != nil {
 			if p.log != nil {

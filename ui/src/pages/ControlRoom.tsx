@@ -186,7 +186,7 @@ export function ControlRoom(): JSX.Element {
   const quickQuestions = overview ? buildQuickQuestions(overview, laneByID, totalPending) : [];
 
   return (
-    <div className="flex flex-col gap-5 p-6">
+    <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="CONTROL ROOM"
         title="Fleet status"

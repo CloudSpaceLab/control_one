@@ -42,7 +42,7 @@ export function FinacleProfiles(): JSX.Element {
   };
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <SectionHeader
         title="Finacle profiles"
         description="Bind branch staff to shifts and rotate access at shift boundaries — fail-closed on enable, fail-open on disable."

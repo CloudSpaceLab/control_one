@@ -25,6 +25,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -35,14 +37,14 @@ import (
 
 // Indicator represents one bad IP / CIDR with provenance.
 type Indicator struct {
-	TenantID  string // empty means global / built-in source
-	IP        string // single IP if no /n
-	CIDR      string // canonical CIDR string when source supplied a netblock
-	Feed      string // feed identifier
-	Category  string // optional taxonomy ("scanner", "tor-exit", "malware", ...)
-	Score     int    // 0-100 confidence
-	FirstSeen time.Time
-	Evidence  string
+	TenantID  string    `json:"tenant_id,omitempty"`  // empty means global / built-in source
+	IP        string    `json:"ip,omitempty"`         // single IP if no /n
+	CIDR      string    `json:"cidr,omitempty"`       // canonical CIDR string when source supplied a netblock
+	Feed      string    `json:"feed"`                 // feed identifier
+	Category  string    `json:"category,omitempty"`   // optional taxonomy ("scanner", "tor-exit", "malware", ...)
+	Score     int       `json:"score"`                // 0-100 confidence
+	FirstSeen time.Time `json:"first_seen,omitempty"` // when the source first observed this indicator
+	Evidence  string    `json:"evidence,omitempty"`
 }
 
 // IndicatorSet is the in-memory view used for fast lookup. Keyed by canonical
@@ -122,6 +124,10 @@ type Source interface {
 type Config struct {
 	RefreshInterval time.Duration // default 1h
 	HTTPTimeout     time.Duration // default 30s
+	// SnapshotDir stores the last successful pull for each source. Runtime
+	// lookups use the in-memory IndicatorSet built from these snapshots, so
+	// investigate pages never need to spend provider API quota.
+	SnapshotDir string
 	// Sources is the static fallback list. Operators primarily add feeds via
 	// the threat_feeds table, but the static list still works for the no-DB
 	// dev case and for "always-on" baseline feeds shipped with the product.
@@ -226,13 +232,10 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 		}
 		for _, ps := range provided {
 			fetchCtx, cancel := context.WithTimeout(ctx, m.cfg.HTTPTimeout)
-			inds, err := ps.Source.Fetch(fetchCtx, m.httpClient)
+			inds, status, errMsg := m.fetchSource(fetchCtx, ps.ID, ps.Source)
 			cancel()
-			if err != nil {
-				if m.log != nil {
-					m.log.Warn("threat feed fetch", zap.String("feed", ps.Source.Name()), zap.Error(err))
-				}
-				m.cfg.Provider.OnRefresh(ctx, ps.ID, "error", err.Error(), 0)
+			if len(inds) == 0 && status == "error" {
+				m.cfg.Provider.OnRefresh(ctx, ps.ID, "error", errMsg, 0)
 				continue
 			}
 			if tenantID := strings.TrimSpace(ps.TenantID); tenantID != "" {
@@ -241,20 +244,14 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 				}
 			}
 			all = append(all, inds...)
-			m.cfg.Provider.OnRefresh(ctx, ps.ID, "ok", "", len(inds))
+			m.cfg.Provider.OnRefresh(ctx, ps.ID, status, errMsg, len(inds))
 		}
 	}
 
 	for _, src := range m.cfg.Sources {
 		fetchCtx, cancel := context.WithTimeout(ctx, m.cfg.HTTPTimeout)
-		inds, err := src.Fetch(fetchCtx, m.httpClient)
+		inds, _, _ := m.fetchSource(fetchCtx, "static", src)
 		cancel()
-		if err != nil {
-			if m.log != nil {
-				m.log.Warn("threat feed fetch", zap.String("feed", src.Name()), zap.Error(err))
-			}
-			continue
-		}
 		all = append(all, inds...)
 	}
 	if len(all) == 0 {
@@ -271,6 +268,38 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 		default:
 		}
 	}
+}
+
+func (m *Manager) fetchSource(ctx context.Context, sourceID string, src Source) ([]Indicator, string, string) {
+	if src == nil {
+		return nil, "error", "source unavailable"
+	}
+	inds, err := src.Fetch(ctx, m.httpClient)
+	if err == nil {
+		if len(inds) > 0 {
+			if saveErr := saveSnapshot(m.cfg.SnapshotDir, sourceID, src.Name(), inds); saveErr != nil && m.log != nil {
+				m.log.Warn("save threat feed snapshot", zap.String("feed", src.Name()), zap.Error(saveErr))
+			}
+		}
+		return inds, "ok", ""
+	}
+	if m.log != nil {
+		m.log.Warn("threat feed fetch", zap.String("feed", src.Name()), zap.Error(err))
+	}
+	snap, snapErr := loadSnapshot(m.cfg.SnapshotDir, sourceID, src.Name())
+	if snapErr == nil && len(snap.Indicators) > 0 {
+		if m.log != nil {
+			m.log.Warn("using stale threat feed snapshot",
+				zap.String("feed", src.Name()),
+				zap.Time("saved_at", snap.SavedAt),
+				zap.Error(err))
+		}
+		return snap.Indicators, "stale", err.Error()
+	}
+	if snapErr != nil && !os.IsNotExist(snapErr) && m.log != nil {
+		m.log.Warn("load threat feed snapshot", zap.String("feed", src.Name()), zap.Error(snapErr))
+	}
+	return nil, "error", err.Error()
 }
 
 func buildSet(inds []Indicator) *IndicatorSet {
@@ -316,6 +345,110 @@ func buildSet(inds []Indicator) *IndicatorSet {
 		cidrs = append(cidrs, n)
 	}
 	return &IndicatorSet{Updated: time.Now().UTC(), cidrs: cidrs, hits: hits}
+}
+
+type sourceSnapshot struct {
+	SourceID   string      `json:"source_id"`
+	SourceName string      `json:"source_name"`
+	SavedAt    time.Time   `json:"saved_at"`
+	Indicators []Indicator `json:"indicators"`
+}
+
+func saveSnapshot(dir, sourceID, sourceName string, inds []Indicator) error {
+	path := snapshotPath(dir, sourceID, sourceName)
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	payload := sourceSnapshot{
+		SourceID:   strings.TrimSpace(sourceID),
+		SourceName: sourceName,
+		SavedAt:    time.Now().UTC(),
+		Indicators: inds,
+	}
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	encErr := json.NewEncoder(f).Encode(payload)
+	closeErr := f.Close()
+	if encErr != nil {
+		_ = os.Remove(tmp)
+		return encErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return closeErr
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			_ = os.Remove(tmp)
+			return err
+		}
+		return os.Rename(tmp, path)
+	}
+	return nil
+}
+
+func loadSnapshot(dir, sourceID, sourceName string) (*sourceSnapshot, error) {
+	path := snapshotPath(dir, sourceID, sourceName)
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	var snap sourceSnapshot
+	if err := json.NewDecoder(f).Decode(&snap); err != nil {
+		return nil, err
+	}
+	return &snap, nil
+}
+
+func SnapshotExists(dir, sourceID, sourceName string) bool {
+	path := snapshotPath(dir, sourceID, sourceName)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func snapshotPath(dir, sourceID, sourceName string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	sourceID = cleanSnapshotName(sourceID)
+	if sourceID == "" {
+		sourceID = "static"
+	}
+	sourceName = cleanSnapshotName(sourceName)
+	if sourceName == "" {
+		sourceName = "source"
+	}
+	return filepath.Join(dir, sourceID+"-"+sourceName+".json")
+}
+
+func cleanSnapshotName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // --- built-in sources ----------------------------------------------------

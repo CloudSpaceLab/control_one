@@ -58,7 +58,7 @@ export function NetworkSecurity(): JSX.Element {
   };
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <SectionHeader
         title="Network security"
         description="Threat feeds, live connections, active blocks, IP behavior, and firewall state."

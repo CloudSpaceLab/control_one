@@ -16,13 +16,13 @@ interface FeedTypeMeta {
   label: string;
   description: string;
   needsURL: 'optional' | 'required' | 'never';
-  needsAPIKey: boolean;
+  apiKeyMode: 'optional' | 'required' | 'never';
   defaultURL?: string;
 }
 
 // FEED_CATALOG describes every feed the platform knows how to fetch. The UI
 // adapts the form fields to each entry — built-in feeds need only a name,
-// commercial feeds want an API key, custom feeds want a URL. Adding a new
+// provider feeds can refresh into local snapshots, custom feeds want a URL. Adding a new
 // feed type is a one-line entry here plus a case in the Go SourceFromConfig.
 const FEED_CATALOG: FeedTypeMeta[] = [
   {
@@ -30,7 +30,7 @@ const FEED_CATALOG: FeedTypeMeta[] = [
     label: 'Spamhaus DROP',
     description: 'Hijacked / malicious netblocks. Free, no key. Updated daily.',
     needsURL: 'optional',
-    needsAPIKey: false,
+    apiKeyMode: 'never',
     defaultURL: 'https://www.spamhaus.org/drop/drop.txt',
   },
   {
@@ -38,7 +38,7 @@ const FEED_CATALOG: FeedTypeMeta[] = [
     label: 'Spamhaus EDROP',
     description: 'Extended DROP list. Same format as DROP but wider coverage.',
     needsURL: 'optional',
-    needsAPIKey: false,
+    apiKeyMode: 'never',
     defaultURL: 'https://www.spamhaus.org/drop/edrop.txt',
   },
   {
@@ -46,7 +46,7 @@ const FEED_CATALOG: FeedTypeMeta[] = [
     label: 'FireHOL Level 1',
     description: 'Curated aggregate of community blocklists. Low false-positive.',
     needsURL: 'optional',
-    needsAPIKey: false,
+    apiKeyMode: 'never',
     defaultURL: 'https://iplists.firehol.org/files/firehol_level1.netset',
   },
   {
@@ -54,36 +54,36 @@ const FEED_CATALOG: FeedTypeMeta[] = [
     label: 'Tor exit nodes',
     description: 'Exit-node IPs. Useful as a separate signal, not always malicious.',
     needsURL: 'optional',
-    needsAPIKey: false,
+    apiKeyMode: 'never',
     defaultURL: 'https://www.dan.me.uk/torlist/?exit',
   },
   {
     type: 'abuseipdb',
     label: 'AbuseIPDB blocklist',
-    description: 'Confidence-scored bad IPs. API key required.',
+    description: 'Confidence-scored bad IPs. Downloaded into the local blacklist DB; key is only needed for refreshes.',
     needsURL: 'never',
-    needsAPIKey: true,
+    apiKeyMode: 'optional',
   },
   {
     type: 'otx',
     label: 'AlienVault OTX',
     description: 'Pulse-based community intelligence. API key required.',
     needsURL: 'never',
-    needsAPIKey: true,
+    apiKeyMode: 'required',
   },
   {
     type: 'custom_lines',
     label: 'Custom — line list',
     description: 'Any URL with one IP/CIDR per line. Comments via # or ; allowed.',
     needsURL: 'required',
-    needsAPIKey: false,
+    apiKeyMode: 'never',
   },
   {
     type: 'custom_spamhaus',
     label: 'Custom — Spamhaus format',
     description: 'Any URL using the "<cidr> ; evidence" format.',
     needsURL: 'required',
-    needsAPIKey: false,
+    apiKeyMode: 'never',
   },
 ];
 
@@ -256,7 +256,7 @@ export function ThreatFeeds(): JSX.Element {
               ? 'healthy'
               : s === 'error' || s === 'failed'
               ? 'critical'
-              : s === 'pending' || s === 'refreshing'
+              : s === 'pending' || s === 'refreshing' || s === 'stale'
               ? 'warning'
               : 'unknown';
           return <StatusTag tone={tone}>{s ?? 'unknown'}</StatusTag>;
@@ -311,7 +311,7 @@ export function ThreatFeeds(): JSX.Element {
       <SectionHeader
         eyebrow="DETECT & RESPOND · THREAT FEEDS"
         title="Abuse IP data sources"
-        description="Choose which feeds to consume. Built-in lists are free; commercial feeds need an API key. Custom URLs are supported for in-house honeypots and partner shares."
+        description="Choose feeds to refresh into the local blacklist database. Investigations search the cached DB first, so live lookups do not burn provider quota."
         actions={
           <SelectField
             value={tenantId}
@@ -535,16 +535,18 @@ export function ThreatFeeds(): JSX.Element {
             </div>
           )}
 
-          {meta.needsAPIKey && (
+          {meta.apiKeyMode !== 'never' && (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="feed-api-key">API key</Label>
+              <Label htmlFor="feed-api-key">
+                API key{meta.apiKeyMode === 'optional' ? ' (optional)' : ''}
+              </Label>
               <Input
                 id="feed-api-key"
-                required
+                required={meta.apiKeyMode === 'required'}
                 type="password"
                 value={form.api_key ?? ''}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                placeholder="paste key"
+                placeholder={meta.apiKeyMode === 'optional' ? 'optional refresh key' : 'paste key'}
                 autoComplete="off"
               />
             </div>

@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
+import { AlertStatusBadge } from './AlertStatusBadge';
 import { NodeStatusBadge } from './NodeStatusBadge';
 
 interface NavItemDef {
@@ -47,7 +48,7 @@ const NAV_GROUPS: NavGroupDef[] = [
     label: 'Home',
     items: [
       { to: '/', label: 'Control Room', icon: Activity },
-      { to: '/alerts', label: 'Alerts', icon: AlertTriangle },
+      { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: <AlertStatusBadge /> },
     ],
   },
   {

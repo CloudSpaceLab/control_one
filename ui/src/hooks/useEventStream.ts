@@ -22,7 +22,7 @@ export function useEventStream(
   handlerRef.current = onEvent;
 
   useEffect(() => {
-    if (!tenantId) return undefined;
+    if (!tenantId || !client?.streamEvents) return undefined;
     const cancel = client.streamEvents(
       { tenantId, topics },
       (ev) => handlerRef.current(ev as StreamedEvent),

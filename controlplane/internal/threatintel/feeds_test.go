@@ -2,10 +2,12 @@ package threatintel
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestParseSpamhaus(t *testing.T) {
@@ -103,4 +105,61 @@ func TestManagerSubscribeReceivesSnapshot(t *testing.T) {
 	if m.Current() == nil {
 		t.Fatal("expected snapshot after refresh")
 	}
+}
+
+func TestManagerUsesLocalSnapshotWhenRefreshFails(t *testing.T) {
+	dir := t.TempDir()
+	src := &flakySource{
+		name: "abuseipdb",
+		inds: []Indicator{
+			{IP: "45.135.193.156", Feed: "abuseipdb", Category: "abuse", Score: 100, FirstSeen: time.Now().UTC()},
+		},
+	}
+	m := New(Config{SnapshotDir: dir, Sources: []Source{src}}, nil)
+	m.refreshOnce(context.Background())
+	if m.Current() == nil {
+		t.Fatal("expected current set after first refresh")
+	}
+
+	src.err = errors.New("quota exhausted")
+	m.refreshOnce(context.Background())
+	set := m.Current()
+	if set == nil {
+		t.Fatal("expected stale snapshot to keep current set alive")
+	}
+	match, ok := set.LookupIP(net.ParseIP("45.135.193.156"))
+	if !ok {
+		t.Fatal("expected stale snapshot lookup hit")
+	}
+	if match.Feed != "abuseipdb" || match.Score != 100 {
+		t.Fatalf("unexpected stale match: %+v", match)
+	}
+}
+
+func TestSnapshotExists(t *testing.T) {
+	dir := t.TempDir()
+	if SnapshotExists(dir, "static", "abuseipdb") {
+		t.Fatal("snapshot should not exist before save")
+	}
+	if err := saveSnapshot(dir, "static", "abuseipdb", []Indicator{{IP: "1.2.3.4", Feed: "abuseipdb", Score: 90}}); err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	if !SnapshotExists(dir, "static", "abuseipdb") {
+		t.Fatal("snapshot should exist after save")
+	}
+}
+
+type flakySource struct {
+	name string
+	inds []Indicator
+	err  error
+}
+
+func (f *flakySource) Name() string { return f.name }
+
+func (f *flakySource) Fetch(context.Context, *http.Client) ([]Indicator, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]Indicator(nil), f.inds...), nil
 }

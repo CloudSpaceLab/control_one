@@ -21,6 +21,9 @@ aml:
   allow_insecure: true
   insecure_skip_verify: false
 
+threat_intel:
+  snapshot_dir: data/threat-intel
+
 database:
   url: postgresql://controlone:controlone@localhost:5432/controlone?sslmode=disable
   max_open_conns: 5

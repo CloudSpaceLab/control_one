@@ -64,9 +64,11 @@ services:
       CONTROLPLANE_DORIS_APPLY_MIGRATIONS: "true"
       IPQUERY_BASE_URL: "http://ipq:8080"
       ABUSEIPDB_API_KEY: "${ABUSEIPDB_API_KEY}"
+      THREAT_INTEL_SNAPSHOT_DIR: "/var/lib/control-one/threat-intel"
     volumes:
       - ./controlplane.yaml:/etc/control-one/controlplane.yaml:ro
       - ./agent-binaries:/var/lib/control-one/agent-binaries:ro
+      - threatintel:/var/lib/control-one/threat-intel
     ports:
       - "127.0.0.1:8443:8443"
       - "127.0.0.1:9090:9090"
@@ -218,6 +220,7 @@ volumes:
   certbot-www:
   dorisfedata:
   dorisbedata:
+  threatintel:
 
 networks:
   doris:

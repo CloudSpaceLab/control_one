@@ -14,9 +14,9 @@ import (
 
 // Threat-feed CRUD lets operators manage which IP/abuse data sources the
 // platform consumes. Built-in sources (Spamhaus, FireHOL, Tor) need only a
-// name; commercial feeds (AbuseIPDB, OTX) need an API key that is sealed at
-// rest with the same secrets sealer used elsewhere; custom feeds accept any
-// URL serving line-delimited or Spamhaus-format text.
+// name; AbuseIPDB can run from the local snapshot cache without a key, OTX
+// needs an API key sealed at rest with the same secrets sealer used elsewhere,
+// and custom feeds accept any URL serving line-delimited or Spamhaus-format text.
 
 type threatFeedResponse struct {
 	ID                 string  `json:"id"`
@@ -153,7 +153,7 @@ func (s *Server) createThreatFeed(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name and feed_type required", http.StatusBadRequest)
 		return
 	}
-	if (req.FeedType == "abuseipdb" || req.FeedType == "otx") && strings.TrimSpace(req.APIKey) == "" {
+	if req.FeedType == "otx" && strings.TrimSpace(req.APIKey) == "" {
 		http.Error(w, "api_key required for "+req.FeedType, http.StatusBadRequest)
 		return
 	}

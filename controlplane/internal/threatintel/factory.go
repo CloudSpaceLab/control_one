@@ -8,7 +8,7 @@ import (
 // SourceFromConfig builds a Source for a stored threat_feed row. The url +
 // apiKey arguments come straight from the row (apiKey already unsealed by
 // the caller). Unknown feed_type values return an error.
-func SourceFromConfig(feedType, url, apiKey, category string) (Source, error) {
+func SourceFromConfig(feedType, url, apiKey, category string, scoreFloor ...int) (Source, error) {
 	switch strings.TrimSpace(feedType) {
 	case "spamhaus_drop":
 		return SpamhausDROP{URL: url}, nil
@@ -19,7 +19,11 @@ func SourceFromConfig(feedType, url, apiKey, category string) (Source, error) {
 	case "tor_exit":
 		return TorExitNodes{URL: url}, nil
 	case "abuseipdb":
-		return AbuseIPDBBlocklist{APIKey: apiKey}, nil
+		confidenceMin := 75
+		if len(scoreFloor) > 0 && scoreFloor[0] > 0 {
+			confidenceMin = scoreFloor[0]
+		}
+		return AbuseIPDBBlocklist{APIKey: apiKey, ConfidenceMin: confidenceMin}, nil
 	case "otx":
 		return AlienVaultOTX{APIKey: apiKey}, nil
 	case "custom_lines":
