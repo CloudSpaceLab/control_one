@@ -74,11 +74,13 @@ func New() *Manager {
 	m := &Manager{}
 	switch runtime.GOOS {
 	case "linux":
+		// Prefer reversible backends first; nftables removal needs handle
+		// tracking, so keep it as the final Linux fallback for now.
 		m.backends = []Backend{
 			&ufwBackend{},
 			&firewalldBackend{},
-			&nftablesBackend{},
 			&iptablesBackend{},
+			&nftablesBackend{},
 		}
 	case "windows":
 		m.backends = []Backend{&netshBackend{}}

@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -50,6 +51,28 @@ func TestDetectErrorsWhenNoneAvailable(t *testing.T) {
 	}
 }
 
+func TestLinuxBackendOrderPrefersReversibleBackendBeforeNft(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux backend order only applies on linux")
+	}
+	m := New()
+	var iptablesIndex, nftIndex = -1, -1
+	for i, backend := range m.backends {
+		switch backend.Name() {
+		case "iptables":
+			iptablesIndex = i
+		case "nftables":
+			nftIndex = i
+		}
+	}
+	if iptablesIndex < 0 || nftIndex < 0 {
+		t.Fatalf("expected iptables and nftables backends, got %#v", m.backends)
+	}
+	if iptablesIndex > nftIndex {
+		t.Fatalf("iptables should be preferred before nftables until nft removal is reversible")
+	}
+}
+
 func TestApplyValidatesShape(t *testing.T) {
 	b := &fakeBackend{available: true}
 	m := (&Manager{}).WithBackends(b)
@@ -85,6 +108,15 @@ func TestUFWArgs(t *testing.T) {
 	}
 }
 
+func TestUFWStatusActiveRejectsInactiveFirewall(t *testing.T) {
+	if !ufwStatusActive("Status: active\n") {
+		t.Fatal("active ufw status should be available")
+	}
+	if ufwStatusActive("Status: inactive\n") {
+		t.Fatal("inactive ufw must not be treated as an enforcing backend")
+	}
+}
+
 func TestNftRule(t *testing.T) {
 	r := Rule{Action: ActionBlock, Source: "1.2.3.0/24", Port: 22, Protocol: "tcp"}
 	expr := buildNftRule(r)
@@ -95,6 +127,24 @@ func TestNftRule(t *testing.T) {
 		if !contains(expr, want) {
 			t.Fatalf("nft rule missing %q: %s", want, expr)
 		}
+	}
+}
+
+func TestNftDirectionSelectsHook(t *testing.T) {
+	chain, hook := nftChainForDirection(DirectionOut)
+	if chain != "output" || hook != "output" {
+		t.Fatalf("outbound nft rule should use output hook, got %s/%s", chain, hook)
+	}
+	chain, hook = nftChainForDirection(DirectionIn)
+	if chain != "input" || hook != "input" {
+		t.Fatalf("inbound nft rule should use input hook, got %s/%s", chain, hook)
+	}
+}
+
+func TestFirewalldOutboundUnsupported(t *testing.T) {
+	r := Rule{Action: ActionBlock, Direction: DirectionOut, Dest: "1.2.3.4"}
+	if got := buildFirewalldRich(r); got != "" {
+		t.Fatalf("firewalld rich rules should not claim outbound support, got %q", got)
 	}
 }
 
