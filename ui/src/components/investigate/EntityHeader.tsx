@@ -67,15 +67,20 @@ export function EntityHeader({ type, id, detail, loading, onAction, onIpActionTa
                 <Tag className="h-3.5 w-3.5" /> Tag
               </Button>
               {type === 'ip' ? (
-                <IpActionMenu
-                  ip={id}
-                  onActionTaken={onIpActionTaken}
-                  trigger={
-                    <Button variant="danger" size="sm" aria-label="Block IP options">
-                      <Ban className="h-3.5 w-3.5" /> Block IP <ChevronDown className="h-3.5 w-3.5" />
-                    </Button>
-                  }
-                />
+                <div className="flex items-center gap-1">
+                  <Button variant="danger" size="sm" onClick={() => onAction?.('block')}>
+                    <Ban className="h-3.5 w-3.5" /> Block IP
+                  </Button>
+                  <IpActionMenu
+                    ip={id}
+                    onActionTaken={onIpActionTaken}
+                    trigger={
+                      <Button variant="danger" size="sm" aria-label={`More IP actions for ${id}`}>
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                    }
+                  />
+                </div>
               ) : (
                 <HoverCard>
                   <HoverCardTrigger asChild>

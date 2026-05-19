@@ -709,6 +709,21 @@ func TestIPBehaviorAPIOverviewAndIPValidation(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("invalid ip status = %d, want 400", rr.Code)
 	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/ip-behavior/ips/203.0.113.44?tenant_id="+tenantID.String(), nil)
+	req = withPrincipal(req, viewerPrincipal())
+	rr = httptest.NewRecorder()
+	s.handleIPBehaviorIPProfile(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("missing profile status = %d body=%q, want OK", rr.Code, rr.Body.String())
+	}
+	var profile storage.IPBehaviorIPProfile
+	if err := json.Unmarshal(rr.Body.Bytes(), &profile); err != nil {
+		t.Fatalf("decode empty profile: %v", err)
+	}
+	if profile.SourceIP != "203.0.113.44" || profile.RequestCount != 0 || profile.StatusCounts["404"] != 0 {
+		t.Fatalf("unexpected empty profile: %+v", profile)
+	}
 }
 
 func TestRefreshBlockProposalEnforcementStatusMarksActiveAndFailed(t *testing.T) {

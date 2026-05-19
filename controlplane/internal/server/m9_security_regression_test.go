@@ -84,7 +84,7 @@ func TestM9IPBehaviorReadEndpointsDoNotLeakCrossTenantData(t *testing.T) {
 		{"overview", "/api/v1/ip-behavior/overview?tenant_id=" + tenantB.String(), s.handleIPBehaviorOverview, http.StatusOK},
 		{"countries", "/api/v1/ip-behavior/countries?tenant_id=" + tenantB.String(), s.handleIPBehaviorCountries, http.StatusOK},
 		{"country detail", "/api/v1/ip-behavior/countries/NG?tenant_id=" + tenantB.String(), s.handleIPBehaviorCountryDetail, http.StatusNotFound},
-		{"ip profile", "/api/v1/ip-behavior/ips/" + ip + "?tenant_id=" + tenantB.String(), s.handleIPBehaviorIPProfile, http.StatusNotFound},
+		{"ip profile", "/api/v1/ip-behavior/ips/" + ip + "?tenant_id=" + tenantB.String(), s.handleIPBehaviorIPProfile, http.StatusOK},
 		{"baselines", "/api/v1/ip-behavior/baselines?tenant_id=" + tenantB.String(), s.handleIPBehaviorBaselines, http.StatusOK},
 	}
 	for _, tc := range blocked {
@@ -95,7 +95,8 @@ func TestM9IPBehaviorReadEndpointsDoNotLeakCrossTenantData(t *testing.T) {
 		if rr.Code != tc.wantStatus {
 			t.Fatalf("%s cross-tenant status=%d body=%s, want %d", tc.name, rr.Code, rr.Body.String(), tc.wantStatus)
 		}
-		if strings.Contains(rr.Body.String(), "Nigeria") || strings.Contains(rr.Body.String(), "core-api|NG") || strings.Contains(rr.Body.String(), ip) {
+		leakedIP := tc.name != "ip profile" && strings.Contains(rr.Body.String(), ip)
+		if strings.Contains(rr.Body.String(), "Nigeria") || strings.Contains(rr.Body.String(), "core-api|NG") || leakedIP {
 			t.Fatalf("%s leaked tenant A data to tenant B: %s", tc.name, rr.Body.String())
 		}
 	}
