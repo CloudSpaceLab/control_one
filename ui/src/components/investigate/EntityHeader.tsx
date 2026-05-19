@@ -1,4 +1,4 @@
-import { Ban, Check, Copy, Tag } from 'lucide-react';
+import { Ban, Check, ChevronDown, Copy, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Eyebrow, IpActionMenu, StatusTag, type StateTone } from '@/components/kit';
 import {
@@ -66,14 +66,19 @@ export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMu
                 <Tag className="h-3.5 w-3.5" /> Tag
               </Button>
               {type === 'ip' ? (
-                <IpActionMenu
-                  ip={id}
-                  trigger={
-                    <Button variant="danger" size="sm">
-                      <Ban className="h-3.5 w-3.5" /> Block
-                    </Button>
-                  }
-                />
+                <div className="flex items-center gap-1">
+                  <Button variant="danger" size="sm" onClick={() => onAction?.('block')}>
+                    <Ban className="h-3.5 w-3.5" /> Block IP
+                  </Button>
+                  <IpActionMenu
+                    ip={id}
+                    trigger={
+                      <Button variant="danger" size="sm" aria-label={`More IP actions for ${id}`}>
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                    }
+                  />
+                </div>
               ) : (
                 <HoverCard>
                   <HoverCardTrigger asChild>

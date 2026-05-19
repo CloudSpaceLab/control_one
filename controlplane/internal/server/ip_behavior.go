@@ -1785,10 +1785,27 @@ func (s *Server) handleIPBehaviorIPProfile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if profile == nil {
-		http.NotFound(w, r)
+		writeJSON(w, http.StatusOK, emptyIPBehaviorIPProfile(ip))
 		return
 	}
 	writeJSON(w, http.StatusOK, profile)
+}
+
+func emptyIPBehaviorIPProfile(ip string) storage.IPBehaviorIPProfile {
+	return storage.IPBehaviorIPProfile{
+		SourceIP:     ip,
+		Countries:    []string{},
+		ASNs:         []string{},
+		ISPs:         []string{},
+		Apps:         []string{},
+		ServerGroups: []string{},
+		NodeIDs:      []string{},
+		History:      []storage.IPBehaviorHistoryPoint{},
+		StatusCounts: map[string]int64{
+			"301": 0, "401": 0, "403": 0, "404": 0, "429": 0,
+			"500": 0, "502": 0, "503": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0,
+		},
+	}
 }
 
 func (s *Server) handleIPBehaviorBaselines(w http.ResponseWriter, r *http.Request) {

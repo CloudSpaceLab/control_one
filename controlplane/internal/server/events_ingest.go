@@ -380,6 +380,7 @@ func detailInt(details map[string]any, key string) int {
 // correlation engine consumers. Runs Phase F anomaly detectors first so any
 // synthetic anomaly.* events ride the same downstream path.
 func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+	s.enrichConnectionThreatIntel(tenantID, events)
 	if anomalies := s.detectAnomalies(ctx, tenantID, nodeID, events); len(anomalies) > 0 {
 		// Stamp tenant/node onto synthetic events so eventToDorisRow has
 		// what it needs.
@@ -493,6 +494,76 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 	}
 
 	return dorisStatus, dorisErr
+}
+
+func (s *Server) enrichConnectionThreatIntel(tenantID uuid.UUID, events []IngestedEvent) {
+	if s == nil || s.threatIntel == nil || len(events) == 0 {
+		return
+	}
+	for i := range events {
+		ev := &events[i]
+		switch ev.Type {
+		case "conn.open", "conn.close", "conn.state_change", "conn.summary":
+		default:
+			continue
+		}
+		if ev.ThreatFeed != "" && ev.ThreatScore > 0 {
+			continue
+		}
+		feed, score := s.connectionThreatMatch(tenantID, ev)
+		if feed == "" || score <= 0 {
+			continue
+		}
+		if ev.ThreatFeed == "" {
+			ev.ThreatFeed = feed
+		}
+		if score > ev.ThreatScore {
+			ev.ThreatScore = score
+		}
+		if sev := severityForScore(score); eventSeverityRank(sev) > eventSeverityRank(ev.Severity) {
+			ev.Severity = sev
+		}
+	}
+}
+
+func (s *Server) connectionThreatMatch(tenantID uuid.UUID, ev *IngestedEvent) (string, int) {
+	if ev == nil {
+		return "", 0
+	}
+	bestFeed := ""
+	bestScore := 0
+	for _, raw := range []string{ev.SrcIP, ev.DstIP} {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil {
+			continue
+		}
+		for _, ind := range s.threatIntelIPMatches(tenantID, ip) {
+			feed := strings.TrimSpace(ind.Feed)
+			if feed == "" {
+				continue
+			}
+			if ind.Score > bestScore || (ind.Score == bestScore && bestFeed == "") {
+				bestFeed = feed
+				bestScore = ind.Score
+			}
+		}
+	}
+	return bestFeed, bestScore
+}
+
+func eventSeverityRank(sev string) int {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "warning", "medium":
+		return 2
+	case "low", "info":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // eventTopicFor maps the event_type to an eventbus topic that existing
