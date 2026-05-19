@@ -150,6 +150,10 @@ export function EntityDetail(): JSX.Element {
         loading={detailQ.isLoading}
         canMutate={canMutate}
         onAction={onAction}
+        onIpActionTaken={() => {
+          void detailQ.refetch();
+          void lifecycleQ.refetch();
+        }}
       />
 
       {safeType === 'ip' && (

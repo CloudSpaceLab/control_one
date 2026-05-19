@@ -1,4 +1,4 @@
-import { Ban, Check, Copy, Tag } from 'lucide-react';
+import { Ban, Check, ChevronDown, Copy, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Eyebrow, IpActionMenu, StatusTag, type StateTone } from '@/components/kit';
 import {
@@ -24,11 +24,12 @@ export interface EntityHeaderProps {
   detail?: EntityDetail;
   loading?: boolean;
   onAction?: (action: 'block' | 'allow' | 'quarantine') => void;
+  onIpActionTaken?: () => void;
   onTag?: () => void;
   canMutate?: boolean;
 }
 
-export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMutate = false }: EntityHeaderProps) {
+export function EntityHeader({ type, id, detail, loading, onAction, onIpActionTaken, onTag, canMutate = false }: EntityHeaderProps) {
   const chips = classificationChips(detail);
 
   return (
@@ -68,9 +69,10 @@ export function EntityHeader({ type, id, detail, loading, onAction, onTag, canMu
               {type === 'ip' ? (
                 <IpActionMenu
                   ip={id}
+                  onActionTaken={onIpActionTaken}
                   trigger={
-                    <Button variant="danger" size="sm">
-                      <Ban className="h-3.5 w-3.5" /> Block
+                    <Button variant="danger" size="sm" aria-label="Block IP options">
+                      <Ban className="h-3.5 w-3.5" /> Block IP <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   }
                 />

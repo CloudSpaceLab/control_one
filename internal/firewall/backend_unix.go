@@ -23,7 +23,7 @@ func (ufwBackend) Available() bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(out), "Status: active") || strings.Contains(string(out), "Status: inactive")
+	return ufwStatusActive(string(out))
 }
 
 func (b ufwBackend) Apply(ctx context.Context, r Rule) error {
@@ -137,6 +137,9 @@ func (b firewalldBackend) List(ctx context.Context, tag string) ([]Rule, error) 
 }
 
 func buildFirewalldRich(r Rule) string {
+	if r.Direction == DirectionOut {
+		return ""
+	}
 	parts := []string{"rule"}
 	if strings.Contains(r.Source, ":") || strings.Contains(r.Dest, ":") {
 		parts = append(parts, "family=ipv6")
@@ -181,11 +184,12 @@ func (b nftablesBackend) Apply(ctx context.Context, r Rule) error {
 	if expr == "" {
 		return ErrUnsupported
 	}
+	chain, hook := nftChainForDirection(r.Direction)
 	// We assume the operator created an inet "controlone" table on first run.
 	// If it does not exist, create it lazily.
 	_ = runCmd(ctx, "nft", "add", "table", "inet", "controlone")
-	_ = runCmd(ctx, "nft", "add", "chain", "inet", "controlone", "input", "{ type filter hook input priority -1; }")
-	return runCmd(ctx, "nft", "add", "rule", "inet", "controlone", "input", expr)
+	_ = runCmd(ctx, "nft", "add", "chain", "inet", "controlone", chain, "{ type filter hook "+hook+" priority -1; }")
+	return runCmd(ctx, "nft", "add", "rule", "inet", "controlone", chain, expr)
 }
 
 func (b nftablesBackend) Remove(_ context.Context, _ Rule) error {
@@ -304,6 +308,17 @@ func buildIptablesArgs(op string, r Rule) []string {
 	}
 	args = append(args, "-j", target)
 	return args
+}
+
+func ufwStatusActive(out string) bool {
+	return strings.Contains(strings.ToLower(out), "status: active")
+}
+
+func nftChainForDirection(direction Direction) (string, string) {
+	if direction == DirectionOut {
+		return "output", "output"
+	}
+	return "input", "input"
 }
 
 // --- pf (FreeBSD / macOS) — minimal --------------------------------------
