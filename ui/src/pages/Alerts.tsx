@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -415,6 +415,11 @@ export function Alerts(): JSX.Element {
             <KpiTile label="HIGH" value={counts.high} tone={counts.high > 0 ? 'degraded' : 'healthy'} />
           </div>
 
+          <CriticalResponseCenter
+            alerts={alerts}
+            onOpenResolve={(id) => setResolveTargetId(id)}
+          />
+
           {alerts.length > 0 && (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <Panel padding="md" eyebrow="ALERT VOLUME" title="Opened per day (last 7 days)" toneAccent="critical">
@@ -619,6 +624,226 @@ export function Alerts(): JSX.Element {
   );
 }
 
+function CriticalResponseCenter({
+  alerts,
+  onOpenResolve,
+}: {
+  alerts: Alert[];
+  onOpenResolve: (id: string) => void;
+}) {
+  const critical = alerts.filter((alert) => (alert.severity ?? '').toLowerCase() === 'critical');
+  const groups = criticalAlertGroups(critical);
+  if (critical.length === 0 || groups.length === 0) return null;
+
+  return (
+    <Panel
+      padding="md"
+      eyebrow="SMART RESPONSE"
+      title="Critical response center"
+      toneAccent="critical"
+      actions={
+        <Button asChild variant="outline" size="sm">
+          <Link to="/control-room">
+            Control Room
+            <ArrowRight />
+          </Link>
+        </Button>
+      }
+    >
+      <div className="mb-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-state-critical" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                {critical.length} critical alert{critical.length === 1 ? '' : 's'} need a containment decision.
+              </p>
+              <p className="mt-1 text-sm text-text-secondary">
+                Treat 100% confidence signals as action-ready: contain first, then relax only when audit,
+                remediation, and drift evidence show the affected scope is clean.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-lg border border-border-subtle bg-surface p-3">
+          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
+            Posture-template target
+          </p>
+          <p className="mt-1 text-sm text-text-secondary">
+            Use posture-template semantics: TTL emergency override, explicit ingress/egress policy, Control One/DNS/NTP/update allowlists,
+            canary rollout, rollback, and drift verification per node.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        {groups.map((group) => (
+          <div key={group.category} className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-elevated p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <StatusTag tone="critical">{group.count} critical</StatusTag>
+              <StatusTag tone={group.tone}>{group.label}</StatusTag>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">{group.immediate}</p>
+              <p className="mt-1 text-sm text-text-secondary">{group.guidance}</p>
+            </div>
+            <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Recommended posture</p>
+              <p className="mt-1 text-sm text-foreground">{group.postureMode}</p>
+              <p className="mt-1 text-xs text-text-muted">{group.postureReason}</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {group.ips.map((ip) => (
+                <StatusTag key={ip} tone="critical" className="font-mono">{ip}</StatusTag>
+              ))}
+              {group.scope ? <StatusTag tone="info">{group.scope}</StatusTag> : null}
+            </div>
+            <div className="mt-auto grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Button type="button" variant="primary" size="sm" onClick={() => onOpenResolve(group.alert.id)}>
+                Review top alert
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link to={group.primaryAction.to}>
+                  {group.primaryAction.label}
+                  <ArrowRight />
+                </Link>
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+interface CriticalResponseGroup {
+  category: string;
+  label: string;
+  count: number;
+  alert: Alert;
+  ips: string[];
+  scope: string;
+  immediate: string;
+  guidance: string;
+  postureMode: string;
+  postureReason: string;
+  primaryAction: { label: string; to: string };
+  tone: StateTone;
+}
+
+function criticalAlertGroups(alerts: Alert[]): CriticalResponseGroup[] {
+  const grouped = new Map<string, Alert[]>();
+  for (const alert of alerts) {
+    const category = alertCategory(alert);
+    grouped.set(category, [...(grouped.get(category) ?? []), alert]);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([category, rows]) => {
+      const alert = [...rows].sort((a, b) => Date.parse(b.opened_at ?? '') - Date.parse(a.opened_at ?? ''))[0] ?? rows[0];
+      const playbook = criticalPlaybook(category, alert);
+      const posture = postureRecommendations(alert, category, alertScope(alert), alertSourceIP(alert))[0];
+      return {
+        category,
+        label: titleCase(category),
+        count: rows.length,
+        alert,
+        ips: uniqueStrings(rows.map(alertSourceIP).filter(Boolean)).slice(0, 4),
+        scope: alertScope(alert),
+        immediate: playbook.immediate,
+        guidance: playbook.guidance,
+        postureMode: posture?.mode ?? 'moderate containment',
+        postureReason: posture?.reason ?? 'Apply the narrowest containment action that preserves audit and rollback evidence.',
+        primaryAction: playbook.primaryAction,
+        tone: playbook.tone,
+      };
+    })
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, 6);
+}
+
+function criticalPlaybook(category: string, alert: Alert): {
+  immediate: string;
+  guidance: string;
+  primaryAction: { label: string; to: string };
+  tone: StateTone;
+} {
+  const ip = alertSourceIP(alert);
+  switch (category) {
+    case 'exfiltration':
+      return {
+        immediate: 'Contain egress before inbox cleanup.',
+        guidance: 'Move the affected scope to update-only or full lockdown, verify outbound destinations, and preserve bytes-out evidence.',
+        primaryAction: { label: 'Egress behavior', to: '/security/network?tab=ip-behavior' },
+        tone: 'critical',
+      };
+    case 'credential':
+      return {
+        immediate: 'Stop authentication pressure and prove no session landed.',
+        guidance: 'Block the source, inspect successful sessions after the failure window, and rotate credentials when exposure is plausible.',
+        primaryAction: { label: 'Access review', to: '/access' },
+        tone: 'critical',
+      };
+    case 'exploit':
+    case 'scanner':
+      return {
+        immediate: 'Protect the public listener now.',
+        guidance: 'Block the source, enable webserver enforcement or default-deny ingress, and patch exposed paths before resolving.',
+        primaryAction: { label: 'Webserver controls', to: '/security/webservers' },
+        tone: 'critical',
+      };
+    case 'malware':
+      return {
+        immediate: 'Assume host compromise until disproven.',
+        guidance: 'Airgap the node with a TTL, verify agent/service integrity, and preserve control-plane audit evidence.',
+        primaryAction: { label: 'Affected servers', to: '/nodes' },
+        tone: 'critical',
+      };
+    case 'exposure':
+      return {
+        immediate: 'Reduce exposure confidence gaps first.',
+        guidance: 'Review public listeners, protect them with default-deny or whitelist-only posture, and verify drift per node.',
+        primaryAction: { label: 'Exposure path', to: '/control-room/exposure' },
+        tone: 'warning',
+      };
+    case 'data':
+      return {
+        immediate: 'Contain data movement and protect secrets.',
+        guidance: 'Stop suspicious egress, rotate exposed credentials or tokens, and keep only evidence required by active assertions.',
+        primaryAction: { label: 'Data security', to: '/data-security' },
+        tone: 'critical',
+      };
+    case 'access':
+      return {
+        immediate: 'Contain privileged access changes.',
+        guidance: 'Review session, MFA, PAM, and role-change evidence; revoke or narrow access before marking resolved.',
+        primaryAction: { label: 'Access controls', to: '/access' },
+        tone: 'warning',
+      };
+    case 'patch':
+      return {
+        immediate: 'Move to update-only remediation safely.',
+        guidance: 'Allow only package repositories, Control One API, DNS/NTP, and approved proxies while the fix deploys.',
+        primaryAction: { label: 'Patch posture', to: '/infrastructure/patch' },
+        tone: 'warning',
+      };
+    case 'compliance':
+      return {
+        immediate: 'Tie remediation to exact control evidence.',
+        guidance: 'Repair the failed assertion and remove redundant collection that is not used for measurement.',
+        primaryAction: { label: 'Compliance', to: '/compliance' },
+        tone: 'warning',
+      };
+    default:
+      return {
+        immediate: ip ? `Contain ${ip} and verify evidence.` : 'Contain the affected scope and verify evidence.',
+        guidance: 'Use the smallest safe block or isolation action, then close only when audit and remediation records support the decision.',
+        primaryAction: { label: 'Investigate', to: ip ? `/investigate/ip/${encodeURIComponent(ip)}?audit=1` : '/investigate' },
+        tone: 'warning',
+      };
+  }
+}
+
 function ResolveAlertModal({
   alert,
   open,
@@ -808,6 +1033,18 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     steps.push('Treat this as host compromise until disproven: isolate the node, verify agent/service integrity, and inspect audit for unauthorized control actions.');
     actions.push({ label: 'Open nodes', to: '/nodes' });
     actions.push({ label: 'Review audit trail', to: '/audit' });
+  } else if (category === 'exposure') {
+    steps.push('Review public listeners, firewall posture, and protected-listener evidence; move the affected scope to whitelist-only or default-deny ingress until drift is clean.');
+    actions.push({ label: 'Review exposure confidence', to: '/control-room/exposure' });
+    actions.push({ label: 'Review host firewall', to: '/security/network?tab=firewall' });
+  } else if (category === 'data') {
+    steps.push('Contain suspicious data movement, rotate exposed secrets or tokens, and keep only evidence that maps to an active assertion or incident decision.');
+    actions.push({ label: 'Open data security', to: '/data-security' });
+    actions.push({ label: 'Review secrets', to: '/secrets' });
+  } else if (category === 'access') {
+    steps.push('Review privileged session, MFA, PAM, and role-change evidence; revoke or narrow access before closing the alert.');
+    actions.push({ label: 'Review access', to: '/access' });
+    actions.push({ label: 'Review sessions', to: '/sessions' });
   } else if (category === 'patch') {
     steps.push('Check whether the affected node should move to proxy/update-only posture, then deploy the missing fix inside the approved maintenance window.');
     actions.push({ label: 'Open patch posture', to: '/infrastructure/patch' });
@@ -899,6 +1136,9 @@ function alertCategory(alert: Alert): string {
   if (haystack.includes('exploit') || haystack.includes('rce') || haystack.includes('injection')) return 'exploit';
   if (haystack.includes('scanner') || haystack.includes('probe')) return 'scanner';
   if (haystack.includes('malware') || haystack.includes('tamper') || haystack.includes('shutdown') || haystack.includes('service stop')) return 'malware';
+  if (haystack.includes('exposure') || haystack.includes('public listener') || haystack.includes('firewall') || haystack.includes('open port')) return 'exposure';
+  if (haystack.includes('secret') || haystack.includes('token') || haystack.includes('api key') || haystack.includes('dlp') || haystack.includes('pii')) return 'data';
+  if (haystack.includes('privilege') || haystack.includes('sudo') || haystack.includes('mfa') || haystack.includes('pam') || haystack.includes('role') || haystack.includes('session')) return 'access';
   if (haystack.includes('patch') || haystack.includes('cve') || haystack.includes('vulnerab')) return 'patch';
   if (haystack.includes('compliance') || haystack.includes('soc') || haystack.includes('iso') || haystack.includes('nist')) return 'compliance';
   return 'generic';
@@ -975,6 +1215,36 @@ function postureRecommendations(
           tone: 'critical',
         },
       ];
+    case 'exposure':
+      return [
+        {
+          mode: 'aggressive ingress protection',
+          scope,
+          reason: 'Exposure-critical alerts should convert public listener gaps into protected, drift-checked desired state.',
+          equivalent: 'Today: apply whitelist-only/default-deny ingress, verify public listeners, and review exposure confidence.',
+          tone: baseTone,
+        },
+      ];
+    case 'data':
+      return [
+        {
+          mode: 'egress default deny plus secret rotation',
+          scope,
+          reason: 'Data and secret alerts need fast containment plus evidence minimization so unused collection is not retained.',
+          equivalent: 'Today: restrict egress, rotate exposed credentials, and link only necessary evidence to the incident.',
+          tone: 'critical',
+        },
+      ];
+    case 'access':
+      return [
+        {
+          mode: 'privileged-access containment',
+          scope,
+          reason: 'Privileged access alerts should narrow access, require verification, and leave a clear audit trail before resolution.',
+          equivalent: 'Today: revoke or narrow sessions/roles, confirm MFA/PAM evidence, and document owner approval.',
+          tone: baseTone,
+        },
+      ];
     case 'patch':
       return [
         {
@@ -1026,6 +1296,18 @@ function alertSourceIP(alert: Alert): string {
 function extractIPv4(value: string): string {
   const match = value.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
   return match?.[0] ?? '';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const key = value.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value.trim());
+  }
+  return out;
 }
 
 function FilterSelect({

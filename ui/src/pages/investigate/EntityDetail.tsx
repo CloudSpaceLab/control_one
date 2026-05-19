@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
+import { AlertTriangle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Panel, SectionHeader, EmptyState, KpiTile, StatusTag, type StateTone } from '@/components/kit';
+import { Panel, SectionHeader, EmptyState, IpActionMenu, KpiTile, StatusTag, type StateTone } from '@/components/kit';
+import { Button } from '@/components/ui/button';
 import { DashboardGrid, DashboardGridItem } from '@/components/shell';
 import {
   EntityHeader,
@@ -99,6 +101,7 @@ export function EntityDetail(): JSX.Element {
     queryFn: () => client.listAnomalies({ tenantId: currentTenantId ?? '', sourceIp: id ?? '', resolved: false, limit: 10 }),
     enabled: !!id && safeType === 'ip' && !!currentTenantId,
   });
+  const ipBehaviorFindings = ipBehaviorFindingsQ.data?.data ?? [];
 
   const onAction = async (action: 'block' | 'allow' | 'quarantine') => {
     if (!currentTenantId) {
@@ -160,9 +163,26 @@ export function EntityDetail(): JSX.Element {
         <IPBehaviorSummaryPanel
           ip={id}
           profile={ipBehaviorProfileQ.data}
-          findings={ipBehaviorFindingsQ.data?.data ?? []}
+          findings={ipBehaviorFindings}
           loading={ipBehaviorProfileQ.isLoading || ipBehaviorFindingsQ.isLoading}
           error={ipBehaviorProfileQ.error || ipBehaviorFindingsQ.error}
+        />
+      )}
+
+      {safeType === 'ip' && (
+        <IPBehaviorRecommendationPanel
+          ip={id}
+          profile={ipBehaviorProfileQ.data}
+          findings={ipBehaviorFindings}
+          enrichment={ipEnrichQ.data}
+          canMutate={canMutate}
+          onActionTaken={() => {
+            void detailQ.refetch();
+            void lifecycleQ.refetch();
+            void ipEnrichQ.refetch();
+            void ipBehaviorProfileQ.refetch();
+            void ipBehaviorFindingsQ.refetch();
+          }}
         />
       )}
 
@@ -226,7 +246,7 @@ function IPBehaviorSummaryPanel({
   loading: boolean;
   error: unknown;
 }) {
-  const topFinding = [...findings].sort((a, b) => ipBehaviorConfidence(b) - ipBehaviorConfidence(a))[0];
+  const topFinding = topBehaviorFinding(findings);
   const topFindingPresentation = topFinding
     ? describeIPBehaviorFinding(topFinding, { countryLabel: profile?.countries?.[0] ?? topFinding.country_code, maxSignals: 4 })
     : null;
@@ -300,6 +320,219 @@ function IPBehaviorSummaryPanel({
       )}
     </Panel>
   );
+}
+
+function IPBehaviorRecommendationPanel({
+  ip,
+  profile,
+  findings,
+  enrichment,
+  canMutate,
+  onActionTaken,
+}: {
+  ip: string;
+  profile?: IPBehaviorIPProfile;
+  findings: BehavioralAnomaly[];
+  enrichment?: IpEnrichment;
+  canMutate: boolean;
+  onActionTaken: () => void;
+}) {
+  const topFinding = topBehaviorFinding(findings);
+  const confidence = topFinding ? ipBehaviorConfidence(topFinding) : 0;
+  const presentation = topFinding
+    ? describeIPBehaviorFinding(topFinding, { countryLabel: profile?.countries?.[0] ?? topFinding.country_code, maxSignals: 4 })
+    : null;
+  const threatFeeds = enrichment?.threat_feeds ?? [];
+  const listed = threatFeeds.length > 0;
+  const serverErrors = statusCountWithAggregate(profile?.status_counts ?? {}, ['500', '502', '503'], '5xx');
+  const authFailures = statusCount(profile?.status_counts ?? {}, '401', '403');
+  const bytesOut = profile?.bytes_out ?? 0;
+  const shouldShow = confidence >= 85 || listed || serverErrors > 0 || authFailures > 0 || bytesOut >= 10 * 1024 * 1024;
+  if (!shouldShow) return null;
+
+  const plan = ipBehaviorResponsePlan(presentation?.category ?? topFinding?.metric ?? 'ip_behavior', confidence, listed);
+  const scopeParts = [
+    profile?.node_ids?.length ? `${profile.node_ids.length} node${profile.node_ids.length === 1 ? '' : 's'}` : '',
+    profile?.apps?.slice(0, 2).join(', '),
+    profile?.server_groups?.slice(0, 2).join(', '),
+  ].filter(Boolean);
+  const scope = scopeParts.join(' / ') || 'affected scope';
+
+  return (
+    <Panel
+      padding="md"
+      eyebrow="SMART RESPONSE"
+      title="Recommended response for this IP"
+      toneAccent={confidence >= 100 || listed ? 'critical' : 'warning'}
+      actions={
+        <Button asChild variant="outline" size="sm">
+          <Link to="/control-room/exposure">
+            Exposure
+            <ArrowRight />
+          </Link>
+        </Button>
+      }
+    >
+      <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
+        <div className="space-y-3">
+          <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 text-state-critical" />
+              <div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <StatusTag tone={confidenceTone(confidence)}>{confidence}% confidence</StatusTag>
+                  {confidence >= 100 ? <StatusTag tone="critical">Auto-alert threshold</StatusTag> : null}
+                  {enrichment ? (
+                    <StatusTag tone={listed ? 'critical' : 'healthy'}>
+                      {listed ? `Local blacklist: ${threatFeeds.map((feed) => feed.feed).slice(0, 2).join(', ')}` : 'Local blacklist: no hit'}
+                    </StatusTag>
+                  ) : null}
+                  <StatusTag tone="info">{scope}</StatusTag>
+                </div>
+                <p className="mt-2 text-sm font-medium text-foreground">{plan.headline}</p>
+                <p className="mt-1 text-sm text-text-secondary">{plan.summary}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <RecommendationMetric label="Observed" value={`${formatTs(profile?.first_seen_at)} - ${formatTs(profile?.last_seen_at)}`} />
+            <RecommendationMetric label="Traffic" value={`${(profile?.request_count ?? 0).toLocaleString()} req / ${formatBytes(bytesOut)} out`} />
+            <RecommendationMetric label="Failure signal" value={`${authFailures.toLocaleString()} auth / ${serverErrors.toLocaleString()} server`} />
+          </div>
+
+          <div className="rounded-lg border border-border-subtle bg-surface p-3">
+            <p className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+              <ShieldCheck className="h-4 w-4 text-brand-400" />
+              Resolution playbook
+            </p>
+            <ol className="space-y-2">
+              {plan.steps.map((step, index) => (
+                <li key={step} className="flex gap-2 text-sm text-text-secondary">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-500/15 font-mono text-[0.7rem] text-brand-400">
+                    {index + 1}
+                  </span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-lg border border-border-subtle bg-surface p-3">
+            <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Posture-template target</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{plan.posture}</p>
+            <p className="mt-1 text-xs text-text-secondary">{plan.postureDetail}</p>
+          </div>
+          {canMutate ? (
+            <IpActionMenu
+              ip={ip}
+              onActionTaken={onActionTaken}
+              trigger={(
+                <Button type="button" variant="danger" size="sm" className="w-full">
+                  Block / allow IP
+                </Button>
+              )}
+            />
+          ) : null}
+          <div className="grid grid-cols-1 gap-2">
+            <Button asChild variant="outline" size="sm" className="justify-between">
+              <Link to="/security/network?tab=blocks">
+                Active blocks
+                <ArrowRight />
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="justify-between">
+              <Link to="/security/webservers">
+                Webserver controls
+                <ArrowRight />
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm" className="justify-between">
+              <Link to="/audit">
+                Audit evidence
+                <ArrowRight />
+              </Link>
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function RecommendationMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+      <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">{label}</p>
+      <p className="mt-1 text-sm text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function ipBehaviorResponsePlan(category: string, confidence: number, listed: boolean): {
+  headline: string;
+  summary: string;
+  steps: string[];
+  posture: string;
+  postureDetail: string;
+} {
+  const normalized = category.toLowerCase();
+  if (normalized.includes('exfil')) {
+    return {
+      headline: 'Contain egress first, then prove destination legitimacy.',
+      summary: 'Large outbound movement from a suspicious IP should become an egress decision, not only an alert review.',
+      steps: [
+        'Move affected nodes to update-only or full lockdown if transfer continues.',
+        'Allow only Control One, DNS/NTP, package repositories, and approved application APIs while reviewing destinations.',
+        'Resolve only after bytes-out, destination class, audit, and drift evidence are clean.',
+      ],
+      posture: 'Aggressive egress lockdown with TTL',
+      postureDetail: 'Template target: egress default deny, explicit update/API allowlist, canary/rollback, and drift failure if the firewall backend cannot enforce it.',
+    };
+  }
+  if (normalized.includes('credential')) {
+    return {
+      headline: 'Block the source and verify no successful session followed.',
+      summary: 'Credential attacks need both IP containment and access evidence before the alert is safe to close.',
+      steps: [
+        'Block the IP on affected nodes; use fleet-wide block only if the source is active across groups.',
+        'Review 401/403 volume, successful sessions after the attack window, and privileged role changes.',
+        'Rotate exposed credentials and tighten management ingress when the same path or account repeats.',
+      ],
+      posture: 'Moderate ingress lockdown',
+      postureDetail: 'Template target: protected management paths, inbound anomaly auto-block TTL, and audit-backed access review.',
+    };
+  }
+  if (normalized.includes('exploit') || normalized.includes('scanner') || normalized.includes('probe')) {
+    return {
+      headline: 'Protect the public listener before tuning detections.',
+      summary: 'Exploit and scanner confidence should drive default-deny or webserver enforcement on the exposed app.',
+      steps: [
+        listed ? 'Treat the local blacklist hit as enough evidence for immediate block on affected nodes.' : 'Block the source if paths, status diversity, or errors match the alert evidence.',
+        'Review probed paths and enable webserver capture/enforce or default-deny firewall protection.',
+        'Patch or close exposed paths, then verify no repeated 4xx/5xx spikes after containment.',
+      ],
+      posture: 'Aggressive ingress protection',
+      postureDetail: 'Template target: ingress default deny, allowed service ports/sources, webserver enforcement receipts, and drift per node.',
+    };
+  }
+  return {
+    headline: confidence >= 100 || listed ? 'Treat this IP as action-ready until disproven.' : 'Review the anomaly and apply the narrowest safe control.',
+    summary: 'The response should combine source containment, posture scope, and evidence required for closure.',
+    steps: [
+      'Inspect lifecycle, blacklist enrichment, app, node, country/ASN, and observed paths.',
+      'Apply block/isolation only to the smallest scope that stops the behavior, then watch Active Blocks and audit.',
+      'Close only after the owner decision and drift/remediation evidence are visible.',
+    ],
+    posture: confidence >= 100 || listed ? 'Time-boxed containment' : 'Observe with escalation threshold',
+    postureDetail: 'Template target: resolved posture by node/group/fleet, dry-run impact preview, TTL override, and rollback.',
+  };
+}
+
+function topBehaviorFinding(findings: BehavioralAnomaly[]): BehavioralAnomaly | undefined {
+  return [...findings].sort((a, b) => ipBehaviorConfidence(b) - ipBehaviorConfidence(a))[0];
 }
 
 function EvidenceBlock({ label, value }: { label: string; value: string }) {
