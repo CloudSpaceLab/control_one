@@ -112,7 +112,7 @@ export function Misconduct(): JSX.Element {
 
   if (!currentTenantId) {
     return (
-      <div className="p-6">
+      <div>
         <EmptyState
           title="Select a tenant"
           description="Choose a tenant from the header to view misconduct cases."
@@ -122,7 +122,7 @@ export function Misconduct(): JSX.Element {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <SectionHeader
         title="Misconduct & whistleblowing"
         description="Investigator console for cases. Public intake URL: /intake."

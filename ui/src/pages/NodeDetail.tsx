@@ -184,7 +184,7 @@ export function NodeDetail(): JSX.Element {
 
   if (loading && !node) {
     return (
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4">
         <Loader size="md" label="Loading node…" />
       </div>
     );
@@ -192,7 +192,7 @@ export function NodeDetail(): JSX.Element {
 
   if (error || !node) {
     return (
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4">
         <Alert variant="critical" title="Could not load node">
           {error?.message ?? 'Node not found.'}
         </Alert>
@@ -235,7 +235,7 @@ export function NodeDetail(): JSX.Element {
   const tone = riskTone(health?.risk_level);
 
   return (
-    <div className="flex flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="flex flex-col gap-5">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2">

@@ -27,6 +27,7 @@ type Config struct {
 	Bastion        BastionConfig        `mapstructure:"bastion"`
 	LDAP           LDAPConfig           `mapstructure:"ldap"`
 	IPIntel        IPIntelConfig        `mapstructure:"ipintel"`
+	ThreatIntel    ThreatIntelConfig    `mapstructure:"threat_intel"`
 	IPBehavior     IPBehaviorConfig     `mapstructure:"ip_behavior"`
 	OfflineContent OfflineContentConfig `mapstructure:"offline_content"`
 	Policy         PolicyConfig         `mapstructure:"policy"`
@@ -69,6 +70,13 @@ type IPIntelConfig struct {
 	CacheTTL         time.Duration `mapstructure:"cache_ttl"`
 	HTTPTimeout      time.Duration `mapstructure:"http_timeout"`
 	AbuseScoreCutoff int           `mapstructure:"abuse_score_cutoff"` // chip emitted when score ≥ this; default 25
+}
+
+// ThreatIntelConfig governs local threat-feed snapshots. The runtime matcher
+// searches the in-memory database built from these files instead of calling
+// remote blacklist APIs during investigation.
+type ThreatIntelConfig struct {
+	SnapshotDir string `mapstructure:"snapshot_dir"`
 }
 
 // IPBehaviorConfig controls web request behavioral intelligence. Counters use
@@ -416,6 +424,9 @@ func setDefaults(v *viper.Viper) {
 	_ = v.BindEnv("ipintel.ipquery_base_url", "IPQUERY_BASE_URL")
 	_ = v.BindEnv("ipintel.abuseipdb_api_key", "ABUSEIPDB_API_KEY")
 
+	v.SetDefault("threat_intel.snapshot_dir", "data/threat-intel")
+	_ = v.BindEnv("threat_intel.snapshot_dir", "THREAT_INTEL_SNAPSHOT_DIR")
+
 	v.SetDefault("ip_behavior.counters.backend", "memory")
 	v.SetDefault("ip_behavior.counters.redis_address", "")
 	v.SetDefault("ip_behavior.counters.redis_db", 0)
@@ -485,6 +496,9 @@ func applyFallbacks(cfg *Config) {
 		cfg.IPBehavior.Counters.RedisAddress = cfg.Worker.Asynq.RedisAddress
 		cfg.IPBehavior.Counters.RedisDB = cfg.Worker.Asynq.RedisDB
 		cfg.IPBehavior.Counters.RedisPassword = cfg.Worker.Asynq.RedisPassword
+	}
+	if cfg.ThreatIntel.SnapshotDir == "" {
+		cfg.ThreatIntel.SnapshotDir = "data/threat-intel"
 	}
 	if cfg.OfflineContent.RootDir == "" {
 		cfg.OfflineContent.RootDir = "data/offline-content"

@@ -100,7 +100,7 @@ export function ControlRoomDrilldown(): JSX.Element {
   }
 
   return (
-    <div className="flex flex-col gap-5 p-6">
+    <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="CONTROL ROOM DETAIL"
         title={lane?.title || 'Lane detail'}

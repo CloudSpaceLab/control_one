@@ -112,7 +112,7 @@ export function WebserverAutoControl(): JSX.Element {
   }
 
   return (
-    <div className="flex flex-col gap-5 p-6">
+    <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="WEBSERVER AUTO-CONTROL"
         title="Capture and enforcement"

@@ -59,7 +59,7 @@ export function Ask(): JSX.Element {
   };
 
   return (
-    <div className="flex flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="ASK"
         title="Ask CISO"

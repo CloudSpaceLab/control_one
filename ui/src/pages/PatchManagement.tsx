@@ -80,7 +80,7 @@ export function PatchManagement(): JSX.Element {
 
   if (!currentTenantId) {
     return (
-      <div className="space-y-6 p-6">
+      <div className="space-y-6">
         <SectionHeader title="Patch management" description="Fleet OS-package upgrades dispatched via the agent." />
         <EmptyState title="Select a tenant" description="Choose a tenant from the header to view patch deployments." />
       </div>
@@ -88,7 +88,7 @@ export function PatchManagement(): JSX.Element {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <SectionHeader
         title="Patch management"
         description="Direct, proxy and airgapped OS-package upgrades fanned out per node. Every deploy passes through the same opt-out / change-window / circuit-breaker / approval gates the compliance remediation engine uses."

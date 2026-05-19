@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -9,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -99,6 +103,77 @@ func TestRecordAuditAsyncRetainsValuesFromParent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("audit write never completed")
+	}
+}
+
+func TestHandleAuditCollectionAllowsAllTenantsWhenTenantFilterOmitted(t *testing.T) {
+	t.Parallel()
+
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	store := &fakeStore{
+		auditLogs: []storage.AuditLog{
+			{
+				ID:           uuid.New(),
+				TenantID:     tenantA,
+				ActorType:    "user",
+				Action:       "node.update",
+				ResourceType: "node",
+				CreatedAt:    time.Now().UTC(),
+			},
+			{
+				ID:           uuid.New(),
+				TenantID:     tenantB,
+				ActorType:    "system",
+				Action:       "job.succeeded",
+				ResourceType: "job",
+				CreatedAt:    time.Now().UTC().Add(-time.Minute),
+			},
+		},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		Auth: authWithTokens("viewer", "viewer-token"),
+	}, store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit?limit=100&offset=0", nil)
+	req.Header.Set("Authorization", "Bearer viewer-token")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var got paginatedResponse[auditLogResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.Data) != 2 {
+		t.Fatalf("expected logs across all tenants, got %d: %#v", len(got.Data), got.Data)
+	}
+	if got.Pagination.Total != 2 {
+		t.Fatalf("expected total 2, got %d", got.Pagination.Total)
+	}
+}
+
+func TestHandleAuditCollectionRejectsInvalidTenantFilter(t *testing.T) {
+	t.Parallel()
+
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		Auth: authWithTokens("viewer", "viewer-token"),
+	}, &fakeStore{}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit?tenant_id=not-a-uuid", nil)
+	req.Header.Set("Authorization", "Bearer viewer-token")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
 }
 
