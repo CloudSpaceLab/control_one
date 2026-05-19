@@ -17,13 +17,18 @@ export function InvestigateHome(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const navigate = useNavigate();
-  const [recents] = useLocalStorage<string[]>('co.search.recents', []);
+  const [recents, setRecents] = useLocalStorage<string[]>('co.search.recents', []);
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const rememberSearch = (value: string) => {
+    setRecents((prev) => [value, ...prev.filter((item) => item !== value)].slice(0, 25));
+  };
 
   const handleSearch = () => {
     const q = query.trim();
     if (!q) return;
+    rememberSearch(q);
     const detection = classifyValue(q);
     if (detection.type === 'ip') {
       // Cross-node aggregate IP investigate is the canonical surface for IPs.
@@ -100,7 +105,16 @@ export function InvestigateHome(): JSX.Element {
           padding="md"
           eyebrow="RECENT"
           title="Recent searches"
-          actions={recents.length > 0 ? <span className="font-mono text-xs text-text-muted">{recents.length}</span> : null}
+          actions={
+            recents.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-text-muted">{recents.length}</span>
+                <Button variant="ghost" size="sm" onClick={() => setRecents([])}>
+                  Clear
+                </Button>
+              </div>
+            ) : null
+          }
         >
           {recents.length === 0 ? (
             <p className="text-sm text-text-muted">No recent searches yet.</p>

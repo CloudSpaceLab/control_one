@@ -20,6 +20,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { useAuditLogs } from '../hooks/useAuditLogs';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import type { AuditLog } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -35,14 +36,14 @@ function auditTabFromParams(params: URLSearchParams): AuditTab {
 }
 
 function formatDate(value?: string): string {
-  if (!value) return '—';
+  if (!value) return 'N/A';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
 }
 
 function formatRelativeTime(value?: string): string {
-  if (!value) return '—';
+  if (!value) return 'N/A';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   const diff = Date.now() - parsed.getTime();
@@ -95,9 +96,11 @@ export function Audit(): JSX.Element {
   const [limit] = useState(100);
   const [offset, setOffset] = useState(0);
 
+  const { currentTenantId } = useTenant();
   const { data: tenants } = useTenants();
+  const auditTenantId = selectedTenant ?? currentTenantId ?? undefined;
   const { data: logs, loading, error, pagination, reload } = useAuditLogs({
-    tenant_id: selectedTenant,
+    tenant_id: auditTenantId,
     actor_type: actorTypeFilter || undefined,
     action: actionFilter || undefined,
     resource_type: resourceTypeFilter || undefined,
@@ -153,7 +156,7 @@ export function Audit(): JSX.Element {
           </StatusTag>
           {row.original.actor_id && (
             <span className="font-mono text-[0.65rem] text-text-muted">
-              {row.original.actor_id.slice(0, 8)}…
+              {row.original.actor_id.slice(0, 8)}...
             </span>
           )}
         </div>
@@ -180,7 +183,7 @@ export function Audit(): JSX.Element {
               <EntityChip type={det.type} value={id} />
             ) : id ? (
               <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem] text-text-secondary">
-                {id.length > 20 ? `${id.slice(0, 20)}…` : id}
+                {id.length > 20 ? `${id.slice(0, 20)}...` : id}
               </code>
             ) : null}
           </div>
@@ -194,7 +197,7 @@ export function Audit(): JSX.Element {
         row.original.metadata && Object.keys(row.original.metadata).length > 0 ? (
           <ExpandableCode label="View metadata" content={JSON.stringify(row.original.metadata, null, 2)} />
         ) : (
-          <span className="text-text-muted">—</span>
+          <span className="text-text-muted">N/A</span>
         ),
     },
   ], []);
@@ -232,7 +235,7 @@ export function Audit(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="POSTURE · AUDIT"
+        eyebrow="POSTURE / AUDIT"
         title="Audit trail"
         description="Who did what, when. Full record for SOC 2, ISO 27001, and incident review."
         actions={
@@ -282,10 +285,10 @@ export function Audit(): JSX.Element {
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <FilterSelect
                 label="Tenant"
-                value={selectedTenant ?? ''}
+                value={auditTenantId ?? ''}
                 onChange={(v) => { setSelectedTenant(v || undefined); setOffset(0); }}
                 options={[
-                  { label: 'All tenants', value: '' },
+                  ...(auditTenantId ? [] : [{ label: 'Select tenant', value: '' }]),
                   ...tenants.map((t) => ({ label: t.name, value: t.id })),
                 ]}
               />
@@ -321,7 +324,7 @@ export function Audit(): JSX.Element {
                 <Label htmlFor="audit-search">Search</Label>
                 <Input
                   id="audit-search"
-                  placeholder="action, resource id…"
+                  placeholder="action, resource id..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -338,7 +341,7 @@ export function Audit(): JSX.Element {
           <Panel
             padding="sm"
             tone="inset"
-            eyebrow={`AUDIT LOG · ${filtered.length} of ${pagination.total}`}
+            eyebrow={`AUDIT LOG / ${filtered.length} of ${pagination.total}`}
             title="Entries"
           >
             <DataTable
