@@ -164,6 +164,21 @@ func TestExposureConfidenceActiveBlocksAvoidZeroFloor(t *testing.T) {
 	}
 }
 
+func TestIsPublicListenerExcludesLoopback(t *testing.T) {
+	public := []string{"", "0.0.0.0", "0.0.0.0:443", "::", "[::]", "[::]:443"}
+	for _, addr := range public {
+		if !isPublicListener(addr) {
+			t.Fatalf("expected %q to be public", addr)
+		}
+	}
+	private := []string{"127.0.0.1", "127.0.0.1:8080", "::1", "[::1]", "[::1]:6379", "10.0.0.5", "192.168.1.10"}
+	for _, addr := range private {
+		if isPublicListener(addr) {
+			t.Fatalf("expected %q to be private", addr)
+		}
+	}
+}
+
 func TestControlRoomExposureIgnoresAirgappedListeners(t *testing.T) {
 	srv, store := dashboardAdminHarness(t, "viewer", "viewer-token")
 	tenantID := store.tenants[0].ID

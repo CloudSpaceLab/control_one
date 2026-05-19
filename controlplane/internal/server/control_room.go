@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -2107,8 +2108,18 @@ func isSensitivePort(port int) bool {
 }
 
 func isPublicListener(addr string) bool {
-	addr = strings.TrimSpace(addr)
-	return addr == "" || strings.HasPrefix(addr, "0.0.0.0") || strings.HasPrefix(addr, "[::]") || strings.HasPrefix(addr, "::")
+	addr = strings.TrimSpace(strings.ToLower(addr))
+	if addr == "" {
+		return true
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		addr = host
+	}
+	addr = strings.Trim(addr, "[]")
+	if zone, _, ok := strings.Cut(addr, "%"); ok {
+		addr = zone
+	}
+	return addr == "0.0.0.0" || addr == "::"
 }
 
 func webserverHasEnforcement(web controlRoomWebserver) bool {
