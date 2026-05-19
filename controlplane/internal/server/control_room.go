@@ -37,6 +37,7 @@ type controlRoomOverviewResponse struct {
 	Webservers     controlRoomWebservers     `json:"webservers"`
 	Isolation      controlRoomIsolation      `json:"isolation"`
 	Firewall       controlRoomFirewall       `json:"firewall"`
+	Exposure       controlRoomExposure       `json:"exposure"`
 	PendingActions []controlRoomAction       `json:"pending_actions"`
 }
 
@@ -158,6 +159,24 @@ type controlRoomFirewallNode struct {
 	DefaultDeny  bool   `json:"default_deny"`
 	Stale        bool   `json:"stale"`
 	ObservedAt   string `json:"observed_at,omitempty"`
+}
+
+type controlRoomExposure struct {
+	PublicListeners []controlRoomPublicListener `json:"public_listeners"`
+}
+
+type controlRoomPublicListener struct {
+	NodeID            string `json:"node_id"`
+	Hostname          string `json:"hostname"`
+	Process           string `json:"process,omitempty"`
+	ServiceKind       string `json:"service_kind,omitempty"`
+	ListenAddr        string `json:"listen_addr"`
+	Port              int    `json:"port"`
+	ObservedAt        string `json:"observed_at,omitempty"`
+	Protection        string `json:"protection"`
+	ExposureState     string `json:"exposure_state"`
+	Tone              string `json:"tone"`
+	RecommendedAction string `json:"recommended_action"`
 }
 
 type controlRoomWebserver struct {
@@ -330,6 +349,7 @@ func (s *Server) buildControlRoomOverview(ctx context.Context, tenantID uuid.UUI
 
 	webservers := s.controlRoomWebservers(ctx, tenantID)
 	resp.Webservers = webservers
+	resp.Exposure = newControlRoomExposure(nodes, services, resp.Isolation, resp.Firewall)
 
 	resp.Lanes = []controlRoomLane{
 		newServerHealthLane(nodeTotal, healthyNodes, staleNodes, offlineNodes, healthCounts, resp.Isolation, now),
@@ -855,6 +875,98 @@ func protectedPublicServiceCount(services []storage.NodeService, isolation contr
 	return count
 }
 
+func newControlRoomExposure(nodes []storage.Node, services []storage.NodeService, isolation controlRoomIsolation, firewall controlRoomFirewall) controlRoomExposure {
+	out := controlRoomExposure{PublicListeners: make([]controlRoomPublicListener, 0)}
+	nodeNames := map[string]string{}
+	for _, node := range nodes {
+		nodeNames[node.ID.String()] = node.Hostname
+	}
+	isolationByNode := map[string]controlRoomIsolationNode{}
+	for _, node := range isolation.Nodes {
+		isolationByNode[node.ID] = node
+	}
+	firewallByNode := map[string]controlRoomFirewallNode{}
+	for _, node := range firewall.Nodes {
+		firewallByNode[node.NodeID] = node
+	}
+	for _, svc := range services {
+		if !isPublicListener(svc.ListenAddr) {
+			continue
+		}
+		nodeID := svc.NodeID.String()
+		row := controlRoomPublicListener{
+			NodeID:      nodeID,
+			Hostname:    firstNonEmptyIPBehavior(nodeNames[nodeID], nodeID),
+			Process:     svc.Process,
+			ServiceKind: svc.ServiceKind,
+			ListenAddr:  firstNonEmptyIPBehavior(svc.ListenAddr, "0.0.0.0"),
+			Port:        svc.Port,
+			ObservedAt:  formatTime(svc.ObservedAt),
+		}
+		row.Protection, row.ExposureState, row.Tone, row.RecommendedAction = publicListenerProtection(
+			svc,
+			isolationByNode[nodeID],
+			firewallByNode[nodeID],
+		)
+		out.PublicListeners = append(out.PublicListeners, row)
+	}
+	sort.SliceStable(out.PublicListeners, func(i, j int) bool {
+		leftRank := publicListenerRiskRank(out.PublicListeners[i])
+		rightRank := publicListenerRiskRank(out.PublicListeners[j])
+		if leftRank == rightRank {
+			if out.PublicListeners[i].Hostname == out.PublicListeners[j].Hostname {
+				return out.PublicListeners[i].Port < out.PublicListeners[j].Port
+			}
+			return out.PublicListeners[i].Hostname < out.PublicListeners[j].Hostname
+		}
+		return leftRank > rightRank
+	})
+	return out
+}
+
+func publicListenerProtection(svc storage.NodeService, isolation controlRoomIsolationNode, firewall controlRoomFirewallNode) (string, string, string, string) {
+	if isolation.Active && isolation.Mode == isolationModeAirgapped && !isolation.Expired {
+		return "Airgapped", "protected_airgapped", "healthy", "No action needed while the airgap is active. Reassess before returning the node online."
+	}
+	if isolation.Active && isolation.Mode == isolationModeWhitelist && !isolation.Expired {
+		if isolationNodeHasAllowlist(isolation) {
+			return "Whitelist-only", "protected_whitelist", "healthy", "Keep the allowlist current for Control One agent, patch, and approved application endpoints."
+		}
+		return "Whitelist-only without allowlist", "gap_whitelist", "warning", "Add allowed applications or CIDRs so whitelist mode can be enforced safely."
+	}
+	switch {
+	case !firewall.Known:
+		return "Firewall unknown", "gap_unknown_firewall", publicServiceTone(svc), "Refresh firewall telemetry or put the node in whitelist-only mode until posture is known."
+	case !firewall.Enabled:
+		return "Firewall off", "gap_firewall_off", publicServiceTone(svc), "Enable a host firewall with default-deny inbound policy or apply whitelist-only isolation."
+	case firewall.Stale:
+		return "Stale firewall report", "gap_stale_firewall", "warning", "Refresh the node agent/firewall snapshot before trusting this listener."
+	case firewall.DefaultDeny:
+		return "Default-deny firewall", "protected_firewall", "healthy", "No immediate action. Keep explicit allow rules narrow and reviewed."
+	default:
+		return "Firewall enabled, default allow", "gap_default_allow", publicServiceTone(svc), "Move inbound policy to default deny and allow only required ports."
+	}
+}
+
+func publicListenerRiskRank(row controlRoomPublicListener) int {
+	rank := 0
+	if !strings.HasPrefix(row.ExposureState, "protected_") {
+		rank += 100
+	}
+	switch row.Tone {
+	case "critical":
+		rank += 30
+	case "warning":
+		rank += 20
+	case "info":
+		rank += 10
+	}
+	if isSensitivePort(row.Port) {
+		rank += 8
+	}
+	return rank
+}
+
 type exposureConfidenceScore struct {
 	PublicListeners       int
 	ProtectedListeners    int
@@ -872,20 +984,33 @@ type exposureConfidenceScore struct {
 
 func (s exposureConfidenceScore) score() int {
 	penalty := 0
-	penalty += s.UnprotectedListeners * 8
-	penalty += s.UnprotectedWeb * 7
-	penalty += s.UnprotectedCritical * 30
-	penalty += s.WhitelistGaps * 12
-	penalty += s.PublicFirewallUnknown * 6
-	penalty += s.PublicFirewallStale * 6
-	penalty += s.PublicFirewallWeak * 8
-	penalty += s.PublicFirewallOff * 10
-	penalty += s.RiskySources * 5
-	bonus := s.ActiveBlocks * 2
-	if bonus > 6 {
-		bonus = 6
+	if s.PublicListeners > 0 {
+		penalty += ceilDiv(s.UnprotectedListeners*45, s.PublicListeners)
 	}
-	return clampScore(100 - penalty + bonus)
+	penalty += minInt(s.UnprotectedWeb*7, 20)
+	penalty += minInt(s.UnprotectedCritical*25, 35)
+	penalty += minInt(s.WhitelistGaps*10, 20)
+	penalty += minInt(s.PublicFirewallUnknown*5+s.PublicFirewallStale*5+s.PublicFirewallWeak*7+s.PublicFirewallOff*8, 25)
+	penalty += minInt(s.RiskySources*3, 15)
+	bonus := minInt(s.ActiveBlocks*4, 10)
+	if s.PublicListeners > 0 && s.ProtectedListeners > 0 {
+		bonus += minInt(ceilDiv(s.ProtectedListeners*15, s.PublicListeners), 15)
+	}
+	score := clampScore(100 - penalty + bonus)
+	if score == 0 {
+		floor := 0
+		if s.ActiveBlocks > 0 {
+			floor = maxInt(floor, 5+minInt(s.ActiveBlocks*2, 5))
+		}
+		if s.ProtectedListeners > 0 {
+			floor = maxInt(floor, 10)
+		}
+		if s.PublicFirewallWeak > 0 {
+			floor = maxInt(floor, 6)
+		}
+		score = maxInt(score, floor)
+	}
+	return score
 }
 
 func exposureConfidenceTone(score int) string {
@@ -1971,10 +2096,14 @@ func publicServiceTone(svc storage.NodeService) string {
 	if isDBPort(svc.Port) {
 		return "critical"
 	}
-	if svc.Port == 22 || svc.Port == 3389 || svc.Port == 5985 || svc.Port == 5986 {
+	if isSensitivePort(svc.Port) {
 		return "warning"
 	}
 	return "info"
+}
+
+func isSensitivePort(port int) bool {
+	return port == 22 || port == 3389 || port == 5985 || port == 5986 || isDBPort(port)
 }
 
 func isPublicListener(addr string) bool {
@@ -2113,4 +2242,25 @@ func clampScore(v int) int {
 		return 100
 	}
 	return v
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func ceilDiv(numerator, denominator int) int {
+	if denominator <= 0 {
+		return 0
+	}
+	return (numerator + denominator - 1) / denominator
 }

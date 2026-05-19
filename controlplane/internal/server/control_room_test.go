@@ -140,8 +140,27 @@ func TestControlRoomOverviewReturnsSixBankingLanes(t *testing.T) {
 	if resp.Isolation.Protected != 1 || resp.Isolation.WhitelistGap != 0 {
 		t.Fatalf("expected covered whitelist posture, got %#v", resp.Isolation)
 	}
+	if len(resp.Exposure.PublicListeners) != 1 || resp.Exposure.PublicListeners[0].Protection != "Whitelist-only" {
+		t.Fatalf("expected exact protected public listener evidence, got %#v", resp.Exposure.PublicListeners)
+	}
 	if len(resp.PendingActions) != 4 {
 		t.Fatalf("expected pending action groups, got %#v", resp.PendingActions)
+	}
+}
+
+func TestExposureConfidenceActiveBlocksAvoidZeroFloor(t *testing.T) {
+	score := exposureConfidenceScore{
+		PublicListeners:      50,
+		UnprotectedListeners: 50,
+		PublicFirewallOff:    2,
+		RiskySources:         20,
+		ActiveBlocks:         1,
+	}.score()
+	if score <= 0 {
+		t.Fatalf("expected active block evidence to keep exposure confidence above zero, got %d", score)
+	}
+	if score >= 50 {
+		t.Fatalf("expected many public gaps to remain critical, got %d", score)
 	}
 }
 
@@ -324,6 +343,9 @@ func TestControlRoomOverviewEmitsEmptyArrays(t *testing.T) {
 	}
 	if resp.Firewall.Nodes == nil {
 		t.Fatal("firewall.nodes encoded as null; expected []")
+	}
+	if resp.Exposure.PublicListeners == nil {
+		t.Fatal("exposure.public_listeners encoded as null; expected []")
 	}
 	if resp.PendingActions == nil {
 		t.Fatal("pending_actions encoded as null; expected []")

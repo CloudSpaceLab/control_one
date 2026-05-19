@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ClipboardList, FileText, History, ListChecks, RefreshCw, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ClipboardList, FileText, History, ListChecks, LockKeyhole, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -22,8 +22,10 @@ import type {
   ControlRoomIsolationNode,
   ControlRoomLane,
   ControlRoomOverview,
+  ControlRoomPublicListener,
   ControlRoomTone,
   ControlRoomWebserver,
+  NetworkIsolationMode,
 } from '../lib/api';
 
 const CONTROL_ROOM_RANGES = [
@@ -171,7 +173,7 @@ export function ControlRoomDrilldown(): JSX.Element {
             </Panel>
           ) : null}
 
-          {lane.id === 'exposure' ? <ExposurePosturePanel overview={overview} /> : null}
+          {lane.id === 'exposure' ? <ExposurePosturePanel overview={overview} onRefresh={refresh} /> : null}
 
           {lane.id === 'app-db-health' ? <AppDBPosturePanel overview={overview} lane={lane} /> : null}
 
@@ -251,6 +253,15 @@ function DetailBlock({ icon, title, body, tone }: { icon: JSX.Element; title: st
         <p className="text-sm font-medium text-foreground">{title}</p>
         <p className="mt-1 text-sm text-text-secondary">{body}</p>
       </div>
+    </div>
+  );
+}
+
+function MetricText({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-surface px-2.5 py-2">
+      <p className="text-[0.68rem] uppercase tracking-wide text-text-muted">{label}</p>
+      <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-foreground">{value}</p>
     </div>
   );
 }
@@ -339,12 +350,49 @@ function IPBehaviorCountryTable({ overview }: { overview: ControlRoomOverview })
   );
 }
 
-function ExposurePosturePanel({ overview }: { overview: ControlRoomOverview }) {
+function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOverview; onRefresh: () => Promise<void> }) {
+  const api = useApiClient();
   const firewall = overview.firewall;
   const isolation = overview.isolation;
   const firewallGaps = firewall.unknown + firewall.disabled;
   const hasGaps = firewallGaps > 0 || firewall.stale > 0 || isolation.whitelist_gaps > 0 || isolation.expired > 0;
   const nodes = firewall.nodes ?? [];
+  const publicListeners = overview.exposure?.public_listeners ?? [];
+  const exposureGaps = publicListeners.filter((row) => publicListenerIsGap(row));
+  const gapNodeIds = uniqueStrings(exposureGaps.map((row) => row.node_id));
+  const [actionState, setActionState] = useState<Record<string, string>>({});
+
+  const runIsolationAction = async (
+    nodeIds: string[],
+    mode: NetworkIsolationMode,
+    durationSeconds: number,
+    label: string,
+  ) => {
+    if (nodeIds.length === 0) return;
+    const verb = mode === 'airgapped' ? 'airgap' : 'put in whitelist-only mode';
+    if (!window.confirm(`Confirm ${verb} for ${nodeIds.length} node${nodeIds.length === 1 ? '' : 's'} (${label})?`)) return;
+    const key = `${mode}:${nodeIds.join(',')}`;
+    setActionState((current) => ({ ...current, [key]: 'Updating...' }));
+    try {
+      for (const nodeId of nodeIds) {
+        await api.setNodeIsolation(nodeId, {
+          mode,
+          duration_seconds: durationSeconds,
+          reason: mode === 'airgapped'
+            ? 'Emergency exposure containment from Control Room'
+            : 'Exposure remediation from Control Room',
+          allowed_applications: mode === 'whitelist' ? ['control-one-agent', 'patch'] : undefined,
+        });
+      }
+      setActionState((current) => ({ ...current, [key]: 'Updated' }));
+      await onRefresh();
+    } catch (err) {
+      setActionState((current) => ({
+        ...current,
+        [key]: err instanceof Error ? err.message : 'Update failed',
+      }));
+    }
+  };
 
   return (
     <Panel eyebrow="FIREWALL AND ISOLATION" title="Exposure protection posture" toneAccent={hasGaps ? 'warning' : 'healthy'}>
@@ -358,6 +406,144 @@ function ExposurePosturePanel({ overview }: { overview: ControlRoomOverview }) {
         <KpiTile size="sm" label="Stale firewall" value={formatNumber(firewall.stale)} tone={firewall.stale > 0 ? 'warning' : 'healthy'} />
         <KpiTile size="sm" label="Isolation protected" value={formatNumber(isolation.protected)} tone={isolation.protected > 0 ? 'healthy' : 'unknown'} />
         <KpiTile size="sm" label="Whitelist gaps" value={formatNumber(isolation.whitelist_gaps)} tone={isolation.whitelist_gaps > 0 ? 'warning' : 'healthy'} />
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-[1fr_22rem]">
+        <div className="rounded-lg border border-border-subtle bg-surface p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-text-muted">Path to 100%</p>
+              <h4 className="mt-1 text-base font-semibold text-foreground">
+                {exposureGaps.length > 0
+                  ? `Protect ${exposureGaps.length} public listener${exposureGaps.length === 1 ? '' : 's'} across ${gapNodeIds.length} node${gapNodeIds.length === 1 ? '' : 's'}`
+                  : 'All reported public listeners have a protection signal'}
+              </h4>
+              <p className="mt-1 max-w-3xl text-sm text-text-secondary">
+                The fastest safe path is whitelist-only containment with Control One agent and patch access allowed. The durable fix is default-deny inbound firewall policy with explicit allow rules for approved services.
+              </p>
+              <p className="mt-1 max-w-3xl text-xs text-text-muted">
+                Posture-template equivalent: apply a TTL emergency override now, then promote a scoped moderate or aggressive ingress template after previewing affected ports, egress allowlists, and drift.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                disabled={gapNodeIds.length === 0}
+                onClick={() => void runIsolationAction(gapNodeIds, 'whitelist', 24 * 60 * 60, 'all exposure gaps')}
+              >
+                <LockKeyhole />
+                Apply whitelist
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={gapNodeIds.length === 0}
+                onClick={() => void runIsolationAction(gapNodeIds, 'airgapped', 60 * 60, 'all exposure gaps')}
+              >
+                <WifiOff />
+                Airgap 1h
+              </Button>
+            </div>
+          </div>
+          {(['whitelist', 'airgapped'] as const).map((mode) => {
+            const status = actionState[`${mode}:${gapNodeIds.join(',')}`];
+            return status ? (
+              <p key={mode} className="mt-2 text-xs text-text-muted">
+                {mode === 'whitelist' ? 'Apply whitelist' : 'Airgap 1h'}: {status}
+              </p>
+            ) : null;
+          })}
+        </div>
+
+        <div className="rounded-lg border border-border-subtle bg-elevated p-4">
+          <p className="text-xs uppercase tracking-wide text-text-muted">Executive readout</p>
+          <p className="mt-2 text-sm text-text-secondary">
+            {publicListeners.length === 0
+              ? 'No public listeners are reported in this window.'
+              : `${formatNumber(publicListeners.length)} public listener${publicListeners.length === 1 ? '' : 's'} reported; ${formatNumber(exposureGaps.length)} still need a stronger protection signal.`}
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <MetricText label="Protected" value={formatNumber(publicListeners.length - exposureGaps.length)} />
+            <MetricText label="Needs action" value={formatNumber(exposureGaps.length)} />
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-border-subtle">
+        <table className="w-full text-sm">
+          <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-text-secondary">
+            <tr>
+              <th className="px-3 py-2">Public listener</th>
+              <th className="px-3 py-2">Exposure</th>
+              <th className="px-3 py-2">Protection signal</th>
+              <th className="px-3 py-2">Recommended action</th>
+              <th className="px-3 py-2 text-right">Contain</th>
+            </tr>
+          </thead>
+          <tbody>
+            {publicListeners.length === 0 ? (
+              <tr>
+                <td className="px-3 py-4 text-text-secondary" colSpan={5}>
+                  No public listeners reported in this period.
+                </td>
+              </tr>
+            ) : publicListeners.slice(0, 50).map((listener) => {
+              const rowGap = publicListenerIsGap(listener);
+              const whitelistKey = `whitelist:${listener.node_id}`;
+              const airgapKey = `airgapped:${listener.node_id}`;
+              return (
+                <tr key={`${listener.node_id}:${listener.listen_addr}:${listener.port}:${listener.process}`} className="border-t border-border-subtle">
+                  <td className="px-3 py-2">
+                    <Link to={`/nodes/${listener.node_id}`} className="font-medium text-brand-400 hover:underline">
+                      {listener.hostname || listener.node_id}
+                    </Link>
+                    <p className="mt-0.5 font-mono text-xs text-text-muted">
+                      {publicListenerName(listener)}
+                    </p>
+                  </td>
+                  <td className="px-3 py-2">
+                    <StatusTag tone={normalizeTone(listener.tone)}>{rowGap ? 'needs action' : 'protected'}</StatusTag>
+                  </td>
+                  <td className="px-3 py-2 text-text-secondary">{listener.protection}</td>
+                  <td className="max-w-[28rem] px-3 py-2 text-text-secondary">{listener.recommended_action}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!rowGap}
+                        onClick={() => void runIsolationAction([listener.node_id], 'whitelist', 24 * 60 * 60, listener.hostname)}
+                      >
+                        <LockKeyhole />
+                        24h
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={!rowGap}
+                        onClick={() => void runIsolationAction([listener.node_id], 'airgapped', 60 * 60, listener.hostname)}
+                      >
+                        <WifiOff />
+                        1h
+                      </Button>
+                    </div>
+                    {([
+                      ['whitelist', actionState[whitelistKey]],
+                      ['airgapped', actionState[airgapKey]],
+                    ] as const).map(([mode, status]) => (
+                      status ? <p key={mode} className="mt-1 text-right text-xs text-text-muted">{status}</p> : null
+                    ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
       {nodes.length ? (
@@ -587,6 +773,15 @@ function firewallNodeEffect(node: ControlRoomFirewallNode): string {
   if (node.stale) return 'needs fresh agent report';
   if (node.default_deny) return 'counts as protected';
   return 'rules active, default allow';
+}
+
+function publicListenerIsGap(listener: ControlRoomPublicListener): boolean {
+  return !listener.exposure_state.startsWith('protected_');
+}
+
+function publicListenerName(listener: ControlRoomPublicListener): string {
+  const service = listener.service_kind || listener.process || 'listener';
+  return `${service} on ${listener.listen_addr}:${listener.port}`;
 }
 
 interface AppDBApplicationRow {

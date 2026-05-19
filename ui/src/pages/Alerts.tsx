@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bell, Plus, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ConfirmModal } from '../components/ConfirmModal';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog';
+import { IpActionMenu } from '../components/kit/IpActionMenu';
 import {
   Chart,
   DataTable,
@@ -26,6 +36,20 @@ import type { ColumnDef } from '@tanstack/react-table';
 type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
+
+interface AlertResolutionFact {
+  label: string;
+  value: string;
+  tone: StateTone;
+}
+
+interface AlertResolutionPlan {
+  facts: AlertResolutionFact[];
+  steps: string[];
+  gate: string;
+  actions: Array<{ label: string; to: string }>;
+  posture: Array<{ mode: string; scope: string; reason: string; equivalent: string; tone: StateTone }>;
+}
 
 function severityTone(sev: string | undefined): StateTone {
   switch ((sev ?? '').toLowerCase()) {
@@ -103,6 +127,8 @@ export function Alerts(): JSX.Element {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
+  const [resolvingAlert, setResolvingAlert] = useState(false);
 
   // Correlation rules state
   const [rules, setRules] = useState<CorrelationRule[]>([]);
@@ -144,8 +170,17 @@ export function Alerts(): JSX.Element {
     refresh();
   };
   const resolve = async (id: string) => {
-    await client.resolveAlert(id);
-    refresh();
+    setResolvingAlert(true);
+    try {
+      await client.resolveAlert(id);
+      setResolveTargetId(null);
+      refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'resolve failed');
+    } finally {
+      setResolvingAlert(false);
+    }
   };
 
   // Correlation rules
@@ -200,6 +235,10 @@ export function Alerts(): JSX.Element {
     }
     return c;
   }, [alerts]);
+  const resolveTarget = useMemo(
+    () => alerts.find((alert) => alert.id === resolveTargetId) ?? null,
+    [alerts, resolveTargetId],
+  );
 
   const columns = useMemo<ColumnDef<Alert>[]>(() => [
     {
@@ -244,7 +283,7 @@ export function Alerts(): JSX.Element {
         return det.type !== 'unknown' ? (
           <EntityChip type={det.type} value={v} />
         ) : (
-          <span className="font-mono text-xs text-text-secondary">{v || '—'}</span>
+          <span className="font-mono text-xs text-text-secondary">{v || '-'}</span>
         );
       },
     },
@@ -276,14 +315,14 @@ export function Alerts(): JSX.Element {
             </Button>
           ) : null}
           {row.original.state !== 'resolved' ? (
-            <Button variant="primary" size="sm" onClick={() => resolve(row.original.id)}>
+            <Button variant="primary" size="sm" onClick={() => setResolveTargetId(row.original.id)}>
               Resolve
             </Button>
           ) : null}
         </div>
       ),
     },
-    // ack/resolve don't change identity — eslint-disable: dependencies stable via closure
+    // ack/resolve don't change identity - eslint-disable: dependencies stable via closure
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], []);
 
@@ -344,7 +383,7 @@ export function Alerts(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="VISIBILITY · ALERTS"
+        eyebrow="VISIBILITY / ALERTS"
         title="Alerts"
         description="Deduped inbox from correlation, rules, and compliance."
         actions={
@@ -461,7 +500,7 @@ export function Alerts(): JSX.Element {
             </Panel>
           )}
 
-          <Panel padding="sm" tone="inset" eyebrow={`ALERTS · ${alerts.length}`} title="Inbox">
+          <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${alerts.length}`} title="Inbox">
             <DataTable
               columns={columns}
               rows={alerts}
@@ -529,7 +568,7 @@ export function Alerts(): JSX.Element {
                 </div>
                 <div className="flex gap-2">
                   <Button variant="primary" size="sm" onClick={handleCreateRule} disabled={creatingRule || !newRuleName.trim() || !tenantId}>
-                    {creatingRule ? 'Creating…' : 'Create'}
+                    {creatingRule ? 'Creating...' : 'Create'}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => setShowCreateRule(false)}>
                     Cancel
@@ -567,8 +606,426 @@ export function Alerts(): JSX.Element {
         onConfirm={handleDeleteRule}
         onCancel={() => setDeleteRuleId(null)}
       />
+
+      <ResolveAlertModal
+        alert={resolveTarget}
+        open={resolveTargetId !== null && resolveTarget !== null}
+        resolving={resolvingAlert}
+        onConfirm={() => { if (resolveTarget) void resolve(resolveTarget.id); }}
+        onCancel={() => setResolveTargetId(null)}
+        onActionTaken={() => { void refresh(); }}
+      />
     </div>
   );
+}
+
+function ResolveAlertModal({
+  alert,
+  open,
+  resolving,
+  onConfirm,
+  onCancel,
+  onActionTaken,
+}: {
+  alert: Alert | null;
+  open: boolean;
+  resolving: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onActionTaken: () => void;
+}) {
+  const plan = alert ? alertResolutionPlan(alert) : null;
+  const ip = alert ? alertSourceIP(alert) : '';
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel(); }}>
+      <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Resolve alert with evidence</DialogTitle>
+          <DialogDescription>
+            Resolve should mean containment or a documented false-positive decision exists, not just inbox cleanup.
+          </DialogDescription>
+        </DialogHeader>
+
+        {alert && plan ? (
+          <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border-subtle bg-elevated p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-text-muted">{alert.severity} alert</p>
+                    <h3 className="mt-1 text-base font-semibold text-foreground">{alert.title}</h3>
+                  </div>
+                  <StatusTag tone={severityTone(alert.severity)}>{alert.state}</StatusTag>
+                </div>
+                {alert.summary ? <p className="mt-2 text-sm text-text-secondary">{alert.summary}</p> : null}
+                {plan.facts.length > 0 ? (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {plan.facts.map((fact) => (
+                      <div key={`${fact.label}:${fact.value}`} className="rounded-md border border-border-subtle bg-surface px-2.5 py-2">
+                        <p className="text-[0.68rem] uppercase tracking-wide text-text-muted">{fact.label}</p>
+                        <StatusTag tone={fact.tone} className="mt-1 max-w-full truncate">
+                          {fact.value}
+                        </StatusTag>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-lg border border-border-subtle bg-surface p-3">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ListChecks className="h-4 w-4 text-brand-400" />
+                  Recommended resolution actions
+                </div>
+                <ol className="space-y-2">
+                  {plan.steps.map((step, index) => (
+                    <li key={step} className="flex gap-2 text-sm text-text-secondary">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-500/15 font-mono text-[0.7rem] text-brand-400">
+                        {index + 1}
+                      </span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                {plan.actions.map((action) => (
+                  <Button key={action.to} asChild variant="outline" size="sm" className="justify-between">
+                    <Link to={action.to}>
+                      {action.label}
+                      <ArrowRight />
+                    </Link>
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {ip ? (
+                <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
+                  <div className="flex items-start gap-2">
+                    <Shield className="mt-0.5 h-4 w-4 text-state-critical" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Contain source IP</p>
+                      <p className="mt-1 font-mono text-xs text-text-secondary">{ip}</p>
+                    </div>
+                  </div>
+                  <IpActionMenu
+                    ip={ip}
+                    onActionTaken={onActionTaken}
+                    trigger={(
+                      <Button type="button" variant="danger" size="sm" className="mt-3 w-full">
+                        <Shield />
+                        Block / allow IP
+                      </Button>
+                    )}
+                  />
+                </div>
+              ) : null}
+
+              <div className="rounded-lg border border-border-subtle bg-surface p-3">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ShieldCheck className="h-4 w-4 text-brand-400" />
+                  Posture recommendation
+                </div>
+                <div className="space-y-2">
+                  {plan.posture.map((item) => (
+                    <div key={`${item.mode}:${item.scope}`} className="rounded-md border border-border-subtle bg-elevated p-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusTag tone={item.tone}>{item.mode}</StatusTag>
+                        <span className="text-xs text-text-muted">{item.scope}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-text-secondary">{item.reason}</p>
+                      <p className="mt-1 text-xs text-text-muted">{item.equivalent}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border-subtle bg-surface p-3">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+                  <CheckCircle2 className="h-4 w-4 text-state-healthy" />
+                  Resolution gate
+                </div>
+                <p className="text-sm text-text-secondary">{plan.gate}</p>
+              </div>
+
+              <Button asChild variant="ghost" size="sm" className="w-full justify-between">
+                <Link to="/audit">
+                  Review audit trail
+                  <ExternalLink />
+                </Link>
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" onClick={onConfirm} loading={resolving} disabled={!alert}>
+            Resolve alert
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
+  const ip = alertSourceIP(alert);
+  const category = alertCategory(alert);
+  const scope = alertScope(alert);
+  const facts = alertResolutionFacts(alert, category, scope, ip);
+  const steps: string[] = [];
+  const actions: Array<{ label: string; to: string }> = [];
+  const posture = postureRecommendations(alert, category, scope, ip);
+
+  if (ip) {
+    steps.push('Open the IP lifecycle and verify the observed paths, country/ASN, blacklist hits, and audit history match this alert.');
+    steps.push('Block the IP on affected nodes first; use fleet-wide scope when the same source is active across more than one node or server group.');
+    steps.push('Confirm Active Blocks shows the rule applied or queued, then watch for repeated traffic, 4xx/5xx spikes, or outbound transfer after the block.');
+    actions.push({ label: 'Open IP investigation', to: `/investigate/ip/${encodeURIComponent(ip)}?audit=1` });
+    actions.push({ label: 'Open active blocks', to: '/security/network?tab=blocks' });
+  } else {
+    steps.push('Inspect the source event and linked entity before changing alert state.');
+    actions.push({ label: 'Open search & lifecycle', to: '/investigate' });
+  }
+
+  if (category === 'exfiltration') {
+    steps.push('Review outbound bytes, destination classes, and egress allowlists; move the affected scope to update-only or full lockdown if transfer continues.');
+    actions.push({ label: 'Review IP behavior', to: '/security/network?tab=ip-behavior' });
+    actions.push({ label: 'Review exposure posture', to: '/control-room/exposure' });
+  } else if (category === 'credential') {
+    steps.push('Review auth failures, rotate exposed credentials if needed, and validate no successful session followed the attack window.');
+    actions.push({ label: 'Review access', to: '/access' });
+  } else if (category === 'exploit' || category === 'scanner') {
+    steps.push('Review probed paths and webserver config, then apply capture/enforcement or patch the exposed application before closing.');
+    actions.push({ label: 'Open webserver controls', to: '/security/webservers' });
+  } else if (category === 'malware') {
+    steps.push('Treat this as host compromise until disproven: isolate the node, verify agent/service integrity, and inspect audit for unauthorized control actions.');
+    actions.push({ label: 'Open nodes', to: '/nodes' });
+    actions.push({ label: 'Review audit trail', to: '/audit' });
+  } else if (category === 'patch') {
+    steps.push('Check whether the affected node should move to proxy/update-only posture, then deploy the missing fix inside the approved maintenance window.');
+    actions.push({ label: 'Open patch posture', to: '/infrastructure/patch' });
+  } else if (category === 'compliance') {
+    steps.push('Map the failed control to required evidence, remove unused collection, and re-run the framework assertion after remediation.');
+    actions.push({ label: 'Open compliance', to: '/compliance' });
+  } else {
+    steps.push('Choose the minimum safe posture change for the affected scope, apply the linked remediation, and document why the signal is benign if no control change is needed.');
+    actions.push({ label: 'Review Control Room', to: '/control-room' });
+    actions.push({ label: 'Review audit trail', to: '/audit' });
+  }
+  if ((alert.severity ?? '').toLowerCase() === 'critical') {
+    steps.push('For a critical signal, prefer a time-boxed containment action first, then relax only after the source, scope, and drift evidence are clean.');
+    actions.push({ label: 'Review Control Room', to: '/control-room' });
+    actions.push({ label: 'Review audit trail', to: '/audit' });
+  }
+  steps.push('Capture the final evidence: applied controls, drift status, owner decision, and the reason this alert can be closed.');
+
+  return {
+    facts,
+    steps,
+    gate: ip
+      ? 'Close only after a block/allow decision, containment result, or false-positive note is visible in audit/remediation history.'
+      : 'Close only after the investigation has an owner decision and the remediation evidence is captured.',
+    actions: dedupeActions(actions),
+    posture,
+  };
+}
+
+function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {
+  const ctx = alert.context ?? {};
+  const facts: AlertResolutionFact[] = [];
+  const country = contextString(ctx, 'country_code', 'country');
+  const asn = contextString(ctx, 'asn');
+
+  addFact(facts, 'Category', titleCase(category), category === 'generic' ? 'warning' : 'info');
+  addFact(facts, 'Scope', scope, 'info');
+  addFact(facts, 'Source IP', ip, 'critical');
+  addFact(facts, 'Signal', contextString(ctx, 'event_type', 'signal', 'reason'), 'info');
+  addFact(facts, 'App', contextString(ctx, 'application_name', 'app', 'vhost'), 'healthy');
+  addFact(facts, 'Origin', [country, asn ? `ASN ${asn}` : ''].filter(Boolean).join(' / '), 'degraded');
+  addFact(facts, 'Confidence', formatPercentLike(contextString(ctx, 'confidence', 'score', 'auto_alert_threshold', 'threat_confidence')), severityTone(alert.severity));
+  addFact(facts, 'Request burst', contextString(ctx, 'request_burst', 'requests_1m', 'request_count', 'events'), 'warning');
+  addFact(facts, 'Outbound', contextString(ctx, 'outbound_transfer', 'outbound_bytes', 'bytes_out'), 'critical');
+  addFact(facts, 'Probed paths', contextListString(ctx, 'top_probed_paths', 'probed_paths', 'paths'), 'warning');
+  return facts.slice(0, 9);
+}
+
+function addFact(facts: AlertResolutionFact[], label: string, value: string, tone: StateTone) {
+  if (!value || facts.some((fact) => fact.label === label || fact.value === value)) return;
+  facts.push({ label, value, tone });
+}
+
+function contextListString(ctx: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = ctx[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .slice(0, 4)
+        .join(', ');
+    }
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function formatPercentLike(value: string): string {
+  if (!value) return '';
+  if (value.includes('%')) return value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 100) return `${numeric}%`;
+  return value;
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function alertCategory(alert: Alert): string {
+  const haystack = `${alert.source} ${alert.title} ${alert.summary ?? ''} ${JSON.stringify(alert.context ?? {})}`.toLowerCase();
+  if (haystack.includes('exfil')) return 'exfiltration';
+  if (haystack.includes('credential') || haystack.includes('auth failure') || haystack.includes('brute')) return 'credential';
+  if (haystack.includes('exploit') || haystack.includes('rce') || haystack.includes('injection')) return 'exploit';
+  if (haystack.includes('scanner') || haystack.includes('probe')) return 'scanner';
+  if (haystack.includes('malware') || haystack.includes('tamper') || haystack.includes('shutdown') || haystack.includes('service stop')) return 'malware';
+  if (haystack.includes('patch') || haystack.includes('cve') || haystack.includes('vulnerab')) return 'patch';
+  if (haystack.includes('compliance') || haystack.includes('soc') || haystack.includes('iso') || haystack.includes('nist')) return 'compliance';
+  return 'generic';
+}
+
+function alertScope(alert: Alert): string {
+  const ctx = alert.context ?? {};
+  const node = alert.node_id || contextString(ctx, 'node_id', 'hostname', 'host');
+  const group = contextString(ctx, 'server_group', 'group', 'cluster');
+  const region = contextString(ctx, 'region', 'country_code', 'country');
+  const app = contextString(ctx, 'application_name', 'app', 'vhost');
+  if (node) return `node ${node}`;
+  if (group) return `server group ${group}`;
+  if (app && region) return `${app} in ${region}`;
+  if (app) return `application ${app}`;
+  if (region) return `region/country ${region}`;
+  return 'affected tenant scope';
+}
+
+function postureRecommendations(
+  alert: Alert,
+  category: string,
+  scope: string,
+  ip: string,
+): Array<{ mode: string; scope: string; reason: string; equivalent: string; tone: StateTone }> {
+  const critical = (alert.severity ?? '').toLowerCase() === 'critical';
+  const baseTone: StateTone = critical ? 'critical' : 'warning';
+  switch (category) {
+    case 'exfiltration':
+      return [
+        {
+          mode: 'aggressive egress lockdown',
+          scope,
+          reason: 'Outbound transfer risk needs a posture that denies unapproved destinations while preserving Control One, DNS/NTP, and update endpoints.',
+          equivalent: 'Today: airgap or whitelist affected nodes, then review egress and Active Blocks.',
+          tone: 'critical',
+        },
+        {
+          mode: 'auto-remediation: aggressive',
+          scope,
+          reason: 'High-confidence exfiltration should allow fast containment with blast-radius caps and rollback evidence.',
+          equivalent: 'Template target: egress default deny, approved update/API allowlist, drift reporting.',
+          tone: 'warning',
+        },
+      ];
+    case 'credential':
+      return [
+        {
+          mode: 'moderate ingress lockdown',
+          scope,
+          reason: 'Credential attacks should tighten management paths and raise inbound anomaly thresholds without cutting off known-good operations.',
+          equivalent: ip ? `Today: block ${ip} on affected nodes, rotate credentials, and review successful sessions.` : 'Today: restrict management ports and review access.',
+          tone: baseTone,
+        },
+      ];
+    case 'exploit':
+    case 'scanner':
+      return [
+        {
+          mode: 'aggressive ingress protection',
+          scope,
+          reason: 'Exploit and scanner activity should move public listeners behind default-deny firewall or webserver enforcement until patched.',
+          equivalent: 'Today: enable whitelist-only containment or default-deny inbound rules; use webserver capture/enforce for app paths.',
+          tone: baseTone,
+        },
+      ];
+    case 'malware':
+      return [
+        {
+          mode: 'emergency full lockdown',
+          scope,
+          reason: 'Tamper, malware, or unauthorized service-control attempts require a TTL-bound override that blocks ingress and egress except break-glass/control/update allowlists.',
+          equivalent: 'Today: airgap the node for 1h, verify agent integrity, and preserve audit evidence before recovery.',
+          tone: 'critical',
+        },
+      ];
+    case 'patch':
+      return [
+        {
+          mode: 'maintenance/update-only',
+          scope,
+          reason: 'Patch-critical alerts should allow package repositories, Control One API, DNS/NTP, and approved proxies while denying unrelated traffic.',
+          equivalent: 'Today: use proxy/airgapped patch mode and keep maintenance firewall windows time-boxed.',
+          tone: 'warning',
+        },
+      ];
+    case 'compliance':
+      return [
+        {
+          mode: 'evidence-preserving moderate',
+          scope,
+          reason: 'Compliance-critical alerts need remediation without collecting redundant data that is not used by assertions.',
+          equivalent: 'Template target: link expected evidence to controls and remove unused collection paths.',
+          tone: 'warning',
+        },
+      ];
+    default:
+      return [
+        {
+          mode: critical ? 'moderate containment' : 'observe and verify',
+          scope,
+          reason: 'Start with the least disruptive posture that contains the affected scope while preserving telemetry and rollback.',
+          equivalent: 'Today: acknowledge, investigate, apply the narrowest block/isolation action, and verify drift/audit evidence.',
+          tone: baseTone,
+        },
+      ];
+  }
+}
+
+function dedupeActions(actions: Array<{ label: string; to: string }>): Array<{ label: string; to: string }> {
+  const seen = new Set<string>();
+  return actions.filter((action) => {
+    if (seen.has(action.to)) return false;
+    seen.add(action.to);
+    return true;
+  });
+}
+
+function alertSourceIP(alert: Alert): string {
+  const ctx = alert.context ?? {};
+  const direct = contextString(ctx, 'source_ip', 'src_ip', 'remote_ip', 'remote_addr', 'client_ip', 'ip');
+  return extractIPv4(direct) || extractIPv4(`${alert.title} ${alert.summary ?? ''}`);
+}
+
+function extractIPv4(value: string): string {
+  const match = value.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+  return match?.[0] ?? '';
 }
 
 function FilterSelect({

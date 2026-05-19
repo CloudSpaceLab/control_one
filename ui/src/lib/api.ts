@@ -333,6 +333,24 @@ export interface ControlRoomFirewall {
   nodes: ControlRoomFirewallNode[];
 }
 
+export interface ControlRoomPublicListener {
+  node_id: string;
+  hostname: string;
+  process?: string;
+  service_kind?: string;
+  listen_addr: string;
+  port: number;
+  observed_at?: string;
+  protection: string;
+  exposure_state: string;
+  tone: ControlRoomTone;
+  recommended_action: string;
+}
+
+export interface ControlRoomExposure {
+  public_listeners: ControlRoomPublicListener[];
+}
+
 export interface ControlRoomAction {
   id: string;
   label: string;
@@ -352,6 +370,7 @@ export interface ControlRoomOverview {
   webservers: ControlRoomWebservers;
   isolation: ControlRoomIsolation;
   firewall: ControlRoomFirewall;
+  exposure?: ControlRoomExposure;
   pending_actions: ControlRoomAction[];
 }
 
