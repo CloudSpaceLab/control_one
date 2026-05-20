@@ -2,10 +2,12 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // Config captures control plane service settings.
@@ -349,8 +351,15 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{}
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+	staticTokens, err := loadExactStaticTokens(path)
+	if err != nil {
+		return nil, fmt.Errorf("preserve static token keys: %w", err)
+	}
+	if len(staticTokens) > 0 {
+		cfg.Auth.OIDC.StaticTokens = staticTokens
 	}
 
 	applyFallbacks(cfg)
@@ -359,6 +368,28 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func loadExactStaticTokens(path string) (map[string]StaticPrincipalConfig, error) {
+	type oidcRaw struct {
+		StaticTokens map[string]StaticPrincipalConfig `yaml:"static_tokens"`
+	}
+	type authRaw struct {
+		OIDC oidcRaw `yaml:"oidc"`
+	}
+	type configRaw struct {
+		Auth authRaw `yaml:"auth"`
+	}
+
+	rawBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw configRaw
+	if err := yaml.Unmarshal(rawBytes, &raw); err != nil {
+		return nil, err
+	}
+	return raw.Auth.OIDC.StaticTokens, nil
 }
 
 func setDefaults(v *viper.Viper) {

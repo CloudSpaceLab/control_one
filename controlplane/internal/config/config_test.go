@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -117,6 +120,40 @@ func TestApplyFallbacksSetsEnforcementSafetyDefaults(t *testing.T) {
 	}
 	if cfg.OfflineContent.MaxBundleBytes != 256*1024*1024 {
 		t.Fatalf("OfflineContent.MaxBundleBytes = %d, want 256MiB", cfg.OfflineContent.MaxBundleBytes)
+	}
+}
+
+func TestLoadPreservesStaticTokenCase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "controlplane.yaml")
+	token := "AdminToken-With_MixedCASE123"
+	config := `http:
+  address: ":0"
+database:
+  url: "postgres://localhost/db"
+auth:
+  oidc:
+    enabled: false
+    static_tokens:
+      "` + token + `":
+        subject: "static-admin"
+        email: "admin@example.com"
+        name: "Bootstrap Admin"
+        roles: ["admin"]
+        groups: ["admins"]
+`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if _, ok := cfg.Auth.OIDC.StaticTokens[token]; !ok {
+		t.Fatalf("expected exact-case static token key to be preserved")
+	}
+	if _, ok := cfg.Auth.OIDC.StaticTokens[strings.ToLower(token)]; ok {
+		t.Fatalf("did not expect lower-cased static token key")
 	}
 }
 
