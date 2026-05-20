@@ -50,22 +50,16 @@ func TestParsePositiveInt(t *testing.T) {
 	}
 }
 
-func TestEventsPipelineMaterializedViewIsDoris21Compatible(t *testing.T) {
+func TestEventsPipelineMigrationDoesNotBuildInlineRollup(t *testing.T) {
 	raw, err := os.ReadFile("migrations/0001_events_pipeline.up.sql")
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}
 	sql := string(raw)
-	if strings.Contains(sql, "date_trunc('hour', ts)") {
-		t.Fatalf("Doris 2.1 requires date_trunc(datetime, unit), not date_trunc(unit, datetime)")
+	if strings.Contains(strings.ToUpper(sql), "CREATE MATERIALIZED VIEW") {
+		t.Fatalf("bootstrap migration must not build materialized views inline")
 	}
-	for _, want := range []string{
-		"date_trunc(ts, 'hour') AS hour_ts",
-		"DISTRIBUTED BY HASH (tenant_id) BUCKETS 4",
-		`"replication_num" = "1"`,
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("migration missing %q", want)
-		}
+	if !strings.Contains(sql, "Do not build events_per_hour_mv in the bootstrap migration") {
+		t.Fatalf("migration should document why the inline rollup is omitted")
 	}
 }
