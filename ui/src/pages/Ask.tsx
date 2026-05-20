@@ -75,8 +75,8 @@ export function Ask(): JSX.Element {
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="ASK"
-        title="Ask CISO"
-        description="Natural-language questions grounded in this tenant's knowledge graph, normalized events, evidence, posture, and case tools. Configure the LLM provider in Settings > AI."
+        title="Ask AI"
+        description="Natural-language investigation over this tenant's knowledge graph, normalized events, evidence, posture, and case tools. Configure the LLM provider in Settings > AI."
       />
 
       {turns.length === 0 && (
@@ -99,15 +99,15 @@ export function Ask(): JSX.Element {
       <Panel padding="md" eyebrow="TRANSCRIPT" title="Conversation">
         {turns.length === 0 ? (
           <p className="py-4 text-sm text-text-muted">
-            Ask anything about this fleet. The model only sees the knowledge graph
-            for the current tenant.
+            Ask anything about this fleet. When a provider is configured, answers
+            are grounded in tenant-scoped tools and cited evidence.
           </p>
         ) : (
           <ul className="flex flex-col gap-3">
             {turns.map((t, i) => (
               <li key={i} className="flex flex-col gap-1">
                 <Eyebrow tone={t.role === 'user' ? 'brand' : 'muted'}>
-                  {t.role === 'user' ? 'You' : 'CISO'}
+                  {t.role === 'user' ? 'You' : 'AI'}
                 </Eyebrow>
                 <div
                   className={

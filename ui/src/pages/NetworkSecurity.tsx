@@ -10,7 +10,6 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { ArrowRight, Ban, Download, Filter, Globe2, Network, RefreshCw, Search, ShieldAlert, ShieldCheck, Sparkles, XCircle } from 'lucide-react';
 import { describeIPBehaviorFinding, ipBehaviorConfidence } from '../lib/ipBehaviorPresentation';
-import { isFeatureFlagEnabled } from '../lib/featureFlags';
 import type {
   ActiveBlock,
   BehavioralAnomaly,
@@ -164,7 +163,6 @@ function IPBehaviorPanel(): JSX.Element {
   const [enforcement, setEnforcement] = useState<EnforcementTarget>('firewall');
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const aiAskEnabled = isFeatureFlagEnabled('ai_ask');
 
   const since = useMemo(() => windowSince(filters.timeWindow), [filters.timeWindow]);
 
@@ -760,9 +758,7 @@ function IPBehaviorPanel(): JSX.Element {
                   <Button variant="outline" size="sm" onClick={queueASNBlockProposal} disabled={!profile.asns?.length}><Network className="h-4 w-4" />Block ASN</Button>
                   <Button variant="outline" size="sm" onClick={() => queueBlockProposal('vhost')} disabled={!filters.vhost.trim()}><ShieldCheck className="h-4 w-4" />Limit to vhost</Button>
                   <Button variant="outline" size="sm" onClick={collectEvidence}><Download className="h-4 w-4" />Evidence</Button>
-                  {aiAskEnabled && (
-                    <Button variant="outline" size="sm" onClick={() => navigate(`/ask?q=${encodeURIComponent(askAIPrompt(profile, profileInsight.description))}`)}><Sparkles className="h-4 w-4" />Ask AI</Button>
-                  )}
+                  <Button variant="outline" size="sm" onClick={() => navigate(`/ask?q=${encodeURIComponent(askAIPrompt(profile, profileInsight.description))}`)}><Sparkles className="h-4 w-4" />Ask AI</Button>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="ghost" size="sm" onClick={suppressProfileFindings} disabled={profileFindings.length === 0}><XCircle className="h-4 w-4" />Suppress</Button>

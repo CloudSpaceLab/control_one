@@ -389,7 +389,7 @@ type Store interface {
 	ReplaceNodeServices(context.Context, uuid.UUID, uuid.UUID, []storage.NodeService) error
 	ListNodeServicesForNode(context.Context, uuid.UUID) ([]storage.NodeService, error)
 	ListNodeServicesForTenant(context.Context, uuid.UUID) ([]storage.NodeService, error)
-	// Ask CISO LLM config (Phase 2). Feature-gated by FEATURE_AI_ASK.
+	// Ask AI LLM config (Phase 2).
 	GetAIConfig(context.Context, uuid.UUID) (*storage.AIConfig, error)
 	UpsertAIConfig(context.Context, storage.AIConfig) error
 	// Network security — operator-driven IP blocks fanned out to per-node rules (PR 3).

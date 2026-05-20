@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// AIConfig holds the per-tenant LLM provider settings for the Ask CISO
+// AIConfig holds the per-tenant LLM provider settings for the Ask AI
 // surface. The api_key is plaintext for v1 — a follow-up moves it into
 // the secrets infra. Code that reads AIConfig must NEVER expose APIKey
 // over a JSON GET response.

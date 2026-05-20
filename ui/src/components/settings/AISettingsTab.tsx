@@ -197,10 +197,10 @@ export function AISettingsTab(): JSX.Element {
         )}
       </Panel>
 
-      <Alert variant="info" title="Feature flag">
-        Ask CISO is gated server-side by FEATURE_AI_ASK and client-side by
-        window.__C1_FLAGS__.ai_ask. Both must be enabled before the /ask page
-        appears in the sidebar.
+      <Alert variant="info" title="Ask AI availability">
+        Ask AI is always available in the investigation sidebar. Answers require
+        a tenant-scoped provider key; without one, the page shows a configuration
+        state instead of a hidden or broken route.
       </Alert>
     </div>
   );

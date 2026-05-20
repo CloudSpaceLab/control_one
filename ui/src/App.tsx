@@ -5,7 +5,6 @@ import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
 import { Skeleton } from './components/ui/skeleton';
-import { isFeatureFlagEnabled } from './lib/featureFlags';
 
 // Eager: every authenticated visit lands on the Control Room.
 import { ControlRoom } from './pages/ControlRoom';
@@ -120,7 +119,7 @@ export function App(): JSX.Element {
                 <Route path="investigate/knowledge-graph" element={<KnowledgeGraph />} />
                 <Route path="investigate/:type/:id" element={<EntityDetail />} />
                 <Route path="investigate/ip/:id/compare" element={<IpCompare />} />
-                <Route path="ask" element={isFeatureFlagEnabled('ai_ask') ? <Ask /> : <Navigate to="/" replace />} />
+                <Route path="ask" element={<Ask />} />
                 <Route path="tenants" element={<Tenants />} />
                 <Route path="nodes" element={<Nodes />} />
                 <Route path="nodes/:id" element={<NodeDetail />} />

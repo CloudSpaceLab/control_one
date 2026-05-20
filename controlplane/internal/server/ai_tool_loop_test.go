@@ -36,7 +36,6 @@ func (c *scriptedLLMClient) Generate(_ context.Context, req llm.Request) (llm.Re
 }
 
 func TestAIAskUsesInvestigationToolsAndReturnsCitations(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint5AIStore(tenantID, nodeID)
@@ -83,7 +82,6 @@ func TestAIAskUsesInvestigationToolsAndReturnsCitations(t *testing.T) {
 }
 
 func TestAIAskToolRBACDeniesOperatorAdminTool(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint5AIStore(tenantID, nodeID)
@@ -122,7 +120,6 @@ func TestAIAskToolRBACDeniesOperatorAdminTool(t *testing.T) {
 }
 
 func TestAIAskReturnsSourceCitationsFromToolPayload(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint5AIStore(tenantID, nodeID)
@@ -182,7 +179,6 @@ func TestSourceCitationIDsIncludeDorisTimelineTables(t *testing.T) {
 }
 
 func TestAIAskToolRejectsCrossTenantNodeEvidence(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	otherTenantID := uuid.New()
@@ -236,7 +232,6 @@ func TestAIAskToolRejectsCrossTenantNodeEvidence(t *testing.T) {
 }
 
 func TestAIAskOperatorProposalIsReadOnly(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint5AIStore(tenantID, nodeID)

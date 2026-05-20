@@ -23,7 +23,6 @@ import {
 } from '@/components/ui/tooltip';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
-import { isFeatureFlagEnabled } from '@/lib/featureFlags';
 import { AlertStatusBadge } from './AlertStatusBadge';
 import { NodeStatusBadge } from './NodeStatusBadge';
 
@@ -33,8 +32,6 @@ interface NavItemDef {
   icon: LucideIcon;
   roles?: string[];
   badge?: ReactNode;
-  /** Hide unless an env feature flag is set (window.__C1_FLAGS__). */
-  flag?: string;
 }
 
 interface NavGroupDef {
@@ -57,7 +54,7 @@ const NAV_GROUPS: NavGroupDef[] = [
     label: 'Investigate',
     items: [
       { to: '/investigate', label: 'Search & lifecycle', icon: Search },
-      { to: '/ask', label: 'Ask CISO', icon: Sparkles, flag: 'ai_ask' },
+      { to: '/ask', label: 'Ask AI', icon: Sparkles },
     ],
   },
   {
@@ -94,7 +91,6 @@ function filterGroups(groups: NavGroupDef[], userRoles: string[]): NavGroupDef[]
     .map((g) => ({
       label: g.label,
       items: g.items.filter((item) => {
-        if (item.flag && !isFeatureFlagEnabled(item.flag)) return false;
         if (!item.roles || item.roles.length === 0) return true;
         if (isAdmin) return true;
         return item.roles.some((r) => userRoles.includes(r));
