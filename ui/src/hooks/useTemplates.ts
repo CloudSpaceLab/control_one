@@ -31,6 +31,9 @@ export function useTemplates(options: UseTemplatesOptions = {}): UseTemplatesRes
 
   const params = useMemo(() => {
     const normalized: ListTemplatesParams = {};
+    if (options.tenantId) {
+      normalized.tenantId = options.tenantId;
+    }
     if (options.provider) {
       normalized.provider = options.provider;
     }
@@ -47,12 +50,29 @@ export function useTemplates(options: UseTemplatesOptions = {}): UseTemplatesRes
       normalized.offset = options.offset;
     }
     return normalized;
-  }, [options.provider, options.namePrefix, options.includeArchived, options.limit, options.offset]);
+  }, [
+    options.tenantId,
+    options.provider,
+    options.namePrefix,
+    options.includeArchived,
+    options.limit,
+    options.offset,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
 
     const fetchTemplates = async () => {
+      if (!params.tenantId) {
+        setState((prev) => ({
+          ...prev,
+          data: [],
+          pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
+          loading: false,
+          error: null,
+        }));
+        return;
+      }
       try {
         setState((prev) => ({ ...prev, loading: true, error: null }));
         const response = await api.listTemplates(params);

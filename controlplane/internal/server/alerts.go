@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,22 +19,31 @@ import (
 )
 
 type alertResponse struct {
-	ID         string         `json:"id"`
-	TenantID   string         `json:"tenant_id"`
-	RuleID     *string        `json:"rule_id,omitempty"`
-	NodeID     *string        `json:"node_id,omitempty"`
-	Source     string         `json:"source"`
-	Severity   string         `json:"severity"`
-	Title      string         `json:"title"`
-	Summary    *string        `json:"summary,omitempty"`
-	State      string         `json:"state"`
-	DedupKey   *string        `json:"dedup_key,omitempty"`
-	Context    map[string]any `json:"context"`
-	OpenedAt   string         `json:"opened_at"`
-	AckedAt    *string        `json:"acked_at,omitempty"`
-	AckedBy    *string        `json:"acked_by,omitempty"`
-	ResolvedAt *string        `json:"resolved_at,omitempty"`
-	ResolvedBy *string        `json:"resolved_by,omitempty"`
+	ID          string                    `json:"id"`
+	TenantID    string                    `json:"tenant_id"`
+	RuleID      *string                   `json:"rule_id,omitempty"`
+	NodeID      *string                   `json:"node_id,omitempty"`
+	Source      string                    `json:"source"`
+	Severity    string                    `json:"severity"`
+	Title       string                    `json:"title"`
+	Summary     *string                   `json:"summary,omitempty"`
+	State       string                    `json:"state"`
+	DedupKey    *string                   `json:"dedup_key,omitempty"`
+	Context     map[string]any            `json:"context"`
+	OpenedAt    string                    `json:"opened_at"`
+	AckedAt     *string                   `json:"acked_at,omitempty"`
+	AckedBy     *string                   `json:"acked_by,omitempty"`
+	ResolvedAt  *string                   `json:"resolved_at,omitempty"`
+	ResolvedBy  *string                   `json:"resolved_by,omitempty"`
+	Disposition *alertDispositionResponse `json:"disposition,omitempty"`
+}
+
+type alertDispositionResponse struct {
+	Value         string  `json:"value"`
+	Reason        string  `json:"reason,omitempty"`
+	UpdatedAt     string  `json:"updated_at,omitempty"`
+	UpdatedBy     string  `json:"updated_by,omitempty"`
+	SuppressUntil *string `json:"suppress_until,omitempty"`
 }
 
 func newAlertResponse(a storage.Alert) alertResponse {
@@ -82,6 +92,9 @@ func newAlertResponse(a storage.Alert) alertResponse {
 		s := a.ResolvedBy.UUID.String()
 		out.ResolvedBy = &s
 	}
+	if disposition := alertDispositionFromContext(a.Context); disposition != nil {
+		out.Disposition = disposition
+	}
 	return out
 }
 
@@ -97,18 +110,26 @@ type createAlertRequest struct {
 	Context  map[string]any `json:"context"`
 }
 
+type alertDispositionRequest struct {
+	Disposition   string `json:"disposition"`
+	Reason        string `json:"reason,omitempty"`
+	SuppressUntil string `json:"suppress_until,omitempty"`
+}
+
 func (s *Server) handleAlertsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListAlerts(w, r)
+		s.handleListAlerts(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleOperator); !ok {
+		principal, ok := s.authorize(w, r, roleOperator)
+		if !ok {
 			return
 		}
-		s.handleCreateAlert(w, r)
+		s.handleCreateAlert(w, r, principal)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -138,17 +159,12 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		a, err := s.store.GetAlert(r.Context(), id)
-		if err != nil {
-			s.logger.Error("get alert", zap.Error(err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-		if a == nil {
-			http.NotFound(w, r)
+		a, ok := s.requireAlertTenantAccess(w, r, principal, id, roleViewer, roleOperator, roleInvestigator, roleAdmin)
+		if !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, newAlertResponse(*a))
@@ -160,6 +176,9 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 		}
 		principal, ok := s.authorize(w, r, roleOperator)
 		if !ok {
+			return
+		}
+		if _, ok := s.requireAlertTenantAccess(w, r, principal, id, roleOperator, roleAdmin); !ok {
 			return
 		}
 		userID := s.userIDForPrincipalCtx(r.Context(), principal)
@@ -178,18 +197,107 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		if _, ok := s.requireAlertTenantAccess(w, r, principal, id, roleOperator, roleAdmin); !ok {
+			return
+		}
 		userID := s.userIDForPrincipalCtx(r.Context(), principal)
 		if err := s.store.ResolveAlert(r.Context(), id, userID); err != nil {
 			http.Error(w, fmt.Sprintf("resolve failed: %v", err), http.StatusBadRequest)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case "disposition":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		principal, ok := s.authorize(w, r, roleOperator)
+		if !ok {
+			return
+		}
+		if _, ok := s.requireAlertTenantAccess(w, r, principal, id, roleOperator, roleAdmin); !ok {
+			return
+		}
+		var req alertDispositionRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+			return
+		}
+		disposition := strings.ToLower(strings.TrimSpace(req.Disposition))
+		if !validAlertDisposition(disposition) {
+			http.Error(w, "invalid disposition", http.StatusBadRequest)
+			return
+		}
+		reason := strings.TrimSpace(req.Reason)
+		if reason == "" {
+			http.Error(w, "reason is required", http.StatusBadRequest)
+			return
+		}
+		var suppressUntil *time.Time
+		if value := strings.TrimSpace(req.SuppressUntil); value != "" {
+			parsed, err := time.Parse(time.RFC3339, value)
+			if err != nil {
+				http.Error(w, "invalid suppress_until", http.StatusBadRequest)
+				return
+			}
+			parsed = parsed.UTC()
+			if !parsed.After(time.Now().UTC()) {
+				http.Error(w, "suppress_until must be in the future", http.StatusBadRequest)
+				return
+			}
+			suppressUntil = &parsed
+		}
+		if disposition == "suppressed" && suppressUntil == nil {
+			http.Error(w, "suppress_until is required for suppressed disposition", http.StatusBadRequest)
+			return
+		}
+		userID := s.userIDForPrincipalCtx(r.Context(), principal)
+		alert, err := s.store.UpdateAlertDisposition(r.Context(), id, storage.UpdateAlertDispositionParams{
+			Disposition:   disposition,
+			Reason:        reason,
+			SuppressUntil: suppressUntil,
+			By:            userID,
+			At:            time.Now().UTC(),
+		})
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, fmt.Sprintf("update disposition failed: %v", err), http.StatusBadRequest)
+			return
+		}
+		s.recordAudit(r.Context(), principal, alert.TenantID, "alert.disposition_updated", "alert", alert.ID.String(), map[string]any{
+			"disposition": disposition,
+			"reason":      reason,
+		})
+		writeJSON(w, http.StatusOK, newAlertResponse(*alert))
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
+func (s *Server) requireAlertTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, id uuid.UUID, roles ...string) (*storage.Alert, bool) {
+	a, err := s.store.GetAlert(r.Context(), id)
+	if err != nil {
+		s.logger.Error("get alert", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, false
+	}
+	if a == nil {
+		http.NotFound(w, r)
+		return nil, false
+	}
+	if !s.requireTenantAccess(w, r, principal, a.TenantID, roles...) {
+		return nil, false
+	}
+	return a, true
+}
+
+func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -214,6 +322,9 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.TenantID = tid
+	if !s.requireTenantAccess(w, r, principal, tid, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+		return
+	}
 	if v := strings.TrimSpace(r.URL.Query().Get("node_id")); v != "" {
 		id, err := uuid.Parse(v)
 		if err != nil {
@@ -243,7 +354,7 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, paginatedResponse[alertResponse]{Data: items, Pagination: newPaginationMeta(total, limit, offset, len(items))})
 }
 
-func (s *Server) handleCreateAlert(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateAlert(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -256,6 +367,9 @@ func (s *Server) handleCreateAlert(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := uuid.Parse(req.TenantID)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	params := storage.CreateAlertParams{
@@ -279,6 +393,16 @@ func (s *Server) handleCreateAlert(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(*req.NodeID)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		node, err := s.store.GetNode(r.Context(), id)
+		if err != nil {
+			s.logger.Error("get alert node", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if node == nil || node.TenantID != tenantID {
+			http.Error(w, "node does not belong to tenant", http.StatusBadRequest)
 			return
 		}
 		params.NodeID = &id
@@ -311,6 +435,36 @@ func (s *Server) handleCreateAlert(w http.ResponseWriter, r *http.Request) {
 		NodeID:   nodeFilter,
 		Payload:  payload,
 	})
+}
+
+func validAlertDisposition(disposition string) bool {
+	switch strings.ToLower(strings.TrimSpace(disposition)) {
+	case "true_positive", "false_positive", "benign_positive", "accepted_risk", "suppressed", "resolved":
+		return true
+	default:
+		return false
+	}
+}
+
+func alertDispositionFromContext(contextMap map[string]any) *alertDispositionResponse {
+	raw := metadataMap(contextMap["disposition"])
+	if len(raw) == 0 {
+		return nil
+	}
+	value := strings.TrimSpace(detailsString(raw, "value", ""))
+	if value == "" {
+		return nil
+	}
+	resp := &alertDispositionResponse{
+		Value:     value,
+		Reason:    strings.TrimSpace(detailsString(raw, "reason", "")),
+		UpdatedAt: strings.TrimSpace(detailsString(raw, "updated_at", "")),
+		UpdatedBy: strings.TrimSpace(detailsString(raw, "updated_by", "")),
+	}
+	if suppressUntil := strings.TrimSpace(detailsString(raw, "suppress_until", "")); suppressUntil != "" {
+		resp.SuppressUntil = &suppressUntil
+	}
+	return resp
 }
 
 // userIDForPrincipalCtx resolves the user row id for the authenticated principal,

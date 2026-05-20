@@ -374,6 +374,130 @@ export interface ControlRoomOverview {
   pending_actions: ControlRoomAction[];
 }
 
+export type CoverageDomain =
+  | 'telemetry'
+  | 'parser'
+  | 'detection'
+  | 'compliance'
+  | 'remediation'
+  | 'vulnerability'
+  | 'posture'
+  | (string & {});
+
+export type CoverageState =
+  | 'supported'
+  | 'partial'
+  | 'raw_only'
+  | 'unsupported'
+  | 'manual_evidence'
+  | 'stale'
+  | 'exception'
+  | 'not_applicable'
+  | 'unknown'
+  | (string & {});
+
+export type CoverageQualityState =
+  | 'production_tested'
+  | 'fixture_tested'
+  | 'manual'
+  | 'untested'
+  | 'unknown'
+  | (string & {});
+
+export interface CoverageMatrixRow {
+  id?: string;
+  tenant_id?: string;
+  domain: CoverageDomain;
+  name?: string;
+  title?: string;
+  description?: string;
+  state?: CoverageState;
+  quality_state?: CoverageQualityState;
+  source?: string;
+  source_kind?: string;
+  subject?: string;
+  owner?: string;
+  version?: string;
+  risk_score?: number;
+  severity?: string;
+  evidence_count?: number;
+  last_seen_at?: string;
+  updated_at?: string;
+  coverage_state?: CoverageState;
+  quality?: CoverageQualityState | CoverageQualityState[];
+  fixture_status?: CoverageQualityState;
+  required_sources?: string[];
+  controls?: string[];
+  mitre_techniques?: string[];
+  signals?: string[];
+  evidence?: string[];
+  gaps?: string[];
+  false_positive_notes?: string;
+  reason?: string;
+  details?: string;
+}
+
+export interface CoverageMatrixSummary {
+  total?: number;
+  supported?: number;
+  partial?: number;
+  raw_only?: number;
+  unsupported?: number;
+  manual_evidence?: number;
+  stale?: number;
+  exception?: number;
+  not_applicable?: number;
+  unknown?: number;
+  [state: string]: number | undefined;
+}
+
+export interface CoverageMatrixResponse {
+  tenant_id?: string;
+  generated_at?: string;
+  summary?: CoverageMatrixSummary;
+  rows: CoverageMatrixRow[];
+}
+
+export interface CoverageMatrixParams {
+  tenant_id?: string;
+  domain?: CoverageDomain;
+}
+
+type RawCoverageMatrixResponse =
+  | CoverageMatrixResponse
+  | CoverageMatrixRow[]
+  | {
+      tenant_id?: string;
+      generated_at?: string;
+      summary?: CoverageMatrixSummary;
+      matrix?: CoverageMatrixRow[];
+      rows?: CoverageMatrixRow[];
+      data?: CoverageMatrixRow[];
+      items?: CoverageMatrixRow[];
+    };
+
+function normalizeCoverageMatrixResponse(raw: RawCoverageMatrixResponse): CoverageMatrixResponse {
+  if (Array.isArray(raw)) {
+    return { rows: raw };
+  }
+  const envelope = raw as {
+    tenant_id?: string;
+    generated_at?: string;
+    summary?: CoverageMatrixSummary;
+    matrix?: CoverageMatrixRow[];
+    rows?: CoverageMatrixRow[];
+    data?: CoverageMatrixRow[];
+    items?: CoverageMatrixRow[];
+  };
+  const rows = envelope.rows ?? envelope.matrix ?? envelope.data ?? envelope.items ?? [];
+  return {
+    tenant_id: envelope.tenant_id,
+    generated_at: envelope.generated_at,
+    summary: envelope.summary,
+    rows,
+  };
+}
+
 // History + framework series
 export interface RiskScorePoint { ts: string; score: number; }
 export interface RiskScoreHistory { points: RiskScorePoint[]; }
@@ -618,6 +742,29 @@ export interface Alert {
   acked_by?: string;
   resolved_at?: string;
   resolved_by?: string;
+  disposition?: AlertDisposition;
+}
+
+export type AlertDispositionValue =
+  | 'true_positive'
+  | 'false_positive'
+  | 'benign_positive'
+  | 'accepted_risk'
+  | 'suppressed'
+  | 'resolved';
+
+export interface AlertDisposition {
+  value: AlertDispositionValue;
+  reason?: string;
+  updated_at?: string;
+  updated_by?: string;
+  suppress_until?: string;
+}
+
+export interface UpdateAlertDispositionPayload {
+  disposition: AlertDispositionValue;
+  reason?: string;
+  suppress_until?: string;
 }
 
 export interface AccessRequest {
@@ -1067,6 +1214,7 @@ export interface ListNodesParams {
 
 export interface Template {
   id: string;
+  tenant_id?: string;
   name: string;
   provider: string;
   description?: string;
@@ -1091,6 +1239,7 @@ export interface TemplateVersion {
 }
 
 export interface ListTemplatesParams {
+  tenantId?: string;
   provider?: string;
   namePrefix?: string;
   includeArchived?: boolean;
@@ -1099,6 +1248,7 @@ export interface ListTemplatesParams {
 }
 
 export interface CreateTemplatePayload {
+  tenant_id: string;
   name: string;
   provider: string;
   description?: string;
@@ -1125,6 +1275,34 @@ export interface CreateTemplateVersionPayload {
   rollout_notes?: string;
 }
 
+export type AssignmentScopeType =
+  | 'tenant'
+  | 'node'
+  | 'label_selector'
+  | 'cluster'
+  | 'hypervisor_host'
+  | 'enrollment_token';
+
+export interface ScopedAssignmentPayload {
+  tenant_id: string;
+  scope_type: AssignmentScopeType;
+  scope_id?: string;
+  selector?: Record<string, unknown>;
+  expires_at?: string;
+}
+
+export interface TemplateAssignment {
+  id: string;
+  template_id: string;
+  tenant_id: string;
+  scope_type: AssignmentScopeType;
+  scope_id?: string;
+  selector: Record<string, unknown>;
+  assigned_at: string;
+  assigned_by?: string;
+  expires_at?: string;
+}
+
 export interface ComplianceResult {
   id: string;
   job_id: string;
@@ -1136,6 +1314,7 @@ export interface ComplianceResult {
   severity?: string;
   details?: string;
   remediation?: string;
+  evidence?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   checked_at?: string;
   created_at: string;
@@ -1204,13 +1383,30 @@ export interface PolicyVersion {
   promoted_at?: string;
 }
 
+export interface PolicyAssignment {
+  id: string;
+  policy_id: string;
+  tenant_id: string;
+  node_id?: string;
+  scope_type: AssignmentScopeType;
+  scope_id?: string;
+  selector: Record<string, unknown>;
+  assigned_at: string;
+  assigned_by?: string;
+  expires_at?: string;
+}
+
 export interface CreatePolicyPayload {
-  tenant_id?: string;
+  tenant_id: string;
   name: string;
   description?: string;
   rule_type: string;
   enabled: boolean;
   labels?: Record<string, string>;
+}
+
+export interface CreatePolicyAssignmentPayload extends ScopedAssignmentPayload {
+  node_id?: string;
 }
 
 export interface CreatePolicyVersionPayload {
@@ -1233,6 +1429,8 @@ export interface ComplianceEvaluateResult {
   passed: boolean;
   severity?: string;
   details?: string;
+  remediation?: string;
+  evidence?: Record<string, unknown>;
   checked_at?: string;
 }
 
@@ -1508,6 +1706,22 @@ export interface AIConfigPut {
   base_url: string;
   /** Empty preserves the previously stored key. */
   api_key: string;
+}
+
+export interface AIAskToolTraceEntry {
+  name: string;
+  citation_id?: string;
+  ok: boolean;
+  error?: string;
+  duration_ms: number;
+}
+
+export interface AIAskResponse {
+  answer: string;
+  citations?: string[];
+  source_citations?: string[];
+  tool_trace?: AIAskToolTraceEntry[];
+  confidence?: string;
 }
 
 export interface NodePackage {
@@ -1901,8 +2115,8 @@ export class APIClient {
     );
   }
 
-  async askAI(tenantId: string, question: string): Promise<{ answer: string; citations?: string[] }> {
-    return this.request<{ answer: string; citations?: string[] }>(
+  async askAI(tenantId: string, question: string): Promise<AIAskResponse> {
+    return this.request<AIAskResponse>(
       `/api/v1/ai/ask?tenant_id=${encodeURIComponent(tenantId)}`,
       { method: 'POST', body: JSON.stringify({ question }) },
     );
@@ -1964,6 +2178,9 @@ export class APIClient {
 
   async listTemplates(params: ListTemplatesParams = {}): Promise<PaginatedResponse<Template>> {
     const search = new URLSearchParams();
+    if (params.tenantId) {
+      search.set('tenant_id', params.tenantId);
+    }
     if (params.provider) {
       search.set('provider', params.provider);
     }
@@ -2045,6 +2262,29 @@ export class APIClient {
     return this.request<TemplateVersion>(
       `/api/v1/templates/${encoded}/versions/${versionNumber}/promote`,
       { method: 'POST' },
+    );
+  }
+
+  async listTemplateAssignments(templateId: string): Promise<{ items: TemplateAssignment[]; total: number }> {
+    return this.request<{ items: TemplateAssignment[]; total: number }>(
+      `/api/v1/templates/${encodeURIComponent(templateId)}/assignments`,
+    );
+  }
+
+  async createTemplateAssignment(
+    templateId: string,
+    payload: ScopedAssignmentPayload,
+  ): Promise<TemplateAssignment> {
+    return this.request<TemplateAssignment>(`/api/v1/templates/${encodeURIComponent(templateId)}/assignments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteTemplateAssignment(templateId: string, assignmentId: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/templates/${encodeURIComponent(templateId)}/assignments/${encodeURIComponent(assignmentId)}`,
+      { method: 'DELETE' },
     );
   }
 
@@ -2142,6 +2382,26 @@ export class APIClient {
     await this.request<void>(`/api/v1/policies/${encodeURIComponent(policyId)}/versions/${version}/promote`, {
       method: 'POST',
     });
+  }
+
+  async listPolicyAssignments(policyId: string): Promise<{ items: PolicyAssignment[]; total: number }> {
+    return this.request<{ items: PolicyAssignment[]; total: number }>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/assignments`,
+    );
+  }
+
+  async createPolicyAssignment(policyId: string, payload: CreatePolicyAssignmentPayload): Promise<PolicyAssignment> {
+    return this.request<PolicyAssignment>(`/api/v1/policies/${encodeURIComponent(policyId)}/assignments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePolicyAssignment(policyId: string, assignmentId: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/assignments/${encodeURIComponent(assignmentId)}`,
+      { method: 'DELETE' },
+    );
   }
 
   async evaluateCompliance(payload: ComplianceEvaluatePayload): Promise<ComplianceEvaluateResponse> {
@@ -2472,6 +2732,15 @@ export class APIClient {
     if (period) search.set('period', period);
     const qs = search.toString();
     return this.request<ControlRoomOverview>(`/api/v1/control-room/overview${qs ? `?${qs}` : ''}`);
+  }
+
+  async getCoverageMatrix(params: CoverageMatrixParams = {}): Promise<CoverageMatrixResponse> {
+    const search = new URLSearchParams();
+    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
+    if (params.domain) search.set('domain', params.domain);
+    const qs = search.toString();
+    const raw = await this.request<RawCoverageMatrixResponse>(`/api/v1/coverage/matrix${qs ? `?${qs}` : ''}`);
+    return normalizeCoverageMatrixResponse(raw);
   }
 
   // ---- Executive Risk Dashboard Metrics -------------------------------------------
@@ -3161,6 +3430,13 @@ export class APIClient {
     await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
   }
 
+  async updateAlertDisposition(id: string, payload: UpdateAlertDispositionPayload): Promise<Alert> {
+    return this.request<Alert>(`/api/v1/alerts/${encodeURIComponent(id)}/disposition`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listAccessRequests(params: { tenantId?: string; status?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<AccessRequest>> {
     const search = new URLSearchParams();
     if (params.tenantId) search.set('tenant_id', params.tenantId);
@@ -3551,13 +3827,21 @@ export class APIClient {
   async listComplianceEvidence(params: {
     tenantId: string;
     framework?: string;
+    controlRef?: string;
     evidenceType?: string;
+    since?: string;
+    until?: string;
+    includeExpired?: boolean;
     limit?: number;
     offset?: number;
   }): Promise<PaginatedResponse<ComplianceEvidence>> {
     const q = new URLSearchParams({ tenant_id: params.tenantId });
     if (params.framework) q.set('framework', params.framework);
+    if (params.controlRef) q.set('control_ref', params.controlRef);
     if (params.evidenceType) q.set('evidence_type', params.evidenceType);
+    if (params.since) q.set('since', params.since);
+    if (params.until) q.set('until', params.until);
+    if (params.includeExpired !== undefined) q.set('include_expired', String(params.includeExpired));
     if (params.limit !== undefined) q.set('limit', String(params.limit));
     if (params.offset !== undefined) q.set('offset', String(params.offset));
     const raw = await this.request<{ data: ComplianceEvidence[]; pagination: ServerPaginationMeta }>(
@@ -3643,6 +3927,16 @@ export class APIClient {
   }
 
   // ── Cluster rollout waves ─────────────────────────────────────────────
+  async listClusters(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<Cluster>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    const qs = search.toString();
+    const response = await this.request<RawPaginatedResponse<Cluster>>(`/api/v1/clusters${qs ? `?${qs}` : ''}`);
+    return { data: response.data, pagination: normalizePagination(response.pagination) };
+  }
+
   async listClusterRolloutWaves(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<ClusterRolloutWave>> {
     const search = new URLSearchParams();
     if (params.tenantId) search.set('tenant_id', params.tenantId);
@@ -3843,8 +4137,10 @@ export class APIClient {
     };
   }
 
-  buildReportDownloadUrl(id: string): string {
-    return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download`;
+  buildReportDownloadUrl(id: string, tenantId: string): string {
+    const search = new URLSearchParams();
+    search.set('tenant_id', tenantId);
+    return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download?${search.toString()}`;
   }
 
   buildEvidenceDownloadUrl(id: string, tenantId: string): string {
@@ -4754,6 +5050,43 @@ export interface CreateCommandACLPayload {
   roles: string[];
 }
 
+export interface ClusterMember {
+  node_id: string;
+  role: string;
+  position: number;
+  joined_at: string;
+}
+
+export interface ClusterRolloutSummary {
+  id: string;
+  template_version_id: string;
+  wave_size: number;
+  wave_strategy: string;
+  health_gate: Record<string, unknown>;
+  state: string;
+  current_wave: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Cluster {
+  id: string;
+  tenant_id: string;
+  name: string;
+  provider: string;
+  desired_size: number;
+  role_plan: Record<string, unknown>;
+  labels: Record<string, unknown>;
+  failure_domain_strategy: string;
+  state: string;
+  template_id?: string;
+  hypervisor_host_id?: string;
+  members?: ClusterMember[];
+  latest_rollout?: ClusterRolloutSummary;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ClusterRolloutWave {
   id: string;
   tenant_id: string;
@@ -4865,6 +5198,9 @@ export interface ComplianceEvidence {
   uploaded_by: string;
   uploaded_at: string;
   expires_at?: string;
+  age_seconds?: number;
+  freshness_status?: string;
+  citation_ids?: string[];
 }
 
 export interface AuditReport {

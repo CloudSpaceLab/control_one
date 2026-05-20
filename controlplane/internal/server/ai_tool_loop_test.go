@@ -121,6 +121,43 @@ func TestAIAskToolRBACDeniesOperatorAdminTool(t *testing.T) {
 	}
 }
 
+func TestAIAskReturnsSourceCitationsFromToolPayload(t *testing.T) {
+	t.Setenv("FEATURE_AI_ASK", "true")
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := sprint5AIStore(tenantID, nodeID)
+	client := &scriptedLLMClient{responses: []llm.Response{
+		{
+			StopReason: llm.StopToolUse,
+			Message: llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				{Type: llm.ContentToolCall, ToolCall: &llm.ToolCall{ID: "toolu_1", Name: "risk_notables", Input: map[string]any{"limit": 5}}},
+			}},
+		},
+		{StopReason: llm.StopEndTurn, Message: llm.TextMessage(llm.RoleAssistant, "There is one high-risk alert [tool:risk_notables:1].")},
+	}}
+	srv := sprint5AIServer(store, client)
+
+	body := bytes.NewBufferString(`{"question":"show current risk notables"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ai/ask?tenant_id="+tenantID.String(), body)
+	req.Header.Set("Authorization", "Bearer operator-token")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got aiAskResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !containsString(got.Citations, "tool:risk_notables:1") {
+		t.Fatalf("expected tool citation, got %+v", got.Citations)
+	}
+	if !hasCitationPrefix(got.SourceCitations, "alerts:") {
+		t.Fatalf("expected alert source citation, got %+v", got.SourceCitations)
+	}
+}
+
 func TestAIAskToolRejectsCrossTenantNodeEvidence(t *testing.T) {
 	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
@@ -212,6 +249,15 @@ func TestAIAskOperatorProposalIsReadOnly(t *testing.T) {
 			t.Fatalf("proposal must not mutate or execute actions, got audit %+v", log)
 		}
 	}
+}
+
+func hasCitationPrefix(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func sprint5AIStore(tenantID, nodeID uuid.UUID) *fakeStore {

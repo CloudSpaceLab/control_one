@@ -82,6 +82,24 @@ func TestStreamLoadFailsOnNonSuccess(t *testing.T) {
 	}
 }
 
+func TestStreamLoadAcceptsFinishedDuplicateLabel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(LoadStatus{
+			Status:            "Label Already Exists",
+			ExistingJobStatus: "FINISHED",
+			Message:           "label replay-batch-1 has already been used",
+		})
+	}))
+	defer server.Close()
+	c := &Client{
+		cfg:  Config{HTTPEndpoint: server.URL, Database: "co"},
+		http: &http.Client{Timeout: 5 * time.Second},
+	}
+	if _, err := c.StreamLoadJSON(context.Background(), "events", []map[string]any{{"a": 1}}, StreamLoadJSONOptions{Label: "replay-batch-1"}); err != nil {
+		t.Fatalf("finished duplicate label should be idempotent: %v", err)
+	}
+}
+
 func TestWriterFlushesOnInterval(t *testing.T) {
 	var pushed int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

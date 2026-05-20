@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -52,15 +53,17 @@ type updateSessionRecordingRequest struct {
 func (s *Server) handleSessionsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListSessions(w, r)
+		s.handleListSessions(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleOperator); !ok {
+		principal, ok := s.authorize(w, r, roleOperator)
+		if !ok {
 			return
 		}
-		s.handleCreateSession(w, r)
+		s.handleCreateSession(w, r, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -110,7 +113,7 @@ func (s *Server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 	http.NotFound(w, r)
 }
 
-func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -134,12 +137,22 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 	params.TenantID = &tenantID
 
 	if nodeIDStr := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeIDStr != "" {
-		if nodeID, err := uuid.Parse(nodeIDStr); err == nil {
-			params.NodeID = &nodeID
+		nodeID, err := uuid.Parse(nodeIDStr)
+		if err != nil {
+			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
 		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, nodeID); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		params.NodeID = &nodeID
 	}
 	if userIDStr := strings.TrimSpace(r.URL.Query().Get("user_id")); userIDStr != "" {
 		params.UserID = &userIDStr
@@ -180,14 +193,9 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	principal, ok := s.authorize(w, r, roleOperator)
-	if !ok {
 		return
 	}
 
@@ -205,6 +213,19 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := uuid.Parse(req.NodeID)
 	if err != nil {
 		http.Error(w, "invalid node_id", http.StatusBadRequest)
+		return
+	}
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get session node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -244,7 +265,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	resp := newSessionRecordingResponse(*created)
 	writeJSON(w, http.StatusCreated, resp)
 
-	s.recordAudit(r.Context(), principal, uuid.Nil, "session.created", "session", created.ID.String(), map[string]any{
+	s.recordAudit(r.Context(), principal, node.TenantID, "session.created", "session", created.ID.String(), map[string]any{
 		"node_id":      nodeID.String(),
 		"session_type": sessionType,
 	})
@@ -253,35 +274,31 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessionResource(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleGetSession(w, r, sessionID)
+		s.handleGetSession(w, r, sessionID, principal)
 	case http.MethodPatch:
-		if _, ok := s.authorize(w, r, roleOperator); !ok {
+		principal, ok := s.authorize(w, r, roleOperator)
+		if !ok {
 			return
 		}
-		s.handleUpdateSession(w, r, sessionID)
+		s.handleUpdateSession(w, r, sessionID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	session, err := s.store.GetSessionRecording(r.Context(), sessionID)
-	if err != nil {
-		s.logger.Error("get session recording", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	if session == nil {
-		http.NotFound(w, r)
+	session, _, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -289,13 +306,13 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request, sessio
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
+func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	principal, ok := s.authorize(w, r, roleOperator)
+	_, tenantID, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleOperator, roleAdmin)
 	if !ok {
 		return
 	}
@@ -334,7 +351,7 @@ func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request, ses
 	resp := newSessionRecordingResponse(*updated)
 	writeJSON(w, http.StatusOK, resp)
 
-	s.recordAudit(r.Context(), principal, uuid.Nil, "session.updated", "session", sessionID.String(), map[string]any{})
+	s.recordAudit(r.Context(), principal, tenantID, "session.updated", "session", sessionID.String(), map[string]any{})
 }
 
 func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID) {
@@ -344,7 +361,8 @@ func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -353,9 +371,8 @@ func (s *Server) handleSessionReplay(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	session, err := s.store.GetSessionRecording(r.Context(), sessionID)
-	if err != nil || session == nil {
-		http.NotFound(w, r)
+	session, _, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -376,7 +393,8 @@ func (s *Server) handleSessionDownload(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -385,9 +403,8 @@ func (s *Server) handleSessionDownload(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
-	session, err := s.store.GetSessionRecording(r.Context(), sessionID)
-	if err != nil || session == nil {
-		http.NotFound(w, r)
+	session, _, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -408,12 +425,16 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if _, _, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleViewer, roleOperator, roleAdmin); !ok {
 		return
 	}
 
@@ -456,6 +477,33 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		Pagination: newPaginationMeta(total, limit, offset, len(respItems)),
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) requireSessionTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, sessionID uuid.UUID, roles ...string) (*storage.SessionRecording, uuid.UUID, bool) {
+	session, err := s.store.GetSessionRecording(r.Context(), sessionID)
+	if err != nil {
+		s.logger.Error("get session recording", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, uuid.Nil, false
+	}
+	if session == nil {
+		http.NotFound(w, r)
+		return nil, uuid.Nil, false
+	}
+	node, err := s.store.GetNode(r.Context(), session.NodeID)
+	if err != nil {
+		s.logger.Error("get session node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, uuid.Nil, false
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return nil, uuid.Nil, false
+	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roles...) {
+		return nil, uuid.Nil, false
+	}
+	return session, node.TenantID, true
 }
 
 func newSessionRecordingResponse(session storage.SessionRecording) sessionRecordingResponse {

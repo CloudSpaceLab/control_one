@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -513,6 +511,9 @@ func (s *Server) persistComplianceResults(ctx context.Context, job *storage.Job,
 			checkedAt := result.CheckedAt
 			record.CheckedAt = &checkedAt
 		}
+		if metadata := complianceResultMetadata(result.Evidence); len(metadata) > 0 {
+			record.Metadata = metadata
+		}
 		stored = append(stored, record)
 	}
 	return s.store.CreateComplianceResults(ctx, stored)
@@ -573,7 +574,14 @@ func (s *Server) handleComplianceReportGenerate(ctx context.Context, job *storag
 	}
 
 	// Gather evidence for this framework+tenant
-	evidence, _, err := s.store.ListComplianceEvidence(ctx, report.TenantID, report.Framework, "", 1000, 0)
+	reportUntil := report.PeriodEnd.Add(24 * time.Hour)
+	evidence, _, err := s.listComplianceEvidenceFiltered(ctx, complianceEvidenceQuery{
+		TenantID:  report.TenantID,
+		Framework: report.Framework,
+		Since:     report.PeriodStart,
+		Until:     reportUntil,
+		Limit:     1000,
+	}, 1000, 0)
 	if err != nil {
 		s.logger.Warn("list compliance evidence for report", zap.Error(err))
 	}
@@ -583,7 +591,7 @@ func (s *Server) handleComplianceReportGenerate(ctx context.Context, job *storag
 	// Calculate summary stats
 	openFindings := 0
 	for _, e := range evidence {
-		if e.ExpiresAt == nil || e.ExpiresAt.After(time.Now()) {
+		if e.ExpiresAt == nil || e.ExpiresAt.After(reportUntil) {
 			openFindings++
 		}
 	}
@@ -614,34 +622,28 @@ func (s *Server) handleComplianceReportGenerate(ctx context.Context, job *storag
 		return fmt.Errorf("generate report html: %w", err)
 	}
 
-	// Save report to disk
-	reportsDir := "/var/lib/control-one/reports"
-	if err := os.MkdirAll(reportsDir, 0755); err != nil {
-		s.logger.Warn("create reports directory", zap.Error(err))
-	}
-
-	pdfPath := filepath.Join(reportsDir, fmt.Sprintf("report-%s-%s.html", report.Framework, reportID.String()))
-	if err := os.WriteFile(pdfPath, html, 0644); err != nil {
+	artifactPath, err := persistAuditReportArtifact(*report, html, "html")
+	if err != nil {
 		now := time.Now().UTC()
 		_ = s.store.UpdateAuditReportStatus(ctx, reportID, "failed", nil, &now)
-		return fmt.Errorf("write report file: %w", err)
+		return err
 	}
 
 	// Update report status to ready
 	now := time.Now().UTC()
-	if err := s.store.UpdateAuditReportStatus(ctx, reportID, "ready", &pdfPath, &now); err != nil {
+	if err := s.store.UpdateAuditReportStatus(ctx, reportID, "ready", &artifactPath, &now); err != nil {
 		s.logger.Error("update audit report status", zap.Error(err))
 	}
 
 	s.logger.Info("compliance report generation completed",
 		zap.String("job_id", job.ID.String()),
 		zap.String("report_id", reportID.String()),
-		zap.String("path", pdfPath),
+		zap.String("path", artifactPath),
 	)
 
 	s.recordAudit(ctx, nil, job.TenantID, "compliance.report.generated", "audit_report", reportID.String(), map[string]any{
 		"framework": report.Framework,
-		"path":      pdfPath,
+		"path":      artifactPath,
 	})
 
 	return nil
@@ -1220,6 +1222,7 @@ type complianceResultPayload struct {
 	Severity    *string        `json:"severity,omitempty"`
 	Details     *string        `json:"details,omitempty"`
 	Remediation *string        `json:"remediation,omitempty"`
+	Evidence    map[string]any `json:"evidence,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	CheckedAt   *string        `json:"checked_at,omitempty"`
 	NodeID      *string        `json:"node_id,omitempty"`
@@ -1277,6 +1280,7 @@ func jobResponseFromModel(job *storage.Job, events []storage.JobEvent, complianc
 			}
 			if len(result.Metadata) > 0 {
 				payload.Metadata = result.Metadata
+				payload.Evidence = complianceEvidenceFromMetadata(result.Metadata)
 			}
 			if result.Severity != nil {
 				payload.Severity = result.Severity

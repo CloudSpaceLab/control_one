@@ -347,7 +347,8 @@ func (s *Server) handleTelemetryMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -362,21 +363,20 @@ func (s *Server) handleTelemetryMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	filter := storage.TelemetryMetricFilter{}
-
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
 	}
+	filter := storage.TelemetryMetricFilter{TenantID: tenantID}
 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		filter.NodeID = parsed
@@ -430,7 +430,8 @@ func (s *Server) handleTelemetryLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -445,21 +446,20 @@ func (s *Server) handleTelemetryLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filter := storage.TelemetryLogFilter{}
-
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
 	}
+	filter := storage.TelemetryLogFilter{TenantID: tenantID}
 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		filter.NodeID = parsed
@@ -518,6 +518,19 @@ func (s *Server) handleTelemetryLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTelemetryNodeSubroutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/telemetry/nodes/")
 	trimmed = strings.Trim(trimmed, "/")
 	if trimmed == "" {
@@ -536,9 +549,22 @@ func (s *Server) handleTelemetryNodeSubroutes(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invalid node id", http.StatusBadRequest)
 		return
 	}
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get telemetry node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 
 	if segments[1] == "metrics" {
-		filter := storage.TelemetryMetricFilter{NodeID: nodeID}
+		filter := storage.TelemetryMetricFilter{TenantID: node.TenantID, NodeID: nodeID}
 
 		if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 			parsed, err := uuid.Parse(tenantParam)
@@ -546,7 +572,10 @@ func (s *Server) handleTelemetryNodeSubroutes(w http.ResponseWriter, r *http.Req
 				http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 				return
 			}
-			filter.TenantID = parsed
+			if parsed != node.TenantID {
+				http.Error(w, "node is outside requested tenant", http.StatusForbidden)
+				return
+			}
 		}
 
 		if metricParam := strings.TrimSpace(r.URL.Query().Get("metric_name")); metricParam != "" {

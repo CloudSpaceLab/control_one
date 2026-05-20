@@ -59,6 +59,10 @@ type heartbeatRequest struct {
 	// CompletedActions reports the outcome of pending_actions the agent
 	// processed since the last heartbeat.
 	CompletedActions []heartbeatCompletedAction `json:"completed_actions,omitempty"`
+
+	// NetworkPolicyReceipts reports agent-side evaluation/enforcement status
+	// for desired network_policy states delivered on prior heartbeats.
+	NetworkPolicyReceipts []heartbeatNetworkPolicyReceipt `json:"network_policy_receipts,omitempty"`
 }
 
 // heartbeatCompletedAction is one row in completed_actions[]. Status is
@@ -73,6 +77,26 @@ type heartbeatCompletedAction struct {
 	// summary data matters (e.g. patch.deploy_direct: packages_upgraded,
 	// log_tail). Empty for actions that need no payload back.
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type heartbeatNetworkPolicyReceipt struct {
+	DesiredStateID    string   `json:"desired_state_id"`
+	SchemaVersion     string   `json:"schema_version"`
+	Mode              string   `json:"mode"`
+	Status            string   `json:"status"`
+	Backend           string   `json:"backend,omitempty"`
+	DryRun            bool     `json:"dry_run"`
+	PlannedRules      int      `json:"planned_rules"`
+	AppliedRules      int      `json:"applied_rules"`
+	RemovedRules      int      `json:"removed_rules,omitempty"`
+	MissingControls   []string `json:"missing_controls,omitempty"`
+	Drift             []string `json:"drift,omitempty"`
+	Error             string   `json:"error,omitempty"`
+	SignaturePresent  bool     `json:"signature_present"`
+	SignatureValid    bool     `json:"signature_valid,omitempty"`
+	SignatureKeyID    string   `json:"signature_key_id,omitempty"`
+	ObservedAt        string   `json:"observed_at"`
+	RollbackAvailable bool     `json:"rollback_available"`
 }
 
 // heartbeatPackage is the per-package payload entry the agent sends.
@@ -203,6 +227,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
 	s.processHeartbeatCompletedActions(r.Context(), nodeID, body.CompletedActions)
+	s.processHeartbeatNetworkPolicyReceipts(r.Context(), node, body.NetworkPolicyReceipts)
 	s.retireAgentUpdateJobsFromHeartbeat(r.Context(), node, body)
 
 	activated, resultState := s.maybeActivatePendingNode(r.Context(), node)
@@ -212,12 +237,17 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		lastSeen = node.LastSeenAt.UTC().Format(time.RFC3339)
 	}
 
+	policyNow := time.Now().UTC()
+	networkPolicy := s.compileNodeNetworkPolicy(r.Context(), *node, policyNow)
+	if networkPolicy != nil && !networkPolicy.Active && networkPolicy.Mode == isolationModeOnline && !nodeAdvertisesCapability(node, networkPolicyCapability) {
+		networkPolicy = nil
+	}
 	resp := heartbeatResponse{
 		NodeID:                 node.ID.String(),
 		State:                  resultState,
 		LastSeenAt:             lastSeen,
 		Activated:              activated,
-		NetworkPolicy:          nodeNetworkPolicyFromPosture(nodeIsolationPostureFromNode(*node, time.Now().UTC())),
+		NetworkPolicy:          networkPolicy,
 		FullInventoryRequested: fullInventoryRequested,
 	}
 	// Deliver tenant capture-filter policy back to the agent so collectors
@@ -485,6 +515,19 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 				continue
 			}
 			if c.Status == "succeeded" {
+				if verr := validateFirewallReceipt(rule, jobID, c.Action, c.Metadata); verr != nil {
+					errMsg := verr.Error()
+					if merr := s.store.MarkNodeFirewallRuleFailed(ctx, rule.ID, errMsg); merr != nil {
+						s.logger.Warn("mark firewall rule failed",
+							zap.String("rule_id", rule.ID.String()), zap.Error(merr))
+					}
+					if jerr := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, errMsg, map[string]any{"error": errMsg}); jerr != nil {
+						s.logger.Warn("firewall job mark failed",
+							zap.String("job_id", jobID.String()), zap.Error(jerr))
+					}
+					s.refreshBlockProposalEnforcementStatusByEntityAction(ctx, rule.EntityActionID)
+					continue
+				}
 				// Apply or remove — record in the same row.
 				var markErr error
 				if c.Action == JobTypeFirewallRuleDelete {
@@ -567,6 +610,129 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 func agentUpdateAlreadyCurrent(errMsg string) bool {
 	msg := strings.ToLower(strings.TrimSpace(errMsg))
 	return strings.Contains(msg, "downgrade refused") && strings.Contains(msg, "<= current")
+}
+
+func (s *Server) processHeartbeatNetworkPolicyReceipts(ctx context.Context, node *storage.Node, receipts []heartbeatNetworkPolicyReceipt) {
+	if s == nil || node == nil || len(receipts) == 0 {
+		return
+	}
+	principal := &auth.Principal{Type: "agent", Name: node.ID.String()}
+	now := time.Now().UTC()
+	for _, r := range receipts {
+		r, validationErrors, currentDesiredStateID := s.validateNetworkPolicyReceipt(ctx, node, r, now)
+		desiredStateID := strings.TrimSpace(r.DesiredStateID)
+		if desiredStateID == "" {
+			desiredStateID = "unknown"
+		}
+		status := strings.TrimSpace(r.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		desiredStateCurrent := currentDesiredStateID == "" || desiredStateID == currentDesiredStateID
+		metadata := map[string]any{
+			"desired_state_id":         desiredStateID,
+			"schema_version":           strings.TrimSpace(r.SchemaVersion),
+			"mode":                     strings.TrimSpace(r.Mode),
+			"status":                   status,
+			"backend":                  strings.TrimSpace(r.Backend),
+			"dry_run":                  r.DryRun,
+			"planned_rules":            r.PlannedRules,
+			"applied_rules":            r.AppliedRules,
+			"removed_rules":            r.RemovedRules,
+			"missing_controls":         sanitizeStringSlice(r.MissingControls, 20),
+			"drift":                    sanitizeStringSlice(r.Drift, 20),
+			"error":                    strings.TrimSpace(r.Error),
+			"signature_present":        r.SignaturePresent,
+			"signature_valid":          r.SignatureValid,
+			"signature_key_id":         strings.TrimSpace(r.SignatureKeyID),
+			"observed_at":              strings.TrimSpace(r.ObservedAt),
+			"rollback_available":       r.RollbackAvailable,
+			"receipt_valid":            len(validationErrors) == 0,
+			"validation_errors":        validationErrors,
+			"current_desired_state_id": currentDesiredStateID,
+			"desired_state_current":    desiredStateCurrent,
+			"receipt_contract":         "network_policy.receipt.v1",
+			"source":                   "agent_heartbeat",
+		}
+		s.recordAudit(ctx, principal, node.TenantID, "network_policy.receipt", "node", node.ID.String(), metadata)
+	}
+}
+
+func (s *Server) validateNetworkPolicyReceipt(ctx context.Context, node *storage.Node, r heartbeatNetworkPolicyReceipt, now time.Time) (heartbeatNetworkPolicyReceipt, []string, string) {
+	var validationErrors []string
+	r.DesiredStateID = strings.TrimSpace(r.DesiredStateID)
+	if r.DesiredStateID == "" {
+		r.DesiredStateID = "unknown"
+		validationErrors = append(validationErrors, "desired_state_id_missing")
+	}
+	r.SchemaVersion = strings.TrimSpace(r.SchemaVersion)
+	if r.SchemaVersion != networkPolicySchemaVersion {
+		validationErrors = append(validationErrors, "schema_version_invalid")
+	}
+	r.Mode = normalizeIsolationMode(r.Mode)
+	if r.Mode == "" {
+		r.Mode = "unknown"
+		validationErrors = append(validationErrors, "mode_invalid")
+	}
+	r.Status = normalizeNetworkPolicyReceiptStatus(r.Status)
+	if r.Status == "invalid" {
+		validationErrors = append(validationErrors, "status_invalid")
+	}
+	r.Backend = strings.TrimSpace(r.Backend)
+	r.SignatureKeyID = strings.TrimSpace(r.SignatureKeyID)
+	r.ObservedAt = strings.TrimSpace(r.ObservedAt)
+	if r.ObservedAt == "" {
+		validationErrors = append(validationErrors, "observed_at_missing")
+	} else if observedAt, err := time.Parse(time.RFC3339, r.ObservedAt); err != nil {
+		validationErrors = append(validationErrors, "observed_at_invalid")
+	} else if observedAt.After(now.Add(5 * time.Minute)) {
+		validationErrors = append(validationErrors, "observed_at_in_future")
+	}
+	r.PlannedRules = clampNetworkPolicyReceiptCount(r.PlannedRules, "planned_rules", &validationErrors)
+	r.AppliedRules = clampNetworkPolicyReceiptCount(r.AppliedRules, "applied_rules", &validationErrors)
+	r.RemovedRules = clampNetworkPolicyReceiptCount(r.RemovedRules, "removed_rules", &validationErrors)
+	r.MissingControls = sanitizeStringSlice(r.MissingControls, 20)
+	r.Drift = sanitizeStringSlice(r.Drift, 20)
+	r.Error = strings.TrimSpace(r.Error)
+	if len(r.Error) > 512 {
+		r.Error = r.Error[:512]
+		validationErrors = append(validationErrors, "error_truncated")
+	}
+
+	currentDesiredStateID := ""
+	if s != nil && node != nil {
+		if policy := s.compileNodeNetworkPolicy(ctx, *node, now); policy != nil {
+			currentDesiredStateID = policy.DesiredStateID
+			if policy.Signature != "" && !r.SignaturePresent {
+				validationErrors = append(validationErrors, "signature_missing_for_signed_policy")
+			} else if policy.Signature != "" && !r.SignatureValid {
+				validationErrors = append(validationErrors, "signature_not_verified")
+			}
+		}
+	}
+	return r, validationErrors, currentDesiredStateID
+}
+
+func normalizeNetworkPolicyReceiptStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "no_op", "planned_dry_run", "drift_detected", "unsupported", "failed", "applied", "rollback_applied":
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return "invalid"
+	}
+}
+
+func clampNetworkPolicyReceiptCount(value int, field string, validationErrors *[]string) int {
+	switch {
+	case value < 0:
+		*validationErrors = append(*validationErrors, field+"_negative")
+		return 0
+	case value > 10000:
+		*validationErrors = append(*validationErrors, field+"_too_large")
+		return 10000
+	default:
+		return value
+	}
 }
 
 func (s *Server) retireAgentUpdateJobsFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) {

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -111,7 +112,8 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -120,14 +122,9 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 	}
 
 	q := r.URL.Query()
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(q.Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
+	if !ok {
+		return
 	}
 
 	period := strings.TrimSpace(q.Get("period"))
@@ -287,7 +284,8 @@ func (s *Server) handleMetricsMTTD(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -295,14 +293,9 @@ func (s *Server) handleMetricsMTTD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
+	if !ok {
+		return
 	}
 
 	severity := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("severity")))
@@ -339,7 +332,8 @@ func (s *Server) handleMetricsMTTR(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -347,14 +341,9 @@ func (s *Server) handleMetricsMTTR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
+	if !ok {
+		return
 	}
 
 	severity := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("severity")))
@@ -391,7 +380,8 @@ func (s *Server) handleMetricsRemediationVelocity(w http.ResponseWriter, r *http
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -399,14 +389,9 @@ func (s *Server) handleMetricsRemediationVelocity(w http.ResponseWriter, r *http
 		return
 	}
 
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
+	if !ok {
+		return
 	}
 
 	periodDays := 30
@@ -436,7 +421,8 @@ func (s *Server) handleMetricsFindingsAging(w http.ResponseWriter, r *http.Reque
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -444,14 +430,9 @@ func (s *Server) handleMetricsFindingsAging(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
+	if !ok {
+		return
 	}
 
 	severity := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("severity")))
@@ -476,7 +457,8 @@ func (s *Server) handleMetricsRiskScore(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -484,14 +466,9 @@ func (s *Server) handleMetricsRiskScore(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		parsed, err := uuid.Parse(v)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
+	if !ok {
+		return
 	}
 
 	score, err := s.store.CalculateRiskScore(r.Context(), tenantID)
@@ -530,7 +507,8 @@ func (s *Server) handleMetricsRiskScoreHistory(w http.ResponseWriter, r *http.Re
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -538,7 +516,7 @@ func (s *Server) handleMetricsRiskScoreHistory(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	tenantID, ok := parseTenantQuery(w, r)
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
 	if !ok {
 		return
 	}
@@ -576,7 +554,8 @@ func (s *Server) handleMetricsRemediationVelocityHistory(w http.ResponseWriter, 
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -584,7 +563,7 @@ func (s *Server) handleMetricsRemediationVelocityHistory(w http.ResponseWriter, 
 		return
 	}
 
-	tenantID, ok := parseTenantQuery(w, r)
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
 	if !ok {
 		return
 	}
@@ -624,7 +603,8 @@ func (s *Server) handleMetricsComplianceByFramework(w http.ResponseWriter, r *ht
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -632,7 +612,7 @@ func (s *Server) handleMetricsComplianceByFramework(w http.ResponseWriter, r *ht
 		return
 	}
 
-	tenantID, ok := parseTenantQuery(w, r)
+	tenantID, ok := s.requireDashboardTenantAccessFromQuery(w, r, principal)
 	if !ok {
 		return
 	}
@@ -652,6 +632,10 @@ func (s *Server) handleMetricsComplianceByFramework(w http.ResponseWriter, r *ht
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) requireDashboardTenantAccessFromQuery(w http.ResponseWriter, r *http.Request, principal *auth.Principal) (uuid.UUID, bool) {
+	return s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
 }
 
 // parseTenantQuery extracts an optional tenant_id query param. When absent it

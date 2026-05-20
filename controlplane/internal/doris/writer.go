@@ -33,6 +33,16 @@ type streamLoadOptions struct {
 	Compress bool
 }
 
+// StreamLoadJSONOptions controls one explicit JSON Stream Load call.
+type StreamLoadJSONOptions struct {
+	// Label should be stable for durable replay. Doris deduplicates labels
+	// for a bounded retention window, which lets callers safely retry after a
+	// timeout without creating duplicate load jobs.
+	Label    string
+	Strict   bool
+	Compress bool
+}
+
 // LoadStatus is the structured response Stream Load returns per request.
 type LoadStatus struct {
 	TxnID                int64  `json:"TxnId"`
@@ -47,6 +57,19 @@ type LoadStatus struct {
 	LoadBytes            int64  `json:"LoadBytes"`
 	LoadTimeMs           int64  `json:"LoadTimeMs"`
 	ErrorURL             string `json:"ErrorURL,omitempty"`
+}
+
+// StreamLoadJSON posts rows to one Doris table and waits for the Stream Load
+// response. Use this for journaled ingest where the caller must not mark a
+// batch accepted until Doris has acknowledged it.
+func (c *Client) StreamLoadJSON(ctx context.Context, table string, rows []map[string]any, opts StreamLoadJSONOptions) (*LoadStatus, error) {
+	return c.streamLoad(ctx, table, rows, streamLoadOptions{
+		Format:          "json",
+		Strict:          opts.Strict,
+		Label:           opts.Label,
+		StripOuterArray: true,
+		Compress:        opts.Compress,
+	})
 }
 
 // streamLoad posts a JSON array of rows to Doris and returns the parsed
@@ -109,12 +132,25 @@ func (c *Client) streamLoad(ctx context.Context, table string, rows []map[string
 	if err := json.Unmarshal(respBody, &status); err != nil {
 		return nil, fmt.Errorf("decode stream load: %w (body=%s)", err, string(respBody))
 	}
-	if resp.StatusCode >= 400 || (status.Status != "Success" && status.Status != "Publish Timeout") {
+	if resp.StatusCode >= 400 || !streamLoadStatusAccepted(status) {
 		return &status, fmt.Errorf("doris stream load %s: %s (loaded %d/%d, filtered %d, error_url=%s)",
 			status.Status, status.Message, status.NumberLoadedRows, status.NumberTotalRows,
 			status.NumberFilteredRows, status.ErrorURL)
 	}
 	return &status, nil
+}
+
+func streamLoadStatusAccepted(status LoadStatus) bool {
+	switch strings.ToLower(strings.TrimSpace(status.Status)) {
+	case "success", "publish timeout":
+		return true
+	case "label already exists":
+		switch strings.ToLower(strings.TrimSpace(status.ExistingJobStatus)) {
+		case "finished", "success", "publish timeout":
+			return true
+		}
+	}
+	return false
 }
 
 const gzipThreshold = 10 * 1024 // 10 KiB

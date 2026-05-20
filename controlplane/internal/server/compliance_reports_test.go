@@ -1,0 +1,141 @@
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+)
+
+func TestAuditReportDownloadRequiresTenantScopeAndPersistsArtifact(t *testing.T) {
+	reportsDir := t.TempDir()
+	t.Setenv("CONTROL_ONE_REPORTS_DIR", reportsDir)
+
+	tenantID := uuid.New()
+	otherTenantID := uuid.New()
+	reportID := uuid.New()
+	report := &storage.AuditReport{
+		ID:          reportID,
+		TenantID:    tenantID,
+		Framework:   "SOC2",
+		PeriodStart: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		PeriodEnd:   time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+		Status:      "pending",
+	}
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}},
+		auditReports: map[uuid.UUID]*storage.AuditReport{
+			reportID: report,
+		},
+	}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "report-viewer"),
+	}
+	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
+	handler := srv.Handler()
+
+	crossTenantReq := httptest.NewRequest(http.MethodGet, "/api/v1/compliance/reports/"+reportID.String()+"/download?tenant_id="+otherTenantID.String(), nil)
+	crossTenantReq.Header.Set("Authorization", "Bearer report-viewer")
+	crossTenantRec := httptest.NewRecorder()
+	handler.ServeHTTP(crossTenantRec, crossTenantReq)
+	if crossTenantRec.Code != http.StatusNotFound {
+		t.Fatalf("expected cross-tenant report download to be hidden, got %d body=%s", crossTenantRec.Code, crossTenantRec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/compliance/reports/"+reportID.String()+"/download?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer report-viewer")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected report download, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Disposition"), "compliance-report-SOC2-2026-05-31.html") {
+		t.Fatalf("unexpected content disposition: %s", rec.Header().Get("Content-Disposition"))
+	}
+
+	updated := store.auditReports[reportID]
+	if updated == nil || updated.Status != "ready" || updated.PDFPath == nil || updated.GeneratedAt == nil {
+		t.Fatalf("expected persisted ready report artifact, got %#v", updated)
+	}
+	if !strings.HasPrefix(*updated.PDFPath, reportsDir) {
+		t.Fatalf("artifact path escaped reports dir: %s", *updated.PDFPath)
+	}
+	if _, err := os.Stat(*updated.PDFPath); err != nil {
+		t.Fatalf("expected artifact file to exist: %v", err)
+	}
+}
+
+func TestListComplianceEvidenceReturnsFreshnessAndHidesFilePath(t *testing.T) {
+	tenantID := uuid.New()
+	now := time.Now().UTC()
+	framework := "SOC2"
+	control := "CC6.1"
+	filePath := "C:/tmp/control-one/evidence/secrets.txt"
+	evidenceID := uuid.New()
+	store := &fakeStore{
+		complianceEvidence: []storage.ComplianceEvidence{
+			{
+				ID:           uuid.New(),
+				TenantID:     tenantID,
+				EvidenceType: "config_snapshot",
+				Framework:    &framework,
+				ControlRef:   &control,
+				Title:        "Expired evidence",
+				FilePath:     &filePath,
+				UploadedAt:   now.Add(-time.Hour),
+				ExpiresAt:    testTimePtr(now.Add(-time.Minute)),
+			},
+			{
+				ID:           evidenceID,
+				TenantID:     tenantID,
+				EvidenceType: "config_snapshot",
+				Framework:    &framework,
+				ControlRef:   &control,
+				Title:        "Current evidence",
+				FilePath:     &filePath,
+				UploadedAt:   now.Add(-2 * time.Hour),
+			},
+		},
+	}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "evidence-viewer"),
+	}
+	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/compliance/evidence?tenant_id="+tenantID.String()+"&framework=SOC2&control_ref=CC6.1&evidence_type=config_snapshot&include_expired=false", nil)
+	req.Header.Set("Authorization", "Bearer evidence-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected evidence list, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "FilePath") || strings.Contains(rec.Body.String(), filePath) {
+		t.Fatalf("list response leaked server file path: %s", rec.Body.String())
+	}
+
+	var body struct {
+		Data []complianceUploadedEvidenceResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Data) != 1 || body.Data[0].ID != evidenceID.String() {
+		t.Fatalf("expected only current evidence, got %#v", body.Data)
+	}
+	if body.Data[0].TenantID != tenantID.String() || body.Data[0].Freshness != "fresh" || body.Data[0].AgeSeconds <= 0 {
+		t.Fatalf("expected freshness metadata, got %#v", body.Data[0])
+	}
+}

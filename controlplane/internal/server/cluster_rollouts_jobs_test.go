@@ -18,9 +18,10 @@ import (
 // rolloutJobFixture wires a server with a cluster that has pre-provisioned
 // members so rollouts can advance without hitting the full provision flow.
 type rolloutJobFixture struct {
-	env       *clustersTestEnv
-	clusterID uuid.UUID
-	memberIDs []uuid.UUID
+	env               *clustersTestEnv
+	clusterID         uuid.UUID
+	memberIDs         []uuid.UUID
+	templateVersionID uuid.UUID
 }
 
 func newRolloutJobFixture(t *testing.T, totalMembers int) *rolloutJobFixture {
@@ -63,11 +64,12 @@ func newRolloutJobFixture(t *testing.T, totalMembers int) *rolloutJobFixture {
 		})
 	}
 	env.store.clusterMembers = map[uuid.UUID][]storage.ClusterMember{clusterID: members}
+	templateVersionID := seedClusterRolloutTemplateVersion(t, env, "mock")
 
 	clearTestNodeLastSeen()
 	t.Cleanup(clearTestNodeLastSeen)
 
-	return &rolloutJobFixture{env: env, clusterID: clusterID, memberIDs: memberIDs}
+	return &rolloutJobFixture{env: env, clusterID: clusterID, memberIDs: memberIDs, templateVersionID: templateVersionID}
 }
 
 // execCapturedTasks drains the queue once, executing each task synchronously.
@@ -124,7 +126,7 @@ func TestRolloutAdvanceHeartbeatHealthyAllWaves(t *testing.T) {
 	}
 
 	accepted := startRolloutJobTest(t, f, map[string]any{
-		"template_version_id": uuid.NewString(),
+		"template_version_id": f.templateVersionID.String(),
 		"wave_size":           2,
 		"health_gate": map[string]any{
 			"type":        "heartbeat",
@@ -166,7 +168,7 @@ func TestRolloutAdvanceHeartbeatHaltsOnMissingHeartbeat(t *testing.T) {
 	// timeout=0 so time.Since(StartedAt) >= timeout fires deterministically
 	// regardless of wall-clock resolution (Windows ~15.6ms would flake on 1ns).
 	accepted := startRolloutJobTest(t, f, map[string]any{
-		"template_version_id": uuid.NewString(),
+		"template_version_id": f.templateVersionID.String(),
 		"wave_size":           2,
 		"health_gate": map[string]any{
 			"type":        "heartbeat",
@@ -210,7 +212,7 @@ func TestRolloutAdvanceComplianceGate(t *testing.T) {
 	}
 
 	accepted := startRolloutJobTest(t, f, map[string]any{
-		"template_version_id": uuid.NewString(),
+		"template_version_id": f.templateVersionID.String(),
 		"wave_size":           2,
 		"health_gate": map[string]any{
 			"type":        "compliance",
@@ -245,7 +247,7 @@ func TestRolloutHTTPGatePassesWhenProbeSucceeds(t *testing.T) {
 	f.env.store.nodes[0].PublicIP = sql.NullString{String: host, Valid: true}
 
 	accepted := startRolloutJobTest(t, f, map[string]any{
-		"template_version_id": uuid.NewString(),
+		"template_version_id": f.templateVersionID.String(),
 		"wave_size":           1,
 		"health_gate": map[string]any{
 			"type":          "http",
@@ -274,7 +276,7 @@ func TestRolloutAbortCancelsInProgressWave(t *testing.T) {
 	f := newRolloutJobFixture(t, 4)
 
 	accepted := startRolloutJobTest(t, f, map[string]any{
-		"template_version_id": uuid.NewString(),
+		"template_version_id": f.templateVersionID.String(),
 		"wave_size":           2,
 		"health_gate": map[string]any{
 			"type":        "heartbeat",

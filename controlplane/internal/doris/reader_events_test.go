@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestListConnectionsForNodeQuery_NoRFC1918Strip pins the SQL emitted by
@@ -122,5 +123,82 @@ func TestRFC1918Peer_StillReachableAsSummary(t *testing.T) {
 		if strings.Contains(q, peer) {
 			t.Errorf("doris query mentions private prefix %q — bugs §1.2 regression\nquery:\n%s", peer, q)
 		}
+	}
+}
+
+func TestBuildEventQuerySQLRequiresTenantAndUsesBoundFilters(t *testing.T) {
+	since := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)
+	until := since.Add(2 * time.Hour)
+
+	_, _, _, err := buildEventQuerySQL(EventQueryParams{Since: since, Until: until})
+	if err == nil {
+		t.Fatal("expected tenant_id validation error")
+	}
+
+	query, countQuery, args, err := buildEventQuerySQL(EventQueryParams{
+		TenantID:      "tenant-1",
+		NodeID:        "node-1",
+		CorrelationID: "corr-1",
+		EventTypes:    []string{"web.request", "web.error"},
+		ParserStatus:  "parsed",
+		Since:         since,
+		Until:         until,
+		Limit:         999,
+		Offset:        3,
+	})
+	if err != nil {
+		t.Fatalf("build event query: %v", err)
+	}
+	for _, want := range []string{
+		"FROM events",
+		"tenant_id = ?",
+		"node_id = ?",
+		"correlation_id = ?",
+		"event_type IN (?, ?)",
+		"parser_status = ?",
+		"ORDER BY ts DESC",
+		"LIMIT 500 OFFSET 3",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("query missing %q:\n%s", want, query)
+		}
+	}
+	if !strings.Contains(countQuery, "SELECT COUNT(*) FROM events WHERE tenant_id = ?") {
+		t.Fatalf("count query missing tenant predicate: %s", countQuery)
+	}
+	if len(args) != 8 {
+		t.Fatalf("args len = %d, want 8 (%+v)", len(args), args)
+	}
+}
+
+func TestBuildTimelineSQLScopesEveryUnionArmByTenant(t *testing.T) {
+	query, args, err := buildTimelineSQL(TimelineBuildParams{
+		TenantID:      "tenant-1",
+		CorrelationID: "corr-1",
+		EntityType:    "ip",
+		EntityID:      "203.0.113.10",
+		Since:         time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC),
+		Until:         time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		Limit:         2000,
+	})
+	if err != nil {
+		t.Fatalf("build timeline query: %v", err)
+	}
+	for _, table := range []string{"FROM events", "FROM file_accesses", "FROM db_queries"} {
+		if !strings.Contains(query, table) {
+			t.Fatalf("timeline query missing %s:\n%s", table, query)
+		}
+	}
+	if got := strings.Count(query, "tenant_id = ?"); got != 3 {
+		t.Fatalf("tenant predicate count = %d, want 3:\n%s", got, query)
+	}
+	if !strings.Contains(query, "events") || !strings.Contains(query, "ORDER BY ts ASC") || !strings.Contains(query, "LIMIT 1000") {
+		t.Fatalf("timeline query missing expected ordering/limit:\n%s", query)
+	}
+	if strings.Contains(query, "203.0.113.10") {
+		t.Fatalf("entity value was interpolated into SQL:\n%s", query)
+	}
+	if len(args) == 0 {
+		t.Fatal("expected bound args")
 	}
 }

@@ -63,7 +63,7 @@ func TestSendHeartbeatTransmitsPayload(t *testing.T) {
 	logger := zap.NewNop()
 	const nodeID = "11111111-1111-1111-1111-111111111111"
 
-	if err := sendHeartbeat(context.Background(), client, logger, nodeID, nil, nil); err != nil {
+	if err := sendHeartbeat(context.Background(), client, logger, nodeID, nil, nil, nil); err != nil {
 		t.Fatalf("sendHeartbeat: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestSendHeartbeatReportsReleaseSeqAndDispatchesAgentUpdateJob(t *testing.T)
 		t.Fatalf("api.NewClient: %v", err)
 	}
 
-	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, update); err != nil {
+	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, nil, update); err != nil {
 		t.Fatalf("sendHeartbeat: %v", err)
 	}
 	if gotPayload.AgentReleaseSeq != 7 {

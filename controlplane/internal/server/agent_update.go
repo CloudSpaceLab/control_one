@@ -63,6 +63,9 @@ func (s *Server) handleNodeAgentUpdate(w http.ResponseWriter, r *http.Request, n
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleOperator, roleAdmin) {
+		return
+	}
 
 	var req agentUpdateRequest
 	if r.ContentLength > 0 {
@@ -122,7 +125,8 @@ func (s *Server) handleAgentRollout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentRolloutGet(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -132,6 +136,9 @@ func (s *Server) handleAgentRolloutGet(w http.ResponseWriter, r *http.Request) {
 	tid, err := uuid.Parse(r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tid, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	state, err := s.store.GetAgentRolloutState(r.Context(), tid)
@@ -166,6 +173,9 @@ func (s *Server) handleAgentRolloutPut(w http.ResponseWriter, r *http.Request) {
 	tid, err := uuid.Parse(req.TenantID)
 	if err != nil {
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tid, roleAdmin) {
 		return
 	}
 	if req.RolloutPct < 0 || req.RolloutPct > 100 {

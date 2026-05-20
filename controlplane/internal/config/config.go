@@ -44,16 +44,13 @@ type AMLConfig struct {
 	InsecureSkipVerify bool          `mapstructure:"insecure_skip_verify"`
 }
 
-// PolicyConfig points the control plane at the public half of the ed25519
-// key used to sign policy bundles. When set, the file's PEM contents are
-// shipped to enrolling agents so they can verify signed policies; when
-// unset, enrolling agents skip signature verification entirely. Today's
-// server doesn't sign policies — this exists so the wiring is in place
-// when it does, and so the agent's auto-generated nodeagent.yaml can be
-// emitted with an explicit (possibly empty) policy block instead of
-// inheriting the agent-side default that points at a path nothing creates.
+// PolicyConfig points the control plane at the ed25519 keys used to sign and
+// verify desired policy state. PublicKeyFile is shipped to enrolling agents;
+// SigningKeyPath signs server-issued desired state such as network_policy.
+// When no public key is configured, enrolling agents skip signature verification.
 type PolicyConfig struct {
-	PublicKeyFile string `mapstructure:"public_key_file"`
+	PublicKeyFile  string `mapstructure:"public_key_file"`
+	SigningKeyPath string `mapstructure:"signing_key_path"`
 }
 
 // IPIntelConfig governs external IP enrichment cache fills. Request-path
@@ -72,9 +69,9 @@ type IPIntelConfig struct {
 	AbuseScoreCutoff int           `mapstructure:"abuse_score_cutoff"` // chip emitted when score ≥ this; default 25
 }
 
-// ThreatIntelConfig governs local threat-feed snapshots. The runtime matcher
-// searches the in-memory database built from these files instead of calling
-// remote blacklist APIs during investigation.
+// ThreatIntelConfig governs locally downloaded blacklist/feed snapshots.
+// External feeds are refreshed in the background; request-path checks read the
+// local snapshot so IP pivots and scans do not require live API calls.
 type ThreatIntelConfig struct {
 	SnapshotDir string `mapstructure:"snapshot_dir"`
 }
@@ -496,9 +493,6 @@ func applyFallbacks(cfg *Config) {
 		cfg.IPBehavior.Counters.RedisAddress = cfg.Worker.Asynq.RedisAddress
 		cfg.IPBehavior.Counters.RedisDB = cfg.Worker.Asynq.RedisDB
 		cfg.IPBehavior.Counters.RedisPassword = cfg.Worker.Asynq.RedisPassword
-	}
-	if cfg.ThreatIntel.SnapshotDir == "" {
-		cfg.ThreatIntel.SnapshotDir = "data/threat-intel"
 	}
 	if cfg.OfflineContent.RootDir == "" {
 		cfg.OfflineContent.RootDir = "data/offline-content"

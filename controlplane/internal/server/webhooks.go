@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -90,15 +91,17 @@ type testWebhookRequest struct {
 func (s *Server) handleWebhooksCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleListWebhooks(w, r)
+		s.handleListWebhooks(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleCreateWebhook(w, r)
+		s.handleCreateWebhook(w, r, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -138,7 +141,7 @@ func (s *Server) handleWebhookSubroutes(w http.ResponseWriter, r *http.Request) 
 	http.NotFound(w, r)
 }
 
-func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -150,14 +153,8 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if tenantParam == "" {
-		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
-		return
-	}
-	tenantID, err := uuid.Parse(tenantParam)
-	if err != nil {
-		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -189,7 +186,7 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -214,14 +211,17 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID uuid.UUID
-	if req.TenantID != nil {
-		parsed, err := uuid.Parse(*req.TenantID)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	if req.TenantID == nil || strings.TrimSpace(*req.TenantID) == "" {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(strings.TrimSpace(*req.TenantID))
+	if err != nil || tenantID == uuid.Nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
 	}
 
 	enabled := true
@@ -253,6 +253,7 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 		RetryCount:     retryCount,
 		Headers:        req.Headers,
 		Metadata:       req.Metadata,
+		CreatedBy:      principalUserID(s, r.Context(), principal),
 	}
 
 	webhook, err := s.store.CreateWebhook(r.Context(), params)
@@ -274,27 +275,30 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebhookResource(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleGetWebhook(w, r, id)
+		s.handleGetWebhook(w, r, id, principal)
 	case http.MethodPut:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleUpdateWebhook(w, r, id)
+		s.handleUpdateWebhook(w, r, id, principal)
 	case http.MethodDelete:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleDeleteWebhook(w, r, id)
+		s.handleDeleteWebhook(w, r, id, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPut, http.MethodDelete}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -310,14 +314,31 @@ func (s *Server) handleGetWebhook(w http.ResponseWriter, r *http.Request, id uui
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireWebhookTenantAccess(w, r, principal, webhook, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
-func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	existing, err := s.store.GetWebhook(r.Context(), id)
+	if err != nil {
+		s.logger.Error("get webhook", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireWebhookTenantAccess(w, r, principal, existing, roleAdmin) {
 		return
 	}
 
@@ -355,9 +376,23 @@ func (s *Server) handleUpdateWebhook(w http.ResponseWriter, r *http.Request, id 
 	_ = json.NewEncoder(w).Encode(webhookToResponse(webhook))
 }
 
-func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	webhook, err := s.store.GetWebhook(r.Context(), id)
+	if err != nil {
+		s.logger.Error("get webhook", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if webhook == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireWebhookTenantAccess(w, r, principal, webhook, roleAdmin) {
 		return
 	}
 
@@ -371,7 +406,8 @@ func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -394,6 +430,9 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request, id uu
 	}
 	if webhook == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireWebhookTenantAccess(w, r, principal, webhook, roleAdmin) {
 		return
 	}
 
@@ -440,12 +479,27 @@ func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	webhook, err := s.store.GetWebhook(r.Context(), webhookID)
+	if err != nil {
+		s.logger.Error("get webhook", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if webhook == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireWebhookTenantAccess(w, r, principal, webhook, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -480,6 +534,17 @@ func (s *Server) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 		"limit":  limit,
 		"offset": offset,
 	})
+}
+
+func (s *Server) requireWebhookTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, webhook *storage.Webhook, roles ...string) bool {
+	if webhook == nil {
+		return false
+	}
+	tenantID := uuid.Nil
+	if webhook.TenantID.Valid {
+		tenantID = webhook.TenantID.UUID
+	}
+	return s.requireTenantAccess(w, r, principal, tenantID, roles...)
 }
 
 func webhookToResponse(w *storage.Webhook) webhookResponse {

@@ -29,6 +29,9 @@ func (s *Server) handleAIInvestigations(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
+	}
 	backend := s.aiOperatorBackend()
 	if backend == nil {
 		http.Error(w, "ai operator store unavailable", http.StatusServiceUnavailable)
@@ -82,6 +85,9 @@ func (s *Server) handleAIOperatorProposals(w http.ResponseWriter, r *http.Reques
 	tenantID, err := tenantIDFromQuery(r, principal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	backend := s.aiOperatorBackend()

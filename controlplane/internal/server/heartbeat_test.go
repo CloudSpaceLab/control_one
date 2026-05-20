@@ -171,8 +171,111 @@ func TestHeartbeatReturnsNetworkIsolationPolicy(t *testing.T) {
 	if resp.NetworkPolicy.Mode != isolationModeWhitelist || !resp.NetworkPolicy.Active {
 		t.Fatalf("unexpected network policy: %#v", resp.NetworkPolicy)
 	}
+	if resp.NetworkPolicy.SchemaVersion != networkPolicySchemaVersion || resp.NetworkPolicy.DesiredStateID == "" {
+		t.Fatalf("expected desired-state contract, got %#v", resp.NetworkPolicy)
+	}
+	if resp.NetworkPolicy.Enforcement.DefaultInboundAction != "block" {
+		t.Fatalf("expected blocking enforcement intent, got %#v", resp.NetworkPolicy.Enforcement)
+	}
 	if len(resp.NetworkPolicy.AllowedApplications) != 2 || resp.NetworkPolicy.AllowedApplications[1] != "patch" {
 		t.Fatalf("expected allowed applications in network policy, got %#v", resp.NetworkPolicy.AllowedApplications)
+	}
+}
+
+func TestHeartbeatRecordsNetworkPolicyReceipt(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:       nodeID,
+			TenantID: tenantID,
+			Hostname: "receipt-host",
+			State:    storage.NodeStateActive,
+			Labels: map[string]any{
+				isolationModeLabel:       isolationModeWhitelist,
+				isolationAllowCIDRsLabel: []any{"10.0.0.0/8"},
+			},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+	srv.auditAsync = false
+	desiredID := srv.compileNodeNetworkPolicy(context.Background(), store.nodes[0], time.Now().UTC()).DesiredStateID
+
+	body := []byte(`{"network_policy_receipts":[{"desired_state_id":"` + desiredID + `","schema_version":"network_policy.desired_state.v1","mode":"whitelist","status":"planned_dry_run","backend":"iptables","dry_run":true,"planned_rules":3,"missing_controls":["application_allowlist"],"drift":["planned_rules_not_present"],"signature_present":false,"observed_at":"2026-05-19T10:00:00Z","rollback_available":false}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", bytes.NewReader(body))
+	principal := &auth.Principal{
+		Type:  "agent",
+		Name:  nodeID.String(),
+		Roles: []string{"agent"},
+	}
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, principal))
+	rec := httptest.NewRecorder()
+
+	srv.handleNodeResource(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.auditLogs) == 0 {
+		t.Fatalf("expected network policy receipt audit log")
+	}
+	got := store.auditLogs[len(store.auditLogs)-1]
+	if got.Action != "network_policy.receipt" || got.ResourceType != "node" {
+		t.Fatalf("unexpected audit entry: %#v", got)
+	}
+	if got.Metadata["desired_state_id"] != desiredID || got.Metadata["status"] != "planned_dry_run" || got.Metadata["receipt_valid"] != true {
+		t.Fatalf("unexpected receipt metadata: %#v", got.Metadata)
+	}
+	if got.Metadata["current_desired_state_id"] != desiredID || got.Metadata["rollback_available"] != false {
+		t.Fatalf("expected validated current dry-run receipt, got %#v", got.Metadata)
+	}
+}
+
+func TestHeartbeatAnnotatesInvalidNetworkPolicyReceipt(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "receipt-host",
+			State:     storage.NodeStateActive,
+			Labels:    map[string]any{},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+	srv.auditAsync = false
+
+	body := []byte(`{"network_policy_receipts":[{"desired_state_id":"sha256:stale","schema_version":"wrong","mode":"whitelist","status":"planned","planned_rules":-2,"applied_rules":50000,"observed_at":"not-a-time"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", bytes.NewReader(body))
+	principal := &auth.Principal{
+		Type:  "agent",
+		Name:  nodeID.String(),
+		Roles: []string{"agent"},
+	}
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, principal))
+	rec := httptest.NewRecorder()
+
+	srv.handleNodeResource(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.auditLogs) == 0 {
+		t.Fatalf("expected network policy receipt audit log")
+	}
+	got := store.auditLogs[len(store.auditLogs)-1]
+	if got.Metadata["receipt_valid"] != false || got.Metadata["status"] != "invalid" {
+		t.Fatalf("expected invalid receipt metadata, got %#v", got.Metadata)
+	}
+	if got.Metadata["planned_rules"] != 0 || got.Metadata["applied_rules"] != 10000 {
+		t.Fatalf("expected clamped rule counts, got %#v", got.Metadata)
 	}
 }
 

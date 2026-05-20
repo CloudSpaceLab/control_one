@@ -21,12 +21,13 @@ type Options struct {
 }
 
 type Result struct {
-	RuleID      string    `json:"rule_id"`
-	Passed      bool      `json:"passed"`
-	Severity    string    `json:"severity"`
-	Details     string    `json:"details"`
-	CheckedAt   time.Time `json:"checked_at"`
-	Remediation string    `json:"remediation,omitempty"`
+	RuleID      string         `json:"rule_id"`
+	Passed      bool           `json:"passed"`
+	Severity    string         `json:"severity"`
+	Details     string         `json:"details"`
+	CheckedAt   time.Time      `json:"checked_at"`
+	Remediation string         `json:"remediation,omitempty"`
+	Evidence    map[string]any `json:"evidence,omitempty"`
 }
 
 type Engine struct {

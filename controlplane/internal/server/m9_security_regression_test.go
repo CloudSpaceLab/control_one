@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -160,6 +161,64 @@ func TestM9ViewerCannotMutateBlockProposalsOrOfflineBundles(t *testing.T) {
 	}
 }
 
+func TestM9TenantAccessGateStopsScopedHandlersBeforeDataAccess(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	tenantID := uuid.New()
+	store := &workerFTenantGateStore{
+		fakeStore: fakeStore{users: map[string]*storage.User{
+			"tenant-user": {ID: userID, ExternalID: "tenant-user"},
+		}},
+		allowed: false,
+		webhook: storage.Webhook{
+			ID:       uuid.New(),
+			TenantID: uuid.NullUUID{UUID: tenantID, Valid: true},
+		},
+		blockEntry: storage.IPBlocklistEntry{
+			ID:       uuid.New(),
+			TenantID: tenantID,
+			IPCIDR:   "203.0.113.10/32",
+			Status:   "proposed",
+		},
+	}
+	s := &Server{store: store, logger: zap.NewNop()}
+	principal := &auth.Principal{Type: "user", Subject: "tenant-user", Roles: []string{roleAdmin, roleOperator, roleViewer}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ip-behavior/overview?tenant_id="+tenantID.String(), nil)
+	req = withPrincipal(req, principal)
+	rr := httptest.NewRecorder()
+	s.handleIPBehaviorOverview(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("ip behavior status=%d body=%s, want 403", rr.Code, rr.Body.String())
+	}
+	if store.ipBehaviorCountryCalls != 0 {
+		t.Fatalf("ip behavior query ran %d time(s), want 0", store.ipBehaviorCountryCalls)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/webhooks/"+store.webhook.ID.String(), strings.NewReader(`{"name":"new-name"}`))
+	req = withPrincipal(req, principal)
+	rr = httptest.NewRecorder()
+	s.handleWebhookResource(rr, req, store.webhook.ID)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("webhook update status=%d body=%s, want 403", rr.Code, rr.Body.String())
+	}
+	if store.webhookUpdateCalls != 0 {
+		t.Fatalf("webhook update ran %d time(s), want 0", store.webhookUpdateCalls)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/network/block-proposals/"+store.blockEntry.ID.String()+"/approve", nil)
+	req = withPrincipal(req, principal)
+	rr = httptest.NewRecorder()
+	s.handleBlockProposalSubroutes(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("block approval status=%d body=%s, want 403", rr.Code, rr.Body.String())
+	}
+	if store.blockStatusUpdates != 0 {
+		t.Fatalf("block status update ran %d time(s), want 0", store.blockStatusUpdates)
+	}
+}
+
 type tenantScopedIPBehaviorStore struct {
 	*fakeStore
 	tenantID uuid.UUID
@@ -190,4 +249,66 @@ func (f *tenantScopedIPBehaviorStore) ListIPBehaviorBaselines(_ context.Context,
 		return nil, 0, nil
 	}
 	return []storage.IPBehaviorBaseline{f.baseline}, 1, nil
+}
+
+type workerFTenantGateStore struct {
+	fakeStore
+	allowed                bool
+	ipBehaviorCountryCalls int
+	webhook                storage.Webhook
+	webhookUpdateCalls     int
+	blockEntry             storage.IPBlocklistEntry
+	blockStatusUpdates     int
+}
+
+func (f *workerFTenantGateStore) UserHasTenantRole(context.Context, uuid.UUID, uuid.UUID, []string) (bool, error) {
+	return f.allowed, nil
+}
+
+func (f *workerFTenantGateStore) ListIPBehaviorCountries(context.Context, uuid.UUID, time.Time, string) ([]storage.IPBehaviorCountrySummary, error) {
+	f.ipBehaviorCountryCalls++
+	return []storage.IPBehaviorCountrySummary{{CountryCode: "NG", Country: "Nigeria"}}, nil
+}
+
+func (f *workerFTenantGateStore) GetWebhook(_ context.Context, id uuid.UUID) (*storage.Webhook, error) {
+	if id != f.webhook.ID {
+		return nil, nil
+	}
+	webhook := f.webhook
+	return &webhook, nil
+}
+
+func (f *workerFTenantGateStore) UpdateWebhook(_ context.Context, id uuid.UUID, params storage.UpdateWebhookParams) (*storage.Webhook, error) {
+	f.webhookUpdateCalls++
+	if id != f.webhook.ID {
+		return nil, nil
+	}
+	if params.Name != nil {
+		f.webhook.Name = *params.Name
+	}
+	webhook := f.webhook
+	return &webhook, nil
+}
+
+func (f *workerFTenantGateStore) CreateIPBlocklistEntry(context.Context, storage.CreateIPBlocklistEntryParams) (*storage.IPBlocklistEntry, error) {
+	return &f.blockEntry, nil
+}
+
+func (f *workerFTenantGateStore) GetIPBlocklistEntry(_ context.Context, id uuid.UUID) (*storage.IPBlocklistEntry, error) {
+	if id != f.blockEntry.ID {
+		return nil, nil
+	}
+	entry := f.blockEntry
+	return &entry, nil
+}
+
+func (f *workerFTenantGateStore) SetIPBlocklistEntryEntityAction(_ context.Context, _ uuid.UUID, entityActionID uuid.UUID) (*storage.IPBlocklistEntry, error) {
+	f.blockEntry.EntityActionID = uuid.NullUUID{UUID: entityActionID, Valid: true}
+	return &f.blockEntry, nil
+}
+
+func (f *workerFTenantGateStore) UpdateIPBlocklistEntryStatus(_ context.Context, _ uuid.UUID, status string, _ *uuid.UUID, _ string) (*storage.IPBlocklistEntry, error) {
+	f.blockStatusUpdates++
+	f.blockEntry.Status = status
+	return &f.blockEntry, nil
 }

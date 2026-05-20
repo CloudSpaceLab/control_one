@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_compliance_evidence_type_uploaded;
+DROP INDEX IF EXISTS idx_compliance_evidence_scope_uploaded;

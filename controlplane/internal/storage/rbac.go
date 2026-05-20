@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // User represents an authenticated principal persisted for RBAC purposes.
@@ -353,6 +354,43 @@ func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, 
 	}
 
 	return roles, nil
+}
+
+// UserHasTenantRole returns true when the user has one of the supplied roles
+// either globally (tenant_id NULL) or scoped to the requested tenant.
+func (s *Store) UserHasTenantRole(ctx context.Context, userID, tenantID uuid.UUID, roles []string) (bool, error) {
+	if s.db == nil {
+		return false, errors.New("store database not initialized")
+	}
+	if userID == uuid.Nil {
+		return false, errors.New("user id required")
+	}
+	if tenantID == uuid.Nil {
+		return false, errors.New("tenant id required")
+	}
+	roles = sanitizeRoles(roles)
+	if len(roles) == 0 {
+		return false, errors.New("roles required")
+	}
+	for i := range roles {
+		roles[i] = strings.ToLower(strings.TrimSpace(roles[i]))
+	}
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM user_roles ur
+			JOIN roles r ON r.id = ur.role_id
+			WHERE ur.user_id = $1
+			  AND (ur.tenant_id IS NULL OR ur.tenant_id = $2)
+			  AND LOWER(r.name) = ANY($3)
+			  AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+		)
+	`, userID, tenantID, pq.Array(roles)).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("query tenant role access: %w", err)
+	}
+	return exists, nil
 }
 
 // SetUserRoles replaces tenant-global role assignments for the user.

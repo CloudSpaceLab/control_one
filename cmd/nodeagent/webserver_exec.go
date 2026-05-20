@@ -21,6 +21,7 @@ const (
 	webserverJobApply     = "webserver.config_apply"
 	webserverJobBlocklist = "webserver.blocklist_update"
 	webserverJobRollback  = "webserver.config_rollback"
+	webserverJobContract  = "webserver.jobs.v1"
 )
 
 type webserverActionDetail struct {
@@ -91,7 +92,7 @@ func executeWebserverAction(ctx context.Context, client *api.Client, log *zap.Lo
 					"action":            jobType,
 					"validation_status": "restored",
 					"reload_status":     "reloaded",
-					"metadata":          map[string]any{"rollback": true},
+					"metadata":          webserverReceiptMetadata(detail, jobType, jobID, map[string]any{"rollback": true}),
 				},
 			},
 		})
@@ -127,6 +128,7 @@ func executeWebserverAction(ctx context.Context, client *api.Client, log *zap.Lo
 			return
 		}
 		receipt, err := mgr.Apply(execCtx, plan)
+		bindWebserverReceipt(&receipt, detail, jobType, jobID)
 		metadata := map[string]any{
 			"plan":    plan,
 			"receipt": receipt,
@@ -148,6 +150,40 @@ func executeWebserverAction(ctx context.Context, client *api.Client, log *zap.Lo
 			Metadata: metadata,
 		})
 	}
+}
+
+func bindWebserverReceipt(receipt *webservercontrol.ConfigReceipt, detail webserverActionDetail, jobType, jobID string) {
+	if receipt == nil {
+		return
+	}
+	if strings.TrimSpace(receipt.Action) == "" {
+		receipt.Action = jobType
+	}
+	receipt.Metadata = webserverReceiptMetadata(detail, jobType, jobID, receipt.Metadata)
+}
+
+func webserverReceiptMetadata(detail webserverActionDetail, jobType, jobID string, existing map[string]any) map[string]any {
+	metadata := map[string]any{}
+	for key, value := range existing {
+		metadata[key] = value
+	}
+	contract := strings.TrimSpace(detail.ContractVersion)
+	if contract == "" {
+		contract = webserverJobContract
+	}
+	metadata["contract_version"] = contract
+	metadata["job_id"] = strings.TrimSpace(jobID)
+	metadata["action"] = strings.TrimSpace(jobType)
+	if v := strings.TrimSpace(detail.IdempotencyKey); v != "" {
+		metadata["idempotency_key"] = v
+	}
+	if v := strings.TrimSpace(detail.CorrelationID); v != "" {
+		metadata["correlation_id"] = v
+	}
+	if v := strings.TrimSpace(detail.WebserverInstanceID); v != "" {
+		metadata["webserver_instance_id"] = v
+	}
+	return metadata
 }
 
 func (d webserverActionDetail) webPolicy() (webservercontrol.WebPolicy, error) {

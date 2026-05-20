@@ -36,7 +36,8 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -52,15 +53,11 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 		ResourceType: strings.TrimSpace(r.URL.Query().Get("resource_type")),
 		ResourceID:   strings.TrimSpace(r.URL.Query().Get("resource_id")),
 	}
-	tenantVal := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if tenantVal != "" {
-		tenantID, parseErr := uuid.Parse(tenantVal)
-		if parseErr != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = tenantID
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
 	}
+	filter.TenantID = tenantID
 	if sinceVal := strings.TrimSpace(r.URL.Query().Get("since")); sinceVal != "" {
 		ts, parseErr := time.Parse(time.RFC3339, sinceVal)
 		if parseErr != nil {

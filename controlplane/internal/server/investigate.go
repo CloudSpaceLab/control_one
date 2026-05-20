@@ -1156,15 +1156,5 @@ func hasRole(p *auth.Principal, role string) bool {
 // "anonymous owner" and tags / saved searches are stored without an
 // attributable creator.
 func principalUserID(s *Server, ctx context.Context, p *auth.Principal) uuid.UUID {
-	if p == nil || s == nil || s.store == nil {
-		return uuid.Nil
-	}
-	if strings.TrimSpace(p.Subject) == "" {
-		return uuid.Nil
-	}
-	user, err := s.store.GetUserByExternalID(ctx, p.Subject)
-	if err != nil || user == nil {
-		return uuid.Nil
-	}
-	return user.ID
+	return principalStorageUserID(s, ctx, p)
 }

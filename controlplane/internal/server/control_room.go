@@ -235,7 +235,8 @@ func (s *Server) handleControlRoomOverview(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -246,19 +247,23 @@ func (s *Server) handleControlRoomOverview(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+		return
+	}
 	resp := s.buildControlRoomOverview(r.Context(), tenantID, period, since, time.Now().UTC())
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func parseControlRoomQuery(w http.ResponseWriter, r *http.Request) (uuid.UUID, string, time.Time, bool) {
-	var tenantID uuid.UUID
-	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return uuid.Nil, "", time.Time{}, false
-		}
-		tenantID = parsed
+	rawTenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if rawTenantID == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return uuid.Nil, "", time.Time{}, false
+	}
+	tenantID, err := uuid.Parse(rawTenantID)
+	if err != nil || tenantID == uuid.Nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return uuid.Nil, "", time.Time{}, false
 	}
 	period := strings.TrimSpace(r.URL.Query().Get("period"))
 	switch period {

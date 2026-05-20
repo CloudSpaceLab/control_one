@@ -222,6 +222,7 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 			"sequence":  receipt.Sequence,
 			"warnings":  receipt.Warnings,
 		})
+		s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
 		writeJSON(w, http.StatusCreated, newOfflineBundleResponse(*row))
 		return
 	}
@@ -231,6 +232,7 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 		"sequence":  receipt.Sequence,
 		"warnings":  receipt.Warnings,
 	})
+	s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
 	writeJSON(w, http.StatusCreated, newOfflineBundleReceiptResponse(*receipt))
 }
 
@@ -283,10 +285,12 @@ func (s *Server) rollbackOfflineBundle(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		s.auditOfflineBundleAction(r.Context(), tenantID, &row.ID, principal, "rollback", "ok", "", map[string]any{"bundle_id": receipt.BundleID, "sequence": receipt.Sequence})
+		s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
 		writeJSON(w, http.StatusOK, newOfflineBundleResponse(*row))
 		return
 	}
 	s.auditOfflineBundleAction(r.Context(), tenantID, nil, principal, "rollback", "ok", "", map[string]any{"bundle_id": receipt.BundleID, "sequence": receipt.Sequence})
+	s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
 	writeJSON(w, http.StatusOK, newOfflineBundleReceiptResponse(*receipt))
 }
 

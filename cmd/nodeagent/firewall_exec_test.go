@@ -41,3 +41,29 @@ func TestFirewallRuleFromActionAddCanStillAllow(t *testing.T) {
 		t.Fatalf("direction = %q, want out", rule.Direction)
 	}
 }
+
+func TestNewFirewallReceiptBindsJobRuleAndBackend(t *testing.T) {
+	t.Parallel()
+
+	detail := firewallActionDetail{
+		NodeFirewallRuleID: "rule-1",
+		EntityActionID:     "entity-1",
+		Action:             "block",
+		Direction:          "in",
+		Source:             "203.0.113.10",
+		Tag:                "c1-test",
+		Reason:             "incident response",
+	}
+	rule := firewallRuleFromAction("firewall.rule_add", detail)
+	receipt := newFirewallReceipt("firewall.rule_add", "job-1", detail, rule, nil)
+
+	if receipt.Contract != "firewall.receipt.v1" || receipt.JobID != "job-1" || receipt.NodeFirewallRuleID != "rule-1" {
+		t.Fatalf("receipt identity mismatch: %#v", receipt)
+	}
+	if receipt.RuleFingerprint == "" || receipt.RuleFingerprint != firewallRuleFingerprint(rule) {
+		t.Fatalf("receipt fingerprint mismatch: %#v", receipt)
+	}
+	if receipt.RuleAction != string(firewall.ActionBlock) || receipt.Direction != string(firewall.DirectionIn) {
+		t.Fatalf("receipt rule shape mismatch: %#v", receipt)
+	}
+}

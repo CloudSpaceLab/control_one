@@ -30,12 +30,56 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
-import type { Alert, CorrelationRule } from '../lib/api';
+import type { Alert, AlertDispositionValue, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
 type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
+
+const ALERT_DISPOSITION_OPTIONS: Array<{
+  value: AlertDispositionValue;
+  label: string;
+  description: string;
+  tone: StateTone;
+}> = [
+  {
+    value: 'resolved',
+    label: 'Resolved, containment verified',
+    description: 'Control evidence, drift status, and owner decision are sufficient to close this alert.',
+    tone: 'healthy',
+  },
+  {
+    value: 'true_positive',
+    label: 'True positive, keep active',
+    description: 'The signal is real and still needs containment, remediation, or case follow-up.',
+    tone: 'critical',
+  },
+  {
+    value: 'false_positive',
+    label: 'False positive',
+    description: 'The signal does not represent malicious or risky activity after review.',
+    tone: 'unknown',
+  },
+  {
+    value: 'benign_positive',
+    label: 'Benign positive',
+    description: 'The detection was valid, but the activity is expected and authorized.',
+    tone: 'info',
+  },
+  {
+    value: 'accepted_risk',
+    label: 'Accepted risk',
+    description: 'The risk remains open by business decision and needs documented ownership.',
+    tone: 'warning',
+  },
+  {
+    value: 'suppressed',
+    label: 'Suppressed with expiry',
+    description: 'The alert should stop paging for a time-boxed maintenance or exception window.',
+    tone: 'warning',
+  },
+];
 
 interface AlertResolutionFact {
   label: string;
@@ -79,6 +123,30 @@ function stateTone(state: string): StateTone {
     default:
       return 'unknown';
   }
+}
+
+function dispositionOption(value: string | undefined) {
+  return ALERT_DISPOSITION_OPTIONS.find((option) => option.value === value);
+}
+
+function dispositionLabel(value: string | undefined): string {
+  const known = dispositionOption(value);
+  if (known) return known.label;
+  return (value ?? '').replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function dispositionTone(value: string | undefined): StateTone {
+  return dispositionOption(value)?.tone ?? 'unknown';
+}
+
+export function alertDispositionPill(alert: Alert): { label: string; value: string; tone: StateTone } | null {
+  const value = alert.disposition?.value;
+  if (!value) return null;
+  return {
+    label: 'Disposition',
+    value: dispositionLabel(value),
+    tone: dispositionTone(value),
+  };
 }
 
 export function alertContextPills(alert: Alert): Array<{ label: string; value: string; tone: StateTone }> {
@@ -169,10 +237,10 @@ export function Alerts(): JSX.Element {
     await client.ackAlert(id);
     refresh();
   };
-  const resolve = async (id: string) => {
+  const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     setResolvingAlert(true);
     try {
-      await client.resolveAlert(id);
+      await client.updateAlertDisposition(id, payload);
       setResolveTargetId(null);
       refresh();
       setError(null);
@@ -299,9 +367,15 @@ export function Alerts(): JSX.Element {
     {
       accessorKey: 'state',
       header: 'State',
-      cell: ({ getValue }) => {
+      cell: ({ row, getValue }) => {
         const s = getValue() as string;
-        return <StatusTag tone={stateTone(s)}>{s}</StatusTag>;
+        const disposition = alertDispositionPill(row.original);
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <StatusTag tone={stateTone(s)}>{s}</StatusTag>
+            {disposition ? <StatusTag tone={disposition.tone}>{disposition.value}</StatusTag> : null}
+          </div>
+        );
       },
     },
     {
@@ -316,7 +390,7 @@ export function Alerts(): JSX.Element {
           ) : null}
           {row.original.state !== 'resolved' ? (
             <Button variant="primary" size="sm" onClick={() => setResolveTargetId(row.original.id)}>
-              Resolve
+              Review
             </Button>
           ) : null}
         </div>
@@ -616,7 +690,7 @@ export function Alerts(): JSX.Element {
         alert={resolveTarget}
         open={resolveTargetId !== null && resolveTarget !== null}
         resolving={resolvingAlert}
-        onConfirm={() => { if (resolveTarget) void resolve(resolveTarget.id); }}
+        onConfirm={(payload) => { if (resolveTarget) void resolve(resolveTarget.id, payload); }}
         onCancel={() => setResolveTargetId(null)}
         onActionTaken={() => { void refresh(); }}
       />
@@ -855,12 +929,41 @@ function ResolveAlertModal({
   alert: Alert | null;
   open: boolean;
   resolving: boolean;
-  onConfirm: () => void;
+  onConfirm: (payload: UpdateAlertDispositionPayload) => void;
   onCancel: () => void;
   onActionTaken: () => void;
 }) {
   const plan = alert ? alertResolutionPlan(alert) : null;
   const ip = alert ? alertSourceIP(alert) : '';
+  const [disposition, setDisposition] = useState<AlertDispositionValue>('resolved');
+  const [reason, setReason] = useState('');
+  const [suppressUntil, setSuppressUntil] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setDisposition(alert?.disposition?.value ?? 'resolved');
+    setReason(alert?.disposition?.reason ?? '');
+    setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
+  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
+
+  const selectedDisposition = dispositionOption(disposition);
+  const reasonMissing = reason.trim().length === 0;
+  const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
+  const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
+  const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid;
+
+  const handleConfirm = () => {
+    if (confirmDisabled) return;
+    const payload: UpdateAlertDispositionPayload = {
+      disposition,
+      reason: reason.trim(),
+    };
+    if (disposition === 'suppressed' && suppressUntil.trim()) {
+      payload.suppress_until = new Date(suppressUntil).toISOString();
+    }
+    onConfirm(payload);
+  };
+
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel(); }}>
       <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
@@ -976,6 +1079,55 @@ function ResolveAlertModal({
                 <p className="text-sm text-text-secondary">{plan.gate}</p>
               </div>
 
+              <div className="rounded-lg border border-border-subtle bg-surface p-3">
+                <SelectField
+                  id="alert-disposition"
+                  label="Disposition"
+                  value={disposition}
+                  onChange={(event) => setDisposition(event.target.value as AlertDispositionValue)}
+                >
+                  {ALERT_DISPOSITION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </SelectField>
+                {selectedDisposition ? (
+                  <p className="mt-2 text-xs text-text-secondary">{selectedDisposition.description}</p>
+                ) : null}
+                {disposition === 'suppressed' ? (
+                  <div className="mt-3 flex flex-col gap-1.5">
+                    <Label htmlFor="alert-suppress-until">Suppress until</Label>
+                    <Input
+                      id="alert-suppress-until"
+                      type="datetime-local"
+                      value={suppressUntil}
+                      onChange={(event) => setSuppressUntil(event.target.value)}
+                    />
+                    {suppressMissing || suppressInvalid ? (
+                      <p className="text-xs text-state-critical" role="alert">
+                        Select a valid suppression expiry.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex flex-col gap-1.5">
+                  <Label htmlFor="alert-disposition-reason">Evidence reason</Label>
+                  <textarea
+                    id="alert-disposition-reason"
+                    className="min-h-24 w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-text-muted focus-visible:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/30"
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    placeholder="Summarize the raw evidence, controls applied, owner approval, and remaining risk."
+                  />
+                  {reasonMissing ? (
+                    <p className="text-xs text-state-critical" role="alert">
+                      Evidence reason is required for alert disposition.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
               <Button asChild variant="ghost" size="sm" className="w-full justify-between">
                 <Link to="/audit">
                   Review audit trail
@@ -990,13 +1142,31 @@ function ResolveAlertModal({
           <Button type="button" variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
-          <Button type="button" variant="primary" onClick={onConfirm} loading={resolving} disabled={!alert}>
-            Resolve alert
+          <Button type="button" variant="primary" onClick={handleConfirm} loading={resolving} disabled={confirmDisabled || resolving}>
+            Record disposition
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function toDateTimeLocal(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    '-',
+    pad(date.getMonth() + 1),
+    '-',
+    pad(date.getDate()),
+    'T',
+    pad(date.getHours()),
+    ':',
+    pad(date.getMinutes()),
+  ].join('');
 }
 
 function alertResolutionPlan(alert: Alert): AlertResolutionPlan {

@@ -46,6 +46,10 @@ type heartbeatPayload struct {
 	// Firewall snapshot — small, sent in full each heartbeat.
 	FirewallState *FirewallState `json:"firewall_state,omitempty"`
 
+	// NetworkPolicyReceipts reports applied/planned/drift status for desired
+	// network policy states received from the control plane.
+	NetworkPolicyReceipts []networkPolicyReceipt `json:"network_policy_receipts,omitempty"`
+
 	// CompletedActions reports the outcome of pending_actions the agent
 	// executed since the previous heartbeat. Drained from completedActionQueue
 	// in enrichHeartbeatPayload. Empty in steady-state.
@@ -84,6 +88,10 @@ type heartbeatAckResponse struct {
 // lightweight test agents that don't run collectors).
 type FilterApplier func(raw json.RawMessage)
 
+// NetworkPolicyApplier handles the controlplane-issued enforcement desired
+// state and returns a receipt to include on the next heartbeat.
+type NetworkPolicyApplier func(ctx context.Context, raw json.RawMessage) *networkPolicyReceipt
+
 // agentVersion is defined at build time via -ldflags. The zero value ("dev")
 // is overwritten in release builds. Exported so the install flow can stamp it
 // without dragging in an additional package.
@@ -117,7 +125,7 @@ var agentInventoryCache = &inventoryCache{}
 // Parameters are deliberately simple: the nodeagent main() owns the *api.Client
 // (already wired with the mTLS cert), the node id, and the heartbeat interval
 // from the enrollment response.
-func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, selfUpdater SelfUpdater) {
+func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, selfUpdater SelfUpdater) {
 	if client == nil || nodeID == "" {
 		log.Warn("heartbeat loop not started: missing client or node id")
 		return
@@ -126,10 +134,10 @@ func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *za
 		interval = 60 * time.Second
 	}
 
-	go runControlPlaneHeartbeat(ctx, client, log, nodeID, interval, applyFilters, selfUpdater)
+	go runControlPlaneHeartbeat(ctx, client, log, nodeID, interval, applyFilters, applyNetworkPolicy, selfUpdater)
 }
 
-func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, selfUpdater SelfUpdater) {
+func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, selfUpdater SelfUpdater) {
 	logger := log.Named("cp-heartbeat")
 	logger.Info("starting control-plane heartbeat",
 		zap.String("node_id", nodeID),
@@ -142,7 +150,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 	// Fire one immediately so the UI sees the node moving quickly — operators
 	// watching the enrollment table don't want to wait a full interval for
 	// the first update.
-	if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, selfUpdater); err != nil {
+	if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, applyNetworkPolicy, selfUpdater); err != nil {
 		logger.Debug("initial heartbeat failed", zap.Error(err))
 	}
 
@@ -152,7 +160,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 			logger.Info("heartbeat loop stopped")
 			return
 		case <-ticker.C:
-			if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, selfUpdater); err != nil {
+			if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, applyNetworkPolicy, selfUpdater); err != nil {
 				logger.Debug("heartbeat attempt failed", zap.Error(err))
 			}
 		}
@@ -162,7 +170,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 // sendHeartbeat performs one POST. Errors are logged at debug — a transient
 // network blip should not clutter the operator console. The response body is
 // parsed only for informational logging.
-func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, selfUpdater SelfUpdater) error {
+func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, selfUpdater SelfUpdater) error {
 	payload := heartbeatPayload{
 		AgentVersion:     heartbeatAgentVersion(),
 		Capabilities:     heartbeatAgentCapabilities(),
@@ -218,7 +226,13 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 		applyFilters(*ack.EventFilters)
 	}
 	if ack.NetworkPolicy != nil {
-		log.Info("network isolation policy received", zap.ByteString("policy", *ack.NetworkPolicy))
+		if applyNetworkPolicy != nil {
+			if receipt := applyNetworkPolicy(ctx, *ack.NetworkPolicy); receipt != nil {
+				enqueueNetworkPolicyReceipt(*receipt)
+			}
+		} else {
+			log.Info("network isolation policy received", zap.ByteString("policy", *ack.NetworkPolicy))
+		}
 	}
 
 	// Dispatch pending actions instructed by the control plane.
@@ -277,6 +291,8 @@ func heartbeatAgentCapabilities() []string {
 		"firewall_control.v1",
 		"patch_management.v1",
 		"event_filters.v1",
+		"network_policy_desired_state.v1",
+		"network_policy_receipts.v1",
 		"webserver_control.v1",
 		"server_purpose_inventory.v1",
 		"connection_lifecycle_headers.v1",
@@ -298,6 +314,9 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 	// heartbeat. The server uses these to flip node_firewall_rules.status.
 	if drained := drainCompletedActions(); len(drained) > 0 {
 		payload.CompletedActions = drained
+	}
+	if receipts := drainNetworkPolicyReceipts(); len(receipts) > 0 {
+		payload.NetworkPolicyReceipts = receipts
 	}
 
 	pkgs, hash, kernel, osVer, purposes, err := cachedInventorySnapshot()

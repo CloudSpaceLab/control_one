@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Send, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ClipboardList, Send, Sparkles } from 'lucide-react';
 import {
   Alert,
   Eyebrow,
@@ -9,12 +9,13 @@ import {
 } from '@/components/kit';
 import { Button } from '@/components/ui/button';
 import { useApiClient } from '@/hooks/useApiClient';
+import type { AIAskToolTraceEntry } from '@/lib/api';
 import { useTenant } from '@/providers/TenantProvider';
 
 const SAMPLE_QUESTIONS = [
   'What new services appeared this week?',
   'Which nodes have public-facing HTTP on non-standard ports?',
-  'Summarize this fleet’s posture for a board update.',
+  "Summarize this fleet's posture for a board update.",
   'Which nodes are reporting calibrating health right now?',
 ];
 
@@ -22,6 +23,9 @@ interface Turn {
   role: 'user' | 'assistant';
   content: string;
   citations?: string[];
+  sourceCitations?: string[];
+  toolTrace?: AIAskToolTraceEntry[];
+  confidence?: string;
 }
 
 export function Ask(): JSX.Element {
@@ -47,7 +51,14 @@ export function Ask(): JSX.Element {
       const resp = await client.askAI(currentTenantId, trimmed);
       setTurns((prev) => [
         ...prev,
-        { role: 'assistant', content: resp.answer, citations: resp.citations },
+        {
+          role: 'assistant',
+          content: resp.answer,
+          citations: resp.citations,
+          sourceCitations: resp.source_citations,
+          toolTrace: resp.tool_trace,
+          confidence: resp.confidence,
+        },
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'ask failed';
@@ -63,7 +74,7 @@ export function Ask(): JSX.Element {
       <SectionHeader
         eyebrow="ASK"
         title="Ask CISO"
-        description="Natural-language questions grounded in this tenant’s knowledge graph (nodes, services, packages, firewall, recent activity). Configure the LLM provider in Settings → AI."
+        description="Natural-language questions grounded in this tenant's knowledge graph, normalized events, evidence, posture, and case tools. Configure the LLM provider in Settings > AI."
       />
 
       {turns.length === 0 && (
@@ -104,15 +115,18 @@ export function Ask(): JSX.Element {
                   }
                 >
                   <p className="whitespace-pre-wrap">{t.content}</p>
-                  {t.citations && t.citations.length > 0 && (
-                    <p className="mt-1 font-mono text-[0.65rem] text-text-muted">
-                      sources: {t.citations.join(', ')}
-                    </p>
+                  {t.role === 'assistant' && (
+                    <GroundingDetails
+                      citations={t.citations}
+                      sourceCitations={t.sourceCitations}
+                      toolTrace={t.toolTrace}
+                      confidence={t.confidence}
+                    />
                   )}
                 </div>
               </li>
             ))}
-            {busy && <Loader size="sm" label="Thinking…" />}
+            {busy && <Loader size="sm" label="Thinking..." />}
           </ul>
         )}
       </Panel>
@@ -130,7 +144,7 @@ export function Ask(): JSX.Element {
           rows={3}
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Ask about this fleet’s posture, services, threats…"
+          placeholder="Ask about this fleet's posture, services, threats..."
           className="flex-1 rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -147,10 +161,92 @@ export function Ask(): JSX.Element {
 
       <p className="text-xs text-text-muted">
         <Sparkles className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
-        Ctrl/⌘+Enter sends. The model sees the per-tenant knowledge_graph.md
-        as grounded context (cached 5 min); it does not see raw events or
-        secrets.
+        Ctrl/Cmd+Enter sends. Answers use tenant-scoped context and approved
+        investigation tools; raw event rows are citation-bound and secrets stay
+        out of scope.
       </p>
     </div>
   );
+}
+
+function GroundingDetails({
+  citations,
+  sourceCitations,
+  toolTrace,
+  confidence,
+}: {
+  citations?: string[];
+  sourceCitations?: string[];
+  toolTrace?: AIAskToolTraceEntry[];
+  confidence?: string;
+}): JSX.Element | null {
+  const normalizedCitations = (citations ?? []).filter(Boolean);
+  const normalizedSourceCitations = (sourceCitations ?? []).filter(Boolean);
+  const normalizedTrace = (toolTrace ?? []).filter((trace) => trace.name);
+  if (normalizedCitations.length === 0 && normalizedSourceCitations.length === 0 && normalizedTrace.length === 0 && !confidence) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 border-t border-border-subtle pt-3">
+      <div className="flex flex-wrap items-center gap-2 text-[0.68rem] text-text-muted">
+        {confidence && (
+          <span className="inline-flex items-center gap-1 rounded-sm border border-border-subtle bg-surface-2 px-2 py-1 font-mono uppercase">
+            <ClipboardList className="h-3.5 w-3.5" />
+            Confidence: {confidence.replaceAll('_', ' ')}
+          </span>
+        )}
+        {normalizedCitations.map((citation) => (
+          <span
+            key={citation}
+            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border-subtle bg-surface-2 px-2 py-1 font-mono text-[0.65rem] text-text-secondary"
+            title={citation}
+          >
+            <ClipboardList className="h-3.5 w-3.5 flex-none" />
+            <span className="truncate">{citation}</span>
+          </span>
+        ))}
+        {normalizedSourceCitations.map((citation) => (
+          <span
+            key={citation}
+            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-state-healthy/30 bg-state-healthy/10 px-2 py-1 font-mono text-[0.65rem] text-state-healthy"
+            title={citation}
+          >
+            <ClipboardList className="h-3.5 w-3.5 flex-none" />
+            <span className="truncate">Evidence: {citation}</span>
+          </span>
+        ))}
+      </div>
+      {normalizedTrace.length > 0 && (
+        <ul className="mt-2 grid gap-1.5">
+          {normalizedTrace.map((trace, index) => (
+            <li
+              key={`${trace.name}:${trace.citation_id ?? index}`}
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-sm bg-surface-2 px-2 py-1.5 text-xs text-text-secondary"
+            >
+              {trace.ok ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-state-healthy" />
+              ) : (
+                <AlertTriangle className="h-3.5 w-3.5 text-state-warning" />
+              )}
+              <span className="font-medium">{toolTraceLabel(trace.name)}</span>
+              {trace.citation_id && (
+                <span className="font-mono text-[0.65rem] text-text-muted">{trace.citation_id}</span>
+              )}
+              <span className="font-mono text-[0.65rem] text-text-muted">{trace.duration_ms}ms</span>
+              {trace.error && <span className="text-state-warning">{trace.error}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function toolTraceLabel(name: string): string {
+  return name
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ');
 }

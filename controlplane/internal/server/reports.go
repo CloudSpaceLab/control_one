@@ -52,7 +52,8 @@ func (s *Server) handleReportExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -64,7 +65,10 @@ func (s *Server) handleReportExport(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tenantID := parseTenantIDOrZero(r)
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
 	since := parseSinceOrDefault(r, 30*24*time.Hour)
 
 	var rows [][]string
@@ -95,18 +99,6 @@ func (s *Server) handleReportExport(w http.ResponseWriter, r *http.Request) {
 	}
 	writer.Flush()
 	_, _ = w.Write(buf.Bytes())
-}
-
-func parseTenantIDOrZero(r *http.Request) uuid.UUID {
-	v := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if v == "" {
-		return uuid.Nil
-	}
-	id, err := uuid.Parse(v)
-	if err != nil {
-		return uuid.Nil
-	}
-	return id
 }
 
 func parseSinceOrDefault(r *http.Request, fallback time.Duration) time.Time {

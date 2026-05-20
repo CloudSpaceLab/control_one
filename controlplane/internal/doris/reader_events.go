@@ -257,6 +257,597 @@ type CorrelationEvent struct {
 	ConnID    string
 }
 
+// EventQueryParams narrows a normalized event query against the Doris events
+// table. TenantID is mandatory so callers cannot accidentally scan or leak
+// cross-tenant data.
+type EventQueryParams struct {
+	TenantID      string
+	NodeID        string
+	CorrelationID string
+	ConnID        string
+	EventID       string
+	RawRef        string
+	EventTypes    []string
+	Severity      string
+	ParserStatus  string
+	Search        string
+	Since         time.Time
+	Until         time.Time
+	Limit         int
+	Offset        int
+}
+
+// EventRow is the normalized event projection used by investigation APIs and
+// AI citations.
+type EventRow struct {
+	SchemaVersion int
+	EventID       string
+	RawRef        string
+	Collector     string
+	Parser        string
+	ParserStatus  string
+	TenantID      string
+	TS            time.Time
+	NodeID        string
+	EventType     string
+	Severity      string
+	CorrelationID string
+	ConnID        string
+	BastionSessID string
+	PID           int64
+	ProcessName   string
+	UserName      string
+	SrcIP         string
+	SrcPort       int
+	DstIP         string
+	DstPort       int
+	Protocol      string
+	BytesIn       int64
+	BytesOut      int64
+	DurationMS    int64
+	RuleID        string
+	ThreatFeed    string
+	ThreatScore   int
+	Message       string
+	DetailsJSON   string
+	DedupKey      string
+}
+
+// QueryEvents returns normalized rows from events ordered newest first.
+func (c *Client) QueryEvents(ctx context.Context, p EventQueryParams) ([]EventRow, int, error) {
+	if c == nil || c.db == nil {
+		return nil, 0, fmt.Errorf("doris client unavailable")
+	}
+	query, countQuery, args, err := buildEventQuerySQL(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+
+	var total int
+	if err := c.db.QueryRowContext(qctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count events: %w", err)
+	}
+	rows, err := c.db.QueryContext(qctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]EventRow, 0, clampEventQueryLimit(p.Limit))
+	for rows.Next() {
+		row, err := scanEventRow(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
+}
+
+func buildEventQuerySQL(p EventQueryParams) (string, string, []any, error) {
+	where, args, err := eventWhereClause(p, "ts")
+	if err != nil {
+		return "", "", nil, err
+	}
+	selectSQL := `
+		SELECT schema_version, event_id, raw_ref, collector, parser, parser_status,
+		       tenant_id, ts, node_id, event_type, severity, correlation_id, conn_id,
+		       bastion_session_id, pid, process_name, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, duration_ms, rule_id, threat_feed, threat_score,
+		       message, details_json, dedup_key
+		FROM events
+		WHERE ` + where + `
+		ORDER BY ts DESC`
+	query := withLimitOffset(selectSQL, clampEventQueryLimit(p.Limit), maxInt(p.Offset, 0))
+	countQuery := "SELECT COUNT(*) FROM events WHERE " + where
+	return query, countQuery, args, nil
+}
+
+func scanEventRow(s rowScanner) (EventRow, error) {
+	var r EventRow
+	var schemaVersion sql.NullInt64
+	var srcPort, dstPort, threatScore sql.NullInt64
+	var pid, bytesIn, bytesOut, durationMS sql.NullInt64
+	var ts *time.Time
+	var eventID, rawRef, collector, parser, parserStatus sql.NullString
+	var tenantID, nodeID, eventType, severity, correlationID, connID sql.NullString
+	var bastion, processName, userName, srcIP, dstIP, protocol sql.NullString
+	var ruleID, threatFeed, message, detailsJSON, dedupKey sql.NullString
+	if err := s.Scan(
+		&schemaVersion, &eventID, &rawRef, &collector, &parser, &parserStatus,
+		&tenantID, &ts, &nodeID, &eventType, &severity, &correlationID, &connID,
+		&bastion, &pid, &processName, &userName,
+		&srcIP, &srcPort, &dstIP, &dstPort, &protocol,
+		&bytesIn, &bytesOut, &durationMS, &ruleID, &threatFeed, &threatScore,
+		&message, &detailsJSON, &dedupKey,
+	); err != nil {
+		return r, err
+	}
+	if schemaVersion.Valid {
+		r.SchemaVersion = int(schemaVersion.Int64)
+	}
+	if r.SchemaVersion <= 0 {
+		r.SchemaVersion = 1
+	}
+	r.EventID = eventID.String
+	r.RawRef = rawRef.String
+	r.Collector = collector.String
+	r.Parser = parser.String
+	r.ParserStatus = parserStatus.String
+	r.TenantID = tenantID.String
+	if ts != nil {
+		r.TS = *ts
+	}
+	r.NodeID = nodeID.String
+	r.EventType = eventType.String
+	r.Severity = severity.String
+	r.CorrelationID = correlationID.String
+	r.ConnID = connID.String
+	r.BastionSessID = bastion.String
+	if pid.Valid {
+		r.PID = pid.Int64
+	}
+	r.ProcessName = processName.String
+	r.UserName = userName.String
+	r.SrcIP = srcIP.String
+	if srcPort.Valid {
+		r.SrcPort = int(srcPort.Int64)
+	}
+	r.DstIP = dstIP.String
+	if dstPort.Valid {
+		r.DstPort = int(dstPort.Int64)
+	}
+	r.Protocol = protocol.String
+	if bytesIn.Valid {
+		r.BytesIn = bytesIn.Int64
+	}
+	if bytesOut.Valid {
+		r.BytesOut = bytesOut.Int64
+	}
+	if durationMS.Valid {
+		r.DurationMS = durationMS.Int64
+	}
+	r.RuleID = ruleID.String
+	r.ThreatFeed = threatFeed.String
+	if threatScore.Valid {
+		r.ThreatScore = int(threatScore.Int64)
+	}
+	r.Message = message.String
+	r.DetailsJSON = detailsJSON.String
+	r.DedupKey = dedupKey.String
+	return r, nil
+}
+
+// TimelineBuildParams describes the bounded timeline query used by the
+// investigation API. At least one pivot must be supplied by the server layer
+// before calling BuildTimeline.
+type TimelineBuildParams struct {
+	TenantID      string
+	CorrelationID string
+	NodeID        string
+	ConnID        string
+	EntityType    string
+	EntityID      string
+	Since         time.Time
+	Until         time.Time
+	Limit         int
+}
+
+// TimelineItem is one normalized row in the multi-table investigation
+// timeline. SourceTable identifies where the cited row came from.
+type TimelineItem struct {
+	SourceTable   string
+	SchemaVersion int
+	EventID       string
+	RawRef        string
+	Collector     string
+	Parser        string
+	ParserStatus  string
+	TenantID      string
+	TS            time.Time
+	NodeID        string
+	EventType     string
+	Severity      string
+	Message       string
+	CorrelationID string
+	ConnID        string
+	PID           int64
+	ProcessName   string
+	UserName      string
+	SrcIP         string
+	DstIP         string
+	DstPort       int
+	Path          string
+	BytesIn       int64
+	BytesOut      int64
+	DetailsJSON   string
+}
+
+func (c *Client) BuildTimeline(ctx context.Context, p TimelineBuildParams) ([]TimelineItem, error) {
+	if c == nil || c.db == nil {
+		return nil, fmt.Errorf("doris client unavailable")
+	}
+	query, args, err := buildTimelineSQL(p)
+	if err != nil {
+		return nil, err
+	}
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+	rows, err := c.db.QueryContext(qctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("build timeline: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]TimelineItem, 0, clampTimelineLimit(p.Limit))
+	for rows.Next() {
+		item, err := scanTimelineItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
+	eventsWhere, eventsArgs, err := eventWhereClause(EventQueryParams{
+		TenantID:      p.TenantID,
+		NodeID:        p.NodeID,
+		CorrelationID: p.CorrelationID,
+		ConnID:        p.ConnID,
+		Since:         p.Since,
+		Until:         p.Until,
+	}, "ts")
+	if err != nil {
+		return "", nil, err
+	}
+	eventsWhere, eventsArgs = appendEntityPredicate(eventsWhere, eventsArgs, p.EntityType, p.EntityID, eventEntityColumns())
+
+	fileWhere, fileArgs, err := timelineSideTableWhere(p, "ts", fileEntityColumns())
+	if err != nil {
+		return "", nil, err
+	}
+	dbWhere, dbArgs, err := timelineSideTableWhere(p, "ts", dbEntityColumns())
+	if err != nil {
+		return "", nil, err
+	}
+
+	query := `
+		SELECT * FROM (
+			SELECT 'events' AS source_table, schema_version, event_id, raw_ref, collector, parser, parser_status,
+			       tenant_id, ts, node_id, event_type, severity, message, correlation_id, conn_id,
+			       pid, process_name, user_name, src_ip, dst_ip, dst_port, '' AS path,
+			       bytes_in, bytes_out, details_json
+			FROM events
+			WHERE ` + eventsWhere + `
+			UNION ALL
+			SELECT 'file_accesses' AS source_table, 1 AS schema_version, '' AS event_id, '' AS raw_ref,
+			       '' AS collector, '' AS parser, '' AS parser_status,
+			       tenant_id, ts, node_id, CONCAT('file.', op) AS event_type, 'info' AS severity,
+			       path AS message, correlation_id, conn_id, pid, process_name, user_name,
+			       '' AS src_ip, '' AS dst_ip, 0 AS dst_port, path, bytes AS bytes_in, 0 AS bytes_out,
+			       '' AS details_json
+			FROM file_accesses
+			WHERE ` + fileWhere + `
+			UNION ALL
+			SELECT 'db_queries' AS source_table, 1 AS schema_version, '' AS event_id, '' AS raw_ref,
+			       '' AS collector, '' AS parser, '' AS parser_status,
+			       tenant_id, ts, node_id, 'db.query' AS event_type, 'info' AS severity,
+			       query_text AS message, correlation_id, conn_id, pid, '' AS process_name, user_name,
+			       src_ip, '' AS dst_ip, 0 AS dst_port, '' AS path, 0 AS bytes_in, exec_time_ms AS bytes_out,
+			       '' AS details_json
+			FROM db_queries
+			WHERE ` + dbWhere + `
+		) timeline
+		ORDER BY ts ASC`
+	args := append(append(eventsArgs, fileArgs...), dbArgs...)
+	return withLimit(query, clampTimelineLimit(p.Limit)), args, nil
+}
+
+func scanTimelineItem(s rowScanner) (TimelineItem, error) {
+	var r TimelineItem
+	var schemaVersion, dstPort, pid, bytesIn, bytesOut sql.NullInt64
+	var ts *time.Time
+	var sourceTable, eventID, rawRef, collector, parser, parserStatus sql.NullString
+	var tenantID, nodeID, eventType, severity, message, correlationID, connID sql.NullString
+	var processName, userName, srcIP, dstIP, path, detailsJSON sql.NullString
+	if err := s.Scan(
+		&sourceTable, &schemaVersion, &eventID, &rawRef, &collector, &parser, &parserStatus,
+		&tenantID, &ts, &nodeID, &eventType, &severity, &message, &correlationID, &connID,
+		&pid, &processName, &userName, &srcIP, &dstIP, &dstPort, &path, &bytesIn, &bytesOut, &detailsJSON,
+	); err != nil {
+		return r, err
+	}
+	r.SourceTable = sourceTable.String
+	if schemaVersion.Valid {
+		r.SchemaVersion = int(schemaVersion.Int64)
+	}
+	if r.SchemaVersion <= 0 {
+		r.SchemaVersion = 1
+	}
+	r.EventID = eventID.String
+	r.RawRef = rawRef.String
+	r.Collector = collector.String
+	r.Parser = parser.String
+	r.ParserStatus = parserStatus.String
+	r.TenantID = tenantID.String
+	if ts != nil {
+		r.TS = *ts
+	}
+	r.NodeID = nodeID.String
+	r.EventType = eventType.String
+	r.Severity = severity.String
+	r.Message = message.String
+	r.CorrelationID = correlationID.String
+	r.ConnID = connID.String
+	if pid.Valid {
+		r.PID = pid.Int64
+	}
+	r.ProcessName = processName.String
+	r.UserName = userName.String
+	r.SrcIP = srcIP.String
+	r.DstIP = dstIP.String
+	if dstPort.Valid {
+		r.DstPort = int(dstPort.Int64)
+	}
+	r.Path = path.String
+	if bytesIn.Valid {
+		r.BytesIn = bytesIn.Int64
+	}
+	if bytesOut.Valid {
+		r.BytesOut = bytesOut.Int64
+	}
+	r.DetailsJSON = detailsJSON.String
+	return r, nil
+}
+
+type entityColumns struct {
+	NodeID      string
+	SrcIP       string
+	DstIP       string
+	UserName    string
+	ProcessName string
+	Path        string
+	ConnID      string
+	EventID     string
+	RawRef      string
+}
+
+func eventEntityColumns() entityColumns {
+	return entityColumns{
+		NodeID:      "node_id",
+		SrcIP:       "src_ip",
+		DstIP:       "dst_ip",
+		UserName:    "user_name",
+		ProcessName: "process_name",
+		ConnID:      "conn_id",
+		EventID:     "event_id",
+		RawRef:      "raw_ref",
+	}
+}
+
+func fileEntityColumns() entityColumns {
+	return entityColumns{
+		NodeID:      "node_id",
+		UserName:    "user_name",
+		ProcessName: "process_name",
+		Path:        "path",
+		ConnID:      "conn_id",
+	}
+}
+
+func dbEntityColumns() entityColumns {
+	return entityColumns{
+		NodeID:   "node_id",
+		SrcIP:    "src_ip",
+		UserName: "user_name",
+		ConnID:   "conn_id",
+	}
+}
+
+func eventWhereClause(p EventQueryParams, timeColumn string) (string, []any, error) {
+	if strings.TrimSpace(p.TenantID) == "" {
+		return "", nil, fmt.Errorf("tenant_id required")
+	}
+	if timeColumn == "" {
+		timeColumn = "ts"
+	}
+	where := []string{"tenant_id = ?"}
+	args := []any{strings.TrimSpace(p.TenantID)}
+	if !p.Since.IsZero() {
+		where = append(where, timeColumn+" >= ?")
+		args = append(args, p.Since)
+	}
+	if !p.Until.IsZero() {
+		where = append(where, timeColumn+" <= ?")
+		args = append(args, p.Until)
+	}
+	if v := strings.TrimSpace(p.NodeID); v != "" {
+		where = append(where, "node_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.CorrelationID); v != "" {
+		where = append(where, "correlation_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.ConnID); v != "" {
+		where = append(where, "conn_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.EventID); v != "" {
+		where = append(where, "event_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.RawRef); v != "" {
+		where = append(where, "raw_ref = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.Severity); v != "" {
+		where = append(where, "severity = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.ParserStatus); v != "" {
+		where = append(where, "parser_status = ?")
+		args = append(args, v)
+	}
+	if types := cleanEventTypes(p.EventTypes); len(types) > 0 {
+		placeholders := make([]string, len(types))
+		for i, typ := range types {
+			placeholders[i] = "?"
+			args = append(args, typ)
+		}
+		where = append(where, "event_type IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if v := strings.TrimSpace(p.Search); v != "" {
+		where = append(where, "message MATCH_ANY ?")
+		args = append(args, v)
+	}
+	return strings.Join(where, " AND "), args, nil
+}
+
+func timelineSideTableWhere(p TimelineBuildParams, timeColumn string, cols entityColumns) (string, []any, error) {
+	base, args, err := eventWhereClause(EventQueryParams{
+		TenantID:      p.TenantID,
+		NodeID:        p.NodeID,
+		CorrelationID: p.CorrelationID,
+		ConnID:        p.ConnID,
+		Since:         p.Since,
+		Until:         p.Until,
+	}, timeColumn)
+	if err != nil {
+		return "", nil, err
+	}
+	where, args := appendEntityPredicate(base, args, p.EntityType, p.EntityID, cols)
+	return where, args, nil
+}
+
+func appendEntityPredicate(where string, args []any, entityType, entityID string, cols entityColumns) (string, []any) {
+	entityType = strings.ToLower(strings.TrimSpace(entityType))
+	entityID = strings.TrimSpace(entityID)
+	if entityType == "" || entityID == "" {
+		return where, args
+	}
+	switch entityType {
+	case "ip":
+		parts := []string{}
+		if cols.SrcIP != "" {
+			parts = append(parts, cols.SrcIP+" = ?")
+			args = append(args, entityID)
+		}
+		if cols.DstIP != "" {
+			parts = append(parts, cols.DstIP+" = ?")
+			args = append(args, entityID)
+		}
+		if len(parts) == 0 {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND (" + strings.Join(parts, " OR ") + ")", args
+	case "user":
+		if cols.UserName == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.UserName + " = ?", append(args, entityID)
+	case "process":
+		if cols.ProcessName == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.ProcessName + " = ?", append(args, entityID)
+	case "file":
+		if cols.Path == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.Path + " = ?", append(args, entityID)
+	case "host", "node":
+		if cols.NodeID == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.NodeID + " = ?", append(args, entityID)
+	case "connection":
+		if cols.ConnID == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.ConnID + " = ?", append(args, entityID)
+	case "event":
+		if cols.EventID == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.EventID + " = ?", append(args, entityID)
+	case "raw_ref":
+		if cols.RawRef == "" {
+			return where + " AND 1 = 0", args
+		}
+		return where + " AND " + cols.RawRef + " = ?", append(args, entityID)
+	default:
+		return where + " AND 1 = 0", args
+	}
+}
+
+func cleanEventTypes(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func clampEventQueryLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func clampTimelineLimit(limit int) int {
+	if limit <= 0 {
+		return 200
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // ListEventsByCorrelation returns every event sharing the same
 // correlation_id, in time order. Joins across events + file_accesses +
 // db_queries. Used by the UI's forensic timeline.

@@ -37,6 +37,10 @@ type logThroughputProvider interface {
 	LogThroughputSeries(context.Context, uuid.UUID, time.Time, time.Time, time.Duration) ([]storage.LogThroughputBucket, error)
 }
 
+type eventIngestBacklogProvider interface {
+	EventIngestBacklog(context.Context) (storage.EventIngestBacklogSummary, error)
+}
+
 func (s *Server) handleAdminSelfHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -113,7 +117,8 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -156,7 +161,20 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 
 	now := time.Now().UTC()
 	since := now.Add(-window)
-	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	tenantID := ""
+	var tenantUUID uuid.UUID
+	if rawTenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id")); rawTenantID != "" {
+		parsed, err := uuid.Parse(rawTenantID)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, parsed, roleAdmin) {
+			return
+		}
+		tenantUUID = parsed
+		tenantID = parsed.String()
+	}
 
 	type bucket struct {
 		ts     time.Time
@@ -178,12 +196,6 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 	}
 	if len(buckets) == 0 && s.store != nil {
 		if pg, ok := s.store.(logThroughputProvider); ok {
-			var tenantUUID uuid.UUID
-			if tenantID != "" {
-				if id, err := uuid.Parse(tenantID); err == nil {
-					tenantUUID = id
-				}
-			}
 			pgBuckets, err := pg.LogThroughputSeries(r.Context(), tenantUUID, since, now, bucketDur)
 			if err != nil {
 				s.logger.Warn("ingest throughput series (postgres)", zap.Error(err))
@@ -204,6 +216,96 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 			BytesPerSec:  0, // byte tracking not in telemetry_logs schema
 		})
 		resp.Totals.Events += b.events
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type ingestBacklogResponse struct {
+	Status           string  `json:"status"`
+	DorisStatus      string  `json:"doris_status"`
+	DorisConfigured  bool    `json:"doris_configured"`
+	WriterHealthy    bool    `json:"writer_healthy"`
+	PendingBatches   int64   `json:"pending_batches"`
+	PendingRows      int64   `json:"pending_rows"`
+	DueBatches       int64   `json:"due_batches"`
+	RetryingBatches  int64   `json:"retrying_batches"`
+	FailedBatches    int64   `json:"failed_batches"`
+	MaxRetryCount    int     `json:"max_retry_count"`
+	OldestPendingAt  *string `json:"oldest_pending_at,omitempty"`
+	NextAttemptAt    *string `json:"next_attempt_at,omitempty"`
+	LastErrorAt      *string `json:"last_error_at,omitempty"`
+	LastErrorMessage string  `json:"last_error_message,omitempty"`
+	GeneratedAt      string  `json:"generated_at"`
+}
+
+func (s *Server) handleAdminIngestBacklog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	provider, ok := s.store.(eventIngestBacklogProvider)
+	if !ok {
+		http.Error(w, "event ingest backlog unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	summary, err := provider.EventIngestBacklog(r.Context())
+	if err != nil {
+		s.logger.Warn("event ingest backlog", zap.Error(err))
+		http.Error(w, "event ingest backlog", http.StatusInternalServerError)
+		return
+	}
+
+	dorisConfigured := s.dorisClient != nil || s.dorisWriter != nil
+	writerHealthy := s.dorisWriter == nil || s.dorisWriter.Healthy()
+	dorisStatus := "unconfigured"
+	if dorisConfigured {
+		dorisStatus = "ok"
+		if !writerHealthy {
+			dorisStatus = "degraded"
+		}
+		if s.dorisClient != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			if err := s.dorisClient.Ping(ctx); err != nil {
+				dorisStatus = "degraded"
+			}
+			cancel()
+		}
+	}
+
+	status := "ok"
+	if summary.PendingBatches > 0 || summary.FailedBatches > 0 || dorisStatus == "degraded" {
+		status = "degraded"
+	}
+	if !dorisConfigured && summary.PendingBatches > 0 {
+		status = "down"
+	}
+
+	resp := ingestBacklogResponse{
+		Status:          status,
+		DorisStatus:     dorisStatus,
+		DorisConfigured: dorisConfigured,
+		WriterHealthy:   writerHealthy,
+		PendingBatches:  summary.PendingBatches,
+		PendingRows:     summary.PendingRows,
+		DueBatches:      summary.DueBatches,
+		RetryingBatches: summary.RetryingBatches,
+		FailedBatches:   summary.FailedBatches,
+		MaxRetryCount:   summary.MaxRetryCount,
+		OldestPendingAt: formatNullTimePtr(summary.OldestPendingAt),
+		NextAttemptAt:   formatNullTimePtr(summary.NextAttemptAt),
+		LastErrorAt:     formatNullTimePtr(summary.LastErrorAt),
+		GeneratedAt:     formatTime(time.Now().UTC()),
+	}
+	if summary.LastErrorMessage.Valid {
+		resp.LastErrorMessage = summary.LastErrorMessage.String
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

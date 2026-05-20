@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { APIClient } from './api';
 
 describe('APIClient.normalizeBase', () => {
@@ -49,5 +49,53 @@ describe('APIClient.normalizeBase', () => {
       expect(url).not.toMatch(/\/api\/api\//);
       expect(url.endsWith('/api/v1/auth/login')).toBe(true);
     }
+  });
+});
+
+describe('APIClient.getCoverageMatrix', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('calls the coverage matrix route and normalizes data envelopes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          generated_at: '2026-05-19T10:00:00Z',
+          data: [{ domain: 'compliance', name: 'Password policy evidence', state: 'unsupported' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com/api/v1', token: 'session-token' });
+    const matrix = await client.getCoverageMatrix({ tenant_id: 'tenant-1', domain: 'compliance' });
+    const [url, init] = fetchMock.mock.calls[0];
+
+    expect(url).toBe('https://cp.example.com/api/v1/coverage/matrix?tenant_id=tenant-1&domain=compliance');
+    expect(init.headers.Authorization).toBe('Bearer session-token');
+    expect(matrix.generated_at).toBe('2026-05-19T10:00:00Z');
+    expect(matrix.rows).toEqual([{ domain: 'compliance', name: 'Password policy evidence', state: 'unsupported' }]);
+  });
+
+  it('normalizes backend catalog matrix envelopes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          catalog_version: 'coverage.truth.v1',
+          matrix: [{ domain: 'parser', title: 'Typed parser coverage', state: 'raw_only', quality: ['fixture_tested'] }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    const matrix = await client.getCoverageMatrix();
+
+    expect(matrix.rows).toEqual([
+      { domain: 'parser', title: 'Typed parser coverage', state: 'raw_only', quality: ['fixture_tested'] },
+    ]);
   });
 });

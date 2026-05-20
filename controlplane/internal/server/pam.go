@@ -94,10 +94,11 @@ type decideAccessRequestRequest struct {
 func (s *Server) handleAccessRequestsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.listAccessRequests(w, r)
+		s.listAccessRequests(w, r, principal)
 	case http.MethodPost:
 		principal, ok := s.authorize(w, r, roleViewer)
 		if !ok {
@@ -110,7 +111,7 @@ func (s *Server) handleAccessRequestsCollection(w http.ResponseWriter, r *http.R
 	}
 }
 
-func (s *Server) listAccessRequests(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listAccessRequests(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -129,6 +130,9 @@ func (s *Server) listAccessRequests(w http.ResponseWriter, r *http.Request) {
 	tid, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tid, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	f.TenantID = tid
@@ -160,6 +164,9 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request, pri
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 	params := storage.CreateAccessRequestParams{
 		TenantID:           tenantID,
 		TargetResourceType: req.TargetResourceType,
@@ -175,6 +182,10 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request, pri
 		id, err := uuid.Parse(*req.TargetNodeID)
 		if err != nil {
 			http.Error(w, "invalid target_node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, id); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		params.TargetNodeID = &id
@@ -210,7 +221,8 @@ func (s *Server) handleAccessRequestSubroutes(w http.ResponseWriter, r *http.Req
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
 		ar, err := s.store.GetAccessRequest(r.Context(), id)
@@ -221,6 +233,9 @@ func (s *Server) handleAccessRequestSubroutes(w http.ResponseWriter, r *http.Req
 		}
 		if ar == nil {
 			http.NotFound(w, r)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, ar.TenantID, roleViewer, roleOperator, roleAdmin) {
 			return
 		}
 		writeJSON(w, http.StatusOK, newAccessRequestResponse(*ar))
@@ -245,6 +260,9 @@ func (s *Server) handleAccessRequestSubroutes(w http.ResponseWriter, r *http.Req
 		existing, err := s.store.GetAccessRequest(r.Context(), id)
 		if err != nil || existing == nil {
 			http.NotFound(w, r)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, existing.TenantID, roleAdmin) {
 			return
 		}
 		var exp *time.Time
@@ -288,25 +306,30 @@ func (s *Server) handleSSHCA(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.getSSHCA(w, r)
+		s.getSSHCA(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.rotateSSHCA(w, r)
+		s.rotateSSHCA(w, r, principal)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) getSSHCA(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getSSHCA(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	tenantID, err := requiredTenantID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	ca, err := s.store.GetActiveSSHCA(r.Context(), tenantID)
@@ -331,7 +354,7 @@ func (s *Server) getSSHCA(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) rotateSSHCA(w http.ResponseWriter, r *http.Request) {
+func (s *Server) rotateSSHCA(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.sealer == nil {
 		http.Error(w, "secrets encryption not configured", http.StatusServiceUnavailable)
 		return
@@ -339,6 +362,9 @@ func (s *Server) rotateSSHCA(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := requiredTenantID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 		return
 	}
 	kp, err := sshca.Generate()
@@ -408,6 +434,9 @@ func (s *Server) handleSSHCASignCert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 	var req signCertRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
@@ -459,6 +488,10 @@ func (s *Server) handleSSHCASignCert(w http.ResponseWriter, r *http.Request) {
 		}
 		if ar.ExpiresAt.Valid && ar.ExpiresAt.Time.Before(time.Now()) {
 			http.Error(w, "access_request expired", http.StatusForbidden)
+			return
+		}
+		if ar.TenantID != tenantID {
+			http.Error(w, "access_request is outside requested tenant", http.StatusForbidden)
 			return
 		}
 		accessReqID = &id

@@ -1651,7 +1651,8 @@ func (s *Server) handleIPBehaviorOverview(w http.ResponseWriter, r *http.Request
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBehaviorQueryStore)
@@ -1661,6 +1662,9 @@ func (s *Server) handleIPBehaviorOverview(w http.ResponseWriter, r *http.Request
 	}
 	tenantID, since, ok := parseIPBehaviorTenantSince(w, r, time.Hour)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	countries, err := store.ListIPBehaviorCountries(r.Context(), tenantID, since, "")
@@ -1698,7 +1702,8 @@ func (s *Server) handleIPBehaviorCountries(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBehaviorQueryStore)
@@ -1708,6 +1713,9 @@ func (s *Server) handleIPBehaviorCountries(w http.ResponseWriter, r *http.Reques
 	}
 	tenantID, since, ok := parseIPBehaviorTenantSince(w, r, 24*time.Hour)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	countries, err := store.ListIPBehaviorCountries(r.Context(), tenantID, since, "")
@@ -1725,7 +1733,8 @@ func (s *Server) handleIPBehaviorCountryDetail(w http.ResponseWriter, r *http.Re
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBehaviorQueryStore)
@@ -1740,6 +1749,9 @@ func (s *Server) handleIPBehaviorCountryDetail(w http.ResponseWriter, r *http.Re
 	}
 	tenantID, since, ok := parseIPBehaviorTenantSince(w, r, 24*time.Hour)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	countries, err := store.ListIPBehaviorCountries(r.Context(), tenantID, since, code)
@@ -1761,7 +1773,8 @@ func (s *Server) handleIPBehaviorIPProfile(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBehaviorQueryStore)
@@ -1776,6 +1789,9 @@ func (s *Server) handleIPBehaviorIPProfile(w http.ResponseWriter, r *http.Reques
 	}
 	tenantID, since, ok := parseIPBehaviorTenantSince(w, r, 24*time.Hour)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	profile, err := store.GetIPBehaviorIPProfile(r.Context(), tenantID, ip, since)
@@ -1814,7 +1830,8 @@ func (s *Server) handleIPBehaviorBaselines(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBehaviorQueryStore)
@@ -1822,9 +1839,8 @@ func (s *Server) handleIPBehaviorBaselines(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "ip behavior store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
-	if err != nil {
-		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	limit, offset, err := parseLimitOffset(r.URL.Query())
@@ -1985,7 +2001,8 @@ func (s *Server) handleBlockProposals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListBlockProposals(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBlockProposalQueryStore)
@@ -1993,9 +2010,8 @@ func (s *Server) handleListBlockProposals(w http.ResponseWriter, r *http.Request
 		http.Error(w, "block proposal store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
-	if err != nil {
-		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	limit, offset, err := parseLimitOffset(r.URL.Query())
@@ -2064,6 +2080,9 @@ func (s *Server) handleCreateBlockProposal(w http.ResponseWriter, r *http.Reques
 	tenantID, err := uuid.Parse(strings.TrimSpace(req.TenantID))
 	if err != nil {
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	if !validIPOrCIDR(req.IPCIDR) {
@@ -2200,6 +2219,9 @@ func (s *Server) handleCreateASNBlockProposals(w http.ResponseWriter, r *http.Re
 	tenantID, err := uuid.Parse(strings.TrimSpace(req.TenantID))
 	if err != nil {
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	asn := strings.TrimSpace(req.ASN)
@@ -2394,6 +2416,9 @@ func (s *Server) handleApproveBlockProposal(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, entry.TenantID, roleOperator, roleAdmin) {
+		return
+	}
 	if protected := s.protectedIPBlockReason(r.Context(), entry.TenantID, entry.IPCIDR); protected != "" {
 		if !entry.ProtectedOverride {
 			updated, _ := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "failed", nil, "protected target: "+protected)
@@ -2564,6 +2589,9 @@ func (s *Server) handlePromoteBlockProposal(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, entry.TenantID, roleOperator, roleAdmin) {
+		return
+	}
 	if !strings.EqualFold(entry.Status, "canary") {
 		http.Error(w, "block proposal is not awaiting canary promotion", http.StatusConflict)
 		return
@@ -2661,6 +2689,9 @@ func (s *Server) handleRejectBlockProposal(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, entry.TenantID, roleOperator, roleAdmin) {
+		return
+	}
 	if !strings.EqualFold(entry.Status, "proposed") {
 		http.Error(w, "only proposed block proposals can be rejected; use rollback for dispatched blocks", http.StatusConflict)
 		return
@@ -2703,6 +2734,9 @@ func (s *Server) handleRollbackBlockProposal(w http.ResponseWriter, r *http.Requ
 	}
 	if entry == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, entry.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 	if blockProposalStatusTerminal(entry.Status) {

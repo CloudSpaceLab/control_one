@@ -367,6 +367,16 @@ func TestControlRoomOverviewEmitsEmptyArrays(t *testing.T) {
 	}
 }
 
+func TestControlRoomOverviewRequiresTenantID(t *testing.T) {
+	srv, _ := dashboardAdminHarness(t, "viewer", "viewer-token")
+
+	rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/control-room/overview")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
 func controlRoomMetricDrilldown(lane controlRoomLane, label string) string {
 	for _, metric := range lane.Metrics {
 		if metric.Label == label {

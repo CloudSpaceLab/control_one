@@ -581,6 +581,11 @@ func main() {
 	// to the telemetry table; this one drives the node state machine.
 	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
 		makeFilterApplier(log.Named("policy"), collectors, netflowMgr, fileMgr, dbMgr),
+		makeNetworkPolicyApplierWithOptions(log.Named("network-policy"), networkPolicyApplierOptions{
+			PublicKeyPath: cfg.Policy.PublicKeyFile,
+			Enforce:       strings.EqualFold(strings.TrimSpace(cfg.NetworkPolicy.EnforcementMode), "enforce"),
+			StateDir:      filepath.Dir(cfg.StateFile),
+		}),
 		NewDefaultSelfUpdater(state.NodeID, filepath.Dir(cfg.StateFile)))
 
 	// Service inventory — feeds node_services and the per-tenant knowledge

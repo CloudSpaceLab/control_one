@@ -20,8 +20,9 @@ import (
 // remediationTestStore wraps fakeStore with remediation script lookup support.
 type remediationTestStore struct {
 	fakeStore
-	mu      sync.Mutex
-	scripts map[string]*storage.RemediationScript // keyed by ruleID
+	mu          sync.Mutex
+	scripts     map[string]*storage.RemediationScript    // keyed by ruleID
+	scriptsByID map[uuid.UUID]*storage.RemediationScript // keyed by script ID
 }
 
 func (r *remediationTestStore) GetRemediationScript(_ context.Context, ruleID, platform string) (*storage.RemediationScript, error) {
@@ -29,6 +30,20 @@ func (r *remediationTestStore) GetRemediationScript(_ context.Context, ruleID, p
 	defer r.mu.Unlock()
 	if script, ok := r.scripts[ruleID]; ok {
 		return script, nil
+	}
+	return nil, nil
+}
+
+func (r *remediationTestStore) GetRemediationScriptByID(_ context.Context, id uuid.UUID) (*storage.RemediationScript, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if script, ok := r.scriptsByID[id]; ok {
+		return script, nil
+	}
+	for _, script := range r.scripts {
+		if script != nil && script.ID == id {
+			return script, nil
+		}
 	}
 	return nil, nil
 }

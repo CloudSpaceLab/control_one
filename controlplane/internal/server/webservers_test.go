@@ -24,7 +24,7 @@ func TestProcessWebserverCompletedActionRequiresReceiptForApplySuccess(t *testin
 	jobID := uuid.New()
 	store := &webserverReceiptStore{
 		fakeStore: &fakeStore{jobs: map[uuid.UUID]*storage.Job{
-			jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeWebserverConfigApply, Status: storage.JobStatusRunning},
+			jobID: webserverTestJob(jobID, tenantID, nodeID, JobTypeWebserverConfigApply),
 		}},
 		action: storage.WebserverConfigAction{
 			ID:       uuid.New(),
@@ -60,9 +60,10 @@ func TestProcessWebserverCompletedActionPersistsRequiredReceipt(t *testing.T) {
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	jobID := uuid.New()
+	job := webserverTestJob(jobID, tenantID, nodeID, JobTypeWebserverBlocklistUpdate)
 	store := &webserverReceiptStore{
 		fakeStore: &fakeStore{jobs: map[uuid.UUID]*storage.Job{
-			jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeWebserverBlocklistUpdate, Status: storage.JobStatusRunning},
+			jobID: job,
 		}},
 		action: storage.WebserverConfigAction{
 			ID:       uuid.New(),
@@ -81,8 +82,10 @@ func TestProcessWebserverCompletedActionPersistsRequiredReceipt(t *testing.T) {
 		Metadata: map[string]any{
 			"receipt": map[string]any{
 				"action":            JobTypeWebserverBlocklistUpdate,
+				"checksum_after":    "sha256:after",
 				"validation_status": "passed",
 				"reload_status":     "reloaded",
+				"metadata":          webserverTestReceiptMetadata(job),
 			},
 		},
 	})
@@ -111,14 +114,65 @@ func TestProcessWebserverCompletedActionPersistsRequiredReceipt(t *testing.T) {
 	}
 }
 
+func TestProcessWebserverCompletedActionRejectsUnboundReceipt(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	jobID := uuid.New()
+	job := webserverTestJob(jobID, tenantID, nodeID, JobTypeWebserverBlocklistUpdate)
+	store := &webserverReceiptStore{
+		fakeStore: &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: job}},
+		action: storage.WebserverConfigAction{
+			ID:       uuid.New(),
+			TenantID: tenantID,
+			NodeID:   nodeID,
+			JobID:    uuid.NullUUID{UUID: jobID, Valid: true},
+			Action:   JobTypeWebserverBlocklistUpdate,
+			Status:   "running",
+		},
+	}
+	s := &Server{store: store}
+	badMetadata := webserverTestReceiptMetadata(job)
+	badMetadata["job_id"] = uuid.New().String()
+
+	s.processWebserverCompletedAction(context.Background(), jobID, heartbeatCompletedAction{
+		Action: JobTypeWebserverBlocklistUpdate,
+		Status: "succeeded",
+		Metadata: map[string]any{
+			"receipt": map[string]any{
+				"action":            JobTypeWebserverBlocklistUpdate,
+				"checksum_after":    "sha256:after",
+				"validation_status": "passed",
+				"reload_status":     "reloaded",
+				"metadata":          badMetadata,
+			},
+		},
+	})
+
+	if store.action.Status != "failed" {
+		t.Fatalf("action status = %q, want failed", store.action.Status)
+	}
+	if !strings.Contains(store.action.ErrorMessage.String, "job_id mismatch") {
+		t.Fatalf("error = %q, want job_id mismatch", store.action.ErrorMessage.String)
+	}
+	if store.receipts != 0 {
+		t.Fatalf("receipts = %d, want 0 for unbound receipt", store.receipts)
+	}
+	if got := store.jobs[jobID].Status; got != storage.JobStatusFailed {
+		t.Fatalf("job status = %q, want failed", got)
+	}
+}
+
 func TestProcessWebserverCompletedActionTreatsElevatedErrorRateAsFailure(t *testing.T) {
 	t.Parallel()
 
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	jobID := uuid.New()
+	job := webserverTestJob(jobID, tenantID, nodeID, JobTypeWebserverBlocklistUpdate)
 	store := &webserverReceiptStore{
-		fakeStore:      &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeWebserverBlocklistUpdate, Status: storage.JobStatusRunning}}},
+		fakeStore:      &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: job}},
 		recentFailures: 3,
 		action: storage.WebserverConfigAction{
 			ID:       uuid.New(),
@@ -137,12 +191,13 @@ func TestProcessWebserverCompletedActionTreatsElevatedErrorRateAsFailure(t *test
 		Metadata: map[string]any{
 			"receipt": map[string]any{
 				"action":            JobTypeWebserverBlocklistUpdate,
+				"checksum_after":    "sha256:after",
 				"validation_status": "passed",
 				"reload_status":     "reloaded",
-				"metadata": map[string]any{
+				"metadata": mergeStringAny(webserverTestReceiptMetadata(job), map[string]any{
 					"error_rate_status": "elevated",
 					"reason":            "5xx rate doubled after canary",
-				},
+				}),
 			},
 		},
 	})
@@ -168,8 +223,9 @@ func TestProcessWebserverCompletedActionTripsRepeatedRollbackCircuit(t *testing.
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	jobID := uuid.New()
+	job := webserverTestJob(jobID, tenantID, nodeID, JobTypeWebserverConfigRollback)
 	store := &webserverReceiptStore{
-		fakeStore:     &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeWebserverConfigRollback, Status: storage.JobStatusRunning}}},
+		fakeStore:     &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: job}},
 		recentActions: 3,
 		action: storage.WebserverConfigAction{
 			ID:       uuid.New(),
@@ -190,7 +246,7 @@ func TestProcessWebserverCompletedActionTripsRepeatedRollbackCircuit(t *testing.
 				"action":            JobTypeWebserverConfigRollback,
 				"validation_status": "restored",
 				"reload_status":     "reloaded",
-				"metadata":          map[string]any{"rollback": true},
+				"metadata":          mergeStringAny(webserverTestReceiptMetadata(job), map[string]any{"rollback": true}),
 			},
 		},
 	})
@@ -298,6 +354,50 @@ func TestDecodeWebserverPayloadContractVersion(t *testing.T) {
 	if _, err := decodeWebserverPayload(invalid); err == nil {
 		t.Fatal("unsupported contract version accepted")
 	}
+}
+
+func webserverTestJob(jobID, tenantID, nodeID uuid.UUID, action string) *storage.Job {
+	payload := webserverJobPayload{
+		ContractVersion: webserverJobContractVersion,
+		TenantID:        tenantID.String(),
+		NodeID:          nodeID.String(),
+		Action:          action,
+	}
+	stampWebserverJobContract(&payload, jobID, "")
+	payloadBytes, _ := json.Marshal(payload)
+	return &storage.Job{
+		ID:       jobID,
+		TenantID: tenantID,
+		Type:     action,
+		Status:   storage.JobStatusRunning,
+		Payload:  payloadBytes,
+	}
+}
+
+func webserverTestReceiptMetadata(job *storage.Job) map[string]any {
+	decoded, err := decodeWebserverPayload(json.RawMessage(job.Payload))
+	if err != nil {
+		return map[string]any{}
+	}
+	payload, _ := decoded.(webserverJobPayload)
+	return map[string]any{
+		"contract_version": webserverJobContractVersion,
+		"job_id":           job.ID.String(),
+		"action":           payload.Action,
+		"idempotency_key":  payload.IdempotencyKey,
+		"correlation_id":   payload.CorrelationID,
+	}
+}
+
+func mergeStringAny(base, extra map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
 }
 
 type webserverReceiptStore struct {

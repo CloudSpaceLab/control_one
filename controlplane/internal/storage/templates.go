@@ -15,6 +15,7 @@ import (
 // ProvisioningTemplate represents a stored provisioning template definition.
 type ProvisioningTemplate struct {
 	ID                uuid.UUID
+	TenantID          uuid.UUID
 	Name              string
 	Provider          string
 	Description       sql.NullString
@@ -41,9 +42,35 @@ type ProvisioningTemplateVersion struct {
 
 // ProvisioningTemplateFilter captures filters for listing templates.
 type ProvisioningTemplateFilter struct {
+	TenantID        uuid.UUID
+	IncludeGlobal   bool
 	Provider        string
 	NamePrefix      string
 	IncludeArchived bool
+}
+
+// ProvisioningTemplateAssignment represents a template assignment to a tenant-bounded scope.
+type ProvisioningTemplateAssignment struct {
+	ID         uuid.UUID
+	TemplateID uuid.UUID
+	TenantID   uuid.UUID
+	ScopeType  string
+	ScopeID    uuid.UUID
+	Selector   map[string]any
+	AssignedAt time.Time
+	AssignedBy *uuid.UUID
+	ExpiresAt  sql.NullTime
+}
+
+// CreateProvisioningTemplateAssignmentParams defines input for template assignment.
+type CreateProvisioningTemplateAssignmentParams struct {
+	TemplateID uuid.UUID
+	TenantID   uuid.UUID
+	ScopeType  string
+	ScopeID    uuid.UUID
+	Selector   map[string]any
+	AssignedBy *uuid.UUID
+	ExpiresAt  *time.Time
 }
 
 // CreateTemplateVersionParams defines input for creating a template version.
@@ -85,12 +112,20 @@ func (s *Store) ListProvisioningTemplates(ctx context.Context, filter Provisioni
 		args = append(args, strings.TrimSpace(filter.NamePrefix)+"%")
 		clauses = append(clauses, fmt.Sprintf("name ILIKE $%d", len(args)))
 	}
+	if filter.TenantID != uuid.Nil {
+		args = append(args, filter.TenantID)
+		if filter.IncludeGlobal {
+			clauses = append(clauses, fmt.Sprintf("(tenant_id = $%d OR tenant_id IS NULL)", len(args)))
+		} else {
+			clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+		}
+	}
 	if !filter.IncludeArchived {
 		clauses = append(clauses, "archived_at IS NULL")
 	}
 
 	query := fmt.Sprintf(`
-        SELECT id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+        SELECT id, tenant_id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
         FROM provisioning_templates
         WHERE %s
         ORDER BY created_at DESC
@@ -127,8 +162,10 @@ func (s *Store) ListProvisioningTemplates(ctx context.Context, filter Provisioni
 		var tpl ProvisioningTemplate
 		var labelsRaw []byte
 		var promoted sql.NullString
+		var tenantID sql.NullString
 		if err := rows.Scan(
 			&tpl.ID,
+			&tenantID,
 			&tpl.Name,
 			&tpl.Provider,
 			&tpl.Description,
@@ -145,6 +182,11 @@ func (s *Store) ListProvisioningTemplates(ctx context.Context, filter Provisioni
 			return nil, 0, err
 		}
 		tpl.Labels = labels
+		if tenantID.Valid {
+			if id, err := uuid.Parse(tenantID.String); err == nil {
+				tpl.TenantID = id
+			}
+		}
 		if promoted.Valid {
 			if id, err := uuid.Parse(promoted.String); err == nil {
 				tpl.PromotedVersionID = &id
@@ -184,9 +226,9 @@ func (s *Store) CreateProvisioningTemplate(ctx context.Context, tpl *Provisionin
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-        INSERT INTO provisioning_templates (id, name, provider, description, labels, created_at, updated_at, archived_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, tpl.ID, tpl.Name, strings.TrimSpace(tpl.Provider), tpl.Description, labelsRaw, tpl.CreatedAt, tpl.UpdatedAt, tpl.ArchivedAt)
+        INSERT INTO provisioning_templates (id, tenant_id, name, provider, description, labels, created_at, updated_at, archived_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, tpl.ID, nullableUUID(tpl.TenantID), tpl.Name, strings.TrimSpace(tpl.Provider), tpl.Description, labelsRaw, tpl.CreatedAt, tpl.UpdatedAt, tpl.ArchivedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert provisioning template: %w", err)
 	}
@@ -269,15 +311,17 @@ func (s *Store) UpdateProvisioningTemplate(ctx context.Context, id uuid.UUID, pa
         UPDATE provisioning_templates
         SET %s
         WHERE id = $%d
-        RETURNING id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+        RETURNING id, tenant_id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
     `, strings.Join(setFragments, ", "), idx)
 	args = append(args, id)
 
 	var tpl ProvisioningTemplate
 	var labelsRaw []byte
 	var promoted sql.NullString
+	var tenantID sql.NullString
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&tpl.ID,
+		&tenantID,
 		&tpl.Name,
 		&tpl.Provider,
 		&tpl.Description,
@@ -298,6 +342,11 @@ func (s *Store) UpdateProvisioningTemplate(ctx context.Context, id uuid.UUID, pa
 		return nil, err
 	}
 	tpl.Labels = labels
+	if tenantID.Valid {
+		if id, err := uuid.Parse(tenantID.String); err == nil {
+			tpl.TenantID = id
+		}
+	}
 	if promoted.Valid {
 		if pid, err := uuid.Parse(promoted.String); err == nil {
 			tpl.PromotedVersionID = &pid
@@ -316,7 +365,7 @@ func (s *Store) GetProvisioningTemplate(ctx context.Context, id uuid.UUID) (*Pro
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-        SELECT id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
+        SELECT id, tenant_id, name, provider, description, labels, created_at, updated_at, archived_at, promoted_version_id
         FROM provisioning_templates
         WHERE id = $1
     `, id)
@@ -324,7 +373,8 @@ func (s *Store) GetProvisioningTemplate(ctx context.Context, id uuid.UUID) (*Pro
 	var tpl ProvisioningTemplate
 	var labelsRaw []byte
 	var promoted sql.NullString
-	if err := row.Scan(&tpl.ID, &tpl.Name, &tpl.Provider, &tpl.Description, &labelsRaw, &tpl.CreatedAt, &tpl.UpdatedAt, &tpl.ArchivedAt, &promoted); err != nil {
+	var tenantID sql.NullString
+	if err := row.Scan(&tpl.ID, &tenantID, &tpl.Name, &tpl.Provider, &tpl.Description, &labelsRaw, &tpl.CreatedAt, &tpl.UpdatedAt, &tpl.ArchivedAt, &promoted); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -335,12 +385,160 @@ func (s *Store) GetProvisioningTemplate(ctx context.Context, id uuid.UUID) (*Pro
 		return nil, err
 	}
 	tpl.Labels = labels
+	if tenantID.Valid {
+		if id, err := uuid.Parse(tenantID.String); err == nil {
+			tpl.TenantID = id
+		}
+	}
 	if promoted.Valid {
 		if id, err := uuid.Parse(promoted.String); err == nil {
 			tpl.PromotedVersionID = &id
 		}
 	}
 	return &tpl, nil
+}
+
+// CreateProvisioningTemplateAssignment assigns a template to a tenant-bounded scope.
+func (s *Store) CreateProvisioningTemplateAssignment(ctx context.Context, params CreateProvisioningTemplateAssignmentParams) (*ProvisioningTemplateAssignment, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if params.TemplateID == uuid.Nil {
+		return nil, errors.New("template_id is required")
+	}
+	if params.TenantID == uuid.Nil {
+		return nil, errors.New("tenant_id is required")
+	}
+	scopeType, scopeID, _, selector, err := normalizeAssignmentScope(params.ScopeType, params.ScopeID, uuid.Nil, params.Selector)
+	if err != nil {
+		return nil, err
+	}
+	selectorRaw, err := marshalJSONBMap(selector)
+	if err != nil {
+		return nil, fmt.Errorf("encode selector: %w", err)
+	}
+	var scopeIDArg *uuid.UUID
+	if scopeID != uuid.Nil {
+		scopeIDArg = &scopeID
+	}
+	var expiresAt sql.NullTime
+	if params.ExpiresAt != nil {
+		expiresAt = sql.NullTime{Time: *params.ExpiresAt, Valid: true}
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		INSERT INTO provisioning_template_assignments (
+			template_id, tenant_id, scope_type, scope_id, selector, assigned_by, expires_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, template_id, tenant_id, scope_type,
+			COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'),
+			selector, assigned_at, assigned_by, expires_at
+	`, params.TemplateID, params.TenantID, scopeType, scopeIDArg, selectorRaw, params.AssignedBy, expiresAt)
+
+	return scanProvisioningTemplateAssignment(row)
+}
+
+// GetProvisioningTemplateAssignment returns a template assignment by ID.
+func (s *Store) GetProvisioningTemplateAssignment(ctx context.Context, id uuid.UUID) (*ProvisioningTemplateAssignment, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("assignment id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, template_id, tenant_id, scope_type,
+			COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'),
+			selector, assigned_at, assigned_by, expires_at
+		FROM provisioning_template_assignments
+		WHERE id = $1
+	`, id)
+	assignment, err := scanProvisioningTemplateAssignment(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return assignment, nil
+}
+
+// ListProvisioningTemplateAssignments returns assignments for a template.
+func (s *Store) ListProvisioningTemplateAssignments(ctx context.Context, templateID uuid.UUID, limit, offset int) ([]ProvisioningTemplateAssignment, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if templateID == uuid.Nil {
+		return nil, 0, errors.New("template_id is required")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM provisioning_template_assignments WHERE template_id = $1`, templateID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count template assignments: %w", err)
+	}
+
+	query := `
+		SELECT id, template_id, tenant_id, scope_type,
+			COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'),
+			selector, assigned_at, assigned_by, expires_at
+		FROM provisioning_template_assignments
+		WHERE template_id = $1
+		ORDER BY assigned_at DESC
+	`
+	args := []any{templateID}
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list template assignments: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	assignments := []ProvisioningTemplateAssignment{}
+	for rows.Next() {
+		assignment, err := scanProvisioningTemplateAssignment(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		assignments = append(assignments, *assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate template assignments: %w", err)
+	}
+	return assignments, total, nil
+}
+
+// DeleteProvisioningTemplateAssignment removes a template assignment.
+func (s *Store) DeleteProvisioningTemplateAssignment(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return errors.New("assignment id is required")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM provisioning_template_assignments WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete template assignment: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete template assignment rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // CreateProvisioningTemplateVersion creates a new version for the template.
@@ -676,6 +874,30 @@ func scanTemplateVersion(scanner rowScanner) (*ProvisioningTemplateVersion, erro
 		}
 	}
 	return &version, nil
+}
+
+func scanProvisioningTemplateAssignment(scanner rowScanner) (*ProvisioningTemplateAssignment, error) {
+	var assignment ProvisioningTemplateAssignment
+	var selectorRaw []byte
+	if err := scanner.Scan(
+		&assignment.ID,
+		&assignment.TemplateID,
+		&assignment.TenantID,
+		&assignment.ScopeType,
+		&assignment.ScopeID,
+		&selectorRaw,
+		&assignment.AssignedAt,
+		&assignment.AssignedBy,
+		&assignment.ExpiresAt,
+	); err != nil {
+		return nil, err
+	}
+	selector, err := decodeJSONBMap(selectorRaw)
+	if err != nil {
+		return nil, fmt.Errorf("decode template assignment selector: %w", err)
+	}
+	assignment.Selector = selector
+	return &assignment, nil
 }
 
 func encodeStringMap(input map[string]string) ([]byte, error) {

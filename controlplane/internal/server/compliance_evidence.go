@@ -51,6 +51,9 @@ func (s *Server) handleCreateComplianceEvidence(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
+	}
 
 	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
@@ -146,7 +149,8 @@ func (s *Server) handleCreateComplianceEvidence(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleListComplianceEvidence(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -157,9 +161,40 @@ func (s *Server) handleListComplianceEvidence(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 
-	framework := q.Get("framework")
-	evidenceType := q.Get("evidence_type")
+	framework := strings.TrimSpace(q.Get("framework"))
+	evidenceType := strings.TrimSpace(q.Get("evidence_type"))
+	controlRef := strings.TrimSpace(q.Get("control_ref"))
+	includeExpired := true
+	if raw := strings.TrimSpace(q.Get("include_expired")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "invalid include_expired value", http.StatusBadRequest)
+			return
+		}
+		includeExpired = parsed
+	}
+	var since time.Time
+	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
+		parsed, ok := parseDateOrTimestamp(raw)
+		if !ok {
+			http.Error(w, "invalid since timestamp (use RFC3339 or YYYY-MM-DD)", http.StatusBadRequest)
+			return
+		}
+		since = parsed
+	}
+	var until time.Time
+	if raw := strings.TrimSpace(q.Get("until")); raw != "" {
+		parsed, ok := parseDateOrTimestamp(raw)
+		if !ok {
+			http.Error(w, "invalid until timestamp (use RFC3339 or YYYY-MM-DD)", http.StatusBadRequest)
+			return
+		}
+		until = parsed
+	}
 	limit := 50
 	offset := 0
 	if v := q.Get("limit"); v != "" {
@@ -173,15 +208,43 @@ func (s *Server) handleListComplianceEvidence(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	items, total, err := s.store.ListComplianceEvidence(r.Context(), tenantID, framework, evidenceType, limit, offset)
+	reference := complianceEvidenceReferenceTime(until)
+	filter := storage.ComplianceEvidenceFilter{
+		TenantID:            tenantID,
+		Framework:           framework,
+		ControlRef:          controlRef,
+		EvidenceType:        evidenceType,
+		UploadedSince:       timePtrIfSet(since),
+		UploadedUntil:       timePtrIfSet(until),
+		ExpirationReference: &reference,
+		IncludeExpired:      includeExpired,
+	}
+	var (
+		items []storage.ComplianceEvidence
+		total int
+	)
+	if store, ok := s.store.(complianceEvidenceFilteredStore); ok {
+		items, total, err = store.ListComplianceEvidenceFiltered(r.Context(), filter, limit, offset)
+	} else {
+		items, total, err = s.store.ListComplianceEvidence(r.Context(), tenantID, framework, evidenceType, limit, offset)
+	}
 	if err != nil {
 		s.logger.Sugar().Errorw("list compliance evidence", "error", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
+	data := make([]complianceUploadedEvidenceResponse, 0, len(items))
+	for _, item := range items {
+		if !includeExpired && item.ExpiresAt != nil && !item.ExpiresAt.After(reference) {
+			continue
+		}
+		resp, _ := complianceUploadedEvidenceItem(item, reference)
+		data = append(data, resp)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data": items,
+		"data": data,
 		"pagination": map[string]any{
 			"total":  total,
 			"limit":  limit,
@@ -219,13 +282,17 @@ func (s *Server) handleComplianceEvidenceResource(w http.ResponseWriter, r *http
 }
 
 func (s *Server) handleDownloadComplianceEvidence(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
 	tenantID, terr := requiredTenantID(r)
 	if terr != nil {
 		http.Error(w, terr.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -260,6 +327,9 @@ func (s *Server) handleDeleteComplianceEvidence(w http.ResponseWriter, r *http.R
 	tenantID, terr := requiredTenantID(r)
 	if terr != nil {
 		http.Error(w, terr.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -364,6 +434,9 @@ func (s *Server) handleCreateAuditReport(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, req.TenantID, roleOperator, roleAdmin) {
+		return
+	}
 	if req.Framework == "" {
 		http.Error(w, "framework is required", http.StatusBadRequest)
 		return
@@ -418,7 +491,8 @@ func (s *Server) handleCreateAuditReport(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleListAuditReports(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -426,6 +500,9 @@ func (s *Server) handleListAuditReports(w http.ResponseWriter, r *http.Request) 
 	tenantID, err := uuid.Parse(q.Get("tenant_id"))
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -485,7 +562,17 @@ func (s *Server) handleComplianceReportsResource(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handleDownloadAuditReport(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+
+	tenantID, terr := requiredTenantID(r)
+	if terr != nil {
+		http.Error(w, terr.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -495,7 +582,7 @@ func (s *Server) handleDownloadAuditReport(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if report == nil {
+	if report == nil || report.TenantID != tenantID {
 		http.NotFound(w, r)
 		return
 	}
@@ -539,7 +626,13 @@ func (s *Server) handleDownloadAuditReport(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	evidence, _, _ := s.store.ListComplianceEvidence(r.Context(), report.TenantID, report.Framework, "", 1000, 0)
+	evidence, _, _ := s.listComplianceEvidenceFiltered(r.Context(), complianceEvidenceQuery{
+		TenantID:  report.TenantID,
+		Framework: report.Framework,
+		Since:     report.PeriodStart,
+		Until:     report.PeriodEnd.Add(24 * time.Hour),
+		Limit:     1000,
+	}, 1000, 0)
 
 	data := pdfreport.ReportData{
 		TenantName:     tenantName,
@@ -581,8 +674,20 @@ func (s *Server) handleDownloadAuditReport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	artifactPath, artifactErr := persistAuditReportArtifact(*report, body, ext)
+	if artifactErr != nil {
+		s.logger.Sugar().Errorw("persist audit report artifact", "error", artifactErr, "report_id", report.ID.String())
+		now := time.Now().UTC()
+		_ = s.store.UpdateAuditReportStatus(r.Context(), id, "failed", nil, &now)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	now := time.Now().UTC()
-	_ = s.store.UpdateAuditReportStatus(r.Context(), id, "ready", nil, &now)
+	if err := s.store.UpdateAuditReportStatus(r.Context(), id, "ready", &artifactPath, &now); err != nil {
+		s.logger.Sugar().Errorw("update audit report status", "error", err, "report_id", report.ID.String())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 
 	filename := fmt.Sprintf("compliance-report-%s-%s.%s", report.Framework, report.PeriodEnd.Format("2006-01-02"), ext)
 	w.Header().Set("Content-Type", contentType)
@@ -606,7 +711,8 @@ func (s *Server) handleComplianceReviewsCollection(w http.ResponseWriter, r *htt
 }
 
 func (s *Server) handleListComplianceReviews(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -618,6 +724,9 @@ func (s *Server) handleListComplianceReviews(w http.ResponseWriter, r *http.Requ
 	tenantID, err := uuid.Parse(q.Get("tenant_id"))
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -675,6 +784,9 @@ func (s *Server) handleCreateComplianceReview(w http.ResponseWriter, r *http.Req
 	}
 	if req.TenantID == uuid.Nil {
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, req.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 	if req.ReviewType == "" {
@@ -739,7 +851,8 @@ func (s *Server) handleComplianceReviewsResource(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handleGetComplianceReview(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -755,6 +868,9 @@ func (s *Server) handleGetComplianceReview(w http.ResponseWriter, r *http.Reques
 	}
 	if review == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, review.TenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -789,6 +905,9 @@ func (s *Server) handleCompleteComplianceReview(w http.ResponseWriter, r *http.R
 	}
 	if review == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, review.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -829,6 +948,9 @@ func (s *Server) handleDeleteComplianceReview(w http.ResponseWriter, r *http.Req
 	}
 	if review == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, review.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 

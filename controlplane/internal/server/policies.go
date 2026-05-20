@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -132,15 +133,17 @@ type createPolicyVersionRequest struct {
 func (s *Server) handlePoliciesCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListPolicies(w, r)
+		s.handleListPolicies(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleCreatePolicy(w, r)
+		s.handleCreatePolicy(w, r, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -181,7 +184,7 @@ func (s *Server) handlePolicySubroutes(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid assignment id", http.StatusBadRequest)
 				return
 			}
-			s.handleDeletePolicyAssignment(w, r, assignmentID)
+			s.handleDeletePolicyAssignment(w, r, policyID, assignmentID)
 			return
 		}
 		http.NotFound(w, r)
@@ -204,20 +207,23 @@ func (s *Server) handlePolicySubroutes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePolicyResource(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleGetPolicy(w, r, policyID)
+		s.handleGetPolicy(w, r, policyID, principal)
 	case http.MethodPatch:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleUpdatePolicy(w, r, policyID)
+		s.handleUpdatePolicy(w, r, policyID, principal)
 	case http.MethodDelete:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleDeletePolicy(w, r, policyID)
+		s.handleDeletePolicy(w, r, policyID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch, http.MethodDelete}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -227,11 +233,15 @@ func (s *Server) handlePolicyResource(w http.ResponseWriter, r *http.Request, po
 func (s *Server) handlePolicyVersions(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
 		if s.store == nil {
 			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if _, ok := s.requirePolicyAccess(w, r, principal, policyID, roleViewer, roleOperator, roleAdmin); !ok {
 			return
 		}
 
@@ -273,11 +283,16 @@ func (s *Server) handlePolicyVersions(w http.ResponseWriter, r *http.Request, po
 func (s *Server) handlePromotePolicyVersion(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, versionNumber int) {
 	switch r.Method {
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
 		if s.store == nil {
 			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		policy, ok := s.requirePolicyAccess(w, r, principal, policyID, roleAdmin)
+		if !ok {
 			return
 		}
 		version, err := s.store.PromotePolicyVersion(r.Context(), policyID, versionNumber)
@@ -287,16 +302,14 @@ func (s *Server) handlePromotePolicyVersion(w http.ResponseWriter, r *http.Reque
 		}
 		resp := newPolicyVersionResponse(version)
 		writeJSON(w, http.StatusOK, resp)
-		if policy, err := s.store.GetPolicy(r.Context(), policyID); err == nil && policy != nil {
-			s.emitPolicyUpdated(policy.TenantID, policyID, "promote", policy.Name, versionNumber)
-		}
+		s.emitPolicyUpdated(policy.TenantID, policyID, "promote", policy.Name, versionNumber)
 	default:
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -321,6 +334,9 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 		parsedTenantID, err = uuid.Parse(tenantParam)
 		if err != nil {
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, parsedTenantID, roleViewer, roleOperator, roleAdmin) {
 			return
 		}
 		filter.TenantID = parsedTenantID
@@ -351,7 +367,17 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
+			if node == nil {
+				http.Error(w, "node not found", http.StatusNotFound)
+				return
+			}
 			filter.TenantID = node.TenantID
+		} else if _, err := s.ensureNodeInTenant(r.Context(), filter.TenantID, nodeID); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, filter.TenantID, roleViewer, roleOperator, roleAdmin) {
+			return
 		}
 		effective, err := s.store.GetEffectivePolicies(r.Context(), filter.TenantID, nodeID)
 		if err != nil {
@@ -390,14 +416,9 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	principal, ok := s.authorize(w, r, roleAdmin)
-	if !ok {
 		return
 	}
 
@@ -418,13 +439,18 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var tenantID uuid.UUID
-	if req.TenantID != nil {
-		parsed, err := uuid.Parse(*req.TenantID)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	if req.TenantID == nil || strings.TrimSpace(*req.TenantID) == "" {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(*req.TenantID))
+	if err != nil || parsed == uuid.Nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	tenantID = parsed
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
 	}
 
 	params := storage.CreatePolicyParams{
@@ -452,20 +478,14 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	s.emitPolicyUpdated(created.TenantID, created.ID, "create", created.Name, 0)
 }
 
-func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
+func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	policy, err := s.store.GetPolicy(r.Context(), policyID)
-	if err != nil {
-		s.logger.Error("get policy", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	if policy == nil {
-		http.NotFound(w, r)
+	policy, ok := s.requirePolicyAccess(w, r, principal, policyID, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -473,14 +493,13 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request, policyI
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
+func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	principal, ok := s.authorize(w, r, roleAdmin)
-	if !ok {
+	if _, ok := s.requirePolicyAccess(w, r, principal, policyID, roleAdmin); !ok {
 		return
 	}
 
@@ -557,25 +576,14 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, poli
 	s.emitPolicyUpdated(updated.TenantID, updated.ID, "update", updated.Name, 0)
 }
 
-func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
+func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	principal, ok := s.authorize(w, r, roleAdmin)
+	policy, ok := s.requirePolicyAccess(w, r, principal, policyID, roleAdmin)
 	if !ok {
-		return
-	}
-
-	policy, err := s.store.GetPolicy(r.Context(), policyID)
-	if err != nil {
-		s.logger.Error("get policy for delete", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	if policy == nil {
-		http.NotFound(w, r)
 		return
 	}
 
@@ -595,6 +603,10 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, poli
 func (s *Server) handleCreatePolicyVersion(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if _, ok := s.requirePolicyAccess(w, r, principal, policyID, roleAdmin); !ok {
 		return
 	}
 
@@ -634,6 +646,27 @@ func (s *Server) handleCreatePolicyVersion(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (s *Server) requirePolicyAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, policyID uuid.UUID, roles ...string) (*storage.Policy, bool) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	policy, err := s.store.GetPolicy(r.Context(), policyID)
+	if err != nil {
+		s.logger.Error("get policy for access check", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, false
+	}
+	if policy == nil {
+		http.NotFound(w, r)
+		return nil, false
+	}
+	if !s.requireTenantAccess(w, r, principal, policy.TenantID, roles...) {
+		return nil, false
+	}
+	return policy, true
+}
+
 func newPolicyResponse(p storage.Policy) policyResponse {
 	resp := policyResponse{
 		ID:        p.ID.String(),
@@ -664,28 +697,35 @@ func newPolicyResponse(p storage.Policy) policyResponse {
 // --- Policy Assignment Handlers ---
 
 type createPolicyAssignmentRequest struct {
-	TenantID  string  `json:"tenant_id"`
-	NodeID    *string `json:"node_id"`
-	ExpiresAt *string `json:"expires_at"`
+	TenantID  string         `json:"tenant_id"`
+	NodeID    *string        `json:"node_id"`
+	ScopeType *string        `json:"scope_type"`
+	ScopeID   *string        `json:"scope_id"`
+	Selector  map[string]any `json:"selector"`
+	ExpiresAt *string        `json:"expires_at"`
 }
 
 type policyAssignmentResponse struct {
-	ID         string  `json:"id"`
-	PolicyID   string  `json:"policy_id"`
-	TenantID   string  `json:"tenant_id"`
-	NodeID     *string `json:"node_id,omitempty"`
-	AssignedAt string  `json:"assigned_at"`
-	AssignedBy *string `json:"assigned_by,omitempty"`
-	ExpiresAt  *string `json:"expires_at,omitempty"`
+	ID         string         `json:"id"`
+	PolicyID   string         `json:"policy_id"`
+	TenantID   string         `json:"tenant_id"`
+	NodeID     *string        `json:"node_id,omitempty"`
+	ScopeType  string         `json:"scope_type"`
+	ScopeID    *string        `json:"scope_id,omitempty"`
+	Selector   map[string]any `json:"selector"`
+	AssignedAt string         `json:"assigned_at"`
+	AssignedBy *string        `json:"assigned_by,omitempty"`
+	ExpiresAt  *string        `json:"expires_at,omitempty"`
 }
 
 func (s *Server) handlePolicyAssignmentsCollection(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListPolicyAssignments(w, r, policyID)
+		s.handleListPolicyAssignments(w, r, policyID, principal)
 	case http.MethodPost:
 		principal, ok := s.authorize(w, r, roleAdmin)
 		if !ok {
@@ -715,19 +755,57 @@ func (s *Server) handleCreatePolicyAssignment(w http.ResponseWriter, r *http.Req
 		http.Error(w, "valid tenant_id is required", http.StatusBadRequest)
 		return
 	}
+	policy, ok := s.requirePolicyAccess(w, r, principal, policyID, roleAdmin)
+	if !ok {
+		return
+	}
+	if policy.TenantID != tenantID {
+		http.Error(w, "assignment tenant_id must match policy tenant_id", http.StatusBadRequest)
+		return
+	}
 
 	params := storage.CreatePolicyAssignmentParams{
 		PolicyID: policyID,
 		TenantID: tenantID,
+		Selector: req.Selector,
 	}
 
+	if req.ScopeType != nil {
+		params.ScopeType = strings.TrimSpace(*req.ScopeType)
+	}
+	if req.ScopeID != nil {
+		scopeID, err := uuid.Parse(strings.TrimSpace(*req.ScopeID))
+		if err != nil || scopeID == uuid.Nil {
+			http.Error(w, "invalid scope_id", http.StatusBadRequest)
+			return
+		}
+		params.ScopeID = scopeID
+	}
 	if req.NodeID != nil {
-		nodeID, err := uuid.Parse(*req.NodeID)
+		nodeID, err := uuid.Parse(strings.TrimSpace(*req.NodeID))
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
 			return
 		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, nodeID); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
 		params.NodeID = nodeID
+	}
+	if params.ScopeType == "" && params.NodeID != uuid.Nil {
+		params.ScopeType = storage.AssignmentScopeNode
+		params.ScopeID = params.NodeID
+	}
+	if params.ScopeType == "" {
+		params.ScopeType = storage.AssignmentScopeTenant
+	}
+	if params.ScopeType == storage.AssignmentScopeNode && params.ScopeID == uuid.Nil {
+		params.ScopeID = params.NodeID
+	}
+	if err := s.validatePolicyAssignmentScope(r.Context(), tenantID, params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if req.ExpiresAt != nil {
@@ -762,9 +840,76 @@ func (s *Server) handleCreatePolicyAssignment(w http.ResponseWriter, r *http.Req
 	s.emitPolicyUpdatedTargeted(assignment.TenantID, policyID, "assign", nodeFilter)
 }
 
-func (s *Server) handleListPolicyAssignments(w http.ResponseWriter, r *http.Request, policyID uuid.UUID) {
+func (s *Server) validatePolicyAssignmentScope(ctx context.Context, tenantID uuid.UUID, params storage.CreatePolicyAssignmentParams) error {
+	scopeType := strings.ToLower(strings.TrimSpace(params.ScopeType))
+	switch scopeType {
+	case storage.AssignmentScopeTenant:
+		if params.ScopeID != uuid.Nil || params.NodeID != uuid.Nil || len(params.Selector) > 0 {
+			return errors.New("tenant scope cannot include node_id, scope_id, or selector")
+		}
+	case storage.AssignmentScopeNode:
+		scopeID := params.ScopeID
+		if scopeID == uuid.Nil {
+			scopeID = params.NodeID
+		}
+		if scopeID == uuid.Nil {
+			return errors.New("node scope requires scope_id")
+		}
+		if _, err := s.ensureNodeInTenant(ctx, tenantID, scopeID); err != nil {
+			return err
+		}
+	case storage.AssignmentScopeCluster:
+		if params.ScopeID == uuid.Nil {
+			return errors.New("cluster scope requires scope_id")
+		}
+		cluster, err := s.store.GetClusterByID(ctx, params.ScopeID)
+		if err != nil {
+			return fmt.Errorf("lookup cluster scope: %w", err)
+		}
+		if cluster == nil || cluster.TenantID != tenantID {
+			return errors.New("cluster scope is outside assignment tenant")
+		}
+	case storage.AssignmentScopeHypervisorHost:
+		if params.ScopeID == uuid.Nil {
+			return errors.New("hypervisor_host scope requires scope_id")
+		}
+		host, err := s.store.GetHypervisorHost(ctx, params.ScopeID)
+		if err != nil {
+			return fmt.Errorf("lookup hypervisor scope: %w", err)
+		}
+		if host == nil || host.TenantID != tenantID {
+			return errors.New("hypervisor_host scope is outside assignment tenant")
+		}
+	case storage.AssignmentScopeEnrollmentToken:
+		if params.ScopeID == uuid.Nil {
+			return errors.New("enrollment_token scope requires scope_id")
+		}
+		token, err := s.store.GetEnrollmentToken(ctx, params.ScopeID)
+		if err != nil {
+			return fmt.Errorf("lookup enrollment token scope: %w", err)
+		}
+		if token == nil || token.TenantID != tenantID {
+			return errors.New("enrollment_token scope is outside assignment tenant")
+		}
+	case storage.AssignmentScopeLabelSelector:
+		if params.ScopeID != uuid.Nil || params.NodeID != uuid.Nil {
+			return errors.New("label_selector scope cannot include node_id or scope_id")
+		}
+		if len(params.Selector) == 0 {
+			return errors.New("label_selector scope requires selector")
+		}
+	default:
+		return fmt.Errorf("unsupported scope_type %q", params.ScopeType)
+	}
+	return nil
+}
+
+func (s *Server) handleListPolicyAssignments(w http.ResponseWriter, r *http.Request, policyID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if _, ok := s.requirePolicyAccess(w, r, principal, policyID, roleViewer, roleOperator, roleAdmin); !ok {
 		return
 	}
 
@@ -792,19 +937,34 @@ func (s *Server) handleListPolicyAssignments(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func (s *Server) handleDeletePolicyAssignment(w http.ResponseWriter, r *http.Request, assignmentID uuid.UUID) {
+func (s *Server) handleDeletePolicyAssignment(w http.ResponseWriter, r *http.Request, policyID, assignmentID uuid.UUID) {
 	if r.Method != http.MethodDelete {
 		w.Header().Set("Allow", http.MethodDelete)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
 		return
 	}
 
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	assignment, err := s.store.GetPolicyAssignment(r.Context(), assignmentID)
+	if err != nil {
+		s.logger.Error("get policy assignment", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if assignment == nil || assignment.PolicyID != policyID {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, assignment.TenantID, roleAdmin) {
 		return
 	}
 
@@ -815,6 +975,12 @@ func (s *Server) handleDeletePolicyAssignment(w http.ResponseWriter, r *http.Req
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	var nodeFilter *uuid.UUID
+	if assignment.NodeID != uuid.Nil {
+		n := assignment.NodeID
+		nodeFilter = &n
+	}
+	s.emitPolicyUpdatedTargeted(assignment.TenantID, policyID, "unassign", nodeFilter)
 }
 
 func newPolicyAssignmentResponse(a *storage.PolicyAssignment) policyAssignmentResponse {
@@ -822,11 +988,27 @@ func newPolicyAssignmentResponse(a *storage.PolicyAssignment) policyAssignmentRe
 		ID:         a.ID.String(),
 		PolicyID:   a.PolicyID.String(),
 		TenantID:   a.TenantID.String(),
+		ScopeType:  a.ScopeType,
+		Selector:   a.Selector,
 		AssignedAt: formatTime(a.AssignedAt),
+	}
+	if resp.ScopeType == "" {
+		if a.NodeID != uuid.Nil {
+			resp.ScopeType = storage.AssignmentScopeNode
+		} else {
+			resp.ScopeType = storage.AssignmentScopeTenant
+		}
+	}
+	if resp.Selector == nil {
+		resp.Selector = map[string]any{}
 	}
 	if a.NodeID != uuid.Nil {
 		nid := a.NodeID.String()
 		resp.NodeID = &nid
+	}
+	if a.ScopeID != uuid.Nil {
+		sid := a.ScopeID.String()
+		resp.ScopeID = &sid
 	}
 	if a.AssignedBy != nil {
 		aid := a.AssignedBy.String()

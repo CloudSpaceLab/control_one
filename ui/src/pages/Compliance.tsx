@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Download, FileText, Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -20,14 +20,23 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { useComplianceResults, useComplianceSummary, useComplianceTrends, useControlPosture } from '../hooks/useCompliance';
 import { ControlPosturePanel } from '../components/compliance/ControlPosturePanel';
+import {
+  ScopePicker,
+  buildScopedAssignmentPayload,
+  describeAssignmentScope,
+  type ScopePickerValue,
+} from '../components/compliance/ScopePicker';
+import { CoverageTruthList } from '../components/coverage/CoverageTruth';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
 import { useApiClient } from '../hooks/useApiClient';
+import { useCoverageMatrix } from '../hooks/useCoverageMatrix';
 import { useToast } from '../providers/ToastProvider';
 import { useTenant } from '../providers/TenantProvider';
 import type {
   ComplianceResult,
   Policy,
+  PolicyAssignment,
   PolicyVersion,
   ComplianceEvaluateResult,
 } from '../lib/api';
@@ -202,6 +211,7 @@ export function Compliance(): JSX.Element {
 
 function PostureTab(): JSX.Element {
   const client = useApiClient();
+  const { currentTenantId } = useTenant();
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [selectedNode, setSelectedNode] = useState<string | undefined>(undefined);
   const [severityFilter, setSeverityFilter] = useState<string>('');
@@ -213,12 +223,21 @@ function PostureTab(): JSX.Element {
   const [postureFramework, setPostureFramework] = useState<string>('SOC2');
 
   const { data: tenants } = useTenants();
-  const { data: nodes } = useNodes({ tenantId: selectedTenant, limit: 1000 });
+  const effectiveTenantId = selectedTenant ?? currentTenantId ?? undefined;
+  const { data: nodes } = useNodes({ tenantId: effectiveTenantId, limit: 1000 });
 
   const { data: postureData, loading: postureLoading, error: postureError } = useControlPosture({
     framework: postureFramework,
-    tenant_id: selectedTenant,
+    tenant_id: effectiveTenantId,
   });
+  const coverageTenantId = effectiveTenantId;
+  const {
+    data: coverageMatrix,
+    loading: coverageLoading,
+    error: coverageError,
+    unavailable: coverageUnavailable,
+    reload: reloadCoverage,
+  } = useCoverageMatrix({ tenantId: coverageTenantId });
 
   useEffect(() => {
     client.listComplianceFrameworks()
@@ -227,14 +246,14 @@ function PostureTab(): JSX.Element {
   }, [client]);
 
   const { data: summary, loading: summaryLoading, error: summaryError, reload: reloadSummary } =
-    useComplianceSummary({ tenant_id: selectedTenant, node_id: selectedNode });
+    useComplianceSummary({ tenant_id: effectiveTenantId, node_id: selectedNode });
 
   const { data: trends, loading: trendsLoading } =
-    useComplianceTrends({ tenant_id: selectedTenant, node_id: selectedNode, days: 30 });
+    useComplianceTrends({ tenant_id: effectiveTenantId, node_id: selectedNode, days: 30 });
 
   const { data: results, loading: resultsLoading, error: resultsError, pagination, reload: reloadResults } =
     useComplianceResults({
-      tenant_id: selectedTenant,
+      tenant_id: effectiveTenantId,
       node_id: selectedNode,
       severity: severityFilter || undefined,
       framework: frameworkFilter || undefined,
@@ -258,7 +277,7 @@ function PostureTab(): JSX.Element {
       });
   }, [summary]);
 
-  const handleRefresh = () => { reloadSummary(); reloadResults(); };
+  const handleRefresh = () => { reloadSummary(); reloadResults(); reloadCoverage(); };
 
   const trendChartData = useMemo(() => {
     if (!trends.length) return null;
@@ -365,16 +384,26 @@ function PostureTab(): JSX.Element {
         </Panel>
       )}
 
+      <Panel padding="md" eyebrow="COVERAGE TRUTH" title="Supported evidence paths">
+        <CoverageTruthList
+          rows={coverageMatrix?.rows ?? []}
+          loading={coverageLoading}
+          error={coverageError}
+          unavailable={coverageUnavailable}
+          generatedAt={coverageMatrix?.generated_at}
+        />
+      </Panel>
+
       <Panel padding="md" eyebrow="FILTERS" title="Refine">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <FilterSelect label="Tenant" value={selectedTenant ?? ''}
             onChange={(v) => { setSelectedTenant(v || undefined); setSelectedNode(undefined); setOffset(0); }}
-            options={[{ label: 'All tenants', value: '' }, ...tenants.map((t) => ({ label: t.name, value: t.id }))]}
+            options={[{ label: 'Current tenant', value: '' }, ...tenants.map((t) => ({ label: t.name, value: t.id }))]}
           />
           <FilterSelect label="Node" value={selectedNode ?? ''}
             onChange={(v) => { setSelectedNode(v || undefined); setOffset(0); }}
             options={[{ label: 'All nodes', value: '' }, ...nodes.map((n) => ({ label: n.hostname, value: n.id }))]}
-            disabled={!selectedTenant}
+            disabled={!effectiveTenantId}
           />
           <FilterSelect label="Severity" value={severityFilter}
             onChange={(v) => { setSeverityFilter(v); setOffset(0); }}
@@ -435,7 +464,7 @@ function PostureTab(): JSX.Element {
         posture={postureData}
         loading={postureLoading}
         error={postureError}
-        tenantSelected={Boolean(selectedTenant)}
+        tenantSelected={Boolean(effectiveTenantId)}
       />
 
       <Panel padding="sm" tone="inset" eyebrow={`RESULTS · ${results.length} of ${pagination.total}`} title="Compliance results">
@@ -484,8 +513,24 @@ function PoliciesTab(): JSX.Element {
   const [createDesc, setCreateDesc] = useState('');
   const [createRuleType, setCreateRuleType] = useState('port_check');
   const [createTenantId, setCreateTenantId] = useState('');
+  const [createScope, setCreateScope] = useState<ScopePickerValue>({ scope_type: 'tenant' });
   const [createEnabled, setCreateEnabled] = useState(true);
   const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (!createTenantId && currentTenantId) {
+      setCreateTenantId(currentTenantId);
+    }
+  }, [createTenantId, currentTenantId]);
+
+  useEffect(() => {
+    setCreateScope((previous) => {
+      if (previous.scope_type === 'tenant' || previous.scope_type === 'label_selector') {
+        return previous;
+      }
+      return { scope_type: previous.scope_type };
+    });
+  }, [createTenantId]);
 
   // Expanded policy (versions + create version)
   const [expandedPolicyId, setExpandedPolicyId] = useState<string | null>(null);
@@ -549,18 +594,38 @@ function PoliciesTab(): JSX.Element {
 
   const handleCreate = async () => {
     if (!createName.trim()) { showToast('Name is required', 'error'); return; }
+    if (!createTenantId) { showToast('Tenant is required', 'error'); return; }
+    const scopedAssignment = buildScopedAssignmentPayload(createTenantId, createScope);
+    if (!scopedAssignment.payload) {
+      showToast(scopedAssignment.error ?? 'Assignment scope is invalid', 'error');
+      return;
+    }
     setCreating(true);
     try {
       const policy = await api.createPolicy({
         name: createName.trim(),
         description: createDesc.trim() || undefined,
         rule_type: createRuleType,
-        tenant_id: createTenantId || undefined,
+        tenant_id: createTenantId,
         enabled: createEnabled,
       });
-      showToast(`Policy "${policy.name}" created`, 'success');
+      try {
+        await api.createPolicyAssignment(policy.id, scopedAssignment.payload);
+        showToast(
+          `Policy "${policy.name}" created and assigned to ${describeAssignmentScope(scopedAssignment.payload)}`,
+          'success',
+        );
+      } catch (assignmentErr) {
+        showToast(
+          assignmentErr instanceof Error
+            ? `Policy created, but assignment failed: ${assignmentErr.message}`
+            : 'Policy created, but assignment failed',
+          'error',
+        );
+      }
       setCreateName(''); setCreateDesc(''); setCreateRuleType('port_check');
-      setCreateTenantId(''); setShowCreate(false);
+      setCreateScope({ scope_type: 'tenant' });
+      setCreateTenantId(currentTenantId ?? ''); setShowCreate(false);
       await loadPolicies();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to create policy', 'error');
@@ -752,7 +817,7 @@ function PoliciesTab(): JSX.Element {
         actions={
           <div className="flex items-center gap-2">
             <SelectField value={tenantFilter} onChange={(e) => setTenantFilter(e.target.value)}>
-              <option value="">All tenants</option>
+              <option value="">Current tenant</option>
               {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </SelectField>
             <Button variant="secondary" size="sm" onClick={loadPolicies} disabled={policiesLoading}>
@@ -767,7 +832,7 @@ function PoliciesTab(): JSX.Element {
         {/* Create policy form */}
         {showCreate && (
           <div className="rounded-md border border-brand-500/30 bg-brand-500/5 p-4">
-            <p className="mb-3 font-mono text-[0.65rem] uppercase tracking-wider text-brand-400">New policy</p>
+            <p className="mb-3 font-mono text-[0.65rem] uppercase tracking-wider text-brand-400">New tenant policy</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="cp-name">Name</Label>
@@ -782,17 +847,26 @@ function PoliciesTab(): JSX.Element {
               }}>
                 {RULE_TYPES.map((rt) => <option key={rt} value={rt}>{rt}</option>)}
               </SelectField>
-              <SelectField id="cp-tenant" label="Tenant (optional)" value={createTenantId} onChange={(e) => setCreateTenantId(e.target.value)}>
-                <option value="">Global (all tenants)</option>
+              <SelectField id="cp-tenant" label="Tenant" value={createTenantId} onChange={(e) => setCreateTenantId(e.target.value)}>
+                <option value="" disabled>Select tenant</option>
                 {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </SelectField>
+            </div>
+            <div className="mt-3">
+              <ScopePicker
+                tenantId={createTenantId}
+                value={createScope}
+                onChange={setCreateScope}
+                disabled={creating || !createTenantId}
+                idPrefix="compliance-policy-create"
+              />
             </div>
             <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
               <input type="checkbox" checked={createEnabled} onChange={(e) => setCreateEnabled(e.target.checked)} className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer" />
               Enable immediately
             </label>
             <div className="mt-3 flex gap-2">
-              <Button variant="primary" size="sm" onClick={handleCreate} disabled={creating}>
+              <Button variant="primary" size="sm" onClick={handleCreate} disabled={creating || !createTenantId}>
                 {creating ? 'Creating…' : 'Create policy'}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setShowCreate(false)}>Cancel</Button>
@@ -891,7 +965,61 @@ function PolicyRow({
   onCreateVersion,
   onPromoteVersion,
 }: PolicyRowProps): JSX.Element {
+  const api = useApiClient();
+  const { showToast } = useToast();
   const tenantName = tenants.find((t) => t.id === policy.tenant_id)?.name;
+  const policyTenantId = policy.tenant_id ?? '';
+  const [assignments, setAssignments] = useState<PolicyAssignment[]>([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [assignmentScope, setAssignmentScope] = useState<ScopePickerValue>({ scope_type: 'tenant' });
+  const [creatingAssignment, setCreatingAssignment] = useState(false);
+
+  const loadAssignments = useCallback(async () => {
+    setAssignmentsLoading(true);
+    try {
+      const response = await api.listPolicyAssignments(policy.id);
+      setAssignments(response.items ?? []);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to load policy assignments', 'error');
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  }, [api, policy.id, showToast]);
+
+  useEffect(() => {
+    if (expanded) {
+      void loadAssignments();
+    }
+  }, [expanded, loadAssignments]);
+
+  const handleCreateAssignment = async () => {
+    const scopedAssignment = buildScopedAssignmentPayload(policyTenantId, assignmentScope);
+    if (!scopedAssignment.payload) {
+      showToast(scopedAssignment.error ?? 'Assignment scope is invalid', 'error');
+      return;
+    }
+    setCreatingAssignment(true);
+    try {
+      await api.createPolicyAssignment(policy.id, scopedAssignment.payload);
+      setAssignmentScope({ scope_type: 'tenant' });
+      await loadAssignments();
+      showToast(`Assignment added for ${describeAssignmentScope(scopedAssignment.payload)}`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to add assignment', 'error');
+    } finally {
+      setCreatingAssignment(false);
+    }
+  };
+
+  const handleDeleteAssignment = async (assignmentId: string) => {
+    try {
+      await api.deletePolicyAssignment(policy.id, assignmentId);
+      setAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
+      showToast('Assignment removed', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to remove assignment', 'error');
+    }
+  };
 
   return (
     <div className="rounded-md border border-border-subtle bg-surface">
@@ -930,6 +1058,72 @@ function PolicyRow({
       {/* Expanded: versions + create version */}
       {expanded && (
         <div className="border-t border-border-subtle px-4 py-3 flex flex-col gap-3">
+          <div className="flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Assignments</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => void loadAssignments()}
+                disabled={assignmentsLoading}
+              >
+                <RefreshCw className="h-3 w-3" />
+              </Button>
+            </div>
+
+            {assignmentsLoading ? <p className="text-xs text-text-muted">Loading assignments...</p> : null}
+            {!assignmentsLoading && assignments.length === 0 ? (
+              <p className="text-xs text-text-muted">No assignments.</p>
+            ) : null}
+            {!assignmentsLoading && assignments.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {assignments.map((assignment) => (
+                  <div
+                    key={assignment.id}
+                    className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{describeAssignmentScope(assignment)}</p>
+                      <p className="font-mono text-[0.65rem] text-text-muted">
+                        {formatDate(assignment.assigned_at)}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-state-critical hover:text-state-critical"
+                      onClick={() => void handleDeleteAssignment(assignment.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+              <ScopePicker
+                tenantId={policyTenantId}
+                value={assignmentScope}
+                onChange={setAssignmentScope}
+                disabled={creatingAssignment || !policyTenantId}
+                idPrefix={`policy-${policy.id}`}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void handleCreateAssignment()}
+                disabled={creatingAssignment || !policyTenantId}
+              >
+                {creatingAssignment ? 'Adding...' : 'Add assignment'}
+              </Button>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between">
             <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Versions</p>
             <Button type="button" variant="secondary" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={onOpenCreateVersion}>

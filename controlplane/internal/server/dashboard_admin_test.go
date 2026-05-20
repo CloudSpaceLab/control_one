@@ -1,10 +1,12 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -93,6 +95,40 @@ func TestAdminIngestThroughputRoleGate(t *testing.T) {
 	})
 }
 
+func TestAdminIngestBacklogRoleGate(t *testing.T) {
+	t.Run("admin sees durable replay backlog", func(t *testing.T) {
+		srv, store := dashboardAdminHarness(t, "admin", "admin-token")
+		lastErr := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+		store.eventIngestBacklog = storage.EventIngestBacklogSummary{
+			PendingBatches:   2,
+			PendingRows:      42,
+			DueBatches:       1,
+			RetryingBatches:  2,
+			MaxRetryCount:    3,
+			LastErrorAt:      sql.NullTime{Time: lastErr, Valid: true},
+			LastErrorMessage: sql.NullString{String: "stream load timeout", Valid: true},
+		}
+		rec := dashboardCall(t, srv, "admin-token", http.MethodGet, "/api/v1/admin/ingest/backlog")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp ingestBacklogResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Status != "down" || resp.PendingBatches != 2 || resp.PendingRows != 42 || resp.LastErrorMessage == "" {
+			t.Fatalf("unexpected backlog response: %+v", resp)
+		}
+	})
+	t.Run("viewer is denied", func(t *testing.T) {
+		srv, _ := dashboardAdminHarness(t, "viewer", "viewer-token")
+		rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/admin/ingest/backlog")
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 got %d", rec.Code)
+		}
+	})
+}
+
 func TestAdminTenantsActivityRoleGate(t *testing.T) {
 	t.Run("admin can read tenant activity", func(t *testing.T) {
 		srv, _ := dashboardAdminHarness(t, "admin", "admin-token")
@@ -171,7 +207,7 @@ func TestAdminCapacityRoleGate(t *testing.T) {
 func TestRiskScoreHistoryRoleGate(t *testing.T) {
 	t.Run("viewer can read history", func(t *testing.T) {
 		srv, _ := dashboardAdminHarness(t, "viewer", "viewer-token")
-		rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/dashboard/metrics/risk-score/history?days=7")
+		rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/dashboard/metrics/risk-score/history?days=7&tenant_id="+uuid.New().String())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 		}
@@ -197,7 +233,7 @@ func TestRiskScoreHistoryRoleGate(t *testing.T) {
 func TestRemediationVelocityHistoryRoleGate(t *testing.T) {
 	t.Run("viewer can read history", func(t *testing.T) {
 		srv, _ := dashboardAdminHarness(t, "viewer", "viewer-token")
-		rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/dashboard/metrics/remediation-velocity/history?days=14")
+		rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/dashboard/metrics/remediation-velocity/history?days=14&tenant_id="+uuid.New().String())
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 		}
@@ -213,7 +249,7 @@ func TestRemediationVelocityHistoryRoleGate(t *testing.T) {
 
 func TestComplianceByFrameworkShape(t *testing.T) {
 	srv, _ := dashboardAdminHarness(t, "viewer", "viewer-token")
-	rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/dashboard/metrics/compliance/by-framework")
+	rec := dashboardCall(t, srv, "viewer-token", http.MethodGet, "/api/v1/dashboard/metrics/compliance/by-framework?tenant_id="+uuid.New().String())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 	}
