@@ -100,7 +100,7 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
-            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx'
+            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris'
           "
 
       - name: Upload Go binaries
@@ -133,10 +133,14 @@ jobs:
           scp -P "${SSH_PORT:-22}" \
             deploy/Dockerfile.controlplane.prebuilt \
             deploy/Dockerfile.console.prebuilt \
+            deploy/docker-compose.yaml \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/"
           scp -P "${SSH_PORT:-22}" \
             deploy/nginx/console.conf \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/nginx/console.conf"
+          scp -P "${SSH_PORT:-22}" \
+            deploy/doris/be_custom.conf \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/doris/be_custom.conf"
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
             set -e
             rm -rf '$DEPLOY_UI_DIR'

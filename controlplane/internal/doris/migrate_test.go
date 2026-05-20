@@ -50,6 +50,29 @@ func TestParsePositiveInt(t *testing.T) {
 	}
 }
 
+func TestRewriteAddColumnIfNotExists(t *testing.T) {
+	table, column, rewritten, ok := rewriteAddColumnIfNotExists(
+		"ALTER TABLE events ADD COLUMN IF NOT EXISTS schema_version SMALLINT AFTER ts",
+	)
+	if !ok {
+		t.Fatal("expected migration helper to recognize ADD COLUMN IF NOT EXISTS")
+	}
+	if table != "events" || column != "schema_version" {
+		t.Fatalf("unexpected target: table=%q column=%q", table, column)
+	}
+	want := "ALTER TABLE events ADD COLUMN schema_version SMALLINT AFTER ts"
+	if rewritten != want {
+		t.Fatalf("rewritten statement mismatch\nwant: %s\n got: %s", want, rewritten)
+	}
+}
+
+func TestRewriteAddColumnIfNotExistsIgnoresOtherStatements(t *testing.T) {
+	_, _, _, ok := rewriteAddColumnIfNotExists("CREATE TABLE events (tenant_id VARCHAR(36))")
+	if ok {
+		t.Fatal("unexpected rewrite for non-ALTER statement")
+	}
+}
+
 func TestEventsPipelineMigrationDoesNotBuildInlineRollup(t *testing.T) {
 	raw, err := os.ReadFile("migrations/0001_events_pipeline.up.sql")
 	if err != nil {
