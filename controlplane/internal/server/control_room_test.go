@@ -203,6 +203,55 @@ func TestControlRoomTopIncidentsDedupesVisibleDuplicates(t *testing.T) {
 	}
 }
 
+func TestControlRoomIPBehaviorDedupesSameSourceCategory(t *testing.T) {
+	tenantID := uuid.New()
+	older := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	newer := older.Add(5 * time.Minute)
+	findings := []storage.IPBehaviorFinding{
+		{
+			ID:          uuid.New(),
+			TenantID:    tenantID,
+			SourceIP:    sql.NullString{String: "78.209.210.52/32", Valid: true},
+			CountryCode: "IT",
+			Category:    "scanner_probe",
+			Severity:    "medium",
+			Score:       85,
+			LastSeenAt:  newer,
+		},
+		{
+			ID:          uuid.New(),
+			TenantID:    tenantID,
+			SourceIP:    sql.NullString{String: "78.209.210.52/32", Valid: true},
+			CountryCode: "IT",
+			Category:    "scanner_probe",
+			Severity:    "medium",
+			Score:       55,
+			LastSeenAt:  older,
+		},
+		{
+			ID:          uuid.New(),
+			TenantID:    tenantID,
+			SourceIP:    sql.NullString{String: "78.209.210.52/32", Valid: true},
+			CountryCode: "IT",
+			Category:    "exfiltration_risk",
+			Severity:    "critical",
+			Score:       100,
+			LastSeenAt:  newer,
+		},
+	}
+
+	got := newControlRoomIPBehavior(nil, findings)
+	if len(got.Findings) != 2 {
+		t.Fatalf("expected overview to keep one finding per source/category, got %#v", got.Findings)
+	}
+	if got.Findings[0].Category != "exfiltration_risk" || got.Findings[0].Score != 100 {
+		t.Fatalf("expected highest risk category first, got %#v", got.Findings)
+	}
+	if got.Findings[1].Category != "scanner_probe" || got.Findings[1].Score != 85 {
+		t.Fatalf("expected duplicate scanner probes to keep highest confidence row, got %#v", got.Findings)
+	}
+}
+
 func TestIsPublicListenerExcludesLoopback(t *testing.T) {
 	public := []string{"", "0.0.0.0", "0.0.0.0:443", "::", "[::]", "[::]:443"}
 	for _, addr := range public {
