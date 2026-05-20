@@ -150,7 +150,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3000m
+          memory: 3800m
 
   console:
     image: controlone/console:${TAG:-latest}
