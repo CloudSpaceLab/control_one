@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -15,6 +15,10 @@ class ResizeObserverMock {
 
 vi.stubGlobal('ResizeObserver', ResizeObserverMock);
 window.HTMLElement.prototype.scrollIntoView = vi.fn();
+
+afterEach(() => {
+  delete (window as Window & { __C1_FLAGS__?: Record<string, boolean> }).__C1_FLAGS__;
+});
 
 vi.mock('@/providers/TenantProvider', () => ({
   useTenant: () => ({
@@ -120,6 +124,19 @@ describe('navigation scope', () => {
     for (const label of DRILLDOWN_ONLY_LABELS) {
       expect(within(nav).queryByText(label)).not.toBeInTheDocument();
     }
+  });
+
+  it('shows Ask CISO in the sidebar only when the AI ask flag is enabled', () => {
+    (window as Window & { __C1_FLAGS__?: Record<string, boolean> }).__C1_FLAGS__ = { ai_ask: true };
+
+    render(
+      <MemoryRouter>
+        <Sidebar userRoles={['admin']} />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation');
+    expect(within(nav).getByRole('link', { name: /ask ciso/i })).toHaveAttribute('href', '/ask');
   });
 
   it('keeps global search quick navigation aligned with the primary IA', async () => {

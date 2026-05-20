@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, ClipboardList, Send, Sparkles } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Eyebrow,
@@ -16,7 +17,7 @@ const SAMPLE_QUESTIONS = [
   'What new services appeared this week?',
   'Which nodes have public-facing HTTP on non-standard ports?',
   "Summarize this fleet's posture for a board update.",
-  'Which nodes are reporting calibrating health right now?',
+  'Which nodes need health attention right now?',
 ];
 
 interface Turn {
@@ -31,7 +32,8 @@ interface Turn {
 export function Ask(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
-  const [question, setQuestion] = useState('');
+  const [searchParams] = useSearchParams();
+  const [question, setQuestion] = useState(() => searchParams.get('q') ?? '');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
