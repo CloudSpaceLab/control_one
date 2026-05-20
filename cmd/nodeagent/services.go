@@ -278,20 +278,6 @@ func serviceKindFor(process, binaryPath string, port int) string {
 	return "unknown"
 }
 
-// startServiceCollector launches the periodic listening-service scan loop.
-// It is independent of the heartbeat: a failure here must not block liveness
-// signalling, and a slow scan must not delay the next heartbeat.
-func startServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration) {
-	if client == nil || nodeID == "" {
-		log.Warn("service collector not started: missing client or node id")
-		return
-	}
-	if interval <= 0 {
-		interval = 10 * time.Minute
-	}
-	go runServiceCollector(ctx, client, log, nodeID, interval)
-}
-
 func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration) {
 	logger := log.Named("services")
 	logger.Info("starting service collector",

@@ -486,10 +486,6 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 	return s.fanOutEventsWithBatch(ctx, uuid.Nil, tenantID, nodeID, events)
 }
 
-func (s *Server) fanOutEventIngestBatch(ctx context.Context, batchID, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
-	return s.fanOutEventsWithBatch(ctx, batchID, tenantID, nodeID, events)
-}
-
 func (s *Server) fanOutEventsWithBatch(ctx context.Context, batchID, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
 	fanoutEvents, anomalies := s.prepareEventFanout(ctx, tenantID, nodeID, events)
 	s.applyLocalEventFanout(ctx, tenantID, nodeID, fanoutEvents, anomalies)

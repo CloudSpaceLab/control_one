@@ -1598,7 +1598,7 @@ func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.
 			continue
 		}
 		if filter.TenantID != uuid.Nil {
-			if tpl.TenantID != filter.TenantID && !(filter.IncludeGlobal && tpl.TenantID == uuid.Nil) {
+			if !(tpl.TenantID == filter.TenantID || filter.IncludeGlobal && tpl.TenantID == uuid.Nil) {
 				continue
 			}
 		}

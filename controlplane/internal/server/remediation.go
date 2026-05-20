@@ -436,10 +436,7 @@ func remediationDescriptorFromScript(script storage.RemediationScript) remediati
 	if len(evidenceRequired) == 0 {
 		evidenceRequired = []string{"rule_id", "script_checksum", "node_id", "operator_reason", "completion_receipt"}
 	}
-	requiresApproval := true
-	if safetyClass == "read_only" && !boolFromMap(script.Metadata, "requires_approval") {
-		requiresApproval = false
-	}
+	requiresApproval := safetyClass != "read_only" || boolFromMap(script.Metadata, "requires_approval")
 	executionPolicy := "proposal_only_for_ai_operator_policy_gated"
 	if !script.Enabled {
 		executionPolicy = "disabled"

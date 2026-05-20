@@ -199,10 +199,6 @@ func applyNodeIsolationLabels(labels map[string]any, posture nodeIsolationPostur
 	return next
 }
 
-func nodeNetworkPolicyFromPosture(posture nodeIsolationPosture) *nodeNetworkPolicy {
-	return newNodeNetworkPolicy(posture, time.Now().UTC(), []string{"node.labels"}, nil)
-}
-
 func formatOptionalTime(value *time.Time) string {
 	if value == nil {
 		return ""

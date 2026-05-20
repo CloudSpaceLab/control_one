@@ -275,28 +275,6 @@ func newBehavioralAnomalyResponse(row storage.IPBehaviorFinding) behavioralAnoma
 	}
 }
 
-func optionalTenantNodeQuery(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
-	var tenantID uuid.UUID
-	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return uuid.Nil, uuid.Nil, false
-		}
-		tenantID = parsed
-	}
-	var nodeID uuid.UUID
-	if raw := strings.TrimSpace(r.URL.Query().Get("node_id")); raw != "" {
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
-			http.Error(w, "invalid node_id", http.StatusBadRequest)
-			return uuid.Nil, uuid.Nil, false
-		}
-		nodeID = parsed
-	}
-	return tenantID, nodeID, true
-}
-
 func (s *Server) tenantNodeQueryWithAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, roles ...string) (uuid.UUID, uuid.UUID, bool) {
 	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roles...)
 	if !ok {
