@@ -1,6 +1,10 @@
 package doris
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestSplitStatementsBasic(t *testing.T) {
 	in := "CREATE TABLE x (a INT);\nINSERT INTO x VALUES (1);\n"
@@ -43,5 +47,25 @@ func TestParsePositiveInt(t *testing.T) {
 	}
 	if _, err := parsePositiveInt("1a"); err == nil {
 		t.Fatal("1a should reject")
+	}
+}
+
+func TestEventsPipelineMaterializedViewIsDoris21Compatible(t *testing.T) {
+	raw, err := os.ReadFile("migrations/0001_events_pipeline.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := string(raw)
+	if strings.Contains(sql, "date_trunc('hour', ts)") {
+		t.Fatalf("Doris 2.1 requires date_trunc(datetime, unit), not date_trunc(unit, datetime)")
+	}
+	for _, want := range []string{
+		"date_trunc(ts, 'hour') AS hour_ts",
+		"DISTRIBUTED BY HASH (tenant_id) BUCKETS 4",
+		`"replication_num" = "1"`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("migration missing %q", want)
+		}
 	}
 }

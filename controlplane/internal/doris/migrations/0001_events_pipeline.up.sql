@@ -193,11 +193,16 @@ PROPERTIES (
   "dynamic_partition.buckets"  = "8"
 );
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS events_per_hour_mv AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS events_per_hour_mv
+DISTRIBUTED BY HASH (tenant_id) BUCKETS 4
+PROPERTIES (
+  "replication_num" = "1"
+)
+AS
   SELECT tenant_id,
          node_id,
          event_type,
-         date_trunc('hour', ts) AS hour_ts,
+         date_trunc(ts, 'hour') AS hour_ts,
          COUNT(*)              AS cnt,
          MAX(severity)         AS sev_max,
          SUM(bytes_in)         AS bytes_in_sum,
