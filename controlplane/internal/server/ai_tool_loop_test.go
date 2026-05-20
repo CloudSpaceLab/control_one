@@ -158,6 +158,21 @@ func TestAIAskReturnsSourceCitationsFromToolPayload(t *testing.T) {
 	}
 }
 
+func TestSourceCitationIDsIncludeDorisTimelineTables(t *testing.T) {
+	got := sourceCitationIDsFromToolPayload(map[string]any{
+		"items": []any{
+			map[string]any{"citation_id": "db_queries:dbq-123"},
+			map[string]any{"source_record_id": "process_connections:conn-456"},
+		},
+	})
+	if !containsString(got, "db_queries:dbq-123") {
+		t.Fatalf("expected db query citation, got %+v", got)
+	}
+	if !containsString(got, "process_connections:conn-456") {
+		t.Fatalf("expected process connection citation, got %+v", got)
+	}
+}
+
 func TestAIAskToolRejectsCrossTenantNodeEvidence(t *testing.T) {
 	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()

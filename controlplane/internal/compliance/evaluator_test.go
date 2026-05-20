@@ -146,9 +146,9 @@ func TestJSONDSLEvaluator_Operators(t *testing.T) {
 			wantPass:   false,
 		},
 		{
-			name:       "empty_conditions_pass",
+			name:       "empty_conditions_unsupported",
 			definition: `{"conditions":[]}`,
-			wantPass:   true,
+			wantPass:   false,
 		},
 		{
 			name:       "missing_field_eq_fails",
@@ -156,9 +156,14 @@ func TestJSONDSLEvaluator_Operators(t *testing.T) {
 			wantPass:   false,
 		},
 		{
-			name:       "missing_field_neq_passes",
+			name:       "missing_field_neq_fails_unsupported",
 			definition: `{"conditions":[{"field":"facts.nonexistent","op":"neq","value":"x"}]}`,
-			wantPass:   true,
+			wantPass:   false,
+		},
+		{
+			name:       "missing_field_not_in_fails_unsupported",
+			definition: `{"conditions":[{"field":"facts.nonexistent","op":"not_in","value":["x"]}]}`,
+			wantPass:   false,
 		},
 		{
 			name:       "unknown_op_errors",
@@ -199,6 +204,32 @@ func TestJSONDSLEvaluator_Operators(t *testing.T) {
 				t.Fatalf("expected passed=%v, got %v (details: %s)", tt.wantPass, result.Passed, result.Details)
 			}
 		})
+	}
+}
+
+func TestJSONDSLEvaluator_MissingObservedFactIsUnsupported(t *testing.T) {
+	eval := NewJSONDSLEvaluator()
+	result, err := eval.Evaluate(context.Background(), RuleDefinition{
+		ID:         "missing-negative",
+		RuleType:   "json-dsl",
+		Definition: `{"description":"SSH root login must not be enabled","conditions":[{"field":"facts.ssh.root_login","op":"neq","value":"yes"}]}`,
+		Severity:   "medium",
+	}, EvalInput{
+		NodeID:   uuid.New(),
+		TenantID: uuid.New(),
+		Facts:    map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if result.Passed {
+		t.Fatal("missing telemetry must not pass a negative compliance assertion")
+	}
+	if result.Outcome != "unsupported" {
+		t.Fatalf("outcome = %q, want unsupported", result.Outcome)
+	}
+	if result.Evidence["outcome"] != "unsupported" || result.Evidence["unsupported_condition"] == nil {
+		t.Fatalf("expected unsupported evidence, got %#v", result.Evidence)
 	}
 }
 

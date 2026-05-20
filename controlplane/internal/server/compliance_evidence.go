@@ -87,9 +87,11 @@ func (s *Server) handleCreateComplianceEvidence(w http.ResponseWriter, r *http.R
 	}
 	if expStr := strings.TrimSpace(r.FormValue("expires_at")); expStr != "" {
 		t, err := time.Parse(time.RFC3339, expStr)
-		if err == nil {
-			ev.ExpiresAt = &t
+		if err != nil {
+			http.Error(w, "expires_at must be RFC3339", http.StatusBadRequest)
+			return
 		}
+		ev.ExpiresAt = &t
 	}
 
 	// Handle optional file upload
@@ -168,7 +170,7 @@ func (s *Server) handleListComplianceEvidence(w http.ResponseWriter, r *http.Req
 	framework := strings.TrimSpace(q.Get("framework"))
 	evidenceType := strings.TrimSpace(q.Get("evidence_type"))
 	controlRef := strings.TrimSpace(q.Get("control_ref"))
-	includeExpired := true
+	includeExpired := false
 	if raw := strings.TrimSpace(q.Get("include_expired")); raw != "" {
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
