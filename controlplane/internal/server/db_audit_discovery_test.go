@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/google/uuid"
@@ -123,6 +124,45 @@ func TestDBAuditAccessRequestArtifactsCoverMajorEngines(t *testing.T) {
 			t.Fatalf("incomplete artifact for %s: %#v", engine, artifact)
 		}
 		assertDBAuditGrantStatementsExecutable(t, artifact)
+	}
+}
+
+func TestDBAuditAggregateEventsInfersEngineSideChannel(t *testing.T) {
+	t.Parallel()
+
+	nodeID := uuid.New().String()
+	rows := []doris.EventRow{
+		{
+			EventID:     "evt-postgres",
+			TenantID:    uuid.New().String(),
+			NodeID:      nodeID,
+			EventType:   "db.query",
+			ProcessName: "postgres",
+			Message:     "select * from pg_stat_activity",
+			DetailsJSON: `{"engine":"postgresql","database_name":"app"}`,
+			TS:          time.Date(2026, 5, 20, 6, 0, 0, 0, time.UTC),
+		},
+		{
+			EventID:     "evt-mongo",
+			NodeID:      nodeID,
+			EventType:   "db.query.long_running",
+			ProcessName: "mongod",
+			Message:     "currentOp slow operation",
+			TS:          time.Date(2026, 5, 20, 6, 1, 0, 0, time.UTC),
+		},
+	}
+
+	aggregates, citations := dbAuditAggregateEventRows(rows)
+	postgres := aggregates[dbAuditEventAggregateKey(nodeID, "postgres")]
+	if postgres.Engine != "postgres" || postgres.QueryCount != 1 || postgres.LongRunningCount != 0 {
+		t.Fatalf("expected postgres query aggregate, got %#v", postgres)
+	}
+	mongo := aggregates[dbAuditEventAggregateKey(nodeID, "mongodb")]
+	if mongo.Engine != "mongodb" || mongo.QueryCount != 0 || mongo.LongRunningCount != 1 {
+		t.Fatalf("expected mongodb long-running aggregate, got %#v", mongo)
+	}
+	if len(citations) != 2 || !strings.HasPrefix(citations[0].ID, "events:evt-") {
+		t.Fatalf("expected event citations, got %#v", citations)
 	}
 }
 
