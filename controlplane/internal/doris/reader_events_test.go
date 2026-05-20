@@ -184,19 +184,49 @@ func TestBuildTimelineSQLScopesEveryUnionArmByTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build timeline query: %v", err)
 	}
-	for _, table := range []string{"FROM events", "FROM file_accesses", "FROM db_queries"} {
+	for _, table := range []string{"FROM events", "FROM process_connections", "FROM file_accesses", "FROM db_queries"} {
 		if !strings.Contains(query, table) {
 			t.Fatalf("timeline query missing %s:\n%s", table, query)
 		}
 	}
-	if got := strings.Count(query, "tenant_id = ?"); got != 3 {
-		t.Fatalf("tenant predicate count = %d, want 3:\n%s", got, query)
+	if got := strings.Count(query, "tenant_id = ?"); got != 4 {
+		t.Fatalf("tenant predicate count = %d, want 4:\n%s", got, query)
 	}
 	if !strings.Contains(query, "events") || !strings.Contains(query, "ORDER BY ts ASC") || !strings.Contains(query, "LIMIT 1000") {
 		t.Fatalf("timeline query missing expected ordering/limit:\n%s", query)
 	}
 	if strings.Contains(query, "203.0.113.10") {
 		t.Fatalf("entity value was interpolated into SQL:\n%s", query)
+	}
+	if len(args) == 0 {
+		t.Fatal("expected bound args")
+	}
+}
+
+func TestBuildTimelineSQLIncludesOverlapAwareProcessConnections(t *testing.T) {
+	query, args, err := buildTimelineSQL(TimelineBuildParams{
+		TenantID: "tenant-1",
+		NodeID:   "node-1",
+		Since:    time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC),
+		Until:    time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatalf("build timeline query: %v", err)
+	}
+	for _, want := range []string{
+		"FROM process_connections",
+		"'process_connections' AS source_table",
+		"started_at <= ?",
+		"(ended_at IS NULL OR ended_at >= ?)",
+		"CONCAT('conn.'",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("timeline query missing %q:\n%s", want, query)
+		}
+	}
+	if strings.Contains(query, "started_at >= ?") {
+		t.Fatalf("connection timeline uses start-only filtering and would hide long-lived flows:\n%s", query)
 	}
 	if len(args) == 0 {
 		t.Fatal("expected bound args")
