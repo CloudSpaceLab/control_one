@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -108,6 +110,8 @@ type dbAuditDiscoveryQuery struct {
 }
 
 type dbAuditEventAggregate struct {
+	NodeID           string
+	Engine           string
 	QueryCount       int
 	LongRunningCount int
 	LastSeen         time.Time
@@ -271,16 +275,27 @@ func (s *Server) buildDBAuditDiscovery(ctx context.Context, q dbAuditDiscoveryQu
 		})
 	}
 
-	for nodeIDString, agg := range eventAgg {
+	for _, agg := range eventAgg {
+		nodeIDString := agg.NodeID
 		if q.NodeID != uuid.Nil && nodeIDString != q.NodeID.String() {
 			continue
 		}
-		key := dbAuditCandidateKey(nodeIDString, "unknown", "", 0)
+		engine := strings.TrimSpace(agg.Engine)
+		if engine == "" {
+			engine = "unknown"
+		}
+		key := dbAuditCandidateKey(nodeIDString, engine, "", 0)
 		var c *dbAuditCandidate
 		for _, existing := range candidates {
-			if existing.NodeID == nodeIDString {
+			if existing.NodeID != nodeIDString {
+				continue
+			}
+			if strings.EqualFold(existing.Engine, engine) {
 				c = existing
 				break
+			}
+			if engine == "unknown" && c == nil {
+				c = existing
 			}
 		}
 		if c == nil {
@@ -290,7 +305,7 @@ func (s *Server) buildDBAuditDiscovery(ctx context.Context, q dbAuditDiscoveryQu
 				ID:                 key,
 				NodeID:             nodeIDString,
 				Hostname:           node.Hostname,
-				Engine:             "unknown",
+				Engine:             engine,
 				Sources:            []string{"db_query_event"},
 				CaptureDBQueries:   resp.CapturePolicy.CaptureDBQueries,
 				DBQueryTextCapture: resp.CapturePolicy.DBQueryTextCapture,
@@ -375,11 +390,22 @@ func (s *Server) dbAuditEventAggregates(ctx context.Context, q dbAuditDiscoveryQ
 	if total > len(rows) {
 		guardrails = append(guardrails, "db_event_counts_limited")
 	}
+	out, citations = dbAuditAggregateEventRows(rows)
+	return out, citations, guardrails
+}
+
+func dbAuditAggregateEventRows(rows []doris.EventRow) (map[string]dbAuditEventAggregate, []dbAuditDiscoveryCitation) {
+	out := map[string]dbAuditEventAggregate{}
+	var citations []dbAuditDiscoveryCitation
 	for _, row := range rows {
 		if strings.TrimSpace(row.NodeID) == "" {
 			continue
 		}
-		agg := out[row.NodeID]
+		engine := inferDBAuditEngineFromEvent(row)
+		key := dbAuditEventAggregateKey(row.NodeID, engine)
+		agg := out[key]
+		agg.NodeID = row.NodeID
+		agg.Engine = engine
 		switch row.EventType {
 		case "db.query.long_running":
 			agg.LongRunningCount++
@@ -400,9 +426,17 @@ func (s *Server) dbAuditEventAggregates(ctx context.Context, q dbAuditDiscoveryQ
 				NodeID:         row.NodeID,
 			})
 		}
-		out[row.NodeID] = agg
+		out[key] = agg
 	}
-	return out, citations, guardrails
+	return out, citations
+}
+
+func dbAuditEventAggregateKey(nodeID, engine string) string {
+	engine = strings.TrimSpace(engine)
+	if engine == "" {
+		engine = "unknown"
+	}
+	return strings.TrimSpace(nodeID) + "|" + engine
 }
 
 func detectDBServiceEngine(svc storage.NodeService) string {
@@ -419,6 +453,79 @@ func detectDBServiceEngine(svc storage.NodeService) string {
 	case strings.Contains(text, "oracle") || strings.Contains(text, "tnslsnr") || svc.Port == 1521 || svc.Port == 1522:
 		return "oracle"
 	case strings.Contains(text, "db2") || strings.Contains(text, "db2sysc") || svc.Port == 50000:
+		return "db2"
+	default:
+		return ""
+	}
+}
+
+func inferDBAuditEngineFromEvent(row doris.EventRow) string {
+	if engine := inferDBAuditEngineFromDetails(row.DetailsJSON); engine != "" {
+		return engine
+	}
+	return detectDBAuditEngineFromText(strings.Join([]string{
+		row.ProcessName,
+		row.Message,
+		row.DetailsJSON,
+	}, " "))
+}
+
+func inferDBAuditEngineFromDetails(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !json.Valid([]byte(raw)) {
+		return ""
+	}
+	var details map[string]any
+	if err := json.Unmarshal([]byte(raw), &details); err != nil {
+		return ""
+	}
+	for _, key := range []string{"engine", "db_engine", "database_engine", "driver", "dbms"} {
+		if value, ok := details[key]; ok {
+			if engine := normalizeDBAuditEngineName(strings.TrimSpace(strings.ToLower(fmt.Sprint(value)))); engine != "" {
+				return engine
+			}
+		}
+	}
+	return ""
+}
+
+func detectDBAuditEngineFromText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(text, "postgres") || strings.Contains(text, "postgresql") || strings.Contains(text, "pg_stat"):
+		return "postgres"
+	case strings.Contains(text, "mysql") || strings.Contains(text, "mariadb") || strings.Contains(text, "mysqld"):
+		return "mysql"
+	case strings.Contains(text, "mongodb") || strings.Contains(text, "mongod") || strings.Contains(text, "mongo "):
+		return "mongodb"
+	case strings.Contains(text, "sqlservr") || strings.Contains(text, "sql server") || strings.Contains(text, "mssql"):
+		return "mssql"
+	case strings.Contains(text, "oracle") || strings.Contains(text, "tnslsnr"):
+		return "oracle"
+	case strings.Contains(text, "db2sysc") || strings.Contains(text, " db2 ") || strings.HasPrefix(text, "db2 "):
+		return "db2"
+	default:
+		return ""
+	}
+}
+
+func normalizeDBAuditEngineName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "postgres", "postgresql", "pg":
+		return "postgres"
+	case "mysql", "mariadb", "aurora-mysql":
+		return "mysql"
+	case "mongodb", "mongo":
+		return "mongodb"
+	case "mssql", "sqlserver", "sql_server", "sql server":
+		return "mssql"
+	case "oracle":
+		return "oracle"
+	case "db2", "ibm_db2":
 		return "db2"
 	default:
 		return ""
