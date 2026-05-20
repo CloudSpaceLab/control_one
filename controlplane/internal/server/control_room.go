@@ -645,11 +645,50 @@ func newControlRoomIPBehavior(countries []storage.IPBehaviorCountrySummary, find
 	}
 	sort.SliceStable(out.Findings, func(i, j int) bool {
 		if out.Findings[i].Score == out.Findings[j].Score {
+			if controlRoomSeverityRank(out.Findings[i].Severity) == controlRoomSeverityRank(out.Findings[j].Severity) {
+				return out.Findings[i].LastSeenAt > out.Findings[j].LastSeenAt
+			}
 			return controlRoomSeverityRank(out.Findings[i].Severity) > controlRoomSeverityRank(out.Findings[j].Severity)
 		}
 		return out.Findings[i].Score > out.Findings[j].Score
 	})
+	out.Findings = dedupeControlRoomIPFindings(out.Findings)
 	return out
+}
+
+func dedupeControlRoomIPFindings(findings []controlRoomIPFinding) []controlRoomIPFinding {
+	if len(findings) < 2 {
+		return findings
+	}
+	out := make([]controlRoomIPFinding, 0, len(findings))
+	seen := make(map[string]struct{}, len(findings))
+	for _, finding := range findings {
+		key := controlRoomIPFindingDedupeKey(finding)
+		if key == "" {
+			out = append(out, finding)
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, finding)
+	}
+	return out
+}
+
+func controlRoomIPFindingDedupeKey(finding controlRoomIPFinding) string {
+	category := strings.ToLower(strings.TrimSpace(finding.Category))
+	sourceIP := strings.ToLower(strings.TrimSpace(finding.SourceIP))
+	country := strings.ToLower(strings.TrimSpace(finding.CountryCode))
+	asn := strings.ToLower(strings.TrimSpace(finding.ASN))
+	if sourceIP != "" {
+		return category + "\x00ip\x00" + sourceIP
+	}
+	if country != "" || asn != "" {
+		return category + "\x00country\x00" + country + "\x00asn\x00" + asn
+	}
+	return ""
 }
 
 func newServerHealthLane(total, healthy, stale, offline int, incidents storage.SecurityEventCounts, isolation controlRoomIsolation, now time.Time) controlRoomLane {
