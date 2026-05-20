@@ -863,7 +863,7 @@ function buildQuickQuestions(
     : null;
   return [
     {
-      label: 'Broken',
+      label: 'Health incidents',
       value: server?.secondary_metric.value ?? '0',
       tone: server?.secondary_metric.tone ?? 'unknown',
       hint: server?.summary ?? 'No server status',
@@ -884,9 +884,9 @@ function buildQuickQuestions(
       icon: <Globe2 />,
     },
     {
-      label: 'Patch changes',
-      value: patch?.metrics.find((m) => m.label === 'Recent deployments')?.value ?? '0',
-      tone: patch?.tone ?? 'unknown',
+      label: 'Patch failures',
+      value: patch?.secondary_metric.value ?? '0',
+      tone: patch?.secondary_metric.tone ?? 'unknown',
       hint: patch?.summary ?? 'No patch data',
       icon: <Wrench />,
     },

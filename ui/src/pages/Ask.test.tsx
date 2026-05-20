@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { Ask } from './Ask';
 import * as useApiClientModule from '../hooks/useApiClient';
 import * as useTenantModule from '../providers/TenantProvider';
@@ -32,7 +33,11 @@ describe('Ask', () => {
     } as ReturnType<typeof useTenantModule.useTenant>);
 
     const user = userEvent.setup();
-    render(<Ask />);
+    render(
+      <MemoryRouter>
+        <Ask />
+      </MemoryRouter>,
+    );
 
     await user.type(screen.getByPlaceholderText(/ask about this fleet's posture/i), 'show timeline');
     await user.click(screen.getByRole('button', { name: /^ask$/i }));
@@ -45,5 +50,21 @@ describe('Ask', () => {
     expect(screen.getByText('Evidence: events:evt-1')).toBeInTheDocument();
     expect(screen.getByText('Events Query')).toBeInTheDocument();
     expect(screen.getByText(/Confidence: cited/i)).toBeInTheDocument();
+  });
+
+  it('prefills the composer from the q query param', () => {
+    vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({ askAI: vi.fn() } as unknown as APIClient);
+    vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
+      currentTenantId: 'tenant-1',
+    } as ReturnType<typeof useTenantModule.useTenant>);
+
+    render(
+      <MemoryRouter initialEntries={['/ask?q=show%20recent%20risk']}>
+        <Ask />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByPlaceholderText(/ask about this fleet's posture/i)).toHaveValue('show recent risk');
+    expect(screen.getByRole('button', { name: /^ask$/i })).toBeEnabled();
   });
 });

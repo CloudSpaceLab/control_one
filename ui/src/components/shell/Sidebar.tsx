@@ -10,6 +10,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { Link, NavLink } from 'react-router-dom';
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
+import { isFeatureFlagEnabled } from '@/lib/featureFlags';
 import { AlertStatusBadge } from './AlertStatusBadge';
 import { NodeStatusBadge } from './NodeStatusBadge';
 
@@ -55,6 +57,7 @@ const NAV_GROUPS: NavGroupDef[] = [
     label: 'Investigate',
     items: [
       { to: '/investigate', label: 'Search & lifecycle', icon: Search },
+      { to: '/ask', label: 'Ask CISO', icon: Sparkles, flag: 'ai_ask' },
     ],
   },
   {
@@ -85,20 +88,13 @@ const NAV_GROUPS: NavGroupDef[] = [
   },
 ];
 
-function isFlagEnabled(flag: string): boolean {
-  if (typeof window === 'undefined') return false;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const flags = (window as any).__C1_FLAGS__ as Record<string, boolean> | undefined;
-  return flags?.[flag] === true;
-}
-
 function filterGroups(groups: NavGroupDef[], userRoles: string[]): NavGroupDef[] {
   const isAdmin = userRoles.includes('admin');
   return groups
     .map((g) => ({
       label: g.label,
       items: g.items.filter((item) => {
-        if (item.flag && !isFlagEnabled(item.flag)) return false;
+        if (item.flag && !isFeatureFlagEnabled(item.flag)) return false;
         if (!item.roles || item.roles.length === 0) return true;
         if (isAdmin) return true;
         return item.roles.some((r) => userRoles.includes(r));

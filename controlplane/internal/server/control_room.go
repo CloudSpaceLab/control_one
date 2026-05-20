@@ -369,6 +369,7 @@ func (s *Server) buildControlRoomOverview(ctx context.Context, tenantID uuid.UUI
 	resp.TopIncidents = append(resp.TopIncidents, controlRoomIPIncidents(resp.IPBehavior.Findings)...)
 	resp.TopIncidents = append(resp.TopIncidents, controlRoomPatchIncidents(patchDeployments)...)
 	resp.TopIncidents = append(resp.TopIncidents, controlRoomNodeIncidents(nodes, now)...)
+	resp.TopIncidents = dedupeControlRoomIncidents(resp.TopIncidents)
 	sort.SliceStable(resp.TopIncidents, func(i, j int) bool {
 		return controlRoomSeverityRank(resp.TopIncidents[i].Severity) > controlRoomSeverityRank(resp.TopIncidents[j].Severity)
 	})
@@ -382,6 +383,52 @@ func (s *Server) buildControlRoomOverview(ctx context.Context, tenantID uuid.UUI
 	}
 	resp.PendingActions = controlRoomPendingActions(activeBlocks, patchApprovals, findings, resp.Isolation)
 	return resp
+}
+
+func dedupeControlRoomIncidents(incidents []controlRoomIncident) []controlRoomIncident {
+	if len(incidents) < 2 {
+		return incidents
+	}
+	out := make([]controlRoomIncident, 0, len(incidents))
+	seen := make(map[string]int, len(incidents))
+	for _, incident := range incidents {
+		key := controlRoomIncidentDedupeKey(incident)
+		if key == "" {
+			out = append(out, incident)
+			continue
+		}
+		if existingIndex, ok := seen[key]; ok {
+			if controlRoomIncidentPreferred(incident, out[existingIndex]) {
+				out[existingIndex] = incident
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, incident)
+	}
+	return out
+}
+
+func controlRoomIncidentDedupeKey(incident controlRoomIncident) string {
+	source := strings.ToLower(strings.TrimSpace(incident.Source))
+	title := strings.ToLower(strings.TrimSpace(incident.Title))
+	drilldown := strings.ToLower(strings.TrimSpace(incident.Drilldown))
+	if source == "" && title == "" && drilldown == "" {
+		return ""
+	}
+	return source + "\x00" + title + "\x00" + drilldown
+}
+
+func controlRoomIncidentPreferred(candidate, current controlRoomIncident) bool {
+	if controlRoomSeverityRank(candidate.Severity) != controlRoomSeverityRank(current.Severity) {
+		return controlRoomSeverityRank(candidate.Severity) > controlRoomSeverityRank(current.Severity)
+	}
+	candidateOpenedAt, candidateErr := time.Parse(time.RFC3339, candidate.OpenedAt)
+	currentOpenedAt, currentErr := time.Parse(time.RFC3339, current.OpenedAt)
+	if candidateErr == nil && currentErr == nil {
+		return candidateOpenedAt.After(currentOpenedAt)
+	}
+	return candidateErr == nil && currentErr != nil
 }
 
 func (s *Server) controlRoomIPBehavior(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]storage.IPBehaviorCountrySummary, []storage.IPBehaviorFinding) {
