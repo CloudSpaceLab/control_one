@@ -154,6 +154,52 @@ func TestScanConnectionRowAllowsSparseDorisRows(t *testing.T) {
 	}
 }
 
+func TestBuildListConnectionsForIPDayQueryIsPartitionScoped(t *testing.T) {
+	for _, peerColumn := range []string{"src_ip", "dst_ip"} {
+		t.Run(peerColumn, func(t *testing.T) {
+			query := buildListConnectionsForIPDayQuery(peerColumn, 250)
+			for _, want := range []string{
+				"FROM process_connections",
+				"event_date = ?",
+				"tenant_id = ?",
+				peerColumn + " = ?",
+				"started_at <= ?",
+				"(ended_at IS NULL OR ended_at >= ?)",
+				"LIMIT 250",
+			} {
+				if !strings.Contains(query, want) {
+					t.Fatalf("query missing %q:\n%s", want, query)
+				}
+			}
+			for _, bad := range []string{
+				"src_ip = ? OR dst_ip = ?",
+				"event_date >=",
+				"event_date <=",
+				"ORDER BY",
+			} {
+				if strings.Contains(query, bad) {
+					t.Fatalf("query contains broad-scan pattern %q:\n%s", bad, query)
+				}
+			}
+		})
+	}
+}
+
+func TestConnectionEventDaysClampsBroadIPQueries(t *testing.T) {
+	until := time.Date(2026, 5, 20, 15, 0, 0, 0, time.UTC)
+	since := until.AddDate(0, 0, -90)
+	days := connectionEventDays(since, until, 14)
+	if len(days) != 14 {
+		t.Fatalf("days len = %d, want 14 (%v)", len(days), days)
+	}
+	if got, want := days[0].Format("2006-01-02"), "2026-05-20"; got != want {
+		t.Fatalf("first day = %s, want %s", got, want)
+	}
+	if got, want := days[len(days)-1].Format("2006-01-02"), "2026-05-07"; got != want {
+		t.Fatalf("last day = %s, want %s", got, want)
+	}
+}
+
 type staticScanner struct {
 	values []any
 }

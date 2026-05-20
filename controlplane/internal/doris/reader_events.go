@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -46,34 +47,61 @@ func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, 
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	q := withLimit(`
+	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
+	defer cancel()
+
+	out := make([]ConnectionRow, 0, limit)
+	seen := map[string]struct{}{}
+	for _, day := range connectionEventDays(since, until, 14) {
+		for _, peerColumn := range []string{"src_ip", "dst_ip"} {
+			remaining := limit - len(out)
+			if remaining <= 0 {
+				break
+			}
+			q := buildListConnectionsForIPDayQuery(peerColumn, remaining)
+			rows, err := queryConnectionRows(qctx, c.db, q, remaining, day.Format("2006-01-02"), tenantID, ip, until, since)
+			if err != nil {
+				return nil, err
+			}
+			for _, row := range rows {
+				key := connectionDedupeKey(row)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, row)
+			}
+		}
+		if len(out) >= limit {
+			break
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func buildListConnectionsForIPDayQuery(peerColumn string, limit int) string {
+	if peerColumn != "dst_ip" {
+		peerColumn = "src_ip"
+	}
+	return withLimit(`
 		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
 		       pid, process_name, cmdline, user_name,
 		       src_ip, src_port, dst_ip, dst_port, protocol,
 		       bytes_in, bytes_out, packets_in, packets_out,
 		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
 		FROM process_connections
-		WHERE tenant_id = ?
-		  AND (src_ip = ? OR dst_ip = ?)
-		  AND started_at >= ? AND started_at <= ?
-		ORDER BY started_at DESC
+		WHERE event_date = ?
+		  AND tenant_id = ?
+		  AND `+peerColumn+` = ?
+		  AND started_at <= ?
+		  AND (ended_at IS NULL OR ended_at >= ?)
 	`, limit)
-	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
-	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, ip, ip, since, until)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := make([]ConnectionRow, 0, limit)
-	for rows.Next() {
-		r, err := scanConnectionRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
 }
 
 // buildListConnectionsForNodeQuery composes the SQL for ListConnectionsForNode.
@@ -281,6 +309,61 @@ func scanConnectionRow(s rowScanner) (ConnectionRow, error) {
 	r.BastionSession = bastionSession.String
 	r.NodeID = nodeID.String
 	return r, nil
+}
+
+func queryConnectionRows(ctx context.Context, db *sql.DB, query string, limit int, args ...any) ([]ConnectionRow, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ConnectionRow, 0, limit)
+	for rows.Next() {
+		r, err := scanConnectionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func connectionEventDays(since, until time.Time, maxDays int) []time.Time {
+	if until.IsZero() {
+		until = time.Now().UTC()
+	}
+	if since.IsZero() {
+		since = until.Add(-24 * time.Hour)
+	}
+	if since.After(until) {
+		since, until = until, since
+	}
+	if maxDays <= 0 {
+		maxDays = 14
+	}
+	minSince := until.AddDate(0, 0, -(maxDays - 1))
+	if since.Before(minSince) {
+		since = minSince
+	}
+	start := dateOnlyUTC(since)
+	end := dateOnlyUTC(until)
+	days := []time.Time{}
+	for day := end; !day.Before(start); day = day.AddDate(0, 0, -1) {
+		days = append(days, day)
+	}
+	return days
+}
+
+func dateOnlyUTC(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+func connectionDedupeKey(row ConnectionRow) string {
+	if row.ConnID != "" {
+		return row.ConnID + "|" + row.StartedAt.UTC().Format(time.RFC3339Nano) + "|" + row.SrcIP + "|" + row.DstIP
+	}
+	return row.StartedAt.UTC().Format(time.RFC3339Nano) + "|" + row.SrcIP + "|" + row.DstIP + "|" + row.ProcessName
 }
 
 // CorrelationEvent is one entry in the unified timeline.
