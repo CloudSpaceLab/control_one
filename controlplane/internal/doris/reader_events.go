@@ -529,6 +529,10 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	connWhere, connArgs, err := timelineConnectionWhere(p)
+	if err != nil {
+		return "", nil, err
+	}
 	dbWhere, dbArgs, err := timelineSideTableWhere(p, "ts", dbEntityColumns())
 	if err != nil {
 		return "", nil, err
@@ -542,6 +546,17 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 			       bytes_in, bytes_out, details_json
 			FROM events
 			WHERE ` + eventsWhere + `
+			UNION ALL
+			SELECT 'process_connections' AS source_table, 1 AS schema_version, '' AS event_id, '' AS raw_ref,
+			       '' AS collector, '' AS parser, '' AS parser_status,
+			       tenant_id, started_at AS ts, node_id,
+			       CONCAT('conn.', COALESCE(NULLIF(direction, ''), 'flow')) AS event_type,
+			       CASE WHEN threat_match THEN 'high' ELSE 'info' END AS severity,
+			       CONCAT(COALESCE(process_name, ''), ' ', COALESCE(src_ip, ''), ' -> ', COALESCE(dst_ip, '')) AS message,
+			       correlation_id, conn_id, pid, process_name, user_name,
+			       src_ip, dst_ip, dst_port, '' AS path, bytes_in, bytes_out, '' AS details_json
+			FROM process_connections
+			WHERE ` + connWhere + `
 			UNION ALL
 			SELECT 'file_accesses' AS source_table, 1 AS schema_version, '' AS event_id, '' AS raw_ref,
 			       '' AS collector, '' AS parser, '' AS parser_status,
@@ -562,7 +577,7 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 			WHERE ` + dbWhere + `
 		) timeline
 		ORDER BY ts ASC`
-	args := append(append(eventsArgs, fileArgs...), dbArgs...)
+	args := append(append(append(eventsArgs, connArgs...), fileArgs...), dbArgs...)
 	return withLimit(query, clampTimelineLimit(p.Limit)), args, nil
 }
 
@@ -667,6 +682,17 @@ func dbEntityColumns() entityColumns {
 	}
 }
 
+func connectionEntityColumns() entityColumns {
+	return entityColumns{
+		NodeID:      "node_id",
+		SrcIP:       "src_ip",
+		DstIP:       "dst_ip",
+		UserName:    "user_name",
+		ProcessName: "process_name",
+		ConnID:      "conn_id",
+	}
+}
+
 func eventWhereClause(p EventQueryParams, timeColumn string) (string, []any, error) {
 	if strings.TrimSpace(p.TenantID) == "" {
 		return "", nil, fmt.Errorf("tenant_id required")
@@ -741,6 +767,42 @@ func timelineSideTableWhere(p TimelineBuildParams, timeColumn string, cols entit
 	}
 	where, args := appendEntityPredicate(base, args, p.EntityType, p.EntityID, cols)
 	return where, args, nil
+}
+
+func timelineConnectionWhere(p TimelineBuildParams) (string, []any, error) {
+	if strings.TrimSpace(p.TenantID) == "" {
+		return "", nil, fmt.Errorf("tenant_id required")
+	}
+	where := []string{"tenant_id = ?"}
+	args := []any{strings.TrimSpace(p.TenantID)}
+	switch {
+	case !p.Since.IsZero() && !p.Until.IsZero():
+		where = append(where, "started_at <= ?")
+		args = append(args, p.Until)
+		where = append(where, "(ended_at IS NULL OR ended_at >= ?)")
+		args = append(args, p.Since)
+	case !p.Since.IsZero():
+		where = append(where, "(ended_at IS NULL OR ended_at >= ?)")
+		args = append(args, p.Since)
+	case !p.Until.IsZero():
+		where = append(where, "started_at <= ?")
+		args = append(args, p.Until)
+	}
+	if v := strings.TrimSpace(p.NodeID); v != "" {
+		where = append(where, "node_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.CorrelationID); v != "" {
+		where = append(where, "correlation_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.ConnID); v != "" {
+		where = append(where, "conn_id = ?")
+		args = append(args, v)
+	}
+	base := strings.Join(where, " AND ")
+	base, args = appendEntityPredicate(base, args, p.EntityType, p.EntityID, connectionEntityColumns())
+	return base, args, nil
 }
 
 func appendEntityPredicate(where string, args []any, entityType, entityID string, cols entityColumns) (string, []any) {
