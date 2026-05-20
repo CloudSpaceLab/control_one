@@ -164,6 +164,45 @@ func TestExposureConfidenceActiveBlocksAvoidZeroFloor(t *testing.T) {
 	}
 }
 
+func TestControlRoomTopIncidentsDedupesVisibleDuplicates(t *testing.T) {
+	older := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	newer := older.Add(5 * time.Minute)
+	incidents := []controlRoomIncident{
+		{
+			ID:        uuid.NewString(),
+			Title:     "Scanner probe from 78.209.210.52/32",
+			Severity:  "medium",
+			Source:    "ip_behavior",
+			Drilldown: "/security/network?tab=ip-behavior&ip=78.209.210.52",
+			OpenedAt:  formatTime(older),
+		},
+		{
+			ID:        uuid.NewString(),
+			Title:     "Scanner probe from 78.209.210.52/32",
+			Severity:  "high",
+			Source:    "ip_behavior",
+			Drilldown: "/security/network?tab=ip-behavior&ip=78.209.210.52",
+			OpenedAt:  formatTime(newer),
+		},
+		{
+			ID:        uuid.NewString(),
+			Title:     "Patch deployment needs attention",
+			Severity:  "high",
+			Source:    "patch",
+			Drilldown: "/infrastructure/patch",
+			OpenedAt:  formatTime(older),
+		},
+	}
+
+	got := dedupeControlRoomIncidents(incidents)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 visible incidents after dedupe, got %#v", got)
+	}
+	if got[0].Severity != "high" || got[0].OpenedAt != formatTime(newer) {
+		t.Fatalf("expected duplicate scanner probe to keep highest-severity newest row, got %#v", got[0])
+	}
+}
+
 func TestIsPublicListenerExcludesLoopback(t *testing.T) {
 	public := []string{"", "0.0.0.0", "0.0.0.0:443", "::", "[::]", "[::]:443"}
 	for _, addr := range public {
