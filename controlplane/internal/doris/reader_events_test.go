@@ -184,13 +184,13 @@ func TestBuildTimelineSQLScopesEveryUnionArmByTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build timeline query: %v", err)
 	}
-	for _, table := range []string{"FROM events", "FROM process_connections", "FROM file_accesses", "FROM db_queries"} {
+	for _, table := range []string{"FROM events", "FROM process_connections", "FROM process_lineage", "FROM file_accesses", "FROM db_queries", "FROM web_requests"} {
 		if !strings.Contains(query, table) {
 			t.Fatalf("timeline query missing %s:\n%s", table, query)
 		}
 	}
-	if got := strings.Count(query, "tenant_id = ?"); got != 4 {
-		t.Fatalf("tenant predicate count = %d, want 4:\n%s", got, query)
+	if got := strings.Count(query, "tenant_id = ?"); got != 6 {
+		t.Fatalf("tenant predicate count = %d, want 6:\n%s", got, query)
 	}
 	if !strings.Contains(query, "events") || !strings.Contains(query, "ORDER BY ts ASC") || !strings.Contains(query, "LIMIT 1000") {
 		t.Fatalf("timeline query missing expected ordering/limit:\n%s", query)
@@ -200,6 +200,59 @@ func TestBuildTimelineSQLScopesEveryUnionArmByTenant(t *testing.T) {
 	}
 	if len(args) == 0 {
 		t.Fatal("expected bound args")
+	}
+}
+
+func TestBuildTimelineSQLIncludesProcessLineageAndWebRequests(t *testing.T) {
+	query, args, err := buildTimelineSQL(TimelineBuildParams{
+		TenantID:   "tenant-1",
+		NodeID:     "node-1",
+		EntityType: "process",
+		EntityID:   "nginx",
+		Since:      time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC),
+		Until:      time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("build timeline query: %v", err)
+	}
+	for _, want := range []string{
+		"FROM process_lineage",
+		"'process_lineage' AS source_table",
+		"observed_at >= ?",
+		"process_name = ?",
+		"FROM web_requests",
+		"'web_requests' AS source_table",
+		"webserver_kind = ?",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("timeline query missing %q:\n%s", want, query)
+		}
+	}
+	if len(args) == 0 {
+		t.Fatal("expected bound args")
+	}
+}
+
+func TestBuildTimelineSQLAvoidsUnsupportedPivotBroadening(t *testing.T) {
+	query, _, err := buildTimelineSQL(TimelineBuildParams{
+		TenantID: "tenant-1",
+		ConnID:   "conn-1",
+		Since:    time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC),
+		Until:    time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatalf("build timeline query: %v", err)
+	}
+	if !strings.Contains(query, "FROM process_lineage") || !strings.Contains(query, "FROM web_requests") {
+		t.Fatalf("expected lineage and web arms to remain present but guarded:\n%s", query)
+	}
+	if got := strings.Count(query, "conn_id = ?"); got != 4 {
+		t.Fatalf("conn_id predicate count = %d, want 4 so lineage/web do not reference missing conn_id columns:\n%s", got, query)
+	}
+	if got := strings.Count(query, "1 = 0"); got < 2 {
+		t.Fatalf("expected unsupported lineage/web conn pivots to be guarded, got %d guards:\n%s", got, query)
 	}
 }
 

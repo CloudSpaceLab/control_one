@@ -163,6 +163,8 @@ func TestSourceCitationIDsIncludeDorisTimelineTables(t *testing.T) {
 		"items": []any{
 			map[string]any{"citation_id": "db_queries:dbq-123"},
 			map[string]any{"source_record_id": "process_connections:conn-456"},
+			map[string]any{"source_record_id": "process_lineage:proc-789"},
+			map[string]any{"source_record_id": "web_requests:web-101"},
 		},
 	})
 	if !containsString(got, "db_queries:dbq-123") {
@@ -170,6 +172,12 @@ func TestSourceCitationIDsIncludeDorisTimelineTables(t *testing.T) {
 	}
 	if !containsString(got, "process_connections:conn-456") {
 		t.Fatalf("expected process connection citation, got %+v", got)
+	}
+	if !containsString(got, "process_lineage:proc-789") {
+		t.Fatalf("expected process lineage citation, got %+v", got)
+	}
+	if !containsString(got, "web_requests:web-101") {
+		t.Fatalf("expected web request citation, got %+v", got)
 	}
 }
 
