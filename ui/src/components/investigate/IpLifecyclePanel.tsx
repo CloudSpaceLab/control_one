@@ -148,12 +148,12 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
       >
         {query.isLoading && <Loader size="md" label="Loading lifecycles…" />}
         {query.error && <Alert variant="critical">{(query.error as Error).message}</Alert>}
-        {!query.isLoading && rows.length === 0 ? (
+        {!query.isLoading && !query.error && rows.length === 0 ? (
           <EmptyState
             title="No lifecycles found"
             description={`No connections involving ${ip} in the selected time window.`}
           />
-        ) : (
+        ) : !query.error ? (
           <>
             <TimelineStrip groupedByNode={groupedByNode} nodesById={nodesById} since={since} />
             <table className="mt-4 w-full text-left text-sm">
@@ -228,7 +228,7 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
               </tbody>
             </table>
           </>
-        )}
+        ) : null}
       </Panel>
 
       <ConnectionDetailSheet

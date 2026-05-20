@@ -1,6 +1,8 @@
 package doris
 
 import (
+	"database/sql"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -124,6 +126,93 @@ func TestRFC1918Peer_StillReachableAsSummary(t *testing.T) {
 			t.Errorf("doris query mentions private prefix %q — bugs §1.2 regression\nquery:\n%s", peer, q)
 		}
 	}
+}
+
+func TestScanConnectionRowAllowsSparseDorisRows(t *testing.T) {
+	started := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	row, err := scanConnectionRow(staticScanner{values: []any{
+		"conn-1", nil, started, nil, nil, nil,
+		nil, "nginx", nil, nil,
+		"45.135.193.156", nil, "10.0.0.4", 443, "tcp",
+		nil, int64(2048), nil, nil,
+		nil, nil, nil, nil, "node-1",
+	}})
+	if err != nil {
+		t.Fatalf("scan sparse connection row: %v", err)
+	}
+	if row.ConnID != "conn-1" || row.ProcessName != "nginx" || row.NodeID != "node-1" {
+		t.Fatalf("unexpected row identity: %+v", row)
+	}
+	if row.CorrelationID != "" || row.DurationMS != 0 || row.PID != 0 || row.ThreatMatch {
+		t.Fatalf("nullable fields should default to zero values: %+v", row)
+	}
+	if row.StartedAt.IsZero() || !row.EndedAt.IsZero() {
+		t.Fatalf("unexpected timestamps: started=%v ended=%v", row.StartedAt, row.EndedAt)
+	}
+	if row.SrcIP != "45.135.193.156" || row.DstIP != "10.0.0.4" || row.DstPort != 443 || row.BytesOut != 2048 {
+		t.Fatalf("unexpected network fields: %+v", row)
+	}
+}
+
+type staticScanner struct {
+	values []any
+}
+
+func (s staticScanner) Scan(dest ...any) error {
+	if len(dest) != len(s.values) {
+		return fmt.Errorf("scan dest len %d, values len %d", len(dest), len(s.values))
+	}
+	for i, value := range s.values {
+		switch d := dest[i].(type) {
+		case *sql.NullString:
+			if value == nil {
+				*d = sql.NullString{}
+				continue
+			}
+			v, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("value %d has type %T, want string", i, value)
+			}
+			*d = sql.NullString{String: v, Valid: true}
+		case *sql.NullInt64:
+			if value == nil {
+				*d = sql.NullInt64{}
+				continue
+			}
+			switch v := value.(type) {
+			case int:
+				*d = sql.NullInt64{Int64: int64(v), Valid: true}
+			case int64:
+				*d = sql.NullInt64{Int64: v, Valid: true}
+			default:
+				return fmt.Errorf("value %d has type %T, want int/int64", i, value)
+			}
+		case *sql.NullBool:
+			if value == nil {
+				*d = sql.NullBool{}
+				continue
+			}
+			v, ok := value.(bool)
+			if !ok {
+				return fmt.Errorf("value %d has type %T, want bool", i, value)
+			}
+			*d = sql.NullBool{Bool: v, Valid: true}
+		case **time.Time:
+			if value == nil {
+				*d = nil
+				continue
+			}
+			v, ok := value.(time.Time)
+			if !ok {
+				return fmt.Errorf("value %d has type %T, want time.Time", i, value)
+			}
+			t := v
+			*d = &t
+		default:
+			return fmt.Errorf("unsupported scan destination %d type %T", i, dest[i])
+		}
+	}
+	return nil
 }
 
 func TestBuildEventQuerySQLRequiresTenantAndUsesBoundFilters(t *testing.T) {

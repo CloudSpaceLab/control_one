@@ -223,19 +223,63 @@ type rowScanner interface {
 func scanConnectionRow(s rowScanner) (ConnectionRow, error) {
 	var r ConnectionRow
 	var startedAt, endedAt *time.Time
-	if err := s.Scan(&r.ConnID, &r.CorrelationID, &startedAt, &endedAt, &r.DurationMS, &r.Direction,
-		&r.PID, &r.ProcessName, &r.Cmdline, &r.UserName,
-		&r.SrcIP, &r.SrcPort, &r.DstIP, &r.DstPort, &r.Protocol,
-		&r.BytesIn, &r.BytesOut, &r.PacketsIn, &r.PacketsOut,
-		&r.ThreatMatch, &r.ThreatFeed, &r.ClosedReason, &r.BastionSession, &r.NodeID); err != nil {
+	var connID, correlationID, direction, processName, cmdline, userName sql.NullString
+	var srcIP, dstIP, protocol, threatFeed, closedReason, bastionSession, nodeID sql.NullString
+	var durationMS, pid, srcPort, dstPort, bytesIn, bytesOut, packetsIn, packetsOut sql.NullInt64
+	var threatMatch sql.NullBool
+	if err := s.Scan(&connID, &correlationID, &startedAt, &endedAt, &durationMS, &direction,
+		&pid, &processName, &cmdline, &userName,
+		&srcIP, &srcPort, &dstIP, &dstPort, &protocol,
+		&bytesIn, &bytesOut, &packetsIn, &packetsOut,
+		&threatMatch, &threatFeed, &closedReason, &bastionSession, &nodeID); err != nil {
 		return r, err
 	}
+	r.ConnID = connID.String
+	r.CorrelationID = correlationID.String
 	if startedAt != nil {
 		r.StartedAt = *startedAt
 	}
 	if endedAt != nil {
 		r.EndedAt = *endedAt
 	}
+	if durationMS.Valid {
+		r.DurationMS = durationMS.Int64
+	}
+	r.Direction = direction.String
+	if pid.Valid {
+		r.PID = pid.Int64
+	}
+	r.ProcessName = processName.String
+	r.Cmdline = cmdline.String
+	r.UserName = userName.String
+	r.SrcIP = srcIP.String
+	if srcPort.Valid {
+		r.SrcPort = int(srcPort.Int64)
+	}
+	r.DstIP = dstIP.String
+	if dstPort.Valid {
+		r.DstPort = int(dstPort.Int64)
+	}
+	r.Protocol = protocol.String
+	if bytesIn.Valid {
+		r.BytesIn = bytesIn.Int64
+	}
+	if bytesOut.Valid {
+		r.BytesOut = bytesOut.Int64
+	}
+	if packetsIn.Valid {
+		r.PacketsIn = packetsIn.Int64
+	}
+	if packetsOut.Valid {
+		r.PacketsOut = packetsOut.Int64
+	}
+	if threatMatch.Valid {
+		r.ThreatMatch = threatMatch.Bool
+	}
+	r.ThreatFeed = threatFeed.String
+	r.ClosedReason = closedReason.String
+	r.BastionSession = bastionSession.String
+	r.NodeID = nodeID.String
 	return r, nil
 }
 
