@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ import (
 var migrationsFS embed.FS
 
 const migrationDir = "migrations"
+
+var addColumnIfNotExistsRE = regexp.MustCompile(`(?is)^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$`)
 
 // migrationFile is one parsed entry from the embed FS.
 type migrationFile struct {
@@ -151,6 +154,14 @@ func runMigration(ctx context.Context, c *Client, mig migrationFile) error {
 		if stmt == "" {
 			continue
 		}
+		rewritten, skip, err := prepareMigrationStatement(ctx, c, stmt)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
+		}
+		stmt = rewritten
 		if _, err := c.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("exec stmt: %w\n--- statement ---\n%s\n--- end ---", err, stmt)
 		}
@@ -160,6 +171,41 @@ func runMigration(ctx context.Context, c *Client, mig migrationFile) error {
 		VALUES (?, ?, ?, NOW())
 	`, mig.Version, mig.Name, mig.Hash)
 	return err
+}
+
+func prepareMigrationStatement(ctx context.Context, c *Client, stmt string) (string, bool, error) {
+	table, column, rewritten, ok := rewriteAddColumnIfNotExists(stmt)
+	if !ok {
+		return stmt, false, nil
+	}
+	exists, err := columnExists(ctx, c, table, column)
+	if err != nil {
+		return "", false, fmt.Errorf("check Doris column %s.%s: %w", table, column, err)
+	}
+	return rewritten, exists, nil
+}
+
+func rewriteAddColumnIfNotExists(stmt string) (table string, column string, rewritten string, ok bool) {
+	match := addColumnIfNotExistsRE.FindStringSubmatch(strings.TrimSpace(stmt))
+	if len(match) != 4 {
+		return "", "", "", false
+	}
+	table = match[1]
+	column = match[2]
+	definition := strings.TrimSpace(match[3])
+	return table, column, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition), true
+}
+
+func columnExists(ctx context.Context, c *Client, table string, column string) (bool, error) {
+	var count int
+	err := c.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.columns
+		WHERE table_schema = ?
+		  AND table_name = ?
+		  AND column_name = ?
+	`, c.cfg.Database, table, column).Scan(&count)
+	return count > 0, err
 }
 
 // splitStatements splits a multi-statement Doris SQL script on bare `;`
