@@ -9,6 +9,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  Sparkles,
   Terminal,
   User as UserIcon,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string 
   { label: 'Control Room', route: '/', icon: <Activity />, group: 'Pages' },
   { label: 'Alerts', route: '/alerts', icon: <AlertTriangle />, group: 'Pages' },
   { label: 'Investigate', route: '/investigate', icon: <Search />, group: 'Pages' },
+  { label: 'Ask AI', route: '/ask', icon: <Sparkles />, group: 'Pages' },
   { label: 'Servers', route: '/nodes', icon: <Server />, group: 'Pages' },
   { label: 'Network & exposure', route: '/security/network', icon: <Network />, group: 'Pages' },
   { label: 'Patch posture', route: '/infrastructure/patch', icon: <ShieldAlert />, group: 'Pages' },

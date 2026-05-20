@@ -5519,7 +5519,7 @@ func (f *fakeStore) GetSecurityEventSeries(_ context.Context, _ uuid.UUID, _ tim
 	return nil, nil
 }
 
-// Ask CISO LLM config (Phase 2).
+// Ask AI LLM config (Phase 2).
 func (f *fakeStore) GetAIConfig(_ context.Context, tenantID uuid.UUID) (*storage.AIConfig, error) {
 	if f.aiConfig != nil && (tenantID == uuid.Nil || f.aiConfig.TenantID == tenantID) {
 		copy := *f.aiConfig

@@ -104,7 +104,7 @@ export function OnboardAIPanel(): JSX.Element | null {
         <p className="text-sm text-text-muted">
           {cfg?.has_api_key
             ? `Anthropic key is on file (model ${cfg.model || 'claude-sonnet-4-6'}). Manage in Settings → AI.`
-            : 'Skip for now — Ask CISO is feature-flagged off until a provider is configured.'}
+            : 'Ask AI is available now; configure a provider key when you are ready to enable grounded answers.'}
         </p>
       </Panel>
     );
@@ -113,7 +113,7 @@ export function OnboardAIPanel(): JSX.Element | null {
   return (
     <Panel
       padding="md"
-      eyebrow="ASK CISO · OPTIONAL"
+      eyebrow="ASK AI · OPTIONAL"
       title="Configure the LLM that powers natural-language Ask"
       toneAccent="brand"
     >
@@ -141,13 +141,13 @@ export function OnboardAIPanel(): JSX.Element | null {
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" variant="primary" size="md" disabled={saving || !apiKey.trim()}>
             {saving ? <Loader size="xs" /> : <Sparkles className="h-4 w-4" />}
-            {saving ? 'Saving…' : 'Save & enable'}
+            {saving ? 'Saving…' : 'Save provider'}
           </Button>
           <Button type="button" variant="ghost" size="md" onClick={() => setOpen(false)}>
             Skip for now
           </Button>
           <Eyebrow>
-            Ask is gated by FEATURE_AI_ASK on the controlplane and __C1_FLAGS__.ai_ask in the UI.
+            Ask AI remains visible; answers require this tenant provider.
           </Eyebrow>
         </div>
       </form>

@@ -29,9 +29,17 @@ export interface IpActionMenuProps {
   /** Optional override for the trigger element. Defaults to a small icon button. */
   trigger?: React.ReactNode;
   onActionTaken?: () => void;
+  showInvestigateLink?: boolean;
+  showCopyAction?: boolean;
 }
 
-export function IpActionMenu({ ip, trigger, onActionTaken }: IpActionMenuProps): JSX.Element {
+export function IpActionMenu({
+  ip,
+  trigger,
+  onActionTaken,
+  showInvestigateLink = true,
+  showCopyAction = true,
+}: IpActionMenuProps): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [busy, setBusy] = useState<null | 'block-affected' | 'block-fleet' | 'allow'>(null);
@@ -102,16 +110,20 @@ export function IpActionMenu({ ip, trigger, onActionTaken }: IpActionMenuProps):
           <ShieldOff className="mr-2 h-4 w-4" />
           Unblock (allow)
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <Link to={entityRoute('ip', ip)} className="flex items-center">
-            <ExternalLink className="mr-2 h-4 w-4" />
-            View in Investigate
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => navigator.clipboard.writeText(ip)}>
-          Copy IP
-        </DropdownMenuItem>
+        {(showInvestigateLink || showCopyAction) && <DropdownMenuSeparator />}
+        {showInvestigateLink && (
+          <DropdownMenuItem asChild>
+            <Link to={entityRoute('ip', ip)} className="flex items-center">
+              <ExternalLink className="mr-2 h-4 w-4" />
+              View in Investigate
+            </Link>
+          </DropdownMenuItem>
+        )}
+        {showCopyAction && (
+          <DropdownMenuItem onClick={() => navigator.clipboard.writeText(ip)}>
+            Copy IP
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

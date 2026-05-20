@@ -18,6 +18,7 @@ const COMMANDS: Command[] = [
   { id: 'go.dashboard', group: 'Go to', label: 'Control Room', hint: 'Fleet status', to: '/' },
   { id: 'go.alerts', group: 'Go to', label: 'Alerts', hint: 'Open findings', to: '/alerts' },
   { id: 'go.investigate', group: 'Go to', label: 'Search & lifecycle', hint: 'Pivot on evidence', to: '/investigate', keywords: ['search', 'lookup', 'pivot'] },
+  { id: 'go.ask', group: 'Go to', label: 'Ask AI', hint: 'Cited investigation chat', to: '/ask', keywords: ['ai', 'chat', 'question', 'assistant'] },
   { id: 'go.nodes', group: 'Go to', label: 'Servers', hint: 'Node health', to: '/nodes', keywords: ['nodes', 'fleet', 'hosts'] },
   { id: 'go.network', group: 'Go to', label: 'Network & exposure', hint: 'Ports, IP behavior, blocks', to: '/security/network', keywords: ['connections', 'ports', 'ip', 'firewall', 'webserver'] },
   { id: 'go.patch', group: 'Go to', label: 'Patch posture', hint: 'Patch risk', to: '/infrastructure/patch', keywords: ['patches', 'updates', 'maintenance'] },

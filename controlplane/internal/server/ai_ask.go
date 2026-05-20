@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,14 +16,6 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
-
-// FEATURE_AI_ASK gates every endpoint in this file. Off by default — the
-// admin opts in by setting the env var. UI also gates /ask via
-// window.__C1_FLAGS__.ai_ask.
-func aiAskEnabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("FEATURE_AI_ASK")))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
 
 // ── /api/v1/ai/config ─────────────────────────────────────────────────────
 
@@ -46,10 +37,6 @@ type aiConfigPutRequest struct {
 }
 
 func (s *Server) handleAIConfig(w http.ResponseWriter, r *http.Request) {
-	if !aiAskEnabled() {
-		http.NotFound(w, r)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		s.handleAIConfigGet(w, r)
@@ -137,10 +124,6 @@ func (s *Server) handleAIConfigPut(w http.ResponseWriter, r *http.Request) {
 // ── /api/v1/ai/test ───────────────────────────────────────────────────────
 
 func (s *Server) handleAITest(w http.ResponseWriter, r *http.Request) {
-	if !aiAskEnabled() {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -194,10 +177,6 @@ type aiAskResponse struct {
 }
 
 func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
-	if !aiAskEnabled() {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
