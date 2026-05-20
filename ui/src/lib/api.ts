@@ -404,6 +404,22 @@ export type CoverageQualityState =
   | 'unknown'
   | (string & {});
 
+export interface CoverageDomainDefinition {
+  domain: CoverageDomain;
+  title: string;
+  description: string;
+}
+
+export interface CoverageStateDefinition {
+  state: CoverageState;
+  description: string;
+}
+
+export interface CoverageQualityDefinition {
+  state: CoverageQualityState;
+  description: string;
+}
+
 export interface CoverageMatrixRow {
   id?: string;
   tenant_id?: string;
@@ -452,8 +468,15 @@ export interface CoverageMatrixSummary {
 }
 
 export interface CoverageMatrixResponse {
+  catalog_version?: string;
+  scope?: 'global' | 'tenant' | (string & {});
   tenant_id?: string;
   generated_at?: string;
+  domains?: CoverageDomainDefinition[];
+  legend?: {
+    states?: CoverageStateDefinition[];
+    quality_states?: CoverageQualityDefinition[];
+  };
   summary?: CoverageMatrixSummary;
   rows: CoverageMatrixRow[];
 }
@@ -468,7 +491,11 @@ type RawCoverageMatrixResponse =
   | CoverageMatrixRow[]
   | {
       tenant_id?: string;
+      catalog_version?: string;
+      scope?: 'global' | 'tenant' | (string & {});
       generated_at?: string;
+      domains?: CoverageDomainDefinition[];
+      legend?: CoverageMatrixResponse['legend'];
       summary?: CoverageMatrixSummary;
       matrix?: CoverageMatrixRow[];
       rows?: CoverageMatrixRow[];
@@ -482,7 +509,11 @@ function normalizeCoverageMatrixResponse(raw: RawCoverageMatrixResponse): Covera
   }
   const envelope = raw as {
     tenant_id?: string;
+    catalog_version?: string;
+    scope?: 'global' | 'tenant' | (string & {});
     generated_at?: string;
+    domains?: CoverageDomainDefinition[];
+    legend?: CoverageMatrixResponse['legend'];
     summary?: CoverageMatrixSummary;
     matrix?: CoverageMatrixRow[];
     rows?: CoverageMatrixRow[];
@@ -491,8 +522,12 @@ function normalizeCoverageMatrixResponse(raw: RawCoverageMatrixResponse): Covera
   };
   const rows = envelope.rows ?? envelope.matrix ?? envelope.data ?? envelope.items ?? [];
   return {
+    catalog_version: envelope.catalog_version,
+    scope: envelope.scope,
     tenant_id: envelope.tenant_id,
     generated_at: envelope.generated_at,
+    domains: envelope.domains,
+    legend: envelope.legend,
     summary: envelope.summary,
     rows,
   };

@@ -22,6 +22,7 @@ const COMMANDS: Command[] = [
   { id: 'go.nodes', group: 'Go to', label: 'Servers', hint: 'Node health', to: '/nodes', keywords: ['nodes', 'fleet', 'hosts'] },
   { id: 'go.network', group: 'Go to', label: 'Network & exposure', hint: 'Ports, IP behavior, blocks', to: '/security/network', keywords: ['connections', 'ports', 'ip', 'firewall', 'webserver'] },
   { id: 'go.patch', group: 'Go to', label: 'Patch posture', hint: 'Patch risk', to: '/infrastructure/patch', keywords: ['patches', 'updates', 'maintenance'] },
+  { id: 'go.coverage', group: 'Go to', label: 'Coverage', hint: 'Capability truth', to: '/coverage', keywords: ['truth', 'support', 'parser', 'telemetry', 'milestone'] },
   { id: 'go.compliance', group: 'Go to', label: 'Compliance', hint: 'Control status', to: '/compliance' },
   { id: 'go.access', group: 'Go to', label: 'Access', hint: 'JIT requests', to: '/access' },
   { id: 'go.audit', group: 'Go to', label: 'Audit Log', hint: 'Change trail', to: '/audit' },
