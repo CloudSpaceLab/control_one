@@ -26,6 +26,7 @@ const FleetEnroll = lazy(() => import('./pages/FleetEnroll').then((m) => ({ defa
 const Hypervisors = lazy(() => import('./pages/Hypervisors').then((m) => ({ default: m.Hypervisors })));
 const Jobs = lazy(() => import('./pages/Jobs').then((m) => ({ default: m.Jobs })));
 const Templates = lazy(() => import('./pages/Templates').then((m) => ({ default: m.Templates })));
+const Coverage = lazy(() => import('./pages/Coverage').then((m) => ({ default: m.Coverage })));
 const Compliance = lazy(() => import('./pages/Compliance').then((m) => ({ default: m.Compliance })));
 const Rules = lazy(() => import('./pages/Rules').then((m) => ({ default: m.Rules })));
 const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
@@ -127,6 +128,7 @@ export function App(): JSX.Element {
                 <Route path="hypervisors" element={<Hypervisors />} />
                 <Route path="jobs" element={<Jobs />} />
                 <Route path="templates" element={<Templates />} />
+                <Route path="coverage" element={<Coverage />} />
                 <Route path="compliance" element={<Compliance />} />
                 <Route path="rules" element={<Rules />} />
                 <Route path="rules/builder" element={<Navigate to="/rules" replace />} />

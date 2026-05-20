@@ -9,6 +9,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  ShieldQuestion,
   Sparkles,
   Terminal,
   User as UserIcon,
@@ -38,12 +39,13 @@ const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string 
   { label: 'Servers', route: '/nodes', icon: <Server />, group: 'Pages' },
   { label: 'Network & exposure', route: '/security/network', icon: <Network />, group: 'Pages' },
   { label: 'Patch posture', route: '/infrastructure/patch', icon: <ShieldAlert />, group: 'Pages' },
+  { label: 'Coverage', route: '/coverage', icon: <ShieldQuestion />, group: 'Pages' },
   { label: 'Compliance', route: '/compliance', icon: <FileText />, group: 'Pages' },
   { label: 'Access', route: '/access', icon: <KeyRound />, group: 'Pages' },
   { label: 'Audit log', route: '/audit', icon: <FileText />, group: 'Pages' },
 ];
 
-const QUICK_NAV_ROUTES = ['/', '/alerts', '/investigate', '/nodes', '/security/network', '/infrastructure/patch'];
+const QUICK_NAV_ROUTES = ['/', '/alerts', '/investigate', '/nodes', '/security/network', '/infrastructure/patch', '/coverage'];
 
 // Discoverability prompts shown under the empty state.
 const EXAMPLE_QUERIES = ['8.8.8.8', '139.162.40.237', 'admin@', 'sshd'];

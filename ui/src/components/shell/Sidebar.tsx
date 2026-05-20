@@ -10,6 +10,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  ShieldQuestion,
   Sparkles,
   type LucideIcon,
 } from 'lucide-react';
@@ -78,6 +79,7 @@ const NAV_GROUPS: NavGroupDef[] = [
   {
     label: 'Governance',
     items: [
+      { to: '/coverage', label: 'Coverage', icon: ShieldQuestion },
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
       { to: '/access', label: 'Access', icon: KeyRound },
       { to: '/audit', label: 'Audit log', icon: FileText },
