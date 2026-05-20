@@ -514,18 +514,18 @@ func detectDBAuditEngineFromText(text string) string {
 
 func normalizeDBAuditEngineName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	switch {
-	case value == "postgres" || value == "postgresql" || value == "pg":
+	switch value {
+	case "postgres", "postgresql", "pg":
 		return "postgres"
-	case value == "mysql" || value == "mariadb" || value == "aurora-mysql":
+	case "mysql", "mariadb", "aurora-mysql":
 		return "mysql"
-	case value == "mongodb" || value == "mongo":
+	case "mongodb", "mongo":
 		return "mongodb"
-	case value == "mssql" || value == "sqlserver" || value == "sql_server" || value == "sql server":
+	case "mssql", "sqlserver", "sql_server", "sql server":
 		return "mssql"
-	case value == "oracle":
+	case "oracle":
 		return "oracle"
-	case value == "db2" || value == "ibm_db2":
+	case "db2", "ibm_db2":
 		return "db2"
 	default:
 		return ""
