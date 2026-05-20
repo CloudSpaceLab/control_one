@@ -6,11 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
 func TestCoverageMatrixHandlerReturnsDeterministicTenantScopedCatalog(t *testing.T) {
@@ -38,7 +42,7 @@ func TestCoverageMatrixHandlerReturnsDeterministicTenantScopedCatalog(t *testing
 		t.Fatalf("expected tenant_id %s got %q", tenantID, resp.TenantID)
 	}
 	if len(resp.Matrix) != 9 {
-		t.Fatalf("expected 9 matrix rows got %d", len(resp.Matrix))
+		t.Fatalf("expected static no-store matrix to stay at 9 rows got %d", len(resp.Matrix))
 	}
 
 	expectedDomains := []string{
@@ -79,6 +83,98 @@ func TestCoverageMatrixHandlerReturnsDeterministicTenantScopedCatalog(t *testing
 	}
 	if rec.Body.String() != rec2.Body.String() {
 		t.Fatalf("expected deterministic response bodies")
+	}
+}
+
+func TestCoverageMatrixAddsTenantHeartbeatFreshnessOverlay(t *testing.T) {
+	tenantID := uuid.New()
+	now := time.Now().UTC()
+	fresh := now.Add(-2 * time.Minute)
+	stale := now.Add(-20 * time.Minute)
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}},
+		nodes: []storage.Node{
+			{ID: uuid.New(), TenantID: tenantID, Hostname: "fresh-1", State: storage.NodeStateActive, LastSeenAt: &fresh},
+			{ID: uuid.New(), TenantID: tenantID, Hostname: "stale-1", State: storage.NodeStateActive, LastSeenAt: &stale},
+			{ID: uuid.New(), TenantID: tenantID, Hostname: "missing-1", State: storage.NodeStateActive},
+		},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "coverage-viewer"),
+	}, store, &stubQueue{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/coverage/matrix?tenant_id="+tenantID.String()+"&domain=telemetry", nil)
+	req.Header.Set("Authorization", "Bearer coverage-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp coverageMatrixResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode matrix response: %v", err)
+	}
+	if resp.Scope != "tenant" || resp.TenantID != tenantID.String() || resp.GeneratedAt == "" {
+		t.Fatalf("expected generated tenant-scoped response, got %+v", resp)
+	}
+	for _, row := range resp.Matrix {
+		if row.Domain != "telemetry" {
+			t.Fatalf("domain filter leaked row %+v", row)
+		}
+	}
+	row := findCoverageRow(resp.Matrix, "Tenant heartbeat freshness")
+	if row == nil {
+		t.Fatalf("expected tenant heartbeat row, got %+v", resp.Matrix)
+	}
+	if row.State != coverageStateStale {
+		t.Fatalf("expected stale heartbeat state, got %+v", row)
+	}
+	if !containsString(row.Signals, "fresh=1") || !containsString(row.Signals, "stale=1") || !containsString(row.Signals, "missing=1") {
+		t.Fatalf("expected heartbeat counters in signals, got %+v", row.Signals)
+	}
+}
+
+func TestCoverageMatrixHeartbeatOverlayFreshAndNotApplicable(t *testing.T) {
+	now := time.Now().UTC()
+	fresh := now.Add(-1 * time.Minute)
+	row := tenantHeartbeatCoverageFromNodes([]storage.Node{{
+		ID:         uuid.New(),
+		TenantID:   uuid.New(),
+		Hostname:   "fresh-1",
+		LastSeenAt: &fresh,
+	}}, 1, now)
+	if row.State != coverageStateSupported {
+		t.Fatalf("expected supported for all fresh nodes, got %+v", row)
+	}
+	none := tenantHeartbeatCoverageFromNodes(nil, 0, now)
+	if none.State != coverageStateNotApplicable {
+		t.Fatalf("expected not_applicable for zero nodes, got %+v", none)
+	}
+}
+
+func TestCoverageMatrixTenantAccessDenied(t *testing.T) {
+	tenantID := uuid.New()
+	store := &coverageAccessStore{
+		fakeStore: &fakeStore{tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}}},
+		allowed:   false,
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "coverage-viewer"),
+	}, store, &stubQueue{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/coverage/matrix?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer coverage-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected tenant access denial, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.checkedTenant != tenantID {
+		t.Fatalf("tenant gate not called with requested tenant: got %s want %s", store.checkedTenant, tenantID)
 	}
 }
 
@@ -208,6 +304,26 @@ func coverageRequest(method, target string) *http.Request {
 		Roles:   []string{roleViewer},
 	}
 	return req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, principal))
+}
+
+type coverageAccessStore struct {
+	*fakeStore
+	allowed       bool
+	checkedTenant uuid.UUID
+}
+
+func (s *coverageAccessStore) UserHasTenantRole(_ context.Context, _ uuid.UUID, tenantID uuid.UUID, _ []string) (bool, error) {
+	s.checkedTenant = tenantID
+	return s.allowed, nil
+}
+
+func findCoverageRow(rows []coverageMatrixRow, title string) *coverageMatrixRow {
+	for i := range rows {
+		if rows[i].Title == title {
+			return &rows[i]
+		}
+	}
+	return nil
 }
 
 func requireCoverageState(t *testing.T, states []coverageStateDefinition, want string) {
