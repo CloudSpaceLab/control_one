@@ -26,6 +26,7 @@ import (
 const networkPolicyReceiptQueueCap = 128
 const networkPolicyDriftReceiptInterval = 10 * time.Minute
 const networkPolicyStateKey = "network_policy_last_enforced"
+const networkPolicyRuleFingerprintKey = "controlone_rule_fp="
 
 type networkPolicyApplierOptions struct {
 	ReceiptInterval time.Duration
@@ -313,6 +314,16 @@ func buildNetworkPolicyReceipt(ctx context.Context, desired networkPolicyDesired
 		ObservedAt:        now.UTC().Format(time.RFC3339),
 		RollbackAvailable: false,
 	}
+	trustErr := validateNetworkPolicyTrust(desired, verifier)
+	if trustErr != nil && (desired.Active || (enforce && previous != nil)) {
+		receipt.Status = "failed"
+		receipt.Error = trustErr.Error()
+		receipt.MissingControls = appendUniqueString(receipt.MissingControls, "policy_signature")
+		return receipt
+	}
+	if trustErr == nil {
+		receipt.SignatureValid = true
+	}
 	if !desired.Active {
 		if enforce && previous != nil {
 			removed, err := rollbackNetworkPolicyRules(ctx, firewallProvider, *previous)
@@ -330,13 +341,6 @@ func buildNetworkPolicyReceipt(ctx context.Context, desired networkPolicyDesired
 		receipt.Status = "no_op"
 		return receipt
 	}
-	if err := validateNetworkPolicyTrust(desired, verifier); err != nil {
-		receipt.Status = "failed"
-		receipt.Error = err.Error()
-		receipt.MissingControls = appendUniqueString(receipt.MissingControls, "policy_signature")
-		return receipt
-	}
-	receipt.SignatureValid = true
 
 	mgr, err := firewallProvider()
 	if err != nil || mgr == nil || mgr.Backend() == nil {
@@ -363,8 +367,15 @@ func buildNetworkPolicyReceipt(ctx context.Context, desired networkPolicyDesired
 	}
 
 	existing, listErr := mgr.List(ctx, networkPolicyRuleTag(desired))
-	if listErr == nil && len(existing) < len(planned) {
-		receipt.Drift = append(receipt.Drift, "planned_rules_not_present")
+	existingVerified := false
+	if listErr == nil {
+		var drift []string
+		existingVerified, drift = networkPolicyPlannedRulesPresent(planned, existing)
+		if !existingVerified {
+			receipt.Drift = append(receipt.Drift, drift...)
+		}
+	}
+	if listErr == nil && !existingVerified {
 		receipt.Status = "drift_detected"
 	}
 	if !enforce {
@@ -381,7 +392,7 @@ func buildNetworkPolicyReceipt(ctx context.Context, desired networkPolicyDesired
 			return receipt
 		}
 	}
-	if listErr == nil && len(existing) >= len(planned) {
+	if listErr == nil && existingVerified {
 		receipt.Status = "applied"
 		receipt.AppliedRules = len(planned)
 		receipt.Drift = nil
@@ -396,7 +407,30 @@ func buildNetworkPolicyReceipt(ctx context.Context, desired networkPolicyDesired
 	}
 	receipt.Status = "applied"
 	receipt.Drift = nil
+	verified, drift, verifyErr := verifyNetworkPolicyRules(ctx, mgr, desired, planned)
+	if verifyErr != nil {
+		receipt.Status = "failed"
+		receipt.Error = verifyErr.Error()
+		receipt.MissingControls = appendUniqueString(receipt.MissingControls, "firewall_rule_verification")
+		return receipt
+	}
+	if !verified {
+		receipt.Status = "failed"
+		receipt.Drift = drift
+		receipt.Error = "network policy firewall rules could not be verified after apply"
+		receipt.MissingControls = appendUniqueString(receipt.MissingControls, "firewall_rule_verification")
+		return receipt
+	}
 	return receipt
+}
+
+func verifyNetworkPolicyRules(ctx context.Context, mgr networkPolicyFirewall, desired networkPolicyDesiredState, planned []firewall.Rule) (bool, []string, error) {
+	existing, err := mgr.List(ctx, networkPolicyRuleTag(desired))
+	if err != nil {
+		return false, nil, fmt.Errorf("verify network policy rules: %w", err)
+	}
+	verified, drift := networkPolicyPlannedRulesPresent(planned, existing)
+	return verified, drift, nil
 }
 
 func applyNetworkPolicyRules(ctx context.Context, mgr networkPolicyFirewall, rules []firewall.Rule) (int, error) {
@@ -553,7 +587,6 @@ func parseNetworkPolicyPublicKeyDER(der []byte) (ed25519.PublicKey, error) {
 
 func plannedNetworkPolicyRules(desired networkPolicyDesiredState) []firewall.Rule {
 	tag := networkPolicyRuleTag(desired)
-	reason := "control one network policy " + desired.DesiredStateID
 	cidrs := desired.Enforcement.AllowlistCIDRs
 	if len(cidrs) == 0 {
 		cidrs = desired.AllowlistCIDRs
@@ -561,23 +594,87 @@ func plannedNetworkPolicyRules(desired networkPolicyDesiredState) []firewall.Rul
 	var rules []firewall.Rule
 	if strings.EqualFold(desired.Enforcement.DefaultInboundAction, "block") {
 		for _, cidr := range cidrs {
-			rules = append(rules, firewall.Rule{Source: cidr, Direction: firewall.DirectionIn, Action: firewall.ActionAllow, Tag: tag, Comment: reason})
+			rules = append(rules, firewall.Rule{Source: cidr, Direction: firewall.DirectionIn, Action: firewall.ActionAllow, Tag: tag})
 		}
 		rules = append(rules,
-			firewall.Rule{Source: "0.0.0.0/0", Direction: firewall.DirectionIn, Action: firewall.ActionBlock, Tag: tag, Comment: reason},
-			firewall.Rule{Source: "::/0", Direction: firewall.DirectionIn, Action: firewall.ActionBlock, Tag: tag, Comment: reason},
+			firewall.Rule{Source: "0.0.0.0/0", Direction: firewall.DirectionIn, Action: firewall.ActionBlock, Tag: tag},
+			firewall.Rule{Source: "::/0", Direction: firewall.DirectionIn, Action: firewall.ActionBlock, Tag: tag},
 		)
 	}
 	if strings.EqualFold(desired.Enforcement.DefaultOutboundAction, "block") {
 		for _, cidr := range cidrs {
-			rules = append(rules, firewall.Rule{Dest: cidr, Direction: firewall.DirectionOut, Action: firewall.ActionAllow, Tag: tag, Comment: reason})
+			rules = append(rules, firewall.Rule{Dest: cidr, Direction: firewall.DirectionOut, Action: firewall.ActionAllow, Tag: tag})
 		}
 		rules = append(rules,
-			firewall.Rule{Dest: "0.0.0.0/0", Direction: firewall.DirectionOut, Action: firewall.ActionBlock, Tag: tag, Comment: reason},
-			firewall.Rule{Dest: "::/0", Direction: firewall.DirectionOut, Action: firewall.ActionBlock, Tag: tag, Comment: reason},
+			firewall.Rule{Dest: "0.0.0.0/0", Direction: firewall.DirectionOut, Action: firewall.ActionBlock, Tag: tag},
+			firewall.Rule{Dest: "::/0", Direction: firewall.DirectionOut, Action: firewall.ActionBlock, Tag: tag},
 		)
 	}
+	for i := range rules {
+		fp := networkPolicyRuleFingerprint(rules[i])
+		rules[i].Comment = "control one network policy " + desired.DesiredStateID + " " + networkPolicyRuleFingerprintKey + fp
+	}
 	return rules
+}
+
+func networkPolicyPlannedRulesPresent(planned, existing []firewall.Rule) (bool, []string) {
+	if len(planned) == 0 {
+		return true, nil
+	}
+	structured := make(map[string]int, len(existing))
+	existingText := strings.Builder{}
+	for _, rule := range existing {
+		if key := networkPolicyRuleIdentity(rule); key != "" {
+			structured[key]++
+		}
+		if rule.Comment != "" {
+			existingText.WriteString("\n")
+			existingText.WriteString(rule.Comment)
+		}
+		if rule.Tag != "" {
+			existingText.WriteString("\n")
+			existingText.WriteString(rule.Tag)
+		}
+	}
+
+	var drift []string
+	text := existingText.String()
+	for _, rule := range planned {
+		key := networkPolicyRuleIdentity(rule)
+		if structured[key] > 0 {
+			structured[key]--
+			continue
+		}
+		fp := networkPolicyRuleFingerprint(rule)
+		if strings.Contains(text, networkPolicyRuleFingerprintKey+fp) {
+			continue
+		}
+		drift = appendUniqueString(drift, "missing_network_policy_rule:"+fp)
+	}
+	return len(drift) == 0, drift
+}
+
+func networkPolicyRuleIdentity(rule firewall.Rule) string {
+	action := strings.ToLower(strings.TrimSpace(string(rule.Action)))
+	direction := strings.ToLower(strings.TrimSpace(string(rule.Direction)))
+	if action == "" || direction == "" {
+		return ""
+	}
+	parts := []string{
+		"src=" + strings.TrimSpace(rule.Source),
+		"dst=" + strings.TrimSpace(rule.Dest),
+		fmt.Sprintf("port=%d", rule.Port),
+		"proto=" + strings.ToLower(strings.TrimSpace(rule.Protocol)),
+		"dir=" + direction,
+		"action=" + action,
+		"tag=" + strings.TrimSpace(rule.Tag),
+	}
+	return strings.Join(parts, "|")
+}
+
+func networkPolicyRuleFingerprint(rule firewall.Rule) string {
+	sum := sha256.Sum256([]byte(networkPolicyRuleIdentity(rule)))
+	return hex.EncodeToString(sum[:8])
 }
 
 func networkPolicyRuleTag(desired networkPolicyDesiredState) string {

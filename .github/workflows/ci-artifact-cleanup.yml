@@ -13,6 +13,18 @@ on:
         description: 'Delete Actions caches not accessed in this many days'
         required: false
         default: '14'
+      dry_run:
+        description: 'Report what would be deleted without deleting anything'
+        required: false
+        default: 'true'
+      protected_artifact_name_regex:
+        description: 'Case-insensitive artifact names to keep'
+        required: false
+        default: '(release|goreleaser|attestation|sbom|sarif)'
+      protected_ref_regex:
+        description: 'Cache/artifact refs to keep'
+        required: false
+        default: '^refs/heads/(main|master|release/.+)$'
 
 permissions:
   actions: write
@@ -32,23 +44,42 @@ jobs:
         env:
           ARTIFACT_RETENTION_DAYS: ${{ github.event.inputs.artifact_retention_days || '14' }}
           CACHE_RETENTION_DAYS: ${{ github.event.inputs.cache_retention_days || '14' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          PROTECTED_ARTIFACT_NAME_REGEX: ${{ github.event.inputs.protected_artifact_name_regex || '(release|goreleaser|attestation|sbom|sarif)' }}
+          PROTECTED_REF_REGEX: ${{ github.event.inputs.protected_ref_regex || '^refs/heads/(main|master|release/.+)$' }}
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const minRetentionDays = 7;
 
             const positiveInt = (value, fallback) => {
               const parsed = Number.parseInt(value, 10);
               return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
             };
+            const compileRegex = (value) => {
+              const pattern = (value || '').trim();
+              if (!pattern) return null;
+              try {
+                return new RegExp(pattern, 'i');
+              } catch (error) {
+                core.warning(`Ignoring invalid regex ${pattern}: ${error.message}`);
+                return null;
+              }
+            };
+            const protectedArtifactName = compileRegex(process.env.PROTECTED_ARTIFACT_NAME_REGEX);
+            const protectedRef = compileRegex(process.env.PROTECTED_REF_REGEX);
+            const dryRun = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
+            const isProtectedRef = (ref) => protectedRef && protectedRef.test(String(ref || ''));
 
-            const artifactRetentionDays = positiveInt(process.env.ARTIFACT_RETENTION_DAYS, 14);
-            const cacheRetentionDays = positiveInt(process.env.CACHE_RETENTION_DAYS, 14);
+            const artifactRetentionDays = Math.max(positiveInt(process.env.ARTIFACT_RETENTION_DAYS, 14), minRetentionDays);
+            const cacheRetentionDays = Math.max(positiveInt(process.env.CACHE_RETENTION_DAYS, 14), minRetentionDays);
             const now = Date.now();
             const artifactCutoff = now - artifactRetentionDays * 24 * 60 * 60 * 1000;
             const cacheCutoff = now - cacheRetentionDays * 24 * 60 * 60 * 1000;
 
             let deletedArtifacts = 0;
+            let skippedProtectedArtifacts = 0;
             const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner,
               repo,
@@ -56,18 +87,27 @@ jobs:
             });
 
             for (const artifact of artifacts) {
+              const artifactName = artifact.name || '';
+              const headBranch = artifact.workflow_run?.head_branch ? `refs/heads/${artifact.workflow_run.head_branch}` : '';
+              if ((protectedArtifactName && protectedArtifactName.test(artifactName)) || isProtectedRef(headBranch)) {
+                skippedProtectedArtifacts += 1;
+                continue;
+              }
               const createdAt = Date.parse(artifact.created_at || '');
               if (artifact.expired || (Number.isFinite(createdAt) && createdAt < artifactCutoff)) {
-                await github.rest.actions.deleteArtifact({
-                  owner,
-                  repo,
-                  artifact_id: artifact.id,
-                });
+                if (!dryRun) {
+                  await github.rest.actions.deleteArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id,
+                  });
+                }
                 deletedArtifacts += 1;
               }
             }
 
             let deletedCaches = 0;
+            let skippedProtectedCaches = 0;
             const cachePages = await github.paginate(github.rest.actions.getActionsCacheList, {
               owner,
               repo,
@@ -75,21 +115,30 @@ jobs:
             });
 
             for (const cache of cachePages) {
+              if (isProtectedRef(cache.ref)) {
+                skippedProtectedCaches += 1;
+                continue;
+              }
               const lastAccessedAt = Date.parse(cache.last_accessed_at || cache.created_at || '');
               if (Number.isFinite(lastAccessedAt) && lastAccessedAt < cacheCutoff) {
-                await github.rest.actions.deleteActionsCacheById({
-                  owner,
-                  repo,
-                  cache_id: cache.id,
-                });
+                if (!dryRun) {
+                  await github.rest.actions.deleteActionsCacheById({
+                    owner,
+                    repo,
+                    cache_id: cache.id,
+                  });
+                }
                 deletedCaches += 1;
               }
             }
 
             core.summary
               .addHeading('CI cleanup summary')
-              .addRaw(`Deleted workflow artifacts: ${deletedArtifacts}\n`)
-              .addRaw(`Deleted Actions caches: ${deletedCaches}\n`)
+              .addRaw(`Mode: ${dryRun ? 'dry-run' : 'delete'}\n`)
+              .addRaw(`${dryRun ? 'Would delete' : 'Deleted'} workflow artifacts: ${deletedArtifacts}\n`)
+              .addRaw(`${dryRun ? 'Would delete' : 'Deleted'} Actions caches: ${deletedCaches}\n`)
+              .addRaw(`Skipped protected artifacts: ${skippedProtectedArtifacts}\n`)
+              .addRaw(`Skipped protected caches: ${skippedProtectedCaches}\n`)
               .addRaw(`Artifact retention days: ${artifactRetentionDays}\n`)
               .addRaw(`Cache retention days: ${cacheRetentionDays}\n`)
               .write();

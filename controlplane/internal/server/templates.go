@@ -243,7 +243,7 @@ func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, 
 		if !ok {
 			return
 		}
-		if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
+		if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
 			return
 		}
 		s.handleCreateTemplateVersion(w, r, templateID, principal)
@@ -264,7 +264,7 @@ func (s *Server) handlePromoteTemplateVersion(w http.ResponseWriter, r *http.Req
 			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
+		if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
 			return
 		}
 		version, err := s.store.PromoteProvisioningTemplateVersion(r.Context(), templateID, versionNumber)
@@ -415,7 +415,7 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, te
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
+	if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
 		return
 	}
 
@@ -702,6 +702,18 @@ func (s *Server) requireTemplateAccess(w http.ResponseWriter, r *http.Request, p
 		return nil, false
 	}
 	if template.TenantID != uuid.Nil && !s.requireTenantAccess(w, r, principal, template.TenantID, roles...) {
+		return nil, false
+	}
+	return template, true
+}
+
+func (s *Server) requireMutableTemplateAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, templateID uuid.UUID, roles ...string) (*storage.ProvisioningTemplate, bool) {
+	template, ok := s.requireTemplateAccess(w, r, principal, templateID, roles...)
+	if !ok {
+		return nil, false
+	}
+	if template.TenantID == uuid.Nil {
+		http.Error(w, "platform-global templates are read-only; create a tenant-owned template before editing", http.StatusForbidden)
 		return nil, false
 	}
 	return template, true

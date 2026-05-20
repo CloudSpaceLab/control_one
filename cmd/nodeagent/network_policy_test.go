@@ -178,6 +178,40 @@ func TestNetworkPolicyReceiptAppliesSignedPolicyWhenEnforcementEnabled(t *testin
 func TestNetworkPolicyReceiptRollsBackPreviousPolicyOnOnlineState(t *testing.T) {
 	t.Parallel()
 
+	previous, verifier, privateKey := signedTestNetworkPolicyWithKey(t, "airgapped")
+	online := previous
+	online.Mode = "online"
+	online.Active = false
+	online.LocalOnly = false
+	online.Enforcement.DefaultInboundAction = "allow"
+	online.Enforcement.DefaultOutboundAction = "allow"
+	online.Signature = ""
+	online.SignatureAlgorithm = ""
+	online.SignatureKeyID = ""
+	signTestNetworkPolicy(t, &online, privateKey)
+	fw := &fakeNetworkPolicyFirewall{}
+
+	receipt := buildNetworkPolicyReceipt(
+		context.Background(),
+		online,
+		time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC),
+		verifier,
+		true,
+		func() (networkPolicyFirewall, error) { return fw, nil },
+		&previous,
+	)
+
+	if receipt.Status != "rollback_applied" || receipt.DryRun || receipt.RemovedRules == 0 {
+		t.Fatalf("expected rollback receipt, got %#v", receipt)
+	}
+	if len(fw.removed) != receipt.RemovedRules {
+		t.Fatalf("removed rules = %d, want %d", len(fw.removed), receipt.RemovedRules)
+	}
+}
+
+func TestNetworkPolicyReceiptRejectsUnsignedInactiveRollback(t *testing.T) {
+	t.Parallel()
+
 	previous, verifier := signedTestNetworkPolicy(t, "airgapped")
 	online := previous
 	online.Mode = "online"
@@ -201,11 +235,43 @@ func TestNetworkPolicyReceiptRollsBackPreviousPolicyOnOnlineState(t *testing.T) 
 		&previous,
 	)
 
-	if receipt.Status != "rollback_applied" || receipt.DryRun || receipt.RemovedRules == 0 {
-		t.Fatalf("expected rollback receipt, got %#v", receipt)
+	if receipt.Status != "failed" || receipt.Error == "" || !containsTestString(receipt.MissingControls, "policy_signature") {
+		t.Fatalf("expected unsigned inactive rollback to fail, got %#v", receipt)
 	}
-	if len(fw.removed) != receipt.RemovedRules {
-		t.Fatalf("removed rules = %d, want %d", len(fw.removed), receipt.RemovedRules)
+	if len(fw.removed) != 0 {
+		t.Fatalf("unsigned inactive desired state removed rules: %#v", fw.removed)
+	}
+}
+
+func TestNetworkPolicyReceiptReappliesWhenExistingRulesDoNotMatchPlan(t *testing.T) {
+	t.Parallel()
+
+	desired, verifier := signedTestNetworkPolicy(t, "whitelist")
+	planned := plannedNetworkPolicyRules(desired)
+	stale := make([]firewall.Rule, 0, len(planned))
+	for range planned {
+		stale = append(stale, firewall.Rule{
+			Tag:     networkPolicyRuleTag(desired),
+			Comment: "stale network policy rule with matching count only",
+		})
+	}
+	fw := &fakeNetworkPolicyFirewall{existing: stale}
+
+	receipt := buildNetworkPolicyReceipt(
+		context.Background(),
+		desired,
+		time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC),
+		verifier,
+		true,
+		func() (networkPolicyFirewall, error) { return fw, nil },
+		nil,
+	)
+
+	if receipt.Status != "applied" || receipt.AppliedRules != len(planned) {
+		t.Fatalf("expected stale rules to be reapplied and verified, got %#v", receipt)
+	}
+	if len(fw.applied) != len(planned) {
+		t.Fatalf("expected exact planned rules to be applied, got %d want %d", len(fw.applied), len(planned))
 	}
 }
 
@@ -213,7 +279,7 @@ func TestNetworkPolicyApplierPersistsAndRestoresRollbackState(t *testing.T) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
-	desired, verifier := signedTestNetworkPolicy(t, "airgapped")
+	desired, verifier, privateKey := signedTestNetworkPolicyWithKey(t, "airgapped")
 	publicKeyPath := writeTestNetworkPolicyPublicKey(t, stateDir, verifier.publicKey)
 	now := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
 	fw := &fakeNetworkPolicyFirewall{}
@@ -250,7 +316,7 @@ func TestNetworkPolicyApplierPersistsAndRestoresRollbackState(t *testing.T) {
 	online.Signature = ""
 	online.SignatureAlgorithm = ""
 	online.SignatureKeyID = ""
-	online.DesiredStateID = computeNetworkPolicyDesiredStateID(online)
+	signTestNetworkPolicy(t, &online, privateKey)
 	rawOnline, err := json.Marshal(online)
 	if err != nil {
 		t.Fatalf("marshal online desired state: %v", err)
@@ -280,7 +346,7 @@ func TestNetworkPolicyApplierKeepsRollbackStateWhenRollbackFails(t *testing.T) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
-	desired, verifier := signedTestNetworkPolicy(t, "airgapped")
+	desired, verifier, privateKey := signedTestNetworkPolicyWithKey(t, "airgapped")
 	publicKeyPath := writeTestNetworkPolicyPublicKey(t, stateDir, verifier.publicKey)
 	now := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
 	applier := makeNetworkPolicyApplierWithOptions(zap.NewNop(), networkPolicyApplierOptions{
@@ -307,7 +373,7 @@ func TestNetworkPolicyApplierKeepsRollbackStateWhenRollbackFails(t *testing.T) {
 	online.Signature = ""
 	online.SignatureAlgorithm = ""
 	online.SignatureKeyID = ""
-	online.DesiredStateID = computeNetworkPolicyDesiredStateID(online)
+	signTestNetworkPolicy(t, &online, privateKey)
 	rawOnline, err := json.Marshal(online)
 	if err != nil {
 		t.Fatalf("marshal online desired state: %v", err)
@@ -389,6 +455,12 @@ func TestParseNetworkPolicyPublicKeyAcceptsPEM(t *testing.T) {
 
 func signedTestNetworkPolicy(t *testing.T, mode string) (networkPolicyDesiredState, networkPolicyVerifier) {
 	t.Helper()
+	desired, verifier, _ := signedTestNetworkPolicyWithKey(t, mode)
+	return desired, verifier
+}
+
+func signedTestNetworkPolicyWithKey(t *testing.T, mode string) (networkPolicyDesiredState, networkPolicyVerifier, ed25519.PrivateKey) {
+	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -414,10 +486,15 @@ func signedTestNetworkPolicy(t *testing.T, mode string) (networkPolicyDesiredSta
 	if mode == "airgapped" {
 		desired.Enforcement.DefaultOutboundAction = "block"
 	}
-	desired.DesiredStateID = computeNetworkPolicyDesiredStateID(desired)
+	signTestNetworkPolicy(t, &desired, priv)
+	return desired, networkPolicyVerifier{publicKey: pub}, priv
+}
+
+func signTestNetworkPolicy(t *testing.T, desired *networkPolicyDesiredState, privateKey ed25519.PrivateKey) {
+	t.Helper()
+	desired.DesiredStateID = computeNetworkPolicyDesiredStateID(*desired)
 	desired.SignatureAlgorithm = "ed25519"
-	desired.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(desired.DesiredStateID)))
-	return desired, networkPolicyVerifier{publicKey: pub}
+	desired.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(desired.DesiredStateID)))
 }
 
 func writeTestNetworkPolicyPublicKey(t *testing.T, dir string, pub ed25519.PublicKey) string {
@@ -454,6 +531,7 @@ func (f *fakeNetworkPolicyFirewall) Apply(_ context.Context, rule firewall.Rule)
 	if f.applyErrAfter > 0 && len(f.applied) > f.applyErrAfter {
 		return errors.New("apply failed")
 	}
+	f.existing = append(f.existing, rule)
 	return nil
 }
 

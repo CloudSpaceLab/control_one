@@ -536,6 +536,45 @@ func TestTemplateEndpoints(t *testing.T) {
 	if patched.Labels["team"] != "platform" {
 		t.Fatalf("expected labels merged, got %+v", patched.Labels)
 	}
+
+	globalTemplateID := uuid.New()
+	store.templates = append(store.templates, storage.ProvisioningTemplate{
+		ID:        globalTemplateID,
+		TenantID:  uuid.Nil,
+		Name:      "platform-linux-baseline",
+		Provider:  "linux",
+		Labels:    map[string]string{"source": "platform"},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	rec = call(http.MethodGet, "/api/v1/templates/"+globalTemplateID.String(), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected platform-global template read 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, _ = json.Marshal(map[string]any{"name": "mutated-platform-template"})
+	rec = call(http.MethodPatch, "/api/v1/templates/"+globalTemplateID.String(), body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected platform-global template patch 403 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, _ = json.Marshal(map[string]any{"body": "#cloud-config"})
+	rec = call(http.MethodPost, fmt.Sprintf("/api/v1/templates/%s/versions", globalTemplateID), body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected platform-global template version create 403 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = call(http.MethodPost, fmt.Sprintf("/api/v1/templates/%s/versions/1/promote", globalTemplateID), nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected platform-global template promote 403 got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{
+		"tenant_id":  templateTenantID.String(),
+		"scope_type": storage.AssignmentScopeTenant,
+	})
+	rec = call(http.MethodPost, fmt.Sprintf("/api/v1/templates/%s/assignments", globalTemplateID), body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected platform-global template assignment to authorized tenant 201 got %d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestScopedPolicyAssignmentEndpoints(t *testing.T) {

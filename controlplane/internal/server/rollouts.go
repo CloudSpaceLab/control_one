@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -36,15 +37,23 @@ type createRolloutRequest struct {
 func (s *Server) handleTemplateRollouts(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
+			return
+		}
+		if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleViewer, roleOperator, roleAdmin); !ok {
 			return
 		}
 		s.handleListRollouts(w, r, templateID)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleCreateRollout(w, r, templateID)
+		if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
+			return
+		}
+		s.handleCreateRollout(w, r, templateID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -54,7 +63,11 @@ func (s *Server) handleTemplateRollouts(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handleRolloutResource(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, rolloutID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
+			return
+		}
+		if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleViewer, roleOperator, roleAdmin); !ok {
 			return
 		}
 		s.handleGetRollout(w, r, rolloutID)
@@ -78,6 +91,9 @@ func (s *Server) handleCancelRollout(w http.ResponseWriter, r *http.Request, tem
 
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
 		return
 	}
 
@@ -153,14 +169,9 @@ func (s *Server) handleListRollouts(w http.ResponseWriter, r *http.Request, temp
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+func (s *Server) handleCreateRollout(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	principal, ok := s.authorize(w, r, roleAdmin)
-	if !ok {
 		return
 	}
 
