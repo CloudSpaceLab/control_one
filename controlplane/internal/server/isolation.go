@@ -39,13 +39,32 @@ type nodeIsolationPosture struct {
 }
 
 type nodeNetworkPolicy struct {
-	Mode                string   `json:"mode"`
-	Active              bool     `json:"active"`
-	LocalOnly           bool     `json:"local_only"`
-	ExpiresAt           *string  `json:"expires_at,omitempty"`
-	Reason              string   `json:"reason,omitempty"`
-	AllowedApplications []string `json:"allowed_applications,omitempty"`
-	AllowlistCIDRs      []string `json:"allowlist_cidrs,omitempty"`
+	SchemaVersion       string                       `json:"schema_version"`
+	PolicyClass         string                       `json:"policy_class"`
+	DesiredStateID      string                       `json:"desired_state_id"`
+	CompiledAt          string                       `json:"compiled_at"`
+	Mode                string                       `json:"mode"`
+	Active              bool                         `json:"active"`
+	LocalOnly           bool                         `json:"local_only"`
+	ExpiresAt           *string                      `json:"expires_at,omitempty"`
+	Reason              string                       `json:"reason,omitempty"`
+	AllowedApplications []string                     `json:"allowed_applications,omitempty"`
+	AllowlistCIDRs      []string                     `json:"allowlist_cidrs,omitempty"`
+	SourceRefs          []string                     `json:"source_refs,omitempty"`
+	TemplateErrors      []string                     `json:"template_errors,omitempty"`
+	Enforcement         nodeNetworkPolicyEnforcement `json:"enforcement"`
+	Signature           string                       `json:"signature,omitempty"`
+	SignatureAlgorithm  string                       `json:"signature_algorithm,omitempty"`
+	SignatureKeyID      string                       `json:"signature_key_id,omitempty"`
+}
+
+type nodeNetworkPolicyEnforcement struct {
+	Engine                string   `json:"engine"`
+	DefaultInboundAction  string   `json:"default_inbound_action"`
+	DefaultOutboundAction string   `json:"default_outbound_action"`
+	AllowlistCIDRs        []string `json:"allowlist_cidrs,omitempty"`
+	ApplicationScope      string   `json:"application_scope"`
+	UnsupportedControls   []string `json:"unsupported_controls,omitempty"`
 }
 
 type nodeIsolationRequest struct {
@@ -178,25 +197,6 @@ func applyNodeIsolationLabels(labels map[string]any, posture nodeIsolationPostur
 		next[isolationAllowCIDRsLabel] = posture.AllowlistCIDRs
 	}
 	return next
-}
-
-func nodeNetworkPolicyFromPosture(posture nodeIsolationPosture) *nodeNetworkPolicy {
-	if posture.Mode == isolationModeOnline && !posture.Expired {
-		return nil
-	}
-	out := &nodeNetworkPolicy{
-		Mode:                posture.Mode,
-		Active:              posture.Active,
-		LocalOnly:           posture.LocalOnly,
-		Reason:              posture.Reason,
-		AllowedApplications: posture.AllowedApplications,
-		AllowlistCIDRs:      posture.AllowlistCIDRs,
-	}
-	if posture.ExpiresAt != nil {
-		formatted := posture.ExpiresAt.UTC().Format(time.RFC3339)
-		out.ExpiresAt = &formatted
-	}
-	return out
 }
 
 func formatOptionalTime(value *time.Time) string {

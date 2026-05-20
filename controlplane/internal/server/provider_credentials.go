@@ -60,15 +60,17 @@ type providerCredentialListResponse struct {
 func (s *Server) handleProviderCredentialsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.listProviderCredentials(w, r)
+		s.listProviderCredentials(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.createProviderCredential(w, r)
+		s.createProviderCredential(w, r, principal)
 	default:
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -93,15 +95,17 @@ func (s *Server) handleProviderCredentialSubroutes(w http.ResponseWriter, r *htt
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
-			if _, ok := s.authorize(w, r, roleAdmin); !ok {
+			principal, ok := s.authorize(w, r, roleAdmin)
+			if !ok {
 				return
 			}
-			s.getProviderCredential(w, r, id)
+			s.getProviderCredential(w, r, id, principal)
 		case http.MethodDelete:
-			if _, ok := s.authorize(w, r, roleAdmin); !ok {
+			principal, ok := s.authorize(w, r, roleAdmin)
+			if !ok {
 				return
 			}
-			s.deleteProviderCredential(w, r, id)
+			s.deleteProviderCredential(w, r, id, principal)
 		default:
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodDelete)
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -115,17 +119,18 @@ func (s *Server) handleProviderCredentialSubroutes(w http.ResponseWriter, r *htt
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.rotateProviderCredential(w, r, id)
+		s.rotateProviderCredential(w, r, id, principal)
 		return
 	}
 
 	http.NotFound(w, r)
 }
 
-func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.sealer == nil {
 		http.Error(w, "secrets encryption is not configured", http.StatusServiceUnavailable)
 		return
@@ -141,6 +146,9 @@ func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request
 
 	if req.TenantID == uuid.Nil {
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, req.TenantID, roleAdmin) {
 		return
 	}
 	provider := strings.TrimSpace(strings.ToLower(req.Provider))
@@ -184,7 +192,6 @@ func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	principal, _ := auth.PrincipalFromContext(r.Context())
 	s.recordAudit(r.Context(), principal, cred.TenantID, "provider_credential.created", "provider_credential", cred.ID.String(), map[string]any{
 		"provider": provider,
 		"name":     name,
@@ -193,7 +200,7 @@ func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, providerCredentialToResponse(cred))
 }
 
-func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID, principal *auth.Principal) {
 	if s.sealer == nil {
 		http.Error(w, "secrets encryption is not configured", http.StatusServiceUnavailable)
 		return
@@ -206,6 +213,9 @@ func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request
 	tenantID, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 		return
 	}
 	existing, err := s.store.GetProviderCredential(r.Context(), id)
@@ -257,12 +267,11 @@ func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	principal, _ := auth.PrincipalFromContext(r.Context())
 	s.recordAudit(r.Context(), principal, cred.TenantID, "provider_credential.rotated", "provider_credential", cred.ID.String(), nil)
 	writeJSON(w, http.StatusOK, providerCredentialToResponse(cred))
 }
 
-func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -276,6 +285,9 @@ func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request)
 	tenantID, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 		return
 	}
 	provider := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("provider")))
@@ -296,7 +308,7 @@ func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (s *Server) getProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) getProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID, principal *auth.Principal) {
 	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantParam == "" {
 		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
@@ -305,6 +317,9 @@ func (s *Server) getProviderCredential(w http.ResponseWriter, r *http.Request, i
 	tenantID, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 		return
 	}
 	cred, err := s.store.GetProviderCredential(r.Context(), id)
@@ -320,7 +335,7 @@ func (s *Server) getProviderCredential(w http.ResponseWriter, r *http.Request, i
 	writeJSON(w, http.StatusOK, providerCredentialToResponse(cred))
 }
 
-func (s *Server) deleteProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) deleteProviderCredential(w http.ResponseWriter, r *http.Request, id uuid.UUID, principal *auth.Principal) {
 	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantParam == "" {
 		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
@@ -329,6 +344,9 @@ func (s *Server) deleteProviderCredential(w http.ResponseWriter, r *http.Request
 	tenantID, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 		return
 	}
 	cred, err := s.store.GetProviderCredential(r.Context(), id)
@@ -350,7 +368,6 @@ func (s *Server) deleteProviderCredential(w http.ResponseWriter, r *http.Request
 		http.Error(w, "delete provider credential", http.StatusInternalServerError)
 		return
 	}
-	principal, _ := auth.PrincipalFromContext(r.Context())
 	s.recordAudit(r.Context(), principal, cred.TenantID, "provider_credential.deleted", "provider_credential", id.String(), nil)
 	w.WriteHeader(http.StatusNoContent)
 }

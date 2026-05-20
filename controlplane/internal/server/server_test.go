@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
@@ -397,8 +398,10 @@ func TestTemplateEndpoints(t *testing.T) {
 	store.overrideRoles = map[uuid.UUID][]string{
 		store.lastUserID: {"admin"},
 	}
+	templateTenantID := uuid.New()
 
 	createPayload := map[string]any{
+		"tenant_id":   templateTenantID.String(),
 		"name":        "web-template",
 		"provider":    "aws",
 		"description": "Sample template",
@@ -419,7 +422,7 @@ func TestTemplateEndpoints(t *testing.T) {
 		t.Fatalf("expected template id")
 	}
 
-	rec = call(http.MethodGet, "/api/v1/templates", nil)
+	rec = call(http.MethodGet, "/api/v1/templates?tenant_id="+templateTenantID.String(), nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected list template 200 got %d", rec.Code)
 	}
@@ -431,6 +434,42 @@ func TestTemplateEndpoints(t *testing.T) {
 	}
 	if len(listResp.Data) != 1 {
 		t.Fatalf("expected 1 template, got %d", len(listResp.Data))
+	}
+
+	assignmentPayload := map[string]any{
+		"tenant_id":  templateTenantID.String(),
+		"scope_type": "label_selector",
+		"selector": map[string]any{
+			"agent.primary_purpose": "db_node",
+		},
+	}
+	body, _ = json.Marshal(assignmentPayload)
+	assignmentPath := fmt.Sprintf("/api/v1/templates/%s/assignments", created.ID)
+	rec = call(http.MethodPost, assignmentPath, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create template assignment 201 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var templateAssignment templateAssignmentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &templateAssignment); err != nil {
+		t.Fatalf("decode template assignment response: %v", err)
+	}
+	if templateAssignment.ScopeType != storage.AssignmentScopeLabelSelector {
+		t.Fatalf("expected label selector assignment, got %+v", templateAssignment)
+	}
+
+	rec = call(http.MethodGet, assignmentPath, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list template assignments 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var assignmentList struct {
+		Items []templateAssignmentResponse `json:"items"`
+		Total int                          `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &assignmentList); err != nil {
+		t.Fatalf("decode template assignment list: %v", err)
+	}
+	if assignmentList.Total != 1 || len(assignmentList.Items) != 1 {
+		t.Fatalf("expected one template assignment, got %+v", assignmentList)
 	}
 
 	versionPayload := map[string]any{
@@ -496,6 +535,231 @@ func TestTemplateEndpoints(t *testing.T) {
 	}
 	if patched.Labels["team"] != "platform" {
 		t.Fatalf("expected labels merged, got %+v", patched.Labels)
+	}
+
+	globalTemplateID := uuid.New()
+	store.templates = append(store.templates, storage.ProvisioningTemplate{
+		ID:        globalTemplateID,
+		TenantID:  uuid.Nil,
+		Name:      "platform-linux-baseline",
+		Provider:  "linux",
+		Labels:    map[string]string{"source": "platform"},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	rec = call(http.MethodGet, "/api/v1/templates/"+globalTemplateID.String(), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected platform-global template read 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, _ = json.Marshal(map[string]any{"name": "mutated-platform-template"})
+	rec = call(http.MethodPatch, "/api/v1/templates/"+globalTemplateID.String(), body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected platform-global template patch 403 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, _ = json.Marshal(map[string]any{"body": "#cloud-config"})
+	rec = call(http.MethodPost, fmt.Sprintf("/api/v1/templates/%s/versions", globalTemplateID), body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected platform-global template version create 403 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = call(http.MethodPost, fmt.Sprintf("/api/v1/templates/%s/versions/1/promote", globalTemplateID), nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected platform-global template promote 403 got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{
+		"tenant_id":  templateTenantID.String(),
+		"scope_type": storage.AssignmentScopeTenant,
+	})
+	rec = call(http.MethodPost, fmt.Sprintf("/api/v1/templates/%s/assignments", globalTemplateID), body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected platform-global template assignment to authorized tenant 201 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestScopedPolicyAssignmentEndpoints(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "subject-policy-scopes"),
+	}
+
+	tenantID := uuid.New()
+	policyID := uuid.New()
+	nodeID := uuid.New()
+	clusterID := uuid.New()
+	hypervisorID := uuid.New()
+	tokenID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "scope-tenant", CreatedAt: now}},
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "scope-node",
+			State:     storage.NodeStateActive,
+			Labels:    map[string]any{"agent.primary_purpose": "db_node"},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}},
+		policies: map[uuid.UUID]storage.Policy{
+			policyID: {
+				ID:        policyID,
+				TenantID:  tenantID,
+				Name:      "Scoped hardening",
+				RuleType:  "compliance",
+				Enabled:   true,
+				Labels:    map[string]string{},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+		},
+		clusters: map[uuid.UUID]*storage.Cluster{
+			clusterID: {
+				ID:        clusterID,
+				TenantID:  tenantID,
+				Name:      "prod-cluster",
+				Provider:  "vmware",
+				Labels:    map[string]any{"function": "payments"},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+		},
+		hypervisorHosts: map[uuid.UUID]*storage.HypervisorHost{
+			hypervisorID: {
+				ID:           hypervisorID,
+				TenantID:     tenantID,
+				Provider:     "vmware",
+				Name:         "vcenter-prod",
+				EndpointURL:  "https://vcenter.example",
+				HealthStatus: "healthy",
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+		},
+		enrollmentTokens: map[string]storage.EnrollmentToken{
+			"hash": {
+				ID:        tokenID,
+				TenantID:  tenantID,
+				Name:      "fleet-token",
+				TokenHash: "hash",
+				Labels:    map[string]string{"onboard_source": "fleet-enroll"},
+				ExpiresAt: now.Add(time.Hour),
+				CreatedAt: now,
+			},
+		},
+	}
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	call := func(method, path string, payload map[string]any) *httptest.ResponseRecorder {
+		var body []byte
+		if payload != nil {
+			body, _ = json.Marshal(payload)
+		}
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer subject-policy-scopes")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := call(http.MethodGet, "/api/v1/tenants", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected warm-up success, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	store.overrideRoles = map[uuid.UUID][]string{store.lastUserID: {"admin"}}
+
+	endpoint := fmt.Sprintf("/api/v1/policies/%s/assignments", policyID)
+	cases := []struct {
+		name      string
+		payload   map[string]any
+		scopeType string
+	}{
+		{
+			name: "tenant",
+			payload: map[string]any{
+				"tenant_id":  tenantID.String(),
+				"scope_type": storage.AssignmentScopeTenant,
+			},
+			scopeType: storage.AssignmentScopeTenant,
+		},
+		{
+			name: "node",
+			payload: map[string]any{
+				"tenant_id":  tenantID.String(),
+				"scope_type": storage.AssignmentScopeNode,
+				"scope_id":   nodeID.String(),
+			},
+			scopeType: storage.AssignmentScopeNode,
+		},
+		{
+			name: "label selector",
+			payload: map[string]any{
+				"tenant_id":  tenantID.String(),
+				"scope_type": storage.AssignmentScopeLabelSelector,
+				"selector":   map[string]any{"agent.primary_purpose": "db_node"},
+			},
+			scopeType: storage.AssignmentScopeLabelSelector,
+		},
+		{
+			name: "cluster",
+			payload: map[string]any{
+				"tenant_id":  tenantID.String(),
+				"scope_type": storage.AssignmentScopeCluster,
+				"scope_id":   clusterID.String(),
+			},
+			scopeType: storage.AssignmentScopeCluster,
+		},
+		{
+			name: "hypervisor",
+			payload: map[string]any{
+				"tenant_id":  tenantID.String(),
+				"scope_type": storage.AssignmentScopeHypervisorHost,
+				"scope_id":   hypervisorID.String(),
+			},
+			scopeType: storage.AssignmentScopeHypervisorHost,
+		},
+		{
+			name: "enrollment token",
+			payload: map[string]any{
+				"tenant_id":  tenantID.String(),
+				"scope_type": storage.AssignmentScopeEnrollmentToken,
+				"scope_id":   tokenID.String(),
+			},
+			scopeType: storage.AssignmentScopeEnrollmentToken,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := call(http.MethodPost, endpoint, tc.payload)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("expected 201 got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var resp policyAssignmentResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode assignment response: %v", err)
+			}
+			if resp.ScopeType != tc.scopeType {
+				t.Fatalf("expected scope %s got %+v", tc.scopeType, resp)
+			}
+		})
+	}
+
+	rec = call(http.MethodGet, endpoint, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list assignments 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResp struct {
+		Items []policyAssignmentResponse `json:"items"`
+		Total int                        `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode assignment list: %v", err)
+	}
+	if listResp.Total != len(cases) || len(listResp.Items) != len(cases) {
+		t.Fatalf("expected %d assignments, got %+v", len(cases), listResp)
 	}
 }
 
@@ -669,7 +933,9 @@ func TestComplianceEvaluateEndpoint(t *testing.T) {
 		},
 	}
 
-	srv := New(logger, cfg, nil, &stubQueue{})
+	nodeID := uuid.New()
+	store := &fakeStore{nodes: []storage.Node{{ID: nodeID, TenantID: uuid.New(), Hostname: "eval-node"}}}
+	srv := New(logger, cfg, store, &stubQueue{})
 	handler := srv.Handler()
 
 	call := func(body []byte) *httptest.ResponseRecorder {
@@ -680,7 +946,6 @@ func TestComplianceEvaluateEndpoint(t *testing.T) {
 		return rec
 	}
 
-	nodeID := uuid.New()
 	ruleSets := []string{"cis-foundations", "nist-sp800"}
 	certifications := []string{"soc2"}
 	payload := map[string]any{
@@ -701,8 +966,8 @@ func TestComplianceEvaluateEndpoint(t *testing.T) {
 		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Synthetic fallback was removed in PR 1: when no store / no policies are
-	// assigned, the endpoint returns empty results plus no_policies_assigned
+	// Synthetic fallback was removed in PR 1: when no policies are assigned,
+	// the endpoint returns empty results plus no_policies_assigned
 	// metadata so the UI can render an empty state instead of fabricated zeros.
 	var resp struct {
 		Results []struct {
@@ -1193,6 +1458,27 @@ func TestRBACAuthorization(t *testing.T) {
 	})
 }
 
+func TestAuthorizeRejectsAgentPrincipalForUserRoles(t *testing.T) {
+	t.Parallel()
+
+	srv := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events/query", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{
+		Type:    "agent",
+		Name:    uuid.NewString(),
+		Subject: "CN=" + uuid.NewString(),
+		Roles:   []string{"agent"},
+	}))
+	rec := httptest.NewRecorder()
+
+	if principal, ok := srv.authorize(rec, req, roleViewer); ok || principal != nil {
+		t.Fatalf("agent principal authorized for viewer role")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeStore struct {
 	mu                  sync.Mutex
 	nodes               []storage.Node
@@ -1202,6 +1488,8 @@ type fakeStore struct {
 	jobs                map[uuid.UUID]*storage.Job
 	events              map[uuid.UUID][]storage.JobEvent
 	complianceResults   map[uuid.UUID][]storage.ComplianceResult
+	complianceEvidence  []storage.ComplianceEvidence
+	auditReports        map[uuid.UUID]*storage.AuditReport
 	users               map[string]*storage.User
 	usersByID           map[uuid.UUID]*storage.User
 	userList            []storage.User
@@ -1212,10 +1500,12 @@ type fakeStore struct {
 	skipUserPersistence bool
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
+	templateAssignments []storage.ProvisioningTemplateAssignment
 	policies            map[uuid.UUID]storage.Policy
 	policyAssignments   []storage.PolicyAssignment
 	auditLogs           []storage.AuditLog
 	clusters            map[uuid.UUID]*storage.Cluster
+	hypervisorHosts     map[uuid.UUID]*storage.HypervisorHost
 	clusterMembers      map[uuid.UUID][]storage.ClusterMember
 	clusterRollouts     map[uuid.UUID][]storage.ClusterRollout
 	clusterRolloutWaves map[uuid.UUID][]storage.ClusterRolloutWave // keyed by rollout id
@@ -1223,39 +1513,43 @@ type fakeStore struct {
 	// nodeLabels mirrors the nodes.labels JSONB column introduced by
 	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
 	// assert label propagation without depending on A's merge. Keyed by node id.
-	nodeLabels           map[uuid.UUID]map[string]any
-	leases               map[uuid.UUID]storage.RemediationLease
-	enrollmentTokens     map[string]storage.EnrollmentToken // keyed by token hash
-	remediationConfigs   map[uuid.UUID]storage.TenantRemediationConfig
-	eventFilters         map[uuid.UUID]storage.TenantEventFilters
-	knownDestinations    map[string]int64
-	knownExeHashes       map[string]int64
-	knownQueryHashes     map[string]int64
-	remediationApprovals map[uuid.UUID]storage.RemediationApproval
-	patchApprovals       map[uuid.UUID]storage.PatchApproval
-	circuitBreakers      map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
-	remediationFailRates map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
-	nodeCertHistory      map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
-	nodePackages         map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
-	nodeServices         map[uuid.UUID][]storage.NodeService
-	firewallStates       map[uuid.UUID]storage.NodeFirewallState
-	nodeHealthScores     map[uuid.UUID]storage.NodeHealthScore
-	alerts               []storage.Alert
-	securityCounts       storage.SecurityEventCounts
-	healthCounts         storage.SecurityEventCounts
-	activeBlocks         []storage.ActiveBlock
-	patchDeployments     []storage.PatchDeployment
-	ipBehaviorCountries  []storage.IPBehaviorCountrySummary
-	ipBehaviorFindings   []storage.IPBehaviorFinding
-	webserverInstances   []storage.WebserverInstance
-	aiConfig             *storage.AIConfig
-	flowDeltas           []FlowDeltaRow
-	fileGrowthDeltas     []FileGrowthDeltaRow
-	resourceDeltas       []ResourceDeltaRow
-	logTailRows          []LogTailRow
-	rootCauseFindings    []RootCauseFinding
-	aiInvestigations     []storage.AIInvestigation
-	aiOperatorProposals  []storage.AIOperatorProposal
+	nodeLabels            map[uuid.UUID]map[string]any
+	leases                map[uuid.UUID]storage.RemediationLease
+	enrollmentTokens      map[string]storage.EnrollmentToken // keyed by token hash
+	remediationConfigs    map[uuid.UUID]storage.TenantRemediationConfig
+	eventFilters          map[uuid.UUID]storage.TenantEventFilters
+	knownDestinations     map[string]int64
+	knownExeHashes        map[string]int64
+	knownQueryHashes      map[string]int64
+	remediationApprovals  map[uuid.UUID]storage.RemediationApproval
+	patchApprovals        map[uuid.UUID]storage.PatchApproval
+	circuitBreakers       map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
+	remediationFailRates  map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
+	nodeCertHistory       map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+	nodePackages          map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
+	vulnerabilityFindings []storage.VulnerabilityFinding
+	nodeServices          map[uuid.UUID][]storage.NodeService
+	firewallStates        map[uuid.UUID]storage.NodeFirewallState
+	nodeHealthScores      map[uuid.UUID]storage.NodeHealthScore
+	alerts                []storage.Alert
+	securityCounts        storage.SecurityEventCounts
+	healthCounts          storage.SecurityEventCounts
+	eventIngestBacklog    storage.EventIngestBacklogSummary
+	eventIngestBatches    []storage.EventIngestBatch
+	activeBlocks          []storage.ActiveBlock
+	patchDeployments      []storage.PatchDeployment
+	ipBehaviorCountries   []storage.IPBehaviorCountrySummary
+	ipBehaviorFindings    []storage.IPBehaviorFinding
+	webserverInstances    []storage.WebserverInstance
+	aiConfig              *storage.AIConfig
+	flowDeltas            []FlowDeltaRow
+	fileGrowthDeltas      []FileGrowthDeltaRow
+	resourceDeltas        []ResourceDeltaRow
+	logTailRows           []LogTailRow
+	rootCauseFindings     []RootCauseFinding
+	aiInvestigations      []storage.AIInvestigation
+	aiOperatorProposals   []storage.AIOperatorProposal
+	savedSearches         []storage.SavedSearch
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -1342,6 +1636,13 @@ func (f *fakeStore) ListProvisioningTemplates(_ context.Context, filter storage.
 		if filter.NamePrefix != "" && !strings.HasPrefix(strings.ToLower(tpl.Name), strings.ToLower(filter.NamePrefix)) {
 			continue
 		}
+		if filter.TenantID != uuid.Nil {
+			tenantMatches := tpl.TenantID == filter.TenantID
+			globalIncluded := filter.IncludeGlobal && tpl.TenantID == uuid.Nil
+			if !tenantMatches && !globalIncluded {
+				continue
+			}
+		}
 		filtered = append(filtered, tpl)
 	}
 	total := len(filtered)
@@ -1389,6 +1690,9 @@ func (f *fakeStore) CreateAuditLog(_ context.Context, entry *storage.AuditLog) (
 	if entry.ID == uuid.Nil {
 		entry.ID = uuid.New()
 	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now().UTC()
+	}
 	entryCopy := *entry
 	f.mu.Lock()
 	f.auditLogs = append(f.auditLogs, entryCopy)
@@ -1420,6 +1724,12 @@ func (f *fakeStore) ListAuditLogs(_ context.Context, filter storage.AuditLogFilt
 			if entry.ResourceID == nil || !strings.EqualFold(*entry.ResourceID, filter.ResourceID) {
 				continue
 			}
+		}
+		if filter.Since != nil && entry.CreatedAt.Before(*filter.Since) {
+			continue
+		}
+		if filter.Until != nil && entry.CreatedAt.After(*filter.Until) {
+			continue
 		}
 		filtered = append(filtered, entry)
 	}
@@ -1493,6 +1803,71 @@ func (f *fakeStore) GetProvisioningTemplate(_ context.Context, id uuid.UUID) (*s
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeStore) CreateProvisioningTemplateAssignment(_ context.Context, params storage.CreateProvisioningTemplateAssignmentParams) (*storage.ProvisioningTemplateAssignment, error) {
+	scopeType := strings.ToLower(strings.TrimSpace(params.ScopeType))
+	if scopeType == "" {
+		scopeType = storage.AssignmentScopeTenant
+	}
+	assignment := storage.ProvisioningTemplateAssignment{
+		ID:         uuid.New(),
+		TemplateID: params.TemplateID,
+		TenantID:   params.TenantID,
+		ScopeType:  scopeType,
+		ScopeID:    params.ScopeID,
+		Selector:   params.Selector,
+		AssignedAt: time.Now(),
+		AssignedBy: params.AssignedBy,
+	}
+	if assignment.Selector == nil {
+		assignment.Selector = map[string]any{}
+	}
+	if params.ExpiresAt != nil {
+		assignment.ExpiresAt = sql.NullTime{Time: *params.ExpiresAt, Valid: true}
+	}
+	f.templateAssignments = append(f.templateAssignments, assignment)
+	return &assignment, nil
+}
+
+func (f *fakeStore) GetProvisioningTemplateAssignment(_ context.Context, id uuid.UUID) (*storage.ProvisioningTemplateAssignment, error) {
+	for i := range f.templateAssignments {
+		if f.templateAssignments[i].ID == id {
+			copy := f.templateAssignments[i]
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListProvisioningTemplateAssignments(_ context.Context, templateID uuid.UUID, limit, offset int) ([]storage.ProvisioningTemplateAssignment, int, error) {
+	var filtered []storage.ProvisioningTemplateAssignment
+	for _, assignment := range f.templateAssignments {
+		if assignment.TemplateID == templateID {
+			filtered = append(filtered, assignment)
+		}
+	}
+	total := len(filtered)
+	if offset > total {
+		return []storage.ProvisioningTemplateAssignment{}, total, nil
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
+}
+
+func (f *fakeStore) DeleteProvisioningTemplateAssignment(_ context.Context, id uuid.UUID) error {
+	for i := range f.templateAssignments {
+		if f.templateAssignments[i].ID == id {
+			f.templateAssignments = append(f.templateAssignments[:i], f.templateAssignments[i+1:]...)
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) CreateProvisioningTemplateVersion(_ context.Context, params storage.CreateTemplateVersionParams) (*storage.ProvisioningTemplateVersion, error) {
@@ -2333,6 +2708,19 @@ func (f *fakeStore) GetEnrollmentTokenByHash(_ context.Context, hash string) (*s
 	return &copy, nil
 }
 
+func (f *fakeStore) GetEnrollmentToken(_ context.Context, id uuid.UUID) (*storage.EnrollmentToken, error) {
+	if f.enrollmentTokens == nil {
+		return nil, nil
+	}
+	for _, tok := range f.enrollmentTokens {
+		if tok.ID == id {
+			copy := tok
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeStore) ListEnrollmentTokens(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.EnrollmentToken, int, error) {
 	return nil, 0, nil
 }
@@ -2354,24 +2742,77 @@ func (f *fakeStore) ListFleetEnrollmentResults(_ context.Context, jobID uuid.UUI
 }
 
 func (f *fakeStore) CreatePolicyAssignment(_ context.Context, params storage.CreatePolicyAssignmentParams) (*storage.PolicyAssignment, error) {
+	scopeType := strings.ToLower(strings.TrimSpace(params.ScopeType))
+	if scopeType == "" {
+		if params.NodeID != uuid.Nil {
+			scopeType = storage.AssignmentScopeNode
+			params.ScopeID = params.NodeID
+		} else {
+			scopeType = storage.AssignmentScopeTenant
+		}
+	}
+	if scopeType == storage.AssignmentScopeNode && params.ScopeID == uuid.Nil {
+		params.ScopeID = params.NodeID
+	}
 	assignment := storage.PolicyAssignment{
 		ID:         uuid.New(),
 		PolicyID:   params.PolicyID,
 		TenantID:   params.TenantID,
 		NodeID:     params.NodeID,
+		ScopeType:  scopeType,
+		ScopeID:    params.ScopeID,
+		Selector:   params.Selector,
 		AssignedAt: time.Now(),
 		AssignedBy: params.AssignedBy,
+	}
+	if assignment.Selector == nil {
+		assignment.Selector = map[string]any{}
+	}
+	if params.ExpiresAt != nil {
+		assignment.ExpiresAt = sql.NullTime{Time: *params.ExpiresAt, Valid: true}
 	}
 	f.policyAssignments = append(f.policyAssignments, assignment)
 	return &assignment, nil
 }
 
 func (f *fakeStore) ListPolicyAssignments(_ context.Context, policyID uuid.UUID, limit, offset int) ([]storage.PolicyAssignment, int, error) {
-	return nil, 0, nil
+	var filtered []storage.PolicyAssignment
+	for _, assignment := range f.policyAssignments {
+		if assignment.PolicyID == policyID {
+			filtered = append(filtered, assignment)
+		}
+	}
+	total := len(filtered)
+	if offset > total {
+		return []storage.PolicyAssignment{}, total, nil
+	}
+	if offset > 0 {
+		filtered = filtered[offset:]
+	}
+	if limit > 0 && limit < len(filtered) {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
+}
+
+func (f *fakeStore) GetPolicyAssignment(_ context.Context, id uuid.UUID) (*storage.PolicyAssignment, error) {
+	for i := range f.policyAssignments {
+		if f.policyAssignments[i].ID == id {
+			copy := f.policyAssignments[i]
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeStore) DeletePolicyAssignment(_ context.Context, id uuid.UUID) error {
-	return nil
+	for i := range f.policyAssignments {
+		if f.policyAssignments[i].ID == id {
+			f.policyAssignments = append(f.policyAssignments[:i], f.policyAssignments[i+1:]...)
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) GetEffectivePolicies(_ context.Context, tenantID, nodeID uuid.UUID) ([]storage.PolicyWithVersion, error) {
@@ -3573,7 +4014,13 @@ func (f *fakeStore) DeleteProviderCredential(_ context.Context, _ uuid.UUID) err
 func (f *fakeStore) CreateHypervisorHost(_ context.Context, _ storage.CreateHypervisorHostParams) (*storage.HypervisorHost, error) {
 	return nil, errors.New("hypervisor hosts not implemented in fakeStore")
 }
-func (f *fakeStore) GetHypervisorHost(_ context.Context, _ uuid.UUID) (*storage.HypervisorHost, error) {
+func (f *fakeStore) GetHypervisorHost(_ context.Context, id uuid.UUID) (*storage.HypervisorHost, error) {
+	if f.hypervisorHosts != nil {
+		if host, ok := f.hypervisorHosts[id]; ok {
+			copy := *host
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 func (f *fakeStore) ListHypervisorHosts(_ context.Context, _ uuid.UUID, _ string, _, _ int) ([]storage.HypervisorHost, int, error) {
@@ -3668,7 +4115,18 @@ func (f *fakeStore) ConsumeStepUpChallenge(_ context.Context, _ uuid.UUID) (*sto
 func (f *fakeStore) CreateAlert(_ context.Context, _ storage.CreateAlertParams) (*storage.Alert, error) {
 	return nil, errors.New("not implemented")
 }
-func (f *fakeStore) GetAlert(_ context.Context, _ uuid.UUID) (*storage.Alert, error) { return nil, nil }
+func (f *fakeStore) GetAlert(_ context.Context, id uuid.UUID) (*storage.Alert, error) {
+	for _, alert := range f.alerts {
+		if alert.ID == id {
+			copy := alert
+			if copy.Context == nil {
+				copy.Context = map[string]any{}
+			}
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
 func (f *fakeStore) ListAlerts(_ context.Context, filter storage.AlertFilter, limit, offset int) ([]storage.Alert, int, error) {
 	var out []storage.Alert
 	for _, alert := range f.alerts {
@@ -3698,6 +4156,53 @@ func (f *fakeStore) ListAlerts(_ context.Context, filter storage.AlertFilter, li
 }
 func (f *fakeStore) AckAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error     { return nil }
 func (f *fakeStore) ResolveAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error { return nil }
+func (f *fakeStore) UpdateAlertDisposition(_ context.Context, id uuid.UUID, params storage.UpdateAlertDispositionParams) (*storage.Alert, error) {
+	for i := range f.alerts {
+		if f.alerts[i].ID != id {
+			continue
+		}
+		if f.alerts[i].Context == nil {
+			f.alerts[i].Context = map[string]any{}
+		}
+		at := params.At.UTC()
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		entry := map[string]any{
+			"value":      strings.ToLower(strings.TrimSpace(params.Disposition)),
+			"updated_at": at.Format(time.RFC3339),
+		}
+		if reason := strings.TrimSpace(params.Reason); reason != "" {
+			entry["reason"] = reason
+		}
+		if params.By != uuid.Nil {
+			entry["updated_by"] = params.By.String()
+		}
+		if params.SuppressUntil != nil {
+			entry["suppress_until"] = params.SuppressUntil.UTC().Format(time.RFC3339)
+		}
+		f.alerts[i].Context["disposition"] = entry
+		switch entry["value"] {
+		case "true_positive":
+			if f.alerts[i].State != "resolved" {
+				f.alerts[i].State = "acked"
+				f.alerts[i].AckedAt = sql.NullTime{Time: at, Valid: true}
+				if params.By != uuid.Nil {
+					f.alerts[i].AckedBy = uuid.NullUUID{UUID: params.By, Valid: true}
+				}
+			}
+		default:
+			f.alerts[i].State = "resolved"
+			f.alerts[i].ResolvedAt = sql.NullTime{Time: at, Valid: true}
+			if params.By != uuid.Nil {
+				f.alerts[i].ResolvedBy = uuid.NullUUID{UUID: params.By, Valid: true}
+			}
+		}
+		copy := f.alerts[i]
+		return &copy, nil
+	}
+	return nil, sql.ErrNoRows
+}
 
 func (f *fakeStore) CreateAccessRequest(_ context.Context, _ storage.CreateAccessRequestParams) (*storage.AccessRequest, error) {
 	return nil, errors.New("not implemented")
@@ -3856,8 +4361,39 @@ func (f *fakeStore) RecordEventIngest(_ context.Context, _ storage.CreateEventIn
 func (f *fakeStore) MarkEventIngestStatus(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }
+func (f *fakeStore) MarkEventIngestLocalComplete(_ context.Context, _ uuid.UUID, _ []byte, _ int) error {
+	return nil
+}
 func (f *fakeStore) PendingEventIngestBatches(_ context.Context, _ time.Duration, _ int) ([]storage.EventIngestBatch, error) {
 	return nil, nil
+}
+func (f *fakeStore) EventIngestBacklog(_ context.Context) (storage.EventIngestBacklogSummary, error) {
+	return f.eventIngestBacklog, nil
+}
+func (f *fakeStore) EventIngestBacklogForTenant(_ context.Context, tenantID uuid.UUID) (storage.EventIngestBacklogSummary, error) {
+	if tenantID == uuid.Nil {
+		return storage.EventIngestBacklogSummary{}, errors.New("tenant_id required")
+	}
+	return f.eventIngestBacklog, nil
+}
+func (f *fakeStore) ListEventIngestBacklogBatches(_ context.Context, tenantID uuid.UUID, limit int) ([]storage.EventIngestBatch, error) {
+	if tenantID == uuid.Nil {
+		return nil, errors.New("tenant_id required")
+	}
+	if limit <= 0 || limit > 25 {
+		limit = 10
+	}
+	out := make([]storage.EventIngestBatch, 0, len(f.eventIngestBatches))
+	for _, batch := range f.eventIngestBatches {
+		if !batch.TenantID.Valid || batch.TenantID.UUID != tenantID {
+			continue
+		}
+		out = append(out, batch)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 func (f *fakeStore) PruneAcceptedEventIngestBatches(_ context.Context, _ time.Duration) (int64, error) {
 	return 0, nil
@@ -3957,25 +4493,134 @@ func (f *fakeStore) CreatePIIFinding(_ context.Context, _ *storage.PIIFinding) (
 
 // Compliance evidence + audit reports stubs (Sprint 3).
 func (f *fakeStore) CreateComplianceEvidence(_ context.Context, e *storage.ComplianceEvidence) (*storage.ComplianceEvidence, error) {
+	if e.ID == uuid.Nil {
+		e.ID = uuid.New()
+	}
+	if e.UploadedAt.IsZero() {
+		e.UploadedAt = time.Now().UTC()
+	}
+	f.complianceEvidence = append(f.complianceEvidence, *e)
 	return e, nil
 }
-func (f *fakeStore) ListComplianceEvidence(_ context.Context, _ uuid.UUID, _, _ string, _, _ int) ([]storage.ComplianceEvidence, int, error) {
-	return nil, 0, nil
+func (f *fakeStore) ListComplianceEvidence(_ context.Context, tenantID uuid.UUID, framework, evidenceType string, limit, offset int) ([]storage.ComplianceEvidence, int, error) {
+	return f.ListComplianceEvidenceFiltered(context.Background(), storage.ComplianceEvidenceFilter{
+		TenantID:       tenantID,
+		Framework:      framework,
+		EvidenceType:   evidenceType,
+		IncludeExpired: true,
+	}, limit, offset)
 }
-func (f *fakeStore) GetComplianceEvidence(_ context.Context, _ uuid.UUID) (*storage.ComplianceEvidence, error) {
+func (f *fakeStore) ListComplianceEvidenceFiltered(_ context.Context, filter storage.ComplianceEvidenceFilter, limit, offset int) ([]storage.ComplianceEvidence, int, error) {
+	var out []storage.ComplianceEvidence
+	expiresAtReference := time.Now().UTC()
+	if filter.ExpirationReference != nil && !filter.ExpirationReference.IsZero() {
+		expiresAtReference = filter.ExpirationReference.UTC()
+	}
+	for _, item := range f.complianceEvidence {
+		if filter.TenantID != uuid.Nil && item.TenantID != filter.TenantID {
+			continue
+		}
+		if strings.TrimSpace(filter.Framework) != "" {
+			if item.Framework == nil || !strings.EqualFold(strings.TrimSpace(*item.Framework), strings.TrimSpace(filter.Framework)) {
+				continue
+			}
+		}
+		if strings.TrimSpace(filter.ControlRef) != "" {
+			if item.ControlRef == nil || !strings.EqualFold(strings.TrimSpace(*item.ControlRef), strings.TrimSpace(filter.ControlRef)) {
+				continue
+			}
+		}
+		if strings.TrimSpace(filter.EvidenceType) != "" && !strings.EqualFold(item.EvidenceType, filter.EvidenceType) {
+			continue
+		}
+		if filter.UploadedSince != nil && item.UploadedAt.Before(*filter.UploadedSince) {
+			continue
+		}
+		if filter.UploadedUntil != nil && item.UploadedAt.After(*filter.UploadedUntil) {
+			continue
+		}
+		if !filter.IncludeExpired && item.ExpiresAt != nil && !item.ExpiresAt.After(expiresAtReference) {
+			continue
+		}
+		out = append(out, item)
+	}
+	total := len(out)
+	if offset > total {
+		return []storage.ComplianceEvidence{}, total, nil
+	}
+	if offset > 0 {
+		out = out[offset:]
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
+}
+func (f *fakeStore) GetComplianceEvidence(_ context.Context, id uuid.UUID) (*storage.ComplianceEvidence, error) {
+	for _, item := range f.complianceEvidence {
+		if item.ID == id {
+			copy := item
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
 func (f *fakeStore) DeleteComplianceEvidence(_ context.Context, _ uuid.UUID) error { return nil }
 func (f *fakeStore) CreateAuditReport(_ context.Context, r *storage.AuditReport) (*storage.AuditReport, error) {
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	if r.Status == "" {
+		r.Status = "pending"
+	}
+	if f.auditReports == nil {
+		f.auditReports = map[uuid.UUID]*storage.AuditReport{}
+	}
+	copy := *r
+	f.auditReports[r.ID] = &copy
 	return r, nil
 }
-func (f *fakeStore) ListAuditReports(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.AuditReport, int, error) {
-	return nil, 0, nil
+func (f *fakeStore) ListAuditReports(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.AuditReport, int, error) {
+	var out []storage.AuditReport
+	for _, report := range f.auditReports {
+		if report != nil && report.TenantID == tenantID {
+			out = append(out, *report)
+		}
+	}
+	total := len(out)
+	if offset > total {
+		return []storage.AuditReport{}, total, nil
+	}
+	if offset > 0 {
+		out = out[offset:]
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
 }
-func (f *fakeStore) GetAuditReport(_ context.Context, _ uuid.UUID) (*storage.AuditReport, error) {
+func (f *fakeStore) GetAuditReport(_ context.Context, id uuid.UUID) (*storage.AuditReport, error) {
+	if report := f.auditReports[id]; report != nil {
+		copy := *report
+		return &copy, nil
+	}
 	return nil, nil
 }
-func (f *fakeStore) UpdateAuditReportStatus(_ context.Context, _ uuid.UUID, _ string, _ *string, _ *time.Time) error {
+func (f *fakeStore) UpdateAuditReportStatus(_ context.Context, id uuid.UUID, status string, pdfPath *string, generatedAt *time.Time) error {
+	if f.auditReports == nil {
+		f.auditReports = map[uuid.UUID]*storage.AuditReport{}
+	}
+	report := f.auditReports[id]
+	if report == nil {
+		report = &storage.AuditReport{ID: id}
+		f.auditReports[id] = report
+	}
+	report.Status = status
+	report.PDFPath = pdfPath
+	report.GeneratedAt = generatedAt
 	return nil
 }
 
@@ -4019,6 +4664,142 @@ func (f *fakeStore) ListNodePackages(_ context.Context, nodeID uuid.UUID) ([]sto
 	out := make([]storage.NodePackage, len(pkgs))
 	copy(out, pkgs)
 	return out, nil
+}
+func (f *fakeStore) UpsertVulnerabilityFindings(_ context.Context, findings []storage.VulnerabilityFinding) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for _, finding := range findings {
+		if finding.ID == uuid.Nil {
+			finding.ID = uuid.New()
+		}
+		if finding.FirstSeenAt.IsZero() {
+			finding.FirstSeenAt = now
+		}
+		if finding.LastSeenAt.IsZero() {
+			finding.LastSeenAt = now
+		}
+		replaced := false
+		for i := range f.vulnerabilityFindings {
+			existing := f.vulnerabilityFindings[i]
+			if existing.TenantID == finding.TenantID &&
+				existing.NodeID == finding.NodeID &&
+				existing.PackageName == finding.PackageName &&
+				existing.InstalledVersion == finding.InstalledVersion &&
+				existing.PackageSource == finding.PackageSource &&
+				existing.Arch == finding.Arch &&
+				strings.EqualFold(existing.CVEID, finding.CVEID) &&
+				strings.EqualFold(existing.EvidenceSource, finding.EvidenceSource) {
+				f.vulnerabilityFindings[i] = finding
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			f.vulnerabilityFindings = append(f.vulnerabilityFindings, finding)
+		}
+	}
+	return nil
+}
+func (f *fakeStore) ReconcileVulnerabilityFindings(_ context.Context, params storage.ReconcileVulnerabilityFindingsParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	observedAt := params.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	scoped := map[string]struct{}{}
+	for _, scope := range params.PackageScopes {
+		scoped[fakeVulnerabilityPackageKey(scope.PackageName, scope.InstalledVersion, scope.PackageSource, scope.Arch)] = struct{}{}
+	}
+	if len(scoped) == 0 {
+		return 0, nil
+	}
+	active := map[string]struct{}{}
+	for _, finding := range params.ActiveFindings {
+		key := fakeVulnerabilityPackageKey(finding.PackageName, finding.InstalledVersion, finding.PackageSource, finding.Arch) + "|" + strings.ToUpper(strings.TrimSpace(finding.CVEID))
+		active[key] = struct{}{}
+	}
+	var resolved int64
+	for i := range f.vulnerabilityFindings {
+		finding := &f.vulnerabilityFindings[i]
+		if finding.TenantID != params.TenantID ||
+			finding.NodeID != params.NodeID ||
+			finding.ResolvedAt != nil ||
+			!strings.EqualFold(finding.EvidenceSource, params.EvidenceSource) {
+			continue
+		}
+		scopeKey := fakeVulnerabilityPackageKey(finding.PackageName, finding.InstalledVersion, finding.PackageSource, finding.Arch)
+		if _, ok := scoped[scopeKey]; !ok {
+			continue
+		}
+		activeKey := scopeKey + "|" + strings.ToUpper(strings.TrimSpace(finding.CVEID))
+		if _, ok := active[activeKey]; ok {
+			continue
+		}
+		t := observedAt
+		finding.ResolvedAt = &t
+		if finding.LastSeenAt.Before(t) {
+			finding.LastSeenAt = t
+		}
+		resolved++
+	}
+	return resolved, nil
+}
+func fakeVulnerabilityPackageKey(name, version, source, arch string) string {
+	return strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(name)),
+		strings.TrimSpace(version),
+		strings.ToLower(strings.TrimSpace(source)),
+		strings.ToLower(strings.TrimSpace(arch)),
+	}, "\x00")
+}
+func (f *fakeStore) ListNodeVulnerabilityFindings(_ context.Context, filter storage.VulnerabilityFindingFilter, limit, offset int) ([]storage.VulnerabilityFinding, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]storage.VulnerabilityFinding, 0, len(f.vulnerabilityFindings))
+	for _, finding := range f.vulnerabilityFindings {
+		if filter.TenantID != uuid.Nil && finding.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && finding.NodeID != filter.NodeID {
+			continue
+		}
+		if !filter.IncludeResolved && finding.ResolvedAt != nil {
+			continue
+		}
+		if strings.TrimSpace(filter.CVEID) != "" && !strings.EqualFold(finding.CVEID, filter.CVEID) {
+			continue
+		}
+		if strings.TrimSpace(filter.PackageName) != "" && !strings.EqualFold(finding.PackageName, filter.PackageName) {
+			continue
+		}
+		if strings.TrimSpace(filter.Severity) != "" && !strings.EqualFold(finding.Severity, filter.Severity) {
+			continue
+		}
+		if filter.KEVOnly && !finding.KEV {
+			continue
+		}
+		out = append(out, finding)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if vulnerabilitySeverityRank(out[i].Severity) != vulnerabilitySeverityRank(out[j].Severity) {
+			return vulnerabilitySeverityRank(out[i].Severity) > vulnerabilitySeverityRank(out[j].Severity)
+		}
+		if out[i].KEV != out[j].KEV {
+			return out[i].KEV
+		}
+		return out[i].LastSeenAt.After(out[j].LastSeenAt)
+	})
+	total := len(out)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return out[offset:end], total, nil
 }
 func (f *fakeStore) GetNodeInventorySync(_ context.Context, _ uuid.UUID) (*storage.NodeInventorySync, error) {
 	return nil, nil
@@ -4878,6 +5659,18 @@ func (f *fakeStore) ListAIInvestigations(_ context.Context, filter storage.ListA
 	return out[offset:end], total, nil
 }
 
+func (f *fakeStore) GetAIInvestigation(_ context.Context, id uuid.UUID) (*storage.AIInvestigation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.aiInvestigations {
+		if row.ID == id {
+			copy := row
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeStore) CreateAIOperatorProposal(_ context.Context, params storage.CreateAIOperatorProposalParams) (*storage.AIOperatorProposal, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -4940,4 +5733,25 @@ func (f *fakeStore) ListAIOperatorProposals(_ context.Context, filter storage.Li
 		end = offset + limit
 	}
 	return out[offset:end], total, nil
+}
+
+func (f *fakeStore) CreateSavedSearch(_ context.Context, in storage.SavedSearch) (*storage.SavedSearch, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if in.ID == uuid.Nil {
+		in.ID = uuid.New()
+	}
+	if len(in.Filters) == 0 {
+		in.Filters = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC()
+	if in.CreatedAt.IsZero() {
+		in.CreatedAt = now
+	}
+	if in.UpdatedAt.IsZero() {
+		in.UpdatedAt = in.CreatedAt
+	}
+	f.savedSearches = append(f.savedSearches, in)
+	copy := in
+	return &copy, nil
 }

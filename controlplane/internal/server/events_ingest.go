@@ -2,8 +2,11 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +22,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
@@ -27,10 +31,16 @@ import (
 // validates the discriminator + a few required fields; everything else
 // passes through to Doris / rollups / eventbus.
 type IngestedEvent struct {
+	SchemaVersion int            `json:"schema_version,omitempty"`
+	EventID       string         `json:"event_id,omitempty"`
 	Type          string         `json:"type"`
 	TS            time.Time      `json:"ts"`
 	NodeID        string         `json:"node_id,omitempty"`
 	TenantID      string         `json:"tenant_id,omitempty"`
+	RawRef        string         `json:"raw_ref,omitempty"`
+	Collector     string         `json:"collector,omitempty"`
+	Parser        string         `json:"parser,omitempty"`
+	ParserStatus  string         `json:"parser_status,omitempty"`
 	Severity      string         `json:"severity,omitempty"`
 	CorrelationID string         `json:"correlation_id,omitempty"`
 	ConnID        string         `json:"conn_id,omitempty"`
@@ -53,6 +63,14 @@ type IngestedEvent struct {
 	Details       map[string]any `json:"details,omitempty"`
 	DedupKey      string         `json:"dedup_key,omitempty"`
 }
+
+const (
+	maxEventIngestCompressed   = 1 << 20 // 1 MiB
+	maxEventIngestDecompressed = 5 << 20 // 5 MiB
+	maxEventIngestRows         = 5_000
+)
+
+var errEventIngestTooManyRows = errors.New("batch exceeds 5000 events")
 
 // allowedEventTypes is the closed-world set of event_type discriminators we
 // accept from agents. Add new families here when collectors land.
@@ -197,13 +215,7 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 		s.ingestLimiter = newRateLimiterRegistry(rate.Limit(10_000), 20_000)
 	}
 
-	const (
-		maxCompressed   = 1 << 20 // 1 MiB
-		maxDecompressed = 5 << 20 // 5 MiB
-		maxRows         = 5_000
-	)
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxCompressed)
+	r.Body = http.MaxBytesReader(w, r.Body, maxEventIngestCompressed)
 	defer func() { _ = r.Body.Close() }()
 	rawBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -211,62 +223,28 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var stream io.Reader
-	if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
-		gz, err := gzip.NewReader(strings.NewReader(string(rawBytes)))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("gzip decode: %v", err), http.StatusBadRequest)
-			return
+	events, err := decodeIngestedEventPayload(rawBytes, r.Header.Get("Content-Encoding"), maxEventIngestDecompressed, maxEventIngestRows)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errEventIngestTooManyRows) {
+			status = http.StatusRequestEntityTooLarge
 		}
-		defer func() { _ = gz.Close() }()
-		stream = io.LimitReader(gz, maxDecompressed)
-	} else {
-		stream = strings.NewReader(string(rawBytes))
+		http.Error(w, err.Error(), status)
+		return
 	}
 
-	events := make([]IngestedEvent, 0, 128)
-	scanner := bufio.NewScanner(stream)
-	scanner.Buffer(make([]byte, 1<<16), 1<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var ev IngestedEvent
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			http.Error(w, fmt.Sprintf("bad event at row %d: %v", len(events)+1, err), http.StatusBadRequest)
-			return
-		}
-		if !allowedEventTypes[ev.Type] {
-			http.Error(w, fmt.Sprintf("event_type %q not allowed", ev.Type), http.StatusBadRequest)
-			return
-		}
-		if err := validateIngestedEventContract(&ev); err != nil {
-			http.Error(w, fmt.Sprintf("bad event at row %d: %v", len(events)+1, err), http.StatusBadRequest)
-			return
-		}
+	now := time.Now().UTC()
+	for i := range events {
+		ev := &events[i]
 		if ev.TS.IsZero() {
-			ev.TS = time.Now().UTC()
+			ev.TS = now
 		}
 		// Reject events too far in the future or past — clock-skew abuse.
-		now := time.Now().UTC()
 		if ev.TS.After(now.Add(30*time.Minute)) || ev.TS.Before(now.Add(-7*24*time.Hour)) {
 			http.Error(w, fmt.Sprintf("event ts %s out of range", ev.TS.Format(time.RFC3339)), http.StatusBadRequest)
 			return
 		}
-		events = append(events, ev)
-		if len(events) > maxRows {
-			http.Error(w, "batch exceeds 5000 events", http.StatusRequestEntityTooLarge)
-			return
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
-		return
-	}
-	if len(events) == 0 {
-		http.Error(w, "empty batch", http.StatusBadRequest)
-		return
+		normalizeIngestedEventMetadata(ev, tenantID, nodeID)
 	}
 
 	// Token-bucket gate.
@@ -292,8 +270,18 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fan out.
-	dorisStatus, fanoutErr := s.fanOutEvents(r.Context(), tenantID, nodeID, events)
+	// Local side effects are phase-marked before Doris is retried. Once this
+	// marker is written, replay becomes Doris-only and cannot duplicate
+	// Postgres rollups, anomaly investigations, or live eventbus delivery.
+	fanoutEvents, anomalies := s.prepareEventFanout(r.Context(), tenantID, nodeID, events)
+	s.applyLocalEventFanout(r.Context(), tenantID, nodeID, fanoutEvents, anomalies)
+	if payload, encErr := encodeIngestedEventPayload(fanoutEvents); encErr != nil {
+		s.logger.Warn("encode normalized event ingest payload", zap.Error(encErr), zap.String("batch_id", batchID.String()))
+	} else if uerr := s.store.MarkEventIngestLocalComplete(r.Context(), batchID, payload, len(fanoutEvents)); uerr != nil {
+		s.logger.Warn("mark ingest local complete", zap.Error(uerr), zap.String("batch_id", batchID.String()))
+	}
+
+	dorisStatus, fanoutErr := s.flushDorisEventFanout(r.Context(), batchID, tenantID, nodeID, fanoutEvents)
 	finalStatus := "accepted"
 	errMsg := ""
 	if fanoutErr != nil {
@@ -314,9 +302,83 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func decodeIngestedEventPayload(payload []byte, contentEncoding string, maxDecompressed int64, maxRows int) ([]IngestedEvent, error) {
+	if maxDecompressed <= 0 {
+		maxDecompressed = maxEventIngestDecompressed
+	}
+	if maxRows <= 0 {
+		maxRows = maxEventIngestRows
+	}
+	stream, closeFn, err := ingestedEventPayloadReader(payload, contentEncoding, maxDecompressed)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFn()
+
+	events := make([]IngestedEvent, 0, 128)
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 1<<16), 1<<20)
+	row := 0
+	for scanner.Scan() {
+		row++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if len(events) >= maxRows {
+			return nil, errEventIngestTooManyRows
+		}
+		var ev IngestedEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			return nil, fmt.Errorf("bad event at row %d: %w", row, err)
+		}
+		if !allowedEventTypes[ev.Type] {
+			return nil, fmt.Errorf("event_type %q not allowed", ev.Type)
+		}
+		if err := validateIngestedEventContract(&ev); err != nil {
+			return nil, fmt.Errorf("bad event at row %d: %w", row, err)
+		}
+		events = append(events, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if len(events) == 0 {
+		return nil, errors.New("empty batch")
+	}
+	return events, nil
+}
+
+func encodeIngestedEventPayload(events []IngestedEvent) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for i := range events {
+		if err := enc.Encode(events[i]); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func ingestedEventPayloadReader(payload []byte, contentEncoding string, maxDecompressed int64) (io.Reader, func(), error) {
+	encoding := strings.ToLower(strings.TrimSpace(contentEncoding))
+	gzipPayload := encoding == "gzip" || (encoding == "" && len(payload) >= 2 && payload[0] == 0x1f && payload[1] == 0x8b)
+	if !gzipPayload {
+		return bytes.NewReader(payload), func() {}, nil
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(payload))
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("gzip decode: %w", err)
+	}
+	return io.LimitReader(gz, maxDecompressed), func() { _ = gz.Close() }, nil
+}
+
 func validateIngestedEventContract(ev *IngestedEvent) error {
 	if ev == nil {
 		return errors.New("event required")
+	}
+	if ev.SchemaVersion < 0 {
+		return errors.New("schema_version cannot be negative")
 	}
 	switch ev.Type {
 	case "web.request":
@@ -375,13 +437,66 @@ func detailInt(details map[string]any, key string) int {
 	}
 }
 
+func normalizeIngestedEventMetadata(ev *IngestedEvent, tenantID, nodeID uuid.UUID) {
+	if ev == nil {
+		return
+	}
+	if ev.SchemaVersion <= 0 {
+		ev.SchemaVersion = 1
+	}
+	ev.EventID = strings.TrimSpace(ev.EventID)
+	if ev.EventID == "" {
+		ev.EventID = deterministicEventID(tenantID, nodeID, ev)
+	}
+}
+
+func deterministicEventID(tenantID, nodeID uuid.UUID, ev *IngestedEvent) string {
+	if ev == nil {
+		return ""
+	}
+	clone := *ev
+	clone.EventID = ""
+	if clone.SchemaVersion <= 0 {
+		clone.SchemaVersion = 1
+	}
+	material := struct {
+		TenantID string        `json:"tenant_id_scope"`
+		NodeID   string        `json:"node_id_scope,omitempty"`
+		Event    IngestedEvent `json:"event"`
+	}{
+		TenantID: tenantID.String(),
+		Event:    clone,
+	}
+	if nodeID != uuid.Nil {
+		material.NodeID = nodeID.String()
+	}
+	raw, err := json.Marshal(material)
+	if err != nil {
+		raw = []byte(fmt.Sprintf("%#v", material))
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
 // fanOutEvents writes the batch to Doris (when configured), increments the
 // Postgres hourly rollup, and publishes each event on the in-memory bus for
 // correlation engine consumers. Runs Phase F anomaly detectors first so any
 // synthetic anomaly.* events ride the same downstream path.
 func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
-	s.enrichConnectionThreatIntel(tenantID, events)
-	if anomalies := s.detectAnomalies(ctx, tenantID, nodeID, events); len(anomalies) > 0 {
+	return s.fanOutEventsWithBatch(ctx, uuid.Nil, tenantID, nodeID, events)
+}
+
+func (s *Server) fanOutEventsWithBatch(ctx context.Context, batchID, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+	fanoutEvents, anomalies := s.prepareEventFanout(ctx, tenantID, nodeID, events)
+	s.applyLocalEventFanout(ctx, tenantID, nodeID, fanoutEvents, anomalies)
+	return s.flushDorisEventFanout(ctx, batchID, tenantID, nodeID, fanoutEvents)
+}
+
+func (s *Server) prepareEventFanout(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) ([]IngestedEvent, []IngestedEvent) {
+	fanoutEvents := append([]IngestedEvent(nil), events...)
+	s.enrichConnectionThreatIntel(tenantID, fanoutEvents)
+	anomalies := s.detectAnomalies(ctx, tenantID, nodeID, fanoutEvents)
+	if len(anomalies) > 0 {
 		// Stamp tenant/node onto synthetic events so eventToDorisRow has
 		// what it needs.
 		for i := range anomalies {
@@ -395,78 +510,17 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 				anomalies[i].TS = time.Now().UTC()
 			}
 		}
-		s.persistAnomalyInvestigations(ctx, tenantID, nodeID, anomalies)
-		events = append(events, anomalies...)
+		fanoutEvents = append(fanoutEvents, anomalies...)
 	}
-	dorisStatus := ""
-	var dorisErr error
+	for i := range fanoutEvents {
+		normalizeIngestedEventMetadata(&fanoutEvents[i], tenantID, nodeID)
+	}
+	return fanoutEvents, anomalies
+}
 
-	if s.dorisWriter != nil {
-		dorisRows := make([]map[string]any, 0, len(events))
-		connRows := make([]map[string]any, 0)
-		lineageRows := make([]map[string]any, 0)
-		fileRows := make([]map[string]any, 0)
-		dbRows := make([]map[string]any, 0)
-		webRows := make([]map[string]any, 0)
-		for i := range events {
-			ev := &events[i]
-			row := eventToDorisRow(tenantID, nodeID, ev)
-			dorisRows = append(dorisRows, row)
-			switch ev.Type {
-			case "conn.open", "conn.close", "conn.state_change", "conn.summary":
-				connRows = append(connRows, eventToConnRow(tenantID, nodeID, ev))
-			case "proc.exec", "proc.exit":
-				lineageRows = append(lineageRows, eventToLineageRow(tenantID, nodeID, ev))
-			case "file.open", "file.read.summary", "file.write.summary", "file.unlink", "file.rename":
-				fileRows = append(fileRows, eventToFileRow(tenantID, nodeID, ev))
-			case "db.query":
-				dbRows = append(dbRows, eventToDBQueryRow(tenantID, nodeID, ev))
-			case "web.request", "web.error":
-				webRows = append(webRows, eventToWebRequestRow(tenantID, nodeID, ev))
-			}
-		}
-		if err := s.dorisWriter.EnqueueNonBlocking("events", dorisRows); err != nil {
-			dorisErr = err
-		}
-		// Side-table writes are best-effort but operators need visibility when
-		// rows are dropped (typically backpressure during a Doris stall).
-		if len(connRows) > 0 {
-			if eerr := s.dorisWriter.EnqueueNonBlocking("process_connections", connRows); eerr != nil {
-				s.logger.Warn("doris enqueue process_connections",
-					zap.Int("rows", len(connRows)), zap.Error(eerr))
-			}
-		}
-		if len(lineageRows) > 0 {
-			if eerr := s.dorisWriter.EnqueueNonBlocking("process_lineage", lineageRows); eerr != nil {
-				s.logger.Warn("doris enqueue process_lineage",
-					zap.Int("rows", len(lineageRows)), zap.Error(eerr))
-			}
-		}
-		if len(fileRows) > 0 {
-			if eerr := s.dorisWriter.EnqueueNonBlocking("file_accesses", fileRows); eerr != nil {
-				s.logger.Warn("doris enqueue file_accesses",
-					zap.Int("rows", len(fileRows)), zap.Error(eerr))
-			}
-		}
-		if len(dbRows) > 0 {
-			if eerr := s.dorisWriter.EnqueueNonBlocking("db_queries", dbRows); eerr != nil {
-				s.logger.Warn("doris enqueue db_queries",
-					zap.Int("rows", len(dbRows)), zap.Error(eerr))
-			}
-		}
-		if len(webRows) > 0 {
-			if eerr := s.dorisWriter.EnqueueNonBlocking("web_requests", webRows); eerr != nil {
-				s.logger.Warn("doris enqueue web_requests",
-					zap.Int("rows", len(webRows)), zap.Error(eerr))
-			}
-		}
-		if dorisErr != nil {
-			dorisStatus = "pending"
-		} else {
-			dorisStatus = "queued"
-		}
-	} else {
-		dorisStatus = "disabled"
+func (s *Server) applyLocalEventFanout(ctx context.Context, tenantID, nodeID uuid.UUID, events, anomalies []IngestedEvent) {
+	if len(anomalies) > 0 {
+		s.persistAnomalyInvestigations(ctx, tenantID, nodeID, anomalies)
 	}
 
 	// Postgres hourly rollup.
@@ -492,8 +546,292 @@ func (s *Server) fanOutEvents(ctx context.Context, tenantID, nodeID uuid.UUID, e
 			})
 		}
 	}
+}
+
+func (s *Server) flushDorisEventFanout(ctx context.Context, batchID, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+	dorisStatus := ""
+	var dorisErr error
+
+	dorisRows := buildDorisEventRows(tenantID, nodeID, events)
+	syncDoris := batchID != uuid.Nil && s.dorisClient != nil
+	if syncDoris {
+		if err := s.streamLoadDorisEventRows(ctx, batchID, dorisRows); err != nil {
+			dorisStatus = "pending"
+			return dorisStatus, err
+		}
+		dorisStatus = "loaded"
+	} else if s.dorisWriter != nil {
+		dorisErr = s.enqueueDorisEventRows(dorisRows)
+		if dorisErr != nil {
+			dorisStatus = "pending"
+		} else {
+			dorisStatus = "queued"
+		}
+	} else {
+		dorisStatus = "disabled"
+	}
 
 	return dorisStatus, dorisErr
+}
+
+type dorisEventRows struct {
+	events  []map[string]any
+	conns   []map[string]any
+	lineage []map[string]any
+	files   []map[string]any
+	db      []map[string]any
+	web     []map[string]any
+}
+
+func buildDorisEventRows(tenantID, nodeID uuid.UUID, events []IngestedEvent) dorisEventRows {
+	rows := dorisEventRows{events: make([]map[string]any, 0, len(events))}
+	for i := range events {
+		ev := &events[i]
+		rows.events = append(rows.events, eventToDorisRow(tenantID, nodeID, ev))
+		switch ev.Type {
+		case "conn.open", "conn.close", "conn.state_change", "conn.summary":
+			rows.conns = append(rows.conns, eventToConnRow(tenantID, nodeID, ev))
+		case "proc.exec", "proc.exit":
+			rows.lineage = append(rows.lineage, eventToLineageRow(tenantID, nodeID, ev))
+		case "file.open", "file.read.summary", "file.write.summary", "file.unlink", "file.rename":
+			rows.files = append(rows.files, eventToFileRow(tenantID, nodeID, ev))
+		case "db.query":
+			rows.db = append(rows.db, eventToDBQueryRow(tenantID, nodeID, ev))
+		case "web.request", "web.error":
+			rows.web = append(rows.web, eventToWebRequestRow(tenantID, nodeID, ev))
+		}
+	}
+	return rows
+}
+
+type dorisEventTableRows struct {
+	table string
+	rows  []map[string]any
+}
+
+func (r dorisEventRows) tables() []dorisEventTableRows {
+	return []dorisEventTableRows{
+		{table: "events", rows: r.events},
+		{table: "process_connections", rows: r.conns},
+		{table: "process_lineage", rows: r.lineage},
+		{table: "file_accesses", rows: r.files},
+		{table: "db_queries", rows: r.db},
+		{table: "web_requests", rows: r.web},
+	}
+}
+
+func (s *Server) streamLoadDorisEventRows(ctx context.Context, batchID uuid.UUID, rows dorisEventRows) error {
+	if s == nil || s.dorisClient == nil {
+		return nil
+	}
+	for _, tableRows := range rows.tables() {
+		if len(tableRows.rows) == 0 {
+			continue
+		}
+		label := doris.LabelFor(tableRows.table, batchID.String())
+		if _, err := s.dorisClient.StreamLoadJSON(ctx, tableRows.table, tableRows.rows, doris.StreamLoadJSONOptions{Label: label}); err != nil {
+			return fmt.Errorf("doris stream load %s: %w", tableRows.table, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) enqueueDorisEventRows(rows dorisEventRows) error {
+	if s == nil || s.dorisWriter == nil {
+		return nil
+	}
+	if !s.dorisWriter.Healthy() {
+		return errors.New("doris writer unhealthy")
+	}
+	var firstErr error
+	for _, tableRows := range rows.tables() {
+		if len(tableRows.rows) == 0 {
+			continue
+		}
+		if err := s.dorisWriter.EnqueueNonBlocking(tableRows.table, tableRows.rows); err != nil {
+			if tableRows.table == "events" && firstErr == nil {
+				firstErr = err
+			}
+			if tableRows.table != "events" {
+				s.logger.Warn("doris enqueue "+tableRows.table,
+					zap.Int("rows", len(tableRows.rows)), zap.Error(err))
+			}
+		}
+	}
+	return firstErr
+}
+
+type eventIngestStatusMarker interface {
+	MarkEventIngestStatus(context.Context, uuid.UUID, string, string, string) error
+}
+
+type eventIngestLocalCompleteMarker interface {
+	MarkEventIngestLocalComplete(context.Context, uuid.UUID, []byte, int) error
+}
+
+type eventFanOutFunc func(context.Context, uuid.UUID, uuid.UUID, []IngestedEvent) (string, error)
+
+// drainEventIngestBatch replays one persisted journal payload through the
+// same fan-out path as live ingest. Coordinator wiring point: call
+// drainPendingEventIngestBatches from the server startup scheduler after
+// store and dorisWriter are initialised, with a short interval and a small
+// limit, so stuck 'received'/'pending_doris' rows retry durably.
+func (s *Server) drainEventIngestBatch(ctx context.Context, batch storage.EventIngestBatch) error {
+	if s == nil || s.store == nil {
+		return errors.New("storage unavailable")
+	}
+	if isDorisOnlyEventIngestStatus(batch.Status) {
+		if s.dorisClient != nil {
+			return drainEventIngestBatchDorisOnly(ctx, batch, s.store, func(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+				return s.flushDorisEventFanout(ctx, batch.ID, tenantID, nodeID, events)
+			})
+		}
+		if s.dorisWriter != nil {
+			return drainEventIngestBatchDorisOnly(ctx, batch, s.store, func(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+				return s.flushDorisEventFanout(ctx, batch.ID, tenantID, nodeID, events)
+			})
+		}
+		err := errors.New("doris writer unavailable for pending event ingest batch")
+		_ = s.store.MarkEventIngestStatus(ctx, batch.ID, "pending_doris", "disabled", err.Error())
+		return err
+	}
+	return drainEventIngestBatch(ctx, batch, s.store, func(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+		fanoutEvents, anomalies := s.prepareEventFanout(ctx, tenantID, nodeID, events)
+		s.applyLocalEventFanout(ctx, tenantID, nodeID, fanoutEvents, anomalies)
+		if marker, ok := s.store.(eventIngestLocalCompleteMarker); ok {
+			if payload, err := encodeIngestedEventPayload(fanoutEvents); err == nil {
+				if err := marker.MarkEventIngestLocalComplete(ctx, batch.ID, payload, len(fanoutEvents)); err != nil {
+					s.logger.Warn("mark replay ingest local complete", zap.Error(err), zap.String("batch_id", batch.ID.String()))
+				}
+			} else {
+				s.logger.Warn("encode replay ingest local payload", zap.Error(err), zap.String("batch_id", batch.ID.String()))
+			}
+		}
+		return s.flushDorisEventFanout(ctx, batch.ID, tenantID, nodeID, fanoutEvents)
+	})
+}
+
+func isDorisOnlyEventIngestStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "local_completed", "pending_doris":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) drainPendingEventIngestBatches(ctx context.Context, olderThan time.Duration, limit int) (int, int, error) {
+	if s == nil || s.store == nil {
+		return 0, 0, errors.New("storage unavailable")
+	}
+	batches, err := s.store.PendingEventIngestBatches(ctx, olderThan, limit)
+	if err != nil {
+		return 0, 0, err
+	}
+	drained := 0
+	failed := 0
+	var joined error
+	for _, batch := range batches {
+		if err := s.drainEventIngestBatch(ctx, batch); err != nil {
+			failed++
+			joined = errors.Join(joined, err)
+			continue
+		}
+		drained++
+	}
+	return drained, failed, joined
+}
+
+func drainEventIngestBatch(ctx context.Context, batch storage.EventIngestBatch, marker eventIngestStatusMarker, fanOut eventFanOutFunc) error {
+	if marker == nil {
+		return errors.New("ingest status marker unavailable")
+	}
+	if fanOut == nil {
+		err := errors.New("event fanout unavailable")
+		_ = marker.MarkEventIngestStatus(ctx, batch.ID, "failed", "", err.Error())
+		return err
+	}
+	if !batch.TenantID.Valid || batch.TenantID.UUID == uuid.Nil {
+		err := errors.New("pending event ingest batch missing tenant_id")
+		_ = marker.MarkEventIngestStatus(ctx, batch.ID, "failed", "", err.Error())
+		return err
+	}
+	tenantID := batch.TenantID.UUID
+	nodeID := uuid.Nil
+	if batch.NodeID.Valid {
+		nodeID = batch.NodeID.UUID
+	}
+	events, err := decodeIngestedEventPayload(batch.Payload, "", maxEventIngestDecompressed, maxEventIngestRows)
+	if err != nil {
+		err = fmt.Errorf("decode event ingest batch %s: %w", batch.ID, err)
+		_ = marker.MarkEventIngestStatus(ctx, batch.ID, "failed", "", err.Error())
+		return err
+	}
+	now := time.Now().UTC()
+	for i := range events {
+		if events[i].TS.IsZero() {
+			events[i].TS = now
+		}
+		normalizeIngestedEventMetadata(&events[i], tenantID, nodeID)
+	}
+	dorisStatus, fanoutErr := fanOut(ctx, tenantID, nodeID, events)
+	if fanoutErr != nil {
+		errMsg := fanoutErr.Error()
+		if err := marker.MarkEventIngestStatus(ctx, batch.ID, "pending_doris", dorisStatus, errMsg); err != nil {
+			return errors.Join(fanoutErr, err)
+		}
+		return fanoutErr
+	}
+	if err := marker.MarkEventIngestStatus(ctx, batch.ID, "accepted", dorisStatus, ""); err != nil {
+		return err
+	}
+	return nil
+}
+
+func drainEventIngestBatchDorisOnly(ctx context.Context, batch storage.EventIngestBatch, marker eventIngestStatusMarker, flush eventFanOutFunc) error {
+	if marker == nil {
+		return errors.New("ingest status marker unavailable")
+	}
+	if flush == nil {
+		err := errors.New("event doris flush unavailable")
+		_ = marker.MarkEventIngestStatus(ctx, batch.ID, "pending_doris", "", err.Error())
+		return err
+	}
+	if !batch.TenantID.Valid || batch.TenantID.UUID == uuid.Nil {
+		err := errors.New("pending event ingest batch missing tenant_id")
+		_ = marker.MarkEventIngestStatus(ctx, batch.ID, "failed", "", err.Error())
+		return err
+	}
+	tenantID := batch.TenantID.UUID
+	nodeID := uuid.Nil
+	if batch.NodeID.Valid {
+		nodeID = batch.NodeID.UUID
+	}
+	events, err := decodeIngestedEventPayload(batch.Payload, "", maxEventIngestDecompressed, maxEventIngestRows)
+	if err != nil {
+		err = fmt.Errorf("decode event ingest batch %s: %w", batch.ID, err)
+		_ = marker.MarkEventIngestStatus(ctx, batch.ID, "failed", "", err.Error())
+		return err
+	}
+	now := time.Now().UTC()
+	for i := range events {
+		if events[i].TS.IsZero() {
+			events[i].TS = now
+		}
+		normalizeIngestedEventMetadata(&events[i], tenantID, nodeID)
+	}
+	dorisStatus, flushErr := flush(ctx, tenantID, nodeID, events)
+	if flushErr != nil {
+		errMsg := flushErr.Error()
+		if err := marker.MarkEventIngestStatus(ctx, batch.ID, "pending_doris", dorisStatus, errMsg); err != nil {
+			return errors.Join(flushErr, err)
+		}
+		return flushErr
+	}
+	if err := marker.MarkEventIngestStatus(ctx, batch.ID, "accepted", dorisStatus, ""); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) enrichConnectionThreatIntel(tenantID uuid.UUID, events []IngestedEvent) {
@@ -660,11 +998,18 @@ func buildRollupBuckets(tenantID, nodeID uuid.UUID, events []IngestedEvent) []ro
 // eventToDorisRow converts an IngestedEvent to the column shape of the Doris
 // `events` table. Bytes/details are passed through; dates derived from ts.
 func eventToDorisRow(tenantID, nodeID uuid.UUID, ev *IngestedEvent) map[string]any {
+	normalizeIngestedEventMetadata(ev, tenantID, nodeID)
 	row := map[string]any{
 		"event_date":         ev.TS.UTC().Format("2006-01-02"),
 		"tenant_id":          tenantID.String(),
 		"ts":                 ev.TS.UTC().Format("2006-01-02 15:04:05.000"),
+		"schema_version":     ev.SchemaVersion,
+		"event_id":           ev.EventID,
 		"event_type":         ev.Type,
+		"raw_ref":            ev.RawRef,
+		"collector":          ev.Collector,
+		"parser":             ev.Parser,
+		"parser_status":      ev.ParserStatus,
 		"severity":           ev.Severity,
 		"correlation_id":     ev.CorrelationID,
 		"conn_id":            ev.ConnID,
@@ -799,11 +1144,18 @@ func eventToDBQueryRow(tenantID, nodeID uuid.UUID, ev *IngestedEvent) map[string
 }
 
 func eventToWebRequestRow(tenantID, nodeID uuid.UUID, ev *IngestedEvent) map[string]any {
+	normalizeIngestedEventMetadata(ev, tenantID, nodeID)
 	row := map[string]any{
 		"event_date":       ev.TS.UTC().Format("2006-01-02"),
 		"tenant_id":        tenantID.String(),
 		"node_id":          nodeID.String(),
 		"ts":               ev.TS.UTC().Format("2006-01-02 15:04:05.000"),
+		"schema_version":   ev.SchemaVersion,
+		"event_id":         ev.EventID,
+		"raw_ref":          ev.RawRef,
+		"collector":        ev.Collector,
+		"parser":           ev.Parser,
+		"parser_status":    ev.ParserStatus,
 		"correlation_id":   ev.CorrelationID,
 		"webserver_kind":   detailsString(ev.Details, "webserver_kind", ev.ProcessName),
 		"server_group":     detailsString(ev.Details, "server_group", ""),

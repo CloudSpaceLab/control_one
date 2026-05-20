@@ -12,9 +12,9 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
-// setupRolloutAPIEnv primes a cluster with two members so rollout create
-// succeeds out of the box. It returns the env plus the seeded cluster id.
-func setupRolloutAPIEnv(t *testing.T) (*clustersTestEnv, uuid.UUID) {
+// setupRolloutAPIEnv primes a cluster with two members and a provider-matched
+// template version so rollout create succeeds out of the box.
+func setupRolloutAPIEnv(t *testing.T) (*clustersTestEnv, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	env := setupClustersEnv(t, "cluster-admin", "viewer")
 
@@ -40,15 +40,35 @@ func setupRolloutAPIEnv(t *testing.T) (*clustersTestEnv, uuid.UUID) {
 			{ClusterID: clusterID, NodeID: uuid.New(), Role: "worker", Position: 1, JoinedAt: time.Now()},
 		},
 	}
-	return env, clusterID
+	templateVersionID := seedClusterRolloutTemplateVersion(t, env, "mock")
+	return env, clusterID, templateVersionID
+}
+
+func seedClusterRolloutTemplateVersion(t *testing.T, env *clustersTestEnv, provider string) uuid.UUID {
+	t.Helper()
+	template, err := env.store.CreateProvisioningTemplate(context.Background(), &storage.ProvisioningTemplate{
+		Name:     "rollout-template-" + uuid.NewString(),
+		Provider: provider,
+	})
+	if err != nil {
+		t.Fatalf("seed rollout template: %v", err)
+	}
+	version, err := env.store.CreateProvisioningTemplateVersion(context.Background(), storage.CreateTemplateVersionParams{
+		TemplateID: template.ID,
+		Body:       "rollout body",
+	})
+	if err != nil {
+		t.Fatalf("seed rollout template version: %v", err)
+	}
+	return version.ID
 }
 
 func TestRolloutAPICreateRequiresAdmin(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, templateVersionID := setupRolloutAPIEnv(t)
 
 	rec := env.call(http.MethodPost, "/api/v1/clusters/"+clusterID.String()+"/rollouts",
 		"cluster-admin", map[string]any{
-			"template_version_id": uuid.NewString(),
+			"template_version_id": templateVersionID.String(),
 			"wave_size":           1,
 		}, "viewer")
 
@@ -58,7 +78,7 @@ func TestRolloutAPICreateRequiresAdmin(t *testing.T) {
 }
 
 func TestRolloutAPICreateRejectsInvalidPayload(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, templateVersionID := setupRolloutAPIEnv(t)
 
 	cases := []struct {
 		name string
@@ -66,9 +86,9 @@ func TestRolloutAPICreateRejectsInvalidPayload(t *testing.T) {
 	}{
 		{"missing template version", map[string]any{"wave_size": 2}},
 		{"bad template version", map[string]any{"template_version_id": "not-a-uuid", "wave_size": 2}},
-		{"zero wave size", map[string]any{"template_version_id": uuid.NewString(), "wave_size": 0}},
+		{"zero wave size", map[string]any{"template_version_id": templateVersionID.String(), "wave_size": 0}},
 		{"bad gate type", map[string]any{
-			"template_version_id": uuid.NewString(),
+			"template_version_id": templateVersionID.String(),
 			"wave_size":           1,
 			"health_gate":         map[string]any{"type": "nope"},
 		}},
@@ -86,10 +106,10 @@ func TestRolloutAPICreateRejectsInvalidPayload(t *testing.T) {
 }
 
 func TestRolloutAPICreateAndGet(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, templateVersionID := setupRolloutAPIEnv(t)
 
 	body := map[string]any{
-		"template_version_id": uuid.NewString(),
+		"template_version_id": templateVersionID.String(),
 		"wave_size":           1,
 		"wave_strategy":       "rolling",
 		"health_gate":         map[string]any{"type": "heartbeat", "grace": "1m", "timeout": "2m"},
@@ -130,7 +150,7 @@ func TestRolloutAPICreateAndGet(t *testing.T) {
 }
 
 func TestRolloutAPIGetWrongClusterReturns404(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, _ := setupRolloutAPIEnv(t)
 
 	// Seed a rollout belonging to a different cluster.
 	otherCluster := uuid.New()
@@ -151,7 +171,7 @@ func TestRolloutAPIGetWrongClusterReturns404(t *testing.T) {
 }
 
 func TestRolloutAPIAbort(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, _ := setupRolloutAPIEnv(t)
 
 	rollout, err := env.store.CreateClusterRollout(context.Background(), storage.CreateClusterRolloutParams{
 		ClusterID:         clusterID,
@@ -177,7 +197,7 @@ func TestRolloutAPIAbort(t *testing.T) {
 }
 
 func TestRolloutAPIAbortViewerForbidden(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, _ := setupRolloutAPIEnv(t)
 
 	rollout, err := env.store.CreateClusterRollout(context.Background(), storage.CreateClusterRolloutParams{
 		ClusterID:         clusterID,
@@ -197,7 +217,7 @@ func TestRolloutAPIAbortViewerForbidden(t *testing.T) {
 }
 
 func TestRolloutAPIResumeRequiresHalted(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, _ := setupRolloutAPIEnv(t)
 
 	rollout, err := env.store.CreateClusterRollout(context.Background(), storage.CreateClusterRolloutParams{
 		ClusterID:         clusterID,
@@ -217,7 +237,7 @@ func TestRolloutAPIResumeRequiresHalted(t *testing.T) {
 }
 
 func TestRolloutAPIResumeFromHalted(t *testing.T) {
-	env, clusterID := setupRolloutAPIEnv(t)
+	env, clusterID, _ := setupRolloutAPIEnv(t)
 
 	rollout, err := env.store.CreateClusterRollout(context.Background(), storage.CreateClusterRolloutParams{
 		ClusterID:         clusterID,

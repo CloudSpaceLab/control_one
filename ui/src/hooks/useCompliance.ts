@@ -64,6 +64,26 @@ export function useComplianceResults(params: ListComplianceResultsParams = {}): 
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!normalizedParams.tenant_id) {
+      setState({
+        data: [],
+        pagination: {
+          total: 0,
+          count: 0,
+          limit: normalizedParams.limit ?? 0,
+          offset: normalizedParams.offset ?? 0,
+          nextOffset: null,
+          prevOffset: null,
+        },
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     api
@@ -125,6 +145,18 @@ export function useComplianceSummary(params: { tenant_id?: string; node_id?: str
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!normalizedParams.tenant_id) {
+      setState({
+        data: null,
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     api
@@ -186,6 +218,18 @@ export function useComplianceTrends(params: ComplianceTrendsParams = {}): UseCom
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!normalizedParams.tenant_id) {
+      setState({
+        data: [],
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     api

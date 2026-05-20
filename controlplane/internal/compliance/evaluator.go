@@ -86,6 +86,9 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 		"rule_id":   rule.ID,
 		"framework": parsed.Framework,
 		"control":   parsed.Control,
+		"node_id":   input.NodeID.String(),
+		"tenant_id": input.TenantID.String(),
+		"rule_type": rule.RuleType,
 	}
 
 	// Empty conditions = auto-pass
@@ -100,18 +103,33 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 	}
 
 	// All conditions must pass (AND logic)
+	conditions := make([]map[string]any, 0, len(parsed.Conditions))
 	for i, cond := range parsed.Conditions {
 		fieldVal, found := resolveField(cond.Field, input)
 		pass, err := evaluateCondition(cond.Op, fieldVal, found, cond.Value)
 		if err != nil {
 			return nil, fmt.Errorf("condition[%d] field=%s op=%s: %w", i, cond.Field, cond.Op, err)
 		}
+		conditionEvidence := map[string]any{
+			"index":    i,
+			"field":    cond.Field,
+			"op":       cond.Op,
+			"expected": cond.Value,
+			"actual":   fieldVal,
+			"found":    found,
+			"passed":   pass,
+		}
+		conditions = append(conditions, conditionEvidence)
 		if !pass {
+			evidence["conditions"] = conditions
+			evidence["conditions_total"] = len(parsed.Conditions)
+			evidence["conditions_passed"] = countPassedConditions(conditions)
 			evidence["failed_condition"] = map[string]any{
 				"field":    cond.Field,
 				"op":       cond.Op,
 				"expected": cond.Value,
 				"actual":   fieldVal,
+				"found":    found,
 			}
 			return &EvalResult{
 				Passed:      false,
@@ -124,6 +142,10 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 		}
 	}
 
+	evidence["conditions"] = conditions
+	evidence["conditions_total"] = len(parsed.Conditions)
+	evidence["conditions_passed"] = countPassedConditions(conditions)
+
 	return &EvalResult{
 		Passed:    true,
 		Severity:  severity,
@@ -131,6 +153,16 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 		Evidence:  evidence,
 		CheckedAt: now,
 	}, nil
+}
+
+func countPassedConditions(conditions []map[string]any) int {
+	var out int
+	for _, condition := range conditions {
+		if passed, ok := condition["passed"].(bool); ok && passed {
+			out++
+		}
+	}
+	return out
 }
 
 // resolveField looks up a dot-separated field path in the EvalInput.

@@ -59,7 +59,11 @@ func (s *Server) handleRemediationCircuitBreakerSubroutes(w http.ResponseWriter,
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 			return
 		}
 		s.handleGetCircuitBreakerState(w, r, tenantID, ruleID)
@@ -71,6 +75,9 @@ func (s *Server) handleRemediationCircuitBreakerSubroutes(w http.ResponseWriter,
 		}
 		principal, ok := s.authorize(w, r, roleAdmin)
 		if !ok {
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 			return
 		}
 		s.handleAckCircuitBreaker(w, r, tenantID, ruleID, principal.Subject)

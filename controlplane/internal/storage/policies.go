@@ -12,6 +12,15 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	AssignmentScopeTenant          = "tenant"
+	AssignmentScopeNode            = "node"
+	AssignmentScopeLabelSelector   = "label_selector"
+	AssignmentScopeCluster         = "cluster"
+	AssignmentScopeHypervisorHost  = "hypervisor_host"
+	AssignmentScopeEnrollmentToken = "enrollment_token"
+)
+
 // Policy represents a policy definition.
 type Policy struct {
 	ID          uuid.UUID
@@ -45,6 +54,9 @@ type PolicyAssignment struct {
 	PolicyID   uuid.UUID
 	TenantID   uuid.UUID
 	NodeID     uuid.UUID
+	ScopeType  string
+	ScopeID    uuid.UUID
+	Selector   map[string]any
 	AssignedAt time.Time
 	AssignedBy *uuid.UUID
 	ExpiresAt  sql.NullTime
@@ -84,6 +96,9 @@ type CreatePolicyAssignmentParams struct {
 	PolicyID   uuid.UUID
 	TenantID   uuid.UUID
 	NodeID     uuid.UUID // uuid.Nil = tenant-wide
+	ScopeType  string
+	ScopeID    uuid.UUID
+	Selector   map[string]any
 	AssignedBy *uuid.UUID
 	ExpiresAt  *time.Time
 }
@@ -739,7 +754,7 @@ func (s *Store) PromotePolicyVersion(ctx context.Context, policyID uuid.UUID, ve
 	return &v, nil
 }
 
-// CreatePolicyAssignment assigns a policy to a tenant or node.
+// CreatePolicyAssignment assigns a policy to an explicit tenant-bounded scope.
 func (s *Store) CreatePolicyAssignment(ctx context.Context, params CreatePolicyAssignmentParams) (*PolicyAssignment, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
@@ -751,6 +766,15 @@ func (s *Store) CreatePolicyAssignment(ctx context.Context, params CreatePolicyA
 		return nil, errors.New("tenant_id is required")
 	}
 
+	scopeType, scopeID, nodeID, selector, err := normalizeAssignmentScope(params.ScopeType, params.ScopeID, params.NodeID, params.Selector)
+	if err != nil {
+		return nil, err
+	}
+	selectorRaw, err := marshalJSONBMap(selector)
+	if err != nil {
+		return nil, fmt.Errorf("encode selector: %w", err)
+	}
+
 	id := uuid.New()
 	now := s.clock()
 
@@ -759,21 +783,95 @@ func (s *Store) CreatePolicyAssignment(ctx context.Context, params CreatePolicyA
 		expiresAt = sql.NullTime{Time: *params.ExpiresAt, Valid: true}
 	}
 
-	var nodeID *uuid.UUID
-	if params.NodeID != uuid.Nil {
-		nodeID = &params.NodeID
+	var nodeIDArg *uuid.UUID
+	if nodeID != uuid.Nil {
+		nodeIDArg = &nodeID
+	}
+	var scopeIDArg *uuid.UUID
+	if scopeID != uuid.Nil {
+		scopeIDArg = &scopeID
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		INSERT INTO policy_assignments (id, policy_id, tenant_id, node_id, assigned_at, assigned_by, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, policy_id, tenant_id, COALESCE(node_id, '00000000-0000-0000-0000-000000000000'), assigned_at, assigned_by, expires_at
-	`, id, params.PolicyID, params.TenantID, nodeID, now, params.AssignedBy, expiresAt)
+		INSERT INTO policy_assignments (
+			id, policy_id, tenant_id, node_id, scope_type, scope_id, selector,
+			assigned_at, assigned_by, expires_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, policy_id, tenant_id,
+			COALESCE(node_id, '00000000-0000-0000-0000-000000000000'),
+			scope_type,
+			COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'),
+			selector,
+			assigned_at, assigned_by, expires_at
+	`, id, params.PolicyID, params.TenantID, nodeIDArg, scopeType, scopeIDArg, selectorRaw, now, params.AssignedBy, expiresAt)
 
 	var a PolicyAssignment
-	if err := row.Scan(&a.ID, &a.PolicyID, &a.TenantID, &a.NodeID, &a.AssignedAt, &a.AssignedBy, &a.ExpiresAt); err != nil {
+	var selectorBytes []byte
+	if err := row.Scan(
+		&a.ID,
+		&a.PolicyID,
+		&a.TenantID,
+		&a.NodeID,
+		&a.ScopeType,
+		&a.ScopeID,
+		&selectorBytes,
+		&a.AssignedAt,
+		&a.AssignedBy,
+		&a.ExpiresAt,
+	); err != nil {
 		return nil, fmt.Errorf("create policy assignment: %w", err)
 	}
+	a.Selector, err = decodeJSONBMap(selectorBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decode selector: %w", err)
+	}
+	return &a, nil
+}
+
+// GetPolicyAssignment returns a single policy assignment by ID.
+func (s *Store) GetPolicyAssignment(ctx context.Context, id uuid.UUID) (*PolicyAssignment, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("assignment id is required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, policy_id, tenant_id,
+			COALESCE(node_id, '00000000-0000-0000-0000-000000000000'),
+			scope_type,
+			COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'),
+			selector,
+			assigned_at, assigned_by, expires_at
+		FROM policy_assignments
+		WHERE id = $1
+	`, id)
+	var a PolicyAssignment
+	var selectorBytes []byte
+	if err := row.Scan(
+		&a.ID,
+		&a.PolicyID,
+		&a.TenantID,
+		&a.NodeID,
+		&a.ScopeType,
+		&a.ScopeID,
+		&selectorBytes,
+		&a.AssignedAt,
+		&a.AssignedBy,
+		&a.ExpiresAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get policy assignment: %w", err)
+	}
+	selector, err := decodeJSONBMap(selectorBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decode selector: %w", err)
+	}
+	a.Selector = selector
 	return &a, nil
 }
 
@@ -793,7 +891,12 @@ func (s *Store) ListPolicyAssignments(ctx context.Context, policyID uuid.UUID, l
 	}
 
 	query := `
-		SELECT id, policy_id, tenant_id, COALESCE(node_id, '00000000-0000-0000-0000-000000000000'), assigned_at, assigned_by, expires_at
+		SELECT id, policy_id, tenant_id,
+			COALESCE(node_id, '00000000-0000-0000-0000-000000000000'),
+			scope_type,
+			COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'),
+			selector,
+			assigned_at, assigned_by, expires_at
 		FROM policy_assignments
 		WHERE policy_id = $1
 		ORDER BY assigned_at DESC
@@ -817,9 +920,26 @@ func (s *Store) ListPolicyAssignments(ctx context.Context, policyID uuid.UUID, l
 	var assignments []PolicyAssignment
 	for rows.Next() {
 		var a PolicyAssignment
-		if err := rows.Scan(&a.ID, &a.PolicyID, &a.TenantID, &a.NodeID, &a.AssignedAt, &a.AssignedBy, &a.ExpiresAt); err != nil {
+		var selectorBytes []byte
+		if err := rows.Scan(
+			&a.ID,
+			&a.PolicyID,
+			&a.TenantID,
+			&a.NodeID,
+			&a.ScopeType,
+			&a.ScopeID,
+			&selectorBytes,
+			&a.AssignedAt,
+			&a.AssignedBy,
+			&a.ExpiresAt,
+		); err != nil {
 			return nil, 0, fmt.Errorf("scan policy assignment: %w", err)
 		}
+		selector, err := decodeJSONBMap(selectorBytes)
+		if err != nil {
+			return nil, 0, fmt.Errorf("decode selector: %w", err)
+		}
+		a.Selector = selector
 		assignments = append(assignments, a)
 	}
 	return assignments, total, nil
@@ -862,10 +982,41 @@ func (s *Store) GetEffectivePolicies(ctx context.Context, tenantID, nodeID uuid.
 		FROM policies p
 		INNER JOIN policy_versions pv ON pv.policy_id = p.id AND pv.promoted_at IS NOT NULL
 		INNER JOIN policy_assignments pa ON pa.policy_id = p.id
+		INNER JOIN nodes n ON n.id = $2 AND n.tenant_id = $1
 		WHERE p.enabled = true
 			AND p.archived_at IS NULL
 			AND pa.tenant_id = $1
-			AND (pa.node_id IS NULL OR pa.node_id = $2)
+			AND (
+				pa.scope_type = 'tenant'
+				OR (pa.scope_type = 'node' AND (pa.scope_id = $2 OR pa.node_id = $2))
+				OR (pa.scope_type = 'label_selector' AND COALESCE(n.labels, '{}'::jsonb) @> pa.selector)
+				OR (
+					pa.scope_type = 'cluster'
+					AND EXISTS (
+						SELECT 1
+						FROM cluster_members cm
+						JOIN clusters c ON c.id = cm.cluster_id
+						WHERE cm.node_id = $2
+							AND c.tenant_id = $1
+							AND c.id = pa.scope_id
+					)
+				)
+				OR (
+					pa.scope_type = 'hypervisor_host'
+					AND EXISTS (
+						SELECT 1
+						FROM cluster_members cm
+						JOIN clusters c ON c.id = cm.cluster_id
+						WHERE cm.node_id = $2
+							AND c.tenant_id = $1
+							AND c.hypervisor_host_id = pa.scope_id
+					)
+				)
+				OR (
+					pa.scope_type = 'enrollment_token'
+					AND COALESCE(n.labels ->> 'enrollment.token_id', '') = pa.scope_id::text
+				)
+			)
 			AND (pa.expires_at IS NULL OR pa.expires_at > NOW())
 		ORDER BY p.id, pv.promoted_at DESC
 	`, tenantID, nodeID)
@@ -893,4 +1044,84 @@ func (s *Store) GetEffectivePolicies(ctx context.Context, tenantID, nodeID uuid.
 		result = append(result, pw)
 	}
 	return result, nil
+}
+
+func normalizeAssignmentScope(scopeType string, scopeID, legacyNodeID uuid.UUID, selector map[string]any) (string, uuid.UUID, uuid.UUID, map[string]any, error) {
+	scopeType = strings.ToLower(strings.TrimSpace(scopeType))
+	if scopeType == "" {
+		if legacyNodeID != uuid.Nil {
+			scopeType = AssignmentScopeNode
+			scopeID = legacyNodeID
+		} else {
+			scopeType = AssignmentScopeTenant
+		}
+	}
+
+	switch scopeType {
+	case AssignmentScopeTenant:
+		if scopeID != uuid.Nil || legacyNodeID != uuid.Nil || len(selector) > 0 {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("tenant scope cannot include scope_id, node_id, or selector")
+		}
+		return scopeType, uuid.Nil, uuid.Nil, map[string]any{}, nil
+	case AssignmentScopeNode:
+		if scopeID == uuid.Nil {
+			scopeID = legacyNodeID
+		}
+		if scopeID == uuid.Nil {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("node scope requires scope_id")
+		}
+		if legacyNodeID != uuid.Nil && legacyNodeID != scopeID {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("node_id must match scope_id")
+		}
+		if len(selector) > 0 {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("node scope cannot include selector")
+		}
+		return scopeType, scopeID, scopeID, map[string]any{}, nil
+	case AssignmentScopeCluster, AssignmentScopeHypervisorHost, AssignmentScopeEnrollmentToken:
+		if scopeID == uuid.Nil {
+			return "", uuid.Nil, uuid.Nil, nil, fmt.Errorf("%s scope requires scope_id", scopeType)
+		}
+		if legacyNodeID != uuid.Nil {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("node_id is only valid with node scope")
+		}
+		if len(selector) > 0 {
+			return "", uuid.Nil, uuid.Nil, nil, fmt.Errorf("%s scope cannot include selector", scopeType)
+		}
+		return scopeType, scopeID, uuid.Nil, map[string]any{}, nil
+	case AssignmentScopeLabelSelector:
+		if scopeID != uuid.Nil || legacyNodeID != uuid.Nil {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("label_selector scope cannot include scope_id or node_id")
+		}
+		cleaned := sanitizeSelectorMap(selector)
+		if len(cleaned) == 0 {
+			return "", uuid.Nil, uuid.Nil, nil, errors.New("label_selector scope requires selector")
+		}
+		return scopeType, uuid.Nil, uuid.Nil, cleaned, nil
+	default:
+		return "", uuid.Nil, uuid.Nil, nil, fmt.Errorf("unsupported scope_type %q", scopeType)
+	}
+}
+
+func sanitizeSelectorMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		key = strings.TrimSpace(key)
+		if key == "" || value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				out[key] = trimmed
+			}
+		case bool, float64, int, int64:
+			out[key] = v
+		default:
+			out[key] = v
+		}
+	}
+	return out
 }

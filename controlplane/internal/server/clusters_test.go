@@ -708,3 +708,121 @@ func TestClustersMethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405 on PUT collection, got %d", rec.Code)
 	}
 }
+
+type tenantGatedFakeStore struct {
+	fakeStore
+	allowedTenants map[uuid.UUID]bool
+}
+
+func (f *tenantGatedFakeStore) UserHasTenantRole(_ context.Context, _ uuid.UUID, tenantID uuid.UUID, _ []string) (bool, error) {
+	return f.allowedTenants[tenantID], nil
+}
+
+func callTenantGatedServer(t *testing.T, srv *Server, method, path, token string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		reader = bytes.NewReader(payload)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestClustersListRequiresTenantAccess(t *testing.T) {
+	allowedTenant := uuid.New()
+	blockedTenant := uuid.New()
+	mineID := uuid.New()
+	theirsID := uuid.New()
+	store := &tenantGatedFakeStore{
+		fakeStore: fakeStore{
+			tenants: []storage.Tenant{
+				{ID: allowedTenant, Name: "allowed", CreatedAt: time.Now()},
+				{ID: blockedTenant, Name: "blocked", CreatedAt: time.Now()},
+			},
+			userRoles: map[uuid.UUID][]string{},
+			clusters: map[uuid.UUID]*storage.Cluster{
+				mineID: {
+					ID: mineID, TenantID: allowedTenant, Name: "mine", Provider: "mock",
+					DesiredSize: 1, RolePlan: map[string]any{}, Labels: map[string]any{},
+					FailureDomainStrategy: "spread", State: "running", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
+				theirsID: {
+					ID: theirsID, TenantID: blockedTenant, Name: "theirs", Provider: "mock",
+					DesiredSize: 1, RolePlan: map[string]any{}, Labels: map[string]any{},
+					FailureDomainStrategy: "spread", State: "running", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
+			},
+		},
+		allowedTenants: map[uuid.UUID]bool{allowedTenant: true},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "cluster-viewer"),
+	}, store, &stubQueue{})
+
+	rec := callTenantGatedServer(t, srv, http.MethodGet, "/api/v1/clusters?tenant_id="+blockedTenant.String(), "cluster-viewer", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected blocked tenant list to return 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = callTenantGatedServer(t, srv, http.MethodGet, "/api/v1/clusters?tenant_id="+allowedTenant.String(), "cluster-viewer", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected allowed tenant list to return 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp paginatedResponse[clusterResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].ID != mineID.String() {
+		t.Fatalf("expected only allowed tenant cluster, got %+v", resp.Data)
+	}
+}
+
+func TestClustersResourceRoutesRequireResourceTenantAccess(t *testing.T) {
+	allowedTenant := uuid.New()
+	blockedTenant := uuid.New()
+	clusterID := uuid.New()
+	store := &tenantGatedFakeStore{
+		fakeStore: fakeStore{
+			tenants: []storage.Tenant{
+				{ID: allowedTenant, Name: "allowed", CreatedAt: time.Now()},
+				{ID: blockedTenant, Name: "blocked", CreatedAt: time.Now()},
+			},
+			userRoles: map[uuid.UUID][]string{},
+			clusters: map[uuid.UUID]*storage.Cluster{
+				clusterID: {
+					ID: clusterID, TenantID: blockedTenant, Name: "blocked-cluster", Provider: "mock",
+					DesiredSize: 1, RolePlan: map[string]any{}, Labels: map[string]any{},
+					FailureDomainStrategy: "spread", State: "running", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
+			},
+		},
+		allowedTenants: map[uuid.UUID]bool{allowedTenant: true},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "cluster-admin"),
+	}, store, &stubQueue{})
+
+	rec := callTenantGatedServer(t, srv, http.MethodGet, "/api/v1/clusters/"+clusterID.String(), "cluster-admin", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-tenant get to return 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = callTenantGatedServer(t, srv, http.MethodPost, "/api/v1/clusters", "cluster-admin",
+		createClusterBody(blockedTenant, "blocked-create", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-tenant create to return 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}

@@ -71,6 +71,9 @@ func (s *Server) handleAIConfigGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -100,6 +103,9 @@ func (s *Server) handleAIConfigPut(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := tenantIDFromQuery(r, principal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
 		return
 	}
 	var body aiConfigPutRequest
@@ -149,6 +155,9 @@ func (s *Server) handleAITest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 	cfg, err := s.store.GetAIConfig(r.Context(), tenantID)
 	if err != nil || cfg == nil || cfg.APIKey == "" {
 		http.Error(w, "ai config not set", http.StatusBadRequest)
@@ -177,10 +186,11 @@ type aiAskRequest struct {
 }
 
 type aiAskResponse struct {
-	Answer     string             `json:"answer"`
-	Citations  []string           `json:"citations,omitempty"`
-	ToolTrace  []aiToolTraceEntry `json:"tool_trace,omitempty"`
-	Confidence string             `json:"confidence,omitempty"`
+	Answer          string             `json:"answer"`
+	Citations       []string           `json:"citations,omitempty"`
+	SourceCitations []string           `json:"source_citations,omitempty"`
+	ToolTrace       []aiToolTraceEntry `json:"tool_trace,omitempty"`
+	Confidence      string             `json:"confidence,omitempty"`
 }
 
 func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
@@ -193,13 +203,16 @@ func (s *Server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleOperator, roleInvestigator, roleAdmin)
 	if !ok {
 		return
 	}
 	tenantID, err := tenantIDFromQuery(r, principal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
 	var body aiAskRequest
@@ -285,7 +298,8 @@ func (s *Server) runAIAskToolLoop(ctx context.Context, principal any, tenantID u
 
 	system := "You are a CISO assistant for the Control One security platform. " +
 		"Answer questions strictly from the grounded context and tool results below. " +
-		"When you use a tool result, cite its citation id inline like [tool:node_documentation:1]. " +
+		"When you use a tool result, cite its tool citation id inline like [tool:node_documentation:1], " +
+		"and prefer source-row citation ids from the tool payload when a raw event, evidence row, policy, posture receipt, or finding supports the claim. " +
 		"If evidence is unavailable, say which evidence is unavailable. " +
 		"Never claim that an operator action executed unless a tool result says it executed. " +
 		"Be concise; security operators value brevity.\n\n" +
@@ -294,6 +308,7 @@ func (s *Server) runAIAskToolLoop(ctx context.Context, principal any, tenantID u
 	tools := s.aiToolSpecs()
 	var traces []aiToolTraceEntry
 	var citations []string
+	var sourceCitations []string
 	citationSeq := 0
 
 	for step := 0; step < 12; step++ {
@@ -308,7 +323,7 @@ func (s *Server) runAIAskToolLoop(ctx context.Context, principal any, tenantID u
 			if strings.TrimSpace(answer) == "" {
 				answer = "No answer was produced."
 			}
-			return aiAskResponse{Answer: answer, Citations: citations, ToolTrace: traces, Confidence: confidenceFromTrace(traces)}, nil
+			return aiAskResponse{Answer: answer, Citations: citations, SourceCitations: sourceCitations, ToolTrace: traces, Confidence: confidenceFromTrace(traces)}, nil
 		}
 
 		resultBlocks := make([]llm.ContentBlock, 0, len(calls))
@@ -340,6 +355,7 @@ func (s *Server) runAIAskToolLoop(ctx context.Context, principal any, tenantID u
 			trace.CitationID = exec.Citation.ID
 			traces = append(traces, trace)
 			citations = append(citations, exec.Citation.ID)
+			sourceCitations = appendUniqueStrings(sourceCitations, sourceCitationIDsFromToolPayload(exec.Payload)...)
 			s.recordAudit(loopCtx, authPrincipal, tenantID, "ai.tool_call", "ai_tool", call.Name, map[string]any{
 				"tool":        call.Name,
 				"citation_id": exec.Citation.ID,
@@ -367,4 +383,83 @@ func confidenceFromTrace(traces []aiToolTraceEntry) string {
 		}
 	}
 	return "grounded"
+}
+
+func appendUniqueStrings(values []string, candidates ...string) []string {
+	for _, candidate := range candidates {
+		values = appendUniqueString(values, candidate)
+	}
+	return values
+}
+
+func sourceCitationIDsFromToolPayload(payload any) []string {
+	if payload == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	out := []string{}
+	walkSourceCitationIDs(decoded, &out)
+	return out
+}
+
+func walkSourceCitationIDs(value any, out *[]string) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			lowerKey := strings.ToLower(strings.TrimSpace(key))
+			if lowerKey == "id" || lowerKey == "citation_id" || lowerKey == "source_record_id" {
+				if text, ok := child.(string); ok && looksLikeSourceCitationID(text) {
+					*out = appendUniqueString(*out, text)
+					continue
+				}
+			}
+			walkSourceCitationIDs(child, out)
+		}
+	case []any:
+		for _, child := range v {
+			walkSourceCitationIDs(child, out)
+		}
+	case string:
+		if looksLikeSourceCitationID(v) {
+			*out = appendUniqueString(*out, v)
+		}
+	}
+}
+
+func looksLikeSourceCitationID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "tool:") || !strings.Contains(value, ":") {
+		return false
+	}
+	prefix := strings.ToLower(strings.TrimSpace(strings.SplitN(value, ":", 2)[0]))
+	switch prefix {
+	case "alerts",
+		"audit_logs",
+		"compliance_evidence",
+		"compliance_results",
+		"events",
+		"file_accesses",
+		"ip_behavior_findings",
+		"lifecycle",
+		"network_connections",
+		"node_health_scores",
+		"node_services",
+		"node_vulnerability_findings",
+		"normalized_events",
+		"process_events",
+		"saved_searches",
+		"security_events",
+		"tenant_event_filters",
+		"ai_investigations":
+		return true
+	default:
+		return false
+	}
 }

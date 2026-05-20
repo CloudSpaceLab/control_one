@@ -65,15 +65,17 @@ type secretResponse struct {
 func (s *Server) handleSecretGroupsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListSecretGroups(w, r)
+		s.handleListSecretGroups(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleCreateSecretGroup(w, r)
+		s.handleCreateSecretGroup(w, r, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -113,7 +115,7 @@ func (s *Server) handleSecretGroupSubroutes(w http.ResponseWriter, r *http.Reque
 	http.NotFound(w, r)
 }
 
-func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -133,6 +135,9 @@ func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) 
 	tenantID, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -155,13 +160,9 @@ func (s *Server) handleListSecretGroups(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
 		return
 	}
 
@@ -181,13 +182,18 @@ func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request)
 	}
 
 	var tenantID uuid.UUID
-	if req.TenantID != nil {
-		parsed, err := uuid.Parse(*req.TenantID)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	if req.TenantID == nil || strings.TrimSpace(*req.TenantID) == "" {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	parsed, err := uuid.Parse(*req.TenantID)
+	if err != nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	tenantID = parsed
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
 	}
 
 	params := storage.CreateSecretGroupParams{
@@ -212,17 +218,18 @@ func (s *Server) handleCreateSecretGroup(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleSecretGroupResource(w http.ResponseWriter, r *http.Request, groupID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleGetSecretGroup(w, r, groupID)
+		s.handleGetSecretGroup(w, r, groupID, principal)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) handleGetSecretGroup(w http.ResponseWriter, r *http.Request, groupID uuid.UUID) {
+func (s *Server) handleGetSecretGroup(w http.ResponseWriter, r *http.Request, groupID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -238,6 +245,9 @@ func (s *Server) handleGetSecretGroup(w http.ResponseWriter, r *http.Request, gr
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, group.TenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 
 	resp := newSecretGroupResponse(*group)
 	writeJSON(w, http.StatusOK, resp)
@@ -250,7 +260,8 @@ func (s *Server) handleListSecretSyncs(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -262,6 +273,20 @@ func (s *Server) handleListSecretSyncs(w http.ResponseWriter, r *http.Request, g
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	group, err := s.store.GetSecretGroup(r.Context(), groupID)
+	if err != nil {
+		s.logger.Error("get secret group for syncs", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if group == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, group.TenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -290,7 +315,8 @@ func (s *Server) handleSyncSecretGroup(w http.ResponseWriter, r *http.Request, g
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -301,6 +327,9 @@ func (s *Server) handleSyncSecretGroup(w http.ResponseWriter, r *http.Request, g
 	group, err := s.store.GetSecretGroup(r.Context(), groupID)
 	if err != nil || group == nil {
 		http.Error(w, "secret group not found", http.StatusNotFound)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, group.TenantID, roleAdmin) {
 		return
 	}
 

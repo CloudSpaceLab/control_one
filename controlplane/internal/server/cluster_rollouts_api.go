@@ -111,10 +111,11 @@ func (s *Server) handleClusterRolloutsRoute(w http.ResponseWriter, r *http.Reque
 	if len(rest) == 1 {
 		switch r.Method {
 		case http.MethodGet:
-			if _, ok := s.authorize(w, r, roleViewer); !ok {
+			principal, ok := s.authorize(w, r, roleViewer)
+			if !ok {
 				return
 			}
-			s.handleGetClusterRollout(w, r, clusterID, rolloutID)
+			s.handleGetClusterRollout(w, r, clusterID, rolloutID, principal)
 		default:
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -166,6 +167,9 @@ func (s *Server) handleCreateClusterRollout(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleAdmin) {
+		return
+	}
 
 	var req createClusterRolloutRequest
 	decoder := json.NewDecoder(r.Body)
@@ -194,6 +198,9 @@ func (s *Server) handleCreateClusterRollout(w http.ResponseWriter, r *http.Reque
 	}
 	if err := validateRolloutHealthGate(req.HealthGate); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.validateProvisioningTemplateVersionForProvider(w, r, templateVersionID, cluster.TenantID, cluster.Provider) {
 		return
 	}
 
@@ -243,7 +250,7 @@ func (s *Server) handleCreateClusterRollout(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (s *Server) handleGetClusterRollout(w http.ResponseWriter, r *http.Request, clusterID, rolloutID uuid.UUID) {
+func (s *Server) handleGetClusterRollout(w http.ResponseWriter, r *http.Request, clusterID, rolloutID uuid.UUID, principal *auth.Principal) {
 	rollout, err := s.store.GetClusterRolloutByID(r.Context(), rolloutID)
 	if err != nil {
 		s.logger.Error("get cluster rollout", zap.Error(err))
@@ -252,6 +259,19 @@ func (s *Server) handleGetClusterRollout(w http.ResponseWriter, r *http.Request,
 	}
 	if rollout == nil || rollout.ClusterID != clusterID {
 		http.NotFound(w, r)
+		return
+	}
+	cluster, err := s.store.GetClusterByID(r.Context(), clusterID)
+	if err != nil {
+		s.logger.Error("get cluster for rollout", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if cluster == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -296,6 +316,19 @@ func (s *Server) handleAbortClusterRollout(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
+	cluster, err := s.store.GetClusterByID(r.Context(), clusterID)
+	if err != nil {
+		s.logger.Error("get cluster for rollout abort", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if cluster == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleAdmin) {
+		return
+	}
 	if rollout.State == RolloutStateAborted || rollout.State == RolloutStateCompleted {
 		http.Error(w, fmt.Sprintf("rollout is already %s", rollout.State), http.StatusConflict)
 		return
@@ -316,11 +349,7 @@ func (s *Server) handleAbortClusterRollout(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	cluster, _ := s.store.GetClusterByID(r.Context(), clusterID)
-	var tenantID uuid.UUID
-	if cluster != nil {
-		tenantID = cluster.TenantID
-	}
+	tenantID := cluster.TenantID
 	s.recordAudit(r.Context(), principal, tenantID, "cluster.rollout.aborted", "cluster_rollout", rolloutID.String(), map[string]any{
 		"cluster_id":   clusterID.String(),
 		"current_wave": rollout.CurrentWave,
@@ -345,6 +374,19 @@ func (s *Server) handleResumeClusterRollout(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	cluster, err := s.store.GetClusterByID(r.Context(), clusterID)
+	if err != nil {
+		s.logger.Error("get cluster for rollout resume", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if cluster == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleAdmin) {
+		return
+	}
 	if rollout.State != RolloutStateHalted {
 		http.Error(w, fmt.Sprintf("rollout is not halted (state=%s)", rollout.State), http.StatusConflict)
 		return
@@ -358,11 +400,7 @@ func (s *Server) handleResumeClusterRollout(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	cluster, _ := s.store.GetClusterByID(r.Context(), clusterID)
-	var tenantID uuid.UUID
-	if cluster != nil {
-		tenantID = cluster.TenantID
-	}
+	tenantID := cluster.TenantID
 
 	jobID, enqueueErr := s.enqueueClusterRolloutAdvance(r, tenantID, clusterID, rolloutID, rollout.CurrentWave)
 	if enqueueErr != nil {

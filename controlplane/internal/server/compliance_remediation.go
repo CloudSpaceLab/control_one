@@ -288,16 +288,20 @@ func (s *Server) triggerAutoRemediation(ctx context.Context, tenantID, nodeID uu
 	// approval endpoint re-dispatches via dispatchRemediationTask below.
 	// ---------------------------------------------------------------------
 	if storage.SeverityAtLeast(severity, cfg.MinApprovalSeverity) {
+		descriptor := remediationDescriptorFromScript(*script)
 		taskPayload := map[string]any{
-			"script_id":      script.ID.String(),
-			"rule_id":        result.RuleID,
-			"tenant_id":      tenantID.String(),
-			"node_id":        nodeID.String(),
-			"severity":       severity,
-			"platform":       script.Platform,
-			"script_type":    script.ScriptType,
-			"script_content": script.ScriptContent,
-			"auto_triggered": true,
+			"script_id":       script.ID.String(),
+			"script_checksum": remediationScriptArtifactChecksum(*script),
+			"script_version":  script.Version,
+			"rule_id":         result.RuleID,
+			"tenant_id":       tenantID.String(),
+			"node_id":         nodeID.String(),
+			"severity":        severity,
+			"platform":        script.Platform,
+			"script_type":     script.ScriptType,
+			"auto_triggered":  true,
+			"action_type":     descriptor.ActionType,
+			"safety_class":    descriptor.SafetyClass,
 		}
 		payloadBytes, err := json.Marshal(taskPayload)
 		if err != nil {

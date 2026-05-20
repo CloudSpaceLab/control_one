@@ -135,7 +135,10 @@ export function AuditReports(): JSX.Element {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => window.open(client.buildReportDownloadUrl(row.original.id), '_blank')}
+          onClick={() => {
+            if (!selectedTenant) return;
+            window.open(client.buildReportDownloadUrl(row.original.id, selectedTenant), '_blank');
+          }}
           title="Download report"
         >
           <Download className="w-3.5 h-3.5" />

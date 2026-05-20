@@ -61,7 +61,8 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleOperator); !ok {
+	principal, ok := s.authorize(w, r, roleOperator)
+	if !ok {
 		return
 	}
 
@@ -75,6 +76,24 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 
 	if err := req.validate(); err != nil {
 		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	nodeID, _ := uuid.Parse(req.NodeID)
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get compliance evaluation node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -190,10 +209,18 @@ func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluat
 				Severity:  "high",
 				Details:   fmt.Sprintf("evaluation error for policy %s: %v", p.Name, err),
 				CheckedAt: time.Now().UTC(),
+				Evidence: map[string]any{
+					"evidence_contract": complianceEvidenceContractVersion,
+					"rule_id":           p.ID.String(),
+					"policy_name":       p.Name,
+					"error":             err.Error(),
+				},
 			})
 			continue
 		}
 
+		evidence, _ := normalizeComplianceEvidence(evalResult.Evidence, "")
+		evidenceMap, _ := evidence.(map[string]any)
 		results = append(results, compliance.Result{
 			RuleID:      p.ID.String(),
 			Passed:      evalResult.Passed,
@@ -201,57 +228,8 @@ func (s *Server) evaluateWithPolicies(ctx context.Context, req complianceEvaluat
 			Details:     evalResult.Details,
 			CheckedAt:   evalResult.CheckedAt,
 			Remediation: evalResult.Remediation,
+			Evidence:    evidenceMap,
 		})
-	}
-
-	// Persist results if we have a job context (called from evaluate endpoint, not job handler)
-	if s.store != nil && len(results) > 0 {
-		stored := make([]storage.ComplianceResult, 0, len(results))
-		nodeID, _ := uuid.Parse(req.NodeID)
-		var tenantID uuid.UUID
-		if node != nil {
-			tenantID = node.TenantID
-		}
-		for _, r := range results {
-			record := storage.ComplianceResult{
-				TenantID: tenantID,
-				NodeID:   nodeID,
-				RuleID:   r.RuleID,
-				Passed:   r.Passed,
-			}
-			if r.Severity != "" {
-				sev := r.Severity
-				record.Severity = &sev
-			}
-			if r.Details != "" {
-				det := r.Details
-				record.Details = &det
-			}
-			if r.Remediation != "" {
-				rem := r.Remediation
-				record.Remediation = &rem
-			}
-			if !r.CheckedAt.IsZero() {
-				t := r.CheckedAt
-				record.CheckedAt = &t
-			}
-			stored = append(stored, record)
-		}
-		if err := s.store.CreateComplianceResults(ctx, stored); err != nil {
-			s.logger.Warn("persist compliance results from evaluate", zap.Error(err))
-		}
-
-		// First-scan hook — if this is the node's first compliance result,
-		// stamp first_scan_at and potentially flip the enrollment gate.
-		s.handleFirstScanHook(ctx, nodeID)
-
-		// Emit webhook events and trigger auto-remediation for failures.
-		s.emitComplianceEvents(ctx, tenantID, nodeID, results, "")
-		for _, r := range results {
-			if !r.Passed {
-				s.triggerAutoRemediation(ctx, tenantID, nodeID, r, req.AutoApply)
-			}
-		}
 	}
 
 	return results, nil
@@ -290,7 +268,8 @@ func (s *Server) handleComplianceBatchScan(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -318,12 +297,23 @@ func (s *Server) handleComplianceBatchScan(w http.ResponseWriter, r *http.Reques
 		}
 		tenantID = parsed
 	}
+	if tenantID == uuid.Nil {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 
 	var nodeIDs []uuid.UUID
 	for _, nidStr := range req.NodeIDs {
 		nid, err := uuid.Parse(nidStr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid node_id %q", nidStr), http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, nid); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		nodeIDs = append(nodeIDs, nid)

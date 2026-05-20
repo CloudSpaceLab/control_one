@@ -106,7 +106,7 @@ func TestRecordAuditAsyncRetainsValuesFromParent(t *testing.T) {
 	}
 }
 
-func TestHandleAuditCollectionAllowsAllTenantsWhenTenantFilterOmitted(t *testing.T) {
+func TestHandleAuditCollectionRequiresAndAppliesTenantFilter(t *testing.T) {
 	t.Parallel()
 
 	tenantA := uuid.New()
@@ -142,6 +142,16 @@ func TestHandleAuditCollectionAllowsAllTenantsWhenTenantFilterOmitted(t *testing
 
 	srv.Handler().ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/audit?tenant_id="+tenantA.String()+"&limit=100&offset=0", nil)
+	req.Header.Set("Authorization", "Bearer viewer-token")
+	rec = httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -150,11 +160,14 @@ func TestHandleAuditCollectionAllowsAllTenantsWhenTenantFilterOmitted(t *testing
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(got.Data) != 2 {
-		t.Fatalf("expected logs across all tenants, got %d: %#v", len(got.Data), got.Data)
+	if len(got.Data) != 1 {
+		t.Fatalf("expected logs for requested tenant, got %d: %#v", len(got.Data), got.Data)
 	}
-	if got.Pagination.Total != 2 {
-		t.Fatalf("expected total 2, got %d", got.Pagination.Total)
+	if got.Pagination.Total != 1 {
+		t.Fatalf("expected total 1, got %d", got.Pagination.Total)
+	}
+	if got.Data[0].TenantID == nil || *got.Data[0].TenantID != tenantA.String() {
+		t.Fatalf("unexpected tenant in response: %#v", got.Data[0].TenantID)
 	}
 }
 

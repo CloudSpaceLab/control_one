@@ -23,7 +23,11 @@ func (s *Server) handleSessionParsed(w http.ResponseWriter, r *http.Request, ses
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
+		return
+	}
+	if _, _, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleViewer, roleOperator, roleAdmin); !ok {
 		return
 	}
 	events, err := s.loadSessionEvents(r, sessionID)
@@ -49,7 +53,11 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request,
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
+		return
+	}
+	if _, _, ok := s.requireSessionTenantAccess(w, r, principal, sessionID, roleViewer, roleOperator, roleAdmin); !ok {
 		return
 	}
 	events, err := s.loadSessionEvents(r, sessionID)

@@ -92,6 +92,7 @@ jobs:
         with:
           name: control-one-wizard-${{ github.sha }}
           path: build/wizard
+          retention-days: 7
 
   goreleaser:
     needs: lint-test-build

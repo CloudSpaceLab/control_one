@@ -28,6 +28,17 @@ type ComplianceEvidence struct {
 	ExpiresAt     *time.Time
 }
 
+type ComplianceEvidenceFilter struct {
+	TenantID            uuid.UUID
+	Framework           string
+	ControlRef          string
+	EvidenceType        string
+	UploadedSince       *time.Time
+	UploadedUntil       *time.Time
+	ExpirationReference *time.Time
+	IncludeExpired      bool
+}
+
 // ComplianceReview represents a scheduled or completed compliance review.
 type ComplianceReview struct {
 	ID           uuid.UUID
@@ -85,6 +96,15 @@ func (s *Store) CreateComplianceEvidence(ctx context.Context, e *ComplianceEvide
 
 // ListComplianceEvidence returns a paginated list of evidence filtered by optional framework and type.
 func (s *Store) ListComplianceEvidence(ctx context.Context, tenantID uuid.UUID, framework, evidenceType string, limit, offset int) ([]ComplianceEvidence, int, error) {
+	return s.ListComplianceEvidenceFiltered(ctx, ComplianceEvidenceFilter{
+		TenantID:       tenantID,
+		Framework:      framework,
+		EvidenceType:   evidenceType,
+		IncludeExpired: true,
+	}, limit, offset)
+}
+
+func (s *Store) ListComplianceEvidenceFiltered(ctx context.Context, filter ComplianceEvidenceFilter, limit, offset int) ([]ComplianceEvidence, int, error) {
 	if s.db == nil {
 		return nil, 0, errors.New("store database not initialized")
 	}
@@ -92,17 +112,41 @@ func (s *Store) ListComplianceEvidence(ctx context.Context, tenantID uuid.UUID, 
 		limit = 50
 	}
 
-	args := []any{tenantID}
+	args := []any{filter.TenantID}
 	where := "WHERE tenant_id = $1"
 	idx := 2
-	if framework != "" {
+	if filter.Framework != "" {
 		where += fmt.Sprintf(" AND framework = $%d", idx)
-		args = append(args, framework)
+		args = append(args, filter.Framework)
 		idx++
 	}
-	if evidenceType != "" {
+	if filter.ControlRef != "" {
+		where += fmt.Sprintf(" AND control_ref = $%d", idx)
+		args = append(args, filter.ControlRef)
+		idx++
+	}
+	if filter.EvidenceType != "" {
 		where += fmt.Sprintf(" AND evidence_type = $%d", idx)
-		args = append(args, evidenceType)
+		args = append(args, filter.EvidenceType)
+		idx++
+	}
+	if filter.UploadedSince != nil {
+		where += fmt.Sprintf(" AND uploaded_at >= $%d", idx)
+		args = append(args, filter.UploadedSince)
+		idx++
+	}
+	if filter.UploadedUntil != nil {
+		where += fmt.Sprintf(" AND uploaded_at <= $%d", idx)
+		args = append(args, filter.UploadedUntil)
+		idx++
+	}
+	if !filter.IncludeExpired {
+		expiresAtReference := time.Now().UTC()
+		if filter.ExpirationReference != nil && !filter.ExpirationReference.IsZero() {
+			expiresAtReference = filter.ExpirationReference.UTC()
+		}
+		where += fmt.Sprintf(" AND (expires_at IS NULL OR expires_at > $%d)", idx)
+		args = append(args, expiresAtReference)
 		idx++
 	}
 

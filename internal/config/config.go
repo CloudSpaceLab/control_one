@@ -37,6 +37,10 @@ type Config struct {
 		MetadataFile  string `mapstructure:"metadata_file"`
 	} `mapstructure:"policy"`
 
+	NetworkPolicy struct {
+		EnforcementMode string `mapstructure:"enforcement_mode"`
+	} `mapstructure:"network_policy"`
+
 	Compliance struct {
 		Region             string   `mapstructure:"region"`
 		RuleSets           []string `mapstructure:"rule_sets"`
@@ -470,6 +474,7 @@ func setDefaults(v *viper.Viper) {
 	// every fresh enrollment to fatal during startup (see
 	// cmd/nodeagent/bootstrap_e2e_test.go for the historical bug).
 	v.SetDefault("policy.metadata_file", defaultPolicyMetadataFile)
+	v.SetDefault("network_policy.enforcement_mode", "dry_run")
 
 	v.SetDefault("tls.cert_file", defaultTLSCertFile)
 	v.SetDefault("tls.key_file", defaultTLSKeyFile)

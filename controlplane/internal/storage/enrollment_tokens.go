@@ -151,6 +151,51 @@ func (s *Store) GetEnrollmentTokenByHash(ctx context.Context, hash string) (*Enr
 	return &token, nil
 }
 
+// GetEnrollmentToken returns an enrollment token by ID.
+func (s *Store) GetEnrollmentToken(ctx context.Context, id uuid.UUID) (*EnrollmentToken, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("token id is required")
+	}
+
+	var token EnrollmentToken
+	var revokedAt sql.NullTime
+	var createdBy sql.NullString
+	var labelsRaw []byte
+	var capsArray pq.StringArray
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, name, token_hash, max_nodes, nodes_enrolled, labels, capabilities, expires_at, revoked_at, created_by, created_at
+		FROM enrollment_tokens
+		WHERE id = $1
+	`, id).Scan(
+		&token.ID, &token.TenantID, &token.Name, &token.TokenHash,
+		&token.MaxNodes, &token.NodesEnrolled, &labelsRaw, &capsArray,
+		&token.ExpiresAt, &revokedAt, &createdBy, &token.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get enrollment token: %w", err)
+	}
+
+	token.RevokedAt = revokedAt
+	if createdBy.Valid {
+		if id, err := uuid.Parse(createdBy.String); err == nil {
+			token.CreatedBy = &id
+		}
+	}
+	if err := json.Unmarshal(labelsRaw, &token.Labels); err != nil {
+		token.Labels = make(map[string]string)
+	}
+	token.Capabilities = []string(capsArray)
+
+	return &token, nil
+}
+
 // ListEnrollmentTokens returns a paginated list of enrollment tokens for a tenant.
 func (s *Store) ListEnrollmentTokens(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]EnrollmentToken, int, error) {
 	if s.db == nil {

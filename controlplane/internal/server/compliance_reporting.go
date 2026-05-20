@@ -25,6 +25,7 @@ type complianceResultResponse struct {
 	Severity    *string        `json:"severity,omitempty"`
 	Details     *string        `json:"details,omitempty"`
 	Remediation *string        `json:"remediation,omitempty"`
+	Evidence    map[string]any `json:"evidence,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	CheckedAt   *string        `json:"checked_at,omitempty"`
 	CreatedAt   string         `json:"created_at"`
@@ -46,7 +47,8 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -61,7 +63,11 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	filter := storage.ComplianceResultFilter{}
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	filter := storage.ComplianceResultFilter{TenantID: tenantID}
 
 	if jobParam := strings.TrimSpace(r.URL.Query().Get("job_id")); jobParam != "" {
 		parsed, err := uuid.Parse(jobParam)
@@ -72,19 +78,14 @@ func (s *Server) handleComplianceResults(w http.ResponseWriter, r *http.Request)
 		filter.JobID = parsed
 	}
 
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
-	}
-
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		filter.NodeID = parsed
@@ -151,7 +152,8 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -160,21 +162,20 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	filter := storage.ComplianceResultFilter{}
-
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
 	}
+	filter := storage.ComplianceResultFilter{TenantID: tenantID}
 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		filter.NodeID = parsed
@@ -263,6 +264,7 @@ func newComplianceResultResponse(result storage.ComplianceResult) complianceResu
 	if resp.Metadata == nil {
 		resp.Metadata = make(map[string]any)
 	}
+	resp.Evidence = complianceEvidenceFromMetadata(resp.Metadata)
 
 	return resp
 }
@@ -286,7 +288,8 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -295,21 +298,20 @@ func (s *Server) handleComplianceTrends(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	filter := storage.ComplianceResultFilter{}
-
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
 	}
+	filter := storage.ComplianceResultFilter{TenantID: tenantID}
 
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		filter.NodeID = parsed
@@ -370,7 +372,8 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -388,7 +391,11 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	filter := storage.ComplianceResultFilter{}
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	filter := storage.ComplianceResultFilter{TenantID: tenantID}
 
 	if jobParam := strings.TrimSpace(r.URL.Query().Get("job_id")); jobParam != "" {
 		parsed, err := uuid.Parse(jobParam)
@@ -399,19 +406,14 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 		filter.JobID = parsed
 	}
 
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		filter.TenantID = parsed
-	}
-
 	if nodeParam := strings.TrimSpace(r.URL.Query().Get("node_id")); nodeParam != "" {
 		parsed, err := uuid.Parse(nodeParam)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		filter.NodeID = parsed
@@ -545,7 +547,8 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -572,6 +575,19 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid node_id", http.StatusBadRequest)
 		return
 	}
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node for compliance history", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
 
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
@@ -580,7 +596,8 @@ func (s *Server) handleComplianceNodeHistory(w http.ResponseWriter, r *http.Requ
 	}
 
 	filter := storage.ComplianceResultFilter{
-		NodeID: nodeID,
+		TenantID: node.TenantID,
+		NodeID:   nodeID,
 	}
 
 	if sinceParam := strings.TrimSpace(r.URL.Query().Get("since")); sinceParam != "" {

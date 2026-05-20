@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -33,7 +34,8 @@ func (s *Server) handleBehavioralBaselines(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(behavioralBaselinePageStore)
@@ -41,7 +43,7 @@ func (s *Server) handleBehavioralBaselines(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "behavioral baseline store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	tenantID, nodeID, ok := optionalTenantNodeQuery(w, r)
+	tenantID, nodeID, ok := s.tenantNodeQueryWithAccess(w, r, principal, roleViewer, roleOperator, roleAdmin)
 	if !ok {
 		return
 	}
@@ -72,7 +74,8 @@ func (s *Server) handleBehavioralAnomalies(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(ipBehaviorFindingPageStore)
@@ -80,7 +83,7 @@ func (s *Server) handleBehavioralAnomalies(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "behavioral anomaly store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	tenantID, _, ok := optionalTenantNodeQuery(w, r)
+	tenantID, _, ok := s.tenantNodeQueryWithAccess(w, r, principal, roleViewer, roleOperator, roleAdmin)
 	if !ok {
 		return
 	}
@@ -159,6 +162,9 @@ func (s *Server) handleBehavioralAnomalyResource(w http.ResponseWriter, r *http.
 	}
 	if existing == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, existing.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 	updated, err := store.UpdateIPBehaviorFindingStatus(r.Context(), id, status)
@@ -269,21 +275,20 @@ func newBehavioralAnomalyResponse(row storage.IPBehaviorFinding) behavioralAnoma
 	}
 }
 
-func optionalTenantNodeQuery(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
-	var tenantID uuid.UUID
-	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return uuid.Nil, uuid.Nil, false
-		}
-		tenantID = parsed
+func (s *Server) tenantNodeQueryWithAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, roles ...string) (uuid.UUID, uuid.UUID, bool) {
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roles...)
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
 	}
 	var nodeID uuid.UUID
 	if raw := strings.TrimSpace(r.URL.Query().Get("node_id")); raw != "" {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return uuid.Nil, uuid.Nil, false
+		}
+		if _, err := s.ensureNodeInTenant(r.Context(), tenantID, parsed); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return uuid.Nil, uuid.Nil, false
 		}
 		nodeID = parsed

@@ -958,6 +958,14 @@ func parseEd25519PublicKeyPEM(data []byte) (ed25519.PublicKey, string, error) {
 	return pk, ed25519Fingerprint(pk), nil
 }
 
+func encodeEd25519PublicKeyPEM(pk ed25519.PublicKey) ([]byte, error) {
+	der, err := x509.MarshalPKIXPublicKey(pk)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ed25519 public key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
+}
+
 func ed25519Fingerprint(pk ed25519.PublicKey) string {
 	if len(pk) == 0 {
 		return ""

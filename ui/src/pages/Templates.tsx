@@ -1,15 +1,22 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Template, ClusterRolloutWave } from '../lib/api';
-import { SectionHeader, Panel, KpiTile, EmptyState, StatusTag, DataTable } from '../components/kit';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { Template, ClusterRolloutWave, TemplateAssignment } from '../lib/api';
+import { SectionHeader, Panel, KpiTile, EmptyState, StatusTag, DataTable, SelectField } from '../components/kit';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import {
+  ScopePicker,
+  buildScopedAssignmentPayload,
+  describeAssignmentScope,
+  type ScopePickerValue,
+} from '../components/compliance/ScopePicker';
 import { useTemplates } from '../hooks/useTemplates';
 import { useTemplateVersions } from '../hooks/useTemplateVersions';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { StateTone } from '../components/kit';
 import { FileText, Layers } from 'lucide-react';
@@ -46,12 +53,14 @@ export function Templates(): JSX.Element {
   const [pageTab, setPageTab] = useState<PageTab>('templates');
   const api = useApiClient();
   const { showToast } = useToast();
+  const { currentTenantId } = useTenant();
   const [limit] = useState(20);
   const [offset, setOffset] = useState(0);
   const [providerFilter, setProviderFilter] = useState('');
   const [nameFilter, setNameFilter] = useState('');
   const [includeArchived, setIncludeArchived] = useState(false);
   const templateOptions = {
+    tenantId: currentTenantId ?? undefined,
     provider: providerFilter.trim() || undefined,
     namePrefix: nameFilter.trim() || undefined,
     includeArchived,
@@ -106,11 +115,24 @@ export function Templates(): JSX.Element {
   const [templateProvider, setTemplateProvider] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
   const [templateLabels, setTemplateLabels] = useState('{}');
+  const [templateTenantId, setTemplateTenantId] = useState('');
 
   const [versionBody, setVersionBody] = useState(DEFAULT_TEMPLATE_BODY);
   const [versionChecksum, setVersionChecksum] = useState('');
   const [versionMetadata, setVersionMetadata] = useState(DEFAULT_METADATA_SCHEMA);
   const [versionNotes, setVersionNotes] = useState('');
+
+  const [templateAssignments, setTemplateAssignments] = useState<TemplateAssignment[]>([]);
+  const [templateAssignmentsLoading, setTemplateAssignmentsLoading] = useState(false);
+  const [templateAssignmentTenantId, setTemplateAssignmentTenantId] = useState('');
+  const [templateAssignmentScope, setTemplateAssignmentScope] = useState<ScopePickerValue>({ scope_type: 'tenant' });
+  const [creatingTemplateAssignment, setCreatingTemplateAssignment] = useState(false);
+
+  useEffect(() => {
+    if (!templateTenantId && currentTenantId) {
+      setTemplateTenantId(currentTenantId);
+    }
+  }, [currentTenantId, templateTenantId]);
 
   // Rollout waves state
   const { data: tenants } = useTenants();
@@ -118,6 +140,32 @@ export function Templates(): JSX.Element {
   const [waves, setWaves] = useState<ClusterRolloutWave[]>([]);
   const [wavesLoading, setWavesLoading] = useState(false);
   const [wavesReloadToken, setWavesReloadToken] = useState(0);
+
+  useEffect(() => {
+    setTemplateAssignments([]);
+    setTemplateAssignmentScope({ scope_type: 'tenant' });
+    setTemplateAssignmentTenantId(selectedTemplate?.tenant_id ?? currentTenantId ?? '');
+  }, [currentTenantId, selectedTemplate?.id, selectedTemplate?.tenant_id]);
+
+  const loadTemplateAssignments = useCallback(async () => {
+    if (!selectedTemplate) {
+      setTemplateAssignments([]);
+      return;
+    }
+    setTemplateAssignmentsLoading(true);
+    try {
+      const response = await api.listTemplateAssignments(selectedTemplate.id);
+      setTemplateAssignments(response.items ?? []);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to load template assignments', 'error');
+    } finally {
+      setTemplateAssignmentsLoading(false);
+    }
+  }, [api, selectedTemplate, showToast]);
+
+  useEffect(() => {
+    void loadTemplateAssignments();
+  }, [loadTemplateAssignments]);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,11 +195,16 @@ export function Templates(): JSX.Element {
       templateForm.showError('Provider is required');
       return;
     }
+    if (!templateTenantId) {
+      templateForm.showError('Tenant is required');
+      return;
+    }
     try {
       setCreatingTemplate(true);
       templateForm.reset();
       const labels = templateLabels.trim() ? parseTemplateLabels(templateLabels) : undefined;
       await api.createTemplate({
+        tenant_id: templateTenantId,
         name,
         provider,
         description: templateDescription.trim() || undefined,
@@ -161,6 +214,7 @@ export function Templates(): JSX.Element {
       setTemplateProvider('');
       setTemplateDescription('');
       setTemplateLabels('{}');
+      setTemplateTenantId(currentTenantId ?? '');
       setOffset(0);
       reload();
       templateForm.showSuccess('Template created successfully');
@@ -245,6 +299,42 @@ export function Templates(): JSX.Element {
       showToast(message, 'error');
     } finally {
       setUpdatingTemplate(false);
+    }
+  };
+
+  const handleCreateTemplateAssignment = async () => {
+    if (!selectedTemplate) {
+      return;
+    }
+    const tenantId = selectedTemplate.tenant_id ?? templateAssignmentTenantId;
+    const scopedAssignment = buildScopedAssignmentPayload(tenantId, templateAssignmentScope);
+    if (!scopedAssignment.payload) {
+      showToast(scopedAssignment.error ?? 'Assignment scope is invalid', 'error');
+      return;
+    }
+    setCreatingTemplateAssignment(true);
+    try {
+      await api.createTemplateAssignment(selectedTemplate.id, scopedAssignment.payload);
+      setTemplateAssignmentScope({ scope_type: 'tenant' });
+      await loadTemplateAssignments();
+      showToast(`Template assigned to ${describeAssignmentScope(scopedAssignment.payload)}`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to assign template', 'error');
+    } finally {
+      setCreatingTemplateAssignment(false);
+    }
+  };
+
+  const handleDeleteTemplateAssignment = async (assignmentId: string) => {
+    if (!selectedTemplate) {
+      return;
+    }
+    try {
+      await api.deleteTemplateAssignment(selectedTemplate.id, assignmentId);
+      setTemplateAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
+      showToast('Template assignment removed', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to remove template assignment', 'error');
     }
   };
 
@@ -469,6 +559,18 @@ export function Templates(): JSX.Element {
                 required
               />
             </div>
+            <SelectField
+              id="template-tenant"
+              label="Tenant"
+              value={templateTenantId}
+              onChange={(event) => setTemplateTenantId(event.target.value)}
+              disabled={creatingTemplate}
+            >
+              <option value="" disabled>Select tenant</option>
+              {tenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+              ))}
+            </SelectField>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -500,7 +602,7 @@ export function Templates(): JSX.Element {
           {templateForm.success ? <p className="text-sm text-state-healthy" role="status">{templateForm.success}</p> : null}
 
           <div className="flex items-center gap-2 pt-2">
-            <Button type="submit" variant="primary" disabled={creatingTemplate}>
+            <Button type="submit" variant="primary" disabled={creatingTemplate || !templateTenantId}>
               {creatingTemplate ? 'Saving…' : 'Create template'}
             </Button>
           </div>
@@ -627,6 +729,12 @@ export function Templates(): JSX.Element {
                   <dd><code className="font-mono text-xs text-text-secondary">{selectedTemplate.id}</code></dd>
                 </div>
                 <div className="flex flex-col gap-0.5">
+                  <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Tenant</dt>
+                  <dd className="text-foreground">
+                    {tenants.find((tenant) => tenant.id === selectedTemplate.tenant_id)?.name ?? 'Platform global'}
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
                   <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Created</dt>
                   <dd className="text-foreground">{formatDate(selectedTemplate.created_at)}</dd>
                 </div>
@@ -662,6 +770,96 @@ export function Templates(): JSX.Element {
                 ) : (
                   <p className="text-sm text-text-muted">No labels assigned.</p>
                 )}
+              </div>
+
+              <hr className="border-border-subtle" />
+
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Assignments</p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void loadTemplateAssignments()}
+                    disabled={templateAssignmentsLoading}
+                  >
+                    Refresh
+                  </Button>
+                </div>
+
+                {templateAssignmentsLoading ? <p className="text-sm text-text-muted">Loading assignments...</p> : null}
+                {!templateAssignmentsLoading && templateAssignments.length === 0 ? (
+                  <p className="text-sm text-text-muted">No assignments.</p>
+                ) : null}
+                {!templateAssignmentsLoading && templateAssignments.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    {templateAssignments.map((assignment) => (
+                      <div
+                        key={assignment.id}
+                        className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground">
+                            {describeAssignmentScope(assignment)}
+                          </p>
+                          <p className="font-mono text-[0.65rem] text-text-muted">
+                            {formatDate(assignment.assigned_at)}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-state-critical hover:text-state-critical"
+                          onClick={() => void handleDeleteTemplateAssignment(assignment.id)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated p-3">
+                  {!selectedTemplate.tenant_id ? (
+                    <SelectField
+                      id="template-assignment-tenant"
+                      label="Tenant"
+                      value={templateAssignmentTenantId}
+                      onChange={(event) => setTemplateAssignmentTenantId(event.target.value)}
+                      disabled={creatingTemplateAssignment}
+                    >
+                      <option value="" disabled>Select tenant</option>
+                      {tenants.map((tenant) => (
+                        <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+                      ))}
+                    </SelectField>
+                  ) : null}
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+                    <ScopePicker
+                      tenantId={selectedTemplate.tenant_id ?? templateAssignmentTenantId}
+                      value={templateAssignmentScope}
+                      onChange={setTemplateAssignmentScope}
+                      disabled={
+                        creatingTemplateAssignment ||
+                        !(selectedTemplate.tenant_id ?? templateAssignmentTenantId)
+                      }
+                      idPrefix={`template-${selectedTemplate.id}`}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleCreateTemplateAssignment()}
+                      disabled={
+                        creatingTemplateAssignment ||
+                        !(selectedTemplate.tenant_id ?? templateAssignmentTenantId)
+                      }
+                    >
+                      {creatingTemplateAssignment ? 'Assigning...' : 'Add assignment'}
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               <hr className="border-border-subtle" />

@@ -163,6 +163,9 @@ tls:
 policy:
   public_key_file: "%s"
 
+network_policy:
+  enforcement_mode: dry_run
+
 intervals:
   heartbeat: %ds
   policy_sync: %ds

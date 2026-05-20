@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,23 +58,32 @@ func drainCompletedActions() []completedAction {
 // (ufw → firewalld → nftables → iptables on Linux; netsh on Windows) and
 // stays cached for the lifetime of the agent.
 var (
-	firewallManagerMu   sync.Mutex
-	firewallManagerOnce sync.Once
-	firewallManager     *firewall.Manager
-	firewallManagerErr  error
+	firewallManagerMu         sync.Mutex
+	firewallManager           *firewall.Manager
+	firewallManagerErr        error
+	firewallManagerLastDetect time.Time
 )
 
+const firewallManagerRetryInterval = time.Minute
+
 func ensureFirewallManager() (*firewall.Manager, error) {
-	firewallManagerOnce.Do(func() {
-		firewallManagerMu.Lock()
-		defer firewallManagerMu.Unlock()
-		m := firewall.New()
-		if err := m.Detect(); err != nil {
-			firewallManagerErr = err
-			return
-		}
-		firewallManager = m
-	})
+	firewallManagerMu.Lock()
+	defer firewallManagerMu.Unlock()
+	if firewallManager != nil {
+		return firewallManager, nil
+	}
+	now := time.Now().UTC()
+	if !firewallManagerLastDetect.IsZero() && now.Sub(firewallManagerLastDetect) < firewallManagerRetryInterval {
+		return nil, firewallManagerErr
+	}
+	firewallManagerLastDetect = now
+	m := firewall.New()
+	if err := m.Detect(); err != nil {
+		firewallManagerErr = err
+		return nil, err
+	}
+	firewallManager = m
+	firewallManagerErr = nil
 	return firewallManager, firewallManagerErr
 }
 
@@ -91,6 +102,25 @@ type firewallActionDetail struct {
 	Protocol           string `json:"protocol"`
 	Tag                string `json:"tag"`
 	Reason             string `json:"reason"`
+}
+
+type firewallReceipt struct {
+	Contract           string `json:"contract"`
+	JobID              string `json:"job_id"`
+	NodeFirewallRuleID string `json:"node_firewall_rule_id"`
+	EntityActionID     string `json:"entity_action_id"`
+	Action             string `json:"action"`
+	Status             string `json:"status"`
+	Backend            string `json:"backend"`
+	RuleFingerprint    string `json:"rule_fingerprint"`
+	Source             string `json:"source,omitempty"`
+	Dest               string `json:"dest,omitempty"`
+	Port               int    `json:"port,omitempty"`
+	Protocol           string `json:"protocol,omitempty"`
+	Direction          string `json:"direction"`
+	RuleAction         string `json:"rule_action"`
+	Tag                string `json:"tag"`
+	ObservedAt         string `json:"observed_at"`
 }
 
 // executeFirewallAction is invoked synchronously from sendHeartbeat for each
@@ -170,7 +200,35 @@ func executeFirewallAction(ctx context.Context, client *api.Client, log *zap.Log
 		Action: jobType,
 		JobID:  jobID,
 		Status: "succeeded",
+		Metadata: map[string]any{
+			"receipt": newFirewallReceipt(jobType, jobID, detail, rule, mgr),
+		},
 	})
+}
+
+func newFirewallReceipt(jobType, jobID string, detail firewallActionDetail, rule firewall.Rule, mgr *firewall.Manager) firewallReceipt {
+	backend := ""
+	if mgr != nil && mgr.Backend() != nil {
+		backend = mgr.Backend().Name()
+	}
+	return firewallReceipt{
+		Contract:           "firewall.receipt.v1",
+		JobID:              jobID,
+		NodeFirewallRuleID: detail.NodeFirewallRuleID,
+		EntityActionID:     detail.EntityActionID,
+		Action:             jobType,
+		Status:             "succeeded",
+		Backend:            backend,
+		RuleFingerprint:    firewallRuleFingerprint(rule),
+		Source:             rule.Source,
+		Dest:               rule.Dest,
+		Port:               rule.Port,
+		Protocol:           rule.Protocol,
+		Direction:          string(rule.Direction),
+		RuleAction:         string(rule.Action),
+		Tag:                rule.Tag,
+		ObservedAt:         time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 func firewallRuleFromAction(jobType string, detail firewallActionDetail) firewall.Rule {
@@ -194,6 +252,29 @@ func firewallRuleFromAction(jobType string, detail firewallActionDetail) firewal
 		rule.Action = firewall.ActionAllow
 	}
 	return rule
+}
+
+func firewallRuleFingerprint(rule firewall.Rule) string {
+	payload := struct {
+		Source    string `json:"source,omitempty"`
+		Dest      string `json:"dest,omitempty"`
+		Port      int    `json:"port,omitempty"`
+		Protocol  string `json:"protocol,omitempty"`
+		Direction string `json:"direction"`
+		Action    string `json:"action"`
+		Tag       string `json:"tag"`
+	}{
+		Source:    rule.Source,
+		Dest:      rule.Dest,
+		Port:      rule.Port,
+		Protocol:  rule.Protocol,
+		Direction: string(rule.Direction),
+		Action:    string(rule.Action),
+		Tag:       rule.Tag,
+	}
+	data, _ := json.Marshal(payload)
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // fetchFirewallJobDetail GETs /api/v1/jobs/:id and decodes the payload.

@@ -125,10 +125,11 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListClusters(w, r)
+		s.handleListClusters(w, r, principal)
 	case http.MethodPost:
 		principal, ok := s.authorize(w, r, roleAdmin)
 		if !ok {
@@ -172,10 +173,11 @@ func (s *Server) handleClusterSubroutes(w http.ResponseWriter, r *http.Request) 
 
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleGetCluster(w, r, clusterID)
+		s.handleGetCluster(w, r, clusterID, principal)
 	case http.MethodPatch:
 		patchPrincipal, ok := s.authorize(w, r, roleAdmin)
 		if !ok {
@@ -194,21 +196,16 @@ func (s *Server) handleClusterSubroutes(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	var tenantID uuid.UUID
-	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
-		parsed, err := uuid.Parse(tenantParam)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-			return
-		}
-		tenantID = parsed
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
 	}
 
 	clusters, total, err := s.store.ListClusters(r.Context(), tenantID, limit, offset)
@@ -230,7 +227,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request, clusterID uuid.UUID) {
+func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request, clusterID uuid.UUID, principal *auth.Principal) {
 	cluster, err := s.store.GetClusterByID(r.Context(), clusterID)
 	if err != nil {
 		s.logger.Error("get cluster", zap.Error(err))
@@ -239,6 +236,9 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request, cluste
 	}
 	if cluster == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -288,6 +288,9 @@ func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request, pri
 		http.Error(w, "tenant not found", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 
 	// Compute desired size from role plan when omitted.
 	rolePlanSum := 0
@@ -326,11 +329,17 @@ func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request, pri
 	}
 	if req.TemplateID != nil {
 		if tid, tErr := uuid.Parse(strings.TrimSpace(*req.TemplateID)); tErr == nil && tid != uuid.Nil {
+			if !s.validateProvisioningTemplateForProvider(w, r, tid, tenantID, params.Provider) {
+				return
+			}
 			params.TemplateID = &tid
 		} else if tErr != nil {
 			http.Error(w, "invalid template_id", http.StatusBadRequest)
 			return
 		}
+	}
+	if !s.validateRolePlanTemplateVersionsForProvider(w, r, req.RolePlan, tenantID, params.Provider) {
+		return
 	}
 	if req.HypervisorHostID != nil && strings.TrimSpace(*req.HypervisorHostID) != "" {
 		hid, hErr := uuid.Parse(strings.TrimSpace(*req.HypervisorHostID))
@@ -394,12 +403,18 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request, clus
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleAdmin) {
+		return
+	}
 
 	var req updateClusterRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.RolePlan != nil && !s.validateRolePlanTemplateVersionsForProvider(w, r, *req.RolePlan, cluster.TenantID, cluster.Provider) {
 		return
 	}
 
@@ -571,6 +586,9 @@ func (s *Server) handleDeleteCluster(w http.ResponseWriter, r *http.Request, clu
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleAdmin) {
+		return
+	}
 
 	// Sprint 2 Worktree E unblocks teardown: enqueue cluster.teardown which
 	// drains members (DeregisterLB → Destroy → RemoveClusterMember) in
@@ -626,11 +644,122 @@ func validateCreateClusterRequest(req *createClusterRequest) error {
 		if role.Count < 1 {
 			return fmt.Errorf("role_plan.roles[%d].count must be >= 1", i)
 		}
+		if rawVersionID := strings.TrimSpace(role.TemplateVersionID); rawVersionID != "" {
+			parsed, err := uuid.Parse(rawVersionID)
+			if err != nil || parsed == uuid.Nil {
+				return fmt.Errorf("role_plan.roles[%d].template_version_id must be a valid UUID", i)
+			}
+		}
 	}
 	if req.DesiredSize != nil && *req.DesiredSize < 0 {
 		return errors.New("desired_size must be non-negative")
 	}
 	return nil
+}
+
+func (s *Server) validateProvisioningTemplateForProvider(w http.ResponseWriter, r *http.Request, templateID, tenantID uuid.UUID, provider string) bool {
+	template, err := s.store.GetProvisioningTemplate(r.Context(), templateID)
+	if err != nil {
+		s.logger.Error("lookup provisioning template", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return false
+	}
+	if template == nil {
+		http.Error(w, "template_id not found", http.StatusBadRequest)
+		return false
+	}
+	if template.TenantID != uuid.Nil && template.TenantID != tenantID {
+		http.Error(w, "template_id not found for tenant", http.StatusBadRequest)
+		return false
+	}
+	if !templateProviderMatches(template.Provider, provider) {
+		http.Error(w, "template provider does not match cluster provider", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func (s *Server) validateProvisioningTemplateVersionForProvider(w http.ResponseWriter, r *http.Request, templateVersionID, tenantID uuid.UUID, provider string) bool {
+	template, version, err := s.findProvisioningTemplateVersionByID(r.Context(), templateVersionID)
+	if err != nil {
+		s.logger.Error("lookup provisioning template version", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return false
+	}
+	if version == nil || template == nil {
+		http.Error(w, "template_version_id not found", http.StatusBadRequest)
+		return false
+	}
+	if template.TenantID != uuid.Nil && template.TenantID != tenantID {
+		http.Error(w, "template_version_id not found for tenant", http.StatusBadRequest)
+		return false
+	}
+	if !templateProviderMatches(template.Provider, provider) {
+		http.Error(w, "template version provider does not match cluster provider", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func (s *Server) validateRolePlanTemplateVersionsForProvider(w http.ResponseWriter, r *http.Request, plan clusterRolePlan, tenantID uuid.UUID, provider string) bool {
+	for i, role := range plan.Roles {
+		rawTemplateVersionID := strings.TrimSpace(role.TemplateVersionID)
+		if rawTemplateVersionID == "" {
+			continue
+		}
+		templateVersionID, err := uuid.Parse(rawTemplateVersionID)
+		if err != nil || templateVersionID == uuid.Nil {
+			http.Error(w, fmt.Sprintf("role_plan.roles[%d].template_version_id must be a valid UUID", i), http.StatusBadRequest)
+			return false
+		}
+		if !s.validateProvisioningTemplateVersionForProvider(w, r, templateVersionID, tenantID, provider) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) findProvisioningTemplateVersionByID(ctx context.Context, templateVersionID uuid.UUID) (*storage.ProvisioningTemplate, *storage.ProvisioningTemplateVersion, error) {
+	if templateVersionID == uuid.Nil {
+		return nil, nil, nil
+	}
+
+	for templateOffset := 0; ; {
+		templates, total, err := s.store.ListProvisioningTemplates(ctx, storage.ProvisioningTemplateFilter{IncludeArchived: true}, maxListLimit, templateOffset)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range templates {
+			template := templates[i]
+			for versionOffset := 0; ; {
+				versions, versionTotal, err := s.store.ListProvisioningTemplateVersions(ctx, template.ID, maxListLimit, versionOffset)
+				if err != nil {
+					return nil, nil, err
+				}
+				for j := range versions {
+					if versions[j].ID == templateVersionID {
+						version := versions[j]
+						return &template, &version, nil
+					}
+				}
+				if len(versions) == 0 || versionOffset+len(versions) >= versionTotal {
+					break
+				}
+				versionOffset += len(versions)
+			}
+		}
+		if len(templates) == 0 || templateOffset+len(templates) >= total {
+			break
+		}
+		templateOffset += len(templates)
+	}
+	return nil, nil, nil
+}
+
+func templateProviderMatches(templateProvider, clusterProvider string) bool {
+	templateProvider = strings.TrimSpace(templateProvider)
+	clusterProvider = strings.TrimSpace(clusterProvider)
+	return templateProvider == "" || clusterProvider == "" || strings.EqualFold(templateProvider, clusterProvider)
 }
 
 func rolePlanToMap(plan clusterRolePlan) map[string]any {

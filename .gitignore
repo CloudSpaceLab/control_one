@@ -3,7 +3,11 @@
 /build/
 /dist/
 /tmp/
+/coverage/
+/test-results/
+/playwright-report/
 coverage.out
+*.lcov
 *.exe
 *.exe~
 *.dll
@@ -27,6 +31,7 @@ Thumbs.db
 *.log
 *.pid
 *.run
+.playwright-mcp/
 
 # Environment and secrets
 .env
@@ -42,6 +47,9 @@ postgres-data/
 /ui/dist/
 /ui/.vite/
 /ui/coverage/
+/ui/test-results/
+/ui/playwright-report/
+/ui/.nyc_output/
 
 # Deploy artefacts that contain secrets or are operator-machine-specific.
 # The auto-deploy workflow (.github/workflows/deploy.yml) only needs the

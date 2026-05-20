@@ -94,6 +94,9 @@ func (s *Server) policyPublicKeyPEM() []byte {
 	s.policyKeyOnce.Do(func() {
 		path := strings.TrimSpace(s.cfg.Policy.PublicKeyFile)
 		if path == "" {
+			if mat := s.policySigningMaterial(); mat != nil && len(mat.publicKeyPEM) > 0 {
+				s.policyKeyPEM = append([]byte(nil), mat.publicKeyPEM...)
+			}
 			return
 		}
 		data, err := os.ReadFile(path)
@@ -489,6 +492,13 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 				s.logger.Warn("update node on re-enrollment", zap.Error(updErr))
 			}
 		}
+		mergedLabels := enrollmentNodeLabels(existing.Labels, token)
+		if err := s.store.UpdateNodeLabels(r.Context(), existing.ID, mergedLabels); err != nil {
+			s.logger.Warn("update enrollment labels on re-enrollment", zap.Error(err),
+				zap.String("node_id", existing.ID.String()))
+		} else {
+			existing.Labels = mergedLabels
+		}
 
 		// Reset nodes that previously failed enrollment (or were retired) so
 		// the state machine can run again from scratch on the next heartbeat +
@@ -551,6 +561,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		PublicIP:  toNullString(&req.PublicIP),
 		MachineID: toNullString(&machineID),
 		State:     storage.NodeStateEnrollmentPending,
+		Labels:    enrollmentNodeLabels(nil, token),
 	}
 
 	created, err := s.store.CreateNode(r.Context(), node)
@@ -620,6 +631,26 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- helpers ---
+
+func enrollmentNodeLabels(existing map[string]any, token *storage.EnrollmentToken) map[string]any {
+	labels := map[string]any{}
+	for key, value := range existing {
+		labels[key] = value
+	}
+	if token == nil {
+		return labels
+	}
+	for key, value := range token.Labels {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		labels[key] = strings.TrimSpace(value)
+	}
+	labels["enrollment.token_id"] = token.ID.String()
+	labels["enrollment.token_name"] = token.Name
+	return labels
+}
 
 func newEnrollmentTokenResponse(t storage.EnrollmentToken, rawToken string) enrollmentTokenResponse {
 	resp := enrollmentTokenResponse{

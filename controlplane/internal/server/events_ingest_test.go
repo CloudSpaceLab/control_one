@@ -1,13 +1,19 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 )
 
@@ -91,4 +97,255 @@ func TestEnrichConnectionThreatIntelUsesLocalSnapshot(t *testing.T) {
 	if row["threat_match"] != true || row["threat_feed"] != "abuseipdb" {
 		t.Fatalf("conn row did not preserve threat match: %+v", row)
 	}
+}
+
+func TestIngestedEventContractV1DefaultsEventMetadata(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	ts := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	ev := IngestedEvent{
+		Type:     "web.request",
+		TS:       ts,
+		SrcIP:    "203.0.113.10",
+		BytesOut: 120,
+		Details:  map[string]any{"status_code": float64(200), "path_template": "/login"},
+	}
+	if err := validateIngestedEventContract(&ev); err != nil {
+		t.Fatalf("v1 event rejected: %v", err)
+	}
+
+	normalizeIngestedEventMetadata(&ev, tenantID, nodeID)
+	if ev.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want v1 default", ev.SchemaVersion)
+	}
+	if ev.EventID == "" {
+		t.Fatal("event_id was not generated")
+	}
+
+	ev2 := IngestedEvent{
+		Type:     "web.request",
+		TS:       ts,
+		SrcIP:    "203.0.113.10",
+		BytesOut: 120,
+		Details:  map[string]any{"path_template": "/login", "status_code": float64(200)},
+	}
+	normalizeIngestedEventMetadata(&ev2, tenantID, nodeID)
+	if ev2.EventID != ev.EventID {
+		t.Fatalf("event_id not deterministic: %q != %q", ev2.EventID, ev.EventID)
+	}
+
+	row := eventToDorisRow(tenantID, nodeID, &ev)
+	if row["schema_version"] != 1 || row["event_id"] != ev.EventID {
+		t.Fatalf("events row missing v1 metadata: %+v", row)
+	}
+	webRow := eventToWebRequestRow(tenantID, nodeID, &ev)
+	if webRow["schema_version"] != 1 || webRow["event_id"] != ev.EventID {
+		t.Fatalf("web_requests row missing v1 metadata: %+v", webRow)
+	}
+}
+
+func TestIngestedEventContractV2MetadataPreserved(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	ev := IngestedEvent{
+		SchemaVersion: 2,
+		EventID:       "evt_01JZV2metadata",
+		Type:          "web.request",
+		TS:            time.Date(2026, 5, 19, 12, 1, 0, 0, time.UTC),
+		SrcIP:         "203.0.113.11",
+		RawRef:        "journal://batch/row/2",
+		Collector:     "nginx-access",
+		Parser:        "nginx-combined",
+		ParserStatus:  "parsed",
+		Details:       map[string]any{"status_code": float64(204)},
+	}
+	normalizeIngestedEventMetadata(&ev, tenantID, nodeID)
+	if ev.SchemaVersion != 2 || ev.EventID != "evt_01JZV2metadata" {
+		t.Fatalf("v2 metadata was changed: %+v", ev)
+	}
+
+	row := eventToDorisRow(tenantID, nodeID, &ev)
+	webRow := eventToWebRequestRow(tenantID, nodeID, &ev)
+	for _, got := range []map[string]any{row, webRow} {
+		if got["schema_version"] != 2 ||
+			got["event_id"] != ev.EventID ||
+			got["raw_ref"] != ev.RawRef ||
+			got["collector"] != ev.Collector ||
+			got["parser"] != ev.Parser ||
+			got["parser_status"] != ev.ParserStatus {
+			t.Fatalf("Doris row did not preserve v2 metadata: %+v", got)
+		}
+	}
+}
+
+func TestDrainEventIngestBatchReplaysGzipNDJSON(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	batchID := uuid.New()
+	payload := gzipNDJSON(t,
+		IngestedEvent{
+			Type:    "web.request",
+			TS:      time.Date(2026, 5, 19, 12, 2, 0, 0, time.UTC),
+			SrcIP:   "203.0.113.12",
+			Details: map[string]any{"status_code": float64(200)},
+		},
+		IngestedEvent{
+			SchemaVersion: 2,
+			EventID:       "evt-replay-preserved",
+			Type:          "web.error",
+			TS:            time.Date(2026, 5, 19, 12, 3, 0, 0, time.UTC),
+			Message:       "parser miss",
+			RawRef:        "journal://batch/row/2",
+			Collector:     "nginx-access",
+			Parser:        "nginx-combined",
+			ParserStatus:  "error",
+		},
+	)
+
+	marker := &replayMarker{}
+	var replayed []IngestedEvent
+	err := drainEventIngestBatch(context.Background(), storage.EventIngestBatch{
+		ID:       batchID,
+		TenantID: uuid.NullUUID{UUID: tenantID, Valid: true},
+		NodeID:   uuid.NullUUID{UUID: nodeID, Valid: true},
+		Payload:  payload,
+	}, marker, func(_ context.Context, gotTenantID, gotNodeID uuid.UUID, events []IngestedEvent) (string, error) {
+		if gotTenantID != tenantID || gotNodeID != nodeID {
+			t.Fatalf("fanout scope = %s/%s, want %s/%s", gotTenantID, gotNodeID, tenantID, nodeID)
+		}
+		replayed = append([]IngestedEvent(nil), events...)
+		return "queued", nil
+	})
+	if err != nil {
+		t.Fatalf("drain failed: %v", err)
+	}
+	if len(replayed) != 2 {
+		t.Fatalf("replayed %d events, want 2", len(replayed))
+	}
+	if replayed[0].SchemaVersion != 1 || replayed[0].EventID == "" {
+		t.Fatalf("v1 replay metadata missing: %+v", replayed[0])
+	}
+	if replayed[1].SchemaVersion != 2 || replayed[1].EventID != "evt-replay-preserved" || replayed[1].ParserStatus != "error" {
+		t.Fatalf("v2 replay metadata not preserved: %+v", replayed[1])
+	}
+	if len(marker.calls) != 1 || marker.calls[0].status != "accepted" || marker.calls[0].dorisStatus != "queued" || marker.calls[0].errMsg != "" {
+		t.Fatalf("unexpected mark calls: %+v", marker.calls)
+	}
+}
+
+func TestDrainEventIngestBatchMarksDecodeFailure(t *testing.T) {
+	t.Parallel()
+
+	marker := &replayMarker{}
+	fanoutCalled := false
+	err := drainEventIngestBatch(context.Background(), storage.EventIngestBatch{
+		ID:       uuid.New(),
+		TenantID: uuid.NullUUID{UUID: uuid.New(), Valid: true},
+		Payload:  gzipRaw(t, []byte(`{"type":"not.allowed"}`+"\n")),
+	}, marker, func(context.Context, uuid.UUID, uuid.UUID, []IngestedEvent) (string, error) {
+		fanoutCalled = true
+		return "", errors.New("should not fan out")
+	})
+	if err == nil {
+		t.Fatal("decode failure returned nil")
+	}
+	if fanoutCalled {
+		t.Fatal("fanout called after decode failure")
+	}
+	if len(marker.calls) != 1 || marker.calls[0].status != "failed" || !strings.Contains(marker.calls[0].errMsg, "not.allowed") {
+		t.Fatalf("unexpected mark calls: %+v", marker.calls)
+	}
+}
+
+func TestDrainEventIngestBatchDorisOnlyDoesNotReplayLocalFanout(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	batchID := uuid.New()
+	payload, err := encodeIngestedEventPayload([]IngestedEvent{{
+		SchemaVersion: 2,
+		EventID:       "evt-local-complete",
+		Type:          "web.request",
+		TS:            time.Date(2026, 5, 19, 12, 4, 0, 0, time.UTC),
+		SrcIP:         "203.0.113.20",
+		Details:       map[string]any{"status_code": float64(200)},
+	}})
+	if err != nil {
+		t.Fatalf("encode normalized payload: %v", err)
+	}
+
+	marker := &replayMarker{}
+	var flushed []IngestedEvent
+	err = drainEventIngestBatchDorisOnly(context.Background(), storage.EventIngestBatch{
+		ID:       batchID,
+		TenantID: uuid.NullUUID{UUID: tenantID, Valid: true},
+		NodeID:   uuid.NullUUID{UUID: nodeID, Valid: true},
+		Status:   "pending_doris",
+		Payload:  payload,
+	}, marker, func(_ context.Context, gotTenantID, gotNodeID uuid.UUID, events []IngestedEvent) (string, error) {
+		if gotTenantID != tenantID || gotNodeID != nodeID {
+			t.Fatalf("flush scope = %s/%s, want %s/%s", gotTenantID, gotNodeID, tenantID, nodeID)
+		}
+		flushed = append([]IngestedEvent(nil), events...)
+		return "loaded", nil
+	})
+	if err != nil {
+		t.Fatalf("doris-only drain failed: %v", err)
+	}
+	if len(flushed) != 1 || flushed[0].EventID != "evt-local-complete" {
+		t.Fatalf("unexpected flushed events: %+v", flushed)
+	}
+	if len(marker.calls) != 1 || marker.calls[0].status != "accepted" || marker.calls[0].dorisStatus != "loaded" {
+		t.Fatalf("unexpected mark calls: %+v", marker.calls)
+	}
+}
+
+type replayMarkCall struct {
+	id          uuid.UUID
+	status      string
+	dorisStatus string
+	errMsg      string
+}
+
+type replayMarker struct {
+	calls []replayMarkCall
+}
+
+func (m *replayMarker) MarkEventIngestStatus(_ context.Context, id uuid.UUID, status, dorisStatus, errMsg string) error {
+	m.calls = append(m.calls, replayMarkCall{id: id, status: status, dorisStatus: dorisStatus, errMsg: errMsg})
+	return nil
+}
+
+func gzipNDJSON(t *testing.T, events ...IngestedEvent) []byte {
+	t.Helper()
+
+	var raw bytes.Buffer
+	enc := json.NewEncoder(&raw)
+	for _, ev := range events {
+		if err := enc.Encode(ev); err != nil {
+			t.Fatalf("encode event: %v", err)
+		}
+	}
+	return gzipRaw(t, raw.Bytes())
+}
+
+func gzipRaw(t *testing.T, raw []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(raw); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
 }

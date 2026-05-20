@@ -13,6 +13,7 @@ import (
 
 type aiOperatorStore interface {
 	CreateAIInvestigation(context.Context, storage.CreateAIInvestigationParams) (*storage.AIInvestigation, error)
+	GetAIInvestigation(context.Context, uuid.UUID) (*storage.AIInvestigation, error)
 	ListAIInvestigations(context.Context, storage.ListAIInvestigationsFilter, int, int) ([]storage.AIInvestigation, int, error)
 	CreateAIOperatorProposal(context.Context, storage.CreateAIOperatorProposalParams) (*storage.AIOperatorProposal, error)
 	ListAIOperatorProposals(context.Context, storage.ListAIOperatorProposalsFilter, int, int) ([]storage.AIOperatorProposal, int, error)

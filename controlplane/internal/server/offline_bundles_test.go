@@ -102,6 +102,121 @@ func TestOfflineBundleImportRejectsInvalidSignatureAndAudits(t *testing.T) {
 	}
 }
 
+func TestOfflineBundleImportUpsertsVulnerabilityFindingsFromSignedFeed(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	root := t.TempDir()
+	keyPath := writeOfflinePublicKey(t, pub)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	arch := "amd64"
+	store := &offlineBundleFakeStore{
+		fakeStore: &fakeStore{
+			nodes: []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "app-01"}},
+			nodePackages: map[uuid.UUID][]storage.NodePackage{
+				nodeID: {{
+					NodeID:  nodeID,
+					Name:    "openssl",
+					Version: "3.0.2-0ubuntu1.14",
+					Source:  "apt",
+					Arch:    &arch,
+				}},
+			},
+		},
+		active: map[string]storage.OfflineContentBundle{},
+	}
+	s := &Server{
+		logger:             zap.NewNop(),
+		store:              store,
+		cfg:                &config.Config{OfflineContent: config.OfflineContentConfig{Enabled: true, RootDir: root, PublicKeyFile: keyPath, MaxBundleBytes: 10 << 20}},
+		offlineContentRoot: root,
+	}
+	body := makeServerVulnerabilityBundle(t, priv, "ubuntu-vuln", "2026.05.19", 3, time.Now().UTC())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offline-bundles?tenant_id="+tenantID.String(), bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{Subject: uuid.NewString(), Roles: []string{roleAdmin}}))
+	rec := httptest.NewRecorder()
+	s.handleOfflineBundles(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.vulnerabilityFindings) != 1 {
+		t.Fatalf("vulnerability findings = %#v, want one", store.vulnerabilityFindings)
+	}
+	finding := store.vulnerabilityFindings[0]
+	if finding.CVEID != "CVE-2026-0001" || finding.PackageName != "openssl" || finding.FixedVersion != "3.0.2-0ubuntu1.15" {
+		t.Fatalf("finding lost CVE/package/fixed version evidence: %+v", finding)
+	}
+	if finding.EvidenceSource != "offline_vulnerability_feed" || finding.Evidence["feed_bundle"] != "ubuntu-vuln" {
+		t.Fatalf("finding missing signed feed provenance: %+v", finding)
+	}
+}
+
+func TestOfflineBundleImportReconcilesVulnerabilitiesWhenNoMatches(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	root := t.TempDir()
+	keyPath := writeOfflinePublicKey(t, pub)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	arch := "amd64"
+	observedAt := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	store := &offlineBundleFakeStore{
+		fakeStore: &fakeStore{
+			nodes: []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "app-01"}},
+			nodePackages: map[uuid.UUID][]storage.NodePackage{
+				nodeID: {{
+					NodeID:  nodeID,
+					Name:    "openssl",
+					Version: "3.0.2-0ubuntu1.13",
+					Source:  "apt",
+					Arch:    &arch,
+				}},
+			},
+			vulnerabilityFindings: []storage.VulnerabilityFinding{{
+				ID:               uuid.New(),
+				TenantID:         tenantID,
+				NodeID:           nodeID,
+				PackageName:      "openssl",
+				InstalledVersion: "3.0.2-0ubuntu1.13",
+				PackageSource:    "apt",
+				Arch:             arch,
+				CVEID:            "CVE-2026-STALE",
+				Severity:         "high",
+				EvidenceSource:   "offline_vulnerability_feed",
+				FirstSeenAt:      observedAt.Add(-time.Hour),
+				LastSeenAt:       observedAt.Add(-time.Hour),
+			}},
+		},
+		active: map[string]storage.OfflineContentBundle{},
+	}
+	s := &Server{
+		logger:             zap.NewNop(),
+		store:              store,
+		cfg:                &config.Config{OfflineContent: config.OfflineContentConfig{Enabled: true, RootDir: root, PublicKeyFile: keyPath, MaxBundleBytes: 10 << 20}},
+		offlineContentRoot: root,
+	}
+	body := makeServerVulnerabilityBundle(t, priv, "ubuntu-vuln", "2026.05.19", 3, observedAt)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offline-bundles?tenant_id="+tenantID.String(), bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{Subject: uuid.NewString(), Roles: []string{roleAdmin}}))
+	rec := httptest.NewRecorder()
+	s.handleOfflineBundles(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.vulnerabilityFindings) != 1 {
+		t.Fatalf("vulnerability findings = %#v, want stale row only", store.vulnerabilityFindings)
+	}
+	if store.vulnerabilityFindings[0].ResolvedAt == nil {
+		t.Fatalf("expected empty match run to resolve stale scoped finding: %+v", store.vulnerabilityFindings[0])
+	}
+}
+
 func TestIPBehaviorEnrichmentUsesLocalThreatIntelWithoutLiveLookup(t *testing.T) {
 	tenantID := uuid.New()
 	var providerCalls int32
@@ -269,6 +384,71 @@ func makeServerOfflineBundle(t *testing.T, priv ed25519.PrivateKey, bundleID, ve
 	addServerTarFile(t, tw, offlinebundle.ManifestPath, manifestBytes)
 	addServerTarFile(t, tw, offlinebundle.SignaturePath, []byte(base64.StdEncoding.EncodeToString(sig)))
 	addServerTarFile(t, tw, "content/ip-enrichment.json", content)
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func makeServerVulnerabilityBundle(t *testing.T, priv ed25519.PrivateKey, bundleID, version string, sequence int64, now time.Time) []byte {
+	t.Helper()
+	feed := offlinebundle.VulnerabilityFeed{
+		SchemaVersion: 1,
+		Source:        "ubuntu-usn-offline",
+		Advisories: []offlinebundle.VulnerabilityAdvisory{{
+			CVEID:       "CVE-2026-0001",
+			Severity:    "high",
+			KEV:         true,
+			AdvisoryURL: "https://vendor.example/advisories/CVE-2026-0001",
+			References:  []string{"https://nvd.nist.gov/vuln/detail/CVE-2026-0001"},
+			AffectedPackages: []offlinebundle.VulnerabilityAffectedPkg{{
+				Name:              "openssl",
+				Source:            "apt",
+				Arch:              "amd64",
+				InstalledVersions: []string{"3.0.2-0ubuntu1.14"},
+				FixedVersion:      "3.0.2-0ubuntu1.15",
+			}},
+		}},
+	}
+	content, err := json.Marshal(feed)
+	if err != nil {
+		t.Fatalf("marshal vulnerability feed: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	contentExpires := now.Add(24 * time.Hour)
+	manifest := offlinebundle.Manifest{
+		SchemaVersion: 1,
+		BundleID:      bundleID,
+		Version:       version,
+		Sequence:      sequence,
+		IssuedAt:      now.Add(-time.Hour),
+		ExpiresAt:     now.Add(24 * time.Hour),
+		Contents: []offlinebundle.ContentFile{{
+			Type:      offlinebundle.ContentTypeVulnerabilityFeed,
+			Name:      "ubuntu",
+			Version:   version,
+			Path:      "content/vulnerability-feed.json",
+			SHA256:    hex.EncodeToString(sum[:]),
+			ExpiresAt: &contentExpires,
+			Metadata: map[string]any{
+				"import_modes": []string{"direct", "proxy", "airgapped"},
+			},
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	sig := ed25519.Sign(priv, manifestBytes)
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	addServerTarFile(t, tw, offlinebundle.ManifestPath, manifestBytes)
+	addServerTarFile(t, tw, offlinebundle.SignaturePath, []byte(base64.StdEncoding.EncodeToString(sig)))
+	addServerTarFile(t, tw, "content/vulnerability-feed.json", content)
 	if err := tw.Close(); err != nil {
 		t.Fatalf("close tar: %v", err)
 	}

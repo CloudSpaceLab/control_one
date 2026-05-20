@@ -87,6 +87,10 @@ type Store interface {
 	CreateProvisioningTemplate(context.Context, *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error)
 	GetProvisioningTemplate(context.Context, uuid.UUID) (*storage.ProvisioningTemplate, error)
 	UpdateProvisioningTemplate(context.Context, uuid.UUID, storage.UpdateProvisioningTemplateParams) (*storage.ProvisioningTemplate, error)
+	CreateProvisioningTemplateAssignment(context.Context, storage.CreateProvisioningTemplateAssignmentParams) (*storage.ProvisioningTemplateAssignment, error)
+	GetProvisioningTemplateAssignment(context.Context, uuid.UUID) (*storage.ProvisioningTemplateAssignment, error)
+	ListProvisioningTemplateAssignments(context.Context, uuid.UUID, int, int) ([]storage.ProvisioningTemplateAssignment, int, error)
+	DeleteProvisioningTemplateAssignment(context.Context, uuid.UUID) error
 	CreateProvisioningTemplateVersion(context.Context, storage.CreateTemplateVersionParams) (*storage.ProvisioningTemplateVersion, error)
 	PromoteProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
 	GetProvisioningTemplateVersion(context.Context, uuid.UUID, int) (*storage.ProvisioningTemplateVersion, error)
@@ -150,6 +154,7 @@ type Store interface {
 	CreateSessionEvent(context.Context, uuid.UUID, string, time.Time, map[string]any) (*storage.SessionEvent, error)
 	ListSessionEvents(context.Context, uuid.UUID, int, int) ([]storage.SessionEvent, int, error)
 	CreateEnrollmentToken(context.Context, storage.CreateEnrollmentTokenParams) (*storage.EnrollmentToken, error)
+	GetEnrollmentToken(context.Context, uuid.UUID) (*storage.EnrollmentToken, error)
 	GetEnrollmentTokenByHash(context.Context, string) (*storage.EnrollmentToken, error)
 	ListEnrollmentTokens(context.Context, uuid.UUID, int, int) ([]storage.EnrollmentToken, int, error)
 	RevokeEnrollmentToken(context.Context, uuid.UUID) error
@@ -157,6 +162,7 @@ type Store interface {
 	CreateFleetEnrollmentResult(context.Context, *storage.FleetEnrollmentResult) error
 	ListFleetEnrollmentResults(context.Context, uuid.UUID) ([]storage.FleetEnrollmentResult, error)
 	CreatePolicyAssignment(context.Context, storage.CreatePolicyAssignmentParams) (*storage.PolicyAssignment, error)
+	GetPolicyAssignment(context.Context, uuid.UUID) (*storage.PolicyAssignment, error)
 	ListPolicyAssignments(context.Context, uuid.UUID, int, int) ([]storage.PolicyAssignment, int, error)
 	DeletePolicyAssignment(context.Context, uuid.UUID) error
 	GetEffectivePolicies(context.Context, uuid.UUID, uuid.UUID) ([]storage.PolicyWithVersion, error)
@@ -249,6 +255,7 @@ type Store interface {
 	ListAlerts(context.Context, storage.AlertFilter, int, int) ([]storage.Alert, int, error)
 	AckAlert(context.Context, uuid.UUID, uuid.UUID) error
 	ResolveAlert(context.Context, uuid.UUID, uuid.UUID) error
+	UpdateAlertDisposition(context.Context, uuid.UUID, storage.UpdateAlertDispositionParams) (*storage.Alert, error)
 	// Access requests.
 	CreateAccessRequest(context.Context, storage.CreateAccessRequestParams) (*storage.AccessRequest, error)
 	GetAccessRequest(context.Context, uuid.UUID) (*storage.AccessRequest, error)
@@ -293,6 +300,7 @@ type Store interface {
 	// Event ingest journal + hourly rollup.
 	RecordEventIngest(context.Context, storage.CreateEventIngestBatchParams) (uuid.UUID, error)
 	MarkEventIngestStatus(context.Context, uuid.UUID, string, string, string) error
+	MarkEventIngestLocalComplete(context.Context, uuid.UUID, []byte, int) error
 	PendingEventIngestBatches(context.Context, time.Duration, int) ([]storage.EventIngestBatch, error)
 	PruneAcceptedEventIngestBatches(context.Context, time.Duration) (int64, error)
 	IncrementHourlyRollup(context.Context, uuid.UUID, *uuid.UUID, string, time.Time, int64, int64, int64, string) error
@@ -369,6 +377,9 @@ type Store interface {
 	// Heartbeat-driven inventory + firewall state (PR 2).
 	ReplaceNodePackages(context.Context, uuid.UUID, []storage.NodePackage) error
 	ListNodePackages(context.Context, uuid.UUID) ([]storage.NodePackage, error)
+	UpsertVulnerabilityFindings(context.Context, []storage.VulnerabilityFinding) error
+	ReconcileVulnerabilityFindings(context.Context, storage.ReconcileVulnerabilityFindingsParams) (int64, error)
+	ListNodeVulnerabilityFindings(context.Context, storage.VulnerabilityFindingFilter, int, int) ([]storage.VulnerabilityFinding, int, error)
 	GetNodeInventorySync(context.Context, uuid.UUID) (*storage.NodeInventorySync, error)
 	UpsertNodeInventorySync(context.Context, storage.NodeInventorySync) error
 	TouchNodeInventorySync(context.Context, uuid.UUID, string) (int64, error)
@@ -522,10 +533,6 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 	if !ok {
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return nil, false
-	}
-
-	if principal.Type == "agent" {
-		return principal, true
 	}
 
 	if len(allowedRoles) == 0 {
@@ -787,11 +794,14 @@ type Server struct {
 	complianceEngine        *compliance.Engine
 	complianceScheduler     *ComplianceScheduler
 	retentionScheduler      *RetentionScheduler
+	eventIngestReplay       *EventIngestReplayScheduler
 	ipBlockExpiryScheduler  *IPBlockExpiryScheduler
 	reviewReminderScheduler *ReviewReminderScheduler
 	healthScheduler         *HealthScheduler
 	agentSigningOnce        sync.Once
 	agentSigning            *agentSigningMaterial
+	policySigningOnce       sync.Once
+	policySigning           *agentSigningMaterial
 
 	// policyKeyOnce + policyKeyPEM cache the policy public key shipped to
 	// agents in the enrollment response. Loaded at most once per process —
@@ -1018,6 +1028,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/telemetry/nodes/", s.handleTelemetryNodeSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/compliance/trends", s.handleComplianceTrends)
 	s.baseRouter.HandleFunc("/api/v1/compliance/control-posture", s.handleComplianceControlPosture)
+	s.baseRouter.HandleFunc("/api/v1/remediation/matrix", s.handleRemediationMatrix)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts", s.handleRemediationScriptsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/scripts/", s.handleRemediationScriptSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)
@@ -1065,6 +1076,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
 	s.baseRouter.HandleFunc("/api/v1/control-room/overview", s.handleControlRoomOverview)
+	s.baseRouter.HandleFunc("/api/v1/coverage/", s.handleCoverageSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/soc/cases", s.handleSOCCasesCollection)
+	s.baseRouter.HandleFunc("/api/v1/soc/cases/", s.handleSOCCaseSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
 	s.baseRouter.HandleFunc("/api/v1/metrics/mttd", s.handleMetricsMTTD)
 	s.baseRouter.HandleFunc("/api/v1/metrics/mttr", s.handleMetricsMTTR)
@@ -1077,6 +1091,7 @@ func (s *Server) registerRoutes() {
 	// Admin self-health, ingest, tenant activity, SLO and capacity dashboards.
 	s.baseRouter.HandleFunc("/api/v1/admin/self-health", s.handleAdminSelfHealth)
 	s.baseRouter.HandleFunc("/api/v1/admin/ingest/throughput", s.handleAdminIngestThroughput)
+	s.baseRouter.HandleFunc("/api/v1/admin/ingest/backlog", s.handleAdminIngestBacklog)
 	s.baseRouter.HandleFunc("/api/v1/admin/tenants/activity", s.handleAdminTenantsActivity)
 	s.baseRouter.HandleFunc("/api/v1/admin/slo", s.handleAdminSLO)
 	s.baseRouter.HandleFunc("/api/v1/admin/capacity", s.handleAdminCapacity)
@@ -1112,6 +1127,10 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/threat-feeds/", s.handleThreatFeedSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/threat-intel/summary", s.handleThreatIntelSummary)
 	s.baseRouter.HandleFunc("/api/v1/events/ingest", s.handleEventsIngest)
+	s.baseRouter.HandleFunc("/api/v1/events/query", s.handleEventsQuery)
+	s.baseRouter.HandleFunc("/api/v1/timelines/build", s.handleTimelineBuild)
+	s.baseRouter.HandleFunc("/api/v1/db-audit/discovery", s.handleDBAuditDiscovery)
+	s.baseRouter.HandleFunc("/api/v1/risk/notables", s.handleRiskNotables)
 	s.baseRouter.HandleFunc("/api/v1/connections", s.handleConnectionsList)
 	s.baseRouter.HandleFunc("/api/v1/connections/", s.handleConnectionDetail)
 	s.baseRouter.HandleFunc("/api/v1/connections/top-talkers", s.handleTopTalkers)
@@ -1971,6 +1990,16 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 2 && segments[1] == "vulnerabilities" {
+		s.handleNodeVulnerabilities(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 3 && segments[1] == "vulnerabilities" && segments[2] == "patch-plan" {
+		s.handleNodeVulnerabilityPatchPlan(w, r, nodeID)
+		return
+	}
+
 	if len(segments) == 2 && segments[1] == "documentation" {
 		s.handleNodeDocumentation(w, r, nodeID, false)
 		return
@@ -2601,6 +2630,15 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	}
 
 	if store != nil {
+		replay := NewEventIngestReplayScheduler(s)
+		if err := replay.Start(30*time.Second, 30*time.Second, 100); err != nil {
+			logger.Error("start event ingest replay scheduler", zap.Error(err))
+		} else {
+			s.eventIngestReplay = replay
+		}
+	}
+
+	if store != nil {
 		ipBlocks := NewIPBlockExpiryScheduler(s)
 		if err := ipBlocks.Start("* * * * *"); err != nil {
 			logger.Error("start ip block expiry scheduler", zap.Error(err))
@@ -2697,6 +2735,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	if s.retentionScheduler != nil {
 		s.retentionScheduler.Stop()
+	}
+	if s.eventIngestReplay != nil {
+		s.eventIngestReplay.Stop()
 	}
 	if s.ipBlockExpiryScheduler != nil {
 		s.ipBlockExpiryScheduler.Stop()

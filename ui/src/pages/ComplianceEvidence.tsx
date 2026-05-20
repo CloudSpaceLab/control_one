@@ -47,6 +47,21 @@ function frameworkTone(fw: string | undefined): StateTone {
   }
 }
 
+function freshnessTone(status: string | undefined): StateTone {
+  switch (status) {
+    case 'fresh':
+      return 'healthy';
+    case 'aging':
+      return 'warning';
+    case 'stale':
+      return 'degraded';
+    case 'expired':
+      return 'critical';
+    default:
+      return 'unknown';
+  }
+}
+
 function formatDate(v?: string | null): string {
   if (!v) return '—';
   const d = new Date(v);
@@ -207,6 +222,15 @@ export function ComplianceEvidence(): JSX.Element {
       accessorKey: 'uploaded_at',
       header: 'Uploaded',
       cell: ({ getValue }) => <span>{formatDate(getValue() as string)}</span>,
+    },
+    {
+      accessorKey: 'freshness_status',
+      header: 'Freshness',
+      cell: ({ getValue }) => {
+        const v = getValue() as string | undefined;
+        if (!v) return <span className="text-muted-foreground">â€”</span>;
+        return <StatusTag tone={freshnessTone(v)}>{v}</StatusTag>;
+      },
     },
     {
       id: 'actions',

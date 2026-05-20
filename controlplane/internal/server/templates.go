@@ -18,6 +18,7 @@ import (
 
 type templateResponse struct {
 	ID                string                   `json:"id"`
+	TenantID          *string                  `json:"tenant_id,omitempty"`
 	Name              string                   `json:"name"`
 	Provider          string                   `json:"provider"`
 	Description       *string                  `json:"description,omitempty"`
@@ -42,10 +43,31 @@ type templateVersionResponse struct {
 }
 
 type createTemplateRequest struct {
+	TenantID    *string           `json:"tenant_id"`
 	Name        string            `json:"name"`
 	Provider    string            `json:"provider"`
 	Description *string           `json:"description"`
 	Labels      map[string]string `json:"labels"`
+}
+
+type createTemplateAssignmentRequest struct {
+	TenantID  string         `json:"tenant_id"`
+	ScopeType string         `json:"scope_type"`
+	ScopeID   *string        `json:"scope_id"`
+	Selector  map[string]any `json:"selector"`
+	ExpiresAt *string        `json:"expires_at"`
+}
+
+type templateAssignmentResponse struct {
+	ID         string         `json:"id"`
+	TemplateID string         `json:"template_id"`
+	TenantID   string         `json:"tenant_id"`
+	ScopeType  string         `json:"scope_type"`
+	ScopeID    *string        `json:"scope_id,omitempty"`
+	Selector   map[string]any `json:"selector"`
+	AssignedAt string         `json:"assigned_at"`
+	AssignedBy *string        `json:"assigned_by,omitempty"`
+	ExpiresAt  *string        `json:"expires_at,omitempty"`
 }
 
 type createTemplateVersionRequest struct {
@@ -67,15 +89,17 @@ type updateTemplateRequest struct {
 func (s *Server) handleTemplatesCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleListTemplates(w, r)
+		s.handleListTemplates(w, r, principal)
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleCreateTemplate(w, r)
+		s.handleCreateTemplate(w, r, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -105,8 +129,23 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 			s.handleTemplateVersions(w, r, templateID)
 			return
 		}
+		if segments[1] == "assignments" {
+			s.handleTemplateAssignmentsCollection(w, r, templateID)
+			return
+		}
 		if segments[1] == "rollouts" {
 			s.handleTemplateRollouts(w, r, templateID)
+			return
+		}
+		http.NotFound(w, r)
+	case 3:
+		if segments[1] == "assignments" {
+			assignmentID, err := uuid.Parse(segments[2])
+			if err != nil {
+				http.Error(w, "invalid assignment id", http.StatusBadRequest)
+				return
+			}
+			s.handleDeleteTemplateAssignment(w, r, templateID, assignmentID)
 			return
 		}
 		http.NotFound(w, r)
@@ -142,15 +181,17 @@ func (s *Server) handleTemplateSubroutes(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleTemplateResource(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
-		s.handleGetTemplate(w, r, templateID)
+		s.handleGetTemplate(w, r, templateID, principal)
 	case http.MethodPatch:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleUpdateTemplate(w, r, templateID)
+		s.handleUpdateTemplate(w, r, templateID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPatch}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -160,11 +201,15 @@ func (s *Server) handleTemplateResource(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
 		if s.store == nil {
 			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleViewer, roleOperator, roleAdmin); !ok {
 			return
 		}
 
@@ -198,6 +243,9 @@ func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, 
 		if !ok {
 			return
 		}
+		if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
+			return
+		}
 		s.handleCreateTemplateVersion(w, r, templateID, principal)
 	default:
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
@@ -208,11 +256,15 @@ func (s *Server) handleTemplateVersions(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handlePromoteTemplateVersion(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, versionNumber int) {
 	switch r.Method {
 	case http.MethodPost:
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
 			return
 		}
 		if s.store == nil {
 			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
 			return
 		}
 		version, err := s.store.PromoteProvisioningTemplateVersion(r.Context(), templateID, versionNumber)
@@ -228,7 +280,7 @@ func (s *Server) handlePromoteTemplateVersion(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -244,7 +296,22 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		Provider:        strings.TrimSpace(r.URL.Query().Get("provider")),
 		NamePrefix:      strings.TrimSpace(r.URL.Query().Get("name_prefix")),
 		IncludeArchived: parseBoolQuery(r.URL.Query().Get("include_archived")),
+		IncludeGlobal:   true,
 	}
+	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantParam == "" {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantParam)
+	if err != nil || tenantID == uuid.Nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
+	filter.TenantID = tenantID
 
 	templates, total, err := s.store.ListProvisioningTemplates(r.Context(), filter, limit, offset)
 	if err != nil {
@@ -265,7 +332,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
@@ -281,8 +348,23 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	var tenantID uuid.UUID
+	if req.TenantID == nil || strings.TrimSpace(*req.TenantID) == "" {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(*req.TenantID))
+	if err != nil || parsed == uuid.Nil {
+		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, parsed, roleAdmin) {
+		return
+	}
+	tenantID = parsed
 
 	template := &storage.ProvisioningTemplate{
+		TenantID: tenantID,
 		Name:     req.Name,
 		Provider: strings.TrimSpace(req.Provider),
 		Labels:   sanitizeLabels(req.Labels),
@@ -304,20 +386,14 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	template, err := s.store.GetProvisioningTemplate(r.Context(), templateID)
-	if err != nil {
-		s.logger.Error("get provisioning template", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	if template == nil {
-		http.NotFound(w, r)
+	template, ok := s.requireTemplateAccess(w, r, principal, templateID, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -334,9 +410,12 @@ func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request, templ
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, principal *auth.Principal) {
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if _, ok := s.requireMutableTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
 		return
 	}
 
@@ -446,6 +525,200 @@ func (s *Server) handleCreateTemplateVersion(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (s *Server) handleTemplateAssignmentsCollection(w http.ResponseWriter, r *http.Request, templateID uuid.UUID) {
+	switch r.Method {
+	case http.MethodGet:
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
+			return
+		}
+		s.handleListTemplateAssignments(w, r, templateID, principal)
+	case http.MethodPost:
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
+			return
+		}
+		s.handleCreateTemplateAssignment(w, r, templateID, principal)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCreateTemplateAssignment(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, principal *auth.Principal) {
+	template, ok := s.requireTemplateAccess(w, r, principal, templateID, roleAdmin)
+	if !ok {
+		return
+	}
+
+	var req createTemplateAssignmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(strings.TrimSpace(req.TenantID))
+	if err != nil || tenantID == uuid.Nil {
+		http.Error(w, "valid tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if template.TenantID != uuid.Nil && template.TenantID != tenantID {
+		http.Error(w, "assignment tenant_id must match template tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
+
+	params := storage.CreateProvisioningTemplateAssignmentParams{
+		TemplateID: templateID,
+		TenantID:   tenantID,
+		ScopeType:  strings.TrimSpace(req.ScopeType),
+		Selector:   req.Selector,
+	}
+	if params.ScopeType == "" {
+		params.ScopeType = storage.AssignmentScopeTenant
+	}
+	if req.ScopeID != nil {
+		scopeID, err := uuid.Parse(strings.TrimSpace(*req.ScopeID))
+		if err != nil || scopeID == uuid.Nil {
+			http.Error(w, "invalid scope_id", http.StatusBadRequest)
+			return
+		}
+		params.ScopeID = scopeID
+	}
+	if err := s.validatePolicyAssignmentScope(r.Context(), tenantID, storage.CreatePolicyAssignmentParams{
+		TenantID:  tenantID,
+		ScopeType: params.ScopeType,
+		ScopeID:   params.ScopeID,
+		Selector:  params.Selector,
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ExpiresAt != nil {
+		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
+		if err != nil {
+			http.Error(w, "expires_at must be RFC3339", http.StatusBadRequest)
+			return
+		}
+		params.ExpiresAt = &t
+	}
+	if principal != nil && strings.TrimSpace(principal.Subject) != "" {
+		if user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject); err == nil && user != nil {
+			params.AssignedBy = &user.ID
+		}
+	}
+
+	assignment, err := s.store.CreateProvisioningTemplateAssignment(r.Context(), params)
+	if err != nil {
+		s.logger.Error("create template assignment", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, newTemplateAssignmentResponse(assignment))
+}
+
+func (s *Server) handleListTemplateAssignments(w http.ResponseWriter, r *http.Request, templateID uuid.UUID, principal *auth.Principal) {
+	template, ok := s.requireTemplateAccess(w, r, principal, templateID, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	assignments, total, err := s.store.ListProvisioningTemplateAssignments(r.Context(), templateID, limit, offset)
+	if err != nil {
+		s.logger.Error("list template assignments", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	items := make([]templateAssignmentResponse, 0, len(assignments))
+	for _, a := range assignments {
+		if template.TenantID == uuid.Nil {
+			if err := s.checkTenantAccess(r.Context(), principal, a.TenantID, roleViewer, roleOperator, roleAdmin); err != nil {
+				continue
+			}
+		}
+		items = append(items, newTemplateAssignmentResponse(&a))
+	}
+	if len(items) != len(assignments) {
+		total = len(items)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": total,
+	})
+}
+
+func (s *Server) handleDeleteTemplateAssignment(w http.ResponseWriter, r *http.Request, templateID, assignmentID uuid.UUID) {
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodDelete)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleAdmin)
+	if !ok {
+		return
+	}
+	if _, ok := s.requireTemplateAccess(w, r, principal, templateID, roleAdmin); !ok {
+		return
+	}
+	assignment, err := s.store.GetProvisioningTemplateAssignment(r.Context(), assignmentID)
+	if err != nil {
+		s.logger.Error("get template assignment", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if assignment == nil || assignment.TemplateID != templateID {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, assignment.TenantID, roleAdmin) {
+		return
+	}
+	if err := s.store.DeleteProvisioningTemplateAssignment(r.Context(), assignmentID); err != nil {
+		s.logger.Error("delete template assignment", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) requireTemplateAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, templateID uuid.UUID, roles ...string) (*storage.ProvisioningTemplate, bool) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	template, err := s.store.GetProvisioningTemplate(r.Context(), templateID)
+	if err != nil {
+		s.logger.Error("get provisioning template", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, false
+	}
+	if template == nil {
+		http.NotFound(w, r)
+		return nil, false
+	}
+	if template.TenantID != uuid.Nil && !s.requireTenantAccess(w, r, principal, template.TenantID, roles...) {
+		return nil, false
+	}
+	return template, true
+}
+
+func (s *Server) requireMutableTemplateAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, templateID uuid.UUID, roles ...string) (*storage.ProvisioningTemplate, bool) {
+	template, ok := s.requireTemplateAccess(w, r, principal, templateID, roles...)
+	if !ok {
+		return nil, false
+	}
+	if template.TenantID == uuid.Nil {
+		http.Error(w, "platform-global templates are read-only; create a tenant-owned template before editing", http.StatusForbidden)
+		return nil, false
+	}
+	return template, true
+}
+
 func newTemplateResponse(tpl storage.ProvisioningTemplate, promoted *templateVersionResponse) templateResponse {
 	resp := templateResponse{
 		ID:        tpl.ID.String(),
@@ -457,6 +730,10 @@ func newTemplateResponse(tpl storage.ProvisioningTemplate, promoted *templateVer
 	}
 	if resp.Labels == nil {
 		resp.Labels = map[string]string{}
+	}
+	if tpl.TenantID != uuid.Nil {
+		tid := tpl.TenantID.String()
+		resp.TenantID = &tid
 	}
 	if tpl.Description.Valid {
 		desc := tpl.Description.String
@@ -471,6 +748,32 @@ func newTemplateResponse(tpl storage.ProvisioningTemplate, promoted *templateVer
 	}
 	if promoted != nil {
 		resp.PromotedVersion = promoted
+	}
+	return resp
+}
+
+func newTemplateAssignmentResponse(a *storage.ProvisioningTemplateAssignment) templateAssignmentResponse {
+	resp := templateAssignmentResponse{
+		ID:         a.ID.String(),
+		TemplateID: a.TemplateID.String(),
+		TenantID:   a.TenantID.String(),
+		ScopeType:  a.ScopeType,
+		Selector:   a.Selector,
+		AssignedAt: formatTime(a.AssignedAt),
+	}
+	if resp.Selector == nil {
+		resp.Selector = map[string]any{}
+	}
+	if a.ScopeID != uuid.Nil {
+		id := a.ScopeID.String()
+		resp.ScopeID = &id
+	}
+	if a.AssignedBy != nil {
+		id := a.AssignedBy.String()
+		resp.AssignedBy = &id
+	}
+	if a.ExpiresAt.Valid {
+		resp.ExpiresAt = formatNullTime(a.ExpiresAt)
 	}
 	return resp
 }

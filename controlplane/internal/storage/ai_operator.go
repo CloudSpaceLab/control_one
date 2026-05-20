@@ -157,6 +157,30 @@ func (s *Store) CreateAIInvestigation(ctx context.Context, params CreateAIInvest
 	return scanAIInvestigation(row)
 }
 
+func (s *Store) GetAIInvestigation(ctx context.Context, id uuid.UUID) (*AIInvestigation, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("investigation id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, node_id, trigger_type, trigger_event_type,
+		       trigger_dedup_key, severity, summary, evidence, status,
+		       created_at, updated_at
+		FROM ai_investigations
+		WHERE id = $1
+	`, id)
+	investigation, err := scanAIInvestigation(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get ai investigation: %w", err)
+	}
+	return investigation, nil
+}
+
 func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestigationsFilter, limit, offset int) ([]AIInvestigation, int, error) {
 	if s.db == nil {
 		return nil, 0, errors.New("store database not initialized")

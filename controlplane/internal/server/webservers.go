@@ -284,6 +284,10 @@ func (s *Server) processWebserverCompletedAction(ctx context.Context, jobID uuid
 	if action == nil {
 		return
 	}
+	jobPayload, jobPayloadErr := s.webserverCompletionJobPayload(ctx, jobID)
+	if jobPayloadErr != nil && s.logger != nil {
+		s.logger.Warn("load webserver job payload for receipt validation", zap.String("job_id", jobID.String()), zap.Error(jobPayloadErr))
+	}
 	status := "succeeded"
 	jobStatus := storage.JobStatusSucceeded
 	message := "agent reported success"
@@ -298,8 +302,15 @@ func (s *Server) processWebserverCompletedAction(ctx context.Context, jobID uuid
 		message = errMsg
 	}
 	receiptPersisted := false
+	var receiptErr error
 	if c.Metadata != nil {
-		receiptPersisted = s.persistWebserverCompletionArtifacts(ctx, action, c.Metadata)
+		receiptPersisted, receiptErr = s.persistWebserverCompletionArtifacts(
+			ctx,
+			action,
+			jobPayload,
+			c.Metadata,
+			status == "succeeded" && webserverActionRequiresReceipt(action.Action),
+		)
 	}
 	if status == "succeeded" {
 		if reason := webserverElevatedErrorRateReason(c.Metadata); reason != "" {
@@ -313,6 +324,9 @@ func (s *Server) processWebserverCompletedAction(ctx context.Context, jobID uuid
 		status = "failed"
 		jobStatus = storage.JobStatusFailed
 		errMsg = "required webserver config receipt missing"
+		if receiptErr != nil {
+			errMsg = "invalid webserver config receipt: " + receiptErr.Error()
+		}
 		message = errMsg
 	}
 	if err := store.MarkWebserverConfigActionStatus(ctx, jobID, status, c.Metadata, errMsg); err != nil {
@@ -342,6 +356,28 @@ func (s *Server) processWebserverCompletedAction(ctx context.Context, jobID uuid
 			}
 		}
 	}
+}
+
+func (s *Server) webserverCompletionJobPayload(ctx context.Context, jobID uuid.UUID) (*webserverJobPayload, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("store unavailable")
+	}
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, errors.New("job not found")
+	}
+	decoded, err := decodeWebserverPayload(json.RawMessage(job.Payload))
+	if err != nil {
+		return nil, err
+	}
+	payload, ok := decoded.(webserverJobPayload)
+	if !ok {
+		return nil, errors.New("unexpected webserver payload type")
+	}
+	return &payload, nil
 }
 
 func webserverActionBlockEntryID(action *storage.WebserverConfigAction) uuid.UUID {
@@ -381,10 +417,10 @@ type webserverReceiptPayload struct {
 	Metadata         map[string]any `json:"metadata"`
 }
 
-func (s *Server) persistWebserverCompletionArtifacts(ctx context.Context, action *storage.WebserverConfigAction, metadata map[string]any) bool {
+func (s *Server) persistWebserverCompletionArtifacts(ctx context.Context, action *storage.WebserverConfigAction, jobPayload *webserverJobPayload, metadata map[string]any, requireSuccessfulReceipt bool) (bool, error) {
 	store, ok := s.store.(webserverStore)
 	if !ok || action == nil || metadata == nil {
-		return false
+		return false, nil
 	}
 	receiptPersisted := false
 	if raw, ok := metadata["instances"]; ok {
@@ -418,16 +454,21 @@ func (s *Server) persistWebserverCompletionArtifacts(ctx context.Context, action
 	if raw, ok := metadata["receipt"]; ok {
 		var receipt webserverReceiptPayload
 		if err := decodeMetadata(raw, &receipt); err != nil {
-			s.logger.Warn("decode webserver receipt", zap.Error(err))
-			return receiptPersisted
+			if s.logger != nil {
+				s.logger.Warn("decode webserver receipt", zap.Error(err))
+			}
+			return receiptPersisted, err
 		}
 		actionID := action.ID
 		var instanceID *uuid.UUID
 		if action.WebserverInstanceID.Valid {
 			instanceID = &action.WebserverInstanceID.UUID
 		}
-		if receipt.Action == "" {
-			receipt.Action = action.Action
+		if err := validateWebserverReceipt(action, jobPayload, receipt, requireSuccessfulReceipt); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("validate webserver receipt", zap.String("job_id", action.JobID.UUID.String()), zap.Error(err))
+			}
+			return receiptPersisted, err
 		}
 		created, err := store.CreateWebserverConfigReceipt(ctx, storage.CreateWebserverConfigReceiptParams{
 			TenantID:            action.TenantID,
@@ -444,13 +485,81 @@ func (s *Server) persistWebserverCompletionArtifacts(ctx context.Context, action
 			Metadata:            receipt.Metadata,
 		})
 		if err != nil {
-			s.logger.Warn("create webserver config receipt", zap.String("job_id", action.JobID.UUID.String()), zap.Error(err))
-			return receiptPersisted
+			if s.logger != nil {
+				s.logger.Warn("create webserver config receipt", zap.String("job_id", action.JobID.UUID.String()), zap.Error(err))
+			}
+			return receiptPersisted, err
 		}
 		metadata["receipt_id"] = created.ID.String()
 		receiptPersisted = true
 	}
-	return receiptPersisted
+	return receiptPersisted, nil
+}
+
+func validateWebserverReceipt(action *storage.WebserverConfigAction, jobPayload *webserverJobPayload, receipt webserverReceiptPayload, requireSuccess bool) error {
+	if action == nil {
+		return errors.New("webserver action unavailable")
+	}
+	if jobPayload == nil {
+		return errors.New("webserver job payload unavailable")
+	}
+	if strings.TrimSpace(receipt.Action) == "" {
+		return errors.New("receipt action required")
+	}
+	if strings.TrimSpace(receipt.Action) != strings.TrimSpace(action.Action) {
+		return errors.New("receipt action mismatch")
+	}
+	if receipt.Metadata == nil {
+		return errors.New("receipt metadata required")
+	}
+	if contract := strings.TrimSpace(detailsString(receipt.Metadata, "contract_version", "")); contract != webserverJobContractVersion {
+		return errors.New("receipt contract_version mismatch")
+	}
+	if action.JobID.Valid {
+		if !strings.EqualFold(strings.TrimSpace(detailsString(receipt.Metadata, "job_id", "")), action.JobID.UUID.String()) {
+			return errors.New("receipt job_id mismatch")
+		}
+	}
+	if expected := strings.TrimSpace(jobPayload.IdempotencyKey); expected != "" {
+		if strings.TrimSpace(detailsString(receipt.Metadata, "idempotency_key", "")) != expected {
+			return errors.New("receipt idempotency_key mismatch")
+		}
+	}
+	if expected := strings.TrimSpace(jobPayload.CorrelationID); expected != "" {
+		if strings.TrimSpace(detailsString(receipt.Metadata, "correlation_id", "")) != expected {
+			return errors.New("receipt correlation_id mismatch")
+		}
+	}
+	if action.WebserverInstanceID.Valid {
+		expected := action.WebserverInstanceID.UUID.String()
+		if !strings.EqualFold(strings.TrimSpace(detailsString(receipt.Metadata, "webserver_instance_id", "")), expected) {
+			return errors.New("receipt webserver_instance_id mismatch")
+		}
+	}
+	if !requireSuccess {
+		return nil
+	}
+	validationStatus := strings.ToLower(strings.TrimSpace(receipt.ValidationStatus))
+	reloadStatus := strings.ToLower(strings.TrimSpace(receipt.ReloadStatus))
+	switch strings.TrimSpace(action.Action) {
+	case JobTypeWebserverConfigRollback:
+		if validationStatus != "restored" {
+			return errors.New("rollback receipt validation_status must be restored")
+		}
+	default:
+		if validationStatus != "passed" {
+			return errors.New("receipt validation_status must be passed")
+		}
+		if strings.TrimSpace(receipt.ChecksumAfter) == "" {
+			return errors.New("receipt checksum_after required")
+		}
+	}
+	switch reloadStatus {
+	case "reloaded", "not_required":
+		return nil
+	default:
+		return errors.New("receipt reload_status must be reloaded or not_required")
+	}
 }
 
 func webserverActionRequiresReceipt(action string) bool {
@@ -593,7 +702,8 @@ func (s *Server) handleWebservers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(webserverStore)
@@ -604,6 +714,9 @@ func (s *Server) handleWebservers(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
 	if err != nil {
 		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
 	var nodeID uuid.UUID
@@ -676,7 +789,8 @@ func (s *Server) handleListWebserverConfigActions(w http.ResponseWriter, r *http
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(webserverHistoryStore)
@@ -686,6 +800,9 @@ func (s *Server) handleListWebserverConfigActions(w http.ResponseWriter, r *http
 	}
 	tenantID, limit, ok := parseWebserverHistoryQuery(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
 	instance, err := store.GetWebserverInstance(r.Context(), instanceID)
@@ -715,7 +832,8 @@ func (s *Server) handleListWebserverConfigReceipts(w http.ResponseWriter, r *htt
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(webserverHistoryStore)
@@ -725,6 +843,9 @@ func (s *Server) handleListWebserverConfigReceipts(w http.ResponseWriter, r *htt
 	}
 	tenantID, limit, ok := parseWebserverHistoryQuery(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
 	instance, err := store.GetWebserverInstance(r.Context(), instanceID)
@@ -826,9 +947,21 @@ func (s *Server) createWebserverInventoryScanAction(w http.ResponseWriter, r *ht
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
+	}
 	nodeID, err := uuid.Parse(strings.TrimSpace(req.NodeID))
 	if err != nil {
 		http.Error(w, "node_id is required", http.StatusBadRequest)
+		return
+	}
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil || node.TenantID != tenantID {
+		http.Error(w, "node does not belong to tenant", http.StatusBadRequest)
 		return
 	}
 	payload := webserverJobPayload{
@@ -899,6 +1032,9 @@ func (s *Server) createWebserverConfigAction(w http.ResponseWriter, r *http.Requ
 	tenantID, err := uuid.Parse(strings.TrimSpace(req.TenantID))
 	if err != nil {
 		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	nodeID, err := uuid.Parse(strings.TrimSpace(req.NodeID))
