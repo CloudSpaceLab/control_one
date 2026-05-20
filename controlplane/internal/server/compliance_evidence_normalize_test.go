@@ -131,3 +131,26 @@ func TestComplianceCredentialDescriptorsAvoidRawMaterial(t *testing.T) {
 		})
 	}
 }
+
+func TestComplianceEvidenceNormalizationRedactsSecretShapedValues(t *testing.T) {
+	t.Parallel()
+
+	metadata := complianceResultMetadata(map[string]any{
+		"summary": "collector returned account status",
+		"sample":  "root:$6$rounds=5000$raw-shadow-hash",
+		"token":   "Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+	})
+	if contains(fmt.Sprint(metadata), "raw-shadow-hash") || contains(fmt.Sprint(metadata), "abcdefghijklmnopqrstuvwxyz") {
+		t.Fatalf("secret-shaped evidence leaked into metadata: %#v", metadata)
+	}
+	if metadata["evidence_redacted"] != true {
+		t.Fatalf("expected value-shape redaction marker, got %#v", metadata)
+	}
+	evidence := complianceEvidenceFromMetadata(metadata)
+	if metadataMap(evidence["sample"])["redacted"] != true {
+		t.Fatalf("expected shadow-shaped sample to be redacted, got %#v", evidence["sample"])
+	}
+	if metadataMap(evidence["token"])["redacted"] != true {
+		t.Fatalf("expected token-shaped value to be redacted, got %#v", evidence["token"])
+	}
+}

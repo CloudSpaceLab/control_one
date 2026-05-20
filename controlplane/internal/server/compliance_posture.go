@@ -53,7 +53,8 @@ func (s *Server) handleComplianceControlPosture(w http.ResponseWriter, r *http.R
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -76,6 +77,9 @@ func (s *Server) handleComplianceControlPosture(w http.ResponseWriter, r *http.R
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		http.Error(w, "tenant_id must be a valid UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 

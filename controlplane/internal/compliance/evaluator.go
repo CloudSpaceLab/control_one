@@ -37,6 +37,7 @@ type EvalInput struct {
 // EvalResult captures the outcome of a single rule evaluation.
 type EvalResult struct {
 	Passed      bool
+	Outcome     string
 	Severity    string
 	Details     string
 	Remediation string
@@ -91,12 +92,14 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 		"rule_type": rule.RuleType,
 	}
 
-	// Empty conditions = auto-pass
 	if len(parsed.Conditions) == 0 {
+		evidence["outcome"] = "unsupported"
+		evidence["unsupported_reason"] = "rule_has_no_conditions"
 		return &EvalResult{
-			Passed:    true,
+			Passed:    false,
+			Outcome:   "unsupported",
 			Severity:  severity,
-			Details:   parsed.Description,
+			Details:   firstNonEmpty(parsed.Description, "rule has no evaluable conditions"),
 			Evidence:  evidence,
 			CheckedAt: now,
 		}, nil
@@ -110,6 +113,7 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 		if err != nil {
 			return nil, fmt.Errorf("condition[%d] field=%s op=%s: %w", i, cond.Field, cond.Op, err)
 		}
+		outcome := conditionOutcome(cond.Op, found, pass)
 		conditionEvidence := map[string]any{
 			"index":    i,
 			"field":    cond.Field,
@@ -118,23 +122,32 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 			"actual":   fieldVal,
 			"found":    found,
 			"passed":   pass,
+			"outcome":  outcome,
 		}
 		conditions = append(conditions, conditionEvidence)
 		if !pass {
 			evidence["conditions"] = conditions
 			evidence["conditions_total"] = len(parsed.Conditions)
 			evidence["conditions_passed"] = countPassedConditions(conditions)
+			evidence["outcome"] = outcome
 			evidence["failed_condition"] = map[string]any{
 				"field":    cond.Field,
 				"op":       cond.Op,
 				"expected": cond.Value,
 				"actual":   fieldVal,
 				"found":    found,
+				"outcome":  outcome,
+			}
+			details := fmt.Sprintf("%s: condition failed on %s", parsed.Description, cond.Field)
+			if outcome == "unsupported" {
+				evidence["unsupported_condition"] = evidence["failed_condition"]
+				details = fmt.Sprintf("%s: evidence unavailable for %s", firstNonEmpty(parsed.Description, "rule evaluation"), cond.Field)
 			}
 			return &EvalResult{
 				Passed:      false,
+				Outcome:     outcome,
 				Severity:    severity,
-				Details:     fmt.Sprintf("%s: condition failed on %s", parsed.Description, cond.Field),
+				Details:     details,
 				Remediation: parsed.Remediation,
 				Evidence:    evidence,
 				CheckedAt:   now,
@@ -145,9 +158,11 @@ func (e *JSONDSLEvaluator) Evaluate(_ context.Context, rule RuleDefinition, inpu
 	evidence["conditions"] = conditions
 	evidence["conditions_total"] = len(parsed.Conditions)
 	evidence["conditions_passed"] = countPassedConditions(conditions)
+	evidence["outcome"] = "pass"
 
 	return &EvalResult{
 		Passed:    true,
+		Outcome:   "pass",
 		Severity:  severity,
 		Details:   parsed.Description,
 		Evidence:  evidence,
@@ -163,6 +178,34 @@ func countPassedConditions(conditions []map[string]any) int {
 		}
 	}
 	return out
+}
+
+func conditionOutcome(op string, fieldFound bool, passed bool) string {
+	if !fieldFound && opRequiresObservedField(op) {
+		return "unsupported"
+	}
+	if passed {
+		return "pass"
+	}
+	return "fail"
+}
+
+func opRequiresObservedField(op string) bool {
+	switch op {
+	case "eq", "neq", "in", "not_in", "gt", "lt", "gte", "lte", "regex":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // resolveField looks up a dot-separated field path in the EvalInput.
@@ -229,7 +272,7 @@ func evaluateCondition(op string, fieldVal any, fieldFound bool, expected any) (
 		return compareEqual(fieldVal, expected), nil
 	case "neq":
 		if !fieldFound {
-			return true, nil
+			return false, nil
 		}
 		return !compareEqual(fieldVal, expected), nil
 	case "in":
@@ -239,7 +282,7 @@ func evaluateCondition(op string, fieldVal any, fieldFound bool, expected any) (
 		return compareIn(fieldVal, expected), nil
 	case "not_in":
 		if !fieldFound {
-			return true, nil
+			return false, nil
 		}
 		return !compareIn(fieldVal, expected), nil
 	case "gt":

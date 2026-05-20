@@ -115,7 +115,7 @@ func TestListComplianceEvidenceReturnsFreshnessAndHidesFilePath(t *testing.T) {
 	}
 	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/compliance/evidence?tenant_id="+tenantID.String()+"&framework=SOC2&control_ref=CC6.1&evidence_type=config_snapshot&include_expired=false", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/compliance/evidence?tenant_id="+tenantID.String()+"&framework=SOC2&control_ref=CC6.1&evidence_type=config_snapshot", nil)
 	req.Header.Set("Authorization", "Bearer evidence-viewer")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -137,5 +137,29 @@ func TestListComplianceEvidenceReturnsFreshnessAndHidesFilePath(t *testing.T) {
 	}
 	if body.Data[0].TenantID != tenantID.String() || body.Data[0].Freshness != "fresh" || body.Data[0].AgeSeconds <= 0 {
 		t.Fatalf("expected freshness metadata, got %#v", body.Data[0])
+	}
+}
+
+func TestCreateComplianceEvidenceRejectsInvalidExpiration(t *testing.T) {
+	tenantID := uuid.New()
+	store := &fakeStore{tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}}}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("operator", "evidence-uploader"),
+	}
+	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
+
+	body := strings.NewReader("tenant_id=" + tenantID.String() + "&title=Bad+expiry&evidence_type=config_snapshot&expires_at=tomorrow")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/compliance/evidence", body)
+	req.Header.Set("Authorization", "Bearer evidence-uploader")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid expiration to be rejected, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.complianceEvidence) != 0 {
+		t.Fatalf("invalid evidence upload was persisted: %#v", store.complianceEvidence)
 	}
 }

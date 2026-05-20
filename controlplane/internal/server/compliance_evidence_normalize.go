@@ -64,6 +64,9 @@ func normalizeComplianceEvidence(value any, path string) (any, int) {
 		}
 		return out, redactions
 	default:
+		if sensitiveComplianceEvidenceValue(typed) {
+			return redactedEvidenceValue(typed), 1
+		}
 		return typed, 0
 	}
 }
@@ -91,6 +94,59 @@ func sensitiveComplianceEvidencePath(path string) bool {
 		}
 	}
 	return false
+}
+
+func sensitiveComplianceEvidenceValue(value any) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if credentialHashAlgorithm(trimmed) != "" {
+		return true
+	}
+	for _, marker := range []string{
+		":$y$",
+		":$6$",
+		":$5$",
+		":$2a$",
+		":$2b$",
+		":$2y$",
+		":$1$",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	if strings.Contains(lower, "-----begin ") && strings.Contains(lower, "private key-----") {
+		return true
+	}
+	switch {
+	case strings.HasPrefix(lower, "bearer ") && len(trimmed) >= 32:
+		return true
+	case strings.HasPrefix(trimmed, "ghp_") && len(trimmed) >= 24:
+		return true
+	case strings.HasPrefix(trimmed, "github_pat_") && len(trimmed) >= 24:
+		return true
+	case strings.HasPrefix(trimmed, "glpat-") && len(trimmed) >= 24:
+		return true
+	case strings.HasPrefix(trimmed, "xoxb-") && len(trimmed) >= 24:
+		return true
+	case strings.HasPrefix(trimmed, "xoxp-") && len(trimmed) >= 24:
+		return true
+	case strings.HasPrefix(trimmed, "sk-") && len(trimmed) >= 32:
+		return true
+	case strings.HasPrefix(trimmed, "AKIA") && len(trimmed) == 20:
+		return true
+	case strings.HasPrefix(trimmed, "eyJ") && strings.Count(trimmed, ".") == 2:
+		return true
+	default:
+		return false
+	}
 }
 
 func redactedEvidenceValue(value any) map[string]any {
