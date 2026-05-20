@@ -376,7 +376,9 @@ func (s *Server) validateRemediationApprovalDispatchGates(ctx context.Context, a
 		cfg = &defaults
 	}
 	severity := strings.ToLower(strings.TrimSpace(approval.Severity))
-	if !(storage.IsInsideChangeWindow(cfg.ChangeWindows, now) || cfg.CriticalOverride && severity == "critical") {
+	insideChangeWindow := storage.IsInsideChangeWindow(cfg.ChangeWindows, now)
+	criticalOverrideAllowed := cfg.CriticalOverride && severity == "critical"
+	if !insideChangeWindow && !criticalOverrideAllowed {
 		return errors.New("remediation approval cannot dispatch outside an active change window")
 	}
 
