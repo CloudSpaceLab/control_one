@@ -533,7 +533,15 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	lineageWhere, lineageArgs, err := timelineLineageWhere(p)
+	if err != nil {
+		return "", nil, err
+	}
 	dbWhere, dbArgs, err := timelineSideTableWhere(p, "ts", dbEntityColumns())
+	if err != nil {
+		return "", nil, err
+	}
+	webWhere, webArgs, err := timelineWebWhere(p)
 	if err != nil {
 		return "", nil, err
 	}
@@ -558,6 +566,17 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 			FROM process_connections
 			WHERE ` + connWhere + `
 			UNION ALL
+			SELECT 'process_lineage' AS source_table, 1 AS schema_version, '' AS event_id, '' AS raw_ref,
+			       '' AS collector, '' AS parser, '' AS parser_status,
+			       tenant_id, observed_at AS ts, node_id,
+			       CASE WHEN exited_at IS NULL THEN 'proc.exec' ELSE 'proc.exit' END AS event_type,
+			       'info' AS severity, CONCAT(COALESCE(process_name, ''), ' ', COALESCE(cmdline, '')) AS message,
+			       '' AS correlation_id, '' AS conn_id, pid, process_name, user_name,
+			       '' AS src_ip, '' AS dst_ip, 0 AS dst_port, exe_path AS path, 0 AS bytes_in, 0 AS bytes_out,
+			       '' AS details_json
+			FROM process_lineage
+			WHERE ` + lineageWhere + `
+			UNION ALL
 			SELECT 'file_accesses' AS source_table, 1 AS schema_version, '' AS event_id, '' AS raw_ref,
 			       '' AS collector, '' AS parser, '' AS parser_status,
 			       tenant_id, ts, node_id, CONCAT('file.', op) AS event_type, 'info' AS severity,
@@ -575,9 +594,18 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 			       '' AS details_json
 			FROM db_queries
 			WHERE ` + dbWhere + `
+			UNION ALL
+			SELECT 'web_requests' AS source_table, schema_version, event_id, raw_ref, collector, parser, parser_status,
+			       tenant_id, ts, node_id,
+			       CASE WHEN status_code >= 500 THEN 'web.error' ELSE 'web.request' END AS event_type,
+			       CASE WHEN status_code >= 500 THEN 'high' WHEN status_code >= 400 THEN 'medium' ELSE 'info' END AS severity,
+			       message, correlation_id, '' AS conn_id, 0 AS pid, webserver_kind AS process_name, '' AS user_name,
+			       src_ip, socket_ip AS dst_ip, 0 AS dst_port, path_template AS path, bytes_in, bytes_out, details_json
+			FROM web_requests
+			WHERE ` + webWhere + `
 		) timeline
 		ORDER BY ts ASC`
-	args := append(append(append(eventsArgs, connArgs...), fileArgs...), dbArgs...)
+	args := append(append(append(append(append(eventsArgs, connArgs...), lineageArgs...), fileArgs...), dbArgs...), webArgs...)
 	return withLimit(query, clampTimelineLimit(p.Limit)), args, nil
 }
 
@@ -693,6 +721,27 @@ func connectionEntityColumns() entityColumns {
 	}
 }
 
+func lineageEntityColumns() entityColumns {
+	return entityColumns{
+		NodeID:      "node_id",
+		UserName:    "user_name",
+		ProcessName: "process_name",
+		Path:        "exe_path",
+	}
+}
+
+func webEntityColumns() entityColumns {
+	return entityColumns{
+		NodeID:      "node_id",
+		SrcIP:       "src_ip",
+		DstIP:       "socket_ip",
+		ProcessName: "webserver_kind",
+		Path:        "path_template",
+		EventID:     "event_id",
+		RawRef:      "raw_ref",
+	}
+}
+
 func eventWhereClause(p EventQueryParams, timeColumn string) (string, []any, error) {
 	if strings.TrimSpace(p.TenantID) == "" {
 		return "", nil, fmt.Errorf("tenant_id required")
@@ -802,6 +851,62 @@ func timelineConnectionWhere(p TimelineBuildParams) (string, []any, error) {
 	}
 	base := strings.Join(where, " AND ")
 	base, args = appendEntityPredicate(base, args, p.EntityType, p.EntityID, connectionEntityColumns())
+	return base, args, nil
+}
+
+func timelineLineageWhere(p TimelineBuildParams) (string, []any, error) {
+	if strings.TrimSpace(p.TenantID) == "" {
+		return "", nil, fmt.Errorf("tenant_id required")
+	}
+	where := []string{"tenant_id = ?"}
+	args := []any{strings.TrimSpace(p.TenantID)}
+	if strings.TrimSpace(p.CorrelationID) != "" || strings.TrimSpace(p.ConnID) != "" {
+		return strings.Join(append(where, "1 = 0"), " AND "), args, nil
+	}
+	if !p.Since.IsZero() {
+		where = append(where, "observed_at >= ?")
+		args = append(args, p.Since)
+	}
+	if !p.Until.IsZero() {
+		where = append(where, "observed_at <= ?")
+		args = append(args, p.Until)
+	}
+	if v := strings.TrimSpace(p.NodeID); v != "" {
+		where = append(where, "node_id = ?")
+		args = append(args, v)
+	}
+	base := strings.Join(where, " AND ")
+	base, args = appendEntityPredicate(base, args, p.EntityType, p.EntityID, lineageEntityColumns())
+	return base, args, nil
+}
+
+func timelineWebWhere(p TimelineBuildParams) (string, []any, error) {
+	if strings.TrimSpace(p.TenantID) == "" {
+		return "", nil, fmt.Errorf("tenant_id required")
+	}
+	where := []string{"tenant_id = ?"}
+	args := []any{strings.TrimSpace(p.TenantID)}
+	if strings.TrimSpace(p.ConnID) != "" {
+		return strings.Join(append(where, "1 = 0"), " AND "), args, nil
+	}
+	if !p.Since.IsZero() {
+		where = append(where, "ts >= ?")
+		args = append(args, p.Since)
+	}
+	if !p.Until.IsZero() {
+		where = append(where, "ts <= ?")
+		args = append(args, p.Until)
+	}
+	if v := strings.TrimSpace(p.NodeID); v != "" {
+		where = append(where, "node_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.CorrelationID); v != "" {
+		where = append(where, "correlation_id = ?")
+		args = append(args, v)
+	}
+	base := strings.Join(where, " AND ")
+	base, args = appendEntityPredicate(base, args, p.EntityType, p.EntityID, webEntityColumns())
 	return base, args, nil
 }
 

@@ -456,9 +456,11 @@ func looksLikeSourceCitationID(value string) bool {
 		"normalized_events",
 		"process_connections",
 		"process_events",
+		"process_lineage",
 		"saved_searches",
 		"security_events",
 		"tenant_event_filters",
+		"web_requests",
 		"ai_investigations":
 		return true
 	default:
