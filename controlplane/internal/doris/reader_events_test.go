@@ -44,6 +44,7 @@ func TestListConnectionsForNodeQuery_NoRFC1918Strip(t *testing.T) {
 		"dst_ip NOT LIKE",
 		"INET_ATON",   // a clever range exclusion would reach for this
 		"PRIVATE_IP_", // hypothetical UDF
+		"CASE WHEN threat_match",
 	}
 
 	for _, tc := range cases {
@@ -86,6 +87,18 @@ func TestListConnectionsForNodeQuery_NoRFC1918Strip(t *testing.T) {
 				t.Errorf("openOnly=false must use overlap semantics: %s", q)
 			}
 		})
+	}
+}
+
+func TestListConnectionsForNodeQueryOrdersByRecency(t *testing.T) {
+	for _, externalOnly := range []bool{false, true} {
+		q := buildListConnectionsForNodeDayQuery(100, false, externalOnly)
+		if !strings.Contains(q, "ORDER BY started_at DESC") {
+			t.Fatalf("node connections should default to recency order:\n%s", q)
+		}
+		if strings.Contains(q, "CASE WHEN threat_match") {
+			t.Fatalf("node connections should not prioritize threat matches by default:\n%s", q)
+		}
 	}
 }
 

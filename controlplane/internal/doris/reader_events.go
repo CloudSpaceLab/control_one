@@ -147,14 +147,14 @@ func buildListConnectionsForNodeDayQuery(limit int, openOnly, externalOnly bool)
 			%s
 		) pc
 		WHERE %s
-		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+		ORDER BY started_at DESC
 	`, connectionSelectColumns, connectionSelectColumns, connectionPeerNumberExpr, where, dorisPublicPeerPredicate("peer_num")), limit)
 	}
 	return withLimit(fmt.Sprintf(`
 		SELECT %s
 		FROM process_connections
 		%s
-		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+		ORDER BY started_at DESC
 	`, connectionSelectColumns, where), limit)
 }
 
@@ -199,9 +199,6 @@ func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID st
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].ThreatMatch != out[j].ThreatMatch {
-			return out[i].ThreatMatch
-		}
 		return out[i].StartedAt.After(out[j].StartedAt)
 	})
 	if len(out) > limit {
@@ -245,9 +242,6 @@ func (c *Client) ListConnectionsForTenant(ctx context.Context, tenantID string, 
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].ThreatMatch != out[j].ThreatMatch {
-			return out[i].ThreatMatch
-		}
 		return out[i].StartedAt.After(out[j].StartedAt)
 	})
 	if len(out) > limit {
@@ -272,14 +266,14 @@ func buildListConnectionsForTenantDayQuery(limit int, externalOnly bool) string 
 			%s
 		) pc
 		WHERE %s
-		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+		ORDER BY started_at DESC
 	`, connectionSelectColumns, connectionSelectColumns, connectionPeerNumberExpr, where, dorisPublicPeerPredicate("peer_num")), limit)
 	}
 	return withLimit(fmt.Sprintf(`
 		SELECT %s
 		FROM process_connections
 		%s
-		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+		ORDER BY started_at DESC
 	`, connectionSelectColumns, where), limit)
 }
 
