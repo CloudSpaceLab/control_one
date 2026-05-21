@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	cpCompliance "github.com/CloudSpaceLab/control_one/controlplane/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/pdfreport"
@@ -900,7 +901,8 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r)
+	if !ok {
 		return
 	}
 
@@ -913,8 +915,88 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 		http.NotFound(w, r)
 		return
 	}
+	if !principalCanReadJob(principal, job) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
 
 	writeJSON(w, http.StatusOK, jobResponseFromModel(job, events, results))
+}
+
+func principalCanReadJob(principal *auth.Principal, job *storage.Job) bool {
+	if principal == nil || job == nil {
+		return false
+	}
+	if strings.EqualFold(principal.Type, "agent") {
+		return agentCanReadJob(principal, job)
+	}
+	return hasRole(principal, roleViewer) || hasRole(principal, roleAdmin)
+}
+
+func agentCanReadJob(principal *auth.Principal, job *storage.Job) bool {
+	if !agentReadableJobType(job.Type) {
+		return false
+	}
+	principalNodeID := agentPrincipalNodeID(principal)
+	if principalNodeID == uuid.Nil {
+		return false
+	}
+	return jobPayloadNodeID(job.Payload) == principalNodeID
+}
+
+func agentReadableJobType(jobType string) bool {
+	switch strings.TrimSpace(jobType) {
+	case JobTypeAgentUpdate,
+		JobTypeFirewallRuleAdd,
+		JobTypeFirewallRuleDelete,
+		JobTypePatchDeployDirect,
+		JobTypePatchDeployProxy,
+		JobTypePatchDeployAirgapped,
+		JobTypePatchInventoryScan,
+		JobTypeSquidInstall,
+		JobTypeSquidReconfigure,
+		JobTypeSquidConfigureClient,
+		JobTypeWebserverInventoryScan,
+		JobTypeWebserverConfigPlan,
+		JobTypeWebserverConfigApply,
+		JobTypeWebserverBlocklistUpdate,
+		JobTypeWebserverConfigRollback:
+		return true
+	default:
+		return false
+	}
+}
+
+func agentPrincipalNodeID(principal *auth.Principal) uuid.UUID {
+	if principal == nil {
+		return uuid.Nil
+	}
+	for _, candidate := range []string{principal.Name, principal.Subject} {
+		if id, err := uuid.Parse(strings.TrimSpace(candidate)); err == nil {
+			return id
+		}
+	}
+	return uuid.Nil
+}
+
+func jobPayloadNodeID(payload []byte) uuid.UUID {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return uuid.Nil
+	}
+	for _, key := range []string{"node_id", "NodeID"} {
+		raw := envelope[key]
+		if len(raw) == 0 {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil {
+			if id, parseErr := uuid.Parse(strings.TrimSpace(value)); parseErr == nil {
+				return id
+			}
+		}
+	}
+	return uuid.Nil
 }
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
