@@ -2,6 +2,8 @@ import { useEffect, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ClipboardList,
+  Database,
   FileText,
   KeyRound,
   Network,
@@ -49,6 +51,7 @@ const NAV_GROUPS: NavGroupDef[] = [
     items: [
       { to: '/', label: 'Control Room', icon: Activity },
       { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: <AlertStatusBadge /> },
+      { to: '/cases', label: 'Cases', icon: ClipboardList },
     ],
   },
   {
@@ -68,6 +71,7 @@ const NAV_GROUPS: NavGroupDef[] = [
         badge: <NodeStatusBadge />,
       },
       { to: '/security/network', label: 'Network & exposure', icon: Network },
+      { to: '/observability', label: 'Observability', icon: Database },
       {
         to: '/infrastructure/patch',
         label: 'Patch posture',

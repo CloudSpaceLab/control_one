@@ -324,7 +324,20 @@ export function ControlRoom(): JSX.Element {
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Panel className="xl:col-span-2" eyebrow="INCIDENTS" title="Top incidents" toneAccent="warning">
+        <Panel
+          className="xl:col-span-2"
+          eyebrow="INCIDENTS"
+          title="Top incidents"
+          toneAccent="warning"
+          actions={
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/cases">
+                Open cases
+                <ArrowRight />
+              </Link>
+            </Button>
+          }
+        >
           {loading && !overview ? (
             <Skeleton className="h-40 rounded-lg" />
           ) : overview && overview.top_incidents.length > 0 ? (

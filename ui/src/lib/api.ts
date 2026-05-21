@@ -1759,6 +1759,84 @@ export interface AIAskResponse {
   confidence?: string;
 }
 
+export interface SOCCaseEvidenceRef {
+  id: string;
+  kind: string;
+}
+
+export interface SOCCaseTimelineItem {
+  timestamp: string;
+  event: string;
+  source: string;
+  citation_id: string;
+  description: string;
+}
+
+export interface SOCCaseCoverageBadge {
+  id: string;
+  label: string;
+  tone: string;
+}
+
+export interface SOCCaseCitation {
+  id?: string;
+  tool?: string;
+  label?: string;
+  detail?: string;
+}
+
+export interface SOCCaseNote {
+  id: string;
+  tenant_id: string;
+  case_id: string;
+  note: string;
+  citations?: SOCCaseEvidenceRef[];
+  audit_id: string;
+  created_at: string;
+  created_by?: string;
+  guardrails: string[];
+}
+
+export interface SOCCase {
+  case_id: string;
+  tenant_id: string;
+  node_id?: string;
+  title: string;
+  status: string;
+  severity: string;
+  source: string;
+  trigger_type: string;
+  trigger_event_type: string;
+  dedup_key: string;
+  summary: string;
+  evidence?: Record<string, unknown>;
+  evidence_refs?: SOCCaseEvidenceRef[];
+  timeline: SOCCaseTimelineItem[];
+  notes?: SOCCaseNote[];
+  citations: SOCCaseCitation[];
+  coverage_badges: SOCCaseCoverageBadge[];
+  export_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SOCCaseExport {
+  export_version: string;
+  generated_at: string;
+  tenant_id: string;
+  case: SOCCase;
+  evidence: SOCCaseEvidenceRef[];
+  notes?: SOCCaseNote[];
+  guardrails: string[];
+}
+
+export interface ListSOCCasesParams {
+  tenantId?: string | null;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface NodePackage {
   node_id: string;
   name: string;
@@ -2154,6 +2232,43 @@ export class APIClient {
     return this.request<AIAskResponse>(
       `/api/v1/ai/ask?tenant_id=${encodeURIComponent(tenantId)}`,
       { method: 'POST', body: JSON.stringify({ question }) },
+    );
+  }
+
+  async listSOCCases(params: ListSOCCasesParams = {}): Promise<PaginatedResponse<SOCCase>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.status) search.set('status', params.status);
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const qs = search.toString();
+    const response = await this.request<RawPaginatedResponse<SOCCase>>(`/api/v1/soc/cases${qs ? `?${qs}` : ''}`);
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getSOCCase(caseId: string, tenantId?: string | null): Promise<SOCCase> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    const qs = search.toString();
+    return this.request<SOCCase>(`/api/v1/soc/cases/${encodeURIComponent(caseId)}${qs ? `?${qs}` : ''}`);
+  }
+
+  async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[] }): Promise<SOCCaseNote> {
+    return this.request<SOCCaseNote>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/notes?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async exportSOCCase(caseId: string, tenantId: string): Promise<SOCCaseExport> {
+    return this.request<SOCCaseExport>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/export?tenant_id=${encodeURIComponent(tenantId)}`,
     );
   }
 

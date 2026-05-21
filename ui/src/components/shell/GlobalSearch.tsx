@@ -2,6 +2,8 @@ import {
   Activity,
   AlertTriangle,
   Building2,
+  ClipboardList,
+  Database,
   FileText,
   Hash,
   KeyRound,
@@ -34,10 +36,12 @@ import type { EntityType } from '@/components/kit';
 const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string }[] = [
   { label: 'Control Room', route: '/', icon: <Activity />, group: 'Pages' },
   { label: 'Alerts', route: '/alerts', icon: <AlertTriangle />, group: 'Pages' },
+  { label: 'Cases', route: '/cases', icon: <ClipboardList />, group: 'Pages' },
   { label: 'Investigate', route: '/investigate', icon: <Search />, group: 'Pages' },
   { label: 'Ask AI', route: '/ask', icon: <Sparkles />, group: 'Pages' },
   { label: 'Servers', route: '/nodes', icon: <Server />, group: 'Pages' },
   { label: 'Network & exposure', route: '/security/network', icon: <Network />, group: 'Pages' },
+  { label: 'Observability', route: '/observability', icon: <Database />, group: 'Pages' },
   { label: 'Patch posture', route: '/infrastructure/patch', icon: <ShieldAlert />, group: 'Pages' },
   { label: 'Coverage', route: '/coverage', icon: <ShieldQuestion />, group: 'Pages' },
   { label: 'Compliance', route: '/compliance', icon: <FileText />, group: 'Pages' },
@@ -45,7 +49,7 @@ const NAV_ITEMS: { label: string; route: string; icon: ReactNode; group: string 
   { label: 'Audit log', route: '/audit', icon: <FileText />, group: 'Pages' },
 ];
 
-const QUICK_NAV_ROUTES = ['/', '/alerts', '/investigate', '/nodes', '/security/network', '/infrastructure/patch', '/coverage'];
+const QUICK_NAV_ROUTES = ['/', '/alerts', '/cases', '/investigate', '/nodes', '/security/network', '/observability', '/infrastructure/patch', '/coverage'];
 
 // Discoverability prompts shown under the empty state.
 const EXAMPLE_QUERIES = ['8.8.8.8', '139.162.40.237', 'admin@', 'sshd'];
