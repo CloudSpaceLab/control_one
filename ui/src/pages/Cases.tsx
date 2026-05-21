@@ -450,14 +450,15 @@ function summarizeCases(rows: SOCCase[]) {
 }
 
 function normalizeTone(tone?: string): StateTone {
-  switch ((tone ?? '').toLowerCase()) {
+  const normalized = (tone ?? '').toLowerCase();
+  switch (normalized) {
     case 'healthy':
     case 'warning':
     case 'degraded':
     case 'critical':
     case 'info':
     case 'unknown':
-      return tone.toLowerCase() as StateTone;
+      return normalized as StateTone;
     default:
       return 'unknown';
   }
