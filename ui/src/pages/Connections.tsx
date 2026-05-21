@@ -46,6 +46,7 @@ export function Connections(): JSX.Element {
       const resp = await client.listConnections({
         tenantId: currentTenantId,
         since,
+        externalOnly: !showInternal,
         limit: 500,
       });
       setRows(resp);
@@ -55,7 +56,7 @@ export function Connections(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [client, currentTenantId, since]);
+  }, [client, currentTenantId, showInternal, since]);
 
   useEffect(() => {
     refresh();
@@ -255,9 +256,11 @@ export function Connections(): JSX.Element {
         />
       </div>
 
-      {!showInternal && hiddenRows > 0 && (
+      {!showInternal && (
         <p className="text-xs text-text-muted">
-          Showing external peers only; {hiddenRows} internal or listener row{hiddenRows === 1 ? '' : 's'} hidden.
+          {hiddenRows > 0
+            ? `Showing external peers only; ${hiddenRows} internal or listener row${hiddenRows === 1 ? '' : 's'} hidden.`
+            : 'Showing external/unknown peers only. Toggle Show internal/private to include private, loopback, and listener rows.'}
         </p>
       )}
       {incompleteRows > 0 && (

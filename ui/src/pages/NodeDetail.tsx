@@ -523,6 +523,10 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   const [openConnId, setOpenConnId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [listeningOnly, setListeningOnly] = useState(false);
+  const [showInternal, setShowInternal] = useState(false);
+
+  const externalOnly = !listeningOnly && !showInternal;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -532,6 +536,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         tenantId,
         nodeId,
         openOnly: false,
+        externalOnly,
         since,
         limit: 250,
       });
@@ -542,7 +547,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     } finally {
       setLoading(false);
     }
-  }, [api, nodeId, tenantId]);
+  }, [api, externalOnly, nodeId, tenantId]);
 
   useEffect(() => {
     refresh();
@@ -551,9 +556,6 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   // Keep the first view security-relevant: placeholder listener rows and
   // private/loopback chatter stay out of the default table unless requested.
   const shapedRows = useMemo(() => rows.filter(hasConnectionShape), [rows]);
-
-  const [listeningOnly, setListeningOnly] = useState(false);
-  const [showInternal, setShowInternal] = useState(false);
 
   // Listening sockets are typically modelled as direction === 'listening',
   // but some agent versions report them via the absence of a peer or via
@@ -707,9 +709,11 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
-        {externalHiddenRows > 0 && (
+        {!listeningOnly && !showInternal && (
           <p className="mb-3 text-xs text-text-muted">
-            Showing external peers only; {externalHiddenRows} internal or listener row{externalHiddenRows === 1 ? '' : 's'} hidden.
+            {externalHiddenRows > 0
+              ? `Showing external peers only; ${externalHiddenRows} internal or listener row${externalHiddenRows === 1 ? '' : 's'} hidden.`
+              : 'Showing external/unknown peers only. Toggle Show internal/private to include private, loopback, and listener rows.'}
           </p>
         )}
         {incompleteRows > 0 && (
@@ -717,7 +721,11 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
             Suppressed {incompleteRows} incomplete placeholder row{incompleteRows === 1 ? '' : 's'} with no usable peer, process, or port.
           </p>
         )}
-        {!loading && visibleRows.length === 0 ? (
+        {loading && visibleRows.length === 0 ? (
+          <div className="flex min-h-40 items-center justify-center rounded border border-border-subtle bg-elevated/40">
+            <Loader label="Loading connections..." />
+          </div>
+        ) : !loading && visibleRows.length === 0 ? (
           <p className="text-sm text-text-muted">
             {listeningOnly
               ? 'No listening sockets reported in the current 24h window.'

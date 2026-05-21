@@ -3844,6 +3844,7 @@ export class APIClient {
     if (params.ip) search.set('ip', params.ip);
     if (params.nodeId) search.set('node_id', params.nodeId);
     if (typeof params.openOnly === 'boolean') search.set('open_only', String(params.openOnly));
+    if (typeof params.externalOnly === 'boolean') search.set('external_only', String(params.externalOnly));
     if (params.since) search.set('since', params.since);
     if (params.until) search.set('until', params.until);
     if (typeof params.limit === 'number') search.set('limit', String(params.limit));
@@ -4605,6 +4606,7 @@ export interface ListConnectionsParams {
   ip?: string;
   nodeId?: string;
   openOnly?: boolean;
+  externalOnly?: boolean;
   since?: string;
   until?: string;
   limit?: number;

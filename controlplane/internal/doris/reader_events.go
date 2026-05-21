@@ -39,6 +39,19 @@ type ConnectionRow struct {
 	NodeID         string
 }
 
+const connectionSelectColumns = `conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id`
+
+const connectionPeerNumberExpr = `INET_ATON(CASE
+		           WHEN direction = 'inbound' THEN src_ip
+		           WHEN direction = 'outbound' THEN dst_ip
+		           WHEN dst_ip IS NOT NULL AND dst_ip != '' THEN dst_ip
+		           ELSE src_ip
+		       END)`
+
 // ListConnectionsForIP returns recent connections involving an IP.
 func (c *Client) ListConnectionsForIP(ctx context.Context, tenantID, ip string, since, until time.Time, limit int) ([]ConnectionRow, error) {
 	if c == nil || c.db == nil {
@@ -89,133 +102,185 @@ func buildListConnectionsForIPDayQuery(peerColumn string, limit int) string {
 	if peerColumn != "dst_ip" {
 		peerColumn = "src_ip"
 	}
-	return withLimit(`
-		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
-		       pid, process_name, cmdline, user_name,
-		       src_ip, src_port, dst_ip, dst_port, protocol,
-		       bytes_in, bytes_out, packets_in, packets_out,
-		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
+	return withLimit(fmt.Sprintf(`
+		SELECT %s
 		FROM process_connections
 		WHERE event_date = ?
 		  AND tenant_id = ?
 		  AND `+peerColumn+` = ?
 		  AND started_at <= ?
 		  AND (ended_at IS NULL OR ended_at >= ?)
-	`, limit)
+	`, connectionSelectColumns), limit)
 }
 
-// buildListConnectionsForNodeQuery composes the SQL for ListConnectionsForNode.
+// buildListConnectionsForNodeDayQuery composes the SQL for ListConnectionsForNode.
 //
 // It is deliberately *single-layer*: the only filtering applied is on
 // (tenant_id, node_id, time window overlap, optional ended_at IS NULL). The peer-IP
 // classification (RFC1918 vs external) lives ONE layer further out — at the
 // agent's `internal/netflow/filter.go` capture-policy boundary — and is NOT
-// re-applied here. Re-applying it would double-strip internal flows on
-// dev/internal nodes where most peers are private (bugs §1.2). Callers that
-// want "external only" should pass an explicit predicate via a future
-// parameter instead of post-filtering rows in the UI.
-func buildListConnectionsForNodeQuery(limit int, openOnly bool) string {
+// not re-applied on the full-scope path. Re-applying it there would
+// double-strip internal flows on dev/internal nodes where most peers are
+// private (bugs §1.2). Callers that
+// externalOnly is explicit and reserved for default UI views; full-scope
+// callers still receive private peers for operator drilldown.
+func buildListConnectionsForNodeDayQuery(limit int, openOnly, externalOnly bool) string {
+	where := `
+		WHERE event_date = ?
+		  AND tenant_id = ?
+		  AND node_id = ?
+		  AND started_at <= ?`
 	if openOnly {
-		return withLimit(`
-		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
-		       pid, process_name, cmdline, user_name,
-		       src_ip, src_port, dst_ip, dst_port, protocol,
-		       bytes_in, bytes_out, packets_in, packets_out,
-		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
-		FROM process_connections
-		WHERE tenant_id = ?
-		  AND node_id = ?
-		  AND started_at <= ?
-		  AND ended_at IS NULL
-		ORDER BY threat_match DESC, started_at DESC
-	`, limit)
+		where += `
+		  AND ended_at IS NULL`
+	} else {
+		where += `
+		  AND (ended_at IS NULL OR ended_at >= ?)`
 	}
-	return withLimit(`
-		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
-		       pid, process_name, cmdline, user_name,
-		       src_ip, src_port, dst_ip, dst_port, protocol,
-		       bytes_in, bytes_out, packets_in, packets_out,
-		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
+	if externalOnly {
+		return withLimit(fmt.Sprintf(`
+		SELECT %s
+		FROM (
+			SELECT %s,
+			       %s AS peer_num
+			FROM process_connections
+			%s
+		) pc
+		WHERE %s
+		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+	`, connectionSelectColumns, connectionSelectColumns, connectionPeerNumberExpr, where, dorisPublicPeerPredicate("peer_num")), limit)
+	}
+	return withLimit(fmt.Sprintf(`
+		SELECT %s
 		FROM process_connections
-		WHERE tenant_id = ?
-		  AND node_id = ?
-		  AND started_at <= ?
-		  AND (ended_at IS NULL OR ended_at >= ?)
-		ORDER BY threat_match DESC, started_at DESC
-	`, limit)
+		%s
+		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+	`, connectionSelectColumns, where), limit)
+}
+
+func buildListConnectionsForNodeQuery(limit int, openOnly bool) string {
+	return buildListConnectionsForNodeDayQuery(limit, openOnly, false)
 }
 
 // ListConnectionsForNode returns recent or currently-open connections for one node.
-func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID string, since, until time.Time, limit int, openOnly bool) ([]ConnectionRow, error) {
+func (c *Client) ListConnectionsForNode(ctx context.Context, tenantID, nodeID string, since, until time.Time, limit int, openOnly, externalOnly bool) ([]ConnectionRow, error) {
 	if c == nil || c.db == nil {
 		return nil, fmt.Errorf("doris client unavailable")
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	q := buildListConnectionsForNodeQuery(limit, openOnly)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	var rows *sql.Rows
-	var err error
-	if openOnly {
-		rows, err = c.db.QueryContext(qctx, q, tenantID, nodeID, until)
-	} else {
-		rows, err = c.db.QueryContext(qctx, q, tenantID, nodeID, until, since)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
+
 	out := make([]ConnectionRow, 0, limit)
-	for rows.Next() {
-		r, err := scanConnectionRow(rows)
+	seen := map[string]struct{}{}
+	for _, day := range connectionEventDays(since, until, 14) {
+		remaining := limit - len(out)
+		if remaining <= 0 {
+			break
+		}
+		q := buildListConnectionsForNodeDayQuery(remaining, openOnly, externalOnly)
+		args := []any{day.Format("2006-01-02"), tenantID, nodeID, until}
+		if !openOnly {
+			args = append(args, since)
+		}
+		rows, err := queryConnectionRows(qctx, c.db, q, remaining, args...)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		for _, row := range rows {
+			key := connectionDedupeKey(row)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, row)
+		}
 	}
-	return out, rows.Err()
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ThreatMatch != out[j].ThreatMatch {
+			return out[i].ThreatMatch
+		}
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // ListConnectionsForTenant returns recent fleet-wide connections for a tenant.
 // The caller decides whether to display internal/listener rows; this method
 // keeps the analytic query broad enough for operator drilldown and UI filters.
-func (c *Client) ListConnectionsForTenant(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]ConnectionRow, error) {
+func (c *Client) ListConnectionsForTenant(ctx context.Context, tenantID string, since, until time.Time, limit int, externalOnly bool) ([]ConnectionRow, error) {
 	if c == nil || c.db == nil {
 		return nil, fmt.Errorf("doris client unavailable")
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	q := withLimit(`
-		SELECT conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
-		       pid, process_name, cmdline, user_name,
-		       src_ip, src_port, dst_ip, dst_port, protocol,
-		       bytes_in, bytes_out, packets_in, packets_out,
-		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id
-		FROM process_connections
-		WHERE tenant_id = ?
-		  AND started_at <= ?
-		  AND (ended_at IS NULL OR ended_at >= ?)
-		ORDER BY threat_match DESC, started_at DESC
-	`, limit)
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, until, since)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
+
 	out := make([]ConnectionRow, 0, limit)
-	for rows.Next() {
-		r, err := scanConnectionRow(rows)
+	seen := map[string]struct{}{}
+	for _, day := range connectionEventDays(since, until, 14) {
+		remaining := limit - len(out)
+		if remaining <= 0 {
+			break
+		}
+		q := buildListConnectionsForTenantDayQuery(remaining, externalOnly)
+		rows, err := queryConnectionRows(qctx, c.db, q, remaining, day.Format("2006-01-02"), tenantID, until, since)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		for _, row := range rows {
+			key := connectionDedupeKey(row)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, row)
+		}
 	}
-	return out, rows.Err()
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ThreatMatch != out[j].ThreatMatch {
+			return out[i].ThreatMatch
+		}
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func buildListConnectionsForTenantDayQuery(limit int, externalOnly bool) string {
+	where := `
+		WHERE event_date = ?
+		  AND tenant_id = ?
+		  AND started_at <= ?
+		  AND (ended_at IS NULL OR ended_at >= ?)`
+	if externalOnly {
+		return withLimit(fmt.Sprintf(`
+		SELECT %s
+		FROM (
+			SELECT %s,
+			       %s AS peer_num
+			FROM process_connections
+			%s
+		) pc
+		WHERE %s
+		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+	`, connectionSelectColumns, connectionSelectColumns, connectionPeerNumberExpr, where, dorisPublicPeerPredicate("peer_num")), limit)
+	}
+	return withLimit(fmt.Sprintf(`
+		SELECT %s
+		FROM process_connections
+		%s
+		ORDER BY CASE WHEN threat_match THEN 1 ELSE 0 END DESC, started_at DESC
+	`, connectionSelectColumns, where), limit)
 }
 
 // ConnectionLifetime returns the full record for a single conn_id (matches
@@ -326,6 +391,21 @@ func queryConnectionRows(ctx context.Context, db *sql.DB, query string, limit in
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func dorisPublicPeerPredicate(peerNum string) string {
+	return fmt.Sprintf(`%s BETWEEN INET_ATON('1.0.0.0') AND INET_ATON('223.255.255.255')
+		  AND NOT (%s BETWEEN INET_ATON('10.0.0.0') AND INET_ATON('10.255.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('100.64.0.0') AND INET_ATON('100.127.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('127.0.0.0') AND INET_ATON('127.255.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('169.254.0.0') AND INET_ATON('169.254.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('172.16.0.0') AND INET_ATON('172.31.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('192.168.0.0') AND INET_ATON('192.168.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('192.0.2.0') AND INET_ATON('192.0.2.255'))
+		  AND NOT (%s BETWEEN INET_ATON('198.18.0.0') AND INET_ATON('198.19.255.255'))
+		  AND NOT (%s BETWEEN INET_ATON('198.51.100.0') AND INET_ATON('198.51.100.255'))
+		  AND NOT (%s BETWEEN INET_ATON('203.0.113.0') AND INET_ATON('203.0.113.255'))`,
+		peerNum, peerNum, peerNum, peerNum, peerNum, peerNum, peerNum, peerNum, peerNum, peerNum, peerNum)
 }
 
 func connectionEventDays(since, until time.Time, maxDays int) []time.Time {
