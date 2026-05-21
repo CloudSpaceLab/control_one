@@ -245,6 +245,7 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 func newSOCCaseResponse(row storage.AIInvestigation) socCaseResponse {
 	evidence := parseSOCCaseEvidence(row.Evidence)
 	citation := workflowCitation("ai_investigations", row.ID.String(), "soc_case")
+	evidenceRefs := socCaseEvidenceRefsForRow(row, evidence, citation)
 	resp := socCaseResponse{
 		CaseID:           row.ID.String(),
 		TenantID:         row.TenantID.String(),
@@ -257,11 +258,11 @@ func newSOCCaseResponse(row storage.AIInvestigation) socCaseResponse {
 		DedupKey:         row.TriggerDedupKey,
 		Summary:          row.Summary,
 		Evidence:         evidence,
-		EvidenceRefs:     socCaseEvidenceRefs(evidence),
+		EvidenceRefs:     evidenceRefs,
 		Citations:        []aiWorkflowCitation{citation},
 		CoverageBadges: []socCaseCoverageBadge{
 			{ID: "source_row_citations", Label: "Source-row cited", Tone: "healthy"},
-			{ID: "evidence_linked", Label: "Evidence linked", Tone: socCaseEvidenceTone(evidence)},
+			{ID: "evidence_linked", Label: "Evidence linked", Tone: socCaseEvidenceTone(evidenceRefs)},
 			{ID: "export_ready", Label: "Audit export ready", Tone: "healthy"},
 			{ID: "actions_proposal_only", Label: "Actions proposal-only", Tone: "info"},
 		},
@@ -272,24 +273,7 @@ func newSOCCaseResponse(row storage.AIInvestigation) socCaseResponse {
 	if row.NodeID != uuid.Nil {
 		resp.NodeID = row.NodeID.String()
 	}
-	resp.Timeline = []socCaseTimelineItem{
-		{
-			Timestamp:   resp.CreatedAt,
-			Event:       "case.created",
-			Source:      "ai_investigations",
-			CitationID:  citation.ID,
-			Description: resp.Summary,
-		},
-	}
-	if !row.UpdatedAt.Equal(row.CreatedAt) {
-		resp.Timeline = append(resp.Timeline, socCaseTimelineItem{
-			Timestamp:   resp.UpdatedAt,
-			Event:       "case.updated",
-			Source:      "ai_investigations",
-			CitationID:  citation.ID,
-			Description: "Investigation case updated",
-		})
-	}
+	resp.Timeline = socCaseTimeline(row, evidence, evidenceRefs, citation, resp.CreatedAt, resp.UpdatedAt, resp.Summary)
 	return resp
 }
 
@@ -341,12 +325,214 @@ func socCaseEvidenceRefs(evidence map[string]any) []socCaseEvidenceRef {
 	return refs
 }
 
+func socCaseEvidenceRefsForRow(row storage.AIInvestigation, evidence map[string]any, citation aiWorkflowCitation) []socCaseEvidenceRef {
+	refs := []socCaseEvidenceRef{}
+	appendSOCCaseEvidenceRef(&refs, citation.ID, "soc_case")
+	if row.NodeID != uuid.Nil {
+		appendSOCCaseEvidenceRef(&refs, "nodes:"+row.NodeID.String(), "node")
+	}
+	for _, ref := range socCaseEvidenceRefs(evidence) {
+		appendSOCCaseEvidenceRef(&refs, ref.ID, ref.Kind)
+	}
+	appendDerivedSOCCaseEvidenceRefs(&refs, evidence, 0)
+	return refs
+}
+
+func appendDerivedSOCCaseEvidenceRefs(refs *[]socCaseEvidenceRef, value any, depth int) {
+	if refs == nil || value == nil || depth > 5 || len(*refs) >= 32 {
+		return
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		appendSOCCaseKnownMapRefs(refs, typed)
+		for key, child := range typed {
+			if len(*refs) >= 32 {
+				return
+			}
+			if strings.EqualFold(key, "citations") {
+				continue
+			}
+			if strings.EqualFold(key, "evidence_refs") || strings.EqualFold(key, "evidence") {
+				appendDerivedSOCCaseEvidenceRefs(refs, child, depth+1)
+				continue
+			}
+			switch child.(type) {
+			case map[string]any, []any, []map[string]any:
+				appendDerivedSOCCaseEvidenceRefs(refs, child, depth+1)
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if len(*refs) >= 32 {
+				return
+			}
+			appendDerivedSOCCaseEvidenceRefs(refs, item, depth+1)
+		}
+	case []map[string]any:
+		for _, item := range typed {
+			if len(*refs) >= 32 {
+				return
+			}
+			appendDerivedSOCCaseEvidenceRefs(refs, item, depth+1)
+		}
+	case string:
+		if id := strings.TrimSpace(typed); looksLikeSOCCaseCitation(id) {
+			appendSOCCaseEvidenceRef(refs, id, socCaseEvidenceKind(id))
+		}
+	}
+}
+
+func appendSOCCaseKnownMapRefs(refs *[]socCaseEvidenceRef, value map[string]any) {
+	if len(value) == 0 {
+		return
+	}
+	for _, candidate := range []struct {
+		key    string
+		prefix string
+		kind   string
+	}{
+		{key: "source_record_id", kind: "evidence"},
+		{key: "citation_id", kind: "evidence"},
+		{key: "event_id", prefix: "events", kind: "event"},
+		{key: "raw_ref", kind: "event"},
+		{key: "conn_id", prefix: "connections", kind: "connection"},
+		{key: "connection_id", prefix: "connections", kind: "connection"},
+		{key: "request_id", prefix: "requests", kind: "request"},
+		{key: "response_request_id", prefix: "requests", kind: "request"},
+		{key: "traceparent", prefix: "traces", kind: "trace"},
+		{key: "db_query_id", prefix: "db_queries", kind: "db_query"},
+		{key: "patch_state_id", prefix: "patch_states", kind: "patch_state"},
+		{key: "exposure_id", prefix: "exposures", kind: "exposure"},
+		{key: "file_event_id", prefix: "file_events", kind: "file"},
+		{key: "process_event_id", prefix: "process_events", kind: "process"},
+		{key: "source_file", prefix: "files", kind: "file"},
+		{key: "node_id", prefix: "nodes", kind: "node"},
+		{key: "rule_id", prefix: "rules", kind: "rule"},
+		{key: "correlation_id", prefix: "correlations", kind: "correlation"},
+		{key: "dedup_key", prefix: "dedup", kind: "evidence"},
+	} {
+		id := socCaseRefID(candidate.prefix, value[candidate.key])
+		if id == "" {
+			continue
+		}
+		kind := candidate.kind
+		if kind == "" {
+			kind = socCaseEvidenceKind(id)
+		}
+		appendSOCCaseEvidenceRef(refs, id, kind)
+	}
+	if id, ok := socCaseSyntheticEvidenceRef(value); ok {
+		appendSOCCaseEvidenceRef(refs, id, socCaseEvidenceKind(id))
+	}
+}
+
+func socCaseSyntheticEvidenceRef(value map[string]any) (string, bool) {
+	eventType := socCaseString(value["type"])
+	timestamp := socCaseString(value["timestamp"])
+	if timestamp == "" {
+		timestamp = socCaseString(value["ts"])
+	}
+	path := socCaseString(value["path"])
+	status := socCaseString(value["status_code"])
+	if eventType == "" || (timestamp == "" && path == "" && status == "") {
+		return "", false
+	}
+	parts := []string{eventType}
+	if timestamp != "" {
+		parts = append(parts, timestamp)
+	}
+	if path != "" {
+		parts = append(parts, path)
+	}
+	if status != "" {
+		parts = append(parts, status)
+	}
+	return "events:" + strings.Join(parts, "|"), true
+}
+
+func socCaseRefID(prefix string, value any) string {
+	text := socCaseString(value)
+	if text == "" {
+		return ""
+	}
+	if looksLikeSOCCaseCitation(text) || prefix == "" {
+		return text
+	}
+	return prefix + ":" + text
+}
+
+func socCaseString(value any) string {
+	if value == nil {
+		return ""
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
+}
+
+func appendSOCCaseEvidenceRef(refs *[]socCaseEvidenceRef, id, kind string) {
+	id = strings.TrimSpace(id)
+	if refs == nil || id == "" || len(*refs) >= 32 {
+		return
+	}
+	for _, existing := range *refs {
+		if strings.EqualFold(existing.ID, id) {
+			return
+		}
+	}
+	if strings.TrimSpace(kind) == "" {
+		kind = socCaseEvidenceKind(id)
+	}
+	*refs = append(*refs, socCaseEvidenceRef{ID: id, Kind: kind})
+}
+
+func looksLikeSOCCaseCitation(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	lower := strings.ToLower(value)
+	for _, prefix := range []string{
+		"ai_investigations:", "normalized_events:", "events:", "doris:", "node_vulnerability_findings:",
+		"posture", "compliance", "connections:", "requests:", "traces:", "db_queries:", "patch_states:",
+		"exposures:", "file_events:", "process_events:", "files:", "nodes:", "rules:", "correlations:",
+		"dedup:",
+	} {
+		if strings.HasPrefix(lower, prefix) || strings.Contains(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func socCaseEvidenceKind(ref string) string {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	switch {
+	case strings.Contains(ref, "ai_investigations"):
+		return "soc_case"
+	case strings.Contains(ref, "nodes:"):
+		return "node"
+	case strings.Contains(ref, "connections:"):
+		return "connection"
+	case strings.Contains(ref, "requests:"):
+		return "request"
+	case strings.Contains(ref, "traces:"):
+		return "trace"
+	case strings.Contains(ref, "db_queries:"):
+		return "db_query"
+	case strings.Contains(ref, "files:"), strings.Contains(ref, "file_events:"):
+		return "file"
+	case strings.Contains(ref, "process_events:"):
+		return "process"
+	case strings.Contains(ref, "rules:"):
+		return "rule"
+	case strings.Contains(ref, "correlations:"):
+		return "correlation"
 	case strings.Contains(ref, "node_vulnerability_findings"):
 		return "vulnerability_finding"
-	case strings.Contains(ref, "normalized_events"), strings.Contains(ref, "doris"):
+	case strings.Contains(ref, "normalized_events"), strings.Contains(ref, "events:"), strings.Contains(ref, "doris"):
 		return "event"
 	case strings.Contains(ref, "compliance"):
 		return "compliance_evidence"
@@ -357,11 +543,100 @@ func socCaseEvidenceKind(ref string) string {
 	}
 }
 
-func socCaseEvidenceTone(evidence map[string]any) string {
-	if len(socCaseEvidenceRefs(evidence)) > 0 {
+func socCaseEvidenceTone(refs []socCaseEvidenceRef) string {
+	if len(refs) > 0 {
 		return "healthy"
 	}
 	return "warning"
+}
+
+func socCaseTimeline(row storage.AIInvestigation, evidence map[string]any, refs []socCaseEvidenceRef, citation aiWorkflowCitation, createdAt, updatedAt, summary string) []socCaseTimelineItem {
+	items := []socCaseTimelineItem{}
+	if observedAt := firstSOCCaseEvidenceTimestamp(evidence); observedAt != "" && observedAt != createdAt {
+		items = append(items, socCaseTimelineItem{
+			Timestamp:   observedAt,
+			Event:       "signal.observed",
+			Source:      firstNonEmptyString(socCaseString(evidence["collector"]), socCaseString(evidence["parser"]), "collector"),
+			CitationID:  firstSOCCaseEvidenceCitation(refs, citation.ID),
+			Description: firstNonEmptyString(socCaseString(evidence["message"]), summary, row.TriggerEventType),
+		})
+	}
+	items = append(items, socCaseTimelineItem{
+		Timestamp:   createdAt,
+		Event:       "case.created",
+		Source:      "ai_investigations",
+		CitationID:  citation.ID,
+		Description: summary,
+	})
+	if row.NodeID != uuid.Nil {
+		items = append(items, socCaseTimelineItem{
+			Timestamp:   createdAt,
+			Event:       "node.scoped",
+			Source:      "ai_investigations",
+			CitationID:  "nodes:" + row.NodeID.String(),
+			Description: "Case scoped to node " + row.NodeID.String(),
+		})
+	}
+	if strings.TrimSpace(row.TriggerDedupKey) != "" {
+		items = append(items, socCaseTimelineItem{
+			Timestamp:   createdAt,
+			Event:       "signal.deduplicated",
+			Source:      "ai_investigations",
+			CitationID:  citation.ID,
+			Description: "Dedup key " + row.TriggerDedupKey,
+		})
+	}
+	linked := 0
+	for _, ref := range refs {
+		if strings.EqualFold(ref.ID, citation.ID) {
+			continue
+		}
+		items = append(items, socCaseTimelineItem{
+			Timestamp:   createdAt,
+			Event:       "evidence.linked",
+			Source:      ref.Kind,
+			CitationID:  ref.ID,
+			Description: "Linked " + ref.Kind + " evidence " + ref.ID,
+		})
+		linked++
+		if linked >= 6 {
+			break
+		}
+	}
+	if !row.UpdatedAt.Equal(row.CreatedAt) {
+		items = append(items, socCaseTimelineItem{
+			Timestamp:   updatedAt,
+			Event:       "case.updated",
+			Source:      "ai_investigations",
+			CitationID:  citation.ID,
+			Description: "Investigation case updated",
+		})
+	}
+	return items
+}
+
+func firstSOCCaseEvidenceTimestamp(evidence map[string]any) string {
+	if len(evidence) == 0 {
+		return ""
+	}
+	for _, key := range []string{"ts", "timestamp", "observed_at", "created_at", "updated_at"} {
+		if text := socCaseString(evidence[key]); text != "" {
+			if parsed, err := time.Parse(time.RFC3339, text); err == nil {
+				return parsed.UTC().Format(time.RFC3339)
+			}
+			return text
+		}
+	}
+	return ""
+}
+
+func firstSOCCaseEvidenceCitation(refs []socCaseEvidenceRef, fallback string) string {
+	for _, ref := range refs {
+		if ref.Kind == "event" || ref.Kind == "connection" || ref.Kind == "request" {
+			return ref.ID
+		}
+	}
+	return fallback
 }
 
 func (s *Server) handleCreateSOCCaseNote(w http.ResponseWriter, r *http.Request, principal *auth.Principal, row storage.AIInvestigation) {
@@ -380,7 +655,8 @@ func (s *Server) handleCreateSOCCaseNote(w http.ResponseWriter, r *http.Request,
 	}
 	citations := sanitizeStringSlice(req.Citations, 100)
 	allowedCitations := map[string]struct{}{}
-	for _, ref := range socCaseEvidenceRefs(parseSOCCaseEvidence(row.Evidence)) {
+	citation := workflowCitation("ai_investigations", row.ID.String(), "soc_case")
+	for _, ref := range socCaseEvidenceRefsForRow(row, parseSOCCaseEvidence(row.Evidence), citation) {
 		allowedCitations[ref.ID] = struct{}{}
 	}
 	for _, citation := range citations {

@@ -1780,6 +1780,9 @@ export interface SOCCaseCoverageBadge {
 
 export interface SOCCaseCitation {
   id?: string;
+  kind?: string;
+  table?: string;
+  source_record_id?: string;
   tool?: string;
   label?: string;
   detail?: string;

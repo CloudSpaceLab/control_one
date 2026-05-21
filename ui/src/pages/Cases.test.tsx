@@ -18,7 +18,16 @@ const caseRow: SOCCase = {
   trigger_event_type: 'credential_attack',
   dedup_key: 'ip:203.0.113.10',
   summary: 'Credential attack timeline with cited source rows.',
+  evidence: {
+    src_ip: '203.0.113.10',
+    process_name: 'nginx',
+    confidence: 100,
+    details: {
+      source_file: '/var/log/nginx/access.log',
+    },
+  },
   evidence_refs: [
+    { id: 'ai_investigations:11111111-1111-1111-1111-111111111111', kind: 'soc_case' },
     { id: 'normalized_events:row-1', kind: 'event' },
     { id: 'posture_receipts:receipt-7', kind: 'posture_receipt' },
   ],
@@ -32,7 +41,14 @@ const caseRow: SOCCase = {
     },
   ],
   notes: [],
-  citations: [],
+  citations: [
+    {
+      id: 'ai_investigations:11111111-1111-1111-1111-111111111111',
+      kind: 'soc_case',
+      table: 'ai_investigations',
+      source_record_id: 'ai_investigations:11111111-1111-1111-1111-111111111111',
+    },
+  ],
   coverage_badges: [
     { id: 'source_row_citations', label: 'Source-row cited', tone: 'healthy' },
     { id: 'actions_proposal_only', label: 'Actions proposal-only', tone: 'info' },
@@ -88,7 +104,12 @@ describe('Cases', () => {
     });
 
     expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
+    expect(screen.getByText('Case facts')).toBeInTheDocument();
+    expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
+    expect(screen.getByText('/var/log/nginx/access.log')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /review ip block/i })).toBeInTheDocument();
     expect(screen.getByText('normalized_events:row-1')).toBeInTheDocument();
+    expect(screen.getAllByText('ai_investigations:11111111-1111-1111-1111-111111111111').length).toBeGreaterThan(0);
     expect(screen.getByText('Timeline')).toBeInTheDocument();
     expect(screen.getByText('Source-row cited')).toBeInTheDocument();
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -74,7 +75,7 @@ func TestSOCCasesListDetailAndAuditExport(t *testing.T) {
 	if item.CaseID != row.ID.String() || item.NodeID != nodeID.String() || item.Severity != "critical" {
 		t.Fatalf("case summary lost scope/severity: %+v", item)
 	}
-	if len(item.Citations) != 1 || len(item.EvidenceRefs) != 2 || !contains(item.ExportURL, "tenant_id="+tenantID.String()) {
+	if len(item.Citations) != 1 || len(item.EvidenceRefs) < 3 || !contains(item.ExportURL, "tenant_id="+tenantID.String()) {
 		t.Fatalf("case missing citations/evidence/export URL: %+v", item)
 	}
 
@@ -108,7 +109,7 @@ func TestSOCCasesListDetailAndAuditExport(t *testing.T) {
 	if export.ExportVersion != "soc-case-export-v1" || export.Case.CaseID != row.ID.String() {
 		t.Fatalf("unexpected export envelope: %+v", export)
 	}
-	if len(export.Evidence) != 2 || !contains(stringsForCaseGuardrails(export.Guardrails), "source_row_citations") {
+	if len(export.Evidence) < 3 || !contains(stringsForCaseGuardrails(export.Guardrails), "source_row_citations") {
 		t.Fatalf("export missing evidence/guardrails: %+v", export)
 	}
 	if export.Case.Evidence != nil || contains(exportRec.Body.String(), "risk_score") {
@@ -116,6 +117,73 @@ func TestSOCCasesListDetailAndAuditExport(t *testing.T) {
 	}
 	if len(export.Notes) != 1 || export.Notes[0].AuditID != note.AuditID {
 		t.Fatalf("export missing analyst note: %+v", export.Notes)
+	}
+}
+
+func TestSOCCaseDerivesEvidenceAndTimelineFromAnomalyRows(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	evidence := map[string]any{
+		"event_id":       "event-7",
+		"type":           "conn.open",
+		"ts":             "2026-05-21T07:16:00Z",
+		"node_id":        nodeID.String(),
+		"conn_id":        "conn-7",
+		"src_ip":         "102.89.68.242",
+		"process_name":   "nginx",
+		"message":        "first connection to 102.89.68.242 by nginx",
+		"collector":      "node-agent",
+		"correlation_id": "corr-7",
+		"details": map[string]any{
+			"source_file": "/var/log/nginx/access.log",
+			"path":        "/login",
+			"status_code": 401,
+			"request_id":  "req-7",
+		},
+	}
+	rawEvidence, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("marshal evidence: %v", err)
+	}
+	row := storage.AIInvestigation{
+		ID:               uuid.New(),
+		TenantID:         tenantID,
+		NodeID:           nodeID,
+		TriggerType:      "anomaly",
+		TriggerEventType: "conn.open",
+		TriggerDedupKey:  "first-connection:102.89.68.242",
+		Severity:         "low",
+		Summary:          "first connection to 102.89.68.242 by nginx",
+		Evidence:         rawEvidence,
+		Status:           storage.AIInvestigationStatusOpen,
+		CreatedAt:        mustParseTime(t, "2026-05-21T07:18:00Z"),
+		UpdatedAt:        mustParseTime(t, "2026-05-21T07:18:00Z"),
+	}
+
+	resp := newSOCCaseResponse(row)
+	refs := stringsForCaseRefs(resp.EvidenceRefs)
+	for _, want := range []string{
+		"ai_investigations:" + row.ID.String(),
+		"nodes:" + nodeID.String(),
+		"events:event-7",
+		"connections:conn-7",
+		"files:/var/log/nginx/access.log",
+		"requests:req-7",
+	} {
+		if !contains(refs, want) {
+			t.Fatalf("derived refs missing %q: %s", want, refs)
+		}
+	}
+	timeline := stringsForCaseTimeline(resp.Timeline)
+	for _, want := range []string{"signal.observed", "case.created", "node.scoped", "evidence.linked"} {
+		if !contains(timeline, want) {
+			t.Fatalf("timeline missing %q: %s", want, timeline)
+		}
+	}
+	if resp.CoverageBadges[1].Tone != "healthy" {
+		t.Fatalf("expected evidence-linked badge to be healthy: %+v", resp.CoverageBadges)
 	}
 }
 
@@ -210,4 +278,23 @@ func TestSOCCaseExportDoesNotLeakCrossTenantCase(t *testing.T) {
 func stringsForCaseGuardrails(values []string) string {
 	out, _ := json.Marshal(values)
 	return string(out)
+}
+
+func stringsForCaseRefs(values []socCaseEvidenceRef) string {
+	out, _ := json.Marshal(values)
+	return string(out)
+}
+
+func stringsForCaseTimeline(values []socCaseTimelineItem) string {
+	out, _ := json.Marshal(values)
+	return string(out)
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse time %q: %v", value, err)
+	}
+	return parsed
 }
