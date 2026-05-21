@@ -307,7 +307,7 @@ export function NodeDetail(): JSX.Element {
           <ConnectionsTab nodeId={node.id} tenantId={node.tenant_id} />
         </TabsContent>
         <TabsContent value="kg" className="pt-4">
-          <KnowledgeGraphTab nodeId={node.id} />
+          <KnowledgeGraphTab nodeId={node.id} tenantId={node.tenant_id} />
         </TabsContent>
         <TabsContent value="packages" className="pt-4">
           <PackagesTab nodeId={node.id} />
@@ -552,7 +552,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   const shapedRows = useMemo(() => rows.filter(hasConnectionShape), [rows]);
 
   const [listeningOnly, setListeningOnly] = useState(false);
-  const [includeInternal, setIncludeInternal] = useState(false);
+  const [includeInternal, setIncludeInternal] = useState(true);
 
   // Listening sockets are typically modelled as direction === 'listening',
   // but some agent versions report them via the absence of a peer or via
@@ -944,22 +944,239 @@ function KnowledgeGraphCanvas({
   );
 }
 
-function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
+interface NodeMemorySignal {
+  name: string;
+  category: string;
+  confidence: number;
+  tone: StateTone;
+  evidence: string[];
+  next: string;
+}
+
+interface LogEvidenceRow {
+  label: string;
+  path: string;
+  source: 'detected' | 'expected';
+  detail: string;
+}
+
+function serviceIsExposed(svc: import('@/lib/api').NodeService): boolean {
+  const addr = svc.listen_addr || '';
+  return addr.includes('0.0.0.0') || addr.includes('::') || addr.startsWith('*');
+}
+
+function compactText(value: string | null | undefined, fallback = 'unknown'): string {
+  const trimmed = (value ?? '').trim();
+  return trimmed || fallback;
+}
+
+function serviceEvidence(svc: import('@/lib/api').NodeService): string {
+  return `${compactText(svc.process)}:${svc.port}${svc.listen_addr ? ` on ${svc.listen_addr}` : ''}`;
+}
+
+function signalTone(confidence: number): StateTone {
+  if (confidence >= 85) return 'healthy';
+  if (confidence >= 65) return 'warning';
+  return 'unknown';
+}
+
+function addSignal(
+  signals: Map<string, NodeMemorySignal>,
+  key: string,
+  input: Omit<NodeMemorySignal, 'evidence'> & { evidence: string },
+): void {
+  const current = signals.get(key);
+  if (!current) {
+    signals.set(key, { ...input, evidence: [input.evidence] });
+    return;
+  }
+  current.confidence = Math.max(current.confidence, input.confidence);
+  current.tone = signalTone(current.confidence);
+  if (!current.evidence.includes(input.evidence)) current.evidence.push(input.evidence);
+}
+
+function inferNodeMemorySignals(
+  services: import('@/lib/api').NodeService[],
+  webservers: import('@/lib/api').WebserverInstance[],
+): NodeMemorySignal[] {
+  const signals = new Map<string, NodeMemorySignal>();
+
+  for (const instance of webservers) {
+    const evidence = [
+      compactText(instance.Kind, 'webserver'),
+      compactText(instance.ConfigPath, 'config path not reported'),
+      compactText(instance.AccessLogPath, 'access log path not reported'),
+    ].join(' / ');
+    addSignal(signals, `web:${instance.Kind}:${instance.ServiceName}`, {
+      name: `${compactText(instance.Kind, 'webserver')} control surface`,
+      category: 'Webserver inventory',
+      confidence: instance.AccessLogPath || instance.ErrorLogPath ? 95 : 82,
+      tone: 'healthy',
+      evidence,
+      next: instance.AccessLogPath || instance.ErrorLogPath
+        ? 'Use these log paths for cited request evidence and webserver enforcement receipts.'
+        : 'Run a managed inventory scan to capture access and error log paths.',
+    });
+  }
+
+  for (const svc of services) {
+    const haystack = `${svc.process} ${svc.binary_path} ${svc.service_kind} ${svc.probe_server ?? ''} ${svc.probe_title ?? ''}`.toLowerCase();
+    const evidence = serviceEvidence(svc);
+    const exposed = serviceIsExposed(svc);
+    const process = compactText(svc.process);
+
+    const candidates: Array<[boolean, string, string, string, number, string]> = [
+      [haystack.includes('nginx'), 'nginx', 'Nginx edge/webserver', 'Webserver', 82, 'Run webserver inventory if config and log paths are not already attached.'],
+      [haystack.includes('apache') || haystack.includes('httpd'), 'apache', 'Apache webserver', 'Webserver', 82, 'Run webserver inventory if config and log paths are not already attached.'],
+      [/(python|uvicorn|gunicorn|django|flask|fastapi|uwsgi)/.test(haystack), 'python', 'Python web application', 'Application framework', 74, 'Confirm framework middleware and request-id instrumentation are installed.'],
+      [/(node|nodejs|npm|next|nuxt|vite|express|bundle)/.test(haystack), 'nodejs', 'Node.js application', 'Application framework', 74, 'Confirm process manager, request logs, and source-map/error capture are connected.'],
+      [/(ruby|rails|puma|unicorn|passenger)/.test(haystack), 'ruby', 'Ruby application', 'Application framework', 72, 'Confirm Rails/Rack logs, exception traces, and request IDs are collected.'],
+      [/(php|php-fpm|wordpress|laravel)/.test(haystack), 'php', 'PHP application', 'Application framework', 72, 'Confirm PHP-FPM/application logs and webserver vhost mapping are collected.'],
+      [/(java|tomcat|jetty|spring)/.test(haystack), 'java', 'Java application', 'Application framework', 70, 'Confirm JVM logs, access logs, and app health endpoints are connected.'],
+      [/(mariadb|mysql|mysqld)/.test(haystack) || svc.port === 3306, 'mysql', 'MySQL/MariaDB database', 'Database', 78, 'Create least-privilege audit access and enable slow query/audit evidence.'],
+      [haystack.includes('postgres') || svc.port === 5432, 'postgres', 'PostgreSQL database', 'Database', 78, 'Create least-privilege audit access and enable slow query/audit evidence.'],
+      [haystack.includes('redis') || svc.port === 6379, 'redis', 'Redis cache', 'Cache', 76, 'Enable slowlog and auth/error log collection so cache incidents are cited, not inferred.'],
+      [haystack.includes('memcached') || svc.port === 11211, 'memcached', 'Memcached cache', 'Cache', 70, 'Restrict public exposure and attach cache access logs where available.'],
+      [haystack.includes('docker-proxy'), 'docker', 'Docker published service', 'Runtime', 68, 'Map the published port back to a container, owner, and approved exposure rule.'],
+      [haystack.includes('livekit'), 'livekit', 'LiveKit media service', 'Realtime media', 74, 'Attach LiveKit logs and confirm TURN/TLS exposure is intended.'],
+      [/(dovecot|pop3|imap|smtp|postfix)/.test(haystack) || [25, 587, 993, 995].includes(svc.port), 'mail', 'Mail service', 'Mail', 70, 'Confirm auth logs, TLS posture, and public exposure are expected.'],
+    ];
+
+    for (const [matches, key, name, category, baseConfidence, next] of candidates) {
+      if (!matches) continue;
+      const confidence = Math.min(98, baseConfidence + (svc.probe_status ? 8 : 0) + (exposed ? 0 : 4));
+      addSignal(signals, key, {
+        name,
+        category,
+        confidence,
+        tone: signalTone(confidence),
+        evidence: `${evidence}${svc.binary_path ? ` / ${svc.binary_path}` : ''}`,
+        next,
+      });
+    }
+
+    if (signals.size === 0 && process !== 'unknown') {
+      addSignal(signals, `process:${process}`, {
+        name: `${process} listener`,
+        category: 'Unclassified process',
+        confidence: 45,
+        tone: 'unknown',
+        evidence,
+        next: 'Attach a parser or connector contract so this stops being raw inventory only.',
+      });
+    }
+  }
+
+  return Array.from(signals.values()).sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name));
+}
+
+function expectedLogEvidenceForServices(services: import('@/lib/api').NodeService[]): LogEvidenceRow[] {
+  const rows = new Map<string, LogEvidenceRow>();
+  const add = (label: string, path: string, detail: string) => {
+    rows.set(`${label}:${path}`, { label, path, source: 'expected', detail });
+  };
+  for (const svc of services) {
+    const haystack = `${svc.process} ${svc.binary_path} ${svc.service_kind}`.toLowerCase();
+    if (haystack.includes('nginx')) {
+      add('nginx access log', '/var/log/nginx/access.log', 'Expected default; run webserver inventory to verify the exact vhost path.');
+      add('nginx error log', '/var/log/nginx/error.log', 'Expected default; run webserver inventory to verify the exact error log path.');
+    }
+    if (haystack.includes('apache') || haystack.includes('httpd')) {
+      add('Apache access log', '/var/log/httpd/access_log', 'Expected default on RHEL/Rocky; verify with webserver inventory.');
+      add('Apache error log', '/var/log/httpd/error_log', 'Expected default on RHEL/Rocky; verify with webserver inventory.');
+    }
+    if (haystack.includes('redis')) add('Redis log', '/var/log/redis/redis.log', 'Expected default; verify service config before citing.');
+    if (haystack.includes('mariadb') || haystack.includes('mysql')) add('MariaDB/MySQL log', '/var/log/mariadb/mariadb.log', 'Expected default; audit/slow-query access is still required for DB-level proof.');
+    if (haystack.includes('php')) add('PHP-FPM log', '/var/log/php-fpm/error.log', 'Expected default; verify pool-specific path before citing.');
+  }
+  return Array.from(rows.values());
+}
+
+function detectedLogEvidence(webservers: import('@/lib/api').WebserverInstance[]): LogEvidenceRow[] {
+  const rows: LogEvidenceRow[] = [];
+  for (const instance of webservers) {
+    const name = compactText(instance.Kind, 'webserver');
+    if (instance.AccessLogPath) {
+      rows.push({
+        label: `${name} access log`,
+        path: instance.AccessLogPath,
+        source: 'detected',
+        detail: compactText(instance.ConfigPath, 'webserver config inventory'),
+      });
+    }
+    if (instance.ErrorLogPath) {
+      rows.push({
+        label: `${name} error log`,
+        path: instance.ErrorLogPath,
+        source: 'detected',
+        detail: compactText(instance.ConfigPath, 'webserver config inventory'),
+      });
+    }
+  }
+  return rows;
+}
+
+function memoryFacts(
+  services: import('@/lib/api').NodeService[],
+  signals: NodeMemorySignal[],
+  webservers: import('@/lib/api').WebserverInstance[],
+): string[] {
+  const exposed = services.filter(serviceIsExposed).length;
+  const appSignals = signals.filter((s) => s.category === 'Application framework');
+  const dbSignals = signals.filter((s) => s.category === 'Database' || s.category === 'Cache');
+  return [
+    `${services.length} listening service${services.length === 1 ? '' : 's'} reported; ${exposed} bind to public/all interfaces.`,
+    appSignals.length > 0
+      ? `Application frameworks inferred: ${appSignals.map((s) => s.name.replace(' application', '')).slice(0, 5).join(', ')}.`
+      : 'No application framework signal is strong enough yet.',
+    dbSignals.length > 0
+      ? `Data services inferred: ${dbSignals.map((s) => s.name).slice(0, 5).join(', ')}.`
+      : 'No database/cache service signal is strong enough yet.',
+    webservers.length > 0
+      ? `${webservers.length} webserver inventory record${webservers.length === 1 ? '' : 's'} include config/log context.`
+      : 'No managed webserver inventory record is attached to this node yet.',
+  ];
+}
+
+function memoryGaps(
+  services: import('@/lib/api').NodeService[],
+  webservers: import('@/lib/api').WebserverInstance[],
+  logRows: LogEvidenceRow[],
+): string[] {
+  const gaps: string[] = [];
+  const hasPublic = services.some(serviceIsExposed);
+  const hasWeb = services.some((svc) => /nginx|apache|httpd|python|node|ruby|php/.test(`${svc.process} ${svc.service_kind}`.toLowerCase()));
+  if (hasPublic) gaps.push('Public listeners need a firewall/isolation protection signal before exposure confidence can reach 100%.');
+  if (hasWeb && webservers.length === 0) gaps.push('Run webserver inventory to turn inferred app roots into verified config, vhost, and log paths.');
+  if (logRows.every((row) => row.source !== 'detected')) gaps.push('Log paths shown as expected defaults are not citation-grade until inventory or connector setup verifies them.');
+  if (services.some((svc) => (svc.service_kind || '').toLowerCase() === 'unknown')) gaps.push('Unknown service kinds need a parser/connector mapping or a not-applicable decision.');
+  return gaps.length ? gaps : ['No major knowledge gaps are visible from the current inventory snapshot.'];
+}
+
+function KnowledgeGraphTab({ nodeId, tenantId }: { nodeId: string; tenantId: string }) {
   const api = useApiClient();
   const [services, setServices] = useState<import('@/lib/api').NodeService[]>([]);
+  const [webservers, setWebservers] = useState<import('@/lib/api').WebserverInstance[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api
-      .listNodeServices(nodeId)
-      .then((resp) => {
-        if (!cancelled) setServices(resp.data ?? []);
-      })
-      .catch((e) => {
-        if (!cancelled) setErr(e instanceof Error ? e.message : 'load failed');
+    Promise.allSettled([
+      api.listNodeServices(nodeId),
+      api.listWebserverInstances({ tenantId, nodeId, limit: 50 }),
+    ])
+      .then(([serviceResult, webserverResult]) => {
+        if (cancelled) return;
+        if (serviceResult.status === 'fulfilled') {
+          setServices(serviceResult.value.data ?? []);
+        } else {
+          setErr(serviceResult.reason instanceof Error ? serviceResult.reason.message : 'load failed');
+        }
+        if (webserverResult.status === 'fulfilled') {
+          setWebservers(webserverResult.value.data ?? []);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -967,7 +1184,7 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [api, nodeId]);
+  }, [api, nodeId, tenantId]);
 
   const normalizedServices = useMemo(() => {
     const groups = new Map<string, import('@/lib/api').NodeService[]>();
@@ -990,13 +1207,53 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
   }, [services]);
 
   const processCount = new Set(normalizedServices.map((svc) => svc.process || 'unknown')).size;
-  const exposedCount = normalizedServices.filter((svc) => {
-    const addr = svc.listen_addr || '';
-    return addr.includes('0.0.0.0') || addr.includes('::') || addr.startsWith('*');
-  }).length;
+  const exposedCount = normalizedServices.filter(serviceIsExposed).length;
+  const signals = useMemo(() => inferNodeMemorySignals(normalizedServices, webservers), [normalizedServices, webservers]);
+  const detectedLogs = useMemo(() => detectedLogEvidence(webservers), [webservers]);
+  const expectedLogs = useMemo(() => expectedLogEvidenceForServices(normalizedServices), [normalizedServices]);
+  const logRows = detectedLogs.length > 0 ? detectedLogs : expectedLogs;
+  const facts = useMemo(() => memoryFacts(normalizedServices, signals, webservers), [normalizedServices, signals, webservers]);
+  const gaps = useMemo(() => memoryGaps(normalizedServices, webservers, logRows), [normalizedServices, webservers, logRows]);
+  const topSignalNames = signals.slice(0, 4).map((signal) => signal.name).join(', ');
 
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+    <div className="flex flex-col gap-4">
+      <Panel padding="md" eyebrow="AI MEMORY" title="Node memory summary">
+        <div className="grid gap-4 xl:grid-cols-[1fr_24rem]">
+          <div>
+            <p className="text-sm leading-6 text-text-secondary">
+              {topSignalNames
+                ? `This node currently reads like ${topSignalNames}. The memory is built from reported listeners, probes, webserver inventory, and citation-grade gaps; inferred facts stay labelled until a connector verifies them.`
+                : 'This node has not produced enough service evidence for a useful memory summary yet.'}
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {facts.map((fact) => (
+                <div key={fact} className="rounded-md border border-border-subtle bg-surface px-3 py-2 text-xs text-text-secondary">
+                  {fact}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border-subtle bg-elevated p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">What is missing</p>
+            <ul className="mt-2 flex flex-col gap-2 text-xs text-text-secondary">
+              {gaps.map((gap) => (
+                <li key={gap} className="rounded-md bg-surface px-3 py-2">{gap}</li>
+              ))}
+            </ul>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button asChild variant="secondary" size="sm">
+                <Link to="/security/webservers">Webserver control</Link>
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/observability">Connector setup</Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
       <Panel padding="md" eyebrow="KNOWLEDGE GRAPH" title="Node service graph">
         {loading && <Loader label="Loading services..." />}
         {err && <Alert variant="critical">{err}</Alert>}
@@ -1048,6 +1305,65 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
           ))}
         </ul>
       </Panel>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Panel padding="md" eyebrow="APPLICATIONS" title="Frameworks and service roles">
+          {signals.length === 0 ? (
+            <Alert variant="info" title="No framework signal yet">
+              Listener inventory exists, but no process, binary path, probe, or webserver
+              evidence maps cleanly to a supported framework.
+            </Alert>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {signals.map((signal) => (
+                <li key={`${signal.category}:${signal.name}`} className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{signal.name}</p>
+                      <p className="text-xs text-text-muted">{signal.category}</p>
+                    </div>
+                    <StatusTag tone={signal.tone}>{signal.confidence}% confidence</StatusTag>
+                  </div>
+                  <p className="mt-2 text-xs text-text-secondary">{signal.next}</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {signal.evidence.slice(0, 4).map((item) => (
+                      <span key={item} className="rounded border border-border-subtle bg-elevated px-2 py-1 font-mono text-[0.65rem] text-text-muted">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel padding="md" eyebrow="LOG EVIDENCE" title="Log and config paths">
+          {logRows.length === 0 ? (
+            <Alert variant="warning" title="No log paths known">
+              Control One has service inventory for this node, but no verified
+              config or log path. Run webserver inventory or connector setup
+              before treating logs as citation-grade evidence.
+            </Alert>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {logRows.map((row) => (
+                <li key={`${row.label}:${row.path}`} className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-foreground">{row.label}</p>
+                    <StatusTag tone={row.source === 'detected' ? 'healthy' : 'warning'}>
+                      {row.source}
+                    </StatusTag>
+                  </div>
+                  <p className="mt-1 break-all font-mono text-xs text-text-secondary">{row.path}</p>
+                  <p className="mt-1 text-xs text-text-muted">{row.detail}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
     </div>
   );
 

@@ -3841,15 +3841,20 @@ export class APIClient {
     if (params.until) search.set('until', params.until);
     if (typeof params.limit === 'number') search.set('limit', String(params.limit));
     const q = search.toString();
-    const resp = await this.request<ConnectionRow[] | { data: ConnectionRow[] }>(`/api/v1/connections${q ? `?${q}` : ''}`);
-    return Array.isArray(resp) ? resp : resp.data ?? [];
+    const resp = await this.request<Array<ConnectionRow | RawConnectionRow> | { data: Array<ConnectionRow | RawConnectionRow> }>(`/api/v1/connections${q ? `?${q}` : ''}`);
+    const rows = Array.isArray(resp) ? resp : resp.data ?? [];
+    return rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id));
   }
 
   async getConnectionDetail(connID: string, params: { tenantId?: string | null } = {}): Promise<ConnectionDetail> {
     const search = new URLSearchParams();
     if (params.tenantId) search.set('tenant_id', params.tenantId);
     const q = search.toString();
-    return this.request<ConnectionDetail>(`/api/v1/connections/${encodeURIComponent(connID)}${q ? `?${q}` : ''}`);
+    const detail = await this.request<ConnectionDetail | RawConnectionDetail>(`/api/v1/connections/${encodeURIComponent(connID)}${q ? `?${q}` : ''}`);
+    return {
+      ...detail,
+      connection: normalizeConnectionRow(detail.connection),
+    };
   }
 
   async listTopTalkers(params: { tenantId?: string; since?: string; limit?: number } = {}): Promise<TopTalker[]> {
@@ -4961,6 +4966,79 @@ export interface ConnectionRow {
   threat_feed?: string;
   threat_score?: number;
   closed_reason?: string;
+}
+
+type RawConnectionRow = Partial<ConnectionRow> & Record<string, unknown>;
+
+interface RawConnectionDetail {
+  connection: ConnectionRow | RawConnectionRow;
+  events: ForensicEvent[];
+}
+
+function rawString(row: RawConnectionRow, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed && trimmed !== '0001-01-01T00:00:00Z') return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function rawNumber(row: RawConnectionRow, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function rawBoolean(row: RawConnectionRow, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      if (value.toLowerCase() === 'true') return true;
+      if (value.toLowerCase() === 'false') return false;
+    }
+  }
+  return undefined;
+}
+
+function normalizeConnectionRow(raw: ConnectionRow | RawConnectionRow): ConnectionRow {
+  const row = raw as RawConnectionRow;
+  return {
+    conn_id: rawString(row, 'conn_id', 'ConnID') ?? '',
+    node_id: rawString(row, 'node_id', 'NodeID'),
+    correlation_id: rawString(row, 'correlation_id', 'CorrelationID'),
+    bastion_session_id: rawString(row, 'bastion_session_id', 'BastionSession'),
+    started_at: rawString(row, 'started_at', 'StartedAt') ?? '',
+    ended_at: rawString(row, 'ended_at', 'EndedAt'),
+    duration_ms: rawNumber(row, 'duration_ms', 'DurationMS'),
+    direction: rawString(row, 'direction', 'Direction'),
+    pid: rawNumber(row, 'pid', 'PID'),
+    process_name: rawString(row, 'process_name', 'ProcessName'),
+    cmdline: rawString(row, 'cmdline', 'Cmdline'),
+    user_name: rawString(row, 'user_name', 'UserName'),
+    src_ip: rawString(row, 'src_ip', 'SrcIP'),
+    src_port: rawNumber(row, 'src_port', 'SrcPort'),
+    dst_ip: rawString(row, 'dst_ip', 'DstIP'),
+    dst_port: rawNumber(row, 'dst_port', 'DstPort'),
+    protocol: rawString(row, 'protocol', 'Protocol'),
+    bytes_in: rawNumber(row, 'bytes_in', 'BytesIn'),
+    bytes_out: rawNumber(row, 'bytes_out', 'BytesOut'),
+    packets_in: rawNumber(row, 'packets_in', 'PacketsIn'),
+    packets_out: rawNumber(row, 'packets_out', 'PacketsOut'),
+    threat_match: rawBoolean(row, 'threat_match', 'ThreatMatch'),
+    threat_feed: rawString(row, 'threat_feed', 'ThreatFeed'),
+    threat_score: rawNumber(row, 'threat_score', 'ThreatScore'),
+    closed_reason: rawString(row, 'closed_reason', 'ClosedReason'),
+  };
 }
 
 export interface ForensicEvent {
