@@ -895,6 +895,7 @@ func enrichDetectedInstance(inst *WebServerInstance) {
 		}
 	}
 	rootHints := applicationRootsFromConfig(kind, config)
+	rootHints = append(rootHints, applicationRootsFromFilesystem(rootHints)...)
 	apps := make([]map[string]any, 0, len(rootHints))
 	for _, hint := range rootHints {
 		app := classifyApplicationRoot(hint)
@@ -997,6 +998,106 @@ func applicationRootsFromConfig(kind, config string) []map[string]any {
 		}
 	}
 	return out
+}
+
+func applicationRootsFromFilesystem(existing []map[string]any) []map[string]any {
+	seen := map[string]struct{}{}
+	for _, row := range existing {
+		if path := stringFromAny(row["path"]); path != "" {
+			seen[strings.ToLower(filepath.Clean(path))] = struct{}{}
+		}
+	}
+
+	var out []map[string]any
+	add := func(path, source string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == string(filepath.Separator) {
+			return
+		}
+		key := strings.ToLower(path)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			return
+		}
+		detected := appcatalog.DetectRootWithFS(path, fileExists, readFileForDetection)
+		if detected.ProfileID == "unknown" && !directoryHasAppRootMarker(path) {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, map[string]any{
+			"path":      path,
+			"directive": "filesystem_scan",
+			"vhost":     source,
+		})
+	}
+
+	for _, root := range []string{"/var/www/html", "/var/www", "/srv/www", "/srv/http", "/usr/share/nginx/html", "/usr/local/www", "/opt/apps", "/opt/app"} {
+		add(root, "common-web-root")
+	}
+	for _, parent := range []string{"/var/www", "/srv/www", "/srv/http"} {
+		for _, child := range boundedChildDirectories(parent, 2, 40) {
+			add(child, "common-web-root")
+		}
+	}
+	return out
+}
+
+func boundedChildDirectories(root string, maxDepth, maxCount int) []string {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if maxDepth <= 0 || maxCount <= 0 {
+		return nil
+	}
+	var out []string
+	var walk func(string, int)
+	walk = func(dir string, depth int) {
+		if len(out) >= maxCount || depth > maxDepth {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			if len(out) >= maxCount {
+				return
+			}
+			if !entry.IsDir() || skipAppRootDirName(entry.Name()) {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			out = append(out, path)
+			walk(path, depth+1)
+		}
+	}
+	walk(root, 1)
+	return out
+}
+
+func skipAppRootDirName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || strings.HasPrefix(name, ".") {
+		return true
+	}
+	switch name {
+	case "node_modules", "vendor", "cache", "tmp", "logs", "log", "run", "sessions", "uploads":
+		return true
+	}
+	return false
+}
+
+func directoryHasAppRootMarker(root string) bool {
+	for _, marker := range []string{
+		"index.html", "index.htm", "package.json", "composer.json", "requirements.txt", "pyproject.toml",
+		"manage.py", "Gemfile", "config.ru", "artisan", "go.mod", "pom.xml", "build.gradle", "web.config",
+	} {
+		if fileExists(filepath.Join(root, marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyApplicationRoot(hint map[string]any) map[string]any {

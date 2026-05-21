@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -20,6 +21,8 @@ type NodeService struct {
 	PID              int
 	Process          string
 	BinaryPath       string
+	WorkingDir       string
+	CommandLine      string
 	ListenAddr       string
 	Port             int
 	ServiceKind      string
@@ -27,6 +30,11 @@ type NodeService struct {
 	ProbeServer      *string
 	ProbeTitle       *string
 	ProbeContentType *string
+	AppRoot          string
+	AppProfileID     string
+	AppName          string
+	AppConfidence    int
+	AppEvidence      []string
 	ObservedAt       time.Time
 }
 
@@ -55,19 +63,25 @@ func (s *Store) ReplaceNodeServices(ctx context.Context, nodeID, tenantID uuid.U
 	if len(services) > 0 {
 		stmt, perr := tx.PrepareContext(ctx, `
 			INSERT INTO node_services
-				(node_id, tenant_id, pid, process, binary_path, listen_addr, port, service_kind,
-				 probe_status, probe_server, probe_title, probe_content_type, observed_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+				(node_id, tenant_id, pid, process, binary_path, working_dir, command_line, listen_addr, port, service_kind,
+				 probe_status, probe_server, probe_title, probe_content_type,
+				 app_root, app_profile_id, app_name, app_confidence, app_evidence, observed_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
 		`)
 		if perr != nil {
 			return fmt.Errorf("prepare insert: %w", perr)
 		}
 		defer func() { _ = stmt.Close() }()
 		for _, svc := range services {
+			appEvidence, err := json.Marshal(svc.AppEvidence)
+			if err != nil {
+				return fmt.Errorf("marshal service app evidence: %w", err)
+			}
 			if _, err := stmt.ExecContext(ctx,
-				nodeID, tenantID, svc.PID, svc.Process, svc.BinaryPath, svc.ListenAddr,
+				nodeID, tenantID, svc.PID, svc.Process, svc.BinaryPath, svc.WorkingDir, svc.CommandLine, svc.ListenAddr,
 				svc.Port, kindOrUnknown(svc.ServiceKind),
 				svc.ProbeStatus, svc.ProbeServer, svc.ProbeTitle, svc.ProbeContentType,
+				svc.AppRoot, svc.AppProfileID, svc.AppName, svc.AppConfidence, appEvidence,
 			); err != nil {
 				return fmt.Errorf("insert service %s:%d: %w", svc.Process, svc.Port, err)
 			}
@@ -99,8 +113,9 @@ func (s *Store) queryServices(ctx context.Context, where string, args ...any) ([
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
-	q := `SELECT id, node_id, tenant_id, pid, process, binary_path, listen_addr, port, service_kind,
-		probe_status, probe_server, probe_title, probe_content_type, observed_at
+	q := `SELECT id, node_id, tenant_id, pid, process, binary_path, working_dir, command_line, listen_addr, port, service_kind,
+		probe_status, probe_server, probe_title, probe_content_type,
+		app_root, app_profile_id, app_name, app_confidence, app_evidence, observed_at
 		FROM node_services ` + where
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -113,10 +128,12 @@ func (s *Store) queryServices(ctx context.Context, where string, args ...any) ([
 		var n NodeService
 		var status sql.NullInt64
 		var server, title, ctype sql.NullString
+		var appEvidenceRaw []byte
 		if err := rows.Scan(
 			&n.ID, &n.NodeID, &n.TenantID, &n.PID, &n.Process, &n.BinaryPath,
-			&n.ListenAddr, &n.Port, &n.ServiceKind,
-			&status, &server, &title, &ctype, &n.ObservedAt,
+			&n.WorkingDir, &n.CommandLine, &n.ListenAddr, &n.Port, &n.ServiceKind,
+			&status, &server, &title, &ctype,
+			&n.AppRoot, &n.AppProfileID, &n.AppName, &n.AppConfidence, &appEvidenceRaw, &n.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan service: %w", err)
 		}
@@ -135,6 +152,9 @@ func (s *Store) queryServices(ctx context.Context, where string, args ...any) ([
 		if ctype.Valid {
 			v := ctype.String
 			n.ProbeContentType = &v
+		}
+		if len(appEvidenceRaw) > 0 {
+			_ = json.Unmarshal(appEvidenceRaw, &n.AppEvidence)
 		}
 		out = append(out, n)
 	}

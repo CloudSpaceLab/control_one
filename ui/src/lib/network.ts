@@ -55,6 +55,10 @@ export function connectionPeerIp(row: ConnectionRow): string {
   return normalizePeerAddress(row.dst_ip) || normalizePeerAddress(row.src_ip);
 }
 
+export function isExternalConnection(row: ConnectionRow): boolean {
+  return isPublicIP(connectionPeerIp(row));
+}
+
 export function isListeningConnection(row: ConnectionRow): boolean {
   const direction = (row.direction ?? '').toLowerCase();
   if (direction === 'listening' || direction === 'listen') return true;

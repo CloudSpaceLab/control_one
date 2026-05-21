@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { ConnectionDetailSheet } from '@/components/investigate/ConnectionDetailSheet';
 import { entityRoute } from '@/lib/entity';
 import { formatBytes, formatDuration, formatTs, isIpv4 } from '@/lib/format';
-import { connectionPeerIp, hasConnectionShape, isPublicIP } from '@/lib/network';
+import { hasConnectionShape, isExternalConnection, isPublicIP } from '@/lib/network';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useTenant } from '@/providers/TenantProvider';
 import type { ConnectionRow } from '@/lib/api';
@@ -32,7 +32,7 @@ export function Connections(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [ipInput, setIpInput] = useState('');
   const [threatOnly, setThreatOnly] = useState(false);
-  const [includeInternal, setIncludeInternal] = useState(false);
+  const [showInternal, setShowInternal] = useState(false);
   const [openConnId, setOpenConnId] = useState<string | null>(null);
   const since = useMemo(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), []);
 
@@ -77,8 +77,8 @@ export function Connections(): JSX.Element {
     [shapedRows, threatOnly],
   );
   const visibleRows = useMemo(
-    () => filteredRows.filter((row) => includeInternal || isPublicIP(connectionPeerIp(row))),
-    [filteredRows, includeInternal],
+    () => filteredRows.filter((row) => showInternal || isExternalConnection(row)),
+    [filteredRows, showInternal],
   );
   const hiddenRows = Math.max(0, filteredRows.length - visibleRows.length);
   const incompleteRows = Math.max(0, rows.length - shapedRows.length);
@@ -224,11 +224,11 @@ export function Connections(): JSX.Element {
         <label className="inline-flex select-none items-center gap-2 text-sm text-text-secondary">
           <input
             type="checkbox"
-            checked={includeInternal}
-            onChange={(e) => setIncludeInternal(e.target.checked)}
+            checked={showInternal}
+            onChange={(e) => setShowInternal(e.target.checked)}
             className="accent-brand-500"
           />
-          Include internal
+          Show internal/private
         </label>
         <Button type="submit" variant="secondary" size="md" disabled={loading}>
           {isIpv4(ipInput.trim()) ? (
@@ -255,7 +255,7 @@ export function Connections(): JSX.Element {
         />
       </div>
 
-      {!includeInternal && hiddenRows > 0 && (
+      {!showInternal && hiddenRows > 0 && (
         <p className="text-xs text-text-muted">
           Showing external peers only; {hiddenRows} internal or listener row{hiddenRows === 1 ? '' : 's'} hidden.
         </p>
@@ -268,10 +268,10 @@ export function Connections(): JSX.Element {
 
       {visibleRows.length === 0 && !loading ? (
         <EmptyState
-          title={includeInternal ? 'No connections found' : 'No external connections found'}
-          description={includeInternal
+          title={showInternal ? 'No connections found' : 'No external connections found'}
+          description={showInternal
             ? 'No recent connection rows matched the current filters.'
-            : 'Recent rows were internal, listener-only, incomplete, or filtered out. Toggle Include internal to inspect them.'}
+            : 'Recent rows were internal, listener-only, incomplete, or filtered out. Toggle Show internal/private to inspect them.'}
         />
       ) : (
         <DataTable

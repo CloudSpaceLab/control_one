@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/appcatalog"
 )
 
 // ServiceInfo is one listening TCP service the agent observed locally. It
@@ -21,16 +24,23 @@ import (
 // Probe fields are reserved for a future opt-in localhost HTTP probe and
 // stay nil today.
 type ServiceInfo struct {
-	PID              int     `json:"pid"`
-	Process          string  `json:"process"`
-	BinaryPath       string  `json:"binary_path,omitempty"`
-	ListenAddr       string  `json:"listen_addr"`
-	Port             int     `json:"port"`
-	ServiceKind      string  `json:"service_kind"`
-	ProbeStatus      *int    `json:"probe_status,omitempty"`
-	ProbeServer      *string `json:"probe_server,omitempty"`
-	ProbeTitle       *string `json:"probe_title,omitempty"`
-	ProbeContentType *string `json:"probe_content_type,omitempty"`
+	PID              int      `json:"pid"`
+	Process          string   `json:"process"`
+	BinaryPath       string   `json:"binary_path,omitempty"`
+	WorkingDir       string   `json:"working_dir,omitempty"`
+	CommandLine      string   `json:"command_line,omitempty"`
+	ListenAddr       string   `json:"listen_addr"`
+	Port             int      `json:"port"`
+	ServiceKind      string   `json:"service_kind"`
+	ProbeStatus      *int     `json:"probe_status,omitempty"`
+	ProbeServer      *string  `json:"probe_server,omitempty"`
+	ProbeTitle       *string  `json:"probe_title,omitempty"`
+	ProbeContentType *string  `json:"probe_content_type,omitempty"`
+	AppRoot          string   `json:"app_root,omitempty"`
+	AppProfileID     string   `json:"app_profile_id,omitempty"`
+	AppName          string   `json:"app_name,omitempty"`
+	AppConfidence    int      `json:"app_confidence,omitempty"`
+	AppEvidence      []string `json:"app_evidence,omitempty"`
 }
 
 // servicesPayload is the request body for POST /api/v1/nodes/<id>/services.
@@ -48,6 +58,9 @@ func collectServices(log *zap.Logger) []ServiceInfo {
 	raw, err := collectPlatformServices()
 	if err != nil {
 		log.Debug("service collection partial failure", zap.Error(err))
+	}
+	for i := range raw {
+		enrichServiceRuntimeContext(&raw[i])
 	}
 	return dedupeAndAnnotate(raw)
 }
@@ -83,6 +96,9 @@ func dedupeAndAnnotate(in []ServiceInfo) []ServiceInfo {
 		seen[key] = true
 		if svc.ServiceKind == "" {
 			svc.ServiceKind = serviceKindFor(svc.Process, svc.BinaryPath, svc.Port)
+		}
+		if svc.AppRoot == "" {
+			enrichServiceApplication(&svc)
 		}
 		out = append(out, svc)
 	}
@@ -276,6 +292,134 @@ func serviceKindFor(process, binaryPath string, port int) string {
 		return "clickhouse"
 	}
 	return "unknown"
+}
+
+func enrichServiceRuntimeContext(svc *ServiceInfo) {
+	if svc == nil || svc.PID <= 0 || runtime.GOOS != "linux" {
+		return
+	}
+	pidDir := filepath.Join("/proc", fmt.Sprint(svc.PID))
+	if svc.WorkingDir == "" {
+		if cwd, err := os.Readlink(filepath.Join(pidDir, "cwd")); err == nil {
+			svc.WorkingDir = cwd
+		}
+	}
+	if svc.CommandLine == "" {
+		if raw, err := os.ReadFile(filepath.Join(pidDir, "cmdline")); err == nil {
+			fields := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+			svc.CommandLine = strings.Join(nonEmptyStrings(fields), " ")
+		}
+	}
+}
+
+func enrichServiceApplication(svc *ServiceInfo) {
+	if svc == nil {
+		return
+	}
+	for _, root := range serviceApplicationRootCandidates(*svc) {
+		detected := appcatalog.DetectRootWithFS(root, servicePathExists, serviceReadFile)
+		if detected.ProfileID == "" || detected.ProfileID == "unknown" {
+			continue
+		}
+		svc.AppRoot = root
+		svc.AppProfileID = detected.ProfileID
+		svc.AppName = detected.Name
+		svc.AppConfidence = detected.Confidence
+		svc.AppEvidence = append([]string{fmt.Sprintf("process:%s:%d", firstNonEmptyString(svc.Process, "unknown"), svc.Port)}, detected.Evidence...)
+		return
+	}
+}
+
+func serviceApplicationRootCandidates(svc ServiceInfo) []string {
+	var out []string
+	add := func(path string) {
+		path = filepath.Clean(strings.TrimSpace(strings.Trim(path, `"'`)))
+		if path == "." || isNoisyServiceRoot(path) {
+			return
+		}
+		if !servicePathExists(path) {
+			return
+		}
+		for _, current := range out {
+			if current == path {
+				return
+			}
+		}
+		out = append(out, path)
+	}
+
+	add(svc.WorkingDir)
+	if svc.BinaryPath != "" {
+		dir := filepath.Dir(svc.BinaryPath)
+		if strings.HasPrefix(dir, "/opt/") || strings.HasPrefix(dir, "/srv/") || strings.HasPrefix(dir, "/var/www/") || strings.HasPrefix(dir, "/home/") {
+			add(dir)
+			add(filepath.Dir(dir))
+		}
+	}
+	for _, raw := range strings.Fields(svc.CommandLine) {
+		token := strings.Trim(raw, `"'`)
+		if strings.HasPrefix(token, "--") || strings.Contains(token, "=") {
+			if _, value, ok := strings.Cut(token, "="); ok {
+				token = value
+			}
+		}
+		if strings.HasPrefix(token, "/var/www/") || strings.HasPrefix(token, "/srv/") || strings.HasPrefix(token, "/opt/") || strings.HasPrefix(token, "/home/") {
+			if info, err := os.Stat(token); err == nil && !info.IsDir() {
+				token = filepath.Dir(token)
+			}
+			add(token)
+		}
+	}
+	return out
+}
+
+func isNoisyServiceRoot(path string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" || path == "." || path == string(filepath.Separator) {
+		return true
+	}
+	noisyExact := map[string]struct{}{
+		"/bin": {}, "/sbin": {}, "/usr": {}, "/usr/bin": {}, "/usr/sbin": {}, "/usr/local/bin": {},
+		"/var": {}, "/var/lib": {}, "/var/log": {}, "/run": {}, "/tmp": {}, "/proc": {}, "/sys": {}, "/dev": {},
+	}
+	if _, ok := noisyExact[path]; ok {
+		return true
+	}
+	switch strings.ToLower(filepath.Base(path)) {
+	case "bin", "sbin", "lib", "lib64", "logs", "log", "tmp", "cache", "node_modules", "vendor":
+		return true
+	}
+	return false
+}
+
+func servicePathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func serviceReadFile(path string) ([]byte, bool) {
+	data, err := os.ReadFile(path)
+	return data, err == nil
+}
+
+func nonEmptyStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration) {

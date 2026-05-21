@@ -1857,6 +1857,8 @@ export interface NodeService {
   pid: number;
   process: string;
   binary_path: string;
+  working_dir?: string;
+  command_line?: string;
   listen_addr: string;
   port: number;
   service_kind: string;
@@ -1864,6 +1866,11 @@ export interface NodeService {
   probe_server?: string | null;
   probe_title?: string | null;
   probe_content_type?: string | null;
+  app_root?: string;
+  app_profile_id?: string;
+  app_name?: string;
+  app_confidence?: number;
+  app_evidence?: string[];
   observed_at: string;
 }
 
