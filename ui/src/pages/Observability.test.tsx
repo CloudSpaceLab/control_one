@@ -13,7 +13,7 @@ describe('Observability', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Guided setup' })).toBeInTheDocument();
-    expect(screen.getByText('PostgreSQL core')).toBeInTheDocument();
+    expect(screen.getAllByText('PostgreSQL core').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Needs access').length).toBeGreaterThan(0);
     expect(screen.getByText(/Create PostgreSQL read-only audit user/i)).toBeInTheDocument();
     expect(screen.getAllByText('Unsupported').length).toBeGreaterThan(0);

@@ -87,7 +87,7 @@ describe('Cases', () => {
       expect(screen.getAllByText('Suspicious IP investigation').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByText('Evidence drawer')).toBeInTheDocument();
+    expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
     expect(screen.getByText('normalized_events:row-1')).toBeInTheDocument();
     expect(screen.getByText('Timeline')).toBeInTheDocument();
     expect(screen.getByText('Source-row cited')).toBeInTheDocument();
