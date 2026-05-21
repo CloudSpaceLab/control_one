@@ -104,7 +104,7 @@ const SERVICES: ObservabilityService[] = [
     cta: 'Copy middleware snippet',
     setup: ['Install package', 'Register middleware', 'Deploy one canary instance'],
     verification: ['trace ID appears', 'error span appears', 'fallback state clears'],
-    snippet: 'pip install controlone-fastapi\napp.add_middleware(ControlOneMiddleware, redact=\"strict\")',
+    snippet: 'pip install controlone-fastapi\napp.add_middleware(ControlOneMiddleware, redact="strict")',
   },
   {
     id: 'svc-postgres',
