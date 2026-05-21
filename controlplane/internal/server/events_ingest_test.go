@@ -99,6 +99,50 @@ func TestEnrichConnectionThreatIntelUsesLocalSnapshot(t *testing.T) {
 	}
 }
 
+func TestEnrichConnectionThreatIntelSkipsNonPublicBogonHits(t *testing.T) {
+	tenantID := uuid.New()
+	mgr := threatintel.New(threatintel.Config{
+		RefreshInterval: time.Hour,
+		HTTPTimeout:     time.Second,
+		Sources: []threatintel.Source{staticThreatSource{indicators: []threatintel.Indicator{
+			{CIDR: "127.0.0.0/8", Feed: "firehol-level1", Score: 90},
+			{CIDR: "172.16.0.0/12", Feed: "firehol-level1", Score: 90},
+			{IP: "204.10.162.167", Feed: "abuseipdb", Score: 95},
+		}}},
+	}, zap.NewNop())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Start(ctx)
+	waitThreatIntelCurrent(t, mgr)
+
+	srv := &Server{threatIntel: mgr}
+	events := []IngestedEvent{{
+		Type:     "conn.open",
+		Severity: "info",
+		SrcIP:    "127.0.0.1",
+		DstIP:    "172.18.0.9",
+		Details:  map[string]any{"direction": "outbound"},
+	}}
+
+	srv.enrichConnectionThreatIntel(tenantID, events)
+
+	if events[0].ThreatFeed != "" || events[0].ThreatScore != 0 {
+		t.Fatalf("non-public connection should not be threat-enriched: %+v", events[0])
+	}
+
+	events = []IngestedEvent{{
+		Type:     "conn.open",
+		Severity: "info",
+		SrcIP:    "10.0.0.5",
+		DstIP:    "204.10.162.167",
+		Details:  map[string]any{"direction": "outbound"},
+	}}
+	srv.enrichConnectionThreatIntel(tenantID, events)
+	if events[0].ThreatFeed != "abuseipdb" || events[0].ThreatScore != 95 {
+		t.Fatalf("public connection threat enrichment missing: %+v", events[0])
+	}
+}
+
 func TestIngestedEventContractV1DefaultsEventMetadata(t *testing.T) {
 	t.Parallel()
 

@@ -172,3 +172,37 @@ func isPrivateIP(ip net.IP) bool {
 	}
 	return false
 }
+
+func isPublicRoutableIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		a, b, c := ip4[0], ip4[1], ip4[2]
+		switch {
+		case a == 0 || a == 127 || a == 255 || a >= 224:
+			return false
+		case a == 100 && b >= 64 && b <= 127:
+			return false
+		case a == 192 && b == 0 && c == 2:
+			return false
+		case a == 198 && (b == 18 || b == 19):
+			return false
+		case a == 198 && b == 51 && c == 100:
+			return false
+		case a == 203 && b == 0 && c == 113:
+			return false
+		}
+		return ip.IsGlobalUnicast()
+	}
+	if len(ip) == net.IPv6len && ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x0d && ip[3] == 0xb8 {
+		return false
+	}
+	return ip.IsGlobalUnicast()
+}

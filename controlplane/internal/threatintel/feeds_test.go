@@ -64,6 +64,26 @@ func TestIndicatorSetLookup(t *testing.T) {
 	}
 }
 
+func TestIndicatorSetLookupSkipsNonPublicBogons(t *testing.T) {
+	inds := []Indicator{
+		{CIDR: "127.0.0.0/8", Feed: "firehol-level1", Score: 80},
+		{CIDR: "172.16.0.0/12", Feed: "firehol-level1", Score: 80},
+		{CIDR: "10.0.0.0/8", Feed: "firehol-level1", Score: 80},
+		{CIDR: "192.168.0.0/16", Feed: "firehol-level1", Score: 80},
+		{CIDR: "1.2.3.0/24", Feed: "spamhaus-drop", Score: 100},
+	}
+	set := buildSet(inds)
+
+	for _, raw := range []string{"127.0.0.1", "172.18.0.9", "10.0.0.1", "192.168.1.1"} {
+		if _, ok := set.LookupIP(net.ParseIP(raw)); ok {
+			t.Fatalf("non-public address %s should not match blacklist indicators", raw)
+		}
+	}
+	if match, ok := set.LookupIP(net.ParseIP("1.2.3.42")); !ok || match.Feed != "spamhaus-drop" {
+		t.Fatalf("public blacklist lookup = %+v, %v; want spamhaus-drop hit", match, ok)
+	}
+}
+
 func TestIndicatorSetLookupTenantScopedFeeds(t *testing.T) {
 	inds := []Indicator{
 		{CIDR: "1.2.3.0/24", Feed: "global", Score: 80},

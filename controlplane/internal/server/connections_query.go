@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -61,6 +62,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	rows = sanitizeConnectionThreatRows(rows)
 	writeJSON(w, http.StatusOK, map[string]any{"data": rows})
 }
 
@@ -96,6 +98,10 @@ func (s *Server) handleConnectionDetail(w http.ResponseWriter, r *http.Request) 
 		s.logger.Warn("doris connection lifetime", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+	if row != nil {
+		sanitized := sanitizeConnectionThreatRow(*row)
+		row = &sanitized
 	}
 	resp := map[string]any{"connection": row}
 	if row != nil && row.CorrelationID != "" {
@@ -238,4 +244,32 @@ func parseLimitDefault(r *http.Request, def, max int) int {
 		}
 	}
 	return def
+}
+
+func sanitizeConnectionThreatRows(rows []doris.ConnectionRow) []doris.ConnectionRow {
+	for i := range rows {
+		rows[i] = sanitizeConnectionThreatRow(rows[i])
+	}
+	return rows
+}
+
+func sanitizeConnectionThreatRow(row doris.ConnectionRow) doris.ConnectionRow {
+	if row.ThreatMatch && !connectionThreatPeerIsPublic(row) {
+		row.ThreatMatch = false
+		row.ThreatFeed = ""
+	}
+	return row
+}
+
+func connectionThreatPeerIsPublic(row doris.ConnectionRow) bool {
+	direction := strings.ToLower(strings.TrimSpace(row.Direction))
+	switch direction {
+	case "inbound":
+		return isPublicRoutableIP(net.ParseIP(strings.TrimSpace(row.SrcIP)))
+	case "outbound":
+		return isPublicRoutableIP(net.ParseIP(strings.TrimSpace(row.DstIP)))
+	default:
+		return isPublicRoutableIP(net.ParseIP(strings.TrimSpace(row.SrcIP))) ||
+			isPublicRoutableIP(net.ParseIP(strings.TrimSpace(row.DstIP)))
+	}
 }
