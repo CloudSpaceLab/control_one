@@ -897,6 +897,38 @@ func TestJobDetailAndCancelEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("agent can fetch own executable job detail", func(t *testing.T) {
+		nodeID := uuid.New()
+		otherNodeID := uuid.New()
+		store.nodes = append(store.nodes,
+			storage.Node{ID: nodeID, TenantID: uuid.New(), Hostname: "agent-node", AuthToken: sql.NullString{String: "node-job-token", Valid: true}},
+			storage.Node{ID: otherNodeID, TenantID: uuid.New(), Hostname: "other-node", AuthToken: sql.NullString{String: "other-node-token", Valid: true}},
+		)
+		payload, _ := json.Marshal(map[string]string{"node_id": nodeID.String()})
+		agentJob, _ := store.CreateJob(context.Background(), &storage.Job{
+			TenantID: nodeID,
+			Type:     JobTypeWebserverInventoryScan,
+			Status:   storage.JobStatusRunning,
+			Payload:  payload,
+		}, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+agentJob.ID.String(), nil)
+		req.Header.Set("Authorization", "Bearer node-job-token")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected agent job fetch 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+agentJob.ID.String(), nil)
+		req.Header.Set("Authorization", "Bearer other-node-token")
+		rec = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected other agent forbidden got %d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("cancels running job", func(t *testing.T) {
 		rec := call(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/cancel")
 		if rec.Code != http.StatusOK {
@@ -6257,7 +6289,7 @@ func (f *fakeStore) GetSecurityEventSeries(_ context.Context, _ uuid.UUID, _ tim
 	return nil, nil
 }
 
-// Ask CISO LLM config (Phase 2).
+// Ask AI LLM config (Phase 2).
 func (f *fakeStore) GetAIConfig(_ context.Context, tenantID uuid.UUID) (*storage.AIConfig, error) {
 	if f.aiConfig != nil && (tenantID == uuid.Nil || f.aiConfig.TenantID == tenantID) {
 		copy := *f.aiConfig

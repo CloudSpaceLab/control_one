@@ -49,6 +49,7 @@ import {
   connectionPeerIp as peerIp,
   connectionServicePort,
   hasConnectionShape,
+  isExternalConnection,
   isListeningConnection,
   isPublicIP,
 } from '@/lib/network';
@@ -307,7 +308,7 @@ export function NodeDetail(): JSX.Element {
           <ConnectionsTab nodeId={node.id} tenantId={node.tenant_id} />
         </TabsContent>
         <TabsContent value="kg" className="pt-4">
-          <KnowledgeGraphTab nodeId={node.id} />
+          <KnowledgeGraphTab nodeId={node.id} tenantId={node.tenant_id} />
         </TabsContent>
         <TabsContent value="packages" className="pt-4">
           <PackagesTab nodeId={node.id} />
@@ -522,6 +523,10 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   const [openConnId, setOpenConnId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [listeningOnly, setListeningOnly] = useState(false);
+  const [showInternal, setShowInternal] = useState(false);
+
+  const externalOnly = !listeningOnly && !showInternal;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -531,6 +536,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         tenantId,
         nodeId,
         openOnly: false,
+        externalOnly,
         since,
         limit: 250,
       });
@@ -541,7 +547,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     } finally {
       setLoading(false);
     }
-  }, [api, nodeId, tenantId]);
+  }, [api, externalOnly, nodeId, tenantId]);
 
   useEffect(() => {
     refresh();
@@ -550,9 +556,6 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   // Keep the first view security-relevant: placeholder listener rows and
   // private/loopback chatter stay out of the default table unless requested.
   const shapedRows = useMemo(() => rows.filter(hasConnectionShape), [rows]);
-
-  const [listeningOnly, setListeningOnly] = useState(false);
-  const [includeInternal, setIncludeInternal] = useState(false);
 
   // Listening sockets are typically modelled as direction === 'listening',
   // but some agent versions report them via the absence of a peer or via
@@ -565,12 +568,12 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   const visibleRows = useMemo(
     () => {
       if (listeningOnly) return shapedRows.filter(isListening);
-      return shapedRows.filter((row) => includeInternal || isPublicIP(peerIp(row)));
+      return shapedRows.filter((row) => showInternal || isExternalConnection(row));
     },
-    [includeInternal, isListening, listeningOnly, shapedRows],
+    [isListening, listeningOnly, shapedRows, showInternal],
   );
   const externalHiddenRows =
-    !listeningOnly && !includeInternal ? Math.max(0, shapedRows.length - visibleRows.length) : 0;
+    !listeningOnly && !showInternal ? Math.max(0, shapedRows.length - visibleRows.length) : 0;
   const incompleteRows = Math.max(0, rows.length - shapedRows.length);
 
   useEffect(() => {
@@ -691,13 +694,13 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
               Listening only
             </Button>
             <Button
-              variant={includeInternal ? 'primary' : 'ghost'}
+              variant={showInternal ? 'primary' : 'ghost'}
               size="sm"
-              onClick={() => setIncludeInternal((v) => !v)}
-              aria-pressed={includeInternal}
+              onClick={() => setShowInternal((v) => !v)}
+              aria-pressed={showInternal}
               disabled={listeningOnly}
             >
-              Include internal
+              Show internal/private
             </Button>
             <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -706,9 +709,11 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
-        {externalHiddenRows > 0 && (
+        {!listeningOnly && !showInternal && (
           <p className="mb-3 text-xs text-text-muted">
-            Showing external peers only; {externalHiddenRows} internal or listener row{externalHiddenRows === 1 ? '' : 's'} hidden.
+            {externalHiddenRows > 0
+              ? `Showing external peers only; ${externalHiddenRows} internal or listener row${externalHiddenRows === 1 ? '' : 's'} hidden.`
+              : 'Showing external/unknown peers only. Toggle Show internal/private to include private, loopback, and listener rows.'}
           </p>
         )}
         {incompleteRows > 0 && (
@@ -716,11 +721,15 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
             Suppressed {incompleteRows} incomplete placeholder row{incompleteRows === 1 ? '' : 's'} with no usable peer, process, or port.
           </p>
         )}
-        {!loading && visibleRows.length === 0 ? (
+        {loading && visibleRows.length === 0 ? (
+          <div className="flex min-h-40 items-center justify-center rounded border border-border-subtle bg-elevated/40">
+            <Loader label="Loading connections..." />
+          </div>
+        ) : !loading && visibleRows.length === 0 ? (
           <p className="text-sm text-text-muted">
             {listeningOnly
               ? 'No listening sockets reported in the current 24h window.'
-              : includeInternal
+              : showInternal
               ? 'No connection activity reported in the current 24h window.'
               : 'No external connection activity reported in the current 24h window.'}
           </p>
@@ -944,30 +953,387 @@ function KnowledgeGraphCanvas({
   );
 }
 
-function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
+interface NodeMemorySignal {
+  name: string;
+  category: string;
+  confidence: number;
+  tone: StateTone;
+  evidence: string[];
+  next: string;
+}
+
+interface LogEvidenceRow {
+  label: string;
+  path: string;
+  source: 'detected' | 'expected';
+  detail: string;
+}
+
+interface ApplicationRootEvidence {
+  path: string;
+  source: 'process' | 'webserver-config' | 'filesystem-scan';
+  appName: string;
+  appType: string;
+  confidence: number;
+  status: string;
+  vhost?: string;
+  evidence: string[];
+  detail: string;
+}
+
+function serviceIsExposed(svc: import('@/lib/api').NodeService): boolean {
+  const addr = svc.listen_addr || '';
+  return addr.includes('0.0.0.0') || addr.includes('::') || addr.startsWith('*');
+}
+
+function compactText(value: string | null | undefined, fallback = 'unknown'): string {
+  const trimmed = (value ?? '').trim();
+  return trimmed || fallback;
+}
+
+function serviceEvidence(svc: import('@/lib/api').NodeService): string {
+  return `${compactText(svc.process)}:${svc.port}${svc.listen_addr ? ` on ${svc.listen_addr}` : ''}`;
+}
+
+function stringFromUnknown(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+}
+
+function numberFromUnknown(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function stringListFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(stringFromUnknown).filter(Boolean);
+  const single = stringFromUnknown(value);
+  return single ? [single] : [];
+}
+
+function applicationRootsFromInventory(
+  services: import('@/lib/api').NodeService[],
+  webservers: import('@/lib/api').WebserverInstance[],
+): ApplicationRootEvidence[] {
+  const rows = new Map<string, ApplicationRootEvidence>();
+  const put = (row: ApplicationRootEvidence) => {
+    const path = compactText(row.path, '');
+    if (!path) return;
+    const key = `${path.toLowerCase()}|${compactText(row.vhost, '').toLowerCase()}|${row.source}|${row.appType.toLowerCase()}`;
+    const current = rows.get(key);
+    if (!current || row.confidence > current.confidence || row.evidence.length > current.evidence.length) {
+      rows.set(key, { ...row, path });
+    }
+  };
+
+  for (const svc of services) {
+    if (!svc.app_root) continue;
+    put({
+      path: svc.app_root,
+      source: 'process',
+      appName: compactText(svc.app_name, compactText(svc.app_profile_id, 'Application')),
+      appType: compactText(svc.app_profile_id, 'unknown'),
+      confidence: svc.app_confidence ?? 60,
+      status: 'process cwd/cmdline',
+      evidence: svc.app_evidence?.length ? svc.app_evidence : [serviceEvidence(svc)],
+      detail: `${compactText(svc.process)}:${svc.port}${svc.working_dir ? ` cwd ${svc.working_dir}` : ''}`,
+    });
+  }
+
+  for (const instance of webservers) {
+    const caps = instance.Capabilities ?? {};
+    const candidates: Record<string, unknown>[] = [];
+    const appRoots = caps.application_roots;
+    if (Array.isArray(appRoots)) {
+      for (const item of appRoots) {
+        if (item && typeof item === 'object') candidates.push(item as Record<string, unknown>);
+      }
+    }
+    for (const vhost of instance.VHosts ?? []) candidates.push(vhost);
+
+    for (const item of candidates) {
+      const path = stringFromUnknown(item.path) || stringFromUnknown(item.document_root) || stringFromUnknown(item.root) || stringFromUnknown(item.app_root);
+      if (!path) continue;
+      const evidence = stringListFromUnknown(item.evidence).concat(stringListFromUnknown(item.detection_evidence));
+      const directive = stringFromUnknown(item.directive);
+      const fromFilesystem = directive === 'filesystem_scan' || evidence.some((entry) => entry.includes('filesystem_scan'));
+      put({
+        path,
+        source: fromFilesystem ? 'filesystem-scan' : 'webserver-config',
+        appName: stringFromUnknown(item.application_name) || stringFromUnknown(item.name) || 'Application root',
+        appType: stringFromUnknown(item.application_type) || stringFromUnknown(item.profile_id) || 'unknown',
+        confidence: numberFromUnknown(item.confidence) || (fromFilesystem ? 70 : 80),
+        status: stringFromUnknown(item.path_status) || stringFromUnknown(item.coverage_state) || 'reported',
+        vhost: stringFromUnknown(item.vhost) || stringFromUnknown(item.server_name) || stringFromUnknown(item.host),
+        evidence: evidence.length ? evidence : [fromFilesystem ? 'filesystem_scan' : `webserver_config:${compactText(instance.ConfigPath, 'unknown config')}`],
+        detail: `${compactText(instance.Kind, 'webserver')} ${compactText(instance.ConfigPath, 'config path unavailable')}`,
+      });
+    }
+  }
+
+  return Array.from(rows.values()).sort((a, b) => b.confidence - a.confidence || a.path.localeCompare(b.path));
+}
+
+function signalTone(confidence: number): StateTone {
+  if (confidence >= 85) return 'healthy';
+  if (confidence >= 65) return 'warning';
+  return 'unknown';
+}
+
+function addSignal(
+  signals: Map<string, NodeMemorySignal>,
+  key: string,
+  input: Omit<NodeMemorySignal, 'evidence'> & { evidence: string },
+): void {
+  const current = signals.get(key);
+  if (!current) {
+    signals.set(key, { ...input, evidence: [input.evidence] });
+    return;
+  }
+  current.confidence = Math.max(current.confidence, input.confidence);
+  current.tone = signalTone(current.confidence);
+  if (!current.evidence.includes(input.evidence)) current.evidence.push(input.evidence);
+}
+
+function inferNodeMemorySignals(
+  services: import('@/lib/api').NodeService[],
+  webservers: import('@/lib/api').WebserverInstance[],
+  appRoots: ApplicationRootEvidence[],
+): NodeMemorySignal[] {
+  const signals = new Map<string, NodeMemorySignal>();
+
+  for (const root of appRoots) {
+    const confidence = Math.max(50, Math.min(98, root.confidence || 70));
+    addSignal(signals, `app-root:${root.path}:${root.appType}`, {
+      name: `${root.appName} root`,
+      category: root.source === 'filesystem-scan' ? 'Filesystem app scan' : 'Application root',
+      confidence,
+      tone: signalTone(confidence),
+      evidence: `${root.path}${root.vhost ? ` / ${root.vhost}` : ''}`,
+      next: root.source === 'filesystem-scan'
+        ? 'Attach parser/log skill coverage for this scanned application root.'
+        : 'Use this vhost root as the app boundary for logs, ownership, and remediation.',
+    });
+  }
+
+  for (const instance of webservers) {
+    const evidence = [
+      compactText(instance.Kind, 'webserver'),
+      compactText(instance.ConfigPath, 'config path not reported'),
+      compactText(instance.AccessLogPath, 'access log path not reported'),
+    ].join(' / ');
+    addSignal(signals, `web:${instance.Kind}:${instance.ServiceName}`, {
+      name: `${compactText(instance.Kind, 'webserver')} control surface`,
+      category: 'Webserver inventory',
+      confidence: instance.AccessLogPath || instance.ErrorLogPath ? 95 : 82,
+      tone: 'healthy',
+      evidence,
+      next: instance.AccessLogPath || instance.ErrorLogPath
+        ? 'Use these log paths for cited request evidence and webserver enforcement receipts.'
+        : 'Run a managed inventory scan to capture access and error log paths.',
+    });
+  }
+
+  for (const svc of services) {
+    const haystack = `${svc.process} ${svc.binary_path} ${svc.service_kind} ${svc.probe_server ?? ''} ${svc.probe_title ?? ''}`.toLowerCase();
+    const evidence = serviceEvidence(svc);
+    const exposed = serviceIsExposed(svc);
+    const process = compactText(svc.process);
+
+    const candidates: Array<[boolean, string, string, string, number, string]> = [
+      [haystack.includes('nginx'), 'nginx', 'Nginx edge/webserver', 'Webserver', 82, 'Run webserver inventory if config and log paths are not already attached.'],
+      [haystack.includes('apache') || haystack.includes('httpd'), 'apache', 'Apache webserver', 'Webserver', 82, 'Run webserver inventory if config and log paths are not already attached.'],
+      [/(python|uvicorn|gunicorn|django|flask|fastapi|uwsgi)/.test(haystack), 'python', 'Python web application', 'Application framework', 74, 'Confirm framework middleware and request-id instrumentation are installed.'],
+      [/(node|nodejs|npm|next|nuxt|vite|express|bundle)/.test(haystack), 'nodejs', 'Node.js application', 'Application framework', 74, 'Confirm process manager, request logs, and source-map/error capture are connected.'],
+      [/(ruby|rails|puma|unicorn|passenger)/.test(haystack), 'ruby', 'Ruby application', 'Application framework', 72, 'Confirm Rails/Rack logs, exception traces, and request IDs are collected.'],
+      [/(php|php-fpm|wordpress|laravel)/.test(haystack), 'php', 'PHP application', 'Application framework', 72, 'Confirm PHP-FPM/application logs and webserver vhost mapping are collected.'],
+      [/(java|tomcat|jetty|spring)/.test(haystack), 'java', 'Java application', 'Application framework', 70, 'Confirm JVM logs, access logs, and app health endpoints are connected.'],
+      [/(mariadb|mysql|mysqld)/.test(haystack) || svc.port === 3306, 'mysql', 'MySQL/MariaDB database', 'Database', 78, 'Create least-privilege audit access and enable slow query/audit evidence.'],
+      [haystack.includes('postgres') || svc.port === 5432, 'postgres', 'PostgreSQL database', 'Database', 78, 'Create least-privilege audit access and enable slow query/audit evidence.'],
+      [haystack.includes('redis') || svc.port === 6379, 'redis', 'Redis cache', 'Cache', 76, 'Enable slowlog and auth/error log collection so cache incidents are cited, not inferred.'],
+      [haystack.includes('memcached') || svc.port === 11211, 'memcached', 'Memcached cache', 'Cache', 70, 'Restrict public exposure and attach cache access logs where available.'],
+      [haystack.includes('docker-proxy'), 'docker', 'Docker published service', 'Runtime', 68, 'Map the published port back to a container, owner, and approved exposure rule.'],
+      [haystack.includes('livekit'), 'livekit', 'LiveKit media service', 'Realtime media', 74, 'Attach LiveKit logs and confirm TURN/TLS exposure is intended.'],
+      [/(dovecot|pop3|imap|smtp|postfix)/.test(haystack) || [25, 587, 993, 995].includes(svc.port), 'mail', 'Mail service', 'Mail', 70, 'Confirm auth logs, TLS posture, and public exposure are expected.'],
+    ];
+
+    for (const [matches, key, name, category, baseConfidence, next] of candidates) {
+      if (!matches) continue;
+      const confidence = Math.min(98, baseConfidence + (svc.probe_status ? 8 : 0) + (exposed ? 0 : 4));
+      addSignal(signals, key, {
+        name,
+        category,
+        confidence,
+        tone: signalTone(confidence),
+        evidence: `${evidence}${svc.binary_path ? ` / ${svc.binary_path}` : ''}`,
+        next,
+      });
+    }
+
+    if (signals.size === 0 && process !== 'unknown') {
+      addSignal(signals, `process:${process}`, {
+        name: `${process} listener`,
+        category: 'Unclassified process',
+        confidence: 45,
+        tone: 'unknown',
+        evidence,
+        next: 'Attach a parser or connector contract so this stops being raw inventory only.',
+      });
+    }
+  }
+
+  return Array.from(signals.values()).sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name));
+}
+
+function expectedLogEvidenceForServices(services: import('@/lib/api').NodeService[]): LogEvidenceRow[] {
+  const rows = new Map<string, LogEvidenceRow>();
+  const add = (label: string, path: string, detail: string) => {
+    rows.set(`${label}:${path}`, { label, path, source: 'expected', detail });
+  };
+  for (const svc of services) {
+    const haystack = `${svc.process} ${svc.binary_path} ${svc.service_kind}`.toLowerCase();
+    if (haystack.includes('nginx')) {
+      add('nginx access log', '/var/log/nginx/access.log', 'Expected default; run webserver inventory to verify the exact vhost path.');
+      add('nginx error log', '/var/log/nginx/error.log', 'Expected default; run webserver inventory to verify the exact error log path.');
+    }
+    if (haystack.includes('apache') || haystack.includes('httpd')) {
+      add('Apache access log', '/var/log/httpd/access_log', 'Expected default on RHEL/Rocky; verify with webserver inventory.');
+      add('Apache error log', '/var/log/httpd/error_log', 'Expected default on RHEL/Rocky; verify with webserver inventory.');
+    }
+    if (haystack.includes('redis')) add('Redis log', '/var/log/redis/redis.log', 'Expected default; verify service config before citing.');
+    if (haystack.includes('mariadb') || haystack.includes('mysql')) add('MariaDB/MySQL log', '/var/log/mariadb/mariadb.log', 'Expected default; audit/slow-query access is still required for DB-level proof.');
+    if (haystack.includes('php')) add('PHP-FPM log', '/var/log/php-fpm/error.log', 'Expected default; verify pool-specific path before citing.');
+  }
+  return Array.from(rows.values());
+}
+
+function detectedLogEvidence(webservers: import('@/lib/api').WebserverInstance[]): LogEvidenceRow[] {
+  const rows: LogEvidenceRow[] = [];
+  for (const instance of webservers) {
+    const name = compactText(instance.Kind, 'webserver');
+    if (instance.AccessLogPath) {
+      rows.push({
+        label: `${name} access log`,
+        path: instance.AccessLogPath,
+        source: 'detected',
+        detail: compactText(instance.ConfigPath, 'webserver config inventory'),
+      });
+    }
+    if (instance.ErrorLogPath) {
+      rows.push({
+        label: `${name} error log`,
+        path: instance.ErrorLogPath,
+        source: 'detected',
+        detail: compactText(instance.ConfigPath, 'webserver config inventory'),
+      });
+    }
+  }
+  return rows;
+}
+
+function memoryFacts(
+  services: import('@/lib/api').NodeService[],
+  signals: NodeMemorySignal[],
+  webservers: import('@/lib/api').WebserverInstance[],
+  appRoots: ApplicationRootEvidence[],
+): string[] {
+  const exposed = services.filter(serviceIsExposed).length;
+  const appSignals = signals.filter((s) => s.category === 'Application framework' || s.category === 'Application root' || s.category === 'Filesystem app scan');
+  const dbSignals = signals.filter((s) => s.category === 'Database' || s.category === 'Cache');
+  return [
+    `${services.length} listening service${services.length === 1 ? '' : 's'} reported; ${exposed} bind to public/all interfaces.`,
+    appSignals.length > 0
+      ? `Application frameworks inferred: ${appSignals.map((s) => s.name.replace(' application', '')).slice(0, 5).join(', ')}.`
+      : 'No application framework signal is strong enough yet.',
+    dbSignals.length > 0
+      ? `Data services inferred: ${dbSignals.map((s) => s.name).slice(0, 5).join(', ')}.`
+      : 'No database/cache service signal is strong enough yet.',
+    webservers.length > 0
+      ? `${webservers.length} webserver inventory record${webservers.length === 1 ? '' : 's'} include config/log context.`
+      : 'No managed webserver inventory record is attached to this node yet.',
+    appRoots.length > 0
+      ? `${appRoots.length} application root${appRoots.length === 1 ? '' : 's'} scanned or mapped from process/webserver evidence.`
+      : 'No application root scan result is attached yet.',
+  ];
+}
+
+function memoryGaps(
+  services: import('@/lib/api').NodeService[],
+  webservers: import('@/lib/api').WebserverInstance[],
+  logRows: LogEvidenceRow[],
+  appRoots: ApplicationRootEvidence[],
+): string[] {
+  const gaps: string[] = [];
+  const hasPublic = services.some(serviceIsExposed);
+  const hasWeb = services.some((svc) => /nginx|apache|httpd|python|node|ruby|php/.test(`${svc.process} ${svc.service_kind}`.toLowerCase()));
+  if (hasPublic) gaps.push('Public listeners need a firewall/isolation protection signal before exposure confidence can reach 100%.');
+  if (hasWeb && webservers.length === 0) gaps.push('Run webserver inventory to turn inferred app roots into verified config, vhost, and log paths.');
+  if (hasWeb && appRoots.length === 0) gaps.push('Run application-root inventory so common paths such as /var/www, /srv/www, and process working directories are scanned.');
+  if (logRows.every((row) => row.source !== 'detected')) gaps.push('Log paths shown as expected defaults are not citation-grade until inventory or connector setup verifies them.');
+  if (services.some((svc) => (svc.service_kind || '').toLowerCase() === 'unknown')) gaps.push('Unknown service kinds need a parser/connector mapping or a not-applicable decision.');
+  return gaps.length ? gaps : ['No major knowledge gaps are visible from the current inventory snapshot.'];
+}
+
+function KnowledgeGraphTab({ nodeId, tenantId }: { nodeId: string; tenantId: string }) {
   const api = useApiClient();
+  const { showToast } = useToast();
   const [services, setServices] = useState<import('@/lib/api').NodeService[]>([]);
+  const [webservers, setWebservers] = useState<import('@/lib/api').WebserverInstance[]>([]);
   const [loading, setLoading] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadInventory = useCallback((cancelledRef?: { cancelled: boolean }) => {
     setLoading(true);
-    api
-      .listNodeServices(nodeId)
-      .then((resp) => {
-        if (!cancelled) setServices(resp.data ?? []);
-      })
-      .catch((e) => {
-        if (!cancelled) setErr(e instanceof Error ? e.message : 'load failed');
+    Promise.allSettled([
+      api.listNodeServices(nodeId),
+      api.listWebserverInstances({ tenantId, nodeId, limit: 50 }),
+    ])
+      .then(([serviceResult, webserverResult]) => {
+        if (cancelledRef?.cancelled) return;
+        if (serviceResult.status === 'fulfilled') {
+          setServices(serviceResult.value.data ?? []);
+        } else {
+          setErr(serviceResult.reason instanceof Error ? serviceResult.reason.message : 'load failed');
+        }
+        if (webserverResult.status === 'fulfilled') {
+          setWebservers(webserverResult.value.data ?? []);
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelledRef?.cancelled) setLoading(false);
       });
+  }, [api, nodeId, tenantId]);
+
+  useEffect(() => {
+    const cancelledRef = { cancelled: false };
+    loadInventory(cancelledRef);
     return () => {
-      cancelled = true;
+      cancelledRef.cancelled = true;
     };
-  }, [api, nodeId]);
+  }, [loadInventory]);
+
+  const queueAppRootScan = useCallback(async () => {
+    setScanLoading(true);
+    try {
+      await api.createWebserverInventoryScan({
+        tenant_id: tenantId,
+        node_id: nodeId,
+        policy: { reason: 'node-detail-application-root-scan' },
+      });
+      showToast('Application-root inventory scan queued', 'success');
+      window.setTimeout(() => loadInventory(), 8000);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to queue application-root scan', 'error');
+    } finally {
+      setScanLoading(false);
+    }
+  }, [api, loadInventory, nodeId, showToast, tenantId]);
 
   const normalizedServices = useMemo(() => {
     const groups = new Map<string, import('@/lib/api').NodeService[]>();
@@ -979,24 +1345,77 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
     }
     return Array.from(groups.values()).map((bucket) => {
       const canonical = bucket[0];
+      const appSource = bucket.find((s) => s.app_root) ?? canonical;
       const listens = Array.from(new Set(bucket.map((s) => s.listen_addr || '*')));
       const probe = bucket.find((s) => s.probe_status != null)?.probe_status ?? canonical.probe_status;
       return {
         ...canonical,
         probe_status: probe,
         listen_addr: listens.join(' / '),
+        working_dir: appSource.working_dir,
+        command_line: appSource.command_line,
+        app_root: appSource.app_root,
+        app_profile_id: appSource.app_profile_id,
+        app_name: appSource.app_name,
+        app_confidence: appSource.app_confidence,
+        app_evidence: appSource.app_evidence,
       };
     });
   }, [services]);
 
   const processCount = new Set(normalizedServices.map((svc) => svc.process || 'unknown')).size;
-  const exposedCount = normalizedServices.filter((svc) => {
-    const addr = svc.listen_addr || '';
-    return addr.includes('0.0.0.0') || addr.includes('::') || addr.startsWith('*');
-  }).length;
+  const exposedCount = normalizedServices.filter(serviceIsExposed).length;
+  const appRoots = useMemo(() => applicationRootsFromInventory(normalizedServices, webservers), [normalizedServices, webservers]);
+  const signals = useMemo(() => inferNodeMemorySignals(normalizedServices, webservers, appRoots), [appRoots, normalizedServices, webservers]);
+  const detectedLogs = useMemo(() => detectedLogEvidence(webservers), [webservers]);
+  const expectedLogs = useMemo(() => expectedLogEvidenceForServices(normalizedServices), [normalizedServices]);
+  const logRows = detectedLogs.length > 0 ? detectedLogs : expectedLogs;
+  const facts = useMemo(() => memoryFacts(normalizedServices, signals, webservers, appRoots), [appRoots, normalizedServices, signals, webservers]);
+  const gaps = useMemo(() => memoryGaps(normalizedServices, webservers, logRows, appRoots), [appRoots, normalizedServices, webservers, logRows]);
+  const topSignalNames = signals.slice(0, 4).map((signal) => signal.name).join(', ');
 
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+    <div className="flex flex-col gap-4">
+      <Panel padding="md" eyebrow="AI MEMORY" title="Node memory summary">
+        <div className="grid gap-4 xl:grid-cols-[1fr_24rem]">
+          <div>
+            <p className="text-sm leading-6 text-text-secondary">
+              {topSignalNames
+                ? `This node currently reads like ${topSignalNames}. The memory is built from reported listeners, probes, webserver inventory, and citation-grade gaps; inferred facts stay labelled until a connector verifies them.`
+                : 'This node has not produced enough service evidence for a useful memory summary yet.'}
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {facts.map((fact) => (
+                <div key={fact} className="rounded-md border border-border-subtle bg-surface px-3 py-2 text-xs text-text-secondary">
+                  {fact}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border-subtle bg-elevated p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">What is missing</p>
+            <ul className="mt-2 flex flex-col gap-2 text-xs text-text-secondary">
+              {gaps.map((gap) => (
+                <li key={gap} className="rounded-md bg-surface px-3 py-2">{gap}</li>
+              ))}
+            </ul>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant="primary" size="sm" onClick={queueAppRootScan} disabled={scanLoading}>
+                <RefreshCw className={`h-3.5 w-3.5 ${scanLoading ? 'animate-spin' : ''}`} />
+                Scan app roots
+              </Button>
+              <Button asChild variant="secondary" size="sm">
+                <Link to="/security/webservers">Webserver control</Link>
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/observability">Connector setup</Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
       <Panel padding="md" eyebrow="KNOWLEDGE GRAPH" title="Node service graph">
         {loading && <Loader label="Loading services..." />}
         {err && <Alert variant="critical">{err}</Alert>}
@@ -1048,6 +1467,123 @@ function KnowledgeGraphTab({ nodeId }: { nodeId: string }) {
           ))}
         </ul>
       </Panel>
+      </div>
+
+      <Panel
+        padding="md"
+        eyebrow="APPLICATION ROOTS"
+        title={`${appRoots.length} scanned or mapped root${appRoots.length === 1 ? '' : 's'}`}
+        actions={
+          <Button variant="ghost" size="sm" onClick={queueAppRootScan} disabled={scanLoading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${scanLoading ? 'animate-spin' : ''}`} /> Scan
+          </Button>
+        }
+      >
+        {appRoots.length === 0 ? (
+          <Alert variant="warning" title="No application roots scanned yet">
+            Queue an inventory scan to inspect common web roots such as /var/www,
+            /srv/www, /usr/share/nginx/html, plus process working directories
+            reported by the agent.
+          </Alert>
+        ) : (
+          <div className="grid gap-2 lg:grid-cols-2">
+            {appRoots.map((root) => (
+              <div key={`${root.source}:${root.path}:${root.vhost ?? ''}:${root.appType}`} className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{root.appName}</p>
+                    <p className="break-all font-mono text-xs text-text-secondary">{root.path}</p>
+                  </div>
+                  <StatusTag tone={signalTone(root.confidence)}>
+                    {root.confidence}% {root.source.replace('-', ' ')}
+                  </StatusTag>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <span className="rounded border border-border-subtle bg-elevated px-2 py-1 text-[0.65rem] uppercase tracking-wide text-text-muted">
+                    {root.appType}
+                  </span>
+                  <span className="rounded border border-border-subtle bg-elevated px-2 py-1 text-[0.65rem] uppercase tracking-wide text-text-muted">
+                    {root.status}
+                  </span>
+                  {root.vhost ? (
+                    <span className="rounded border border-border-subtle bg-elevated px-2 py-1 font-mono text-[0.65rem] text-text-muted">
+                      {root.vhost}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-2 text-xs text-text-muted">{root.detail}</p>
+                {root.evidence.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {root.evidence.slice(0, 4).map((item) => (
+                      <span key={item} className="rounded border border-border-subtle bg-elevated px-2 py-1 font-mono text-[0.65rem] text-text-muted">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Panel padding="md" eyebrow="APPLICATIONS" title="Frameworks and service roles">
+          {signals.length === 0 ? (
+            <Alert variant="info" title="No framework signal yet">
+              Listener inventory exists, but no process, binary path, probe, or webserver
+              evidence maps cleanly to a supported framework.
+            </Alert>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {signals.map((signal) => (
+                <li key={`${signal.category}:${signal.name}`} className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{signal.name}</p>
+                      <p className="text-xs text-text-muted">{signal.category}</p>
+                    </div>
+                    <StatusTag tone={signal.tone}>{signal.confidence}% confidence</StatusTag>
+                  </div>
+                  <p className="mt-2 text-xs text-text-secondary">{signal.next}</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {signal.evidence.slice(0, 4).map((item) => (
+                      <span key={item} className="rounded border border-border-subtle bg-elevated px-2 py-1 font-mono text-[0.65rem] text-text-muted">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel padding="md" eyebrow="LOG EVIDENCE" title="Log and config paths">
+          {logRows.length === 0 ? (
+            <Alert variant="warning" title="No log paths known">
+              Control One has service inventory for this node, but no verified
+              config or log path. Run webserver inventory or connector setup
+              before treating logs as citation-grade evidence.
+            </Alert>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {logRows.map((row) => (
+                <li key={`${row.label}:${row.path}`} className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-foreground">{row.label}</p>
+                    <StatusTag tone={row.source === 'detected' ? 'healthy' : 'warning'}>
+                      {row.source}
+                    </StatusTag>
+                  </div>
+                  <p className="mt-1 break-all font-mono text-xs text-text-secondary">{row.path}</p>
+                  <p className="mt-1 text-xs text-text-muted">{row.detail}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
     </div>
   );
 

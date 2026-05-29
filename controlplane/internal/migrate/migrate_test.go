@@ -66,6 +66,12 @@ func TestMigrationsUpAndDown(t *testing.T) {
         )`).Scan(&tableExists))
 	require.True(t, tableExists, "provisioning_templates table should exist after up migrations")
 
+	_, err = db.ExecContext(ctx, `
+        INSERT INTO event_ingest_batches (status, rows)
+        VALUES ('local_completed', 1)
+    `)
+	require.NoError(t, err, "event ingest journal should accept local_completed status")
+
 	// Run down migrations to ensure reversibility (including 0004).
 	src, err := iofs.New(migrationsFS, "sql")
 	require.NoError(t, err)

@@ -548,17 +548,34 @@ func TestApplicationRootDiscoveryClassifiesConfiguredApps(t *testing.T) {
 	inst := WebServerInstance{Kind: "nginx", ConfigPath: configPath, Capabilities: map[string]any{}}
 	enrichDetectedInstance(&inst)
 	apps, ok := inst.Capabilities["application_roots"].([]map[string]any)
-	if !ok || len(apps) != 1 {
+	if !ok || len(apps) == 0 {
 		t.Fatalf("application roots not discovered: %#v", inst.Capabilities["application_roots"])
 	}
-	if apps[0]["application_type"] != "nodejs" {
-		t.Fatalf("application_type = %#v, want nodejs", apps[0]["application_type"])
+	var configuredApp map[string]any
+	for _, app := range apps {
+		if app["path"] == appDir {
+			configuredApp = app
+			break
+		}
+	}
+	if configuredApp == nil {
+		t.Fatalf("configured application root not discovered: %#v", apps)
+	}
+	if configuredApp["application_type"] != "nodejs" {
+		t.Fatalf("application_type = %#v, want nodejs", configuredApp["application_type"])
 	}
 	purposes, ok := inst.Capabilities["server_purposes"].([]string)
 	if !ok || len(purposes) == 0 {
 		t.Fatalf("server purposes missing: %#v", inst.Capabilities["server_purposes"])
 	}
-	if len(inst.VHosts) != 1 || inst.VHosts[0]["document_root"] == "" {
+	var foundVHost bool
+	for _, vhost := range inst.VHosts {
+		if vhost["document_root"] == appDir {
+			foundVHost = true
+			break
+		}
+	}
+	if !foundVHost {
 		t.Fatalf("vhost app metadata missing: %#v", inst.VHosts)
 	}
 }

@@ -324,7 +324,20 @@ export function ControlRoom(): JSX.Element {
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Panel className="xl:col-span-2" eyebrow="INCIDENTS" title="Top incidents" toneAccent="warning">
+        <Panel
+          className="xl:col-span-2"
+          eyebrow="INCIDENTS"
+          title="Top incidents"
+          toneAccent="warning"
+          actions={
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/cases">
+                Open cases
+                <ArrowRight />
+              </Link>
+            </Button>
+          }
+        >
           {loading && !overview ? (
             <Skeleton className="h-40 rounded-lg" />
           ) : overview && overview.top_incidents.length > 0 ? (
@@ -479,6 +492,19 @@ function ExposureConfidencePanel({ lane, loading, className }: { lane?: ControlR
   const criticalGaps = lane ? metricByLabel(lane, 'Critical gaps') : undefined;
   const firewallGaps = lane ? metricByLabel(lane, 'Public firewall gaps') : undefined;
   const webReady = lane ? metricByLabel(lane, 'Web block ready') : undefined;
+  const publicCount = metricValueNumber(publicListeners?.value);
+  const protectedCount = metricValueNumber(protectedListeners?.value);
+  const criticalCount = metricValueNumber(criticalGaps?.value);
+  const firewallGapCount = metricValueNumber(firewallGaps?.value);
+  const unprotectedCount = Math.max(0, publicCount - protectedCount);
+  const nextSteps = buildExposureNextSteps({
+    confidence,
+    publicCount,
+    protectedCount,
+    criticalCount,
+    firewallGapCount,
+    webReady: webReady?.value,
+  });
 
   return (
     <Panel
@@ -522,6 +548,31 @@ function ExposureConfidencePanel({ lane, loading, className }: { lane?: ControlR
                 Web enforcement readiness: <span className="font-mono text-foreground">{webReady.value}</span>
               </div>
             ) : null}
+            <div className="rounded-lg border border-border-subtle bg-elevated p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Path to 100%</p>
+                  <p className="mt-1 text-sm text-text-secondary">
+                    {confidence >= 100
+                      ? 'Every reported public listener has a current protection signal.'
+                      : unprotectedCount > 0
+                      ? `${unprotectedCount} public listener${unprotectedCount === 1 ? '' : 's'} still need default-deny firewall, whitelist-only isolation, or an approved webserver control receipt.`
+                      : 'The remaining confidence gap is in stale, unknown, or unverified protection evidence.'}
+                  </p>
+                </div>
+                <Button asChild variant="secondary" size="sm">
+                  <Link to="/control-room/exposure">
+                    Exact gaps
+                    <ArrowRight />
+                  </Link>
+                </Button>
+              </div>
+              <ul className="mt-3 grid gap-2 text-xs text-text-secondary sm:grid-cols-2">
+                {nextSteps.map((step) => (
+                  <li key={step} className="rounded-md bg-surface px-3 py-2">{step}</li>
+                ))}
+              </ul>
+            </div>
             {lane.items?.length ? (
               <div className="flex flex-col gap-2">
                 {lane.items.slice(0, 3).map((item) => (
@@ -668,6 +719,44 @@ function metricByLabel(lane: ControlRoomLane, label: string) {
   if (lane.primary_metric.label === label) return lane.primary_metric;
   if (lane.secondary_metric.label === label) return lane.secondary_metric;
   return lane.metrics.find((metric) => metric.label === label);
+}
+
+function metricValueNumber(value?: string | number | null): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const match = String(value ?? '').match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
+function buildExposureNextSteps(input: {
+  confidence: number;
+  publicCount: number;
+  protectedCount: number;
+  criticalCount: number;
+  firewallGapCount: number;
+  webReady?: string;
+}): string[] {
+  if (input.confidence >= 100) {
+    return [
+      'Keep firewall and isolation heartbeats fresh so this score does not decay.',
+      'Resolve any new public listener by attaching an owner, approved port, and receipt.',
+    ];
+  }
+  const steps: string[] = [];
+  const unprotected = Math.max(0, input.publicCount - input.protectedCount);
+  if (unprotected > 0) {
+    steps.push(`Protect ${unprotected} public listener${unprotected === 1 ? '' : 's'} with whitelist-only isolation or default-deny inbound rules.`);
+  }
+  if (input.firewallGapCount > 0) {
+    steps.push(`Fix ${input.firewallGapCount} firewall signal gap${input.firewallGapCount === 1 ? '' : 's'} by getting enabled/default-deny state from the agent.`);
+  }
+  if (input.criticalCount > 0) {
+    steps.push(`Handle ${input.criticalCount} critical gap${input.criticalCount === 1 ? '' : 's'} first; these block confidence from becoming action-ready.`);
+  }
+  if (input.webReady && input.webReady !== '0/0') {
+    steps.push(`Use webserver controls where ready (${input.webReady}) and keep proposal/receipt status attached.`);
+  }
+  steps.push('Open the exposure drilldown for the exact listener, node, and recommended containment action.');
+  return steps.slice(0, 4);
 }
 
 function exposureConfidenceLabel(score: number): string {
@@ -863,7 +952,7 @@ function buildQuickQuestions(
     : null;
   return [
     {
-      label: 'Broken',
+      label: 'Health incidents',
       value: server?.secondary_metric.value ?? '0',
       tone: server?.secondary_metric.tone ?? 'unknown',
       hint: server?.summary ?? 'No server status',
@@ -884,9 +973,9 @@ function buildQuickQuestions(
       icon: <Globe2 />,
     },
     {
-      label: 'Patch changes',
-      value: patch?.metrics.find((m) => m.label === 'Recent deployments')?.value ?? '0',
-      tone: patch?.tone ?? 'unknown',
+      label: 'Patch failures',
+      value: patch?.secondary_metric.value ?? '0',
+      tone: patch?.secondary_metric.tone ?? 'unknown',
       hint: patch?.summary ?? 'No patch data',
       icon: <Wrench />,
     },

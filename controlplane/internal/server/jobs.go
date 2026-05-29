@@ -952,6 +952,70 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 	writeJSON(w, http.StatusOK, jobResponseFromModel(job, events, results))
 }
 
+func principalCanReadJob(principal *auth.Principal, job *storage.Job) bool {
+	if principal == nil || job == nil {
+		return false
+	}
+	if strings.EqualFold(principal.Type, "agent") {
+		return agentCanReadJob(principal, job)
+	}
+	return hasRole(principal, roleViewer) || hasRole(principal, roleAdmin)
+}
+
+func agentCanReadJob(principal *auth.Principal, job *storage.Job) bool {
+	if !agentReadableJobType(job.Type) {
+		return false
+	}
+	principalNodeID := agentPrincipalNodeID(principal)
+	if principalNodeID == uuid.Nil {
+		return false
+	}
+	return jobPayloadNodeID(job.Payload) == principalNodeID
+}
+
+func agentReadableJobType(jobType string) bool {
+	switch strings.TrimSpace(jobType) {
+	case JobTypeAgentUpdate,
+		JobTypeFirewallRuleAdd,
+		JobTypeFirewallRuleDelete,
+		JobTypePatchDeployDirect,
+		JobTypePatchDeployProxy,
+		JobTypePatchDeployAirgapped,
+		JobTypePatchInventoryScan,
+		JobTypeSquidInstall,
+		JobTypeSquidReconfigure,
+		JobTypeSquidConfigureClient,
+		JobTypeWebserverInventoryScan,
+		JobTypeWebserverConfigPlan,
+		JobTypeWebserverConfigApply,
+		JobTypeWebserverBlocklistUpdate,
+		JobTypeWebserverConfigRollback:
+		return true
+	default:
+		return false
+	}
+}
+
+func jobPayloadNodeID(payload []byte) uuid.UUID {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return uuid.Nil
+	}
+	for _, key := range []string{"node_id", "NodeID"} {
+		raw := envelope[key]
+		if len(raw) == 0 {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil {
+			if id, parseErr := uuid.Parse(strings.TrimSpace(value)); parseErr == nil {
+				return id
+			}
+		}
+	}
+	return uuid.Nil
+}
+
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -1222,7 +1286,7 @@ func (s *Server) authorizeJobRead(w http.ResponseWriter, r *http.Request, princi
 		return false
 	}
 	if strings.EqualFold(principal.Type, "agent") {
-		if jobTargetsAgentNode(job, principal) {
+		if agentCanReadJob(principal, job) {
 			return true
 		}
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)

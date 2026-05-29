@@ -16,7 +16,6 @@ import (
 )
 
 func TestSprint6AIAskUsesEventCaptureEvidence(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint6IncidentStore(tenantID, nodeID)

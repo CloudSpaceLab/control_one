@@ -199,11 +199,11 @@ func (s *Server) listFlowDeltas(ctx context.Context, filter EventCaptureFilter) 
 	if span <= 0 {
 		span = time.Hour
 	}
-	current, err := s.dorisClient.ListConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since, filter.Until, limit, false)
+	current, err := s.dorisClient.ListConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since, filter.Until, limit, false, false)
 	if err != nil {
 		return nil, err
 	}
-	previous, err := s.dorisClient.ListConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since.Add(-span), filter.Since, limit, false)
+	previous, err := s.dorisClient.ListConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since.Add(-span), filter.Since, limit, false, false)
 	if err != nil {
 		return nil, err
 	}

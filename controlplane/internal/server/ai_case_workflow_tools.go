@@ -225,7 +225,8 @@ func (s *Server) runCaseNoteAddTool(ctx context.Context, tc aiToolContext, input
 				return aiToolExecution{}, errors.New("case is outside requested tenant")
 			}
 			allowedCitations := map[string]struct{}{}
-			for _, ref := range socCaseEvidenceRefs(parseSOCCaseEvidence(investigation.Evidence)) {
+			citation := workflowCitation("ai_investigations", investigation.ID.String(), "soc_case")
+			for _, ref := range socCaseEvidenceRefsForRow(*investigation, parseSOCCaseEvidence(investigation.Evidence), citation) {
 				allowedCitations[ref.ID] = struct{}{}
 			}
 			for _, citation := range citationRefs {

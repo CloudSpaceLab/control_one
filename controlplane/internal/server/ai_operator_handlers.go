@@ -11,10 +11,6 @@ import (
 )
 
 func (s *Server) handleAIInvestigations(w http.ResponseWriter, r *http.Request) {
-	if !aiAskEnabled() {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -69,10 +65,6 @@ func (s *Server) handleAIInvestigations(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleAIOperatorProposals(w http.ResponseWriter, r *http.Request) {
-	if !aiAskEnabled() {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)

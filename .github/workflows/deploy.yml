@@ -100,7 +100,9 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
-            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx'
+            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel'
+            chown 65532:65532 '$DEPLOY_DIR/threat-intel'
+            chmod 750 '$DEPLOY_DIR/threat-intel'
           "
 
       - name: Upload Go binaries
@@ -133,10 +135,14 @@ jobs:
           scp -P "${SSH_PORT:-22}" \
             deploy/Dockerfile.controlplane.prebuilt \
             deploy/Dockerfile.console.prebuilt \
+            deploy/docker-compose.yaml \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/"
           scp -P "${SSH_PORT:-22}" \
             deploy/nginx/console.conf \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/nginx/console.conf"
+          scp -P "${SSH_PORT:-22}" \
+            deploy/doris/be_custom.conf \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/doris/be_custom.conf"
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
             set -e
             rm -rf '$DEPLOY_UI_DIR'
@@ -170,15 +176,13 @@ jobs:
           # Hit /healthz on the controlplane container directly via SSH so
           # Cloudflare's bot-protection on the public hostname can't 403 the
           # GitHub-runner IP and block what is otherwise a healthy deploy.
-          # We spin up a transient curl image on the same docker network as
-          # the controlplane container — distroless has no shell, so we
-          # cannot `docker exec` into the controlplane image directly.
+          # The service is published on host localhost; using that address
+          # avoids brittle Docker-network discovery when controlplane joins
+          # multiple networks.
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" '
             set -e
-            net=$(docker inspect deploy-controlplane-1 --format "{{range \$k,\$_ := .NetworkSettings.Networks}}{{\$k}}{{end}}")
             for i in 1 2 3 4 5 6; do
-              if docker run --rm --network "$net" curlimages/curl:8.10.1 \
-                   -fsS --max-time 5 http://controlplane:8443/healthz 2>/dev/null; then
+              if curl -fsS --max-time 5 http://127.0.0.1:8443/healthz 2>/dev/null; then
                 echo
                 echo "✓ controlplane /healthz OK"
                 exit 0

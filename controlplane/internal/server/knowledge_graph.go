@@ -26,33 +26,47 @@ type nodeServicesRequest struct {
 }
 
 type nodeServiceItem struct {
-	PID              int     `json:"pid"`
-	Process          string  `json:"process"`
-	BinaryPath       string  `json:"binary_path"`
-	ListenAddr       string  `json:"listen_addr"`
-	Port             int     `json:"port"`
-	ServiceKind      string  `json:"service_kind"`
-	ProbeStatus      *int    `json:"probe_status,omitempty"`
-	ProbeServer      *string `json:"probe_server,omitempty"`
-	ProbeTitle       *string `json:"probe_title,omitempty"`
-	ProbeContentType *string `json:"probe_content_type,omitempty"`
+	PID              int      `json:"pid"`
+	Process          string   `json:"process"`
+	BinaryPath       string   `json:"binary_path"`
+	WorkingDir       string   `json:"working_dir,omitempty"`
+	CommandLine      string   `json:"command_line,omitempty"`
+	ListenAddr       string   `json:"listen_addr"`
+	Port             int      `json:"port"`
+	ServiceKind      string   `json:"service_kind"`
+	ProbeStatus      *int     `json:"probe_status,omitempty"`
+	ProbeServer      *string  `json:"probe_server,omitempty"`
+	ProbeTitle       *string  `json:"probe_title,omitempty"`
+	ProbeContentType *string  `json:"probe_content_type,omitempty"`
+	AppRoot          string   `json:"app_root,omitempty"`
+	AppProfileID     string   `json:"app_profile_id,omitempty"`
+	AppName          string   `json:"app_name,omitempty"`
+	AppConfidence    int      `json:"app_confidence,omitempty"`
+	AppEvidence      []string `json:"app_evidence,omitempty"`
 }
 
 type nodeServiceResponse struct {
-	ID               string  `json:"id"`
-	NodeID           string  `json:"node_id"`
-	TenantID         string  `json:"tenant_id"`
-	PID              int     `json:"pid"`
-	Process          string  `json:"process"`
-	BinaryPath       string  `json:"binary_path"`
-	ListenAddr       string  `json:"listen_addr"`
-	Port             int     `json:"port"`
-	ServiceKind      string  `json:"service_kind"`
-	ProbeStatus      *int    `json:"probe_status,omitempty"`
-	ProbeServer      *string `json:"probe_server,omitempty"`
-	ProbeTitle       *string `json:"probe_title,omitempty"`
-	ProbeContentType *string `json:"probe_content_type,omitempty"`
-	ObservedAt       string  `json:"observed_at"`
+	ID               string   `json:"id"`
+	NodeID           string   `json:"node_id"`
+	TenantID         string   `json:"tenant_id"`
+	PID              int      `json:"pid"`
+	Process          string   `json:"process"`
+	BinaryPath       string   `json:"binary_path"`
+	WorkingDir       string   `json:"working_dir,omitempty"`
+	CommandLine      string   `json:"command_line,omitempty"`
+	ListenAddr       string   `json:"listen_addr"`
+	Port             int      `json:"port"`
+	ServiceKind      string   `json:"service_kind"`
+	ProbeStatus      *int     `json:"probe_status,omitempty"`
+	ProbeServer      *string  `json:"probe_server,omitempty"`
+	ProbeTitle       *string  `json:"probe_title,omitempty"`
+	ProbeContentType *string  `json:"probe_content_type,omitempty"`
+	AppRoot          string   `json:"app_root,omitempty"`
+	AppProfileID     string   `json:"app_profile_id,omitempty"`
+	AppName          string   `json:"app_name,omitempty"`
+	AppConfidence    int      `json:"app_confidence,omitempty"`
+	AppEvidence      []string `json:"app_evidence,omitempty"`
+	ObservedAt       string   `json:"observed_at"`
 }
 
 type nodeApprovedLogSourcesResponse struct {
@@ -85,6 +99,8 @@ func newNodeServiceResponse(svc storage.NodeService) nodeServiceResponse {
 		PID:              svc.PID,
 		Process:          svc.Process,
 		BinaryPath:       svc.BinaryPath,
+		WorkingDir:       svc.WorkingDir,
+		CommandLine:      svc.CommandLine,
 		ListenAddr:       svc.ListenAddr,
 		Port:             svc.Port,
 		ServiceKind:      svc.ServiceKind,
@@ -92,6 +108,11 @@ func newNodeServiceResponse(svc storage.NodeService) nodeServiceResponse {
 		ProbeServer:      svc.ProbeServer,
 		ProbeTitle:       svc.ProbeTitle,
 		ProbeContentType: svc.ProbeContentType,
+		AppRoot:          svc.AppRoot,
+		AppProfileID:     svc.AppProfileID,
+		AppName:          svc.AppName,
+		AppConfidence:    svc.AppConfidence,
+		AppEvidence:      svc.AppEvidence,
 		ObservedAt:       svc.ObservedAt.UTC().Format(time.RFC3339),
 	}
 }
@@ -161,6 +182,8 @@ func (s *Server) handleNodeServicesIngest(w http.ResponseWriter, r *http.Request
 			PID:              svc.PID,
 			Process:          svc.Process,
 			BinaryPath:       svc.BinaryPath,
+			WorkingDir:       svc.WorkingDir,
+			CommandLine:      svc.CommandLine,
 			ListenAddr:       svc.ListenAddr,
 			Port:             svc.Port,
 			ServiceKind:      svc.ServiceKind,
@@ -168,6 +191,11 @@ func (s *Server) handleNodeServicesIngest(w http.ResponseWriter, r *http.Request
 			ProbeServer:      svc.ProbeServer,
 			ProbeTitle:       svc.ProbeTitle,
 			ProbeContentType: svc.ProbeContentType,
+			AppRoot:          svc.AppRoot,
+			AppProfileID:     svc.AppProfileID,
+			AppName:          svc.AppName,
+			AppConfidence:    svc.AppConfidence,
+			AppEvidence:      sanitizeStringSlice(svc.AppEvidence, 12),
 		})
 	}
 
@@ -639,6 +667,18 @@ func (s *Server) buildKGSections(ctx context.Context, tenantID uuid.UUID) ([]kgS
 	for _, svc := range services {
 		servicesByNode[svc.NodeID] = append(servicesByNode[svc.NodeID], svc)
 	}
+	webserversByNode := map[uuid.UUID][]storage.WebserverInstance{}
+	if store, ok := s.store.(interface {
+		ListWebserverInstances(context.Context, uuid.UUID, uuid.UUID, int, int) ([]storage.WebserverInstance, int, error)
+	}); ok {
+		if webservers, _, err := store.ListWebserverInstances(ctx, tenantID, uuid.Nil, 1000, 0); err == nil {
+			for _, web := range webservers {
+				webserversByNode[web.NodeID] = append(webserversByNode[web.NodeID], web)
+			}
+		} else {
+			s.logger.Warn("list webservers for knowledge graph", zap.Error(err))
+		}
+	}
 
 	// Stable ordering — nodes by hostname for deterministic output.
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Hostname < nodes[j].Hostname })
@@ -689,7 +729,7 @@ func (s *Server) buildKGSections(ctx context.Context, tenantID uuid.UUID) ([]kgS
 		canSummarize := len(members) >= majorityMin && float64(domCount)/float64(len(members)) >= majorityFrac
 		if !canSummarize {
 			for _, n := range members {
-				sections = append(sections, fullNodeSection(n, servicesByNode[n.ID]))
+				sections = append(sections, fullNodeSection(n, servicesByNode[n.ID], webserversByNode[n.ID]))
 			}
 			continue
 		}
@@ -709,7 +749,7 @@ func (s *Server) buildKGSections(ctx context.Context, tenantID uuid.UUID) ([]kgS
 			sections = append(sections, lookupNodeSection(n))
 		}
 		for _, n := range outliers {
-			sections = append(sections, fullNodeSection(n, servicesByNode[n.ID]))
+			sections = append(sections, fullNodeSection(n, servicesByNode[n.ID], webserversByNode[n.ID]))
 		}
 	}
 
@@ -795,7 +835,7 @@ func lookupNodeSection(n storage.Node) kgSection {
 // fullNodeSection renders one node + its listening services as the
 // original per-node block. This is the bloated shape we're trying to
 // avoid emitting too many of.
-func fullNodeSection(n storage.Node, nodeServices []storage.NodeService) kgSection {
+func fullNodeSection(n storage.Node, nodeServices []storage.NodeService, webservers []storage.WebserverInstance) kgSection {
 	sort.Slice(nodeServices, func(i, j int) bool { return nodeServices[i].Port < nodeServices[j].Port })
 
 	var b strings.Builder
@@ -822,21 +862,48 @@ func fullNodeSection(n storage.Node, nodeServices []storage.NodeService) kgSecti
 	if len(nodeServices) == 0 {
 		b.WriteString("\n_No listening services discovered yet._\n\n")
 	} else {
-		b.WriteString("\n| Port | Process | Kind | Server | URL |\n")
-		b.WriteString("|---:|---|---|---|---|\n")
+		b.WriteString("\n| Port | Process | Kind | App root | App | Server | URL |\n")
+		b.WriteString("|---:|---|---|---|---|---|---|\n")
 		for _, svc := range nodeServices {
 			url := serviceURL(svc, n)
 			server := ""
 			if svc.ProbeServer != nil {
 				server = *svc.ProbeServer
 			}
-			fmt.Fprintf(&b, "| %d | %s | %s | %s | %s |\n",
+			appName := svc.AppName
+			if appName == "" {
+				appName = svc.AppProfileID
+			}
+			fmt.Fprintf(&b, "| %d | %s | %s | %s | %s | %s | %s |\n",
 				svc.Port,
 				strOrDash(svc.Process),
 				strOrDash(svc.ServiceKind),
+				strOrDash(svc.AppRoot),
+				strOrDash(appName),
 				strOrDash(server),
 				strOrDash(url),
 			)
+		}
+		b.WriteString("\n")
+	}
+
+	if roots := kgApplicationRoots(webservers); len(roots) > 0 {
+		b.WriteString("\nApplication roots:\n")
+		for _, root := range roots {
+			fmt.Fprintf(&b, "- `%s`", root.path)
+			if root.app != "" {
+				fmt.Fprintf(&b, " â€” %s", root.app)
+			}
+			if root.source != "" {
+				fmt.Fprintf(&b, " (%s)", root.source)
+			}
+			if root.vhost != "" {
+				fmt.Fprintf(&b, " vhost=%s", root.vhost)
+			}
+			if root.evidence != "" {
+				fmt.Fprintf(&b, " evidence=%s", root.evidence)
+			}
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}
@@ -850,6 +917,87 @@ func fullNodeSection(n storage.Node, nodeServices []storage.NodeService) kgSecti
 		Tokens:   tokenizeForKG(md),
 		Markdown: md,
 	}
+}
+
+type kgAppRoot struct {
+	path     string
+	app      string
+	source   string
+	vhost    string
+	evidence string
+}
+
+func kgApplicationRoots(webservers []storage.WebserverInstance) []kgAppRoot {
+	seen := map[string]struct{}{}
+	var out []kgAppRoot
+	add := func(path, app, source, vhost string, evidence []string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		key := strings.ToLower(path + "|" + vhost + "|" + source)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, kgAppRoot{
+			path:     path,
+			app:      app,
+			source:   source,
+			vhost:    vhost,
+			evidence: strings.Join(sanitizeStringSlice(evidence, 4), ", "),
+		})
+	}
+	for _, web := range webservers {
+		for _, vhost := range web.VHosts {
+			path := vhostValue(vhost, "document_root", "root", "web_root", "app_root", "path")
+			if path == "" {
+				continue
+			}
+			evidence := anyStringSlice(vhost["evidence"])
+			evidence = append(evidence, anyStringSlice(vhost["detection_evidence"])...)
+			source := "webserver_config"
+			if vhostValue(vhost, "directive") == "filesystem_scan" || containsString(evidence, "webserver_config:filesystem_scan") {
+				source = "filesystem_scan"
+			}
+			app := firstNonEmpty(vhostValue(vhost, "application_name", "app", "application"), vhostValue(vhost, "application_type", "profile_id"))
+			add(path, app, source, vhostValue(vhost, "vhost", "server_name", "host", "name"), evidence)
+		}
+		if raw, ok := web.Capabilities["application_roots"]; ok {
+			for _, item := range anyMapSlice(raw) {
+				path := vhostValue(item, "path", "document_root", "root", "app_root")
+				if path == "" {
+					continue
+				}
+				evidence := anyStringSlice(item["evidence"])
+				source := "webserver_config"
+				if vhostValue(item, "directive") == "filesystem_scan" || containsString(evidence, "webserver_config:filesystem_scan") {
+					source = "filesystem_scan"
+				}
+				app := firstNonEmpty(vhostValue(item, "application_name", "app", "application"), vhostValue(item, "application_type", "profile_id"))
+				add(path, app, source, vhostValue(item, "vhost", "server_name", "host", "name"), evidence)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
+	return out
+}
+
+func anyMapSlice(value any) []map[string]any {
+	items, ok := value.([]any)
+	if !ok {
+		if typed, ok := value.([]map[string]any); ok {
+			return typed
+		}
+		return nil
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if row, ok := item.(map[string]any); ok {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // renderKGSections concatenates every section's pre-rendered markdown.

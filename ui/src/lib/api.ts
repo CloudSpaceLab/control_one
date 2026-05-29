@@ -419,6 +419,22 @@ export type CoverageQualityState =
   | "unknown"
   | (string & {});
 
+export interface CoverageDomainDefinition {
+  domain: CoverageDomain;
+  title: string;
+  description: string;
+}
+
+export interface CoverageStateDefinition {
+  state: CoverageState;
+  description: string;
+}
+
+export interface CoverageQualityDefinition {
+  state: CoverageQualityState;
+  description: string;
+}
+
 export interface CoverageMatrixRow {
   id?: string;
   tenant_id?: string;
@@ -467,8 +483,15 @@ export interface CoverageMatrixSummary {
 }
 
 export interface CoverageMatrixResponse {
+  catalog_version?: string;
+  scope?: 'global' | 'tenant' | (string & {});
   tenant_id?: string;
   generated_at?: string;
+  domains?: CoverageDomainDefinition[];
+  legend?: {
+    states?: CoverageStateDefinition[];
+    quality_states?: CoverageQualityDefinition[];
+  };
   summary?: CoverageMatrixSummary;
   rows: CoverageMatrixRow[];
 }
@@ -483,7 +506,11 @@ type RawCoverageMatrixResponse =
   | CoverageMatrixRow[]
   | {
       tenant_id?: string;
+      catalog_version?: string;
+      scope?: 'global' | 'tenant' | (string & {});
       generated_at?: string;
+      domains?: CoverageDomainDefinition[];
+      legend?: CoverageMatrixResponse['legend'];
       summary?: CoverageMatrixSummary;
       matrix?: CoverageMatrixRow[];
       rows?: CoverageMatrixRow[];
@@ -499,7 +526,11 @@ function normalizeCoverageMatrixResponse(
   }
   const envelope = raw as {
     tenant_id?: string;
+    catalog_version?: string;
+    scope?: 'global' | 'tenant' | (string & {});
     generated_at?: string;
+    domains?: CoverageDomainDefinition[];
+    legend?: CoverageMatrixResponse['legend'];
     summary?: CoverageMatrixSummary;
     matrix?: CoverageMatrixRow[];
     rows?: CoverageMatrixRow[];
@@ -509,8 +540,12 @@ function normalizeCoverageMatrixResponse(
   const rows =
     envelope.rows ?? envelope.matrix ?? envelope.data ?? envelope.items ?? [];
   return {
+    catalog_version: envelope.catalog_version,
+    scope: envelope.scope,
     tenant_id: envelope.tenant_id,
     generated_at: envelope.generated_at,
+    domains: envelope.domains,
+    legend: envelope.legend,
     summary: envelope.summary,
     rows,
   };
@@ -1786,6 +1821,91 @@ export interface AIAskResponse {
   confidence?: string;
 }
 
+export interface SOCCaseEvidenceRef {
+  id: string;
+  kind: string;
+}
+
+export interface SOCCaseTimelineItem {
+  timestamp: string;
+  event: string;
+  source: string;
+  citation_id: string;
+  description: string;
+}
+
+export interface SOCCaseCoverageBadge {
+  id: string;
+  label: string;
+  tone: string;
+}
+
+export interface SOCCaseCitation {
+  id?: string;
+  kind?: string;
+  table?: string;
+  source_record_id?: string;
+  tool?: string;
+  label?: string;
+  detail?: string;
+}
+
+export interface SOCCaseNote {
+  id: string;
+  tenant_id: string;
+  case_id: string;
+  note: string;
+  citations?: SOCCaseEvidenceRef[];
+  audit_id: string;
+  created_at: string;
+  created_by?: string;
+  guardrails: string[];
+}
+
+export interface SOCCase {
+  case_id: string;
+  tenant_id: string;
+  node_id?: string;
+  title: string;
+  status: string;
+  severity: string;
+  source: string;
+  trigger_type: string;
+  trigger_event_type: string;
+  dedup_key: string;
+  summary: string;
+  evidence?: Record<string, unknown>;
+  evidence_refs?: SOCCaseEvidenceRef[];
+  timeline: SOCCaseTimelineItem[];
+  notes?: SOCCaseNote[];
+  citations: SOCCaseCitation[];
+  coverage_badges: SOCCaseCoverageBadge[];
+  export_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SOCCaseExport {
+  export_version: string;
+  generated_at: string;
+  tenant_id: string;
+  case: SOCCase;
+  evidence: SOCCaseEvidenceRef[];
+  notes?: SOCCaseNote[];
+  guardrails: string[];
+}
+
+export interface ListSOCCasesParams {
+  tenantId?: string | null;
+  status?: string;
+  triggerType?: string;
+  triggerEventType?: string;
+  nodeId?: string;
+  includeNotes?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export interface NodePackage {
   node_id: string;
   name: string;
@@ -1806,6 +1926,8 @@ export interface NodeService {
   pid: number;
   process: string;
   binary_path: string;
+  working_dir?: string;
+  command_line?: string;
   listen_addr: string;
   port: number;
   service_kind: string;
@@ -1813,6 +1935,11 @@ export interface NodeService {
   probe_server?: string | null;
   probe_title?: string | null;
   probe_content_type?: string | null;
+  app_root?: string;
+  app_profile_id?: string;
+  app_name?: string;
+  app_confidence?: number;
+  app_evidence?: string[];
   observed_at: string;
 }
 
@@ -2266,6 +2393,53 @@ export class APIClient {
     return this.request<AIAskResponse>(
       `/api/v1/ai/ask?tenant_id=${encodeURIComponent(tenantId)}`,
       { method: "POST", body: JSON.stringify({ question }) },
+    );
+  }
+
+  async listSOCCases(params: ListSOCCasesParams = {}): Promise<PaginatedResponse<SOCCase>> {
+    const search = new URLSearchParams();
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.status?.trim()) search.set("status", params.status.trim());
+    if (params.triggerType?.trim())
+      search.set("trigger_type", params.triggerType.trim());
+    if (params.triggerEventType?.trim())
+      search.set("trigger_event_type", params.triggerEventType.trim());
+    if (params.nodeId?.trim()) search.set("node_id", params.nodeId.trim());
+    if (params.includeNotes) search.set("include_notes", "true");
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const qs = search.toString();
+    const response = await this.request<RawPaginatedResponse<SOCCase>>(
+      `/api/v1/soc/cases${qs ? `?${qs}` : ""}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getSOCCase(caseId: string, tenantId?: string | null): Promise<SOCCase> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set('tenant_id', tenantId);
+    const qs = search.toString();
+    return this.request<SOCCase>(`/api/v1/soc/cases/${encodeURIComponent(caseId)}${qs ? `?${qs}` : ''}`);
+  }
+
+  async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[] }): Promise<SOCCaseNote> {
+    return this.request<SOCCaseNote>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/notes?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async exportSOCCase(caseId: string, tenantId: string): Promise<SOCCaseExport> {
+    return this.request<SOCCaseExport>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/export?tenant_id=${encodeURIComponent(tenantId)}`,
     );
   }
 
@@ -4390,15 +4564,18 @@ export class APIClient {
     if (params.nodeId) search.set("node_id", params.nodeId);
     if (typeof params.openOnly === "boolean")
       search.set("open_only", String(params.openOnly));
+    if (typeof params.externalOnly === "boolean")
+      search.set("external_only", String(params.externalOnly));
     if (params.since) search.set("since", params.since);
     if (params.until) search.set("until", params.until);
     if (typeof params.limit === "number")
       search.set("limit", String(params.limit));
     const q = search.toString();
     const resp = await this.request<
-      ConnectionRow[] | { data: ConnectionRow[] }
+      Array<ConnectionRow | RawConnectionRow> | { data: Array<ConnectionRow | RawConnectionRow> }
     >(`/api/v1/connections${q ? `?${q}` : ""}`);
-    return Array.isArray(resp) ? resp : (resp.data ?? []);
+    const rows = Array.isArray(resp) ? resp : resp.data ?? [];
+    return rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id));
   }
 
   async getConnectionDetail(
@@ -4408,9 +4585,13 @@ export class APIClient {
     const search = new URLSearchParams();
     if (params.tenantId) search.set("tenant_id", params.tenantId);
     const q = search.toString();
-    return this.request<ConnectionDetail>(
+    const detail = await this.request<ConnectionDetail | RawConnectionDetail>(
       `/api/v1/connections/${encodeURIComponent(connID)}${q ? `?${q}` : ""}`,
     );
+    return {
+      ...detail,
+      connection: normalizeConnectionRow(detail.connection),
+    };
   }
 
   async listTopTalkers(
@@ -4576,38 +4757,6 @@ export class APIClient {
         body: JSON.stringify(payload),
       },
     );
-  }
-
-  async listSOCCases(params: {
-    tenantId: string;
-    status?: string;
-    triggerType?: string;
-    triggerEventType?: string;
-    nodeId?: string;
-    includeNotes?: boolean;
-    limit?: number;
-    offset?: number;
-  }): Promise<PaginatedResponse<SOCCase>> {
-    const search = new URLSearchParams();
-    search.set("tenant_id", params.tenantId);
-    if (params.status?.trim()) search.set("status", params.status.trim());
-    if (params.triggerType?.trim())
-      search.set("trigger_type", params.triggerType.trim());
-    if (params.triggerEventType?.trim())
-      search.set("trigger_event_type", params.triggerEventType.trim());
-    if (params.nodeId?.trim()) search.set("node_id", params.nodeId.trim());
-    if (params.includeNotes) search.set("include_notes", "true");
-    if (typeof params.limit === "number")
-      search.set("limit", params.limit.toString());
-    if (typeof params.offset === "number")
-      search.set("offset", params.offset.toString());
-    const response = await this.request<RawPaginatedResponse<SOCCase>>(
-      `/api/v1/soc/cases?${search.toString()}`,
-    );
-    return {
-      data: response.data,
-      pagination: normalizePagination(response.pagination),
-    };
   }
 
   async createSOCCaseNote(
@@ -5685,6 +5834,7 @@ export interface ListConnectionsParams {
   ip?: string;
   nodeId?: string;
   openOnly?: boolean;
+  externalOnly?: boolean;
   since?: string;
   until?: string;
   limit?: number;
@@ -6070,6 +6220,79 @@ export interface ConnectionRow {
   closed_reason?: string;
 }
 
+type RawConnectionRow = Partial<ConnectionRow> & Record<string, unknown>;
+
+interface RawConnectionDetail {
+  connection: ConnectionRow | RawConnectionRow;
+  events: ForensicEvent[];
+}
+
+function rawString(row: RawConnectionRow, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed && trimmed !== '0001-01-01T00:00:00Z') return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function rawNumber(row: RawConnectionRow, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function rawBoolean(row: RawConnectionRow, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      if (value.toLowerCase() === 'true') return true;
+      if (value.toLowerCase() === 'false') return false;
+    }
+  }
+  return undefined;
+}
+
+function normalizeConnectionRow(raw: ConnectionRow | RawConnectionRow): ConnectionRow {
+  const row = raw as RawConnectionRow;
+  return {
+    conn_id: rawString(row, 'conn_id', 'ConnID') ?? '',
+    node_id: rawString(row, 'node_id', 'NodeID'),
+    correlation_id: rawString(row, 'correlation_id', 'CorrelationID'),
+    bastion_session_id: rawString(row, 'bastion_session_id', 'BastionSession'),
+    started_at: rawString(row, 'started_at', 'StartedAt') ?? '',
+    ended_at: rawString(row, 'ended_at', 'EndedAt'),
+    duration_ms: rawNumber(row, 'duration_ms', 'DurationMS'),
+    direction: rawString(row, 'direction', 'Direction'),
+    pid: rawNumber(row, 'pid', 'PID'),
+    process_name: rawString(row, 'process_name', 'ProcessName'),
+    cmdline: rawString(row, 'cmdline', 'Cmdline'),
+    user_name: rawString(row, 'user_name', 'UserName'),
+    src_ip: rawString(row, 'src_ip', 'SrcIP'),
+    src_port: rawNumber(row, 'src_port', 'SrcPort'),
+    dst_ip: rawString(row, 'dst_ip', 'DstIP'),
+    dst_port: rawNumber(row, 'dst_port', 'DstPort'),
+    protocol: rawString(row, 'protocol', 'Protocol'),
+    bytes_in: rawNumber(row, 'bytes_in', 'BytesIn'),
+    bytes_out: rawNumber(row, 'bytes_out', 'BytesOut'),
+    packets_in: rawNumber(row, 'packets_in', 'PacketsIn'),
+    packets_out: rawNumber(row, 'packets_out', 'PacketsOut'),
+    threat_match: rawBoolean(row, 'threat_match', 'ThreatMatch'),
+    threat_feed: rawString(row, 'threat_feed', 'ThreatFeed'),
+    threat_score: rawNumber(row, 'threat_score', 'ThreatScore'),
+    closed_reason: rawString(row, 'closed_reason', 'ClosedReason'),
+  };
+}
+
 export interface ForensicEvent {
   ts: string;
   source: "event" | "file" | "db" | "log" | "alert" | "process";
@@ -6245,51 +6468,7 @@ export interface ContentPackSourceHealth {
   recommended_actions?: ContentPackSourceHealthAction[];
 }
 
-export interface ContentPackSourceHealthInvestigationCase {
-  case_id: string;
-  tenant_id?: string;
-  node_id?: string;
-  title?: string;
-  status?: string;
-  severity?: string;
-  source?: string;
-  trigger_type?: string;
-  trigger_event_type?: string;
-  dedup_key?: string;
-  summary?: string;
-  evidence?: Record<string, unknown>;
-  evidence_refs?: SOCCaseEvidenceRef[];
-  notes?: SOCCaseNote[];
-  coverage_badges?: SOCCaseCoverageBadge[];
-  export_url?: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export type SOCCase = ContentPackSourceHealthInvestigationCase;
-
-export interface SOCCaseEvidenceRef {
-  id: string;
-  kind: string;
-}
-
-export interface SOCCaseCoverageBadge {
-  id: string;
-  label: string;
-  tone: string;
-}
-
-export interface SOCCaseNote {
-  id: string;
-  tenant_id: string;
-  case_id: string;
-  note: string;
-  citations?: SOCCaseEvidenceRef[];
-  audit_id?: string;
-  created_at: string;
-  created_by?: string;
-  guardrails?: string[];
-}
+export type ContentPackSourceHealthInvestigationCase = SOCCase;
 
 export interface ContentPackSourceHealthInvestigationResponse {
   case_id: string;

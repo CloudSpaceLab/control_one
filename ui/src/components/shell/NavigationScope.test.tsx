@@ -63,11 +63,15 @@ vi.mock('@/hooks/useFleetSummary', () => ({
 const PRIMARY_DESTINATIONS = [
   'Control Room',
   'Alerts',
+  'Cases',
   'Search & lifecycle',
+  'Ask AI',
   'Servers',
   'Network & exposure',
+  'Observability',
   'SIEM coverage',
   'Patch posture',
+  'Coverage',
   'Compliance',
   'Access',
   'Audit log',
@@ -76,10 +80,15 @@ const PRIMARY_DESTINATIONS = [
 const GLOBAL_SEARCH_DESTINATIONS = [
   'Control Room',
   'Alerts',
+  'Cases',
   'Investigate',
+  'Ask AI',
   'Servers',
   'Network & exposure',
+  'Observability',
+  'SIEM coverage',
   'Patch posture',
+  'Coverage',
   'Compliance',
   'Access',
   'Audit log',
@@ -121,6 +130,17 @@ describe('navigation scope', () => {
     for (const label of DRILLDOWN_ONLY_LABELS) {
       expect(within(nav).queryByText(label)).not.toBeInTheDocument();
     }
+  });
+
+  it('keeps Ask AI visible as a primary investigation surface', () => {
+    render(
+      <MemoryRouter>
+        <Sidebar userRoles={['admin']} />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation');
+    expect(within(nav).getByRole('link', { name: /ask ai/i })).toHaveAttribute('href', '/ask');
   });
 
   it('keeps global search quick navigation aligned with the primary IA', async () => {

@@ -965,9 +965,12 @@ func (s *Server) connectionThreatMatch(tenantID uuid.UUID, ev *IngestedEvent) (s
 	}
 	bestFeed := ""
 	bestScore := 0
-	for _, raw := range []string{ev.SrcIP, ev.DstIP} {
+	for _, raw := range connectionThreatCandidateIPs(ev) {
 		ip := net.ParseIP(strings.TrimSpace(raw))
 		if ip == nil {
+			continue
+		}
+		if !isPublicRoutableIP(ip) {
 			continue
 		}
 		for _, ind := range s.threatIntelIPMatches(tenantID, ip) {
@@ -982,6 +985,21 @@ func (s *Server) connectionThreatMatch(tenantID uuid.UUID, ev *IngestedEvent) (s
 		}
 	}
 	return bestFeed, bestScore
+}
+
+func connectionThreatCandidateIPs(ev *IngestedEvent) []string {
+	if ev == nil {
+		return nil
+	}
+	direction := strings.ToLower(strings.TrimSpace(detailsString(ev.Details, "direction", "")))
+	switch direction {
+	case "inbound":
+		return []string{ev.SrcIP}
+	case "outbound":
+		return []string{ev.DstIP}
+	default:
+		return []string{ev.SrcIP, ev.DstIP}
+	}
 }
 
 func eventSeverityRank(sev string) int {

@@ -2,6 +2,8 @@ import { useEffect, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ClipboardList,
+  Database,
   DatabaseZap,
   FileText,
   KeyRound,
@@ -11,6 +13,8 @@ import {
   Search,
   Server,
   ShieldAlert,
+  ShieldQuestion,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { Link, NavLink } from 'react-router-dom';
@@ -32,8 +36,6 @@ interface NavItemDef {
   icon: LucideIcon;
   roles?: string[];
   badge?: ReactNode;
-  /** Hide unless an env feature flag is set (window.__C1_FLAGS__). */
-  flag?: string;
 }
 
 interface NavGroupDef {
@@ -50,12 +52,14 @@ const NAV_GROUPS: NavGroupDef[] = [
     items: [
       { to: '/', label: 'Control Room', icon: Activity },
       { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: <AlertStatusBadge /> },
+      { to: '/cases', label: 'Cases', icon: ClipboardList },
     ],
   },
   {
     label: 'Investigate',
     items: [
       { to: '/investigate', label: 'Search & lifecycle', icon: Search },
+      { to: '/ask', label: 'Ask AI', icon: Sparkles },
     ],
   },
   {
@@ -68,6 +72,7 @@ const NAV_GROUPS: NavGroupDef[] = [
         badge: <NodeStatusBadge />,
       },
       { to: '/security/network', label: 'Network & exposure', icon: Network },
+      { to: '/observability', label: 'Observability', icon: Database },
       { to: '/security/siem', label: 'SIEM coverage', icon: DatabaseZap },
       {
         to: '/infrastructure/patch',
@@ -80,6 +85,7 @@ const NAV_GROUPS: NavGroupDef[] = [
   {
     label: 'Governance',
     items: [
+      { to: '/coverage', label: 'Coverage', icon: ShieldQuestion },
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
       { to: '/access', label: 'Access', icon: KeyRound },
       { to: '/audit', label: 'Audit log', icon: FileText },
@@ -87,20 +93,12 @@ const NAV_GROUPS: NavGroupDef[] = [
   },
 ];
 
-function isFlagEnabled(flag: string): boolean {
-  if (typeof window === 'undefined') return false;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const flags = (window as any).__C1_FLAGS__ as Record<string, boolean> | undefined;
-  return flags?.[flag] === true;
-}
-
 function filterGroups(groups: NavGroupDef[], userRoles: string[]): NavGroupDef[] {
   const isAdmin = userRoles.includes('admin');
   return groups
     .map((g) => ({
       label: g.label,
       items: g.items.filter((item) => {
-        if (item.flag && !isFlagEnabled(item.flag)) return false;
         if (!item.roles || item.roles.length === 0) return true;
         if (isAdmin) return true;
         return item.roles.some((r) => userRoles.includes(r));

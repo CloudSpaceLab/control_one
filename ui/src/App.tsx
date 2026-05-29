@@ -18,6 +18,8 @@ const SavedSearches = lazy(() => import('./pages/investigate/Saved').then((m) =>
 const KnowledgeGraph = lazy(() => import('./pages/investigate/KnowledgeGraph').then((m) => ({ default: m.KnowledgeGraph })));
 const IpCompare = lazy(() => import('./pages/investigate/IpCompare').then((m) => ({ default: m.IpCompare })));
 const Ask = lazy(() => import('./pages/Ask').then((m) => ({ default: m.Ask })));
+const Cases = lazy(() => import('./pages/Cases').then((m) => ({ default: m.Cases })));
+const Observability = lazy(() => import('./pages/Observability').then((m) => ({ default: m.Observability })));
 
 const Tenants = lazy(() => import('./pages/Tenants').then((m) => ({ default: m.Tenants })));
 const Nodes = lazy(() => import('./pages/Nodes').then((m) => ({ default: m.Nodes })));
@@ -26,6 +28,7 @@ const FleetEnroll = lazy(() => import('./pages/FleetEnroll').then((m) => ({ defa
 const Hypervisors = lazy(() => import('./pages/Hypervisors').then((m) => ({ default: m.Hypervisors })));
 const Jobs = lazy(() => import('./pages/Jobs').then((m) => ({ default: m.Jobs })));
 const Templates = lazy(() => import('./pages/Templates').then((m) => ({ default: m.Templates })));
+const Coverage = lazy(() => import('./pages/Coverage').then((m) => ({ default: m.Coverage })));
 const Compliance = lazy(() => import('./pages/Compliance').then((m) => ({ default: m.Compliance })));
 const Rules = lazy(() => import('./pages/Rules').then((m) => ({ default: m.Rules })));
 const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
@@ -121,13 +124,16 @@ export function App(): JSX.Element {
                 <Route path="investigate/:type/:id" element={<EntityDetail />} />
                 <Route path="investigate/ip/:id/compare" element={<IpCompare />} />
                 <Route path="ask" element={<Ask />} />
+                <Route path="cases" element={<Cases />} />
                 <Route path="tenants" element={<Tenants />} />
                 <Route path="nodes" element={<Nodes />} />
                 <Route path="nodes/:id" element={<NodeDetail />} />
                 <Route path="fleet-enroll" element={<FleetEnroll />} />
                 <Route path="hypervisors" element={<Hypervisors />} />
                 <Route path="jobs" element={<Jobs />} />
+                <Route path="observability" element={<Observability />} />
                 <Route path="templates" element={<Templates />} />
+                <Route path="coverage" element={<Coverage />} />
                 <Route path="compliance" element={<Compliance />} />
                 <Route path="rules" element={<Rules />} />
                 <Route path="rules/builder" element={<Navigate to="/rules" replace />} />

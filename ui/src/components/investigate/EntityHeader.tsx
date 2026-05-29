@@ -1,4 +1,4 @@
-import { Ban, Check, ChevronDown, Copy, Tag } from 'lucide-react';
+import { Ban, Check, ChevronDown, Copy, Shield, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Eyebrow, IpActionMenu, StatusTag, type StateTone } from '@/components/kit';
 import {
@@ -67,20 +67,19 @@ export function EntityHeader({ type, id, detail, loading, onAction, onIpActionTa
                 <Tag className="h-3.5 w-3.5" /> Tag
               </Button>
               {type === 'ip' ? (
-                <div className="flex items-center gap-1">
-                  <Button variant="danger" size="sm" onClick={() => onAction?.('block')}>
-                    <Ban className="h-3.5 w-3.5" /> Block IP
-                  </Button>
-                  <IpActionMenu
-                    ip={id}
-                    onActionTaken={onIpActionTaken}
-                    trigger={
-                      <Button variant="danger" size="sm" aria-label={`More IP actions for ${id}`}>
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      </Button>
-                    }
-                  />
-                </div>
+                <IpActionMenu
+                  ip={id}
+                  onActionTaken={onIpActionTaken}
+                  showInvestigateLink={false}
+                  showCopyAction={false}
+                  trigger={
+                    <Button variant="secondary" size="sm" aria-label={`IP response actions for ${id}`}>
+                      <Shield className="h-3.5 w-3.5" />
+                      IP response
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                />
               ) : (
                 <HoverCard>
                   <HoverCardTrigger asChild>
@@ -93,9 +92,11 @@ export function EntityHeader({ type, id, detail, loading, onAction, onIpActionTa
                   </HoverCardContent>
                 </HoverCard>
               )}
-              <Button variant="ghost" size="sm" onClick={() => onAction?.('allow')}>
-                <Check className="h-3.5 w-3.5" /> Allow
-              </Button>
+              {type !== 'ip' && (
+                <Button variant="ghost" size="sm" onClick={() => onAction?.('allow')}>
+                  <Check className="h-3.5 w-3.5" /> Allow
+                </Button>
+              )}
             </>
           )}
         </div>

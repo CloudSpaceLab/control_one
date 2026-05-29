@@ -17,7 +17,6 @@ import (
 )
 
 func TestOperatorProposalToolPersistsDryRunProposal(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint5AIStore(tenantID, nodeID)
@@ -78,7 +77,6 @@ func TestOperatorProposalToolPersistsDryRunProposal(t *testing.T) {
 }
 
 func TestFanOutEventsPersistsAnomalyInvestigation(t *testing.T) {
-	t.Setenv("FEATURE_AI_ASK", "true")
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	store := sprint5AIStore(tenantID, nodeID)

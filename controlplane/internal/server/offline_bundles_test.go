@@ -268,7 +268,7 @@ func TestOfflineBundleImportReconcilesVulnerabilitiesWhenNoMatches(t *testing.T)
 		cfg:                &config.Config{OfflineContent: config.OfflineContentConfig{Enabled: true, RootDir: root, PublicKeyFile: keyPath, MaxBundleBytes: 10 << 20}},
 		offlineContentRoot: root,
 	}
-	body := makeServerVulnerabilityBundle(t, priv, "ubuntu-vuln", "2026.05.19", 3, observedAt)
+	body := makeServerVulnerabilityBundle(t, priv, "ubuntu-vuln", "2026.05.19", 3, time.Now().UTC())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/offline-bundles?tenant_id="+tenantID.String(), bytes.NewReader(body))
 	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{Subject: uuid.NewString(), Roles: []string{roleAdmin}}))

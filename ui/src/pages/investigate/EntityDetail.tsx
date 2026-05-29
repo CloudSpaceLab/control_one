@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Panel, SectionHeader, EmptyState, IpActionMenu, KpiTile, StatusTag, type StateTone } from '@/components/kit';
+import { Panel, SectionHeader, EmptyState, KpiTile, StatusTag, type StateTone } from '@/components/kit';
 import { Button } from '@/components/ui/button';
 import { DashboardGrid, DashboardGridItem } from '@/components/shell';
 import {
@@ -175,14 +175,6 @@ export function EntityDetail(): JSX.Element {
           profile={ipBehaviorProfileQ.data}
           findings={ipBehaviorFindings}
           enrichment={ipEnrichQ.data}
-          canMutate={canMutate}
-          onActionTaken={() => {
-            void detailQ.refetch();
-            void lifecycleQ.refetch();
-            void ipEnrichQ.refetch();
-            void ipBehaviorProfileQ.refetch();
-            void ipBehaviorFindingsQ.refetch();
-          }}
         />
       )}
 
@@ -322,20 +314,16 @@ function IPBehaviorSummaryPanel({
   );
 }
 
-function IPBehaviorRecommendationPanel({
+export function IPBehaviorRecommendationPanel({
   ip,
   profile,
   findings,
   enrichment,
-  canMutate,
-  onActionTaken,
 }: {
   ip: string;
   profile?: IPBehaviorIPProfile;
   findings: BehavioralAnomaly[];
   enrichment?: IpEnrichment;
-  canMutate: boolean;
-  onActionTaken: () => void;
 }) {
   const topFinding = topBehaviorFinding(findings);
   const confidence = topFinding ? ipBehaviorConfidence(topFinding) : 0;
@@ -425,17 +413,17 @@ function IPBehaviorRecommendationPanel({
             <p className="mt-1 text-sm font-medium text-foreground">{plan.posture}</p>
             <p className="mt-1 text-xs text-text-secondary">{plan.postureDetail}</p>
           </div>
-          {canMutate ? (
-            <IpActionMenu
-              ip={ip}
-              onActionTaken={onActionTaken}
-              trigger={(
-                <Button type="button" variant="danger" size="sm" className="w-full">
-                  Block / allow IP
-                </Button>
-              )}
-            />
-          ) : null}
+          <div className="rounded-lg border border-border-subtle bg-surface p-3">
+            <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Response governance</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <StatusTag tone="warning">Approval gate</StatusTag>
+              <StatusTag tone="info">Policy scoped</StatusTag>
+              <StatusTag tone="info">Receipt required</StatusTag>
+            </div>
+            <p className="mt-2 text-xs text-text-secondary">
+              Containment for {ip} should resolve through posture policy, approval state, enforcement receipts, and rollback evidence before it is treated as remediated.
+            </p>
+          </div>
           <div className="grid grid-cols-1 gap-2">
             <Button asChild variant="outline" size="sm" className="justify-between">
               <Link to="/security/network?tab=blocks">

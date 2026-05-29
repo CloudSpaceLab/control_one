@@ -68,7 +68,7 @@ services:
     volumes:
       - ./controlplane.yaml:/etc/control-one/controlplane.yaml:ro
       - ./agent-binaries:/var/lib/control-one/agent-binaries:ro
-      - threatintel:/var/lib/control-one/threat-intel
+      - ./threat-intel:/var/lib/control-one/threat-intel
     ports:
       - "127.0.0.1:8443:8443"
       - "127.0.0.1:9090:9090"
@@ -110,7 +110,10 @@ services:
           memory: 1800m
 
   doris-be:
-    # BE memory cap: ~2 GB. Large queries will spill to disk before OOM.
+    # BE memory cap for the current 4 vCPU / 8 GB single-node SIEM deploy.
+    # The mounted be_custom.conf keeps Doris' internal limit below this cgroup
+    # ceiling so native/JVM allocator overhead and replay bursts do not exhaust
+    # the container before Doris can shed work.
     # ulimits: start_be.sh hard-exits if nofile < 60000; 655350 is the
     # value Doris docs recommend. max_map_count must be >=2000000 on the
     # host (set via sysctl); swap must be disabled (swapoff -a).
@@ -122,7 +125,7 @@ services:
     environment:
       FE_SERVERS: "fe1:172.31.0.10:9010"
       BE_ADDR: "172.31.0.20:9050"
-      JAVA_OPTS_FOR_JDK_17: "-Xmx1024m -Xms256m"
+      JAVA_OPTS_FOR_JDK_17: "-Xmx512m -Xms128m"
       # init_be.sh registers BE by running `mysql -uroot ...` against FE
       # on port 9030. FE root has DORIS_PASSWORD set, so without this
       # env the mysql client auths with no password and the entrypoint
@@ -138,6 +141,7 @@ services:
         ipv4_address: 172.31.0.20
       default:
     volumes:
+      - ./doris/be_custom.conf:/opt/apache-doris/be/conf/be_custom.conf:ro
       - dorisbedata:/opt/apache-doris/be/storage
     expose:
       - "9060"
@@ -146,7 +150,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2200m
+          memory: 3800m
 
   console:
     image: controlone/console:${TAG:-latest}
@@ -220,7 +224,6 @@ volumes:
   certbot-www:
   dorisfedata:
   dorisbedata:
-  threatintel:
 
 networks:
   doris:

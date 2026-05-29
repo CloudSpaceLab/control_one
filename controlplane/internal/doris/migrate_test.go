@@ -1,6 +1,10 @@
 package doris
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestSplitStatementsBasic(t *testing.T) {
 	in := "CREATE TABLE x (a INT);\nINSERT INTO x VALUES (1);\n"
@@ -54,5 +58,42 @@ func TestRenderMigrationSQLOverridesReplicationNum(t *testing.T) {
 	}
 	if got := renderMigrationSQL(in, MigrationOptions{}); got != in {
 		t.Fatalf("default render should preserve dev replication, got %q", got)
+	}
+}
+
+func TestRewriteAddColumnIfNotExists(t *testing.T) {
+	table, column, rewritten, ok := rewriteAddColumnIfNotExists(
+		"ALTER TABLE events ADD COLUMN IF NOT EXISTS schema_version SMALLINT AFTER ts",
+	)
+	if !ok {
+		t.Fatal("expected migration helper to recognize ADD COLUMN IF NOT EXISTS")
+	}
+	if table != "events" || column != "schema_version" {
+		t.Fatalf("unexpected target: table=%q column=%q", table, column)
+	}
+	want := "ALTER TABLE events ADD COLUMN schema_version SMALLINT AFTER ts"
+	if rewritten != want {
+		t.Fatalf("rewritten statement mismatch\nwant: %s\n got: %s", want, rewritten)
+	}
+}
+
+func TestRewriteAddColumnIfNotExistsIgnoresOtherStatements(t *testing.T) {
+	_, _, _, ok := rewriteAddColumnIfNotExists("CREATE TABLE events (tenant_id VARCHAR(36))")
+	if ok {
+		t.Fatal("unexpected rewrite for non-ALTER statement")
+	}
+}
+
+func TestEventsPipelineMigrationDoesNotBuildInlineRollup(t *testing.T) {
+	raw, err := os.ReadFile("migrations/0001_events_pipeline.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := string(raw)
+	if strings.Contains(strings.ToUpper(sql), "CREATE MATERIALIZED VIEW") {
+		t.Fatalf("bootstrap migration must not build materialized views inline")
+	}
+	if !strings.Contains(sql, "Do not build events_per_hour_mv in the bootstrap migration") {
+		t.Fatalf("migration should document why the inline rollup is omitted")
 	}
 }

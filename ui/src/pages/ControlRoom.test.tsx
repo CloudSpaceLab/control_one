@@ -211,6 +211,9 @@ describe('ControlRoom', () => {
     expect(screen.getAllByText(/Security confidence/i).length).toBeGreaterThan(0);
     expect(screen.getByText('Connection/IP Behavior')).toBeInTheDocument();
     expect(screen.getByText('Patch Posture')).toBeInTheDocument();
+    expect(screen.getByText('Health incidents')).toBeInTheDocument();
+    expect(screen.queryByText('Broken')).not.toBeInTheDocument();
+    expect(screen.getByText('Patch failures')).toBeInTheDocument();
     expect(screen.getAllByText('91%').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/91% confidence/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/baseline dimension/i)).not.toBeInTheDocument();

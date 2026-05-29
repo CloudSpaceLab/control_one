@@ -193,14 +193,9 @@ PROPERTIES (
   "dynamic_partition.buckets"  = "8"
 );
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS events_per_hour_mv AS
-  SELECT tenant_id,
-         node_id,
-         event_type,
-         date_trunc('hour', ts) AS hour_ts,
-         COUNT(*)              AS cnt,
-         MAX(severity)         AS sev_max,
-         SUM(bytes_in)         AS bytes_in_sum,
-         SUM(bytes_out)        AS bytes_out_sum
-  FROM events
-  GROUP BY tenant_id, node_id, event_type, hour_ts;
+-- Do not build events_per_hour_mv in the bootstrap migration. On small
+-- single-BE deployments Doris materialized-view build planning can exhaust the
+-- BE memory low-water mark during controlplane startup, leaving this migration
+-- partially applied and blocking later schema migrations. The application
+-- reads live events today; add rollups as a separate deferred migration/job
+-- when the refresh path can be capacity-gated.
