@@ -468,12 +468,14 @@ func socCaseEvidenceFieldString(fields map[string]any, key string) string {
 
 func socCaseEvidenceRefsForRow(row storage.AIInvestigation, evidence map[string]any, citation aiWorkflowCitation) []socCaseEvidenceRef {
 	refs := []socCaseEvidenceRef{}
+	appendSOCCaseEvidenceRef(&refs, citation.ID, "soc_case")
+	if row.NodeID != uuid.Nil {
+		appendSOCCaseEvidenceRef(&refs, "nodes:"+row.NodeID.String(), "node")
+	}
 	for _, ref := range socCaseEvidenceRefs(evidence) {
 		appendSOCCaseEvidenceRef(&refs, ref.ID, ref.Kind)
 	}
-	if len(refs) == 0 {
-		appendDerivedSOCCaseEvidenceRefs(&refs, evidence, 0)
-	}
+	appendDerivedSOCCaseEvidenceRefs(&refs, evidence, 0)
 	return refs
 }
 

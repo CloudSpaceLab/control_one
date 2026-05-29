@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,7 +220,14 @@ func TestPrivateAccessExposureFindingCreatesSOCCase(t *testing.T) {
 	if resp.Case.TriggerType != "private_access_exposure" || resp.Case.TriggerEventType != "private_access_exposure."+privateaccess.FindingPubliclyExposed {
 		t.Fatalf("unexpected case trigger: %+v", resp.Case)
 	}
-	if len(resp.Case.EvidenceRefs) != 1 || resp.Case.EvidenceRefs[0].Kind != "private_access_exposure_finding" {
+	hasExposureEvidence := false
+	for _, ref := range resp.Case.EvidenceRefs {
+		if ref.Kind == "private_access_exposure_finding" && strings.Contains(ref.ID, findingID.String()) {
+			hasExposureEvidence = true
+			break
+		}
+	}
+	if !hasExposureEvidence {
 		t.Fatalf("expected private-access evidence ref, got %+v", resp.Case.EvidenceRefs)
 	}
 	if len(store.aiInvestigations) != 1 || store.aiInvestigations[0].NodeID != nodeID {

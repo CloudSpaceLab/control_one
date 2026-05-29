@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	contractsv1 "github.com/CloudSpaceLab/ai-logfixer/pkg/contracts/v1"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	contractsv1 "github.com/CloudSpaceLab/control_one/controlplane/internal/ailogfixercontracts/v1"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 

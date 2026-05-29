@@ -7,7 +7,6 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6 v6.4.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v6 v6.2.0
-	github.com/CloudSpaceLab/ai-logfixer v0.0.0
 	github.com/alicebob/miniredis/v2 v2.30.0
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.16
@@ -43,6 +42,7 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/time v0.8.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -145,7 +145,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
 	google.golang.org/grpc v1.64.1 // indirect
 	google.golang.org/protobuf v1.35.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
@@ -173,5 +172,3 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/google/uuid v1.6.0
 )
-
-replace github.com/CloudSpaceLab/ai-logfixer => ../ai-logfixer

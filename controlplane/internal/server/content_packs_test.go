@@ -1486,7 +1486,14 @@ func TestContentPackSourceHealthInvestigationCreatesSOCCase(t *testing.T) {
 	if resp.CaseID == "" || resp.Case.TriggerType != "siem_source_health" || resp.Case.TriggerEventType != "content_pack.source_health.parser_failed" {
 		t.Fatalf("investigation response = %#v", resp)
 	}
-	if len(resp.Case.EvidenceRefs) != 1 || resp.Case.EvidenceRefs[0].Kind != "content_pack_source_runtime_state" || !strings.Contains(resp.Case.EvidenceRefs[0].ID, runtimeStateID.String()) {
+	hasRuntimeStateEvidence := false
+	for _, ref := range resp.Case.EvidenceRefs {
+		if ref.Kind == "content_pack_source_runtime_state" && strings.Contains(ref.ID, runtimeStateID.String()) {
+			hasRuntimeStateEvidence = true
+			break
+		}
+	}
+	if !hasRuntimeStateEvidence {
 		t.Fatalf("investigation evidence refs = %#v", resp.Case.EvidenceRefs)
 	}
 	if len(store.aiInvestigations) != 1 {
