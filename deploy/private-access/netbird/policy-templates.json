@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "provider": "netbird",
+  "name": "Control One bank baseline NetBird policy intent",
+  "description": "Production policy templates for a bank-owned self-hosted NetBird deployment connected to Control One imports.",
+  "guardrails": [
+    "Disable or remove the default all-to-all policy before go-live.",
+    "Use explicit source and destination groups for every allow policy.",
+    "Assign every routed subnet or network resource to an access-control group.",
+    "Separate routing peers from human admin groups.",
+    "Require ticket references and expiry for break-glass membership."
+  ],
+  "groups": [
+    {
+      "id": "g-secops-admins",
+      "name": "secops-admins",
+      "purpose": "Security administrators allowed to manage hardened hosts."
+    },
+    {
+      "id": "g-platform-admins",
+      "name": "platform-admins",
+      "purpose": "Platform administrators allowed to reach management ports."
+    },
+    {
+      "id": "g-app-team",
+      "name": "app-team",
+      "purpose": "Application operators allowed to reach app subnets and app ports."
+    },
+    {
+      "id": "g-db-admins",
+      "name": "db-admins",
+      "purpose": "Database administrators allowed to reach database listeners."
+    },
+    {
+      "id": "g-break-glass",
+      "name": "break-glass",
+      "purpose": "Time-boxed emergency responders with ticket-backed membership."
+    },
+    {
+      "id": "g-route-prod",
+      "name": "route-prod",
+      "purpose": "Headless routing peers that bridge production private networks."
+    },
+    {
+      "id": "g-prod-mgmt-acl",
+      "name": "prod-mgmt-acl",
+      "purpose": "Route access-control group for production management CIDRs."
+    },
+    {
+      "id": "g-prod-app-acl",
+      "name": "prod-app-acl",
+      "purpose": "Route access-control group for production application CIDRs."
+    },
+    {
+      "id": "g-prod-db-acl",
+      "name": "prod-db-acl",
+      "purpose": "Route access-control group for production database CIDRs."
+    }
+  ],
+  "templates": [
+    {
+      "id": "baseline-disable-all-to-all",
+      "name": "Disable default all-to-all",
+      "type": "baseline_control",
+      "required": true,
+      "intent": "No enabled policy may allow All to All across all protocols and ports.",
+      "evidence": [
+        "No enabled policy has source group All and destination group All with protocol any.",
+        "Control One import shows zero unrestricted full-mesh policies."
+      ]
+    },
+    {
+      "id": "prod-management-admins",
+      "name": "Production management access",
+      "type": "allow_policy",
+      "source_groups": [
+        "secops-admins",
+        "platform-admins"
+      ],
+      "destination_groups": [
+        "prod-mgmt-acl"
+      ],
+      "protocols": [
+        "tcp",
+        "icmp"
+      ],
+      "ports": [
+        "22",
+        "3389",
+        "5985",
+        "5986",
+        "9100",
+        "9443"
+      ],
+      "guards": [
+        "MFA required by IdP or local-user policy.",
+        "Source group membership reviewed at least monthly.",
+        "Route must use an access-control group; unrestricted route distribution is not permitted."
+      ]
+    },
+    {
+      "id": "prod-application-team",
+      "name": "Application team to production app subnets",
+      "type": "allow_policy",
+      "source_groups": [
+        "app-team"
+      ],
+      "destination_groups": [
+        "prod-app-acl"
+      ],
+      "protocols": [
+        "tcp",
+        "icmp"
+      ],
+      "ports": [
+        "80",
+        "443",
+        "8080",
+        "8443"
+      ],
+      "guards": [
+        "No SSH or database ports in this template.",
+        "Application subnet CIDRs must be approved in the bank CMDB.",
+        "Control One must reconcile reachable services with expected app inventory."
+      ]
+    },
+    {
+      "id": "prod-database-admins",
+      "name": "Database administration access",
+      "type": "allow_policy",
+      "source_groups": [
+        "db-admins"
+      ],
+      "destination_groups": [
+        "prod-db-acl"
+      ],
+      "protocols": [
+        "tcp"
+      ],
+      "ports": [
+        "1433",
+        "1521",
+        "3306",
+        "5432",
+        "6379",
+        "9042"
+      ],
+      "guards": [
+        "Database admin membership requires manager and security approval.",
+        "No broad app-team access to database groups.",
+        "Database routes must not be distributed to the All group."
+      ]
+    },
+    {
+      "id": "prod-routing-peers",
+      "name": "Routing peer hardening",
+      "type": "route_peer_control",
+      "routing_peer_groups": [
+        "route-prod"
+      ],
+      "destination_groups": [
+        "prod-mgmt-acl",
+        "prod-app-acl",
+        "prod-db-acl"
+      ],
+      "guards": [
+        "Routing peers use setup keys, not personal logins.",
+        "Routing peers are patched and monitored as production infrastructure.",
+        "Routing peer host firewalls allow forwarding only for approved routed CIDRs.",
+        "Routing peers are not members of human admin groups."
+      ]
+    },
+    {
+      "id": "break-glass-prod",
+      "name": "Emergency break-glass access",
+      "type": "allow_policy",
+      "source_groups": [
+        "break-glass"
+      ],
+      "destination_groups": [
+        "prod-mgmt-acl",
+        "prod-app-acl",
+        "prod-db-acl"
+      ],
+      "protocols": [
+        "tcp",
+        "icmp"
+      ],
+      "ports": [
+        "22",
+        "3389",
+        "443",
+        "5432",
+        "9443"
+      ],
+      "guards": [
+        "Membership expires within 4 hours.",
+        "Ticket id is recorded in group membership notes.",
+        "Control One alert is generated when the group is non-empty.",
+        "Post-incident review confirms membership removal."
+      ]
+    }
+  ]
+}
+

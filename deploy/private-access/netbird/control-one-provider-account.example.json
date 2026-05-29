@@ -1,0 +1,21 @@
+{
+  "provider": "netbird",
+  "account_id": "bank-prod-netbird",
+  "display_name": "Bank Production NetBird",
+  "endpoint_url": "https://netbird.example.bank",
+  "credential_id": "00000000-0000-4000-8000-000000000002",
+  "config": {
+    "endpoints": {
+      "peers": "/api/peers",
+      "groups": "/api/groups",
+      "policies": "/api/policies",
+      "routes": "/api/routes",
+      "audit_events": "/api/events"
+    },
+    "timeout_seconds": 30,
+    "tls_skip_verify": false
+  },
+  "import_enabled": true,
+  "import_interval_seconds": 900
+}
+

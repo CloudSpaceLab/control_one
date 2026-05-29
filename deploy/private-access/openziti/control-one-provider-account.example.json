@@ -1,0 +1,20 @@
+{
+  "provider": "openziti",
+  "account_id": "bank-prod-openziti",
+  "display_name": "Bank Production OpenZiti",
+  "endpoint_url": "https://openziti.example.bank",
+  "credential_id": "00000000-0000-4000-8000-000000000002",
+  "config": {
+    "endpoints": {
+      "identities": "/edge/management/v1/identities",
+      "services": "/edge/management/v1/services",
+      "service_policies": "/edge/management/v1/service-policies",
+      "connector_health": "/edge/management/v1/edge-routers",
+      "audit_events": "/edge/management/v1/events"
+    },
+    "timeout_seconds": 30,
+    "tls_skip_verify": false
+  },
+  "import_enabled": true,
+  "import_interval_seconds": 900
+}

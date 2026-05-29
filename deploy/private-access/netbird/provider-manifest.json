@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "provider": "netbird",
+  "name": "netbird-bank-prod",
+  "display_name": "Bank Production NetBird",
+  "version": "2026.05.29",
+  "generated_at": "2026-05-29T00:00:00Z",
+  "description": "Control One private-access provider manifest for a bank-owned self-hosted NetBird deployment.",
+  "capabilities": [
+    "peers",
+    "groups",
+    "policies",
+    "routes",
+    "audit_events",
+    "routing_peers"
+  ],
+  "http_import": {
+    "endpoints": {
+      "peers": "/api/peers",
+      "groups": "/api/groups",
+      "policies": "/api/policies",
+      "routes": "/api/routes",
+      "audit_events": "/api/events"
+    },
+    "authorization_schemes": [
+      "bearer_token",
+      "api_token"
+    ],
+    "default_interval_seconds": 900,
+    "tls_required": true
+  },
+  "policy": {
+    "guardrails": [
+      "Disable or remove the default all-to-all policy before go-live.",
+      "Use explicit source and destination groups for every allow policy.",
+      "Assign every routed subnet or network resource to an access-control group.",
+      "Separate routing peers from human admin groups.",
+      "Require ticket references and expiry for break-glass membership."
+    ],
+    "templates": [
+      {
+        "id": "baseline-disable-all-to-all",
+        "name": "Disable default all-to-all",
+        "type": "baseline_control",
+        "description": "No enabled policy may allow All to All across all protocols and ports.",
+        "guards": [
+          "Control One import shows zero unrestricted full-mesh policies."
+        ]
+      },
+      {
+        "id": "prod-management-admins",
+        "name": "Production management access",
+        "type": "allow_policy",
+        "source_groups": [
+          "secops-admins",
+          "platform-admins"
+        ],
+        "destination_groups": [
+          "prod-mgmt-acl"
+        ],
+        "protocols": [
+          "tcp",
+          "icmp"
+        ],
+        "ports": [
+          "22",
+          "3389",
+          "5985",
+          "5986",
+          "9100",
+          "9443"
+        ]
+      },
+      {
+        "id": "prod-application-team",
+        "name": "Application team to production app subnets",
+        "type": "allow_policy",
+        "source_groups": [
+          "app-team"
+        ],
+        "destination_groups": [
+          "prod-app-acl"
+        ],
+        "protocols": [
+          "tcp",
+          "icmp"
+        ],
+        "ports": [
+          "80",
+          "443",
+          "8080",
+          "8443"
+        ]
+      },
+      {
+        "id": "prod-database-admins",
+        "name": "Database administration access",
+        "type": "allow_policy",
+        "source_groups": [
+          "db-admins"
+        ],
+        "destination_groups": [
+          "prod-db-acl"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "1433",
+          "1521",
+          "3306",
+          "5432",
+          "6379",
+          "9042"
+        ]
+      },
+      {
+        "id": "break-glass-prod",
+        "name": "Emergency break-glass access",
+        "type": "allow_policy",
+        "source_groups": [
+          "break-glass"
+        ],
+        "destination_groups": [
+          "prod-mgmt-acl",
+          "prod-app-acl",
+          "prod-db-acl"
+        ],
+        "protocols": [
+          "tcp",
+          "icmp"
+        ],
+        "ports": [
+          "22",
+          "3389",
+          "443",
+          "5432",
+          "9443"
+        ],
+        "guards": [
+          "Membership expires within 4 hours.",
+          "Ticket id is recorded in group membership notes.",
+          "Control One alert is generated when the group is non-empty."
+        ]
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "operator-readme",
+      "type": "runbook",
+      "path": "deploy/private-access/netbird/README.md",
+      "description": "Self-host deployment and HA notes."
+    },
+    {
+      "name": "policy-templates",
+      "type": "policy_intent",
+      "path": "deploy/private-access/netbird/policy-templates.json",
+      "description": "Expanded bank baseline policy intent."
+    }
+  ]
+}
+

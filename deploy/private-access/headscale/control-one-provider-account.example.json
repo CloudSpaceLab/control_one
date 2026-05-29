@@ -1,0 +1,19 @@
+{
+  "provider": "headscale",
+  "account_id": "bank-prod-headscale",
+  "display_name": "Bank Production Headscale",
+  "endpoint_url": "https://headscale.example.bank",
+  "credential_id": "00000000-0000-4000-8000-000000000002",
+  "config": {
+    "endpoints": {
+      "nodes": "/api/v1/node",
+      "routes": "/api/v1/routes",
+      "users": "/api/v1/user",
+      "acls": "/api/v1/policy"
+    },
+    "timeout_seconds": 30,
+    "tls_skip_verify": false
+  },
+  "import_enabled": true,
+  "import_interval_seconds": 900
+}

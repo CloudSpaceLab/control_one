@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "pack_id": "controlone.bank.remediation.baseline",
+  "version": "2026.05.29",
+  "generated_at": "2026-05-29T00:00:00Z",
+  "description": "Baseline signed remediation pack manifest for bank-controlled action-plan workflows.",
+  "actions": [
+    {
+      "id": "linux-host-firewall-close-public-ssh",
+      "title": "Close public SSH exposure",
+      "action_type": "host_firewall",
+      "target_kinds": [
+        "node"
+      ],
+      "risk": "high",
+      "requires_approval": true,
+      "min_approvers": 2,
+      "separation_of_duties": true,
+      "script_refs": [
+        {
+          "name": "apply",
+          "path": "scripts/linux/close-public-ssh.sh",
+          "sha256": "d8f4700d9da1b0ed75b8d61e760f53f7659b858a09766a285c64d3b4c43e4ca7",
+          "media_type": "text/x-shellscript"
+        }
+      ],
+      "rollback_refs": [
+        {
+          "name": "rollback",
+          "path": "scripts/linux/rollback-close-public-ssh.sh",
+          "sha256": "f3ce0c95fae26bfbc82c9323880dd8e6ba8f8db7eccbeb62017471ae84d8267e",
+          "media_type": "text/x-shellscript"
+        }
+      ],
+      "verification_steps": [
+        "confirm host firewall default deny remains active",
+        "confirm public SSH listener is no longer reachable",
+        "confirm approved private-access policy still reaches the management group"
+      ],
+      "source_refs": [
+        "private_access_exposure_findings",
+        "node_firewall_states",
+        "action_plan_approvals"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "operator-runbook",
+      "path": "runbooks/remediation-change-window.md",
+      "sha256": "c807163864acff77b01dd56fb253dc58e4c0f948d2f57041e43bb2e0764b7c7d",
+      "media_type": "text/markdown"
+    }
+  ]
+}
+

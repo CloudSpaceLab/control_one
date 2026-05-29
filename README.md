@@ -8,14 +8,14 @@ Control One delivers a unified control plane, background worker service, and nod
 - **Worker Manager** (`controlplane/internal/worker`): Dispatches provisioning and compliance jobs via in-memory queues or Asynq/Redis, coordinating with the job store and external integrations.
 - **Node Agent** (`cmd/nodeagent`): Runs on managed hosts, orchestrating bootstrap, scheduling, provisioning, compliance, telemetry, access, and secrets workflows.
 - **Web UI** (`ui/`): React + TypeScript SPA providing authenticated dashboards, routing, and placeholders for tenants, nodes, and login surfaces.
-- **Docs & Diagrams** (`docs/`): Architecture brief, threat model, provider setup guide, and C4/sequence diagrams underpinning Phase 0 planning.
+- **Docs** (`docs/`): Current bank go-live issue log plus narrow API/agent contract notes. Stale strategy, sprint, and phase-planning docs are intentionally removed so the code and current issue log stay authoritative.
 
 ## Architecture
 - **Agent Core** (`cmd/nodeagent/main.go`): wires configuration, registration, scheduling, telemetry, mesh, provisioning, access, and secrets workflows.
 - **Configuration** (`internal/config/`): loads YAML config, applies defaults, and ensures runtime directories for policy, mesh, and state artifacts.
 - **API Client** (`internal/api/`): mTLS-enabled REST client for Control One Core communication.
 - **Registration** (`internal/registration/`): bootstraps the node, persists state, and prevents duplicate registrations.
-- **Mesh Manager** (`internal/mesh/`): prepares zero-touch WireGuard mesh state, polls the coordinator, and rotates keys.
+- **Mesh Manager** (`internal/mesh/`): local mesh state support. Bank private-access strategy is tracked separately in `docs/bank-sales-go-live-issue-log.md`; Control One should integrate with NetBird/OpenZiti/Headscale out of the box rather than becoming a VPN control plane.
 - **Provisioning Engine** (`internal/provisioning/`): applies node templates, baseline hardening, and optional auto-remediation.
   - Templates are authored in the control plane and referenced by name via `provisioning.template`; metadata keys (e.g. `cluster`, `resource_group`) are forwarded untouched in the apply payload, enabling provider-specific workflows.
 - **Provisioning Adapter Architecture**
@@ -57,7 +57,7 @@ Control One delivers a unified control plane, background worker service, and nod
 - **Scanner** (`internal/scanner/`): executes compliance checks with timeout/concurrency controls.
   - Log ingestion helpers live in `internal/telemetry/logs/` with pluggable collectors/formatters driven by `telemetry_prefs.log_sources`.
   - Built-in presets cover nginx, Apache, MySQL, PostgreSQL, Redis, Kafka, IIS, and more; custom entries only need to provide overrides such as log paths or additional labels.
-  - The generic formatter (`formatter_generic.go`) consumes declarative `format_rules` (regex capture groups + templates) so complex log formats can be normalized without bespoke Go code.
+  - The generic formatter (`formatter_generic.go`) remains a compatibility path for declarative `format_rules`; new production SIEM parser/source semantics belong in signed content packs under `internal/contentpacks`, with replayed samples and coverage truth.
 - **Access Manager** (`internal/access/`): syncs user/groups from AD/API/local providers for fine-grained control.
 - **Secrets Store** (`internal/secrets/`): manages secure retrieval/refresh of secrets across groups.
 - **Utilities** (`internal/util/`): gathers system metadata, host metrics, and
@@ -216,13 +216,16 @@ agent_runtime:
   profile: auto
 
 telemetry_prefs:
-  # Log collection is opt-in; empty log_sources means collect no logs.
+  # Log collection is opt-in. When enabled, auto_discover_log_sources adds
+  # eligible local sources from observed services; high-risk app profiles still
+  # require explicit approval/configuration.
   collect_logs: false
+  auto_discover_log_sources: true
   log_namespaces:
     - system
     - application
     - security
-  # Set collect_logs: true and provide explicit sources when log ingestion is required.
+  # Explicit sources override/extend auto-discovered local sources.
   log_sources:
     - program: nginx
       paths:

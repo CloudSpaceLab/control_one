@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "provider": "headscale",
+  "name": "Control One bank baseline Headscale ACL intent",
+  "description": "Production ACL and route-approval templates for a bank-owned Headscale deployment connected to Control One imports.",
+  "guardrails": [
+    "OIDC groups should drive durable access intent.",
+    "Production subnet routes must be explicitly approved before use.",
+    "Preauth keys are short-lived, scoped, and tied to a change ticket.",
+    "Route owners are separate from broad human admin groups.",
+    "Break-glass tags require ticket references and time-boxed membership."
+  ],
+  "groups": [
+    {
+      "id": "group:secops-admins",
+      "purpose": "Security administrators allowed to reach hardened management ports."
+    },
+    {
+      "id": "group:platform-admins",
+      "purpose": "Platform administrators allowed to reach production infrastructure management."
+    },
+    {
+      "id": "group:app-team",
+      "purpose": "Application operators allowed to reach production app services."
+    },
+    {
+      "id": "group:db-admins",
+      "purpose": "Database administrators allowed to reach database listeners."
+    },
+    {
+      "id": "tag:route-prod",
+      "purpose": "Headless route owners that bridge production private networks."
+    },
+    {
+      "id": "tag:break-glass",
+      "purpose": "Time-boxed emergency access tag."
+    }
+  ],
+  "route_approvals": [
+    {
+      "id": "prod-mgmt-routes",
+      "cidrs": [
+        "10.10.0.0/16"
+      ],
+      "advertised_by": [
+        "tag:route-prod"
+      ],
+      "guards": [
+        "Route approval is recorded in the bank change system.",
+        "Route owner node is monitored and patched as production infrastructure.",
+        "Control One import shows route approved=true before traffic is allowed."
+      ]
+    },
+    {
+      "id": "prod-app-routes",
+      "cidrs": [
+        "10.20.0.0/16"
+      ],
+      "advertised_by": [
+        "tag:route-prod"
+      ],
+      "guards": [
+        "Application route CIDRs match approved CMDB service ranges.",
+        "No database listener is reachable through app-only ACLs."
+      ]
+    },
+    {
+      "id": "prod-db-routes",
+      "cidrs": [
+        "10.30.0.0/16"
+      ],
+      "advertised_by": [
+        "tag:route-prod"
+      ],
+      "guards": [
+        "Database route approval requires security and DBA owner approval.",
+        "App team groups cannot reach database CIDRs unless explicitly approved."
+      ]
+    }
+  ],
+  "templates": [
+    {
+      "id": "prod-management-admins",
+      "name": "Production management access",
+      "type": "acl_rule",
+      "src": [
+        "group:secops-admins",
+        "group:platform-admins"
+      ],
+      "dst": [
+        "tag:route-prod:22",
+        "tag:route-prod:3389",
+        "tag:route-prod:5985",
+        "tag:route-prod:5986",
+        "tag:route-prod:9443"
+      ],
+      "guards": [
+        "MFA is enforced by OIDC.",
+        "Admin group membership is reviewed monthly.",
+        "Route nodes are not assigned to broad human admin groups."
+      ]
+    },
+    {
+      "id": "prod-application-team",
+      "name": "Application team access",
+      "type": "acl_rule",
+      "src": [
+        "group:app-team"
+      ],
+      "dst": [
+        "tag:route-prod:80",
+        "tag:route-prod:443",
+        "tag:route-prod:8080",
+        "tag:route-prod:8443"
+      ],
+      "guards": [
+        "No SSH, RDP, or database ports in this template.",
+        "Application CIDRs are approved in the bank CMDB."
+      ]
+    },
+    {
+      "id": "prod-database-admins",
+      "name": "Database administration access",
+      "type": "acl_rule",
+      "src": [
+        "group:db-admins"
+      ],
+      "dst": [
+        "tag:route-prod:1433",
+        "tag:route-prod:1521",
+        "tag:route-prod:3306",
+        "tag:route-prod:5432",
+        "tag:route-prod:6379"
+      ],
+      "guards": [
+        "Database admin membership requires manager and security approval.",
+        "No broad app-team access to database ports."
+      ]
+    },
+    {
+      "id": "break-glass-prod",
+      "name": "Emergency break-glass access",
+      "type": "acl_rule",
+      "src": [
+        "tag:break-glass"
+      ],
+      "dst": [
+        "tag:route-prod:22",
+        "tag:route-prod:3389",
+        "tag:route-prod:443",
+        "tag:route-prod:5432",
+        "tag:route-prod:9443"
+      ],
+      "guards": [
+        "Membership expires within 4 hours.",
+        "Ticket id is recorded in the ACL change.",
+        "Post-incident review confirms tag removal."
+      ]
+    }
+  ]
+}

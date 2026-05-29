@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "provider": "openziti",
+  "name": "openziti-bank-prod",
+  "display_name": "Bank Production OpenZiti",
+  "version": "2026.05.29",
+  "generated_at": "2026-05-29T00:00:00Z",
+  "description": "Control One private-access provider manifest for a bank-owned OpenZiti deployment used for dark app, database, and admin services.",
+  "capabilities": [
+    "identities",
+    "services",
+    "service_policies",
+    "connector_health",
+    "audit_events"
+  ],
+  "http_import": {
+    "endpoints": {
+      "identities": "/edge/management/v1/identities",
+      "services": "/edge/management/v1/services",
+      "service_policies": "/edge/management/v1/service-policies",
+      "connector_health": "/edge/management/v1/edge-routers",
+      "audit_events": "/edge/management/v1/events"
+    },
+    "authorization_schemes": [
+      "bearer_token",
+      "api_token"
+    ],
+    "default_interval_seconds": 900,
+    "tls_required": true
+  },
+  "policy": {
+    "guardrails": [
+      "Publish sensitive services through OpenZiti services instead of public listeners.",
+      "Separate dial identities from bind identities for routers and tunnelers.",
+      "Use role attributes for policy assignment rather than long-lived individual exceptions.",
+      "Keep ZAC and controller administration on a hardened management path.",
+      "Require ticket references and expiry for break-glass identities and policies."
+    ],
+    "templates": [
+      {
+        "id": "dark-ssh-admin",
+        "name": "Dark SSH administration",
+        "type": "service_policy",
+        "description": "Expose SSH only through OpenZiti to security and platform administrators.",
+        "source_groups": [
+          "#secops-admins",
+          "#platform-admins"
+        ],
+        "destination_groups": [
+          "#svc-prod-ssh"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "22"
+        ]
+      },
+      {
+        "id": "dark-rdp-admin",
+        "name": "Dark RDP administration",
+        "type": "service_policy",
+        "source_groups": [
+          "#secops-admins",
+          "#platform-admins"
+        ],
+        "destination_groups": [
+          "#svc-prod-rdp"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "3389"
+        ]
+      },
+      {
+        "id": "dark-database-admin",
+        "name": "Dark database administration",
+        "type": "service_policy",
+        "source_groups": [
+          "#db-admins"
+        ],
+        "destination_groups": [
+          "#svc-prod-db"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "1433",
+          "1521",
+          "3306",
+          "5432",
+          "6379"
+        ]
+      },
+      {
+        "id": "dark-app-access",
+        "name": "Dark application access",
+        "type": "service_policy",
+        "source_groups": [
+          "#app-operators"
+        ],
+        "destination_groups": [
+          "#svc-prod-app"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "443",
+          "8443"
+        ]
+      },
+      {
+        "id": "break-glass-dark-services",
+        "name": "Emergency dark-service break-glass",
+        "type": "service_policy",
+        "source_groups": [
+          "#break-glass"
+        ],
+        "destination_groups": [
+          "#svc-prod-ssh",
+          "#svc-prod-rdp",
+          "#svc-prod-db",
+          "#svc-prod-app"
+        ],
+        "guards": [
+          "Identity or role membership expires within 4 hours.",
+          "Ticket id is recorded in the identity metadata.",
+          "Control One import shows break-glass state before and after the change window."
+        ]
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "operator-readme",
+      "type": "runbook",
+      "path": "deploy/private-access/openziti/README.md",
+      "description": "Self-host deployment, ZAC, router, and tunneler guidance."
+    },
+    {
+      "name": "service-templates",
+      "type": "policy_intent",
+      "path": "deploy/private-access/openziti/service-templates.json",
+      "description": "Bank baseline OpenZiti service and service-policy intent."
+    }
+  ]
+}

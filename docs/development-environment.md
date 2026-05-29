@@ -19,7 +19,7 @@ Optional tooling:
 cmd/                 # service entrypoints (control plane, node agent)
 controlplane/        # API, worker, storage, auth, config
 ui/                  # React + TypeScript single-page app
-docs/                # architecture, threat model, diagrams, phase summaries
+docs/                # current bank go-live issue log plus API/agent contract notes
 infra/               # infrastructure as code templates
  .github/workflows/  # CI definitions
 ```
@@ -80,5 +80,5 @@ A baseline dev container is available under `.devcontainer/`. Open the repo in V
 - **Ports already in use**: Adjust service ports in `docker-compose.dev.yml` or stop conflicting processes.
 
 ## Next Steps
-- Review `docs/phase0-foundations.md` for Phase 0 status.
-- Track future improvements and ADRs under `docs/` as the platform evolves.
+- Review `docs/bank-sales-go-live-issue-log.md` before adding platform or connector work.
+- Keep future docs narrow and code-backed so stale planning material does not become a competing source of truth.

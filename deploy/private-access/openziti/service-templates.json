@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "provider": "openziti",
+  "name": "Control One bank baseline OpenZiti service intent",
+  "description": "Production service and policy templates for a bank-owned OpenZiti deployment connected to Control One imports.",
+  "guardrails": [
+    "Sensitive admin, database, and internal application listeners should be dark services, not public listeners.",
+    "Dial identities and bind identities must be separate.",
+    "Role attributes should drive service policies rather than one-off permanent identity exceptions.",
+    "Break-glass identities require ticket references and time-boxed expiry.",
+    "ZAC and controller administration must remain behind a hardened management path."
+  ],
+  "identity_roles": [
+    {
+      "role": "#secops-admins",
+      "purpose": "Security administrators allowed to dial hardened admin services."
+    },
+    {
+      "role": "#platform-admins",
+      "purpose": "Platform administrators allowed to dial infrastructure admin services."
+    },
+    {
+      "role": "#db-admins",
+      "purpose": "Database administrators allowed to dial database services."
+    },
+    {
+      "role": "#app-operators",
+      "purpose": "Application operators allowed to dial application services."
+    },
+    {
+      "role": "#break-glass",
+      "purpose": "Time-boxed emergency responders with ticket-backed membership."
+    },
+    {
+      "role": "#bind-prod",
+      "purpose": "Router/tunneler bind identities in production networks."
+    }
+  ],
+  "service_roles": [
+    {
+      "role": "#svc-prod-ssh",
+      "ports": [
+        22
+      ],
+      "purpose": "Production SSH endpoints."
+    },
+    {
+      "role": "#svc-prod-rdp",
+      "ports": [
+        3389
+      ],
+      "purpose": "Production RDP endpoints."
+    },
+    {
+      "role": "#svc-prod-db",
+      "ports": [
+        1433,
+        1521,
+        3306,
+        5432,
+        6379
+      ],
+      "purpose": "Production database listeners."
+    },
+    {
+      "role": "#svc-prod-app",
+      "ports": [
+        443,
+        8443
+      ],
+      "purpose": "Production internal application endpoints."
+    }
+  ],
+  "templates": [
+    {
+      "id": "bind-prod-services",
+      "name": "Production bind identities",
+      "type": "bind_policy",
+      "identity_roles": [
+        "#bind-prod"
+      ],
+      "service_roles": [
+        "#svc-prod-ssh",
+        "#svc-prod-rdp",
+        "#svc-prod-db",
+        "#svc-prod-app"
+      ],
+      "guards": [
+        "Bind identities belong to routers or tunnelers, not human users.",
+        "Enrollment JWTs are short-lived and stored in the approved secret manager.",
+        "Control One import shows router health for every production bind location."
+      ]
+    },
+    {
+      "id": "dial-admin-services",
+      "name": "Administrative dial access",
+      "type": "dial_policy",
+      "identity_roles": [
+        "#secops-admins",
+        "#platform-admins"
+      ],
+      "service_roles": [
+        "#svc-prod-ssh",
+        "#svc-prod-rdp"
+      ],
+      "guards": [
+        "MFA is enforced by the identity provider.",
+        "Administrative identities are reviewed at least monthly.",
+        "No broad wildcard service role is attached to human admin identities."
+      ]
+    },
+    {
+      "id": "dial-database-services",
+      "name": "Database dial access",
+      "type": "dial_policy",
+      "identity_roles": [
+        "#db-admins"
+      ],
+      "service_roles": [
+        "#svc-prod-db"
+      ],
+      "guards": [
+        "Database admin membership requires manager and security approval.",
+        "Application operator roles cannot dial database service roles.",
+        "Control One exposure reconciliation shows no public listener for the same database endpoint."
+      ]
+    },
+    {
+      "id": "dial-application-services",
+      "name": "Application dial access",
+      "type": "dial_policy",
+      "identity_roles": [
+        "#app-operators"
+      ],
+      "service_roles": [
+        "#svc-prod-app"
+      ],
+      "guards": [
+        "No SSH, RDP, or database service role is included.",
+        "Application endpoints are mapped to approved CMDB services.",
+        "Control One imports verify that only expected roles can dial."
+      ]
+    },
+    {
+      "id": "break-glass-dark-services",
+      "name": "Emergency dark-service break-glass",
+      "type": "dial_policy",
+      "identity_roles": [
+        "#break-glass"
+      ],
+      "service_roles": [
+        "#svc-prod-ssh",
+        "#svc-prod-rdp",
+        "#svc-prod-db",
+        "#svc-prod-app"
+      ],
+      "guards": [
+        "Membership expires within 4 hours.",
+        "Ticket id is recorded in identity metadata.",
+        "Post-incident review confirms role removal."
+      ]
+    }
+  ]
+}

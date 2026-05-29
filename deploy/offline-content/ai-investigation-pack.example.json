@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "pack_id": "controlone.bank.ai.baseline",
+  "version": "2026.05.29",
+  "generated_at": "2026-05-29T00:00:00Z",
+  "description": "Baseline signed AI investigation pack manifest for evidence-first operator workflows.",
+  "tools": [
+    {
+      "id": "private-access-exposure-summary",
+      "name": "Private access exposure summary",
+      "purpose": "Summarize public exposure findings with cited Control One rows.",
+      "input_schema_ref": {
+        "name": "schema",
+        "path": "schemas/private-access-exposure-summary.schema.json",
+        "sha256": "7f8947f2736e27731927ed22fc7ada244a4f529c21d87decdbed519daebd3233",
+        "media_type": "application/schema+json"
+      },
+      "citation_required": true,
+      "guardrails": [
+        "Only cite imported findings, action receipts, and SOC case evidence.",
+        "Do not recommend production changes without an action-plan approval path."
+      ],
+      "allowed_roles": [
+        "operator",
+        "admin"
+      ]
+    }
+  ],
+  "prompts": [
+    {
+      "id": "exposure-triage",
+      "name": "Exposure triage",
+      "purpose": "Create an evidence-first triage note for private-access exposure drift.",
+      "prompt_ref": {
+        "name": "prompt",
+        "path": "prompts/exposure-triage.md",
+        "sha256": "c13126a8fe4e33c5ed792f16f23621c70fb81e14187c56b021e9ad9e4272b287",
+        "media_type": "text/markdown"
+      },
+      "allowed_tools": [
+        "private-access-exposure-summary"
+      ],
+      "guardrails": [
+        "State uncertainty when source evidence is missing.",
+        "Keep remediation recommendations tied to cited findings and rollback plans."
+      ]
+    }
+  ]
+}
+

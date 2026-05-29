@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "provider": "headscale",
+  "name": "headscale-bank-prod",
+  "display_name": "Bank Production Headscale",
+  "version": "2026.05.29",
+  "generated_at": "2026-05-29T00:00:00Z",
+  "description": "Control One private-access provider manifest for a bank-owned Headscale deployment with OIDC, ACL-file, preauth-key, and route-approval evidence.",
+  "capabilities": [
+    "nodes",
+    "users",
+    "routes",
+    "acl_rules",
+    "route_approvals"
+  ],
+  "http_import": {
+    "endpoints": {
+      "nodes": "/api/v1/node",
+      "routes": "/api/v1/routes",
+      "users": "/api/v1/user",
+      "acls": "/api/v1/policy"
+    },
+    "authorization_schemes": [
+      "bearer_token",
+      "api_key"
+    ],
+    "default_interval_seconds": 900,
+    "tls_required": true
+  },
+  "policy": {
+    "guardrails": [
+      "Use OIDC groups for durable access intent.",
+      "Use short-lived, scoped preauth keys for approved automation only.",
+      "Explicitly approve advertised subnet routes before production use.",
+      "Keep route-owner nodes separate from broad human admin groups.",
+      "Require ticket references and expiry for break-glass tags."
+    ],
+    "templates": [
+      {
+        "id": "prod-management-admins",
+        "name": "Production management access",
+        "type": "acl_rule",
+        "source_groups": [
+          "group:secops-admins",
+          "group:platform-admins"
+        ],
+        "destination_groups": [
+          "tag:route-prod"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "22",
+          "3389",
+          "5985",
+          "5986",
+          "9443"
+        ]
+      },
+      {
+        "id": "prod-application-team",
+        "name": "Application team access",
+        "type": "acl_rule",
+        "source_groups": [
+          "group:app-team"
+        ],
+        "destination_groups": [
+          "tag:route-prod"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "80",
+          "443",
+          "8080",
+          "8443"
+        ]
+      },
+      {
+        "id": "prod-database-admins",
+        "name": "Database administration access",
+        "type": "acl_rule",
+        "source_groups": [
+          "group:db-admins"
+        ],
+        "destination_groups": [
+          "tag:route-prod"
+        ],
+        "protocols": [
+          "tcp"
+        ],
+        "ports": [
+          "1433",
+          "1521",
+          "3306",
+          "5432",
+          "6379"
+        ]
+      },
+      {
+        "id": "prod-route-approval",
+        "name": "Production route approval",
+        "type": "route_approval",
+        "routing_peer_groups": [
+          "tag:route-prod"
+        ],
+        "guards": [
+          "Route approval is tied to a bank change ticket.",
+          "Route owner node is monitored and patched.",
+          "Control One import shows approved route state before production use."
+        ]
+      },
+      {
+        "id": "break-glass-prod",
+        "name": "Emergency break-glass access",
+        "type": "acl_rule",
+        "source_groups": [
+          "tag:break-glass"
+        ],
+        "destination_groups": [
+          "tag:route-prod"
+        ],
+        "guards": [
+          "Membership expires within 4 hours.",
+          "Ticket id is recorded in the ACL change.",
+          "Control One import shows break-glass state before and after the change window."
+        ]
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "operator-readme",
+      "type": "runbook",
+      "path": "deploy/private-access/headscale/README.md",
+      "description": "OIDC, preauth-key, ACL-file, and route-approval guidance."
+    },
+    {
+      "name": "acl-templates",
+      "type": "policy_intent",
+      "path": "deploy/private-access/headscale/acl-templates.json",
+      "description": "Bank baseline Headscale ACL and route-approval intent."
+    }
+  ]
+}
