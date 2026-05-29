@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 )
@@ -51,6 +54,43 @@ func TestValidateIngestedEventContractForWebAndRemediationEvents(t *testing.T) {
 	remediation := &IngestedEvent{Type: "remediation.webserver_block.applied"}
 	if err := validateIngestedEventContract(remediation); err == nil {
 		t.Fatal("remediation event without correlation accepted")
+	}
+}
+
+func TestValidateIngestedEventContractRejectsNormalizedSchemaViolations(t *testing.T) {
+	t.Parallel()
+
+	badSource := &IngestedEvent{Type: "conn.open", SrcIP: "not-an-ip"}
+	if err := validateIngestedEventContract(badSource); err == nil || !strings.Contains(err.Error(), "source.ip") {
+		t.Fatalf("invalid source.ip error = %v", err)
+	}
+
+	badParsedFields := &IngestedEvent{
+		Type: "log.line",
+		Details: map[string]any{
+			"fields": map[string]any{
+				"event":  map[string]any{"kind": "event"},
+				"source": map[string]any{"ip": "10.0.0.5", "port": "443"},
+			},
+		},
+	}
+	if err := validateIngestedEventContract(badParsedFields); err == nil || !strings.Contains(err.Error(), "source.port") {
+		t.Fatalf("invalid parsed source.port error = %v", err)
+	}
+
+	valid := &IngestedEvent{
+		Type:     "conn.open",
+		SrcIP:    "203.0.113.10",
+		SrcPort:  44310,
+		DstIP:    "10.0.0.5",
+		DstPort:  443,
+		Protocol: "tcp",
+		Details: map[string]any{
+			"vendor_specific_source": "not a normalized source object",
+		},
+	}
+	if err := validateIngestedEventContract(valid); err != nil {
+		t.Fatalf("valid normalized event rejected: %v", err)
 	}
 }
 
@@ -179,6 +219,55 @@ func TestIngestedEventContractV2MetadataPreserved(t *testing.T) {
 			got["parser_status"] != ev.ParserStatus {
 			t.Fatalf("Doris row did not preserve v2 metadata: %+v", got)
 		}
+	}
+}
+
+func TestHandleEventsIngestReturnsReplayReceiptForDuplicateKey(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{nodes: []storage.Node{{ID: nodeID, TenantID: tenantID}}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	body := gzipNDJSON(t, IngestedEvent{
+		Type:    "web.error",
+		TS:      time.Now().UTC().Add(-time.Minute),
+		Message: "parser miss",
+	})
+
+	post := func() map[string]any {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/events/ingest", bytes.NewReader(body))
+		req.Header.Set("Content-Encoding", "gzip")
+		req.Header.Set("Content-Type", "application/x-ndjson")
+		req.Header.Set("X-ControlOne-Replay-Key", "eventstream:test-replay-key")
+		req = withPrincipal(req, &auth.Principal{
+			Type:    "agent",
+			Name:    nodeID.String(),
+			Subject: nodeID.String(),
+			Roles:   []string{"agent"},
+		})
+		rec := httptest.NewRecorder()
+		srv.handleEventsIngest(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("event ingest status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return resp
+	}
+
+	first := post()
+	second := post()
+	if first["batch_id"] == "" || second["batch_id"] != first["batch_id"] {
+		t.Fatalf("duplicate did not return original batch id: first=%v second=%v", first, second)
+	}
+	if second["duplicate"] != true {
+		t.Fatalf("duplicate response missing receipt marker: %v", second)
+	}
+	if len(store.eventIngestReplayByKey) != 1 {
+		t.Fatalf("event ingest replay records = %d, want 1", len(store.eventIngestReplayByKey))
 	}
 }
 

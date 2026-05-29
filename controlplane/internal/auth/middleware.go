@@ -109,7 +109,7 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 // Wrap decorates the provided handler with authentication.
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := m.publicPaths[r.URL.Path]; ok {
+		if m.publicRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -126,6 +126,49 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ContextKeyPrincipal, principal)))
 	})
+}
+
+func (m *Middleware) publicRequest(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	if _, ok := m.publicPaths[r.URL.Path]; ok {
+		return true
+	}
+	if contentPackCollectorSelfServicePath(r.URL.Path) && requestHasCollectorCredential(r) {
+		return true
+	}
+	return false
+}
+
+func contentPackCollectorSelfServicePath(path string) bool {
+	const prefix = "/api/v1/content-packs/collectors/"
+	rest, ok := strings.CutPrefix(path, prefix)
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return false
+	}
+	switch parts[1] {
+	case "heartbeat", "desired-config", "apply-result":
+		return true
+	default:
+		return false
+	}
+}
+
+func requestHasCollectorCredential(r *http.Request) bool {
+	if strings.TrimSpace(r.Header.Get("X-ControlOne-Collector-Token")) != "" {
+		return true
+	}
+	authz := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
+		return false
+	}
+	token := strings.TrimSpace(authz[7:])
+	return strings.HasPrefix(token, storage.ContentPackEdgeCollectorTokenPrefix)
 }
 
 func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {

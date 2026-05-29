@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -169,6 +170,31 @@ func TestMiddlewareRejectsOpaqueBearerWhenOIDCDisabled(t *testing.T) {
 	}
 	if principal != nil {
 		t.Fatalf("expected nil principal, got %+v", principal)
+	}
+}
+
+func TestMiddlewareBypassesCollectorSelfServiceOnlyWithCollectorCredential(t *testing.T) {
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, &fakeIdentityStore{})
+	called := false
+	handler := mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/content-packs/collectors/edge-1/heartbeat?tenant_id="+uuid.NewString(), nil)
+	req.Header.Set("X-ControlOne-Collector-Token", storage.ContentPackEdgeCollectorTokenPrefix+"test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || !called {
+		t.Fatalf("collector credential bypass status=%d called=%v", rec.Code, called)
+	}
+
+	called = false
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/content-packs/collectors/edge-1/heartbeat?tenant_id="+uuid.NewString(), nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || called {
+		t.Fatalf("missing collector credential status=%d called=%v, want 401 and not called", rec.Code, called)
 	}
 }
 

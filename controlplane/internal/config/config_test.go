@@ -118,6 +118,30 @@ func TestApplyFallbacksSetsEnforcementSafetyDefaults(t *testing.T) {
 	if cfg.OfflineContent.MaxBundleBytes != 256*1024*1024 {
 		t.Fatalf("OfflineContent.MaxBundleBytes = %d, want 256MiB", cfg.OfflineContent.MaxBundleBytes)
 	}
+	if cfg.SIEMForwarding.Interval != 30*time.Second {
+		t.Fatalf("SIEMForwarding.Interval = %s, want 30s", cfg.SIEMForwarding.Interval)
+	}
+	if cfg.SIEMForwarding.RunTimeout != 2*time.Minute {
+		t.Fatalf("SIEMForwarding.RunTimeout = %s, want 2m", cfg.SIEMForwarding.RunTimeout)
+	}
+	if cfg.SIEMForwarding.InitialLookback != 15*time.Minute {
+		t.Fatalf("SIEMForwarding.InitialLookback = %s, want 15m", cfg.SIEMForwarding.InitialLookback)
+	}
+	if cfg.SIEMForwarding.MaxBatchSize != 500 {
+		t.Fatalf("SIEMForwarding.MaxBatchSize = %d, want 500", cfg.SIEMForwarding.MaxBatchSize)
+	}
+	if cfg.PrivateAccess.ImportSchedulerInterval != 5*time.Minute {
+		t.Fatalf("PrivateAccess.ImportSchedulerInterval = %s, want 5m", cfg.PrivateAccess.ImportSchedulerInterval)
+	}
+	if cfg.PrivateAccess.ImportSchedulerLimit != 50 {
+		t.Fatalf("PrivateAccess.ImportSchedulerLimit = %d, want 50", cfg.PrivateAccess.ImportSchedulerLimit)
+	}
+	if cfg.Doris.ReplicationNum != 1 {
+		t.Fatalf("Doris.ReplicationNum = %d, want dev default 1", cfg.Doris.ReplicationNum)
+	}
+	if cfg.Vault.Timeout != 30*time.Second {
+		t.Fatalf("Vault.Timeout = %s, want 30s", cfg.Vault.Timeout)
+	}
 }
 
 func TestValidateOfflineContentRequiresSigningKey(t *testing.T) {

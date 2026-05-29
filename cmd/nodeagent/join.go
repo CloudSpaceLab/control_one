@@ -177,7 +177,17 @@ agent_runtime:
 
 telemetry_prefs:
   collect_logs: false
+  auto_discover_log_sources: true
   log_sources: []
+
+app_dependencies:
+  enabled: true
+  scan_roots: []
+  include_dev_dependencies: false
+  scan_interval: 6h
+  max_depth: 8
+  max_manifests: 512
+  max_file_bytes: 1048576
 
 scanner:
   enabled: true

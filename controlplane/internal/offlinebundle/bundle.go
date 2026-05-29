@@ -260,6 +260,9 @@ func VerifyArchive(r io.Reader, opts ImportOptions) (*VerifiedArchive, error) {
 		if !strings.EqualFold(got, strings.TrimSpace(content.SHA256)) {
 			return nil, fmt.Errorf("content %s sha256 mismatch", content.Path)
 		}
+		if err := validateKnownContentPayload(content, data); err != nil {
+			return nil, err
+		}
 	}
 	sum := sha256.Sum256(manifestBytes)
 	return &VerifiedArchive{
@@ -433,6 +436,9 @@ func applyContentReceipt(path string, enriched *IPEnrichment) {
 	if err := json.Unmarshal(data, &receipt); err != nil {
 		return
 	}
+	if contentReceiptExpired(receipt, time.Now().UTC()) {
+		receipt.Stale = true
+	}
 	enriched.ContentVersion = receipt.Version
 	enriched.Stale = receipt.Stale
 	enriched.BundleID = receipt.BundleID
@@ -440,6 +446,13 @@ func applyContentReceipt(path string, enriched *IPEnrichment) {
 }
 
 func ListStatus(rootDir string) ([]Receipt, error) {
+	return ListStatusAt(rootDir, time.Now().UTC())
+}
+
+func ListStatusAt(rootDir string, now time.Time) ([]Receipt, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	pattern := filepath.Join(strings.TrimSpace(rootDir), "active", "*.receipt.json")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -456,6 +469,7 @@ func ListStatus(rootDir string) ([]Receipt, error) {
 		if err := json.Unmarshal(data, &receipt); err != nil {
 			return nil, err
 		}
+		refreshReceiptStaleness(&receipt, now)
 		out = append(out, receipt)
 	}
 	return out, nil
@@ -549,6 +563,45 @@ func contentExpired(content ContentFile, now time.Time) bool {
 		return false
 	}
 	return now.After(content.ExpiresAt.UTC())
+}
+
+func contentReceiptExpired(content ContentReceipt, now time.Time) bool {
+	if content.ExpiresAt == nil || content.ExpiresAt.IsZero() {
+		return false
+	}
+	return now.After(content.ExpiresAt.UTC())
+}
+
+func refreshReceiptStaleness(receipt *Receipt, now time.Time) {
+	if receipt == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if !receipt.ExpiresAt.IsZero() && now.After(receipt.ExpiresAt.UTC()) {
+		receipt.Status = "expired"
+		receipt.Warnings = appendWarning(receipt.Warnings, "bundle is expired")
+	}
+	for i := range receipt.Contents {
+		if contentReceiptExpired(receipt.Contents[i], now) {
+			receipt.Contents[i].Stale = true
+			receipt.Warnings = appendWarning(receipt.Warnings, fmt.Sprintf("%s/%s content is expired", receipt.Contents[i].Type, receipt.Contents[i].Name))
+		}
+	}
+}
+
+func appendWarning(warnings []string, warning string) []string {
+	warning = strings.TrimSpace(warning)
+	if warning == "" {
+		return warnings
+	}
+	for _, existing := range warnings {
+		if strings.EqualFold(strings.TrimSpace(existing), warning) {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
 }
 
 func decodeSignature(data []byte) ([]byte, string, error) {

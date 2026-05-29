@@ -346,6 +346,7 @@ func (s *Server) processWebserverCompletedAction(ctx context.Context, jobID uuid
 	if err := s.store.UpdateJobStatus(ctx, jobID, jobStatus, message, fields); err != nil {
 		s.logger.Warn("webserver job mark complete", zap.String("job_id", jobID.String()), zap.Error(err))
 	}
+	s.recordWebserverActionReceipt(ctx, action, jobID, status, errMsg, c.Metadata, receiptPersisted)
 	if blockEntryID := webserverActionBlockEntryID(action); blockEntryID != uuid.Nil {
 		if proposalStore, ok := s.store.(ipBlockProposalStore); ok {
 			entry, err := proposalStore.GetIPBlocklistEntry(ctx, blockEntryID)
@@ -973,6 +974,8 @@ func (s *Server) createWebserverInventoryScanAction(w http.ResponseWriter, r *ht
 	}
 	jobID := uuid.New()
 	stampWebserverJobContract(&payload, jobID, "")
+	var actionPlanID uuid.UUID
+	payload.Policy, actionPlanID = s.attachWebserverActionPlan(r.Context(), tenantID, nodeID, nil, jobID, JobTypeWebserverInventoryScan, payload.Policy, nil)
 	payloadBytes, _ := json.Marshal(payload)
 	job := &storage.Job{
 		ID:       jobID,
@@ -991,7 +994,7 @@ func (s *Server) createWebserverInventoryScanAction(w http.ResponseWriter, r *ht
 		NodeID:   nodeID,
 		JobID:    &created.ID,
 		Action:   JobTypeWebserverInventoryScan,
-		Policy:   req.Policy,
+		Policy:   payload.Policy,
 	})
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1000,11 +1003,15 @@ func (s *Server) createWebserverInventoryScanAction(w http.ResponseWriter, r *ht
 	s.recordAudit(r.Context(), principal, tenantID, "webserver.inventory_scan.created", "webserver_config_action", action.ID.String(), map[string]any{
 		"job_id": created.ID.String(),
 	})
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	resp := map[string]any{
 		"job_id":    created.ID.String(),
 		"action_id": action.ID.String(),
 		"status":    action.Status,
-	})
+	}
+	if actionPlanID != uuid.Nil {
+		resp["action_plan_id"] = actionPlanID.String()
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (s *Server) createWebserverConfigAction(w http.ResponseWriter, r *http.Request, instanceID uuid.UUID, jobType string) {
@@ -1079,6 +1086,8 @@ func (s *Server) createWebserverConfigAction(w http.ResponseWriter, r *http.Requ
 	}
 	jobID := uuid.New()
 	stampWebserverJobContract(&payload, jobID, "")
+	var actionPlanID uuid.UUID
+	payload.Policy, actionPlanID = s.attachWebserverActionPlan(r.Context(), tenantID, nodeID, &instanceID, jobID, jobType, payload.Policy, payload.Instance)
 	payloadBytes, _ := json.Marshal(payload)
 	job := &storage.Job{
 		ID:       jobID,
@@ -1098,7 +1107,7 @@ func (s *Server) createWebserverConfigAction(w http.ResponseWriter, r *http.Requ
 		WebserverInstanceID: &instanceID,
 		JobID:               &created.ID,
 		Action:              jobType,
-		Policy:              req.Policy,
+		Policy:              payload.Policy,
 	})
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1108,12 +1117,16 @@ func (s *Server) createWebserverConfigAction(w http.ResponseWriter, r *http.Requ
 		"job_id": created.ID.String(),
 		"action": jobType,
 	})
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	resp := map[string]any{
 		"job_id":     created.ID.String(),
 		"action_id":  action.ID.String(),
 		"status":     action.Status,
 		"created_at": time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+	if actionPlanID != uuid.Nil {
+		resp["action_plan_id"] = actionPlanID.String()
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (s *Server) dispatchBlockProposalToWebserversOnNode(ctx context.Context, entry *storage.IPBlocklistEntry, nodeID uuid.UUID) (int, error) {
@@ -1207,6 +1220,8 @@ func (s *Server) enqueueWebserverBlocklistUpdate(ctx context.Context, entry *sto
 	}
 	jobID := uuid.New()
 	stampWebserverJobContract(&payload, jobID, "ip_blocklist_entry:"+entry.ID.String())
+	instanceID := instance.ID
+	payload.Policy, _ = s.attachWebserverActionPlan(ctx, entry.TenantID, instance.NodeID, &instanceID, jobID, JobTypeWebserverBlocklistUpdate, payload.Policy, payload.Instance)
 	payloadBytes, _ := json.Marshal(payload)
 	job := &storage.Job{
 		ID:       jobID,
@@ -1219,14 +1234,13 @@ func (s *Server) enqueueWebserverBlocklistUpdate(ctx context.Context, entry *sto
 	if err != nil {
 		return nil, nil, fmt.Errorf("create webserver blocklist job: %w", err)
 	}
-	instanceID := instance.ID
 	action, err := store.CreateWebserverConfigAction(ctx, storage.CreateWebserverConfigActionParams{
 		TenantID:            entry.TenantID,
 		NodeID:              instance.NodeID,
 		WebserverInstanceID: &instanceID,
 		JobID:               &created.ID,
 		Action:              JobTypeWebserverBlocklistUpdate,
-		Policy:              policy,
+		Policy:              payload.Policy,
 	})
 	if err != nil {
 		return created, nil, fmt.Errorf("create webserver blocklist action: %w", err)
@@ -1373,6 +1387,8 @@ func (s *Server) enqueueWebserverBlocklistRefresh(ctx context.Context, tenantID 
 	}
 	jobID := uuid.New()
 	stampWebserverJobContract(&payload, jobID, webserverCorrelationSeedFromMetadata(metadata))
+	instanceID := instance.ID
+	payload.Policy, _ = s.attachWebserverActionPlan(ctx, tenantID, instance.NodeID, &instanceID, jobID, JobTypeWebserverBlocklistUpdate, payload.Policy, payload.Instance)
 	payloadBytes, _ := json.Marshal(payload)
 	job := &storage.Job{
 		ID:       jobID,
@@ -1385,14 +1401,13 @@ func (s *Server) enqueueWebserverBlocklistRefresh(ctx context.Context, tenantID 
 	if err != nil {
 		return nil, nil, fmt.Errorf("create webserver blocklist refresh job: %w", err)
 	}
-	instanceID := instance.ID
 	action, err := store.CreateWebserverConfigAction(ctx, storage.CreateWebserverConfigActionParams{
 		TenantID:            tenantID,
 		NodeID:              instance.NodeID,
 		WebserverInstanceID: &instanceID,
 		JobID:               &created.ID,
 		Action:              JobTypeWebserverBlocklistUpdate,
-		Policy:              policy,
+		Policy:              payload.Policy,
 	})
 	if err != nil {
 		return created, nil, fmt.Errorf("create webserver blocklist refresh action: %w", err)

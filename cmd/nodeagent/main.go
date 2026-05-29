@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -215,8 +216,11 @@ func main() {
 	// filters keep cardinality bounded.
 	eventStream := eventstream.NewStream(8192)
 	correlator := eventstream.NewCorrelator(2 * time.Second)
+	durabilityDir := filepath.Dir(cfg.StateFile)
 	batcher := eventstream.NewBatcher(client, eventStream, log, eventstream.BatcherOptions{
-		Stamp: correlator.Stamp,
+		Stamp:         correlator.Stamp,
+		SpoolDir:      filepath.Join(durabilityDir, "event-spool"),
+		SpoolMaxBytes: 256 << 20,
 	})
 	go batcher.Run(ctx)
 
@@ -269,15 +273,70 @@ func main() {
 	dbMgr := dbquery.NewManager(eventStream, log, dbquery.Options{
 		NodeID:   state.NodeID,
 		TenantID: state.TenantID,
+		Targets:  dbQueryTargetsFromConfig(cfg.DBQuery.Targets),
 	})
+	dbMgr.SetCaptureQueryText(cfg.DBQuery.CaptureQueryText)
 	collectors.Register("dbquery", dbMgr.Run, func() string { return "policy-gated" })
 	if runtimeSettings.DBQueryDefaultEnabled {
 		collectors.Start("dbquery")
 	}
 
+	if cfg.ContentPackCollector.Enabled {
+		contentPackCollectorVersion := strings.TrimSpace(cfg.ContentPackCollector.Version)
+		if contentPackCollectorVersion == "" {
+			contentPackCollectorVersion = agentVersion
+		}
+		contentPackCollector := newContentPackEdgeCollectorWrapper(client, log, contentPackEdgeCollectorOptions{
+			TenantID:         state.TenantID,
+			CollectorID:      cfg.ContentPackCollector.CollectorID,
+			Kind:             cfg.ContentPackCollector.Kind,
+			Version:          contentPackCollectorVersion,
+			Token:            cfg.ContentPackCollector.Token,
+			ConfigPath:       cfg.ContentPackCollector.ConfigPath,
+			StateFile:        cfg.ContentPackCollector.StateFile,
+			MetricsEndpoint:  cfg.ContentPackCollector.MetricsEndpoint,
+			MetricsTimeout:   cfg.ContentPackCollector.MetricsTimeout,
+			PollInterval:     cfg.ContentPackCollector.PollInterval,
+			ApplyTimeout:     cfg.ContentPackCollector.ApplyTimeout,
+			ValidateCommand:  cfg.ContentPackCollector.ValidateCommand,
+			ReloadCommand:    cfg.ContentPackCollector.ReloadCommand,
+			SuperviseCommand: cfg.ContentPackCollector.SuperviseCommand,
+		})
+		if err := contentPackCollector.Validate(); err != nil {
+			log.Warn("content pack collector wrapper disabled", zap.Error(err))
+			collectors.MarkDisabled("content-pack-collector", err.Error(), contentPackCollector.Backend)
+		} else {
+			collectors.Register("content-pack-collector", contentPackCollector.Run, contentPackCollector.Backend)
+			collectors.Start("content-pack-collector")
+		}
+	}
+
+	if cfg.AppDependencies.Enabled {
+		collectors.Register("app-dependencies", func(cctx context.Context) {
+			runAppDependencyCollector(cctx, client, log, appDependencyCollectorOptions{
+				appDependencyScanOptions: appDependencyScanOptions{
+					ScanRoots:              cfg.AppDependencies.ScanRoots,
+					IncludeDevDependencies: cfg.AppDependencies.IncludeDevDependencies,
+					MaxDepth:               cfg.AppDependencies.MaxDepth,
+					MaxManifests:           cfg.AppDependencies.MaxManifests,
+					MaxFileBytes:           cfg.AppDependencies.MaxFileBytes,
+				},
+				Interval: cfg.AppDependencies.ScanInterval,
+				NodeID:   state.NodeID,
+			})
+		}, func() string { return "manifest-sbom" })
+		collectors.Start("app-dependencies")
+	} else {
+		collectors.MarkDisabled("app-dependencies", "app dependency inventory disabled", func() string { return "manifest-sbom" })
+	}
+
 	configureHeartbeatRuntime(runtimeSettings, eventStream, collectors.Snapshot, func() (int, uint64) {
 		stats := netflowMgr.Stats()
 		return stats.SummaryBuckets, stats.SummaryEvicted
+	}, func() agentSpoolRuntimeStats {
+		eventStats, _ := batcher.SpoolStats()
+		logStats, _ := telemetrySvc.LogSpoolStats()
+		return agentSpoolRuntimeStats{Event: eventStats, Logs: logStats}
 	})
 
 	// Bastion SSH tunnel — when enabled the agent listens for
@@ -303,8 +362,34 @@ func main() {
 	// the eventstream so log.spike events land in Doris/UI, not just the
 	// local hooks subsystem.
 	telemetrySvc.WithEventStream(eventStream)
+	telemetrySvc.WithDurability(telemetry.DurabilityOptions{
+		LogSpoolDir:      filepath.Join(durabilityDir, "log-spool"),
+		LogSpoolMaxBytes: 256 << 20,
+		LogCursorDir:     filepath.Join(durabilityDir, "log-cursors"),
+	})
+	activeLogSourcesMu := sync.Mutex{}
+	activeLogSources := append([]config.LogSourceConfig(nil), cfg.TelemetryPrefs.LogSources...)
+	snapshotActiveLogSources := func() []config.LogSourceConfig {
+		activeLogSourcesMu.Lock()
+		defer activeLogSourcesMu.Unlock()
+		return append([]config.LogSourceConfig(nil), activeLogSources...)
+	}
+	appendActiveLogSources := func(sources []config.LogSourceConfig) {
+		if len(sources) == 0 {
+			return
+		}
+		activeLogSourcesMu.Lock()
+		defer activeLogSourcesMu.Unlock()
+		activeLogSources = append(activeLogSources, sources...)
+	}
 	if cfg.TelemetryPrefs.CollectLogs {
-		telemetrySvc.StartLogCollection(ctx, state.NodeID, cfg.TelemetryPrefs.LogSources)
+		appendActiveLogSources(fetchApprovedConnectorLogSources(ctx, client, log.Named("connector-discovery"), state.NodeID, snapshotActiveLogSources()))
+		if cfg.TelemetryPrefs.AutoDiscoverLogSources {
+			services := collectServices(log.Named("connector-discovery"))
+			cacheConnectorServices(services)
+			appendActiveLogSources(connectorDiscoveryLogSources(log.Named("connector-discovery"), snapshotActiveLogSources(), services))
+		}
+		telemetrySvc.StartLogCollection(ctx, state.NodeID, snapshotActiveLogSources())
 	}
 
 	meshMgr := mesh.New(log, client, mesh.Options{
@@ -532,9 +617,25 @@ func main() {
 		metricsInterval = time.Minute
 	}
 	if _, err := sched.AddInterval("telemetry-metrics", metricsInterval, func() {
-		metrics := util.CollectHostMetrics()
-		telemetrySvc.SendMetrics(ctx, state.NodeID, metrics)
-		emitHook(ctx, hooksService, log, "telemetry.metrics.sent", state.NodeID, map[string]any{"components": len(metrics)})
+		snapshot := util.CollectHostMetricSnapshotWithOptions(util.HostMetricOptions{
+			HealthProbeTargets: cfg.TelemetryPrefs.HealthProbeTargets,
+			HealthProbeCount:   cfg.TelemetryPrefs.HealthProbeCount,
+			HealthProbeTimeout: cfg.TelemetryPrefs.HealthProbeTimeout,
+			DiskHealthDevices:  cfg.TelemetryPrefs.DiskHealthDevices,
+		})
+		samples := make([]telemetry.MetricSample, 0, len(snapshot.Samples))
+		for _, sample := range snapshot.Samples {
+			samples = append(samples, telemetry.MetricSample{
+				Name:   sample.Name,
+				Value:  sample.Value,
+				Labels: sample.Labels,
+			})
+		}
+		telemetrySvc.SendMetricBatch(ctx, state.NodeID, telemetry.MetricBatch{
+			Metrics: snapshot.Metrics,
+			Samples: samples,
+		})
+		emitHook(ctx, hooksService, log, "telemetry.metrics.sent", state.NodeID, map[string]any{"components": len(snapshot.Metrics) + len(samples)})
 	}); err != nil {
 		log.Fatal("schedule telemetry", zap.Error(err))
 	}
@@ -579,6 +680,21 @@ func main() {
 	// scan, transition the node out of enrollment_pending. Sprint 2 Pillar
 	// 1.7/1.8. Distinct from the telemetry heartbeat above: that one writes
 	// to the telemetry table; this one drives the node state machine.
+	var approvedLogSourcesApplier ApprovedLogSourcesApplier
+	if cfg.TelemetryPrefs.CollectLogs {
+		approvedLogSourcesApplier = func(cctx context.Context, items []approvedConnectorLogSourceDTO) {
+			sources := approvedConnectorLogSourcesFromDTOs(log.Named("connector-discovery"), items, snapshotActiveLogSources())
+			if len(sources) == 0 {
+				return
+			}
+			started := telemetrySvc.AddLogSources(cctx, state.NodeID, sources)
+			if started == 0 {
+				return
+			}
+			appendActiveLogSources(sources)
+			log.Named("connector-discovery").Info("hot-loaded approved connector log sources", zap.Int("count", started))
+		}
+	}
 	startControlPlaneHeartbeat(ctx, client, log, state.NodeID, cfg.Intervals.Heartbeat,
 		makeFilterApplier(log.Named("policy"), collectors, netflowMgr, fileMgr, dbMgr),
 		makeNetworkPolicyApplierWithOptions(log.Named("network-policy"), networkPolicyApplierOptions{
@@ -586,13 +702,14 @@ func main() {
 			Enforce:       strings.EqualFold(strings.TrimSpace(cfg.NetworkPolicy.EnforcementMode), "enforce"),
 			StateDir:      filepath.Dir(cfg.StateFile),
 		}),
+		approvedLogSourcesApplier,
 		NewDefaultSelfUpdater(state.NodeID, filepath.Dir(cfg.StateFile)))
 
 	// Service inventory — feeds node_services and the per-tenant knowledge
 	// graph. Independent loop: a slow ss/lsof scan must never delay liveness.
 	if runtimeSettings.ServicesInterval > 0 {
 		collectors.Register("services", func(cctx context.Context) {
-			runServiceCollector(cctx, client, log, state.NodeID, runtimeSettings.ServicesInterval)
+			runServiceCollector(cctx, client, log, state.NodeID, runtimeSettings.ServicesInterval, snapshotActiveLogSources)
 		}, func() string { return runtime.GOOS })
 		collectors.Start("services")
 	} else {
@@ -809,6 +926,37 @@ func defaultDataDir() string {
 		}
 	}
 	return "/var/lib/control-one/nodeagent"
+}
+
+func dbQueryTargetsFromConfig(configured []config.DBQueryTargetConfig) []dbquery.Target {
+	if len(configured) == 0 {
+		return nil
+	}
+	targets := make([]dbquery.Target, 0, len(configured))
+	for _, item := range configured {
+		engine := dbquery.Engine(strings.ToLower(strings.TrimSpace(item.Engine)))
+		switch engine {
+		case dbquery.EnginePostgres, dbquery.EngineMySQL, dbquery.EngineMSSQL:
+		default:
+			continue
+		}
+		dsn := strings.TrimSpace(item.DSN)
+		if dsn == "" || item.Disabled {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = string(engine)
+		}
+		targets = append(targets, dbquery.Target{
+			Name:           name,
+			Engine:         engine,
+			DSN:            dsn,
+			ScrapeInterval: item.ScrapeInterval,
+			Disabled:       item.Disabled,
+		})
+	}
+	return targets
 }
 
 func emitHook(parent context.Context, publisher hooks.Publisher, log *zap.Logger, eventID, subject string, payload map[string]any) {

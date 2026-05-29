@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 )
 
 func TestServiceKindForByProcess(t *testing.T) {
@@ -112,7 +114,10 @@ func TestPostServicesPostsExpectedShape(t *testing.T) {
 	services := []ServiceInfo{
 		{PID: 1, Process: "nginx", ListenAddr: "0.0.0.0", Port: 80, ServiceKind: "nginx"},
 	}
-	if err := postServices(ctx, client, zap.NewNop(), "node-id-123", services); err != nil {
+	proposals := []connectordiscovery.Proposal{
+		{ID: "local-log:nginx", Kind: connectordiscovery.KindLocalLog, Program: "nginx", AutoConnectEligible: true},
+	}
+	if err := postServices(ctx, client, zap.NewNop(), "node-id-123", services, proposals); err != nil {
 		t.Fatalf("postServices: %v", err)
 	}
 
@@ -124,5 +129,84 @@ func TestPostServicesPostsExpectedShape(t *testing.T) {
 	}
 	if len(got.body.Services) != 1 || got.body.Services[0].Process != "nginx" {
 		t.Errorf("body = %+v", got.body)
+	}
+	if len(got.body.ConnectorProposals) != 1 || got.body.ConnectorProposals[0].Program != "nginx" {
+		t.Errorf("connector proposals = %+v", got.body.ConnectorProposals)
+	}
+}
+
+func TestFetchApprovedConnectorLogSourcesMergesAndDedupes(t *testing.T) {
+	t.Parallel()
+
+	type recv struct {
+		method string
+		path   string
+	}
+	var got recv
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.method = r.Method
+		got.path = r.URL.Path
+		_ = json.NewEncoder(w).Encode(approvedConnectorLogSourcesResponse{
+			NodeID:      "node-id-123",
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			Sources: []approvedConnectorLogSourceDTO{
+				{
+					ProposalRecordID: "proposal-record-nginx",
+					ProposalID:       "local-log:nginx",
+					Program:          "nginx",
+					Type:             connectordiscovery.CollectorTypeFile,
+					Paths:            []string{"/var/log/nginx/access.log"},
+					Formatter:        "nginx",
+				},
+				{
+					ProposalRecordID: "proposal-record-temenos",
+					ProposalID:       "local-log:temenos-t24",
+					SourceID:         "temenos-t24",
+					Program:          "temenos-t24",
+					Type:             connectordiscovery.CollectorTypeFile,
+					CollectMode:      "collect_raw",
+					Paths:            []string{"/opt/temenos/*/logs/*.log", "/opt/temenos/*/logs/*.log"},
+					Formatter:        "generic",
+					Labels:           map[string]string{"parser_profile": "temenos-t24"},
+				},
+				{
+					ProposalID: "local-log:empty",
+					Program:    "empty",
+					Type:       connectordiscovery.CollectorTypeFile,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client, err := api.NewClient(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatalf("api.NewClient: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sources := fetchApprovedConnectorLogSources(ctx, client, zap.NewNop(), "node-id-123", []config.LogSourceConfig{{Program: "nginx"}})
+	if got.method != http.MethodGet || got.path != "/api/v1/nodes/node-id-123/log-sources/approved" {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("approved sources = %#v", sources)
+	}
+	source := sources[0]
+	if source.Program != "temenos-t24" || source.Type != connectordiscovery.CollectorTypeFile || source.Formatter != "generic" {
+		t.Fatalf("approved source = %#v", source)
+	}
+	if source.CollectMode != config.LogCollectModeCollectRaw {
+		t.Fatalf("collect mode = %q", source.CollectMode)
+	}
+	if len(source.Paths) != 1 || source.Paths[0] != "/opt/temenos/*/logs/*.log" {
+		t.Fatalf("paths = %#v", source.Paths)
+	}
+	if source.Labels["control_one.source_proposal_id"] != "proposal-record-temenos" ||
+		source.Labels["control_one.source_proposal_external_id"] != "local-log:temenos-t24" ||
+		source.Labels["control_one.content_pack_source_id"] != "temenos-t24" ||
+		source.Labels["control_one.collect_mode"] != "collect_raw" {
+		t.Fatalf("labels = %#v", source.Labels)
 	}
 }

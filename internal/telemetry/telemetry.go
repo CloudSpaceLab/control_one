@@ -2,11 +2,15 @@ package telemetry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/durablespool"
 	"github.com/CloudSpaceLab/control_one/internal/eventstream"
 	"github.com/CloudSpaceLab/control_one/internal/hooks"
 	"github.com/CloudSpaceLab/control_one/internal/scanner"
@@ -29,12 +34,22 @@ type Service struct {
 
 	logsMu     sync.Mutex
 	logsActive bool
+	logSources map[string]struct{}
 
 	triggerMu sync.Mutex
 	triggers  []*compiledTrigger
 
 	spike  *logSpikeDetector
 	stream *eventstream.Stream
+
+	logSpool     *durablespool.Spool
+	logCursorDir string
+}
+
+type DurabilityOptions struct {
+	LogSpoolDir      string
+	LogSpoolMaxBytes int64
+	LogCursorDir     string
 }
 
 // WithEventStream wires the agent's eventstream into the telemetry service
@@ -45,6 +60,33 @@ func (s *Service) WithEventStream(es *eventstream.Stream) {
 		return
 	}
 	s.stream = es
+}
+
+func (s *Service) WithDurability(opts DurabilityOptions) {
+	if s == nil {
+		return
+	}
+	s.logCursorDir = strings.TrimSpace(opts.LogCursorDir)
+	if strings.TrimSpace(opts.LogSpoolDir) == "" {
+		return
+	}
+	spool, err := durablespool.New(durablespool.Options{
+		Dir:      opts.LogSpoolDir,
+		Prefix:   "logs",
+		MaxBytes: opts.LogSpoolMaxBytes,
+	})
+	if err != nil {
+		s.log.Warn("log spool disabled", zap.String("dir", opts.LogSpoolDir), zap.Error(err))
+		return
+	}
+	s.logSpool = spool
+}
+
+func (s *Service) LogSpoolStats() (durablespool.Stats, error) {
+	if s == nil || s.logSpool == nil {
+		return durablespool.Stats{}, nil
+	}
+	return s.logSpool.Stats()
 }
 
 type compiledTrigger struct {
@@ -93,12 +135,31 @@ func (s *Service) LoadTriggers(triggers []config.LogTriggerConfig) {
 	}
 }
 
+type MetricSample struct {
+	Name   string            `json:"name"`
+	Value  any               `json:"value"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+type MetricBatch struct {
+	Metrics map[string]any
+	Samples []MetricSample
+}
+
 // SendMetrics pushes periodic host metrics.
 func (s *Service) SendMetrics(ctx context.Context, nodeID string, metrics map[string]any) {
+	s.SendMetricBatch(ctx, nodeID, MetricBatch{Metrics: metrics})
+}
+
+// SendMetricBatch pushes aggregate host metrics plus optional labelled samples.
+func (s *Service) SendMetricBatch(ctx context.Context, nodeID string, batch MetricBatch) {
 	payload := map[string]any{
 		"node_id":   nodeID,
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"metrics":   metrics,
+		"metrics":   batch.Metrics,
+	}
+	if len(batch.Samples) > 0 {
+		payload["metric_samples"] = batch.Samples
 	}
 	if err := s.postJSON(ctx, "/api/v1/telemetry", payload); err != nil {
 		s.log.Warn("send metrics failed", zap.Error(err))
@@ -131,27 +192,53 @@ func (s *Service) SendCompliance(ctx context.Context, nodeID string, results []s
 	}
 }
 
-// StartLogCollection spins up collectors for configured log sources once.
+// StartLogCollection spins up collectors for configured log sources.
 func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources []config.LogSourceConfig) {
+	if s.AddLogSources(ctx, nodeID, sources) == 0 {
+		s.logsMu.Lock()
+		active := s.logsActive
+		s.logsMu.Unlock()
+		if !active {
+			s.log.Info("log collection not started: no explicit log sources configured")
+		}
+	}
+}
+
+// AddLogSources starts collectors for sources that are not already active. It
+// is intentionally additive: approvals can hot-add collection without tearing
+// down existing file cursors or disrupting in-flight batches.
+func (s *Service) AddLogSources(ctx context.Context, nodeID string, sources []config.LogSourceConfig) int {
 	prepared := logs.PrepareSources(sources)
 	if len(prepared) == 0 {
-		s.log.Info("log collection not started: no explicit log sources configured")
-		return
+		return 0
 	}
 
+	toStart := make([]config.LogSourceConfig, 0, len(prepared))
 	s.logsMu.Lock()
-	if s.logsActive {
-		s.logsMu.Unlock()
-		return
+	if s.logSources == nil {
+		s.logSources = map[string]struct{}{}
 	}
-	s.logsActive = true
-	s.logsMu.Unlock()
-
 	for _, src := range prepared {
-		source := src
-		if source.Disabled {
+		if src.Disabled || !config.LogCollectModeStartsCollector(src.CollectMode) {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(src.Type), "file") && strings.TrimSpace(src.CursorStateFile) == "" {
+			src.CursorStateFile = s.defaultLogCursorFile(src)
+		}
+		key := logSourceRuntimeKey(src)
+		if _, exists := s.logSources[key]; exists {
+			continue
+		}
+		s.logSources[key] = struct{}{}
+		toStart = append(toStart, src)
+	}
+	if len(toStart) > 0 {
+		s.logsActive = true
+	}
+	s.logsMu.Unlock()
+
+	for _, src := range toStart {
+		source := src
 
 		bufferSize := source.BufferSize
 		if bufferSize <= 0 {
@@ -164,6 +251,44 @@ func (s *Service) StartLogCollection(ctx context.Context, nodeID string, sources
 		formatter := logs.GetFormatter(source.Formatter)
 		go s.consumeLogs(ctx, nodeID, source, formatter, rawCh)
 	}
+	return len(toStart)
+}
+
+func (s *Service) defaultLogCursorFile(source config.LogSourceConfig) string {
+	dir := strings.TrimSpace(s.logCursorDir)
+	if dir == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(logSourceRuntimeKey(source)))
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+}
+
+func logSourceRuntimeKey(source config.LogSourceConfig) string {
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(source.Program)),
+		strings.ToLower(strings.TrimSpace(source.Type)),
+		strings.ToLower(strings.TrimSpace(source.Formatter)),
+		config.NormalizeLogCollectMode(source.CollectMode),
+		joinLogSourceStrings(source.Paths),
+		joinLogSourceStrings(source.JournalUnits),
+		joinLogSourceStrings(source.EventChannels),
+	}
+	return strings.Join(parts, "|")
+}
+
+func joinLogSourceStrings(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+	sort.Strings(normalized)
+	return strings.Join(normalized, ",")
 }
 
 func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source config.LogSourceConfig, out chan<- logs.RawLog) {
@@ -233,15 +358,22 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 
 	flush := func(reason string) {
 		if len(batch) == 0 {
+			if err := s.drainLogSpool(ctx); err != nil {
+				s.log.Warn("log spool replay failed", zap.Error(err))
+			}
 			return
 		}
-		if err := s.sendLogBatch(ctx, nodeID, source, batch); err != nil {
+		persisted, err := s.sendLogBatch(ctx, nodeID, source, batch)
+		if err != nil {
 			s.log.Warn("log batch send failed", zap.String("program", source.Program), zap.Int("count", len(batch)), zap.Error(err))
 			s.publishHook(ctx, "telemetry.logs.failed", nodeID, map[string]any{
 				"program": source.Program,
 				"count":   len(batch),
 				"error":   err.Error(),
 			})
+			if persisted {
+				batch = batch[:0]
+			}
 			return
 		} else {
 			s.publishHook(ctx, "telemetry.logs.forwarded", nodeID, map[string]any{
@@ -282,6 +414,7 @@ func (s *Service) consumeLogs(ctx context.Context, nodeID string, source config.
 				})
 				continue
 			}
+			entry = applyLogCollectMode(entry, source)
 			s.evaluateTriggers(ctx, nodeID, entry)
 			batch = append(batch, entry)
 			if dropped := trimLogRetryBacklog(&batch, maxRetained); dropped > 0 {
@@ -346,7 +479,37 @@ func trimLogRetryBacklog(batch *[]logs.StructuredLog, maxRetained int) int {
 	return dropped
 }
 
-func (s *Service) sendLogBatch(ctx context.Context, nodeID string, source config.LogSourceConfig, batch []logs.StructuredLog) error {
+func applyLogCollectMode(entry logs.StructuredLog, source config.LogSourceConfig) logs.StructuredLog {
+	mode := config.NormalizeLogCollectMode(source.CollectMode)
+	if entry.Labels == nil {
+		entry.Labels = map[string]string{}
+	}
+	entry.Labels["control_one.collect_mode"] = mode
+	switch mode {
+	case config.LogCollectModeCollectParsed:
+		entry.Message = "raw log omitted by collect_parsed"
+		entry.Labels["control_one.raw_message_retained"] = "false"
+	case config.LogCollectModeCollectRaw:
+		entry.Labels["control_one.raw_message_retained"] = "true"
+	}
+	return entry
+}
+
+func (s *Service) sendLogBatch(ctx context.Context, nodeID string, source config.LogSourceConfig, batch []logs.StructuredLog) (bool, error) {
+	payload := s.logBatchPayload(nodeID, source, batch)
+	if s.logSpool != nil {
+		if _, err := s.logSpool.AppendJSON(payload); err != nil {
+			return false, fmt.Errorf("persist log batch: %w", err)
+		}
+		if err := s.drainLogSpool(ctx); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	return false, s.postJSON(ctx, "/api/v1/logs", payload)
+}
+
+func (s *Service) logBatchPayload(nodeID string, source config.LogSourceConfig, batch []logs.StructuredLog) map[string]any {
 	entries := make([]map[string]any, 0, len(batch))
 	for _, entry := range batch {
 		entries = append(entries, entry.ToMap())
@@ -372,8 +535,71 @@ func (s *Service) sendLogBatch(ctx context.Context, nodeID string, source config
 	if len(source.EventChannels) > 0 {
 		payload["event_channels"] = source.EventChannels
 	}
+	payload["replay_key"] = logReplayKey(payload)
 
-	return s.postJSON(ctx, "/api/v1/logs", payload)
+	return payload
+}
+
+func (s *Service) drainLogSpool(ctx context.Context) error {
+	if s == nil || s.logSpool == nil || ctx.Err() != nil {
+		return nil
+	}
+	records, err := s.logSpool.Records()
+	if err != nil {
+		return fmt.Errorf("list log spool: %w", err)
+	}
+	for _, record := range records {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		body, err := s.logSpool.Read(record)
+		if err != nil {
+			return fmt.Errorf("read log spool: %w", err)
+		}
+		if !json.Valid(body) {
+			_ = s.logSpool.Delete(record)
+			continue
+		}
+		body, err = ensureLogReplayKey(body)
+		if err != nil {
+			return fmt.Errorf("prepare log replay key: %w", err)
+		}
+		if err := s.postJSONBytes(ctx, "/api/v1/logs", body); err != nil {
+			return err
+		}
+		if err := s.logSpool.Delete(record); err != nil {
+			return fmt.Errorf("delete log spool: %w", err)
+		}
+	}
+	return nil
+}
+
+func logReplayKey(payload map[string]any) string {
+	material := make(map[string]any, len(payload))
+	for key, value := range payload {
+		if key == "replay_key" {
+			continue
+		}
+		material[key] = value
+	}
+	raw, err := json.Marshal(material)
+	if err != nil {
+		raw = []byte(fmt.Sprintf("%#v", material))
+	}
+	sum := sha256.Sum256(raw)
+	return "logs:" + hex.EncodeToString(sum[:])
+}
+
+func ensureLogReplayKey(body []byte) ([]byte, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	if raw, ok := payload["replay_key"].(string); ok && strings.TrimSpace(raw) != "" {
+		return body, nil
+	}
+	payload["replay_key"] = logReplayKey(payload)
+	return json.Marshal(payload)
 }
 
 func (s *Service) publishHook(parent context.Context, eventID, nodeID string, payload map[string]any) {
@@ -408,6 +634,10 @@ func (s *Service) postJSON(ctx context.Context, path string, payload any) error 
 	if err != nil {
 		return fmt.Errorf("marshal telemetry payload: %w", err)
 	}
+	return s.postJSONBytes(ctx, path, body)
+}
+
+func (s *Service) postJSONBytes(ctx context.Context, path string, body []byte) error {
 	resp, err := s.client.Do(ctx, "POST", path, body)
 	if err != nil {
 		return fmt.Errorf("post telemetry: %w", err)

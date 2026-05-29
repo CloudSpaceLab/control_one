@@ -15,12 +15,14 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 )
 
 // nodeServicesRequest is the agent's payload when reporting an inventory cycle.
 // Empty `services` means "no listening services discovered" (clears table).
 type nodeServicesRequest struct {
-	Services []nodeServiceItem `json:"services"`
+	Services           []nodeServiceItem             `json:"services"`
+	ConnectorProposals []connectordiscovery.Proposal `json:"connector_proposals,omitempty"`
 }
 
 type nodeServiceItem struct {
@@ -51,6 +53,28 @@ type nodeServiceResponse struct {
 	ProbeTitle       *string `json:"probe_title,omitempty"`
 	ProbeContentType *string `json:"probe_content_type,omitempty"`
 	ObservedAt       string  `json:"observed_at"`
+}
+
+type nodeApprovedLogSourcesResponse struct {
+	NodeID      string                  `json:"node_id"`
+	GeneratedAt string                  `json:"generated_at"`
+	Sources     []nodeApprovedLogSource `json:"sources"`
+}
+
+type nodeApprovedLogSource struct {
+	ProposalRecordID string            `json:"proposal_record_id"`
+	ProposalID       string            `json:"proposal_id"`
+	SourceID         string            `json:"source_id,omitempty"`
+	Program          string            `json:"program"`
+	Type             string            `json:"type"`
+	CollectMode      string            `json:"collect_mode,omitempty"`
+	Paths            []string          `json:"paths"`
+	Formatter        string            `json:"formatter,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
+}
+
+type nodeApprovedLogSourceStore interface {
+	ListApprovedContentPackSourceProposalsForNode(context.Context, uuid.UUID, uuid.UUID, int) ([]storage.ContentPackSourceProposalRecord, error)
 }
 
 func newNodeServiceResponse(svc storage.NodeService) nodeServiceResponse {
@@ -152,6 +176,12 @@ func (s *Server) handleNodeServicesIngest(w http.ResponseWriter, r *http.Request
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	if len(body.ConnectorProposals) > 0 {
+		if _, err := s.updateNodeConnectorProposals(r.Context(), node, body.ConnectorProposals); err != nil {
+			s.logger.Warn("update node connector proposals", zap.Error(err))
+		}
+		s.persistNodeConnectorProposals(r.Context(), node, body.ConnectorProposals)
+	}
 
 	// Bridge node_services -> port_observations (bugs §1.3).
 	//
@@ -170,6 +200,248 @@ func (s *Server) handleNodeServicesIngest(w http.ResponseWriter, r *http.Request
 	knowledgeGraphCache.invalidate(node.TenantID)
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleNodeApprovedLogSources(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+	if principal.Type != "agent" {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
+	cn := strings.TrimSpace(principal.Name)
+	if cn == "" || !strings.EqualFold(cn, nodeID.String()) {
+		http.Error(w, "client cert CN does not match node id", http.StatusForbidden)
+		return
+	}
+
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node for approved log sources", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	sources, err := s.listNodeApprovedLogSources(r.Context(), node, 128)
+	if err != nil {
+		s.logger.Error("list approved log source proposals", zap.Error(err), zap.String("node_id", nodeID.String()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, nodeApprovedLogSourcesResponse{
+		NodeID:      nodeID.String(),
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Sources:     sources,
+	})
+}
+
+func (s *Server) listNodeApprovedLogSources(ctx context.Context, node *storage.Node, limit int) ([]nodeApprovedLogSource, error) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil || node.TenantID == uuid.Nil {
+		return nil, nil
+	}
+	store, ok := s.store.(nodeApprovedLogSourceStore)
+	if !ok || store == nil {
+		return []nodeApprovedLogSource{}, nil
+	}
+	proposals, err := store.ListApprovedContentPackSourceProposalsForNode(ctx, node.TenantID, node.ID, limit)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]nodeApprovedLogSource, 0, len(proposals))
+	for _, proposal := range proposals {
+		source, ok := nodeApprovedLogSourceFromProposal(proposal)
+		if ok {
+			sources = append(sources, source)
+		}
+	}
+	return sources, nil
+}
+
+func nodeApprovedLogSourceFromProposal(proposal storage.ContentPackSourceProposalRecord) (nodeApprovedLogSource, bool) {
+	if proposal.Status != storage.ContentPackSourceProposalStatusApproved {
+		return nodeApprovedLogSource{}, false
+	}
+	if !storage.ContentPackSourceProposalCollectModeDeploysNodeAgent(proposal.CollectMode) {
+		return nodeApprovedLogSource{}, false
+	}
+	kind := strings.ToLower(strings.TrimSpace(proposal.Kind))
+	if kind != connectordiscovery.KindLocalLog {
+		return nodeApprovedLogSource{}, false
+	}
+	collectorType := strings.ToLower(strings.TrimSpace(proposal.CollectorType))
+	if collectorType == "" {
+		collectorType = connectordiscovery.CollectorTypeFile
+	}
+	if collectorType != connectordiscovery.CollectorTypeFile {
+		return nodeApprovedLogSource{}, false
+	}
+	program := strings.ToLower(strings.TrimSpace(proposal.Program))
+	if program == "" {
+		return nodeApprovedLogSource{}, false
+	}
+	paths := sanitizeStringSlice(proposal.Paths, 64)
+	if len(paths) == 0 {
+		return nodeApprovedLogSource{}, false
+	}
+	collectMode := strings.ToLower(strings.TrimSpace(proposal.CollectMode))
+	if collectMode == "" {
+		collectMode = storage.ContentPackSourceProposalCollectModeCollectRaw
+	}
+	labels := sanitizeConnectorProposalLabels(proposal.Labels)
+	labels["control_one.source_proposal_id"] = proposal.ID.String()
+	labels["control_one.source_proposal_external_id"] = proposal.ProposalID
+	labels["control_one.connector_decision"] = storage.ContentPackSourceProposalStatusApproved
+	labels["control_one.collect_mode"] = collectMode
+	if proposal.SourceID != "" {
+		labels["control_one.content_pack_source_id"] = proposal.SourceID
+	}
+	if labels["discovery_source"] == "" {
+		labels["discovery_source"] = "local"
+	}
+	formatter := strings.ToLower(strings.TrimSpace(proposal.Formatter))
+	if formatter == "" {
+		formatter = "generic"
+	}
+	return nodeApprovedLogSource{
+		ProposalRecordID: proposal.ID.String(),
+		ProposalID:       proposal.ProposalID,
+		SourceID:         proposal.SourceID,
+		Program:          program,
+		Type:             collectorType,
+		CollectMode:      collectMode,
+		Paths:            paths,
+		Formatter:        formatter,
+		Labels:           labels,
+	}, true
+}
+
+func (s *Server) updateNodeConnectorProposals(ctx context.Context, node *storage.Node, proposals []connectordiscovery.Proposal) (*storage.Node, error) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil {
+		return node, nil
+	}
+	normalized := normalizeConnectorProposals(proposals)
+	if len(normalized) == 0 {
+		return node, nil
+	}
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	labels["agent.connector_proposals"] = normalized
+	labels["agent.connector_proposal_count"] = len(normalized)
+	labels["agent.connector_auto_eligible_count"] = countAutoEligibleConnectorProposals(proposals)
+	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
+		return node, err
+	}
+	updated := *node
+	updated.Labels = labels
+	return &updated, nil
+}
+
+func (s *Server) persistNodeConnectorProposals(ctx context.Context, node *storage.Node, proposals []connectordiscovery.Proposal) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil || node.TenantID == uuid.Nil || len(proposals) == 0 {
+		return
+	}
+	store, ok := s.store.(contentPackSourceProposalStore)
+	if !ok || store == nil {
+		return
+	}
+	records, err := store.UpsertContentPackSourceProposals(ctx, storage.UpsertContentPackSourceProposalsParams{
+		TenantID:  node.TenantID,
+		NodeID:    node.ID,
+		Proposals: proposals,
+	})
+	if err != nil {
+		s.logger.Warn("persist connector source proposals", zap.Error(err), zap.String("node_id", node.ID.String()))
+		return
+	}
+	s.persistContentPackSourceRuntimeStatesFromProposals(ctx, records)
+}
+
+func normalizeConnectorProposals(proposals []connectordiscovery.Proposal) []map[string]any {
+	out := make([]map[string]any, 0, len(proposals))
+	seen := map[string]struct{}{}
+	for _, proposal := range proposals {
+		program := strings.ToLower(strings.TrimSpace(proposal.Program))
+		if program == "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(proposal.ID))
+		if key == "" {
+			key = proposal.Kind + ":" + program
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		confidence := proposal.Confidence
+		if confidence < 0 {
+			confidence = 0
+		}
+		if confidence > 100 {
+			confidence = 100
+		}
+		item := map[string]any{
+			"id":                    key,
+			"kind":                  strings.ToLower(strings.TrimSpace(proposal.Kind)),
+			"program":               program,
+			"collector_type":        strings.ToLower(strings.TrimSpace(proposal.CollectorType)),
+			"formatter":             strings.ToLower(strings.TrimSpace(proposal.Formatter)),
+			"confidence":            confidence,
+			"risk":                  strings.ToLower(strings.TrimSpace(proposal.Risk)),
+			"auto_connect_eligible": proposal.AutoConnectEligible,
+			"requires_approval":     proposal.RequiresApproval,
+			"reason":                strings.TrimSpace(proposal.Reason),
+			"evidence":              sanitizeStringSlice(proposal.Evidence, 12),
+			"paths":                 sanitizeStringSlice(proposal.Paths, 12),
+			"labels":                sanitizeConnectorProposalLabels(proposal.Labels),
+		}
+		out = append(out, item)
+		if len(out) >= 32 {
+			break
+		}
+	}
+	return out
+}
+
+func countAutoEligibleConnectorProposals(proposals []connectordiscovery.Proposal) int {
+	count := 0
+	for _, proposal := range proposals {
+		if proposal.AutoConnectEligible {
+			count++
+		}
+	}
+	return count
+}
+
+func sanitizeConnectorProposalLabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(labels))
+	for key, value := range labels {
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+		if len(out) >= 16 {
+			break
+		}
+	}
+	return out
 }
 
 // bridgePortObservations writes one port_observations row per listening

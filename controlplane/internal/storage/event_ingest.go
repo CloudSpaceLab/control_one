@@ -20,6 +20,7 @@ type EventIngestBatch struct {
 	SizeBytes     int64
 	Rows          int
 	Status        string
+	ReplayKey     sql.NullString
 	DorisStatus   sql.NullString
 	LastAttemptAt sql.NullTime
 	RetryCount    int
@@ -36,7 +37,23 @@ type CreateEventIngestBatchParams struct {
 	SizeBytes int64
 	Rows      int
 	Status    string
+	ReplayKey string
 	Payload   []byte
+}
+
+// DuplicateEventIngestReplayError reports that RecordEventIngest found an
+// existing journal row for the tenant/node replay key instead of creating a
+// fresh batch. Callers should return the stored receipt and skip local side
+// effects.
+type DuplicateEventIngestReplayError struct {
+	Batch EventIngestBatch
+}
+
+func (e *DuplicateEventIngestReplayError) Error() string {
+	if e == nil {
+		return "duplicate event ingest replay"
+	}
+	return fmt.Sprintf("duplicate event ingest replay: %s", e.Batch.ID)
 }
 
 // RecordEventIngest writes a journal row in 'received' (or caller-chosen)
@@ -57,6 +74,11 @@ func (s *Store) RecordEventIngest(ctx context.Context, p CreateEventIngestBatchP
 	if p.NodeID != nil && *p.NodeID != uuid.Nil {
 		nArg = *p.NodeID
 	}
+	replayKey := strings.TrimSpace(p.ReplayKey)
+	if replayKey != "" {
+		id, err := s.recordEventIngestWithReplayKey(ctx, id, tArg, nArg, p, status, replayKey)
+		return id, err
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO event_ingest_batches (id, tenant_id, node_id, received_at, size_bytes, rows, status, payload)
 		VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7)
@@ -65,6 +87,50 @@ func (s *Store) RecordEventIngest(ctx context.Context, p CreateEventIngestBatchP
 		return uuid.Nil, fmt.Errorf("insert event_ingest_batches: %w", err)
 	}
 	return id, nil
+}
+
+func (s *Store) recordEventIngestWithReplayKey(ctx context.Context, id uuid.UUID, tenantArg, nodeArg any, p CreateEventIngestBatchParams, status, replayKey string) (uuid.UUID, error) {
+	row := s.db.QueryRowContext(ctx, `
+		WITH inserted AS (
+			INSERT INTO event_ingest_batches (id, tenant_id, node_id, received_at, size_bytes, rows, status, replay_key, payload)
+			VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8)
+			ON CONFLICT DO NOTHING
+			RETURNING id, tenant_id, node_id, received_at, size_bytes, rows, status,
+			          replay_key, doris_status, last_attempt_at, retry_count,
+			          next_attempt_at, last_error_at, payload, error_message
+		)
+		SELECT id, tenant_id, node_id, received_at, size_bytes, rows, status,
+		       replay_key, doris_status, last_attempt_at, retry_count,
+		       next_attempt_at, last_error_at, payload, error_message,
+		       FALSE AS duplicate
+		FROM inserted
+		UNION ALL
+		SELECT id, tenant_id, node_id, received_at, size_bytes, rows, status,
+		       replay_key, doris_status, last_attempt_at, retry_count,
+		       next_attempt_at, last_error_at, payload, error_message,
+		       TRUE AS duplicate
+		FROM event_ingest_batches
+		WHERE tenant_id IS NOT DISTINCT FROM $2
+		  AND node_id IS NOT DISTINCT FROM $3
+		  AND replay_key = $7
+		ORDER BY duplicate
+		LIMIT 1
+	`, id, tenantArg, nodeArg, p.SizeBytes, p.Rows, status, replayKey, p.Payload)
+	var batch EventIngestBatch
+	var duplicate bool
+	if err := row.Scan(
+		&batch.ID, &batch.TenantID, &batch.NodeID, &batch.ReceivedAt,
+		&batch.SizeBytes, &batch.Rows, &batch.Status, &batch.ReplayKey,
+		&batch.DorisStatus, &batch.LastAttemptAt, &batch.RetryCount,
+		&batch.NextAttemptAt, &batch.LastErrorAt, &batch.Payload,
+		&batch.ErrorMessage, &duplicate,
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("insert event_ingest_batches: %w", err)
+	}
+	if duplicate {
+		return batch.ID, &DuplicateEventIngestReplayError{Batch: batch}
+	}
+	return batch.ID, nil
 }
 
 // MarkEventIngestStatus updates the batch row after fan-out completes (or
@@ -138,7 +204,7 @@ func (s *Store) PendingEventIngestBatches(ctx context.Context, olderThan time.Du
 	cutoff := time.Now().UTC().Add(-olderThan)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, node_id, received_at, size_bytes, rows, status,
-		       doris_status, last_attempt_at, retry_count, next_attempt_at, last_error_at, payload, error_message
+		       replay_key, doris_status, last_attempt_at, retry_count, next_attempt_at, last_error_at, payload, error_message
 		FROM event_ingest_batches
 		WHERE status IN ('received','local_completed','pending_doris')
 		  AND received_at <= $1
@@ -153,7 +219,7 @@ func (s *Store) PendingEventIngestBatches(ctx context.Context, olderThan time.Du
 	var out []EventIngestBatch
 	for rows.Next() {
 		var b EventIngestBatch
-		if err := rows.Scan(&b.ID, &b.TenantID, &b.NodeID, &b.ReceivedAt, &b.SizeBytes, &b.Rows, &b.Status, &b.DorisStatus, &b.LastAttemptAt, &b.RetryCount, &b.NextAttemptAt, &b.LastErrorAt, &b.Payload, &b.ErrorMessage); err != nil {
+		if err := rows.Scan(&b.ID, &b.TenantID, &b.NodeID, &b.ReceivedAt, &b.SizeBytes, &b.Rows, &b.Status, &b.ReplayKey, &b.DorisStatus, &b.LastAttemptAt, &b.RetryCount, &b.NextAttemptAt, &b.LastErrorAt, &b.Payload, &b.ErrorMessage); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -259,7 +325,7 @@ func (s *Store) ListEventIngestBacklogBatches(ctx context.Context, tenantID uuid
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, node_id, received_at, size_bytes, rows, status,
-		       doris_status, last_attempt_at, retry_count, next_attempt_at, last_error_at,
+		       replay_key, doris_status, last_attempt_at, retry_count, next_attempt_at, last_error_at,
 		       NULL::bytea AS payload, error_message
 		FROM event_ingest_batches
 		WHERE tenant_id = $1
@@ -274,7 +340,7 @@ func (s *Store) ListEventIngestBacklogBatches(ctx context.Context, tenantID uuid
 	var out []EventIngestBatch
 	for rows.Next() {
 		var b EventIngestBatch
-		if err := rows.Scan(&b.ID, &b.TenantID, &b.NodeID, &b.ReceivedAt, &b.SizeBytes, &b.Rows, &b.Status, &b.DorisStatus, &b.LastAttemptAt, &b.RetryCount, &b.NextAttemptAt, &b.LastErrorAt, &b.Payload, &b.ErrorMessage); err != nil {
+		if err := rows.Scan(&b.ID, &b.TenantID, &b.NodeID, &b.ReceivedAt, &b.SizeBytes, &b.Rows, &b.Status, &b.ReplayKey, &b.DorisStatus, &b.LastAttemptAt, &b.RetryCount, &b.NextAttemptAt, &b.LastErrorAt, &b.Payload, &b.ErrorMessage); err != nil {
 			return nil, err
 		}
 		out = append(out, b)

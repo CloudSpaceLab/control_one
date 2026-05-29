@@ -30,8 +30,36 @@ type Config struct {
 	ThreatIntel    ThreatIntelConfig    `mapstructure:"threat_intel"`
 	IPBehavior     IPBehaviorConfig     `mapstructure:"ip_behavior"`
 	OfflineContent OfflineContentConfig `mapstructure:"offline_content"`
+	SIEMForwarding SIEMForwardingConfig `mapstructure:"siem_forwarding"`
+	PrivateAccess  PrivateAccessConfig  `mapstructure:"private_access"`
+	Vault          VaultConfig          `mapstructure:"vault"`
 	Policy         PolicyConfig         `mapstructure:"policy"`
 	AML            AMLConfig            `mapstructure:"aml"`
+}
+
+type VaultConfig struct {
+	Address    string        `mapstructure:"address"`
+	Token      string        `mapstructure:"token"`
+	Timeout    time.Duration `mapstructure:"timeout"`
+	SkipVerify bool          `mapstructure:"skip_verify"`
+}
+
+// SIEMForwardingConfig controls the outbound coexistence worker that forwards
+// tenant telemetry logs to configured external SIEM destinations.
+type SIEMForwardingConfig struct {
+	Enabled                  bool          `mapstructure:"enabled"`
+	Interval                 time.Duration `mapstructure:"interval"`
+	RunTimeout               time.Duration `mapstructure:"run_timeout"`
+	InitialLookback          time.Duration `mapstructure:"initial_lookback"`
+	MaxBatchSize             int           `mapstructure:"max_batch_size"`
+	MaxTenantsPerPass        int           `mapstructure:"max_tenants_per_pass"`
+	MaxDestinationsPerTenant int           `mapstructure:"max_destinations_per_tenant"`
+}
+
+type PrivateAccessConfig struct {
+	ImportSchedulerEnabled  bool          `mapstructure:"import_scheduler_enabled"`
+	ImportSchedulerInterval time.Duration `mapstructure:"import_scheduler_interval"`
+	ImportSchedulerLimit    int           `mapstructure:"import_scheduler_limit"`
 }
 
 // AMLConfig points Control One at the existing CloudSpaceLab/aml-service.
@@ -147,6 +175,7 @@ type DorisConfig struct {
 	User            string `mapstructure:"user"`
 	Password        string `mapstructure:"password"`
 	ApplyMigrations bool   `mapstructure:"apply_migrations"`
+	ReplicationNum  int    `mapstructure:"replication_num"`
 }
 
 // WebAuthnConfig configures the relying-party identity advertised to browsers
@@ -438,6 +467,17 @@ func setDefaults(v *viper.Viper) {
 	_ = v.BindEnv("offline_content.enabled", "OFFLINE_CONTENT_ENABLED")
 	_ = v.BindEnv("offline_content.root_dir", "OFFLINE_CONTENT_ROOT_DIR")
 	_ = v.BindEnv("offline_content.public_key_file", "OFFLINE_CONTENT_PUBLIC_KEY_FILE")
+
+	v.SetDefault("siem_forwarding.enabled", false)
+	v.SetDefault("siem_forwarding.interval", 30*time.Second)
+	v.SetDefault("siem_forwarding.run_timeout", 2*time.Minute)
+	v.SetDefault("siem_forwarding.initial_lookback", 15*time.Minute)
+	v.SetDefault("siem_forwarding.max_batch_size", 500)
+	v.SetDefault("siem_forwarding.max_tenants_per_pass", 500)
+	v.SetDefault("siem_forwarding.max_destinations_per_tenant", 100)
+	v.SetDefault("vault.timeout", 30*time.Second)
+	_ = v.BindEnv("vault.address", "VAULT_ADDR")
+	_ = v.BindEnv("vault.token", "VAULT_TOKEN")
 }
 
 func applyFallbacks(cfg *Config) {
@@ -499,6 +539,36 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.OfflineContent.MaxBundleBytes <= 0 {
 		cfg.OfflineContent.MaxBundleBytes = 256 * 1024 * 1024
+	}
+	if cfg.SIEMForwarding.Interval <= 0 {
+		cfg.SIEMForwarding.Interval = 30 * time.Second
+	}
+	if cfg.SIEMForwarding.RunTimeout <= 0 {
+		cfg.SIEMForwarding.RunTimeout = 2 * time.Minute
+	}
+	if cfg.SIEMForwarding.InitialLookback <= 0 {
+		cfg.SIEMForwarding.InitialLookback = 15 * time.Minute
+	}
+	if cfg.SIEMForwarding.MaxBatchSize <= 0 {
+		cfg.SIEMForwarding.MaxBatchSize = 500
+	}
+	if cfg.SIEMForwarding.MaxTenantsPerPass <= 0 {
+		cfg.SIEMForwarding.MaxTenantsPerPass = 500
+	}
+	if cfg.SIEMForwarding.MaxDestinationsPerTenant <= 0 {
+		cfg.SIEMForwarding.MaxDestinationsPerTenant = 100
+	}
+	if cfg.PrivateAccess.ImportSchedulerInterval <= 0 {
+		cfg.PrivateAccess.ImportSchedulerInterval = 5 * time.Minute
+	}
+	if cfg.PrivateAccess.ImportSchedulerLimit <= 0 {
+		cfg.PrivateAccess.ImportSchedulerLimit = 50
+	}
+	if cfg.Doris.ReplicationNum <= 0 {
+		cfg.Doris.ReplicationNum = 1
+	}
+	if cfg.Vault.Timeout <= 0 {
+		cfg.Vault.Timeout = 30 * time.Second
 	}
 }
 

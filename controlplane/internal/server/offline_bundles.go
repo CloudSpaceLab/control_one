@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -223,6 +224,7 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 			"warnings":  receipt.Warnings,
 		})
 		s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
+		s.syncOfflineContentPacks(r.Context(), tenantID, receipt)
 		writeJSON(w, http.StatusCreated, newOfflineBundleResponse(*row))
 		return
 	}
@@ -233,6 +235,7 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 		"warnings":  receipt.Warnings,
 	})
 	s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
+	s.syncOfflineContentPacks(r.Context(), tenantID, receipt)
 	writeJSON(w, http.StatusCreated, newOfflineBundleReceiptResponse(*receipt))
 }
 
@@ -418,18 +421,29 @@ type offlineBundleResponse struct {
 }
 
 func newOfflineBundleResponse(row storage.OfflineContentBundle) offlineBundleResponse {
+	return newOfflineBundleResponseAt(row, time.Now().UTC())
+}
+
+func newOfflineBundleResponseAt(row storage.OfflineContentBundle, now time.Time) offlineBundleResponse {
+	warnings := append([]string{}, row.Warnings...)
+	contents := offlineBundleContentsWithFreshness(row.Contents, now, &warnings)
+	status := row.Status
+	if row.ExpiresAt.Valid && !now.IsZero() && now.After(row.ExpiresAt.Time.UTC()) {
+		status = "expired"
+		warnings = appendOfflineBundleWarning(warnings, "bundle is expired")
+	}
 	out := offlineBundleResponse{
 		ID:                   row.ID.String(),
 		TenantID:             row.TenantID.String(),
 		BundleID:             row.BundleID,
 		Version:              row.Version,
 		Sequence:             row.Sequence,
-		Status:               row.Status,
+		Status:               status,
 		PublicKeyFingerprint: row.PublicKeyFingerprint,
 		ManifestSHA256:       row.ManifestSHA256,
 		StoragePath:          row.StoragePath,
-		Contents:             row.Contents,
-		Warnings:             row.Warnings,
+		Contents:             contents,
+		Warnings:             warnings,
 		Error:                row.Error,
 		ImportedAt:           row.ImportedAt.UTC().Format(time.RFC3339),
 	}
@@ -442,6 +456,55 @@ func newOfflineBundleResponse(row storage.OfflineContentBundle) offlineBundleRes
 		out.ExpiresAt = &v
 	}
 	return out
+}
+
+func offlineBundleContentsWithFreshness(contents []map[string]any, now time.Time, warnings *[]string) []map[string]any {
+	out := make([]map[string]any, 0, len(contents))
+	for _, content := range contents {
+		row := map[string]any{}
+		for key, value := range content {
+			row[key] = value
+		}
+		if raw, ok := row["expires_at"].(string); ok && !now.IsZero() {
+			if expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(raw)); err == nil && now.After(expiresAt.UTC()) {
+				row["stale"] = true
+				if warnings != nil {
+					*warnings = appendOfflineBundleWarning(*warnings, fmt.Sprintf("%s/%s content is expired", offlineBundleMapString(row, "type"), offlineBundleMapString(row, "name")))
+				}
+			}
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func offlineBundleMapString(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func appendOfflineBundleWarning(warnings []string, warning string) []string {
+	warning = strings.TrimSpace(warning)
+	if warning == "" {
+		return warnings
+	}
+	for _, existing := range warnings {
+		if strings.EqualFold(strings.TrimSpace(existing), warning) {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
 }
 
 type offlineBundleReceiptResponse struct {

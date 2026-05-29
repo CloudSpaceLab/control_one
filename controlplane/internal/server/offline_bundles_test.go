@@ -154,6 +154,74 @@ func TestOfflineBundleImportUpsertsVulnerabilityFindingsFromSignedFeed(t *testin
 	}
 }
 
+func TestOfflineBundleImportMatchesAppDependencies(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	root := t.TempDir()
+	keyPath := writeOfflinePublicKey(t, pub)
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &offlineBundleFakeStore{
+		fakeStore: &fakeStore{
+			nodes: []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "app-01"}},
+			nodeAppDependencies: map[uuid.UUID][]storage.NodeAppDependency{
+				nodeID: {{
+					NodeID:    nodeID,
+					TenantID:  tenantID,
+					AppRoot:   "/srv/core-api",
+					Ecosystem: "npm",
+					Name:      "express",
+					Version:   "4.18.2",
+					PURL:      "pkg:npm/express@4.18.2",
+				}},
+			},
+		},
+		active: map[string]storage.OfflineContentBundle{},
+	}
+	s := &Server{
+		logger:             zap.NewNop(),
+		store:              store,
+		cfg:                &config.Config{OfflineContent: config.OfflineContentConfig{Enabled: true, RootDir: root, PublicKeyFile: keyPath, MaxBundleBytes: 10 << 20}},
+		offlineContentRoot: root,
+	}
+	feed := offlinebundle.VulnerabilityFeed{
+		SchemaVersion: 1,
+		Source:        "osv-offline",
+		Advisories: []offlinebundle.VulnerabilityAdvisory{{
+			CVEID:    "CVE-2026-APP1",
+			Severity: "critical",
+			AffectedPackages: []offlinebundle.VulnerabilityAffectedPkg{{
+				Name:          "express",
+				Source:        "npm",
+				VersionScheme: "semver",
+				VersionRange:  ">= 4.0.0, < 4.18.3",
+				FixedVersion:  "4.18.3",
+			}},
+		}},
+	}
+	body := makeServerVulnerabilityBundleWithFeed(t, priv, "osv-vuln", "2026.05.29", 7, time.Now().UTC(), feed)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offline-bundles?tenant_id="+tenantID.String(), bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{Subject: uuid.NewString(), Roles: []string{roleAdmin}}))
+	rec := httptest.NewRecorder()
+	s.handleOfflineBundles(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.vulnerabilityFindings) != 1 {
+		t.Fatalf("vulnerability findings = %#v, want one app dependency finding", store.vulnerabilityFindings)
+	}
+	finding := store.vulnerabilityFindings[0]
+	if finding.PackageName != "express" || finding.PackageSource != "npm" || finding.CVEID != "CVE-2026-APP1" {
+		t.Fatalf("finding lost app dependency evidence: %+v", finding)
+	}
+	if finding.Evidence["match_type"] != "explicit_version_range" {
+		t.Fatalf("match_type = %#v, want explicit_version_range", finding.Evidence["match_type"])
+	}
+}
+
 func TestOfflineBundleImportReconcilesVulnerabilitiesWhenNoMatches(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -164,7 +232,7 @@ func TestOfflineBundleImportReconcilesVulnerabilitiesWhenNoMatches(t *testing.T)
 	tenantID := uuid.New()
 	nodeID := uuid.New()
 	arch := "amd64"
-	observedAt := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	observedAt := time.Now().UTC()
 	store := &offlineBundleFakeStore{
 		fakeStore: &fakeStore{
 			nodes: []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "app-01"}},
@@ -413,6 +481,11 @@ func makeServerVulnerabilityBundle(t *testing.T, priv ed25519.PrivateKey, bundle
 			}},
 		}},
 	}
+	return makeServerVulnerabilityBundleWithFeed(t, priv, bundleID, version, sequence, now, feed)
+}
+
+func makeServerVulnerabilityBundleWithFeed(t *testing.T, priv ed25519.PrivateKey, bundleID, version string, sequence int64, now time.Time, feed offlinebundle.VulnerabilityFeed) []byte {
+	t.Helper()
 	content, err := json.Marshal(feed)
 	if err != nil {
 		t.Fatalf("marshal vulnerability feed: %v", err)

@@ -15,6 +15,8 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
+	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 )
 
 // TestRecommendationsBridgeWritesPortObservations is the closure test for
@@ -163,6 +165,457 @@ func TestBridgePortObservationsRejectsInvalidPort(t *testing.T) {
 	}
 	if store.portObservations[0].Port != 80 {
 		t.Errorf("persisted port = %d, want 80", store.portObservations[0].Port)
+	}
+}
+
+func TestNodeServicesIngestPersistsConnectorProposalLabels(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "connector-tenant", CreatedAt: time.Now()}},
+		nodes: []storage.Node{{
+			ID: nodeID, TenantID: tenantID, Hostname: "host",
+			State: storage.NodeStateActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}},
+	}
+	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}, Auth: authWithTokens("admin", "t")}, store, &stubQueue{})
+
+	body := nodeServicesRequest{
+		Services: []nodeServiceItem{{PID: 1, Process: "nginx", Port: 80, ServiceKind: "nginx"}},
+		ConnectorProposals: []connectordiscovery.Proposal{{
+			ID:                  "local-log:nginx",
+			Kind:                connectordiscovery.KindLocalLog,
+			Program:             "nginx",
+			CollectorType:       connectordiscovery.CollectorTypeFile,
+			Formatter:           "nginx",
+			Confidence:          90,
+			Risk:                "low",
+			AutoConnectEligible: true,
+			Paths:               []string{"/var/log/nginx/access.log"},
+			Labels:              map[string]string{"discovery_source": "local"},
+		}},
+	}
+	performIngest(t, srv, nodeID, body)
+
+	labels := store.nodes[0].Labels
+	if labels["agent.connector_proposal_count"] != 1 {
+		t.Fatalf("connector proposal count label = %#v", labels["agent.connector_proposal_count"])
+	}
+	if labels["agent.connector_auto_eligible_count"] != 1 {
+		t.Fatalf("connector auto eligible count label = %#v", labels["agent.connector_auto_eligible_count"])
+	}
+	proposals, ok := labels["agent.connector_proposals"].([]map[string]any)
+	if !ok || len(proposals) != 1 {
+		t.Fatalf("connector proposals label = %#v", labels["agent.connector_proposals"])
+	}
+	if proposals[0]["program"] != "nginx" || proposals[0]["auto_connect_eligible"] != true {
+		t.Fatalf("unexpected connector proposal label: %#v", proposals[0])
+	}
+	if len(store.sourceProposals) != 1 {
+		t.Fatalf("durable source proposals = %d, want 1", len(store.sourceProposals))
+	}
+	if store.sourceProposals[0].Status != storage.ContentPackSourceProposalStatusAutoEligible || store.sourceProposals[0].Program != "nginx" {
+		t.Fatalf("unexpected durable source proposal: %#v", store.sourceProposals[0])
+	}
+	if len(store.sourceStates) != 1 {
+		t.Fatalf("source runtime states = %d, want 1", len(store.sourceStates))
+	}
+	if store.sourceStates[0].State.CoverageState != contentpacks.CoverageState(contentpacks.CoverageProposed) || store.sourceStates[0].State.NodeID != nodeID.String() {
+		t.Fatalf("unexpected source runtime state from proposal: %#v", store.sourceStates[0].State)
+	}
+}
+
+func TestContentPackSourceProposalsAPIListsDurableConnectorProposals(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "connector-tenant", CreatedAt: now}},
+		nodes: []storage.Node{{
+			ID: nodeID, TenantID: tenantID, Hostname: "host",
+			State: storage.NodeStateActive, CreatedAt: now, UpdatedAt: now,
+		}},
+		sourceProposals: []storage.ContentPackSourceProposalRecord{{
+			ID:               uuid.New(),
+			TenantID:         tenantID,
+			NodeID:           nodeID,
+			ProposalID:       "local-log:temenos-t24",
+			Kind:             connectordiscovery.KindLocalLog,
+			Program:          "temenos-t24",
+			SourceID:         "temenos-t24",
+			CollectorType:    connectordiscovery.CollectorTypeFile,
+			Formatter:        "generic",
+			Status:           storage.ContentPackSourceProposalStatusApprovalRequired,
+			Confidence:       95,
+			Risk:             "high",
+			RequiresApproval: true,
+			Reason:           "running local service matches a sensitive catalog profile and needs operator approval",
+			Paths:            []string{"/opt/temenos/*/logs/*.log"},
+			Evidence:         []string{"service:kind=weblogic"},
+			Labels:           map[string]string{"discovery_source": "local"},
+			FirstSeenAt:      now,
+			LastSeenAt:       now,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}, {
+			ID:            uuid.New(),
+			TenantID:      tenantID,
+			NodeID:        nodeID,
+			ProposalID:    "local-log:nginx",
+			Kind:          connectordiscovery.KindLocalLog,
+			Program:       "nginx",
+			SourceID:      "nginx.access",
+			CollectorType: connectordiscovery.CollectorTypeFile,
+			Status:        storage.ContentPackSourceProposalStatusApproved,
+			Risk:          "medium",
+			FirstSeenAt:   now,
+			LastSeenAt:    now,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}},
+	}
+	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}, Auth: authWithTokens("admin", "t")}, store, &stubQueue{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/content-packs/source-proposals?tenant_id="+tenantID.String()+"&limit=1", nil)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Name: "viewer@example.com", Roles: []string{"viewer"}})
+	rec := httptest.NewRecorder()
+	srv.handleContentPackSourceProposals(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("source proposals status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var resp contentPackSourceProposalListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode source proposals: %v; body=%s", err, rec.Body.String())
+	}
+	if len(resp.Data) != 1 || resp.Pagination.Total != 2 || resp.Pagination.NextOffset == nil {
+		t.Fatalf("source proposals response = %#v", resp.Data)
+	}
+	if resp.Summary == nil || resp.Summary.Total != 2 || resp.Summary.ByStatus[storage.ContentPackSourceProposalStatusApprovalRequired] != 1 || resp.Summary.ByStatus[storage.ContentPackSourceProposalStatusApproved] != 1 {
+		t.Fatalf("source proposals summary = %#v", resp.Summary)
+	}
+
+	filterReq := httptest.NewRequest(http.MethodGet, "/api/v1/content-packs/source-proposals?tenant_id="+tenantID.String()+"&q=temenos&status=approval_required", nil)
+	filterReq = withPrincipal(filterReq, &auth.Principal{Type: "user", Name: "viewer@example.com", Roles: []string{"viewer"}})
+	filterRec := httptest.NewRecorder()
+	srv.handleContentPackSourceProposals(filterRec, filterReq)
+	if filterRec.Code != http.StatusOK {
+		t.Fatalf("filtered source proposals status = %d, want 200; body = %s", filterRec.Code, filterRec.Body.String())
+	}
+	var filterResp contentPackSourceProposalListResponse
+	if err := json.Unmarshal(filterRec.Body.Bytes(), &filterResp); err != nil {
+		t.Fatalf("decode filtered source proposals: %v; body=%s", err, filterRec.Body.String())
+	}
+	if len(filterResp.Data) != 1 || filterResp.Data[0].Status != storage.ContentPackSourceProposalStatusApprovalRequired || filterResp.Data[0].Program != "temenos-t24" {
+		t.Fatalf("filtered source proposals response = %#v", filterResp.Data)
+	}
+	if filterResp.Summary == nil || filterResp.Summary.Total != 1 || filterResp.Summary.ByStatus[storage.ContentPackSourceProposalStatusApprovalRequired] != 1 {
+		t.Fatalf("filtered source proposals summary = %#v", filterResp.Summary)
+	}
+
+	invalidReq := httptest.NewRequest(http.MethodGet, "/api/v1/content-packs/source-proposals?tenant_id="+tenantID.String()+"&status=not_real", nil)
+	invalidReq = withPrincipal(invalidReq, &auth.Principal{Type: "user", Name: "viewer@example.com", Roles: []string{"viewer"}})
+	invalidRec := httptest.NewRecorder()
+	srv.handleContentPackSourceProposals(invalidRec, invalidReq)
+	if invalidRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status response = %d, want 400; body = %s", invalidRec.Code, invalidRec.Body.String())
+	}
+}
+
+func TestContentPackSourceProposalDecisionAPIs(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	approveID := uuid.New()
+	rejectID := uuid.New()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "connector-tenant", CreatedAt: now}},
+		nodes: []storage.Node{{
+			ID: nodeID, TenantID: tenantID, Hostname: "host",
+			State: storage.NodeStateActive, CreatedAt: now, UpdatedAt: now,
+		}},
+		sourceProposals: []storage.ContentPackSourceProposalRecord{
+			{
+				ID:          approveID,
+				TenantID:    tenantID,
+				NodeID:      nodeID,
+				ProposalID:  "local-log:nginx",
+				Kind:        connectordiscovery.KindLocalLog,
+				Program:     "nginx",
+				Status:      storage.ContentPackSourceProposalStatusAutoEligible,
+				FirstSeenAt: now,
+				LastSeenAt:  now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
+			{
+				ID:          rejectID,
+				TenantID:    tenantID,
+				NodeID:      nodeID,
+				ProposalID:  "local-log:temenos-t24",
+				Kind:        connectordiscovery.KindLocalLog,
+				Program:     "temenos-t24",
+				Status:      storage.ContentPackSourceProposalStatusApprovalRequired,
+				FirstSeenAt: now,
+				LastSeenAt:  now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
+		},
+	}
+	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}, Auth: authWithTokens("admin", "t")}, store, &stubQueue{})
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/v1/content-packs/source-proposals/"+approveID.String()+"/approve?tenant_id="+tenantID.String(), bytes.NewReader([]byte(`{"note":"CAB-91","collect_mode":"metadata_only"}`)))
+	approveReq = withPrincipal(approveReq, &auth.Principal{Type: "user", Name: "admin@example.com", Subject: "admin@example.com", Roles: []string{"admin"}})
+	approveRec := httptest.NewRecorder()
+	srv.handleApproveContentPackSourceProposal(approveRec, approveReq, approveID.String())
+	if approveRec.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, want 200; body = %s", approveRec.Code, approveRec.Body.String())
+	}
+	var approved contentPackSourceProposalDTO
+	if err := json.Unmarshal(approveRec.Body.Bytes(), &approved); err != nil {
+		t.Fatalf("decode approve response: %v", err)
+	}
+	if approved.Status != storage.ContentPackSourceProposalStatusApproved || approved.ApprovedBySubject != "admin@example.com" || approved.ApprovalNote != "CAB-91" || approved.CollectMode != storage.ContentPackSourceProposalCollectModeMetadataOnly {
+		t.Fatalf("approved proposal = %#v", approved)
+	}
+	if len(store.sourceStates) != 1 || store.sourceStates[0].State.CoverageState != contentpacks.CoverageState(contentpacks.CoverageApproved) {
+		t.Fatalf("approved source runtime state = %#v", store.sourceStates)
+	}
+	approvedStateLabels := store.sourceStates[0].State.Labels
+	if approvedStateLabels["collect_mode"] != storage.ContentPackSourceProposalCollectModeMetadataOnly ||
+		approvedStateLabels["runtime_evidence"] != "metadata_observed" ||
+		approvedStateLabels["metadata_observed"] != "true" ||
+		approvedStateLabels["log_collection_started"] != "false" ||
+		approvedStateLabels["control_one.raw_message_retained"] != "false" {
+		t.Fatalf("metadata-only source runtime labels = %#v", approvedStateLabels)
+	}
+
+	rejectReq := httptest.NewRequest(http.MethodPost, "/api/v1/content-packs/source-proposals/"+rejectID.String()+"/reject?tenant_id="+tenantID.String(), bytes.NewReader([]byte(`{"reason":"customer data path requires DPO review","privacy_blocked":true}`)))
+	rejectReq = withPrincipal(rejectReq, &auth.Principal{Type: "user", Name: "admin@example.com", Subject: "admin@example.com", Roles: []string{"admin"}})
+	rejectRec := httptest.NewRecorder()
+	srv.handleRejectContentPackSourceProposal(rejectRec, rejectReq, rejectID.String())
+	if rejectRec.Code != http.StatusOK {
+		t.Fatalf("reject status = %d, want 200; body = %s", rejectRec.Code, rejectRec.Body.String())
+	}
+	var rejected contentPackSourceProposalDTO
+	if err := json.Unmarshal(rejectRec.Body.Bytes(), &rejected); err != nil {
+		t.Fatalf("decode reject response: %v", err)
+	}
+	if rejected.Status != storage.ContentPackSourceProposalStatusPrivacyBlocked || rejected.RejectedBySubject != "admin@example.com" || rejected.RejectionReason == "" {
+		t.Fatalf("rejected proposal = %#v", rejected)
+	}
+	if len(store.sourceStates) != 2 {
+		t.Fatalf("source runtime states after reject = %#v", store.sourceStates)
+	}
+	var privacyStateSeen bool
+	for _, row := range store.sourceStates {
+		if row.State.CoverageState == contentpacks.CoverageState(contentpacks.CoveragePrivacyBlocked) {
+			privacyStateSeen = true
+		}
+	}
+	if !privacyStateSeen {
+		t.Fatalf("privacy-blocked source runtime state missing: %#v", store.sourceStates)
+	}
+}
+
+func TestNodeApprovedLogSourcesReturnsApprovedLocalFileProposals(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	otherNodeID := uuid.New()
+	now := time.Now().UTC()
+	approvedID := uuid.New()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "connector-tenant", CreatedAt: now}},
+		nodes: []storage.Node{{
+			ID: nodeID, TenantID: tenantID, Hostname: "host",
+			State: storage.NodeStateActive, CreatedAt: now, UpdatedAt: now,
+		}},
+		sourceProposals: []storage.ContentPackSourceProposalRecord{
+			{
+				ID:            approvedID,
+				TenantID:      tenantID,
+				NodeID:        nodeID,
+				ProposalID:    "local-log:nginx",
+				Kind:          connectordiscovery.KindLocalLog,
+				Program:       "nginx",
+				SourceID:      "nginx-access",
+				CollectorType: connectordiscovery.CollectorTypeFile,
+				Formatter:     "nginx",
+				Status:        storage.ContentPackSourceProposalStatusApproved,
+				CollectMode:   storage.ContentPackSourceProposalCollectModeCollectParsed,
+				Paths:         []string{"/var/log/nginx/access.log", "/var/log/nginx/access.log"},
+				Labels:        map[string]string{"discovery_source": "local", "parser_profile": "nginx"},
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				ApprovedAt:    &now,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				ID:            uuid.New(),
+				TenantID:      tenantID,
+				NodeID:        nodeID,
+				ProposalID:    "local-log:postgres",
+				Kind:          connectordiscovery.KindLocalLog,
+				Program:       "postgres",
+				CollectorType: connectordiscovery.CollectorTypeFile,
+				Status:        storage.ContentPackSourceProposalStatusApproved,
+				CollectMode:   storage.ContentPackSourceProposalCollectModeMetadataOnly,
+				Paths:         []string{"/var/log/postgresql/postgresql*.log"},
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				ApprovedAt:    &now,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				ID:            uuid.New(),
+				TenantID:      tenantID,
+				NodeID:        nodeID,
+				ProposalID:    "local-log:temenos-t24",
+				Kind:          connectordiscovery.KindLocalLog,
+				Program:       "temenos-t24",
+				CollectorType: connectordiscovery.CollectorTypeFile,
+				Status:        storage.ContentPackSourceProposalStatusApprovalRequired,
+				Paths:         []string{"/opt/temenos/*/logs/*.log"},
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				ID:            uuid.New(),
+				TenantID:      tenantID,
+				NodeID:        otherNodeID,
+				ProposalID:    "local-log:postgres",
+				Kind:          connectordiscovery.KindLocalLog,
+				Program:       "postgres",
+				CollectorType: connectordiscovery.CollectorTypeFile,
+				Status:        storage.ContentPackSourceProposalStatusApproved,
+				Paths:         []string{"/var/log/postgresql/postgresql*.log"},
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+		},
+	}
+	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}, Auth: authWithTokens("admin", "t")}, store, &stubQueue{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+nodeID.String()+"/log-sources/approved", nil)
+	req = withPrincipal(req, agentPrincipal(nodeID))
+	rec := httptest.NewRecorder()
+	srv.handleNodeApprovedLogSources(rec, req, nodeID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approved log sources status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var resp nodeApprovedLogSourcesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode approved log sources: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.NodeID != nodeID.String() || len(resp.Sources) != 1 {
+		t.Fatalf("approved log sources response = %#v", resp)
+	}
+	source := resp.Sources[0]
+	if source.Program != "nginx" || source.Type != connectordiscovery.CollectorTypeFile || source.Formatter != "nginx" {
+		t.Fatalf("approved log source = %#v", source)
+	}
+	if source.CollectMode != storage.ContentPackSourceProposalCollectModeCollectParsed {
+		t.Fatalf("approved log source collect mode = %q", source.CollectMode)
+	}
+	if len(source.Paths) != 1 || source.Paths[0] != "/var/log/nginx/access.log" {
+		t.Fatalf("approved source paths = %#v", source.Paths)
+	}
+	if source.Labels["control_one.source_proposal_id"] != approvedID.String() ||
+		source.Labels["control_one.connector_decision"] != storage.ContentPackSourceProposalStatusApproved ||
+		source.Labels["control_one.collect_mode"] != storage.ContentPackSourceProposalCollectModeCollectParsed {
+		t.Fatalf("approved source labels = %#v", source.Labels)
+	}
+
+	denyReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+nodeID.String()+"/log-sources/approved", nil)
+	denyReq = withPrincipal(denyReq, agentPrincipal(uuid.New()))
+	denyRec := httptest.NewRecorder()
+	srv.handleNodeApprovedLogSources(denyRec, denyReq, nodeID)
+	if denyRec.Code != http.StatusForbidden {
+		t.Fatalf("mismatched agent status = %d, want 403; body = %s", denyRec.Code, denyRec.Body.String())
+	}
+}
+
+func TestLogIngestProjectsAgentLocalSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	proposalID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "connector-tenant", CreatedAt: now}},
+		nodes: []storage.Node{{
+			ID: nodeID, TenantID: tenantID, Hostname: "host",
+			State: storage.NodeStateActive, CreatedAt: now, UpdatedAt: now,
+		}},
+	}
+	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}, Auth: authWithTokens("admin", "t")}, store, &stubQueue{})
+
+	raw := []byte(fmt.Sprintf(`{
+		"node_id":%q,
+		"program":"nginx",
+		"collector_type":"file",
+		"count":1,
+		"labels":{
+			"control_one.source_proposal_id":%q,
+			"control_one.content_pack_source_id":"nginx.access",
+			"control_one.collect_mode":"collect_parsed"
+		},
+		"paths":["/var/log/nginx/access.log"],
+		"entries":[{
+			"timestamp":"2026-05-28T12:00:00Z",
+			"program":"nginx",
+			"message":"raw log omitted by collect_parsed",
+			"severity":"info",
+			"labels":{"control_one.raw_message_retained":"false"},
+			"fields":{"status":200,"path":"/customers/123"}
+		}]
+	}`, nodeID.String(), proposalID.String()))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req = withPrincipal(req, &auth.Principal{
+		Type:    "agent",
+		Name:    nodeID.String(),
+		Subject: nodeID.String(),
+		Roles:   []string{"agent"},
+	})
+	rec := httptest.NewRecorder()
+	srv.handleLogIngest(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("log ingest status = %d, want 202; body = %s", rec.Code, rec.Body.String())
+	}
+	if len(store.sourceStates) != 1 {
+		t.Fatalf("source states = %#v", store.sourceStates)
+	}
+	state := store.sourceStates[0].State
+	if state.SourceID != "nginx.access" || state.CoverageState != contentpacks.CoverageState(contentpacks.CoverageCollecting) {
+		t.Fatalf("runtime state identity/status = %#v", state)
+	}
+	if state.ApprovalID != proposalID.String() || state.CollectorMode != contentpacks.CollectorNodeFileLog {
+		t.Fatalf("runtime state approval/collector = %#v", state)
+	}
+	if state.Metrics.EventsReceived != 1 || state.Metrics.EventsParsed != 1 || state.LastEventAt == nil || state.LastParsedAt == nil {
+		t.Fatalf("runtime state metrics/timestamps = %#v", state)
+	}
+	if state.Labels["control_one.collect_mode"] != storage.ContentPackSourceProposalCollectModeCollectParsed ||
+		state.Labels["control_one.raw_message_retained"] != "false" {
+		t.Fatalf("runtime state labels = %#v", state.Labels)
 	}
 }
 

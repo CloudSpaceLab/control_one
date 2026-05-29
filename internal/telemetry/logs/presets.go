@@ -78,6 +78,9 @@ func mergeLogSource(base, override config.LogSourceConfig) config.LogSourceConfi
 	if strings.TrimSpace(override.Formatter) != "" {
 		result.Formatter = override.Formatter
 	}
+	if strings.TrimSpace(override.CollectMode) != "" {
+		result.CollectMode = override.CollectMode
+	}
 	if override.BatchSize > 0 {
 		result.BatchSize = override.BatchSize
 	}

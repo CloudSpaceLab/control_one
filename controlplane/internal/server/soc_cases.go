@@ -128,8 +128,19 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 		return
 	}
 	out := make([]socCaseResponse, 0, len(rows))
+	includeNotes := parseBoolQuery(r.URL.Query().Get("include_notes"))
 	for _, row := range rows {
-		out = append(out, newSOCCaseResponse(row))
+		resp := newSOCCaseResponse(row)
+		if includeNotes {
+			notes, _, err := s.listSOCCaseNotes(r.Context(), tenantID, row.ID, 3, 0)
+			if err != nil {
+				s.logger.Warn("list soc case notes for collection", zap.Error(err), zap.String("case_id", row.ID.String()))
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			resp.Notes = notes
+		}
+		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, paginatedResponse[socCaseResponse]{
 		Data:       out,
@@ -330,22 +341,156 @@ func socCaseEvidenceRefs(evidence map[string]any) []socCaseEvidenceRef {
 		return nil
 	}
 	refs := []socCaseEvidenceRef{}
-	for _, value := range stringSliceFromAny(evidence["citations"]) {
-		refs = append(refs, socCaseEvidenceRef{ID: value, Kind: socCaseEvidenceKind(value)})
-	}
+	seen := map[string]struct{}{}
+	refs = appendSOCCaseEvidenceRefs(refs, seen, evidence["citations"])
 	if details, ok := evidence["details"].(map[string]any); ok {
-		for _, value := range stringSliceFromAny(details["citations"]) {
-			refs = append(refs, socCaseEvidenceRef{ID: value, Kind: socCaseEvidenceKind(value)})
-		}
+		refs = appendSOCCaseEvidenceRefs(refs, seen, details["citations"])
 	}
 	return refs
+}
+
+func appendSOCCaseEvidenceRefs(refs []socCaseEvidenceRef, seen map[string]struct{}, raw any) []socCaseEvidenceRef {
+	for _, ref := range parseSOCCaseEvidenceRefs(raw) {
+		ref.ID = strings.TrimSpace(ref.ID)
+		ref.Kind = strings.TrimSpace(ref.Kind)
+		if ref.ID == "" {
+			continue
+		}
+		if ref.Kind == "" {
+			ref.Kind = socCaseEvidenceKind(ref.ID)
+		}
+		key := ref.Kind + "\x00" + ref.ID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func parseSOCCaseEvidenceRefs(raw any) []socCaseEvidenceRef {
+	switch v := raw.(type) {
+	case nil:
+		return nil
+	case []string:
+		refs := make([]socCaseEvidenceRef, 0, len(v))
+		for _, item := range v {
+			if ref, ok := socCaseEvidenceRefFromAny(item); ok {
+				refs = append(refs, ref)
+			}
+		}
+		return refs
+	case string:
+		values := stringSliceFromAny(v)
+		refs := make([]socCaseEvidenceRef, 0, len(values))
+		for _, item := range values {
+			if ref, ok := socCaseEvidenceRefFromAny(item); ok {
+				refs = append(refs, ref)
+			}
+		}
+		return refs
+	case []any:
+		refs := make([]socCaseEvidenceRef, 0, len(v))
+		for _, item := range v {
+			if ref, ok := socCaseEvidenceRefFromAny(item); ok {
+				refs = append(refs, ref)
+			}
+		}
+		return refs
+	default:
+		if ref, ok := socCaseEvidenceRefFromAny(v); ok {
+			return []socCaseEvidenceRef{ref}
+		}
+		return nil
+	}
+}
+
+func socCaseEvidenceRefFromAny(raw any) (socCaseEvidenceRef, bool) {
+	switch v := raw.(type) {
+	case socCaseEvidenceRef:
+		return v, strings.TrimSpace(v.ID) != ""
+	case string:
+		id := strings.TrimSpace(v)
+		if id == "" {
+			return socCaseEvidenceRef{}, false
+		}
+		return socCaseEvidenceRef{ID: id, Kind: socCaseEvidenceKind(id)}, true
+	case map[string]string:
+		fields := make(map[string]any, len(v))
+		for key, value := range v {
+			fields[key] = value
+		}
+		return socCaseEvidenceRefFromMap(fields)
+	case map[string]any:
+		return socCaseEvidenceRefFromMap(v)
+	default:
+		values := stringSliceFromAny(v)
+		if len(values) == 0 {
+			return socCaseEvidenceRef{}, false
+		}
+		id := strings.TrimSpace(values[0])
+		if id == "" {
+			return socCaseEvidenceRef{}, false
+		}
+		return socCaseEvidenceRef{ID: id, Kind: socCaseEvidenceKind(id)}, true
+	}
+}
+
+func socCaseEvidenceRefFromMap(fields map[string]any) (socCaseEvidenceRef, bool) {
+	id := firstNonEmptyString(
+		socCaseEvidenceFieldString(fields, "id"),
+		socCaseEvidenceFieldString(fields, "citation_id"),
+		socCaseEvidenceFieldString(fields, "ref"),
+		socCaseEvidenceFieldString(fields, "reference"),
+		socCaseStructuredEvidenceID(fields),
+	)
+	if id == "" {
+		return socCaseEvidenceRef{}, false
+	}
+	kind := firstNonEmptyString(
+		socCaseEvidenceFieldString(fields, "kind"),
+		socCaseEvidenceFieldString(fields, "type"),
+		socCaseEvidenceKind(id),
+	)
+	return socCaseEvidenceRef{ID: id, Kind: kind}, true
+}
+
+func socCaseStructuredEvidenceID(fields map[string]any) string {
+	typ := strings.ToLower(socCaseEvidenceFieldString(fields, "type"))
+	if runtimeStateID := socCaseEvidenceFieldString(fields, "runtime_state_id"); runtimeStateID != "" {
+		switch typ {
+		case "content_pack_source_runtime_state", "source_runtime_state":
+			return "content_pack_source_runtime_state:" + runtimeStateID
+		}
+		if strings.Contains(typ, "source_runtime_state") {
+			return "content_pack_source_runtime_state:" + runtimeStateID
+		}
+	}
+	return ""
+}
+
+func socCaseEvidenceFieldString(fields map[string]any, key string) string {
+	value, ok := fields[key]
+	if !ok {
+		return ""
+	}
+	out := strings.TrimSpace(fmt.Sprint(value))
+	if out == "" || out == "<nil>" {
+		return ""
+	}
+	return out
 }
 
 func socCaseEvidenceKind(ref string) string {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	switch {
+	case strings.Contains(ref, "content_pack_source_runtime_state"), strings.Contains(ref, "source_runtime_state"):
+		return "content_pack_source_runtime_state"
 	case strings.Contains(ref, "node_vulnerability_findings"):
 		return "vulnerability_finding"
+	case strings.Contains(ref, "private_access_exposure_findings"), strings.Contains(ref, "private_access_exposure"):
+		return "private_access_exposure_finding"
 	case strings.Contains(ref, "normalized_events"), strings.Contains(ref, "doris"):
 		return "event"
 	case strings.Contains(ref, "compliance"):

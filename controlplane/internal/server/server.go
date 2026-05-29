@@ -38,6 +38,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
+	"github.com/CloudSpaceLab/control_one/internal/detections"
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 )
@@ -377,6 +378,8 @@ type Store interface {
 	// Heartbeat-driven inventory + firewall state (PR 2).
 	ReplaceNodePackages(context.Context, uuid.UUID, []storage.NodePackage) error
 	ListNodePackages(context.Context, uuid.UUID) ([]storage.NodePackage, error)
+	ReplaceNodeAppDependencies(context.Context, uuid.UUID, uuid.UUID, []storage.NodeAppDependency) error
+	ListNodeAppDependencies(context.Context, uuid.UUID) ([]storage.NodeAppDependency, error)
 	UpsertVulnerabilityFindings(context.Context, []storage.VulnerabilityFinding) error
 	ReconcileVulnerabilityFindings(context.Context, storage.ReconcileVulnerabilityFindingsParams) (int64, error)
 	ListNodeVulnerabilityFindings(context.Context, storage.VulnerabilityFindingFilter, int, int) ([]storage.VulnerabilityFinding, int, error)
@@ -798,6 +801,8 @@ type Server struct {
 	ipBlockExpiryScheduler  *IPBlockExpiryScheduler
 	reviewReminderScheduler *ReviewReminderScheduler
 	healthScheduler         *HealthScheduler
+	siemForwardingScheduler *SIEMForwardingScheduler
+	privateAccessScheduler  *PrivateAccessImportScheduler
 	agentSigningOnce        sync.Once
 	agentSigning            *agentSigningMaterial
 	policySigningOnce       sync.Once
@@ -853,7 +858,11 @@ type Server struct {
 	threatIntelStop context.CancelFunc
 	// offlineContent exposes signed airgapped content bundles to enrichment,
 	// detectors, and operator status views.
-	offlineContentRoot string
+	offlineContentRoot         string
+	contentPackDetectionsMu    sync.Mutex
+	contentPackDetectionsCache map[uuid.UUID]contentPackDetectionCacheEntry
+	contentPackTemporalMu      sync.Mutex
+	contentPackTemporalEval    *detections.StatefulEvaluator
 	// connectRegistry powers the operator "onboard a server" wizard. Lazy
 	// because most servers never invoke it; tests inject a stub via
 	// connectRegistryOverride to skip real network calls.
@@ -1000,6 +1009,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/ai/ask", s.handleAIAsk)
 	s.baseRouter.HandleFunc("/api/v1/ai/investigations", s.handleAIInvestigations)
 	s.baseRouter.HandleFunc("/api/v1/ai/operator/proposals", s.handleAIOperatorProposals)
+	s.baseRouter.HandleFunc("/api/v1/ai/logfixer/runs", s.handleAILogFixerRuns)
 	s.baseRouter.HandleFunc("/api/v1/tenants", s.handleTenantsCollection)
 	s.baseRouter.HandleFunc("/api/v1/tenants/", s.handleTenantResource)
 	s.baseRouter.HandleFunc("/api/v1/jobs", s.handleJobsCollection)
@@ -1034,6 +1044,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals", s.handleRemediationApprovalsCollection)
 	s.baseRouter.HandleFunc("/api/v1/remediation/approvals/", s.handleRemediationApprovalSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/remediation/circuit-breaker/", s.handleRemediationCircuitBreakerSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/action-plans", s.handleActionPlansCollection)
+	s.baseRouter.HandleFunc("/api/v1/action-plans/", s.handleActionPlanSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/policies", s.handleRetentionPoliciesCollection)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/retention/cleanup", s.handleRetentionCleanup)
 	s.baseRouter.HandleFunc("/api/v1/secrets/groups", s.handleSecretGroupsCollection)
@@ -1077,6 +1089,17 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
 	s.baseRouter.HandleFunc("/api/v1/control-room/overview", s.handleControlRoomOverview)
 	s.baseRouter.HandleFunc("/api/v1/coverage/", s.handleCoverageSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/content-packs", s.handleContentPacksCollection)
+	s.baseRouter.HandleFunc("/api/v1/content-packs/", s.handleContentPackSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/siem/forwarding-destinations", s.handleSIEMForwardingDestinations)
+	s.baseRouter.HandleFunc("/api/v1/siem/imports", s.handleSIEMImports)
+	s.baseRouter.HandleFunc("/api/v1/private-access/provider-accounts", s.handlePrivateAccessProviderAccounts)
+	s.baseRouter.HandleFunc("/api/v1/private-access/provider-accounts/", s.handlePrivateAccessProviderAccountSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/private-access/import-runs", s.handlePrivateAccessImportRuns)
+	s.baseRouter.HandleFunc("/api/v1/private-access/snapshots", s.handlePrivateAccessSnapshots)
+	s.baseRouter.HandleFunc("/api/v1/private-access/exposure/findings", s.handlePrivateAccessExposureFindings)
+	s.baseRouter.HandleFunc("/api/v1/private-access/exposure/findings/", s.handlePrivateAccessExposureFindingSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/private-access/exposure/reconcile", s.handlePrivateAccessExposureReconcile)
 	s.baseRouter.HandleFunc("/api/v1/soc/cases", s.handleSOCCasesCollection)
 	s.baseRouter.HandleFunc("/api/v1/soc/cases/", s.handleSOCCaseSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
@@ -1659,6 +1682,9 @@ func (s *Server) handleTenantResource(w http.ResponseWriter, r *http.Request) {
 		case "event-filters":
 			s.handleTenantEventFilters(w, r)
 			return
+		case "connector-policy":
+			s.handleTenantConnectorPolicy(w, r)
+			return
 		case "remediation-config":
 			s.handleTenantRemediationConfig(w, r)
 			return
@@ -1985,8 +2011,18 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(segments) == 3 && segments[1] == "log-sources" && segments[2] == "approved" {
+		s.handleNodeApprovedLogSources(w, r, nodeID)
+		return
+	}
+
 	if len(segments) == 2 && segments[1] == "packages" {
 		s.handleNodePackages(w, r, nodeID)
+		return
+	}
+
+	if len(segments) == 2 && segments[1] == "app-dependencies" {
+		s.handleNodeAppDependencies(w, r, nodeID)
 		return
 	}
 
@@ -2578,7 +2614,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 			})
 			if cfg.Doris.ApplyMigrations {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				if mErr := doris.ApplyMigrations(ctx, dorisCli); mErr != nil {
+				if mErr := doris.ApplyMigrationsWithOptions(ctx, dorisCli, doris.MigrationOptions{ReplicationNum: cfg.Doris.ReplicationNum}); mErr != nil {
 					logger.Error("apply doris migrations", zap.Error(mErr))
 				}
 				cancel()
@@ -2635,6 +2671,21 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 			logger.Error("start event ingest replay scheduler", zap.Error(err))
 		} else {
 			s.eventIngestReplay = replay
+		}
+	}
+
+	if cfg.SIEMForwarding.Enabled {
+		if err := s.startSIEMForwardingScheduler(); err != nil {
+			logger.Error("start SIEM forwarding scheduler", zap.Error(err))
+		}
+	}
+
+	if cfg.PrivateAccess.ImportSchedulerEnabled {
+		privateAccess := NewPrivateAccessImportScheduler(s)
+		if err := privateAccess.Start(cfg.PrivateAccess.ImportSchedulerInterval, cfg.PrivateAccess.ImportSchedulerLimit); err != nil {
+			logger.Error("start private access import scheduler", zap.Error(err))
+		} else {
+			s.privateAccessScheduler = privateAccess
 		}
 	}
 
@@ -2738,6 +2789,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	if s.eventIngestReplay != nil {
 		s.eventIngestReplay.Stop()
+	}
+	if s.siemForwardingScheduler != nil {
+		s.siemForwardingScheduler.Stop()
+	}
+	if s.privateAccessScheduler != nil {
+		s.privateAccessScheduler.Stop()
 	}
 	if s.ipBlockExpiryScheduler != nil {
 		s.ipBlockExpiryScheduler.Stop()

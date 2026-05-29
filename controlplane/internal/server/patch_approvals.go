@@ -223,6 +223,10 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 	// non-approval gates (change window / circuit breaker) before
 	// dispatching, but for now we stay aligned with the compliance approve
 	// loop which also bypasses on approve.
+	policy := patchPackagePolicy{}
+	if deployment, derr := s.store.GetPatchDeployment(r.Context(), updated.DeploymentID); derr == nil && deployment != nil {
+		policy = patchPackagePolicyFromSummary(deployment.Summary)
+	}
 	state, dispErr := s.dispatchPatchModeToNode(
 		r.Context(),
 		updated.TenantID,
@@ -231,6 +235,7 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 		updated.Mode,
 		updated.ProxyID,
 		updated.WindowID,
+		policy,
 	)
 	var jobID *uuid.UUID
 	if dispErr != nil {

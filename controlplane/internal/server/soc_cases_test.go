@@ -94,6 +94,21 @@ func TestSOCCasesListDetailAndAuditExport(t *testing.T) {
 		t.Fatalf("unexpected note response: %+v", note)
 	}
 
+	listWithNotesReq := httptest.NewRequest(http.MethodGet, "/api/v1/soc/cases?tenant_id="+tenantID.String()+"&include_notes=true", nil)
+	listWithNotesReq.Header.Set("Authorization", "Bearer investigator-token")
+	listWithNotesRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(listWithNotesRec, listWithNotesReq)
+	if listWithNotesRec.Code != http.StatusOK {
+		t.Fatalf("list with notes status=%d body=%s", listWithNotesRec.Code, listWithNotesRec.Body.String())
+	}
+	var listWithNotes paginatedResponse[socCaseResponse]
+	if err := json.Unmarshal(listWithNotesRec.Body.Bytes(), &listWithNotes); err != nil {
+		t.Fatalf("decode list with notes: %v", err)
+	}
+	if len(listWithNotes.Data) != 1 || len(listWithNotes.Data[0].Notes) != 1 || listWithNotes.Data[0].Notes[0].AuditID != note.AuditID {
+		t.Fatalf("list with notes did not hydrate analyst note: %+v", listWithNotes)
+	}
+
 	exportReq := httptest.NewRequest(http.MethodGet, item.ExportURL, bytes.NewReader(nil))
 	exportReq.Header.Set("Authorization", "Bearer investigator-token")
 	exportRec := httptest.NewRecorder()

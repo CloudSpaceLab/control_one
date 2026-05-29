@@ -66,10 +66,14 @@ const (
 // uses just the IDs. Proxy mode adds ProxyURL (e.g. "http://10.0.0.5:3128").
 // Airgapped mode adds StagedRepoPath (e.g. "/var/cache/apt/staged").
 type patchJobPayload struct {
-	NodePatchStateID string `json:"node_patch_state_id"`
-	NodeID           string `json:"node_id"`
-	DeploymentID     string `json:"deployment_id"`
-	Mode             string `json:"mode"`
+	NodePatchStateID string   `json:"node_patch_state_id"`
+	NodeID           string   `json:"node_id"`
+	DeploymentID     string   `json:"deployment_id"`
+	ActionPlanID     string   `json:"action_plan_id,omitempty"`
+	Mode             string   `json:"mode"`
+	PackageAllowlist []string `json:"package_allowlist,omitempty"`
+	PackageDenylist  []string `json:"package_denylist,omitempty"`
+	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
 
 	// Proxy mode.
 	ProxyURL string `json:"proxy_url,omitempty"`
@@ -109,11 +113,20 @@ type patchDeployRequest struct {
 	NodeIDs  []string `json:"node_ids,omitempty"` // empty → every enrolled node in the tenant
 	Mode     string   `json:"mode,omitempty"`     // "direct" today; reserved for future
 	Reason   string   `json:"reason,omitempty"`
+	DryRun   bool     `json:"dry_run,omitempty"`
+
+	CanaryNodeIDs    []string `json:"canary_node_ids,omitempty"`
+	WaveSize         int      `json:"wave_size,omitempty"`
+	PackageAllowlist []string `json:"package_allowlist,omitempty"`
+	PackageDenylist  []string `json:"package_denylist,omitempty"`
+	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
 }
 
 type patchDeployResponse struct {
 	Deployment  *storage.PatchDeployment `json:"deployment"`
 	NodeCount   int                      `json:"node_count"`
+	WaveNumber  int                      `json:"wave_number,omitempty"`
+	Plan        *patchDeploymentPlan     `json:"plan,omitempty"`
 	Succeeded   []string                 `json:"succeeded,omitempty"`
 	Failed      []map[string]string      `json:"failed,omitempty"`
 	GateBlocked []map[string]string      `json:"gate_blocked,omitempty"`
@@ -121,6 +134,45 @@ type patchDeployResponse struct {
 	// pending an operator green-light. Each entry carries the approval id so
 	// the UI can deep-link straight into the approve/deny workflow.
 	AwaitingApproval []map[string]string `json:"awaiting_approval,omitempty"`
+}
+
+type patchPackagePolicy struct {
+	Allowlist       []string `json:"allowlist,omitempty"`
+	Denylist        []string `json:"denylist,omitempty"`
+	PostPatchRescan bool     `json:"post_patch_rescan,omitempty"`
+}
+
+type patchDeploymentPlan struct {
+	TenantID      string                `json:"tenant_id"`
+	RequestedMode string                `json:"requested_mode"`
+	HeaderMode    string                `json:"header_mode"`
+	Reason        string                `json:"reason,omitempty"`
+	TotalNodes    int                   `json:"total_nodes"`
+	WaveSize      int                   `json:"wave_size"`
+	PackagePolicy patchPackagePolicy    `json:"package_policy"`
+	Waves         []patchDeploymentWave `json:"waves"`
+	GeneratedAt   string                `json:"generated_at"`
+}
+
+type patchDeploymentWave struct {
+	WaveNumber int                   `json:"wave_number"`
+	Canary     bool                  `json:"canary"`
+	Nodes      []patchDeploymentNode `json:"nodes"`
+}
+
+type patchDeploymentNode struct {
+	NodeID     string `json:"node_id"`
+	Mode       string `json:"mode"`
+	GateStatus string `json:"gate_status"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type patchDispatchResult struct {
+	WaveNumber       int
+	Succeeded        []string
+	Failed           []map[string]string
+	GateBlocked      []map[string]string
+	AwaitingApproval []map[string]string
 }
 
 // handlePatchDeployments routes /api/v1/patch/deployments — POST creates a
@@ -178,6 +230,20 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "no target nodes resolved", http.StatusBadRequest)
 		return
 	}
+	policy, err := patchPackagePolicyFromRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	plan, err := s.buildPatchDeploymentPlan(r.Context(), tenantID, nodeIDs, req, requestedMode, headerModeForPatchMode(requestedMode), policy)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.DryRun {
+		writeJSON(w, http.StatusOK, patchDeployResponse{NodeCount: len(nodeIDs), Plan: &plan})
+		return
+	}
 
 	requestedBy := principalUserID(s, r.Context(), principal)
 	var by *uuid.UUID
@@ -192,16 +258,24 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 	if headerMode == "auto" {
 		headerMode = patchModeDirect
 	}
+	headerMode = plan.HeaderMode
 	deployment, err := s.store.CreatePatchDeployment(r.Context(), storage.PatchDeployment{
 		TenantID:        tenantID,
 		Mode:            headerMode,
 		TargetNodeCount: len(nodeIDs),
 		RequestedBy:     by,
 		Summary: map[string]any{
-			"reason":         req.Reason,
-			"node_count":     len(nodeIDs),
-			"requested":      time.Now().UTC().Format(time.RFC3339),
-			"requested_mode": requestedMode,
+			"reason":            req.Reason,
+			"node_count":        len(nodeIDs),
+			"requested":         time.Now().UTC().Format(time.RFC3339),
+			"requested_mode":    requestedMode,
+			"planned_node_ids":  patchPlanNodeIDs(plan),
+			"canary_node_ids":   patchPlanCanaryNodeIDs(plan),
+			"wave_size":         plan.WaveSize,
+			"package_allowlist": policy.Allowlist,
+			"package_denylist":  policy.Denylist,
+			"post_patch_rescan": policy.PostPatchRescan,
+			"waves":             plan.Waves,
 		},
 	})
 	if err != nil {
@@ -209,6 +283,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	nodeIDs = patchPlanWaveNodeUUIDs(plan, 0)
 
 	succeeded := make([]string, 0, len(nodeIDs))
 	failed := make([]map[string]string, 0)
@@ -264,7 +339,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 
-		if _, err := s.dispatchPatchModeToNode(r.Context(), tenantID, deployment.ID, nid, nodeMode, proxyID, windowID); err != nil {
+		if _, err := s.dispatchPatchModeToNode(r.Context(), tenantID, deployment.ID, nid, nodeMode, proxyID, windowID, policy); err != nil {
 			failed = append(failed, map[string]string{
 				"node_id": nid.String(),
 				"error":   err.Error(),
@@ -297,7 +372,9 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 
 	s.recordAudit(r.Context(), principal, tenantID, "patch.deploy.queued", "patch_deployment", deployment.ID.String(), map[string]any{
 		"mode":              headerMode,
-		"node_count":        len(nodeIDs),
+		"node_count":        plan.TotalNodes,
+		"wave_number":       0,
+		"wave_node_count":   len(nodeIDs),
 		"reason":            req.Reason,
 		"succeeded":         len(succeeded),
 		"failed":            len(failed),
@@ -308,6 +385,8 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, patchDeployResponse{
 		Deployment:       deployment,
 		NodeCount:        len(succeeded),
+		WaveNumber:       0,
+		Plan:             &plan,
 		Succeeded:        succeeded,
 		Failed:           failed,
 		GateBlocked:      gateBlocked,
@@ -440,6 +519,46 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	return patchGateResult{Allowed: true}
 }
 
+func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID uuid.UUID, mode string, windowID *uuid.UUID) patchGateResult {
+	if s.store == nil {
+		return patchGateResult{Allowed: true}
+	}
+	now := time.Now().UTC()
+	if nodeID != uuid.Nil {
+		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil && node.Labels != nil {
+			posture := nodeIsolationPostureFromNode(*node, now)
+			if posture.Active && posture.Mode == isolationModeAirgapped && mode != patchModeAirgapped {
+				return patchGateResult{Reason: "node is airgapped; use airgapped patch mode or clear the isolation timer"}
+			}
+			if posture.Active && posture.Mode == isolationModeWhitelist && mode == patchModeDirect && windowID == nil && !stringSliceContainsFold(posture.AllowedApplications, "patch") {
+				return patchGateResult{Reason: "node is whitelist-only; patch requires an allowed patch application, proxy, airgapped mode, or a maintenance window"}
+			}
+			if val, ok := node.Labels["remediation"]; ok {
+				if str, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(str), "manual-only") {
+					return patchGateResult{Reason: "node labelled remediation=manual-only"}
+				}
+			}
+		}
+	}
+	cfg, cfgErr := s.store.GetTenantRemediationConfig(ctx, tenantID)
+	if cfgErr != nil || cfg == nil {
+		defaults := storage.DefaultTenantRemediationConfig(tenantID)
+		cfg = &defaults
+	}
+	if !storage.IsInsideChangeWindow(cfg.ChangeWindows, now) {
+		return patchGateResult{Reason: "outside tenant change window"}
+	}
+	patchRuleID := "patch.deploy"
+	if breaker, err := s.store.GetCircuitBreakerState(ctx, tenantID, patchRuleID); err == nil &&
+		breaker != nil && breaker.AckedAt == nil {
+		return patchGateResult{Reason: fmt.Sprintf("circuit breaker tripped: %s", breaker.TrippedReason)}
+	}
+	if cfg.PatchRequiresApproval {
+		return patchGateResult{AwaitingApproval: true, Reason: "approval required"}
+	}
+	return patchGateResult{Allowed: true}
+}
+
 func stringSliceContainsFold(values []string, target string) bool {
 	for _, value := range values {
 		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(target)) {
@@ -488,6 +607,10 @@ func (s *Server) handlePatchDeploymentSubroute(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
+	if parts[0] == "plan" {
+		s.handlePatchDeploymentPlan(w, r)
+		return
+	}
 	id, err := uuid.Parse(parts[0])
 	if err != nil {
 		http.Error(w, "deployment id must be a UUID", http.StatusBadRequest)
@@ -495,6 +618,10 @@ func (s *Server) handlePatchDeploymentSubroute(w http.ResponseWriter, r *http.Re
 	}
 	if len(parts) >= 2 && parts[1] == "nodes" {
 		s.handleListPatchDeploymentNodes(w, r, id)
+		return
+	}
+	if len(parts) >= 2 && parts[1] == "advance" {
+		s.handleAdvancePatchDeployment(w, r, id)
 		return
 	}
 	http.NotFound(w, r)
@@ -526,6 +653,116 @@ func (s *Server) handleListPatchDeploymentNodes(w http.ResponseWriter, r *http.R
 // tenant boundary, or — when the list is empty — pulls every enrolled node
 // in the tenant. Bounded at 1000 to keep one operator click from
 // accidentally fanning out to the entire fleet of a megatenant.
+func (s *Server) handlePatchDeploymentPlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+		return
+	}
+	var req patchDeployRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	tenantID, err := uuid.Parse(strings.TrimSpace(req.TenantID))
+	if err != nil {
+		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	requestedMode := strings.TrimSpace(req.Mode)
+	if requestedMode == "" {
+		requestedMode = "auto"
+	}
+	switch requestedMode {
+	case "auto", patchModeDirect, patchModeProxy, patchModeAirgapped:
+	default:
+		http.Error(w, "mode must be one of auto|direct|proxy|airgapped", http.StatusBadRequest)
+		return
+	}
+	nodeIDs, err := s.resolvePatchTargets(r.Context(), tenantID, req.NodeIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	policy, err := patchPackagePolicyFromRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	plan, err := s.buildPatchDeploymentPlan(r.Context(), tenantID, nodeIDs, req, requestedMode, headerModeForPatchMode(requestedMode), policy)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plan": plan})
+}
+
+func (s *Server) handleAdvancePatchDeployment(w http.ResponseWriter, r *http.Request, deploymentID uuid.UUID) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	deployment, err := s.store.GetPatchDeployment(r.Context(), deploymentID)
+	if err != nil {
+		s.logger.Error("get patch deployment for advance", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if deployment == nil {
+		http.NotFound(w, r)
+		return
+	}
+	rows, err := s.store.ListNodePatchStatesForDeployment(r.Context(), deploymentID)
+	if err != nil {
+		s.logger.Error("list patch states for advance", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if pending, failed := patchWavePendingFailed(rows); pending > 0 || failed > 0 {
+		http.Error(w, fmt.Sprintf("cannot advance while previous wave has %d pending and %d failed nodes", pending, failed), http.StatusConflict)
+		return
+	}
+	plan := patchPlanFromDeployment(deployment)
+	if len(plan.Waves) == 0 {
+		http.Error(w, "deployment has no wave plan", http.StatusConflict)
+		return
+	}
+	nextWave := nextPatchWaveNumber(plan, rows)
+	if nextWave < 0 {
+		http.Error(w, "all planned waves have already been dispatched", http.StatusConflict)
+		return
+	}
+	result := s.dispatchPatchPlanWave(r.Context(), deployment.TenantID, deployment.ID, plan, nextWave)
+	if len(result.Succeeded) > 0 {
+		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "in_progress", false)
+	}
+	s.recordAudit(r.Context(), principal, deployment.TenantID, "patch.deploy.wave_advanced", "patch_deployment", deployment.ID.String(), map[string]any{
+		"wave_number":       result.WaveNumber,
+		"succeeded":         len(result.Succeeded),
+		"failed":            len(result.Failed),
+		"gate_blocked":      len(result.GateBlocked),
+		"awaiting_approval": len(result.AwaitingApproval),
+	})
+	writeJSON(w, http.StatusOK, patchDeployResponse{
+		Deployment:       deployment,
+		NodeCount:        len(result.Succeeded),
+		WaveNumber:       result.WaveNumber,
+		Plan:             &plan,
+		Succeeded:        result.Succeeded,
+		Failed:           result.Failed,
+		GateBlocked:      result.GateBlocked,
+		AwaitingApproval: result.AwaitingApproval,
+	})
+}
+
 func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, raw []string) ([]uuid.UUID, error) {
 	if len(raw) == 0 {
 		nodes, _, err := s.store.ListNodes(ctx, tenantID, "", 1000, 0)
@@ -560,6 +797,342 @@ func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, ra
 	return out, nil
 }
 
+func headerModeForPatchMode(mode string) string {
+	if strings.TrimSpace(mode) == "" || mode == "auto" {
+		return patchModeDirect
+	}
+	return strings.TrimSpace(mode)
+}
+
+func patchPackagePolicyFromRequest(req patchDeployRequest) (patchPackagePolicy, error) {
+	policy := patchPackagePolicy{
+		Allowlist:       normalizePatchPackageNames(req.PackageAllowlist),
+		Denylist:        normalizePatchPackageNames(req.PackageDenylist),
+		PostPatchRescan: req.PostPatchRescan,
+	}
+	for _, allow := range policy.Allowlist {
+		for _, deny := range policy.Denylist {
+			if strings.EqualFold(allow, deny) {
+				return policy, fmt.Errorf("package %q cannot be in both allowlist and denylist", allow)
+			}
+		}
+	}
+	if len(policy.Denylist) > 0 && len(policy.Allowlist) == 0 {
+		return policy, errors.New("package_denylist requires package_allowlist so the agent can fail closed instead of upgrading everything")
+	}
+	return policy, nil
+}
+
+func normalizePatchPackageNames(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (s *Server) buildPatchDeploymentPlan(ctx context.Context, tenantID uuid.UUID, nodeIDs []uuid.UUID, req patchDeployRequest, requestedMode, headerMode string, policy patchPackagePolicy) (patchDeploymentPlan, error) {
+	waveIDs, err := buildPatchWaveNodeIDs(nodeIDs, req.CanaryNodeIDs, req.WaveSize)
+	if err != nil {
+		return patchDeploymentPlan{}, err
+	}
+	plan := patchDeploymentPlan{
+		TenantID:      tenantID.String(),
+		RequestedMode: requestedMode,
+		HeaderMode:    headerMode,
+		Reason:        strings.TrimSpace(req.Reason),
+		TotalNodes:    len(nodeIDs),
+		WaveSize:      effectivePatchWaveSize(len(nodeIDs), len(req.CanaryNodeIDs), req.WaveSize),
+		PackagePolicy: policy,
+		Waves:         make([]patchDeploymentWave, 0, len(waveIDs)),
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	for waveNumber, ids := range waveIDs {
+		wave := patchDeploymentWave{WaveNumber: waveNumber, Canary: waveNumber == 0 && len(req.CanaryNodeIDs) > 0}
+		for _, nodeID := range ids {
+			mode, _, windowID := s.resolvePatchModeForNode(ctx, nodeID, requestedMode)
+			gate := s.previewPatchSafetyGates(ctx, tenantID, nodeID, mode, windowID)
+			status := "allowed"
+			switch {
+			case gate.AwaitingApproval:
+				status = "approval_required"
+			case !gate.Allowed:
+				status = "blocked"
+			}
+			wave.Nodes = append(wave.Nodes, patchDeploymentNode{
+				NodeID:     nodeID.String(),
+				Mode:       mode,
+				GateStatus: status,
+				Reason:     gate.Reason,
+			})
+		}
+		plan.Waves = append(plan.Waves, wave)
+	}
+	return plan, nil
+}
+
+func buildPatchWaveNodeIDs(nodeIDs []uuid.UUID, rawCanaries []string, waveSize int) ([][]uuid.UUID, error) {
+	if waveSize < 0 {
+		return nil, errors.New("wave_size must be non-negative")
+	}
+	targets := map[uuid.UUID]struct{}{}
+	for _, nodeID := range nodeIDs {
+		targets[nodeID] = struct{}{}
+	}
+	canarySeen := map[uuid.UUID]struct{}{}
+	canaries := make([]uuid.UUID, 0, len(rawCanaries))
+	for _, raw := range rawCanaries {
+		nodeID, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, fmt.Errorf("invalid canary_node_id %q: %w", raw, err)
+		}
+		if _, ok := targets[nodeID]; !ok {
+			return nil, fmt.Errorf("canary node %s is not in target nodes", nodeID)
+		}
+		if _, ok := canarySeen[nodeID]; ok {
+			continue
+		}
+		canarySeen[nodeID] = struct{}{}
+		canaries = append(canaries, nodeID)
+	}
+	size := effectivePatchWaveSize(len(nodeIDs), len(canaries), waveSize)
+	if size <= 0 {
+		size = len(nodeIDs)
+	}
+	var waves [][]uuid.UUID
+	if len(canaries) > 0 {
+		waves = append(waves, canaries)
+	}
+	var remaining []uuid.UUID
+	for _, nodeID := range nodeIDs {
+		if _, ok := canarySeen[nodeID]; ok {
+			continue
+		}
+		remaining = append(remaining, nodeID)
+	}
+	for len(remaining) > 0 {
+		n := size
+		if n > len(remaining) {
+			n = len(remaining)
+		}
+		waves = append(waves, append([]uuid.UUID(nil), remaining[:n]...))
+		remaining = remaining[n:]
+	}
+	return waves, nil
+}
+
+func effectivePatchWaveSize(totalNodes, canaryCount, requested int) int {
+	if requested > 0 {
+		return requested
+	}
+	if totalNodes <= canaryCount {
+		return totalNodes
+	}
+	return totalNodes - canaryCount
+}
+
+func (s *Server) resolvePatchModeForNode(ctx context.Context, nodeID uuid.UUID, requestedMode string) (string, *uuid.UUID, *uuid.UUID) {
+	nodeMode := requestedMode
+	var proxyID, windowID *uuid.UUID
+	if nodeMode == "" || nodeMode == "auto" {
+		cfg, err := s.store.GetNodePatchConfig(ctx, nodeID)
+		if err != nil {
+			s.logger.Warn("get node patch config", zap.Error(err), zap.String("node_id", nodeID.String()))
+			return patchModeDirect, nil, nil
+		}
+		if cfg != nil {
+			nodeMode = cfg.Mode
+			proxyID = cfg.ProxyID
+			windowID = cfg.WindowID
+		} else {
+			nodeMode = patchModeDirect
+		}
+	}
+	return nodeMode, proxyID, windowID
+}
+
+func patchPlanNodeIDs(plan patchDeploymentPlan) []string {
+	var out []string
+	for _, wave := range plan.Waves {
+		for _, node := range wave.Nodes {
+			out = append(out, node.NodeID)
+		}
+	}
+	return out
+}
+
+func patchPlanCanaryNodeIDs(plan patchDeploymentPlan) []string {
+	if len(plan.Waves) == 0 || !plan.Waves[0].Canary {
+		return nil
+	}
+	out := make([]string, 0, len(plan.Waves[0].Nodes))
+	for _, node := range plan.Waves[0].Nodes {
+		out = append(out, node.NodeID)
+	}
+	return out
+}
+
+func patchPlanWaveNodeUUIDs(plan patchDeploymentPlan, waveNumber int) []uuid.UUID {
+	for _, wave := range plan.Waves {
+		if wave.WaveNumber != waveNumber {
+			continue
+		}
+		out := make([]uuid.UUID, 0, len(wave.Nodes))
+		for _, node := range wave.Nodes {
+			if parsed, err := uuid.Parse(node.NodeID); err == nil {
+				out = append(out, parsed)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func patchPackagePolicyFromSummary(summary map[string]any) patchPackagePolicy {
+	return patchPackagePolicy{
+		Allowlist:       stringSliceFromSummary(summary["package_allowlist"]),
+		Denylist:        stringSliceFromSummary(summary["package_denylist"]),
+		PostPatchRescan: boolFromSummary(summary["post_patch_rescan"]),
+	}
+}
+
+func patchPlanFromDeployment(deployment *storage.PatchDeployment) patchDeploymentPlan {
+	if deployment == nil {
+		return patchDeploymentPlan{}
+	}
+	summary := deployment.Summary
+	plan := patchDeploymentPlan{
+		TenantID:      deployment.TenantID.String(),
+		RequestedMode: stringFromSummary(summary["requested_mode"]),
+		HeaderMode:    deployment.Mode,
+		Reason:        stringFromSummary(summary["reason"]),
+		TotalNodes:    intFromSummary(summary["node_count"]),
+		WaveSize:      intFromSummary(summary["wave_size"]),
+		PackagePolicy: patchPackagePolicyFromSummary(summary),
+		GeneratedAt:   stringFromSummary(summary["requested"]),
+	}
+	if plan.RequestedMode == "" {
+		plan.RequestedMode = deployment.Mode
+	}
+	if plan.TotalNodes == 0 {
+		plan.TotalNodes = deployment.TargetNodeCount
+	}
+	if raw, ok := summary["waves"]; ok {
+		data, _ := json.Marshal(raw)
+		_ = json.Unmarshal(data, &plan.Waves)
+	}
+	return plan
+}
+
+func stringSliceFromSummary(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if str, ok := item.(string); ok && strings.TrimSpace(str) != "" {
+				out = append(out, strings.TrimSpace(str))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringFromSummary(value any) string {
+	if str, ok := value.(string); ok {
+		return strings.TrimSpace(str)
+	}
+	return ""
+}
+
+func boolFromSummary(value any) bool {
+	if b, ok := value.(bool); ok {
+		return b
+	}
+	return false
+}
+
+func intFromSummary(value any) int {
+	switch n := value.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func patchWavePendingFailed(rows []storage.NodePatchState) (int, int) {
+	pending, failed := 0, 0
+	for _, row := range rows {
+		switch row.Status {
+		case "pending":
+			pending++
+		case "failed":
+			failed++
+		}
+	}
+	return pending, failed
+}
+
+func nextPatchWaveNumber(plan patchDeploymentPlan, rows []storage.NodePatchState) int {
+	dispatched := map[string]struct{}{}
+	for _, row := range rows {
+		dispatched[row.NodeID.String()] = struct{}{}
+	}
+	for _, wave := range plan.Waves {
+		for _, node := range wave.Nodes {
+			if _, ok := dispatched[node.NodeID]; !ok {
+				return wave.WaveNumber
+			}
+		}
+	}
+	return -1
+}
+
+func (s *Server) dispatchPatchPlanWave(ctx context.Context, tenantID, deploymentID uuid.UUID, plan patchDeploymentPlan, waveNumber int) patchDispatchResult {
+	policy := plan.PackagePolicy
+	result := patchDispatchResult{WaveNumber: waveNumber}
+	for _, nid := range patchPlanWaveNodeUUIDs(plan, waveNumber) {
+		nodeMode, proxyID, windowID := s.resolvePatchModeForNode(ctx, nid, plan.RequestedMode)
+		gate := s.runPatchSafetyGates(ctx, tenantID, nid, deploymentID, nodeMode, proxyID, windowID)
+		switch {
+		case gate.AwaitingApproval:
+			entry := map[string]string{"node_id": nid.String(), "reason": gate.Reason}
+			if gate.ApprovalID != uuid.Nil {
+				entry["approval_id"] = gate.ApprovalID.String()
+			}
+			result.AwaitingApproval = append(result.AwaitingApproval, entry)
+			continue
+		case !gate.Allowed:
+			result.GateBlocked = append(result.GateBlocked, map[string]string{"node_id": nid.String(), "reason": gate.Reason})
+			continue
+		}
+		if _, err := s.dispatchPatchModeToNode(ctx, tenantID, deploymentID, nid, nodeMode, proxyID, windowID, policy); err != nil {
+			result.Failed = append(result.Failed, map[string]string{"node_id": nid.String(), "error": err.Error()})
+			continue
+		}
+		result.Succeeded = append(result.Succeeded, nid.String())
+	}
+	return result
+}
+
 // dispatchPatchModeToNode chooses the job type based on the resolved per-node
 // mode and embeds the proxy URL or airgapped staged path in the payload as
 // needed. Returns the created NodePatchState row.
@@ -569,6 +1142,7 @@ func (s *Server) dispatchPatchModeToNode(
 	mode string,
 	proxyID *uuid.UUID,
 	windowID *uuid.UUID,
+	policy patchPackagePolicy,
 ) (*storage.NodePatchState, error) {
 	state, err := s.store.CreateNodePatchState(ctx, storage.NodePatchState{
 		DeploymentID: deploymentID,
@@ -588,6 +1162,12 @@ func (s *Server) dispatchPatchModeToNode(
 		NodeID:           nodeID.String(),
 		DeploymentID:     deploymentID.String(),
 		Mode:             mode,
+		PackageAllowlist: policy.Allowlist,
+		PackageDenylist:  policy.Denylist,
+		PostPatchRescan:  policy.PostPatchRescan,
+	}
+	if actionPlanID := s.createPatchNodeActionPlan(ctx, tenantID, deploymentID, state.ID, nodeID, mode, policy); actionPlanID != uuid.Nil {
+		payload.ActionPlanID = actionPlanID.String()
 	}
 	switch mode {
 	case patchModeProxy:
@@ -625,6 +1205,7 @@ func (s *Server) dispatchPatchModeToNode(
 	}
 	created, err := s.store.CreateJob(ctx, job, nil)
 	if err != nil {
+		s.markActionPlanFailed(ctx, payload.ActionPlanID)
 		return state, fmt.Errorf("create patch job: %w", err)
 	}
 	if err := s.store.SetNodePatchStateJobID(ctx, state.ID, created.ID); err != nil {

@@ -14,9 +14,10 @@ import (
 
 // Threat-feed CRUD lets operators manage which IP/abuse data sources the
 // platform consumes. Built-in sources (Spamhaus, FireHOL, Tor) need only a
-// name; AbuseIPDB can run from the local snapshot cache without a key, OTX
-// needs an API key sealed at rest with the same secrets sealer used elsewhere,
-// and custom feeds accept any URL serving line-delimited or Spamhaus-format text.
+// name; AbuseIPDB can use a sealed API key to refresh its upstream blocklist
+// but request-path checks read the downloaded local snapshot; OTX still needs
+// an API key. Custom feeds accept any URL serving line-delimited or
+// Spamhaus-format text.
 
 type threatFeedResponse struct {
 	ID                 string  `json:"id"`

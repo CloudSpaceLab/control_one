@@ -56,11 +56,8 @@ type healthSignal struct {
 	trigger func(samples []storage.TelemetryMetric) bool
 	// primaryKey is the components-map key for incident dedupe.
 	primaryKey string
-	// optional marks signals that the agent does not yet emit (PSI iowait,
-	// SMART, ICMP, oom_kill, etc — see controlplane/internal/metrics
-	// OptionalSignals). The calibration gate excludes optional signals
-	// from min(samples) so a fresh node can finish calibrating using only
-	// CoreEmitted signals (load1) instead of waiting for unlanded
+	// optional marks signals that should not gate cold-start calibration.
+	// Some are platform-specific emitted metrics and some are future
 	// collectors. Penalty still applies once the metric arrives.
 	optional bool
 }
@@ -70,9 +67,8 @@ type healthSignal struct {
 // tie-breaking when two signals have identical penalties.
 func healthSignalsCatalog() []healthSignal {
 	return []healthSignal{
-		// Optional signals — names live in metrics.OptionalSignals; the
-		// agent does not yet emit these. They contribute penalties when
-		// rows arrive but never gate calibration (see scorePredictForTenant).
+		// Non-gating signals. They contribute penalties when rows arrive
+		// but never gate calibration (see scorePredictForTenant).
 		{
 			metricName: metrics.MetricSmartReallocatedSectors,
 			penalty:    35,
@@ -109,6 +105,13 @@ func healthSignalsCatalog() []healthSignal {
 			optional:   true,
 		},
 		{
+			metricName: metrics.MetricHostDiskQueueLength,
+			penalty:    15,
+			primaryKey: "disk_queue_sustained",
+			trigger:    triggerSustainedAbove(2, 6),
+			optional:   true,
+		},
+		{
 			metricName: metrics.MetricHostLoadAvgRatio,
 			penalty:    10,
 			primaryKey: "load_avg_high",
@@ -122,8 +125,8 @@ func healthSignalsCatalog() []healthSignal {
 			trigger:    triggerLatestAbove(5),
 			optional:   true,
 		},
-		// Core-emitted signal: gates calibration. load1 ships from the
-		// agent today (internal/util/sysinfo.go CollectHostMetrics).
+		// Gating signal. load1 is universally emitted by the agent, unlike
+		// platform/config-dependent health probes.
 		{
 			metricName: metrics.MetricLoad1,
 			penalty:    10,
@@ -133,7 +136,8 @@ func healthSignalsCatalog() []healthSignal {
 		// icmp_latency p99 baseline-relative is handled separately by
 		// scoreLatencyVsBaseline so it can compare against the EWMA
 		// baseline — it doesn't fit the static-threshold trigger shape.
-		// It is also optional (no agent emitter today).
+		// It is also optional because it only emits when ICMP probes are
+		// configured and the host can run ping.
 	}
 }
 

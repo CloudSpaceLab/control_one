@@ -31,6 +31,18 @@ database:
   conn_max_lifetime: 15m
   apply_migrations: true
 
+doris:
+  enabled: false
+  dsn: ""
+  http_endpoint: ""
+  database: controlone
+  user: root
+  password: ""
+  apply_migrations: false
+  # Dev/single-node Doris can use 1. Bank production clusters should set 3
+  # after provisioning at least three backend replicas.
+  replication_num: 3
+
 worker:
   concurrency: 4
   queue_size: 256

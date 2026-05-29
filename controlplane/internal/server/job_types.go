@@ -152,4 +152,10 @@ func init() {
 			return decodeSquidPayload(payload)
 		},
 	})
+	registerJobDefinition(JobTypePrivateAccessImport, jobDefinition{
+		RequiresTenant: true,
+		Validate: func(payload json.RawMessage) (any, error) {
+			return decodePrivateAccessImportPayload(payload)
+		},
+	})
 }

@@ -2,8 +2,12 @@ package logforward
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -95,6 +99,160 @@ func TestElasticSinkSerialization(t *testing.T) {
 	sink := NewElasticSink(server.URL, "")
 	if err := sink.Push(context.Background(), []LogRecord{{Message: "hi"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSplunkHECSinkSerialization(t *testing.T) {
+	var gotBody string
+	var gotAuth string
+	var gotContentType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		gotBody = string(raw)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sink := NewSplunkHECSink(server.URL, "token-123", "control-one", "controlone:telemetry", "main")
+	err := sink.Push(context.Background(), []LogRecord{{
+		Timestamp: time.Unix(1710000000, 123000000).UTC(),
+		Level:     "warn",
+		Message:   "blocked login",
+		Source:    "ad",
+		Program:   "wec",
+		NodeID:    "node-1",
+		TenantID:  "tenant-a",
+		Labels: map[string]string{
+			"attack":  "T1110",
+			"channel": "Security",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Splunk token-123" {
+		t.Fatalf("unexpected Authorization header %q", gotAuth)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("unexpected Content-Type header %q", gotContentType)
+	}
+	lines := strings.Split(strings.TrimSpace(gotBody), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected one HEC event, got %d lines: %q", len(lines), gotBody)
+	}
+	var event map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event["host"] != "node-1" || event["source"] != "ad" || event["sourcetype"] != "controlone:telemetry" || event["index"] != "main" {
+		t.Fatalf("unexpected HEC envelope: %#v", event)
+	}
+	gotTime, ok := event["time"].(float64)
+	if !ok || math.Abs(gotTime-1710000000.123) > 0.000001 {
+		t.Fatalf("unexpected HEC event time: %#v", event["time"])
+	}
+	payload, ok := event["event"].(map[string]any)
+	if !ok {
+		t.Fatalf("HEC event payload missing: %#v", event["event"])
+	}
+	if payload["message"] != "blocked login" || payload["tenant_id"] != "tenant-a" || payload["source"] != "ad" {
+		t.Fatalf("unexpected HEC event payload: %#v", payload)
+	}
+	fields, ok := event["fields"].(map[string]any)
+	if !ok {
+		t.Fatalf("HEC fields missing: %#v", event["fields"])
+	}
+	if fields["tenant_id"] != "tenant-a" || fields["node_id"] != "node-1" || fields["label.attack"] != "T1110" {
+		t.Fatalf("unexpected HEC fields: %#v", fields)
+	}
+}
+
+func TestAzureMonitorSinkSerialization(t *testing.T) {
+	var gotBody string
+	var gotAuth string
+	var gotContentType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		gotBody = string(raw)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sink := NewAzureMonitorSink(server.URL, "aad-token")
+	err := sink.Push(context.Background(), []LogRecord{{
+		Timestamp: time.Date(2026, 5, 29, 12, 0, 0, 123, time.UTC),
+		Level:     "warn",
+		Message:   "blocked login",
+		Source:    "wec",
+		Program:   "windows",
+		NodeID:    "node-1",
+		TenantID:  "tenant-a",
+		Labels:    map[string]string{"channel": "Security"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer aad-token" {
+		t.Fatalf("unexpected Authorization header %q", gotAuth)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("unexpected Content-Type header %q", gotContentType)
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) != 1 || payload[0]["Message"] != "blocked login" || payload[0]["TenantId"] != "tenant-a" {
+		t.Fatalf("unexpected Azure Monitor payload: %#v", payload)
+	}
+	if payload[0]["TimeGenerated"] == "" {
+		t.Fatalf("TimeGenerated missing: %#v", payload[0])
+	}
+}
+
+func TestNewSinkFromConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  SinkConfig
+		want string
+	}{
+		{name: "loki", cfg: SinkConfig{Kind: "loki", URL: "http://loki.example"}, want: "loki"},
+		{name: "elastic", cfg: SinkConfig{Kind: "elastic", URL: "http://elastic.example/_bulk"}, want: "elasticsearch"},
+		{name: "splunk", cfg: SinkConfig{Kind: "splunk_hec", URL: "http://splunk.example/services/collector", Token: "token"}, want: "splunk_hec"},
+		{name: "sentinel", cfg: SinkConfig{Kind: "sentinel", URL: "http://azure.example/dataCollectionRules/dcr/streams/Custom-ControlOne", Token: "token"}, want: "azure_monitor"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink, err := NewSinkFromConfig(tt.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sink.Name() != tt.want {
+				t.Fatalf("sink name = %q, want %q", sink.Name(), tt.want)
+			}
+		})
+	}
+
+	for _, cfg := range []SinkConfig{
+		{Kind: "loki"},
+		{Kind: "elasticsearch"},
+		{Kind: "splunk_hec", URL: "http://splunk.example/services/collector"},
+		{Kind: "sentinel", URL: "http://azure.example/dataCollectionRules/dcr/streams/Custom-ControlOne"},
+		{Kind: "unknown", URL: "http://example"},
+	} {
+		if _, err := NewSinkFromConfig(cfg); err == nil {
+			t.Fatalf("expected config error for %+v", cfg)
+		}
 	}
 }
 

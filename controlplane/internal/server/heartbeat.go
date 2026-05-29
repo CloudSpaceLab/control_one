@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
+	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 )
 
 // enrollmentPendingTimeout controls how long a node may sit in
@@ -43,6 +46,9 @@ type heartbeatRequest struct {
 	AgentVersion    string   `json:"agent_version"`
 	Capabilities    []string `json:"capabilities,omitempty"`
 	AgentReleaseSeq int      `json:"agent_release_seq,omitempty"`
+	RuntimeProfile  string   `json:"agent_runtime_profile,omitempty"`
+
+	AgentSelfMetrics *heartbeatAgentSelfMetrics `json:"agent_self_metrics,omitempty"`
 
 	// Inventory + firewall snapshot fields. Optional. Old agents send none of
 	// these; new agents send firewall every heartbeat and os_packages only
@@ -63,6 +69,17 @@ type heartbeatRequest struct {
 	// NetworkPolicyReceipts reports agent-side evaluation/enforcement status
 	// for desired network_policy states delivered on prior heartbeats.
 	NetworkPolicyReceipts []heartbeatNetworkPolicyReceipt `json:"network_policy_receipts,omitempty"`
+}
+
+type heartbeatAgentSelfMetrics struct {
+	EventSpoolRecords  int    `json:"event_spool_records,omitempty"`
+	EventSpoolBytes    int64  `json:"event_spool_bytes,omitempty"`
+	EventSpoolMaxBytes int64  `json:"event_spool_max_bytes,omitempty"`
+	EventSpoolDropped  uint64 `json:"event_spool_dropped,omitempty"`
+	LogSpoolRecords    int    `json:"log_spool_records,omitempty"`
+	LogSpoolBytes      int64  `json:"log_spool_bytes,omitempty"`
+	LogSpoolMaxBytes   int64  `json:"log_spool_max_bytes,omitempty"`
+	LogSpoolDropped    uint64 `json:"log_spool_dropped,omitempty"`
 }
 
 // heartbeatCompletedAction is one row in completed_actions[]. Status is
@@ -124,15 +141,17 @@ type heartbeatFirewallState struct {
 }
 
 type heartbeatResponse struct {
-	NodeID                 string                      `json:"node_id"`
-	State                  string                      `json:"state"`
-	LastSeenAt             string                      `json:"last_seen_at"`
-	Activated              bool                        `json:"activated"`
-	Reason                 *string                     `json:"reason,omitempty"`
-	EventFilters           *storage.TenantEventFilters `json:"event_filters,omitempty"`
-	NetworkPolicy          *nodeNetworkPolicy          `json:"network_policy,omitempty"`
-	PendingActions         []string                    `json:"pending_actions,omitempty"`
-	FullInventoryRequested bool                        `json:"full_inventory_requested,omitempty"`
+	NodeID                 string                                `json:"node_id"`
+	State                  string                                `json:"state"`
+	LastSeenAt             string                                `json:"last_seen_at"`
+	Activated              bool                                  `json:"activated"`
+	Reason                 *string                               `json:"reason,omitempty"`
+	EventFilters           *storage.TenantEventFilters           `json:"event_filters,omitempty"`
+	ConnectorPolicy        *connectordiscovery.AutoConnectPolicy `json:"connector_policy,omitempty"`
+	NetworkPolicy          *nodeNetworkPolicy                    `json:"network_policy,omitempty"`
+	ApprovedLogSources     []nodeApprovedLogSource               `json:"approved_log_sources,omitempty"`
+	PendingActions         []string                              `json:"pending_actions,omitempty"`
+	FullInventoryRequested bool                                  `json:"full_inventory_requested,omitempty"`
 }
 
 // handleNodeHeartbeat is the mTLS endpoint the agent hits every heartbeat
@@ -226,8 +245,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
-	s.processHeartbeatCompletedActions(r.Context(), nodeID, body.CompletedActions)
+	if s.processHeartbeatCompletedActions(r.Context(), nodeID, body.CompletedActions) {
+		fullInventoryRequested = true
+	}
 	s.processHeartbeatNetworkPolicyReceipts(r.Context(), node, body.NetworkPolicyReceipts)
+	s.persistAgentSpoolSourceRuntimeState(r.Context(), node, body)
 	s.retireAgentUpdateJobsFromHeartbeat(r.Context(), node, body)
 
 	activated, resultState := s.maybeActivatePendingNode(r.Context(), node)
@@ -256,10 +278,24 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	// is too important to fail on a policy lookup blip.
 	if filters, ferr := s.store.GetTenantEventFilters(r.Context(), node.TenantID); ferr == nil && filters != nil {
 		resp.EventFilters = filters
+		if nodeAdvertisesCapability(node, "connector_auto_connect_policy.v1") {
+			policy := connectorPolicyFromTenantEventFilters(filters)
+			resp.ConnectorPolicy = &policy
+		}
 	} else if ferr != nil {
 		s.logger.Warn("get tenant event filters during heartbeat",
 			zap.String("tenant_id", node.TenantID.String()),
 			zap.Error(ferr))
+	}
+	if nodeAdvertisesCapability(node, "connector_approved_sources.v1") {
+		sources, serr := s.listNodeApprovedLogSources(r.Context(), node, 128)
+		if serr != nil {
+			s.logger.Warn("list approved log sources during heartbeat",
+				zap.String("node_id", node.ID.String()),
+				zap.Error(serr))
+		} else if len(sources) > 0 {
+			resp.ApprovedLogSources = sources
+		}
 	}
 	if resultState == storage.NodeStateEnrollmentPending {
 		// Surface which gate is still pending so the agent can log usefully.
@@ -345,6 +381,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	} else if !errors.Is(perr, sql.ErrNoRows) {
 		s.logger.Warn("list pending patch states", zap.Error(perr))
 	}
+	s.appendPendingAILogFixerActions(r.Context(), nodeID, node, &resp)
 	s.appendPendingWebserverActions(r.Context(), nodeID, node, &resp)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -385,6 +422,19 @@ func normalizeAgentCapabilities(capabilities []string) []string {
 		out = append(out, capability)
 	}
 	return out
+}
+
+func connectorPolicyFromTenantEventFilters(filters *storage.TenantEventFilters) connectordiscovery.AutoConnectPolicy {
+	if filters == nil {
+		return connectordiscovery.AutoConnectPolicy{}
+	}
+	return connectordiscovery.AutoConnectPolicy{
+		AllowMediumRisk:          filters.ConnectorAutoConnectMediumRisk,
+		AllowHighRisk:            filters.ConnectorAutoConnectHighRisk,
+		AutoConnectPrograms:      sanitizeStringSlice(filters.ConnectorAutoConnectPrograms, 128),
+		ApprovalRequiredPrograms: sanitizeStringSlice(filters.ConnectorApprovalRequiredPrograms, 128),
+		BlockedPrograms:          sanitizeStringSlice(filters.ConnectorBlockedPrograms, 128),
+	}
 }
 
 func (s *Server) updateNodeServerPurposes(ctx context.Context, node *storage.Node, purposes []heartbeatServerPurpose) (*storage.Node, error) {
@@ -467,10 +517,11 @@ func sanitizeStringSlice(values []string, limit int) []string {
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
 // dispatched on previous heartbeats.
-func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UUID, completed []heartbeatCompletedAction) {
+func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UUID, completed []heartbeatCompletedAction) bool {
 	if len(completed) == 0 {
-		return
+		return false
 	}
+	requestFullInventory := false
 	for _, c := range completed {
 		jobID, err := uuid.Parse(strings.TrimSpace(c.JobID))
 		if err != nil {
@@ -514,6 +565,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			if rule == nil {
 				continue
 			}
+			actionPlanID := s.firewallActionPlanIDForJob(ctx, jobID)
 			if c.Status == "succeeded" {
 				if verr := validateFirewallReceipt(rule, jobID, c.Action, c.Metadata); verr != nil {
 					errMsg := verr.Error()
@@ -525,6 +577,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 						s.logger.Warn("firewall job mark failed",
 							zap.String("job_id", jobID.String()), zap.Error(jerr))
 					}
+					s.recordFirewallActionReceipt(ctx, actionPlanID, rule, jobID, storage.ActionPlanStateFailed, errMsg)
 					s.refreshBlockProposalEnforcementStatusByEntityAction(ctx, rule.EntityActionID)
 					continue
 				}
@@ -545,6 +598,11 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 					s.logger.Warn("firewall job mark succeeded",
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
 				}
+				receiptState := storage.ActionPlanStateSucceeded
+				if c.Action == JobTypeFirewallRuleDelete {
+					receiptState = storage.ActionPlanStateRolledBack
+				}
+				s.recordFirewallActionReceipt(ctx, actionPlanID, rule, jobID, receiptState, "")
 			} else {
 				errMsg := strings.TrimSpace(c.Error)
 				if errMsg == "" {
@@ -558,6 +616,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 					s.logger.Warn("firewall job mark failed",
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
 				}
+				s.recordFirewallActionReceipt(ctx, actionPlanID, rule, jobID, storage.ActionPlanStateFailed, errMsg)
 			}
 			s.refreshBlockProposalEnforcementStatusByEntityAction(ctx, rule.EntityActionID)
 		case JobTypePatchDeployDirect, JobTypePatchDeployProxy, JobTypePatchDeployAirgapped:
@@ -571,6 +630,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			}
 			logTail, _ := c.Metadata["log_tail"].(string)
 			pkgsUpgraded := metadataInt(c.Metadata, "packages_upgraded")
+			actionPlanID := s.patchActionPlanIDForJob(ctx, jobID)
 			if c.Status == "succeeded" {
 				if merr := s.store.MarkNodePatchApplied(ctx, ps.ID, pkgsUpgraded, logTail); merr != nil {
 					s.logger.Warn("mark patch applied",
@@ -582,6 +642,11 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 					s.logger.Warn("patch job mark succeeded",
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
 				}
+				postPatchRescan := s.patchJobRequestsPostPatchRescan(ctx, jobID)
+				if postPatchRescan {
+					requestFullInventory = true
+				}
+				s.recordPatchActionReceipt(ctx, actionPlanID, ps, jobID, storage.ActionPlanStateSucceeded, pkgsUpgraded, logTail, "", postPatchRescan)
 			} else {
 				errMsg := strings.TrimSpace(c.Error)
 				if errMsg == "" {
@@ -595,16 +660,20 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 					s.logger.Warn("patch job mark failed",
 						zap.String("job_id", jobID.String()), zap.Error(jerr))
 				}
+				s.recordPatchActionReceipt(ctx, actionPlanID, ps, jobID, storage.ActionPlanStateFailed, -1, logTail, errMsg, false)
 			}
 			// Roll up the parent deployment if every node has finished.
 			s.maybeRollupPatchDeployment(ctx, ps.DeploymentID)
 		case JobTypeWebserverInventoryScan, JobTypeWebserverConfigPlan, JobTypeWebserverConfigApply, JobTypeWebserverBlocklistUpdate, JobTypeWebserverConfigRollback:
 			s.processWebserverCompletedAction(ctx, jobID, c)
+		case JobTypeAILogFixerPlan, JobTypeAILogFixerApply, JobTypeAILogFixerRollback:
+			s.processAILogFixerCompletedAction(ctx, jobID, c)
 		default:
 			// Ignore unknown actions (forward-compat with future action types).
 			continue
 		}
 	}
+	return requestFullInventory
 }
 
 func agentUpdateAlreadyCurrent(errMsg string) bool {
@@ -735,6 +804,73 @@ func clampNetworkPolicyReceiptCount(value int, field string, validationErrors *[
 	}
 }
 
+func (s *Server) persistAgentSpoolSourceRuntimeState(ctx context.Context, node *storage.Node, body heartbeatRequest) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil || body.AgentSelfMetrics == nil {
+		return
+	}
+	store, ok := s.store.(contentPackSourceRuntimeStateStore)
+	if !ok || store == nil {
+		return
+	}
+	m := body.AgentSelfMetrics
+	queueDepth := int64(m.EventSpoolRecords + m.LogSpoolRecords)
+	dropped := int64(m.EventSpoolDropped + m.LogSpoolDropped)
+	state := contentpacks.CoverageState(contentpacks.CoverageCollecting)
+	lastError := ""
+	switch {
+	case dropped > 0:
+		state = contentpacks.CoverageState(contentpacks.CoverageBackpressured)
+		lastError = "agent durable spool dropped records after budget pressure"
+	case queueDepth > 0:
+		state = contentpacks.CoverageState(contentpacks.CoverageBackpressured)
+		lastError = "agent durable spool has pending replay backlog"
+	}
+	now := time.Now().UTC()
+	sourceID := "control_one.agent_spool"
+	labels := map[string]string{
+		"source":                  "agent_heartbeat",
+		"agent_runtime_profile":   strings.TrimSpace(body.RuntimeProfile),
+		"event_spool_records":     strconv.Itoa(m.EventSpoolRecords),
+		"event_spool_bytes":       strconv.FormatInt(m.EventSpoolBytes, 10),
+		"event_spool_max_bytes":   strconv.FormatInt(m.EventSpoolMaxBytes, 10),
+		"event_spool_dropped":     strconv.FormatUint(m.EventSpoolDropped, 10),
+		"log_spool_records":       strconv.Itoa(m.LogSpoolRecords),
+		"log_spool_bytes":         strconv.FormatInt(m.LogSpoolBytes, 10),
+		"log_spool_max_bytes":     strconv.FormatInt(m.LogSpoolMaxBytes, 10),
+		"log_spool_dropped":       strconv.FormatUint(m.LogSpoolDropped, 10),
+		"control_one.synthetic":   "true",
+		"control_one.health_kind": "agent_spool",
+	}
+	runtimeState := contentpacks.SourceRuntimeState{
+		SourceInstanceID: "node:" + node.ID.String() + "/" + sourceID,
+		SourceID:         sourceID,
+		DisplayName:      "Control One agent durable spool",
+		NodeID:           node.ID.String(),
+		CollectorID:      node.ID.String(),
+		CollectorMode:    contentpacks.CollectorControlOneNode,
+		ParserID:         "control_one.agent_spool",
+		CoverageState:    state,
+		LastHealthAt:     &now,
+		LastError:        lastError,
+		Metrics: contentpacks.SourceRuntimeMetrics{
+			EventsDropped: dropped,
+			QueueDepth:    queueDepth,
+			RetryCount:    queueDepth,
+		},
+		Labels:    labels,
+		UpdatedAt: now,
+	}
+	if _, err := store.UpsertContentPackSourceRuntimeState(ctx, storage.UpsertContentPackSourceRuntimeStateParams{
+		TenantID: node.TenantID,
+		State:    runtimeState,
+	}); err != nil {
+		s.logger.Warn("persist agent spool source runtime state",
+			zap.String("node_id", node.ID.String()),
+			zap.Error(err),
+		)
+	}
+}
+
 func (s *Server) retireAgentUpdateJobsFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) {
 	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil || body.AgentReleaseSeq <= 0 {
 		return
@@ -810,6 +946,13 @@ func (s *Server) maybeRollupPatchDeployment(ctx context.Context, deploymentID uu
 		s.logger.Warn("rollup patch deployment", zap.Error(err))
 		return
 	}
+	if deployment, derr := s.store.GetPatchDeployment(ctx, deploymentID); derr == nil && deployment != nil && len(rows) < deployment.TargetNodeCount {
+		if uerr := s.store.UpdatePatchDeploymentStatus(ctx, deploymentID, "in_progress", false); uerr != nil {
+			s.logger.Warn("mark patch deployment awaiting next wave",
+				zap.String("deployment_id", deploymentID.String()), zap.Error(uerr))
+		}
+		return
+	}
 	pending, applied, failed := 0, 0, 0
 	for _, r := range rows {
 		switch r.Status {
@@ -835,6 +978,21 @@ func (s *Server) maybeRollupPatchDeployment(ctx context.Context, deploymentID uu
 		s.logger.Warn("rollup patch deployment",
 			zap.String("deployment_id", deploymentID.String()), zap.Error(uerr))
 	}
+}
+
+func (s *Server) patchJobRequestsPostPatchRescan(ctx context.Context, jobID uuid.UUID) bool {
+	if s == nil || s.store == nil || jobID == uuid.Nil {
+		return false
+	}
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil || job == nil || len(job.Payload) == 0 {
+		return false
+	}
+	var payload patchJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return false
+	}
+	return payload.PostPatchRescan
 }
 
 // fullInventoryRefreshInterval bounds how stale the server's package
@@ -900,6 +1058,9 @@ func (s *Server) processHeartbeatInventory(ctx context.Context, nodeID uuid.UUID
 		}
 		if err := s.store.UpsertNodeInventorySync(ctx, sync); err != nil {
 			s.logger.Warn("upsert node inventory sync", zap.Error(err))
+		}
+		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil {
+			s.refreshOfflineVulnerabilityFindingsForNode(ctx, node, sync.LastFullSync, "package_inventory_full_sync")
 		}
 		return false
 	}

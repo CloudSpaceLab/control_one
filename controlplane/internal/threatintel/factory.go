@@ -19,11 +19,11 @@ func SourceFromConfig(feedType, url, apiKey, category string, scoreFloor ...int)
 	case "tor_exit":
 		return TorExitNodes{URL: url}, nil
 	case "abuseipdb":
-		confidenceMin := 75
+		min := 75
 		if len(scoreFloor) > 0 && scoreFloor[0] > 0 {
-			confidenceMin = scoreFloor[0]
+			min = scoreFloor[0]
 		}
-		return AbuseIPDBBlocklist{APIKey: apiKey, ConfidenceMin: confidenceMin}, nil
+		return AbuseIPDBBlocklist{APIKey: apiKey, ConfidenceMin: min}, nil
 	case "otx":
 		return AlienVaultOTX{APIKey: apiKey}, nil
 	case "custom_lines":

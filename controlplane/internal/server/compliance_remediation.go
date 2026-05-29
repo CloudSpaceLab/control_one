@@ -408,6 +408,10 @@ func (s *Server) dispatchRemediationTask(ctx context.Context, p dispatchRemediat
 		"script_content": p.Script.ScriptContent,
 		"auto_triggered": true,
 	}
+	jobID := uuid.New()
+	if actionPlanID := s.createRemediationScriptActionPlan(ctx, p.TenantID, p.NodeID, jobID, p.RuleID, p.Script, "execute", true); actionPlanID != uuid.Nil {
+		jobPayload["action_plan_id"] = actionPlanID.String()
+	}
 
 	payloadBytes, err := json.Marshal(jobPayload)
 	if err != nil {
@@ -419,6 +423,7 @@ func (s *Server) dispatchRemediationTask(ctx context.Context, p dispatchRemediat
 	}
 
 	job := &storage.Job{
+		ID:       jobID,
 		Type:     "remediation.execute",
 		TenantID: p.TenantID,
 		Payload:  payloadBytes,
@@ -839,12 +844,17 @@ func (s *Server) enqueueRemediationRollback(ctx context.Context, tenantID, nodeI
 		"mode":              "rollback",
 		"triggering_job_id": triggeringJobID.String(),
 	}
+	jobID := uuid.New()
+	if actionPlanID := s.createRemediationScriptActionPlan(ctx, tenantID, nodeID, jobID, ruleID, script, "rollback", true); actionPlanID != uuid.Nil {
+		payload["action_plan_id"] = actionPlanID.String()
+	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal rollback payload: %w", err)
 	}
 
 	job := &storage.Job{
+		ID:       jobID,
 		Type:     JobTypeRemediationRollback,
 		TenantID: tenantID,
 		Payload:  payloadBytes,

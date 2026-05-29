@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 )
 
 // heartbeatPayload is the body we POST to /api/v1/nodes/:id/heartbeat. Only
@@ -70,15 +71,17 @@ type completedAction struct {
 // doesn't strictly need to interpret the body, but logging the state/
 // activated flags is useful for operator debugging during enrollment.
 type heartbeatAckResponse struct {
-	NodeID                 string           `json:"node_id"`
-	State                  string           `json:"state"`
-	LastSeenAt             string           `json:"last_seen_at"`
-	Activated              bool             `json:"activated"`
-	Reason                 *string          `json:"reason,omitempty"`
-	EventFilters           *json.RawMessage `json:"event_filters,omitempty"`
-	NetworkPolicy          *json.RawMessage `json:"network_policy,omitempty"`
-	PendingActions         []string         `json:"pending_actions,omitempty"`
-	FullInventoryRequested bool             `json:"full_inventory_requested,omitempty"`
+	NodeID                 string                                `json:"node_id"`
+	State                  string                                `json:"state"`
+	LastSeenAt             string                                `json:"last_seen_at"`
+	Activated              bool                                  `json:"activated"`
+	Reason                 *string                               `json:"reason,omitempty"`
+	EventFilters           *json.RawMessage                      `json:"event_filters,omitempty"`
+	ConnectorPolicy        *connectordiscovery.AutoConnectPolicy `json:"connector_policy,omitempty"`
+	NetworkPolicy          *json.RawMessage                      `json:"network_policy,omitempty"`
+	ApprovedLogSources     []approvedConnectorLogSourceDTO       `json:"approved_log_sources,omitempty"`
+	PendingActions         []string                              `json:"pending_actions,omitempty"`
+	FullInventoryRequested bool                                  `json:"full_inventory_requested,omitempty"`
 }
 
 // FilterApplier is invoked once per heartbeat with the controlplane-issued
@@ -91,6 +94,10 @@ type FilterApplier func(raw json.RawMessage)
 // NetworkPolicyApplier handles the controlplane-issued enforcement desired
 // state and returns a receipt to include on the next heartbeat.
 type NetworkPolicyApplier func(ctx context.Context, raw json.RawMessage) *networkPolicyReceipt
+
+// ApprovedLogSourcesApplier hot-adds control-plane-approved local log sources
+// after a heartbeat response. It is nil when log collection is disabled.
+type ApprovedLogSourcesApplier func(ctx context.Context, sources []approvedConnectorLogSourceDTO)
 
 // agentVersion is defined at build time via -ldflags. The zero value ("dev")
 // is overwritten in release builds. Exported so the install flow can stamp it
@@ -125,7 +132,7 @@ var agentInventoryCache = &inventoryCache{}
 // Parameters are deliberately simple: the nodeagent main() owns the *api.Client
 // (already wired with the mTLS cert), the node id, and the heartbeat interval
 // from the enrollment response.
-func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, selfUpdater SelfUpdater) {
+func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, applyApprovedLogSources ApprovedLogSourcesApplier, selfUpdater SelfUpdater) {
 	if client == nil || nodeID == "" {
 		log.Warn("heartbeat loop not started: missing client or node id")
 		return
@@ -134,10 +141,10 @@ func startControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *za
 		interval = 60 * time.Second
 	}
 
-	go runControlPlaneHeartbeat(ctx, client, log, nodeID, interval, applyFilters, applyNetworkPolicy, selfUpdater)
+	go runControlPlaneHeartbeat(ctx, client, log, nodeID, interval, applyFilters, applyNetworkPolicy, applyApprovedLogSources, selfUpdater)
 }
 
-func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, selfUpdater SelfUpdater) {
+func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, applyApprovedLogSources ApprovedLogSourcesApplier, selfUpdater SelfUpdater) {
 	logger := log.Named("cp-heartbeat")
 	logger.Info("starting control-plane heartbeat",
 		zap.String("node_id", nodeID),
@@ -150,7 +157,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 	// Fire one immediately so the UI sees the node moving quickly — operators
 	// watching the enrollment table don't want to wait a full interval for
 	// the first update.
-	if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, applyNetworkPolicy, selfUpdater); err != nil {
+	if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, applyNetworkPolicy, applyApprovedLogSources, selfUpdater); err != nil {
 		logger.Debug("initial heartbeat failed", zap.Error(err))
 	}
 
@@ -160,7 +167,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 			logger.Info("heartbeat loop stopped")
 			return
 		case <-ticker.C:
-			if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, applyNetworkPolicy, selfUpdater); err != nil {
+			if err := sendHeartbeat(ctx, client, logger, nodeID, applyFilters, applyNetworkPolicy, applyApprovedLogSources, selfUpdater); err != nil {
 				logger.Debug("heartbeat attempt failed", zap.Error(err))
 			}
 		}
@@ -170,7 +177,7 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 // sendHeartbeat performs one POST. Errors are logged at debug — a transient
 // network blip should not clutter the operator console. The response body is
 // parsed only for informational logging.
-func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, selfUpdater SelfUpdater) error {
+func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, applyApprovedLogSources ApprovedLogSourcesApplier, selfUpdater SelfUpdater) error {
 	payload := heartbeatPayload{
 		AgentVersion:     heartbeatAgentVersion(),
 		Capabilities:     heartbeatAgentCapabilities(),
@@ -225,6 +232,12 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 	if applyFilters != nil && ack.EventFilters != nil {
 		applyFilters(*ack.EventFilters)
 	}
+	if ack.ConnectorPolicy != nil {
+		setConnectorAutoConnectPolicy(*ack.ConnectorPolicy)
+	}
+	if applyApprovedLogSources != nil && len(ack.ApprovedLogSources) > 0 {
+		applyApprovedLogSources(ctx, ack.ApprovedLogSources)
+	}
 	if ack.NetworkPolicy != nil {
 		if applyNetworkPolicy != nil {
 			if receipt := applyNetworkPolicy(ctx, *ack.NetworkPolicy); receipt != nil {
@@ -273,6 +286,12 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// receipts; run it off the heartbeat path and report completion
 			// in the next completed_actions drain.
 			go executeWebserverAction(ctx, client, log, action)
+		case strings.HasPrefix(action, "ailogfixer.plan:"),
+			strings.HasPrefix(action, "ailogfixer.apply:"),
+			strings.HasPrefix(action, "ailogfixer.rollback:"):
+			// AI LogFixer actions run node-local and return structured dry-run
+			// or mutation receipts through the normal heartbeat completion queue.
+			go executeAILogFixerAction(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {
@@ -294,8 +313,13 @@ func heartbeatAgentCapabilities() []string {
 		"network_policy_desired_state.v1",
 		"network_policy_receipts.v1",
 		"webserver_control.v1",
+		"ailogfixer_remediation.v1",
 		"server_purpose_inventory.v1",
+		"connector_discovery.v1",
+		"connector_auto_connect_policy.v1",
+		"connector_approved_sources.v1",
 		"connection_lifecycle_headers.v1",
+		"app_dependency_inventory.v1",
 		"agent_update_job_status.v1",
 	}
 	return append(base, heartbeatRuntimeCapabilities()...)

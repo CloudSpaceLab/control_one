@@ -17,6 +17,8 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
+	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 )
 
 // mtlsRequest builds a request where the auth middleware has already promoted
@@ -86,6 +88,121 @@ func TestHeartbeatActivatesOnFirstBeat(t *testing.T) {
 	}
 	if store.nodes[0].LastSeenAt == nil {
 		t.Fatalf("last_seen_at was not stamped")
+	}
+}
+
+func TestHeartbeatReturnsApprovedLogSourcesForCapableAgent(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "collector-host",
+			State:     storage.NodeStateActive,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Labels:    map[string]any{},
+		}},
+		sourceProposals: []storage.ContentPackSourceProposalRecord{{
+			ID:            uuid.New(),
+			TenantID:      tenantID,
+			NodeID:        nodeID,
+			ProposalID:    "local-log:nginx",
+			Kind:          connectordiscovery.KindLocalLog,
+			Program:       "nginx",
+			CollectorType: connectordiscovery.CollectorTypeFile,
+			Formatter:     "nginx",
+			Status:        storage.ContentPackSourceProposalStatusApproved,
+			Paths:         []string{"/var/log/nginx/access.log"},
+			FirstSeenAt:   now,
+			LastSeenAt:    now,
+			ApprovedAt:    &now,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	raw := []byte(`{"capabilities":["connector_approved_sources.v1"]}`)
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	req.ContentLength = int64(len(raw))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	var resp heartbeatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.ApprovedLogSources) != 1 || resp.ApprovedLogSources[0].Program != "nginx" {
+		t.Fatalf("approved log sources = %#v", resp.ApprovedLogSources)
+	}
+}
+
+func TestHeartbeatReturnsConnectorPolicyForCapableAgent(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "collector-host",
+			State:     storage.NodeStateActive,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Labels:    map[string]any{},
+		}},
+		eventFilters: map[uuid.UUID]storage.TenantEventFilters{
+			tenantID: {
+				TenantID:                          tenantID,
+				CaptureExternal:                   true,
+				CaptureInternalSummary:            true,
+				CaptureListeningChanges:           true,
+				ConnectorAutoConnectMediumRisk:    true,
+				ConnectorAutoConnectPrograms:      []string{"postgresql"},
+				ConnectorApprovalRequiredPrograms: []string{"nginx"},
+				ConnectorBlockedPrograms:          []string{"temenos-t24"},
+				UpdatedAt:                         now,
+			},
+		},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	raw := []byte(`{"capabilities":["connector_auto_connect_policy.v1"]}`)
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	req.ContentLength = int64(len(raw))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	var resp heartbeatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ConnectorPolicy == nil {
+		t.Fatal("connector policy missing from heartbeat response")
+	}
+	if !resp.ConnectorPolicy.AllowMediumRisk || len(resp.ConnectorPolicy.AutoConnectPrograms) != 1 || resp.ConnectorPolicy.AutoConnectPrograms[0] != "postgresql" {
+		t.Fatalf("connector policy = %#v", resp.ConnectorPolicy)
+	}
+	if len(resp.ConnectorPolicy.ApprovalRequiredPrograms) != 1 || resp.ConnectorPolicy.ApprovalRequiredPrograms[0] != "nginx" {
+		t.Fatalf("approval-required programs = %#v", resp.ConnectorPolicy.ApprovalRequiredPrograms)
+	}
+	if len(resp.ConnectorPolicy.BlockedPrograms) != 1 || resp.ConnectorPolicy.BlockedPrograms[0] != "temenos-t24" {
+		t.Fatalf("blocked programs = %#v", resp.ConnectorPolicy.BlockedPrograms)
 	}
 }
 
@@ -231,6 +348,51 @@ func TestHeartbeatRecordsNetworkPolicyReceipt(t *testing.T) {
 	}
 	if got.Metadata["current_desired_state_id"] != desiredID || got.Metadata["rollback_available"] != false {
 		t.Fatalf("expected validated current dry-run receipt, got %#v", got.Metadata)
+	}
+}
+
+func TestHeartbeatProjectsAgentSpoolBackpressureToSourceHealth(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "spool-host",
+			State:     storage.NodeStateActive,
+			Labels:    map[string]any{},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+	body := []byte(`{"agent_runtime_profile":"forensic","agent_self_metrics":{"event_spool_records":2,"event_spool_bytes":4096,"event_spool_max_bytes":1048576,"log_spool_records":1,"log_spool_bytes":2048,"log_spool_dropped":3}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{
+		Type:  "agent",
+		Name:  nodeID.String(),
+		Roles: []string{"agent"},
+	}))
+	rec := httptest.NewRecorder()
+
+	srv.handleNodeResource(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.sourceStates) != 1 {
+		t.Fatalf("source states = %#v", store.sourceStates)
+	}
+	state := store.sourceStates[0].State
+	if state.SourceID != "control_one.agent_spool" || state.CoverageState != contentpacks.CoverageState(contentpacks.CoverageBackpressured) {
+		t.Fatalf("unexpected spool source state: %#v", state)
+	}
+	if state.Metrics.QueueDepth != 3 || state.Metrics.EventsDropped != 3 {
+		t.Fatalf("unexpected spool metrics: %#v", state.Metrics)
+	}
+	if state.Labels["agent_runtime_profile"] != "forensic" || state.Labels["event_spool_records"] != "2" || state.Labels["log_spool_dropped"] != "3" {
+		t.Fatalf("unexpected spool labels: %#v", state.Labels)
 	}
 }
 

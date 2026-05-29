@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -66,6 +67,59 @@ func TestFirewallCompletionAcceptsValidReceipt(t *testing.T) {
 	}
 	if got := base.jobs[jobID].Status; got != storage.JobStatusSucceeded {
 		t.Fatalf("job status = %s, want succeeded", got)
+	}
+}
+
+func TestFirewallCompletionCreatesUnifiedActionReceipt(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	jobID := uuid.New()
+	rule := testFirewallRule(t, tenantID, jobID)
+	base := &fakeStore{jobs: map[uuid.UUID]*storage.Job{
+		jobID: {ID: jobID, TenantID: tenantID, Type: JobTypeFirewallRuleAdd, Status: storage.JobStatusRunning},
+	}}
+	plan, err := base.CreateActionPlan(context.Background(), storage.CreateActionPlanParams{
+		TenantID:   tenantID,
+		NodeID:     &rule.NodeID,
+		Domain:     "firewall",
+		ActionKind: "block",
+		State:      storage.ActionPlanStateQueued,
+	})
+	if err != nil {
+		t.Fatalf("create action plan: %v", err)
+	}
+	payload := firewallJobPayload{
+		NodeFirewallRuleID: rule.ID.String(),
+		NodeID:             rule.NodeID.String(),
+		EntityActionID:     rule.EntityActionID.String(),
+		ActionPlanID:       plan.ID.String(),
+		Action:             "block",
+		Direction:          "in",
+		Source:             *rule.Source,
+		Tag:                rule.Tag,
+	}
+	raw, _ := json.Marshal(payload)
+	base.jobs[jobID].Payload = raw
+	store := &firewallCompletionStore{fakeStore: base, rule: rule}
+	srv := &Server{logger: zap.NewNop(), store: store}
+
+	srv.processHeartbeatCompletedActions(context.Background(), rule.NodeID, []heartbeatCompletedAction{{
+		Action:   JobTypeFirewallRuleAdd,
+		JobID:    jobID.String(),
+		Status:   "succeeded",
+		Metadata: map[string]any{"receipt": validFirewallReceipt(rule, jobID, JobTypeFirewallRuleAdd)},
+	}})
+
+	receipts := base.actionReceipts[plan.ID]
+	if len(receipts) != 1 {
+		t.Fatalf("expected one unified receipt, got %d", len(receipts))
+	}
+	if receipts[0].State != storage.ActionPlanStateSucceeded || receipts[0].JobID.UUID != jobID {
+		t.Fatalf("unexpected unified receipt: %+v", receipts[0])
+	}
+	if got := base.actionPlans[plan.ID].State; got != storage.ActionPlanStateSucceeded {
+		t.Fatalf("action plan state = %s, want succeeded", got)
 	}
 }
 

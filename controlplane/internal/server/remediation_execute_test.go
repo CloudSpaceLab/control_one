@@ -75,6 +75,12 @@ func TestExecuteRemediationScriptBindsTenantAndLease(t *testing.T) {
 		if payload["tenant_id"] != tenantID.String() || payload["manual_triggered"] != true {
 			t.Fatalf("unexpected job payload: %#v", payload)
 		}
+		if _, ok := payload["action_plan_id"].(string); !ok {
+			t.Fatalf("job payload missing action_plan_id: %#v", payload)
+		}
+	}
+	if len(store.actionPlans) != 1 {
+		t.Fatalf("action plans = %d, want 1", len(store.actionPlans))
 	}
 	store.mu.Lock()
 	lease, ok := store.leases[nodeID]

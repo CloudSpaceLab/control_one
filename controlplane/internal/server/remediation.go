@@ -670,6 +670,10 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	if len(req.Env) > 0 {
 		jobPayload["env"] = req.Env
 	}
+	jobID := uuid.New()
+	if actionPlanID := s.createRemediationScriptActionPlan(r.Context(), tenantID, nodeID, jobID, ruleID, script, "execute", false); actionPlanID != uuid.Nil {
+		jobPayload["action_plan_id"] = actionPlanID.String()
+	}
 
 	payloadBytes, err := json.Marshal(jobPayload)
 	if err != nil {
@@ -679,6 +683,7 @@ func (s *Server) handleExecuteRemediationScript(w http.ResponseWriter, r *http.R
 	}
 
 	job := &storage.Job{
+		ID:       jobID,
 		Type:     "remediation.execute",
 		TenantID: tenantID,
 		Payload:  payloadBytes,
@@ -799,6 +804,7 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 		if job == nil {
 			return fmt.Errorf("job %s not found", jobID)
 		}
+		actionPlanID := remediationActionPlanIDFromJob(job)
 
 		if err := s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusRunning, "executing remediation script", nil); err != nil {
 			return fmt.Errorf("update job status: %w", err)
@@ -820,6 +826,7 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 			_ = s.store.UpdateJobStatus(ctx, jobID, storage.JobStatusFailed, fmt.Sprintf("remediation execution failed: %v", err), map[string]any{
 				"error": err.Error(),
 			})
+			s.recordRemediationActionReceipt(ctx, actionPlanID, job, nodeID, ruleID, storage.ActionPlanStateFailed, nil, err.Error())
 			return err
 		}
 
@@ -838,6 +845,7 @@ func (s *Server) buildRemediationJobExecution(jobID uuid.UUID, scriptID uuid.UUI
 		}); err != nil {
 			return fmt.Errorf("update job status: %w", err)
 		}
+		s.recordRemediationActionReceipt(ctx, actionPlanID, job, nodeID, ruleID, remediationActionReceiptState(job.Type, result.Success), result, result.Error)
 
 		s.recordAudit(ctx, principal, job.TenantID, "remediation.completed", "job", jobID.String(), map[string]any{
 			"success": result.Success,

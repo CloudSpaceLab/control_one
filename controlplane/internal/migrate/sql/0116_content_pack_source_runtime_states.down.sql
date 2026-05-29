@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS idx_content_pack_source_runtime_tenant_source;
+DROP INDEX IF EXISTS idx_content_pack_source_runtime_tenant_collector;
+DROP INDEX IF EXISTS idx_content_pack_source_runtime_tenant_state;
+DROP TABLE IF EXISTS content_pack_source_runtime_states;

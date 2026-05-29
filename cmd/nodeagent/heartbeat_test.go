@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 )
 
 // TestSendHeartbeatTransmitsPayload spins up an httptest server, points an
@@ -63,7 +64,7 @@ func TestSendHeartbeatTransmitsPayload(t *testing.T) {
 	logger := zap.NewNop()
 	const nodeID = "11111111-1111-1111-1111-111111111111"
 
-	if err := sendHeartbeat(context.Background(), client, logger, nodeID, nil, nil, nil); err != nil {
+	if err := sendHeartbeat(context.Background(), client, logger, nodeID, nil, nil, nil, nil); err != nil {
 		t.Fatalf("sendHeartbeat: %v", err)
 	}
 
@@ -102,6 +103,84 @@ func TestSendHeartbeatTransmitsPayload(t *testing.T) {
 	}
 }
 
+func TestSendHeartbeatAppliesApprovedLogSources(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ack := heartbeatAckResponse{
+			NodeID:     "11111111-1111-1111-1111-111111111111",
+			State:      "active",
+			LastSeenAt: "2026-05-05T00:00:00Z",
+			Activated:  false,
+			ApprovedLogSources: []approvedConnectorLogSourceDTO{{
+				ProposalID: "local-log:nginx",
+				Program:    "nginx",
+				Type:       "file",
+				Paths:      []string{"/var/log/nginx/access.log"},
+				Formatter:  "nginx",
+			}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ack)
+	}))
+	defer srv.Close()
+
+	client, err := api.NewClient(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatalf("api.NewClient: %v", err)
+	}
+
+	var got []approvedConnectorLogSourceDTO
+	apply := func(_ context.Context, sources []approvedConnectorLogSourceDTO) {
+		got = append([]approvedConnectorLogSourceDTO(nil), sources...)
+	}
+	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, nil, apply, nil); err != nil {
+		t.Fatalf("sendHeartbeat: %v", err)
+	}
+	if len(got) != 1 || got[0].Program != "nginx" || len(got[0].Paths) != 1 {
+		t.Fatalf("approved log sources applied = %#v", got)
+	}
+}
+
+func TestSendHeartbeatCachesConnectorPolicy(t *testing.T) {
+	setConnectorAutoConnectPolicy(connectordiscovery.AutoConnectPolicy{})
+	t.Cleanup(func() { setConnectorAutoConnectPolicy(connectordiscovery.AutoConnectPolicy{}) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ack := heartbeatAckResponse{
+			NodeID:     "11111111-1111-1111-1111-111111111111",
+			State:      "active",
+			LastSeenAt: "2026-05-05T00:00:00Z",
+			Activated:  false,
+			ConnectorPolicy: &connectordiscovery.AutoConnectPolicy{
+				AllowMediumRisk: true,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ack)
+	}))
+	defer srv.Close()
+
+	client, err := api.NewClient(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatalf("api.NewClient: %v", err)
+	}
+	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, nil, nil, nil); err != nil {
+		t.Fatalf("sendHeartbeat: %v", err)
+	}
+	proposals := connectorProposalsFromServices([]ServiceInfo{{
+		Process:     "postgres",
+		ServiceKind: "postgres",
+		Port:        5432,
+	}}, nil)
+	if len(proposals) != 1 {
+		t.Fatalf("proposals = %#v, want one", proposals)
+	}
+	if proposals[0].Program != "postgresql" || !proposals[0].AutoConnectEligible || proposals[0].RequiresApproval {
+		t.Fatalf("connector policy was not applied to discovery: %#v", proposals[0])
+	}
+}
+
 func TestSendHeartbeatReportsReleaseSeqAndDispatchesAgentUpdateJob(t *testing.T) {
 	update := &fakeSelfUpdater{seq: 7, called: make(chan string, 1)}
 	var gotPayload heartbeatPayload
@@ -125,7 +204,7 @@ func TestSendHeartbeatReportsReleaseSeqAndDispatchesAgentUpdateJob(t *testing.T)
 		t.Fatalf("api.NewClient: %v", err)
 	}
 
-	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, nil, update); err != nil {
+	if err := sendHeartbeat(context.Background(), client, zap.NewNop(), "11111111-1111-1111-1111-111111111111", nil, nil, nil, update); err != nil {
 		t.Fatalf("sendHeartbeat: %v", err)
 	}
 	if gotPayload.AgentReleaseSeq != 7 {

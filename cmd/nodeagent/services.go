@@ -14,6 +14,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/config"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 )
 
 // ServiceInfo is one listening TCP service the agent observed locally. It
@@ -37,7 +39,8 @@ type ServiceInfo struct {
 // Empty Services means "no listeners" — the server clears the table for this
 // node, so the absence of a service is itself a signal.
 type servicesPayload struct {
-	Services []ServiceInfo `json:"services"`
+	Services           []ServiceInfo                 `json:"services"`
+	ConnectorProposals []connectordiscovery.Proposal `json:"connector_proposals,omitempty"`
 }
 
 // collectServices returns every listening TCP service on the host. It never
@@ -278,7 +281,7 @@ func serviceKindFor(process, binaryPath string, port int) string {
 	return "unknown"
 }
 
-func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration) {
+func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, interval time.Duration, logSources func() []config.LogSourceConfig) {
 	logger := log.Named("services")
 	logger.Info("starting service collector",
 		zap.String("node_id", nodeID),
@@ -292,11 +295,17 @@ func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logge
 
 	tick := func() {
 		services := collectServices(logger)
-		if err := postServices(ctx, client, logger, nodeID, services); err != nil {
+		cacheConnectorServices(services)
+		var currentLogSources []config.LogSourceConfig
+		if logSources != nil {
+			currentLogSources = logSources()
+		}
+		proposals := connectorProposalsFromServices(services, currentLogSources)
+		if err := postServices(ctx, client, logger, nodeID, services, proposals); err != nil {
 			logger.Debug("post services failed", zap.Error(err))
 			return
 		}
-		logger.Debug("services posted", zap.Int("count", len(services)))
+		logger.Debug("services posted", zap.Int("count", len(services)), zap.Int("connector_proposals", len(proposals)))
 	}
 
 	ticker := time.NewTicker(interval)
@@ -315,8 +324,8 @@ func runServiceCollector(ctx context.Context, client *api.Client, log *zap.Logge
 	}
 }
 
-func postServices(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, services []ServiceInfo) error {
-	body, err := json.Marshal(servicesPayload{Services: services})
+func postServices(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, services []ServiceInfo, proposals []connectordiscovery.Proposal) error {
+	body, err := json.Marshal(servicesPayload{Services: services, ConnectorProposals: proposals})
 	if err != nil {
 		return fmt.Errorf("marshal services: %w", err)
 	}

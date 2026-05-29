@@ -98,6 +98,13 @@ func (s *Server) aiInvestigationTools() map[string]aiInvestigationTool {
 			Run:         s.runNodePackagesTool,
 		},
 		{
+			Name:        "node_app_dependencies",
+			Description: "Return application dependency and SBOM inventory for one node with app roots, ecosystems, manifests, PURLs, and scopes.",
+			MinRole:     roleViewer,
+			Schema:      nodeIDToolSchema(),
+			Run:         s.runNodeAppDependenciesTool,
+		},
+		{
 			Name:        "node_vulnerabilities",
 			Description: "Return CVE/package/fixed-version vulnerability findings for one node with source-row citations and exploitability evidence.",
 			MinRole:     roleViewer,
@@ -580,6 +587,22 @@ func (s *Server) runNodePackagesTool(ctx context.Context, tc aiToolContext, inpu
 		out = append(out, newNodePackageResponse(pkg))
 	}
 	return aiToolExecution{Citation: llm.Citation{Tool: "node_packages", Label: "installed packages", Detail: nodeID.String()}, Payload: out}, nil
+}
+
+func (s *Server) runNodeAppDependenciesTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {
+	nodeID, err := s.nodeIDFromToolInput(ctx, tc.TenantID, input)
+	if err != nil {
+		return aiToolExecution{}, err
+	}
+	deps, err := s.store.ListNodeAppDependencies(ctx, nodeID)
+	if err != nil {
+		return aiToolExecution{}, err
+	}
+	out := make([]nodeAppDependencyResponse, 0, len(deps))
+	for _, dep := range deps {
+		out = append(out, newNodeAppDependencyResponse(dep))
+	}
+	return aiToolExecution{Citation: llm.Citation{Tool: "node_app_dependencies", Label: "application dependencies", Detail: nodeID.String()}, Payload: out}, nil
 }
 
 func (s *Server) runNodeFirewallTool(ctx context.Context, tc aiToolContext, input map[string]any) (aiToolExecution, error) {

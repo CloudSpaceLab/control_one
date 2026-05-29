@@ -28,10 +28,13 @@ const (
 // patchActionDetail mirrors the server-side patchJobPayload. The id fields
 // drive heartbeat correlation; ProxyURL / StagedRepoPath are mode-specific.
 type patchActionDetail struct {
-	NodePatchStateID string `json:"node_patch_state_id"`
-	NodeID           string `json:"node_id"`
-	DeploymentID     string `json:"deployment_id"`
-	Mode             string `json:"mode"`
+	NodePatchStateID string   `json:"node_patch_state_id"`
+	NodeID           string   `json:"node_id"`
+	DeploymentID     string   `json:"deployment_id"`
+	Mode             string   `json:"mode"`
+	PackageAllowlist []string `json:"package_allowlist,omitempty"`
+	PackageDenylist  []string `json:"package_denylist,omitempty"`
+	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
 
 	// Proxy mode.
 	ProxyURL string `json:"proxy_url,omitempty"`
@@ -87,6 +90,15 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		effectiveJobType = patchJobAirgapped
 	case "direct":
 		effectiveJobType = patchJobDirect
+	}
+	if err := validatePatchPackagePolicy(detail); err != nil {
+		enqueueCompletedAction(completedAction{
+			Action: jobType,
+			JobID:  jobID,
+			Status: "failed",
+			Error:  err.Error(),
+		})
+		return
 	}
 
 	cmdName, args, env, label, ok := patchCommandForJob(effectiveJobType, detail)
@@ -150,6 +162,7 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		Metadata: map[string]any{
 			"packages_upgraded": pkgs,
 			"log_tail":          logTail,
+			"post_patch_rescan": detail.PostPatchRescan,
 		},
 	})
 }
@@ -183,6 +196,12 @@ func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, a
 		if strings.TrimSpace(staged) == "" {
 			return "", nil, nil, "", false
 		}
+		if allowlist := normalizePatchPackageList(detail.PackageAllowlist); len(allowlist) > 0 {
+			return "/bin/sh", []string{"-c", fmt.Sprintf(
+				"apt-get -o Dir::Etc::SourceList=%s update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::SourceList=%s -y -qq -o Dpkg::Options::=--force-confold install --only-upgrade %s",
+				staged, staged, shellQuoteArgs(allowlist),
+			)}, nil, "apt-get airgapped allowlist (staged: " + staged + ")", true
+		}
 		return "/bin/sh", []string{"-c", fmt.Sprintf(
 			"apt-get -o Dir::Etc::SourceList=%s update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::SourceList=%s -y -qq -o Dpkg::Options::=--force-confold upgrade",
 			staged, staged,
@@ -208,22 +227,37 @@ func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, a
 		return base, baseArgs, envProxy, baseLabel + " (via proxy " + detail.ProxyURL + ")", true
 
 	default: // patchJobDirect or anything else falls back to direct.
+		allowlist := normalizePatchPackageList(detail.PackageAllowlist)
 		switch runtime.GOOS {
 		case "linux":
 			if _, err := exec.LookPath("apt-get"); err == nil {
+				if len(allowlist) > 0 {
+					return "/bin/sh", []string{"-c",
+						"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold install --only-upgrade " + shellQuoteArgs(allowlist),
+					}, nil, "apt-get update + install --only-upgrade allowlist", true
+				}
 				return "/bin/sh", []string{"-c",
 					"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade",
 				}, nil, "apt-get update + upgrade", true
 			}
 			if _, err := exec.LookPath("dnf"); err == nil {
+				if len(allowlist) > 0 {
+					return "dnf", append([]string{"-y", "--quiet", "upgrade"}, allowlist...), nil, "dnf -y upgrade allowlist", true
+				}
 				return "dnf", []string{"-y", "--quiet", "upgrade"}, nil, "dnf -y upgrade", true
 			}
 			if _, err := exec.LookPath("yum"); err == nil {
+				if len(allowlist) > 0 {
+					return "yum", append([]string{"-y", "--quiet", "update"}, allowlist...), nil, "yum -y update allowlist", true
+				}
 				return "yum", []string{"-y", "--quiet", "update"}, nil, "yum -y update", true
 			}
 			return "", nil, nil, "", false
 		case "windows":
 			if _, err := exec.LookPath("winget"); err == nil {
+				if len(allowlist) > 0 {
+					return "", nil, nil, "", false
+				}
 				return "winget", []string{
 					"upgrade", "--all",
 					"--silent",
@@ -237,6 +271,51 @@ func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, a
 			return "", nil, nil, "", false
 		}
 	}
+}
+
+func validatePatchPackagePolicy(detail patchActionDetail) error {
+	allowlist := normalizePatchPackageList(detail.PackageAllowlist)
+	denylist := normalizePatchPackageList(detail.PackageDenylist)
+	for _, allow := range allowlist {
+		for _, deny := range denylist {
+			if strings.EqualFold(allow, deny) {
+				return fmt.Errorf("patch package %q is both allowed and denied", allow)
+			}
+		}
+	}
+	if len(denylist) > 0 && len(allowlist) == 0 {
+		return fmt.Errorf("package denylist %v cannot be enforced for full-system upgrade; provide a package allowlist", denylist)
+	}
+	if runtime.GOOS == "windows" && len(allowlist) > 0 {
+		return fmt.Errorf("package allowlist is not yet supported for winget patch jobs")
+	}
+	return nil
+}
+
+func normalizePatchPackageList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func shellQuoteArgs(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, "'"+strings.ReplaceAll(value, "'", "'\"'\"'")+"'")
+	}
+	return strings.Join(quoted, " ")
 }
 
 // executePatchInventory runs the read-only enumeration of available

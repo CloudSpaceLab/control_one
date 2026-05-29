@@ -1,7 +1,7 @@
 // Package logforward pushes telemetry_logs rows out to an external sink
-// (Loki or Elasticsearch) so operators can use their existing search + alert
-// stack. It is sink-agnostic: callers supply a Sink implementation; the
-// forwarder handles batching, backoff, and checkpointing.
+// (Loki, Elasticsearch, or Splunk HEC) so operators can use their existing
+// search + alert stack. It is sink-agnostic: callers supply a Sink
+// implementation; the forwarder handles batching, backoff, and checkpointing.
 package logforward
 
 import (

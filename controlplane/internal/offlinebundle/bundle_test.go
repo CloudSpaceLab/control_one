@@ -128,6 +128,32 @@ func TestImportExpiredContentWarnsAndMarksOfflineLookupStale(t *testing.T) {
 	}
 }
 
+func TestListStatusAtMarksContentThatExpiredAfterImport(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	body := makeOfflineBundle(t, priv, offlineBundleFixture{BundleID: "c1", Version: "1", Sequence: 1, Now: now})
+	if _, err := Import(context.Background(), bytes.NewReader(body), ImportOptions{RootDir: root, PublicKey: pub, Now: now}); err != nil {
+		t.Fatalf("import bundle: %v", err)
+	}
+	receipts, err := ListStatusAt(root, now.Add(25*time.Hour))
+	if err != nil {
+		t.Fatalf("list status: %v", err)
+	}
+	if len(receipts) != 1 || len(receipts[0].Contents) != 1 {
+		t.Fatalf("receipts = %#v, want one content receipt", receipts)
+	}
+	if !receipts[0].Contents[0].Stale {
+		t.Fatalf("expected content to be stale after expiry, got %#v", receipts[0])
+	}
+	if len(receipts[0].Warnings) == 0 {
+		t.Fatalf("expected stale content warning, got %#v", receipts[0])
+	}
+}
+
 func TestActivateRollsBackActiveContent(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

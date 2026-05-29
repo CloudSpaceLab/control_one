@@ -37,13 +37,13 @@ import (
 
 // Indicator represents one bad IP / CIDR with provenance.
 type Indicator struct {
-	TenantID  string    `json:"tenant_id,omitempty"`  // empty means global / built-in source
-	IP        string    `json:"ip,omitempty"`         // single IP if no /n
-	CIDR      string    `json:"cidr,omitempty"`       // canonical CIDR string when source supplied a netblock
-	Feed      string    `json:"feed"`                 // feed identifier
-	Category  string    `json:"category,omitempty"`   // optional taxonomy ("scanner", "tor-exit", "malware", ...)
-	Score     int       `json:"score"`                // 0-100 confidence
-	FirstSeen time.Time `json:"first_seen,omitempty"` // when the source first observed this indicator
+	TenantID  string    `json:"tenant_id,omitempty"` // empty means global / built-in source
+	IP        string    `json:"ip,omitempty"`        // single IP if no /n
+	CIDR      string    `json:"cidr,omitempty"`      // canonical CIDR string when source supplied a netblock
+	Feed      string    `json:"feed,omitempty"`      // feed identifier
+	Category  string    `json:"category,omitempty"`  // optional taxonomy ("scanner", "tor-exit", "malware", ...)
+	Score     int       `json:"score"`               // 0-100 confidence
+	FirstSeen time.Time `json:"first_seen,omitempty"`
 	Evidence  string    `json:"evidence,omitempty"`
 }
 
@@ -124,9 +124,9 @@ type Source interface {
 type Config struct {
 	RefreshInterval time.Duration // default 1h
 	HTTPTimeout     time.Duration // default 30s
-	// SnapshotDir stores the last successful pull for each source. Runtime
-	// lookups use the in-memory IndicatorSet built from these snapshots, so
-	// investigate pages never need to spend provider API quota.
+	// SnapshotDir stores per-source JSON snapshots after successful fetches.
+	// On later refresh failures (including missing API keys), the Manager
+	// keeps serving the last downloaded local copy instead of going empty.
 	SnapshotDir string
 	// Sources is the static fallback list. Operators primarily add feeds via
 	// the threat_feeds table, but the static list still works for the no-DB
@@ -231,17 +231,10 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 			m.log.Warn("threat feed provider list", zap.Error(err))
 		}
 		for _, ps := range provided {
-			fetchCtx, cancel := context.WithTimeout(ctx, m.cfg.HTTPTimeout)
-			inds, status, errMsg := m.fetchSource(fetchCtx, ps.ID, ps.Source)
-			cancel()
+			inds, status, errMsg := m.fetchSource(ctx, ps.ID, ps.TenantID, ps.Source)
 			if len(inds) == 0 && status == "error" {
-				m.cfg.Provider.OnRefresh(ctx, ps.ID, "error", errMsg, 0)
+				m.cfg.Provider.OnRefresh(ctx, ps.ID, status, errMsg, 0)
 				continue
-			}
-			if tenantID := strings.TrimSpace(ps.TenantID); tenantID != "" {
-				for i := range inds {
-					inds[i].TenantID = tenantID
-				}
 			}
 			all = append(all, inds...)
 			m.cfg.Provider.OnRefresh(ctx, ps.ID, status, errMsg, len(inds))
@@ -249,9 +242,7 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 	}
 
 	for _, src := range m.cfg.Sources {
-		fetchCtx, cancel := context.WithTimeout(ctx, m.cfg.HTTPTimeout)
-		inds, _, _ := m.fetchSource(fetchCtx, "static", src)
-		cancel()
+		inds, _, _ := m.fetchSource(ctx, "static", "", src)
 		all = append(all, inds...)
 	}
 	if len(all) == 0 {
@@ -270,36 +261,36 @@ func (m *Manager) refreshOnce(ctx context.Context) {
 	}
 }
 
-func (m *Manager) fetchSource(ctx context.Context, sourceID string, src Source) ([]Indicator, string, string) {
+func (m *Manager) fetchSource(ctx context.Context, sourceID, tenantID string, src Source) ([]Indicator, string, string) {
 	if src == nil {
 		return nil, "error", "source unavailable"
 	}
-	inds, err := src.Fetch(ctx, m.httpClient)
-	if err == nil {
-		if len(inds) > 0 {
-			if saveErr := saveSnapshot(m.cfg.SnapshotDir, sourceID, src.Name(), inds); saveErr != nil && m.log != nil {
-				m.log.Warn("save threat feed snapshot", zap.String("feed", src.Name()), zap.Error(saveErr))
+	fetchCtx, cancel := context.WithTimeout(ctx, m.cfg.HTTPTimeout)
+	inds, err := src.Fetch(fetchCtx, m.httpClient)
+	cancel()
+	if err != nil {
+		if cached, cacheErr := m.loadSnapshot(sourceID, src.Name()); cacheErr == nil && len(cached) > 0 {
+			if m.log != nil {
+				m.log.Warn("threat feed fetch failed; using local snapshot",
+					zap.String("feed", src.Name()),
+					zap.Error(err))
 			}
+			return cached, "stale", err.Error()
 		}
-		return inds, "ok", ""
-	}
-	if m.log != nil {
-		m.log.Warn("threat feed fetch", zap.String("feed", src.Name()), zap.Error(err))
-	}
-	snap, snapErr := loadSnapshot(m.cfg.SnapshotDir, sourceID, src.Name())
-	if snapErr == nil && len(snap.Indicators) > 0 {
 		if m.log != nil {
-			m.log.Warn("using stale threat feed snapshot",
-				zap.String("feed", src.Name()),
-				zap.Time("saved_at", snap.SavedAt),
-				zap.Error(err))
+			m.log.Warn("threat feed fetch", zap.String("feed", src.Name()), zap.Error(err))
 		}
-		return snap.Indicators, "stale", err.Error()
+		return nil, "error", err.Error()
 	}
-	if snapErr != nil && !os.IsNotExist(snapErr) && m.log != nil {
-		m.log.Warn("load threat feed snapshot", zap.String("feed", src.Name()), zap.Error(snapErr))
+	if tenant := strings.TrimSpace(tenantID); tenant != "" {
+		for i := range inds {
+			inds[i].TenantID = tenant
+		}
 	}
-	return nil, "error", err.Error()
+	if err := m.saveSnapshot(sourceID, src.Name(), inds); err != nil && m.log != nil {
+		m.log.Warn("write threat feed snapshot", zap.String("feed", src.Name()), zap.Error(err))
+	}
+	return inds, "ok", ""
 }
 
 func buildSet(inds []Indicator) *IndicatorSet {
@@ -348,70 +339,55 @@ func buildSet(inds []Indicator) *IndicatorSet {
 }
 
 type sourceSnapshot struct {
-	SourceID   string      `json:"source_id"`
-	SourceName string      `json:"source_name"`
-	SavedAt    time.Time   `json:"saved_at"`
+	Version    int         `json:"version"`
+	SourceID   string      `json:"source_id,omitempty"`
+	Feed       string      `json:"feed"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 	Indicators []Indicator `json:"indicators"`
 }
 
-func saveSnapshot(dir, sourceID, sourceName string, inds []Indicator) error {
-	path := snapshotPath(dir, sourceID, sourceName)
+func (m *Manager) saveSnapshot(sourceID, sourceName string, inds []Indicator) error {
+	path := snapshotPath(m.cfg.SnapshotDir, sourceID, sourceName)
 	if path == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	payload := sourceSnapshot{
+	body, err := json.MarshalIndent(sourceSnapshot{
+		Version:    1,
 		SourceID:   strings.TrimSpace(sourceID),
-		SourceName: sourceName,
-		SavedAt:    time.Now().UTC(),
+		Feed:       strings.TrimSpace(sourceName),
+		UpdatedAt:  time.Now().UTC(),
 		Indicators: inds,
-	}
-	f, err := os.Create(tmp)
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
-	encErr := json.NewEncoder(f).Encode(payload)
-	closeErr := f.Close()
-	if encErr != nil {
-		_ = os.Remove(tmp)
-		return encErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmp)
-		return closeErr
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
-			_ = os.Remove(tmp)
-			return err
-		}
-		return os.Rename(tmp, path)
-	}
-	return nil
+	return os.WriteFile(path, append(body, '\n'), 0o644)
 }
 
-func loadSnapshot(dir, sourceID, sourceName string) (*sourceSnapshot, error) {
-	path := snapshotPath(dir, sourceID, sourceName)
+func (m *Manager) loadSnapshot(sourceID, sourceName string) ([]Indicator, error) {
+	path := snapshotPath(m.cfg.SnapshotDir, sourceID, sourceName)
 	if path == "" {
 		return nil, os.ErrNotExist
 	}
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
 	var snap sourceSnapshot
-	if err := json.NewDecoder(f).Decode(&snap); err != nil {
+	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
 	}
-	return &snap, nil
+	return snap.Indicators, nil
 }
 
-func SnapshotExists(dir, sourceID, sourceName string) bool {
-	path := snapshotPath(dir, sourceID, sourceName)
+// SnapshotExists reports whether a local source snapshot is available. Server
+// startup uses this to keep static API-backed feeds active after the initial
+// download, even when the upstream API key is no longer configured.
+func SnapshotExists(snapshotDir, sourceID, sourceName string) bool {
+	path := snapshotPath(snapshotDir, sourceID, sourceName)
 	if path == "" {
 		return false
 	}
@@ -419,36 +395,35 @@ func SnapshotExists(dir, sourceID, sourceName string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func snapshotPath(dir, sourceID, sourceName string) string {
-	dir = strings.TrimSpace(dir)
+func snapshotPath(snapshotDir, sourceID, sourceName string) string {
+	dir := strings.TrimSpace(snapshotDir)
 	if dir == "" {
 		return ""
 	}
-	sourceID = cleanSnapshotName(sourceID)
-	if sourceID == "" {
-		sourceID = "static"
+	name := cleanSnapshotName(strings.TrimSpace(sourceID) + "-" + strings.TrimSpace(sourceName))
+	if name == "" {
+		return ""
 	}
-	sourceName = cleanSnapshotName(sourceName)
-	if sourceName == "" {
-		sourceName = "source"
-	}
-	return filepath.Join(dir, sourceID+"-"+sourceName+".json")
+	return filepath.Join(dir, name+".json")
 }
 
 func cleanSnapshotName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
 	var b strings.Builder
+	lastDash := false
 	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '.'
+		if ok {
 			b.WriteRune(r)
-		} else {
+			lastDash = false
+			continue
+		}
+		if !lastDash {
 			b.WriteByte('-')
+			lastDash = true
 		}
 	}
-	return strings.Trim(b.String(), "-")
+	return strings.Trim(b.String(), "-.")
 }
 
 // --- built-in sources ----------------------------------------------------

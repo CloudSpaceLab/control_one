@@ -158,7 +158,7 @@ func (s *Server) createHypervisorHost(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	provider := strings.TrimSpace(strings.ToLower(req.Provider))
-	if _, ok := supportedProviders[provider]; !ok {
+	if _, ok := supportedHypervisorProviders[provider]; !ok {
 		http.Error(w, "provider must be one of aws|azure|vmware|libvirt", http.StatusBadRequest)
 		return
 	}

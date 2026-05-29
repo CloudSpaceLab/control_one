@@ -23,6 +23,10 @@ var migrationsFS embed.FS
 
 const migrationDir = "migrations"
 
+type MigrationOptions struct {
+	ReplicationNum int
+}
+
 // migrationFile is one parsed entry from the embed FS.
 type migrationFile struct {
 	Version int
@@ -75,10 +79,15 @@ func loadMigrations() ([]migrationFile, error) {
 // migration against the Doris cluster. Idempotent: already-applied versions
 // are skipped, and a checksum mismatch on an applied version aborts the run.
 func ApplyMigrations(ctx context.Context, c *Client) error {
+	return ApplyMigrationsWithOptions(ctx, c, MigrationOptions{})
+}
+
+func ApplyMigrationsWithOptions(ctx context.Context, c *Client, opts MigrationOptions) error {
 	if c == nil || c.db == nil {
 		return errors.New("doris client not initialised")
 	}
-	if err := ensureMigrationTable(ctx, c); err != nil {
+	opts = normalizeMigrationOptions(opts)
+	if err := ensureMigrationTable(ctx, c, opts); err != nil {
 		return err
 	}
 	files, err := loadMigrations()
@@ -98,15 +107,22 @@ func ApplyMigrations(ctx context.Context, c *Client) error {
 			}
 			continue
 		}
-		if err := runMigration(ctx, c, mig); err != nil {
+		if err := runMigration(ctx, c, mig, opts); err != nil {
 			return fmt.Errorf("apply doris migration %d (%s): %w", mig.Version, mig.Name, err)
 		}
 	}
 	return nil
 }
 
-func ensureMigrationTable(ctx context.Context, c *Client) error {
-	const ddl = `
+func normalizeMigrationOptions(opts MigrationOptions) MigrationOptions {
+	if opts.ReplicationNum <= 0 {
+		opts.ReplicationNum = 1
+	}
+	return opts
+}
+
+func ensureMigrationTable(ctx context.Context, c *Client, opts MigrationOptions) error {
+	ddl := renderMigrationSQL(`
 CREATE TABLE IF NOT EXISTS doris_migrations (
   version BIGINT,
   name VARCHAR(255),
@@ -116,7 +132,7 @@ CREATE TABLE IF NOT EXISTS doris_migrations (
 DUPLICATE KEY (version)
 DISTRIBUTED BY HASH (version) BUCKETS 1
 PROPERTIES ("replication_num" = "1")
-`
+`, opts)
 	_, err := c.db.ExecContext(ctx, ddl)
 	return err
 }
@@ -145,8 +161,8 @@ func loadApplied(ctx context.Context, c *Client) (map[int]appliedRecord, error) 
 	return out, rows.Err()
 }
 
-func runMigration(ctx context.Context, c *Client, mig migrationFile) error {
-	for _, stmt := range splitStatements(mig.SQL) {
+func runMigration(ctx context.Context, c *Client, mig migrationFile, opts MigrationOptions) error {
+	for _, stmt := range splitStatements(renderMigrationSQL(mig.SQL, opts)) {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
 			continue
@@ -160,6 +176,12 @@ func runMigration(ctx context.Context, c *Client, mig migrationFile) error {
 		VALUES (?, ?, ?, NOW())
 	`, mig.Version, mig.Name, mig.Hash)
 	return err
+}
+
+func renderMigrationSQL(sql string, opts MigrationOptions) string {
+	opts = normalizeMigrationOptions(opts)
+	repl := fmt.Sprintf(`"replication_num" = "%d"`, opts.ReplicationNum)
+	return strings.ReplaceAll(sql, `"replication_num" = "1"`, repl)
 }
 
 // splitStatements splits a multi-statement Doris SQL script on bare `;`

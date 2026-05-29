@@ -18,13 +18,26 @@ import (
 
 // Supported provider identifiers for credentials + hypervisor hosts.
 const (
-	ProviderAWS     = "aws"
-	ProviderAzure   = "azure"
-	ProviderVMware  = "vmware"
-	ProviderLibvirt = "libvirt"
+	ProviderAWS       = "aws"
+	ProviderAzure     = "azure"
+	ProviderVMware    = "vmware"
+	ProviderLibvirt   = "libvirt"
+	ProviderNetBird   = "netbird"
+	ProviderHeadscale = "headscale"
+	ProviderOpenZiti  = "openziti"
 )
 
-var supportedProviders = map[string]struct{}{
+var supportedCredentialProviders = map[string]struct{}{
+	ProviderAWS:       {},
+	ProviderAzure:     {},
+	ProviderVMware:    {},
+	ProviderLibvirt:   {},
+	ProviderNetBird:   {},
+	ProviderHeadscale: {},
+	ProviderOpenZiti:  {},
+}
+
+var supportedHypervisorProviders = map[string]struct{}{
 	ProviderAWS:     {},
 	ProviderAzure:   {},
 	ProviderVMware:  {},
@@ -152,8 +165,8 @@ func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request
 		return
 	}
 	provider := strings.TrimSpace(strings.ToLower(req.Provider))
-	if _, ok := supportedProviders[provider]; !ok {
-		http.Error(w, "provider must be one of aws|azure|vmware|libvirt", http.StatusBadRequest)
+	if _, ok := supportedCredentialProviders[provider]; !ok {
+		http.Error(w, "provider must be one of aws|azure|vmware|libvirt|netbird|headscale|openziti", http.StatusBadRequest)
 		return
 	}
 	name := strings.TrimSpace(req.Name)

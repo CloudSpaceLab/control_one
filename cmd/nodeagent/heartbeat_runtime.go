@@ -10,6 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 
 	"github.com/CloudSpaceLab/control_one/internal/agentruntime"
+	"github.com/CloudSpaceLab/control_one/internal/durablespool"
 	"github.com/CloudSpaceLab/control_one/internal/eventstream"
 )
 
@@ -34,8 +35,21 @@ type agentSelfMetrics struct {
 	HeapSysBytes          uint64 `json:"heap_sys_bytes,omitempty"`
 	Goroutines            int    `json:"goroutines"`
 	EventStreamDropped    uint64 `json:"event_stream_dropped,omitempty"`
+	EventSpoolRecords     int    `json:"event_spool_records,omitempty"`
+	EventSpoolBytes       int64  `json:"event_spool_bytes,omitempty"`
+	EventSpoolMaxBytes    int64  `json:"event_spool_max_bytes,omitempty"`
+	EventSpoolDropped     uint64 `json:"event_spool_dropped,omitempty"`
+	LogSpoolRecords       int    `json:"log_spool_records,omitempty"`
+	LogSpoolBytes         int64  `json:"log_spool_bytes,omitempty"`
+	LogSpoolMaxBytes      int64  `json:"log_spool_max_bytes,omitempty"`
+	LogSpoolDropped       uint64 `json:"log_spool_dropped,omitempty"`
 	NetflowSummaryBuckets int    `json:"netflow_summary_buckets,omitempty"`
 	NetflowSummaryEvicted uint64 `json:"netflow_summary_evicted,omitempty"`
+}
+
+type agentSpoolRuntimeStats struct {
+	Event durablespool.Stats
+	Logs  durablespool.Stats
 }
 
 type heartbeatRuntimeState struct {
@@ -45,19 +59,21 @@ type heartbeatRuntimeState struct {
 	eventStream    *eventstream.Stream
 	collectorState func() []collectorStateReport
 	netflowStats   func() (buckets int, evicted uint64)
+	spoolStats     func() agentSpoolRuntimeStats
 }
 
 var heartbeatRuntime = &heartbeatRuntimeState{
 	settings: agentruntime.ResolveForOS(agentruntime.ProfileAuto, runtime.GOOS),
 }
 
-func configureHeartbeatRuntime(settings agentruntime.Settings, es *eventstream.Stream, collectorState func() []collectorStateReport, netflowStats func() (int, uint64)) {
+func configureHeartbeatRuntime(settings agentruntime.Settings, es *eventstream.Stream, collectorState func() []collectorStateReport, netflowStats func() (int, uint64), spoolStats func() agentSpoolRuntimeStats) {
 	heartbeatRuntime.mu.Lock()
 	defer heartbeatRuntime.mu.Unlock()
 	heartbeatRuntime.settings = settings
 	heartbeatRuntime.eventStream = es
 	heartbeatRuntime.collectorState = collectorState
 	heartbeatRuntime.netflowStats = netflowStats
+	heartbeatRuntime.spoolStats = spoolStats
 }
 
 func heartbeatRuntimeProfile() string {
@@ -127,9 +143,21 @@ func collectAgentSelfMetrics() *agentSelfMetrics {
 		out.EventStreamDropped = heartbeatRuntime.eventStream.Dropped()
 	}
 	statsFn := heartbeatRuntime.netflowStats
+	spoolStatsFn := heartbeatRuntime.spoolStats
 	heartbeatRuntime.mu.RUnlock()
 	if statsFn != nil {
 		out.NetflowSummaryBuckets, out.NetflowSummaryEvicted = statsFn()
+	}
+	if spoolStatsFn != nil {
+		stats := spoolStatsFn()
+		out.EventSpoolRecords = stats.Event.Records
+		out.EventSpoolBytes = stats.Event.Bytes
+		out.EventSpoolMaxBytes = stats.Event.MaxBytes
+		out.EventSpoolDropped = stats.Event.DroppedRecords
+		out.LogSpoolRecords = stats.Logs.Records
+		out.LogSpoolBytes = stats.Logs.Bytes
+		out.LogSpoolMaxBytes = stats.Logs.MaxBytes
+		out.LogSpoolDropped = stats.Logs.DroppedRecords
 	}
 	return out
 }

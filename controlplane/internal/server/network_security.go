@@ -35,6 +35,7 @@ type firewallJobPayload struct {
 	NodeFirewallRuleID string `json:"node_firewall_rule_id"`
 	NodeID             string `json:"node_id"`
 	EntityActionID     string `json:"entity_action_id"`
+	ActionPlanID       string `json:"action_plan_id,omitempty"`
 	Action             string `json:"action"`
 	Direction          string `json:"direction"`
 	Source             string `json:"source,omitempty"`
@@ -137,6 +138,7 @@ func (s *Server) dispatchFirewallRule(
 		jobType = JobTypeFirewallRuleDelete
 		payloadAction = "block"
 	}
+	jobID := uuid.New()
 	payload := firewallJobPayload{
 		NodeFirewallRuleID: rule.ID.String(),
 		NodeID:             nodeID.String(),
@@ -148,9 +150,13 @@ func (s *Server) dispatchFirewallRule(
 		TTLSeconds:         ttlSeconds,
 		Reason:             reason,
 	}
+	if actionPlanID := s.createFirewallActionPlan(ctx, tenantID, nodeID, entityActionID, rule.ID, jobID, payload); actionPlanID != uuid.Nil {
+		payload.ActionPlanID = actionPlanID.String()
+	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	job := &storage.Job{
+		ID:       jobID,
 		TenantID: tenantID,
 		Type:     jobType,
 		Status:   storage.JobStatusQueued,
@@ -158,6 +164,7 @@ func (s *Server) dispatchFirewallRule(
 	}
 	created, err := s.store.CreateJob(ctx, job, nil)
 	if err != nil {
+		s.markActionPlanFailed(ctx, payload.ActionPlanID)
 		return rule, nil, fmt.Errorf("create firewall job: %w", err)
 	}
 	if err := s.store.SetNodeFirewallRuleJobID(ctx, rule.ID, created.ID); err != nil {

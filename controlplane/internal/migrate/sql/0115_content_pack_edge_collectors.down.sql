@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_content_pack_edge_collectors_tenant_heartbeat;
+DROP INDEX IF EXISTS idx_content_pack_edge_collectors_tenant_status;
+DROP TABLE IF EXISTS content_pack_edge_collectors;

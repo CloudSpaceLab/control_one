@@ -104,8 +104,11 @@ agent_runtime:
   profile: auto
 
 telemetry_prefs:
-  # Log collection is opt-in; empty log_sources means collect no logs.
+  # Log collection is opt-in. When enabled, auto_discover_log_sources adds
+  # eligible local sources from observed services; high-risk app profiles still
+  # require explicit approval/configuration.
   collect_logs: false
+  auto_discover_log_sources: true
   log_namespaces:
     - system
     - application
@@ -182,6 +185,64 @@ telemetry_prefs:
   file_integrity: true
   metrics_interval: 30s
   activity_interval: 2m
+  # Optional predictive health probes. ICMP probes emit packet loss and latency
+  # when ping is available; disk probes require smartctl on the host.
+  health_probe_targets:
+    - 1.1.1.1
+    - 8.8.8.8
+  health_probe_count: 4
+  health_probe_timeout: 3s
+  disk_health_devices:
+    - /dev/sda
+
+app_dependencies:
+  # Read-only manifest/SBOM inventory for application dependency CVE coverage.
+  enabled: true
+  scan_roots:
+    - /srv
+    - /opt
+    - /var/www
+  include_dev_dependencies: false
+  scan_interval: 6h
+  max_depth: 8
+  max_manifests: 512
+  max_file_bytes: 1048576
+
+content_pack_collector:
+  # Optional wrapper for approved SIEM content-pack collector configs. It polls
+  # the control plane for queued OTel/Alloy config, writes the exact approved
+  # YAML, optionally validates/reloads the local collector, and reports apply
+  # results with the collector-scoped token.
+  enabled: false
+  collector_id: edge-${HOSTNAME}
+  kind: otel
+  version: ""
+  token: ""
+  config_path: /var/lib/control-one/nodeagent/content-pack-collector/otel.yaml
+  state_file: /var/lib/control-one/nodeagent/content-pack-collector/state.json
+  # Optional OTel/Alloy Prometheus metrics scrape for receiver/source health.
+  # Example: http://127.0.0.1:8888/metrics
+  metrics_endpoint: ""
+  metrics_timeout: 3s
+  poll_interval: 30s
+  apply_timeout: 30s
+  validate_command:
+    - /usr/bin/otelcol
+    - validate
+    - --config
+    - ${C1_COLLECTOR_CONFIG}
+  reload_command:
+    - /bin/systemctl
+    - reload
+    - otelcol
+  # Alternative to reload_command when the node agent should supervise the
+  # collector process directly instead of using systemd/service manager.
+  supervise_command: []
+  # Example:
+  # supervise_command:
+  #   - /usr/bin/otelcol
+  #   - --config
+  #   - ${C1_COLLECTOR_CONFIG}
 
 tls:
   cert_file: /var/lib/control-one/nodeagent/certs/nodeagent.crt

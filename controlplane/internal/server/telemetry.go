@@ -18,6 +18,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 	"github.com/CloudSpaceLab/control_one/internal/metrics"
 )
 
@@ -51,12 +52,23 @@ type telemetryLogResponse struct {
 //
 //	{"node_id": "...", "timestamp": "RFC3339Nano", "metrics": {"cpu_usage_percent": 12.3, ...}}
 //
+// Labelled per-device samples can ride alongside aggregate metrics:
+//
+//	{"metric_samples":[{"name":"smart.reallocated_sector_count","value":2,"labels":{"device":"/dev/sda"}}]}
+//
 // Each metric becomes one row in telemetry_metrics. Tenant + node_id are
 // resolved from the mTLS agent principal — the body's node_id is informational.
 type agentMetricsIngestRequest struct {
-	NodeID    string         `json:"node_id"`
-	Timestamp string         `json:"timestamp"`
-	Metrics   map[string]any `json:"metrics"`
+	NodeID        string                     `json:"node_id"`
+	Timestamp     string                     `json:"timestamp"`
+	Metrics       map[string]any             `json:"metrics"`
+	MetricSamples []agentMetricSampleRequest `json:"metric_samples,omitempty"`
+}
+
+type agentMetricSampleRequest struct {
+	Name   string            `json:"name"`
+	Value  any               `json:"value"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 type agentLogIngestRequest struct {
@@ -68,7 +80,13 @@ type agentLogIngestRequest struct {
 	Paths         []string          `json:"paths,omitempty"`
 	JournalUnits  []string          `json:"journal_units,omitempty"`
 	EventChannels []string          `json:"event_channels,omitempty"`
+	ReplayKey     string            `json:"replay_key,omitempty"`
 	Entries       []agentLogEntry   `json:"entries"`
+}
+
+type agentIngestReplayReceiptStore interface {
+	GetAgentIngestReplayReceipt(context.Context, uuid.UUID, uuid.UUID, string, string) (*storage.AgentIngestReplayReceipt, error)
+	UpsertAgentIngestReplayReceipt(context.Context, storage.UpsertAgentIngestReplayReceiptParams) error
 }
 
 type agentLogEntry struct {
@@ -146,30 +164,16 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows := make([]storage.CreateTelemetryMetricParams, 0, len(body.Metrics))
+	rows := make([]storage.CreateTelemetryMetricParams, 0, len(body.Metrics)+len(body.MetricSamples))
 	for name, raw := range body.Metrics {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
+		if row, ok := newAgentMetricRow(tenantID, nodeID, name, raw, nil, ts); ok {
+			rows = append(rows, row)
 		}
-		val, ok := metricToFloat(raw)
-		if !ok {
-			// Skip values we can't coerce; the agent might add string-typed
-			// metrics later and we don't want one bad row to drop the batch.
-			continue
+	}
+	for _, sample := range body.MetricSamples {
+		if row, ok := newAgentMetricRow(tenantID, nodeID, sample.Name, sample.Value, sample.Labels, ts); ok {
+			rows = append(rows, row)
 		}
-		row := storage.CreateTelemetryMetricParams{
-			TenantID:    tenantID,
-			NodeID:      nodeID,
-			MetricName:  name,
-			MetricValue: val,
-			Timestamp:   ts,
-		}
-		if unit, known := metricUnits[name]; known && unit != "" {
-			u := unit
-			row.MetricUnit = &u
-		}
-		rows = append(rows, row)
 	}
 
 	if len(rows) == 0 {
@@ -237,6 +241,22 @@ func (s *Server) handleLogIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
 		return
 	}
+	replayKey, err := sanitizeReplayKey(body.ReplayKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if replayKey != "" {
+		if receiptStore, ok := s.store.(agentIngestReplayReceiptStore); ok {
+			receipt, err := receiptStore.GetAgentIngestReplayReceipt(r.Context(), tenantID, nodeID, "logs", replayKey)
+			if err != nil {
+				s.logger.Warn("lookup log ingest replay receipt", zap.Error(err), zap.String("replay_key", replayKey))
+			} else if receipt != nil && strings.EqualFold(receipt.Status, "accepted") {
+				writeAgentIngestReplayReceipt(w, receipt)
+				return
+			}
+		}
+	}
 	if len(body.Entries) == 0 {
 		http.Error(w, "entries required", http.StatusBadRequest)
 		return
@@ -300,20 +320,120 @@ func (s *Server) handleLogIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ingest := s.eventIngestService()
+	eventBatch, err := ingest.recordLogDerivedBatch(r.Context(), tenantID, nodeID, events, replayKey)
+	if err != nil {
+		s.logger.Error("journal log-derived events", zap.Error(err), zap.Int("events", len(events)))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
 	if err := s.store.CreateTelemetryLogs(r.Context(), logRows); err != nil {
 		s.logger.Error("ingest telemetry logs", zap.Error(err), zap.Int("rows", len(logRows)))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	dorisStatus, fanoutErr := s.fanOutEvents(r.Context(), tenantID, nodeID, events)
-	if fanoutErr != nil {
-		s.logger.Warn("fanout log-derived events", zap.Error(fanoutErr), zap.String("doris_status", dorisStatus))
+	s.persistContentPackSourceRuntimeStateFromAgentLogs(r.Context(), tenantID, nodeID, body)
+	if !eventBatch.Duplicate {
+		eventBatch.DorisStatus, eventBatch.Status, err = ingest.complete(r.Context(), eventBatch.ID, tenantID, nodeID, events)
+		if err != nil {
+			s.logger.Warn("fanout log-derived events", zap.Error(err), zap.String("doris_status", eventBatch.DorisStatus))
+		}
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"rows":         len(logRows),
-		"events":       len(events),
-		"doris_status": dorisStatus,
-	})
+	resp := map[string]any{
+		"rows":                len(logRows),
+		"events":              len(events),
+		"doris_status":        eventBatch.DorisStatus,
+		"event_ingest_status": eventBatch.Status,
+	}
+	if eventBatch.ID != uuid.Nil {
+		resp["event_batch_id"] = eventBatch.ID.String()
+	}
+	if replayKey != "" {
+		resp["replay_key"] = replayKey
+		if receiptStore, ok := s.store.(agentIngestReplayReceiptStore); ok {
+			raw, _ := json.Marshal(resp)
+			if err := receiptStore.UpsertAgentIngestReplayReceipt(r.Context(), storage.UpsertAgentIngestReplayReceiptParams{
+				TenantID:  tenantID,
+				NodeID:    nodeID,
+				Endpoint:  "logs",
+				ReplayKey: replayKey,
+				Status:    "accepted",
+				Response:  raw,
+			}); err != nil {
+				s.logger.Warn("record log ingest replay receipt", zap.Error(err), zap.String("replay_key", replayKey))
+			}
+		}
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+func writeAgentIngestReplayReceipt(w http.ResponseWriter, receipt *storage.AgentIngestReplayReceipt) {
+	resp := map[string]any{}
+	if receipt != nil && len(receipt.Response) > 0 {
+		_ = json.Unmarshal(receipt.Response, &resp)
+	}
+	if resp == nil {
+		resp = map[string]any{}
+	}
+	resp["duplicate"] = true
+	if receipt != nil && strings.TrimSpace(receipt.ReplayKey) != "" {
+		resp["replay_key"] = strings.TrimSpace(receipt.ReplayKey)
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+func logDerivedEventReplayKey(replayKey string) string {
+	replayKey = strings.TrimSpace(replayKey)
+	if replayKey == "" {
+		return ""
+	}
+	return "logs-events:" + hashString(replayKey)
+}
+
+func newAgentMetricRow(tenantID, nodeID uuid.UUID, name string, raw any, labels map[string]string, ts time.Time) (storage.CreateTelemetryMetricParams, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return storage.CreateTelemetryMetricParams{}, false
+	}
+	val, ok := metricToFloat(raw)
+	if !ok {
+		// Skip values we can't coerce; the agent might add string-typed
+		// metrics later and we don't want one bad row to drop the batch.
+		return storage.CreateTelemetryMetricParams{}, false
+	}
+	row := storage.CreateTelemetryMetricParams{
+		TenantID:    tenantID,
+		NodeID:      nodeID,
+		MetricName:  name,
+		MetricValue: val,
+		Labels:      sanitizeMetricLabels(labels),
+		Timestamp:   ts,
+	}
+	if unit, known := metricUnits[name]; known && unit != "" {
+		u := unit
+		row.MetricUnit = &u
+	}
+	return row, true
+}
+
+func sanitizeMetricLabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(labels))
+	for key, value := range labels {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // metricToFloat coerces a JSON-decoded value (already float64 from
@@ -337,6 +457,105 @@ func metricToFloat(v any) (float64, bool) {
 		return 0, true
 	default:
 		return 0, false
+	}
+}
+
+func (s *Server) persistContentPackSourceRuntimeStateFromAgentLogs(ctx context.Context, tenantID, nodeID uuid.UUID, body agentLogIngestRequest) {
+	if s == nil || s.store == nil || tenantID == uuid.Nil || nodeID == uuid.Nil || len(body.Entries) == 0 {
+		return
+	}
+	store, ok := s.store.(contentPackSourceRuntimeStateStore)
+	if !ok || store == nil {
+		return
+	}
+
+	labels := mergeStringLabels(body.Labels, nil)
+	for _, entry := range body.Entries {
+		labels = mergeStringLabels(labels, entry.Labels)
+	}
+	sourceID := strings.TrimSpace(firstNonEmpty(
+		labels["control_one.content_pack_source_id"],
+		labels["content_pack_source_id"],
+		labels["source_id"],
+		labels["parser_profile"],
+		body.Program,
+	))
+	if sourceID == "" {
+		return
+	}
+
+	now := time.Now().UTC()
+	latestEventAt := time.Time{}
+	parsedCount := int64(0)
+	for _, entry := range body.Entries {
+		ts := parseLogTimestamp(entry.Timestamp)
+		if latestEventAt.IsZero() || ts.After(latestEventAt) {
+			latestEventAt = ts
+		}
+		if len(entry.Fields) > 0 || strings.EqualFold(labels["control_one.collect_mode"], "collect_parsed") {
+			parsedCount++
+		}
+	}
+	if latestEventAt.IsZero() {
+		latestEventAt = now
+	}
+	var lastParsedAt *time.Time
+	if parsedCount > 0 {
+		t := latestEventAt
+		lastParsedAt = &t
+	}
+	lastHealthAt := now
+	logSource := firstNonEmpty(firstString(body.Paths), firstString(body.JournalUnits), firstString(body.EventChannels), body.CollectorType)
+	stateLabels := map[string]string{
+		"program":                           strings.TrimSpace(body.Program),
+		"collector_type":                    strings.TrimSpace(body.CollectorType),
+		"source":                            strings.TrimSpace(logSource),
+		"collect_mode":                      strings.TrimSpace(labels["control_one.collect_mode"]),
+		contentPackCollectionOwnerLabel:     contentPackCollectionOwnerNodeAgent,
+		contentPackCollectionIdentityLabel:  contentPackAgentLogCollectionIdentity(nodeID, sourceID, labels),
+		"control_one.collection_log_source": strings.TrimSpace(logSource),
+	}
+	for _, key := range []string{
+		"control_one.source_proposal_id",
+		"control_one.source_proposal_external_id",
+		"control_one.content_pack_source_id",
+		"control_one.collect_mode",
+		"control_one.raw_message_retained",
+	} {
+		if value := strings.TrimSpace(labels[key]); value != "" {
+			stateLabels[key] = value
+		}
+	}
+	state := contentpacks.SourceRuntimeState{
+		SourceInstanceID: contentPackProposalSourceInstanceID(nodeID, sourceID),
+		SourceID:         sourceID,
+		DisplayName:      strings.TrimSpace(firstNonEmpty(body.Program, sourceID)),
+		NodeID:           nodeID.String(),
+		CollectorID:      nodeID.String(),
+		CollectorMode:    contentpacks.CollectorNodeFileLog,
+		ParserID:         sourceID,
+		CoverageState:    contentpacks.CoverageState(contentpacks.CoverageCollecting),
+		ApprovalRequired: strings.TrimSpace(labels["control_one.source_proposal_id"]) != "",
+		ApprovalID:       strings.TrimSpace(labels["control_one.source_proposal_id"]),
+		LastEventAt:      &latestEventAt,
+		LastParsedAt:     lastParsedAt,
+		LastHealthAt:     &lastHealthAt,
+		Metrics: contentpacks.SourceRuntimeMetrics{
+			EventsReceived: int64(len(body.Entries)),
+			EventsParsed:   parsedCount,
+		},
+		Labels:    stateLabels,
+		UpdatedAt: now,
+	}
+	if _, err := store.UpsertContentPackSourceRuntimeState(ctx, storage.UpsertContentPackSourceRuntimeStateParams{
+		TenantID: tenantID,
+		State:    state,
+	}); err != nil {
+		s.logger.Warn("persist source runtime state from agent log ingest",
+			zap.Error(err),
+			zap.String("source_id", sourceID),
+			zap.String("node_id", nodeID.String()),
+		)
 	}
 }
 

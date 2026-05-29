@@ -68,14 +68,51 @@ type Config struct {
 	} `mapstructure:"hardening"`
 
 	TelemetryPrefs struct {
-		CollectLogs      bool               `mapstructure:"collect_logs"`
-		LogNamespaces    []string           `mapstructure:"log_namespaces"`
-		FileIntegrity    bool               `mapstructure:"file_integrity"`
-		MetricsInterval  time.Duration      `mapstructure:"metrics_interval"`
-		ActivityInterval time.Duration      `mapstructure:"activity_interval"`
-		LogSources       []LogSourceConfig  `mapstructure:"log_sources"`
-		Triggers         []LogTriggerConfig `mapstructure:"triggers"`
+		CollectLogs            bool               `mapstructure:"collect_logs"`
+		AutoDiscoverLogSources bool               `mapstructure:"auto_discover_log_sources"`
+		LogNamespaces          []string           `mapstructure:"log_namespaces"`
+		FileIntegrity          bool               `mapstructure:"file_integrity"`
+		MetricsInterval        time.Duration      `mapstructure:"metrics_interval"`
+		ActivityInterval       time.Duration      `mapstructure:"activity_interval"`
+		HealthProbeTargets     []string           `mapstructure:"health_probe_targets"`
+		HealthProbeCount       int                `mapstructure:"health_probe_count"`
+		HealthProbeTimeout     time.Duration      `mapstructure:"health_probe_timeout"`
+		DiskHealthDevices      []string           `mapstructure:"disk_health_devices"`
+		LogSources             []LogSourceConfig  `mapstructure:"log_sources"`
+		Triggers               []LogTriggerConfig `mapstructure:"triggers"`
 	} `mapstructure:"telemetry_prefs"`
+
+	ContentPackCollector struct {
+		Enabled          bool          `mapstructure:"enabled"`
+		CollectorID      string        `mapstructure:"collector_id"`
+		Kind             string        `mapstructure:"kind"`
+		Version          string        `mapstructure:"version"`
+		Token            string        `mapstructure:"token"`
+		ConfigPath       string        `mapstructure:"config_path"`
+		StateFile        string        `mapstructure:"state_file"`
+		MetricsEndpoint  string        `mapstructure:"metrics_endpoint"`
+		MetricsTimeout   time.Duration `mapstructure:"metrics_timeout"`
+		PollInterval     time.Duration `mapstructure:"poll_interval"`
+		ApplyTimeout     time.Duration `mapstructure:"apply_timeout"`
+		ValidateCommand  []string      `mapstructure:"validate_command"`
+		ReloadCommand    []string      `mapstructure:"reload_command"`
+		SuperviseCommand []string      `mapstructure:"supervise_command"`
+	} `mapstructure:"content_pack_collector"`
+
+	AppDependencies struct {
+		Enabled                bool          `mapstructure:"enabled"`
+		ScanRoots              []string      `mapstructure:"scan_roots"`
+		IncludeDevDependencies bool          `mapstructure:"include_dev_dependencies"`
+		ScanInterval           time.Duration `mapstructure:"scan_interval"`
+		MaxDepth               int           `mapstructure:"max_depth"`
+		MaxManifests           int           `mapstructure:"max_manifests"`
+		MaxFileBytes           int64         `mapstructure:"max_file_bytes"`
+	} `mapstructure:"app_dependencies"`
+
+	DBQuery struct {
+		Targets          []DBQueryTargetConfig `mapstructure:"targets"`
+		CaptureQueryText bool                  `mapstructure:"capture_query_text"`
+	} `mapstructure:"dbquery"`
 
 	AgentRuntime struct {
 		Profile string `mapstructure:"profile"`
@@ -216,6 +253,14 @@ type LogFormatRuleConfig struct {
 	Labels          map[string]string `mapstructure:"labels"`
 }
 
+type DBQueryTargetConfig struct {
+	Name           string        `mapstructure:"name"`
+	Engine         string        `mapstructure:"engine"`
+	DSN            string        `mapstructure:"dsn"`
+	ScrapeInterval time.Duration `mapstructure:"scrape_interval"`
+	Disabled       bool          `mapstructure:"disabled"`
+}
+
 // LogTriggerConfig defines a regex-based trigger that can emit hooks and optionally run a script.
 type LogTriggerConfig struct {
 	ID             string            `mapstructure:"id"`
@@ -282,6 +327,8 @@ const (
 	defaultTLSKeyFile           = "/var/lib/control-one/nodeagent/certs/nodeagent.key"
 	defaultTLSCACertFile        = "/var/lib/control-one/nodeagent/certs/ca.crt"
 	defaultPolicyMetadataFile   = "/var/lib/control-one/nodeagent/policies/policies.meta.json"
+	defaultContentPackConfig    = "/var/lib/control-one/nodeagent/content-pack-collector/otel.yaml"
+	defaultContentPackState     = "/var/lib/control-one/nodeagent/content-pack-collector/state.json"
 	defaultScannerTimeout       = 30 * time.Second
 	defaultMeshStateFile        = "/var/lib/control-one/nodeagent/mesh/state.json"
 	defaultMeshNamespace        = "default"
@@ -291,6 +338,7 @@ const (
 	defaultSecretsSyncInterval  = 15 * time.Minute
 	defaultTelemetryMetrics     = time.Minute
 	defaultTelemetryActivity    = 5 * time.Minute
+	defaultAppDependencyScan    = 6 * time.Hour
 	defaultWizardCertValidity   = 365 * 24 * time.Hour
 	defaultHooksMaxQueue        = 1024
 	defaultHooksMaxConcurrency  = 4
@@ -348,6 +396,12 @@ func (c *Config) EnsureDirectories() error {
 
 	if c.Mesh.StateFile != "" {
 		dirs = append(dirs, filepath.Dir(c.Mesh.StateFile))
+	}
+	if c.ContentPackCollector.ConfigPath != "" {
+		dirs = append(dirs, filepath.Dir(c.ContentPackCollector.ConfigPath))
+	}
+	if c.ContentPackCollector.StateFile != "" {
+		dirs = append(dirs, filepath.Dir(c.ContentPackCollector.StateFile))
 	}
 	if c.SessionRecording.Enabled && c.SessionRecording.StoragePath != "" {
 		dirs = append(dirs, c.SessionRecording.StoragePath)
@@ -442,12 +496,40 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("hardening.allow_overrides", false)
 
 	v.SetDefault("telemetry_prefs.collect_logs", false)
+	v.SetDefault("telemetry_prefs.auto_discover_log_sources", true)
 	v.SetDefault("telemetry_prefs.log_namespaces", []string{"system", "application"})
 	v.SetDefault("telemetry_prefs.file_integrity", false)
 	v.SetDefault("telemetry_prefs.metrics_interval", defaultTelemetryMetrics.String())
 	v.SetDefault("telemetry_prefs.activity_interval", defaultTelemetryActivity.String())
+	v.SetDefault("telemetry_prefs.health_probe_targets", []string{})
+	v.SetDefault("telemetry_prefs.health_probe_count", 4)
+	v.SetDefault("telemetry_prefs.health_probe_timeout", "3s")
+	v.SetDefault("telemetry_prefs.disk_health_devices", []string{})
 	v.SetDefault("telemetry_prefs.log_sources", []map[string]any{})
 	v.SetDefault("telemetry_prefs.triggers", []map[string]any{})
+	v.SetDefault("content_pack_collector.enabled", false)
+	v.SetDefault("content_pack_collector.collector_id", "")
+	v.SetDefault("content_pack_collector.kind", "otel")
+	v.SetDefault("content_pack_collector.version", "")
+	v.SetDefault("content_pack_collector.token", "")
+	v.SetDefault("content_pack_collector.config_path", defaultContentPackConfig)
+	v.SetDefault("content_pack_collector.state_file", defaultContentPackState)
+	v.SetDefault("content_pack_collector.metrics_endpoint", "")
+	v.SetDefault("content_pack_collector.metrics_timeout", "3s")
+	v.SetDefault("content_pack_collector.poll_interval", "30s")
+	v.SetDefault("content_pack_collector.apply_timeout", "30s")
+	v.SetDefault("content_pack_collector.validate_command", []string{})
+	v.SetDefault("content_pack_collector.reload_command", []string{})
+	v.SetDefault("content_pack_collector.supervise_command", []string{})
+	v.SetDefault("app_dependencies.enabled", true)
+	v.SetDefault("app_dependencies.scan_roots", []string{})
+	v.SetDefault("app_dependencies.include_dev_dependencies", false)
+	v.SetDefault("app_dependencies.scan_interval", defaultAppDependencyScan.String())
+	v.SetDefault("app_dependencies.max_depth", 8)
+	v.SetDefault("app_dependencies.max_manifests", 512)
+	v.SetDefault("app_dependencies.max_file_bytes", int64(1<<20))
+	v.SetDefault("dbquery.targets", []map[string]any{})
+	v.SetDefault("dbquery.capture_query_text", false)
 	v.SetDefault("agent_runtime.profile", "auto")
 
 	v.SetDefault("wizard.enabled", true)
@@ -596,6 +678,42 @@ func applyFallbacks(cfg *Config) {
 	if cfg.TelemetryPrefs.ActivityInterval == 0 {
 		cfg.TelemetryPrefs.ActivityInterval = defaultTelemetryActivity
 	}
+	if cfg.TelemetryPrefs.HealthProbeCount <= 0 {
+		cfg.TelemetryPrefs.HealthProbeCount = 4
+	}
+	if cfg.TelemetryPrefs.HealthProbeTimeout <= 0 {
+		cfg.TelemetryPrefs.HealthProbeTimeout = 3 * time.Second
+	}
+	if strings.TrimSpace(cfg.ContentPackCollector.Kind) == "" {
+		cfg.ContentPackCollector.Kind = "otel"
+	}
+	if cfg.ContentPackCollector.ConfigPath == "" {
+		cfg.ContentPackCollector.ConfigPath = defaultContentPackConfig
+	}
+	if cfg.ContentPackCollector.StateFile == "" {
+		cfg.ContentPackCollector.StateFile = defaultContentPackState
+	}
+	if cfg.ContentPackCollector.MetricsTimeout == 0 {
+		cfg.ContentPackCollector.MetricsTimeout = 3 * time.Second
+	}
+	if cfg.ContentPackCollector.PollInterval == 0 {
+		cfg.ContentPackCollector.PollInterval = 30 * time.Second
+	}
+	if cfg.ContentPackCollector.ApplyTimeout == 0 {
+		cfg.ContentPackCollector.ApplyTimeout = 30 * time.Second
+	}
+	if cfg.AppDependencies.ScanInterval == 0 {
+		cfg.AppDependencies.ScanInterval = defaultAppDependencyScan
+	}
+	if cfg.AppDependencies.MaxDepth <= 0 {
+		cfg.AppDependencies.MaxDepth = 8
+	}
+	if cfg.AppDependencies.MaxManifests <= 0 {
+		cfg.AppDependencies.MaxManifests = 512
+	}
+	if cfg.AppDependencies.MaxFileBytes <= 0 {
+		cfg.AppDependencies.MaxFileBytes = 1 << 20
+	}
 	if strings.TrimSpace(cfg.AgentRuntime.Profile) == "" {
 		cfg.AgentRuntime.Profile = "auto"
 	}
@@ -637,6 +755,9 @@ func applyFallbacks(cfg *Config) {
 	for i := range cfg.TelemetryPrefs.Triggers {
 		cfg.TelemetryPrefs.Triggers[i].applyDefaults()
 	}
+	for i := range cfg.DBQuery.Targets {
+		cfg.DBQuery.Targets[i].applyDefaults()
+	}
 }
 
 // HooksConfig captures configuration for the event hook system.
@@ -651,20 +772,41 @@ type HooksConfig struct {
 // LogSourceConfig describes how the telemetry service should collect and parse logs
 // for a specific program or subsystem across supported operating systems.
 type LogSourceConfig struct {
-	Program       string                `mapstructure:"program"`
-	Type          string                `mapstructure:"type"`
-	Paths         []string              `mapstructure:"paths"`
-	JournalUnits  []string              `mapstructure:"journal_units"`
-	EventChannels []string              `mapstructure:"event_channels"`
-	Formatter     string                `mapstructure:"formatter"`
-	SeverityMap   map[string]string     `mapstructure:"severity_map"`
-	BatchSize     int                   `mapstructure:"batch_size"`
-	BufferSize    int                   `mapstructure:"buffer_size"`
-	FlushInterval time.Duration         `mapstructure:"flush_interval"`
-	PollInterval  time.Duration         `mapstructure:"poll_interval"`
-	Labels        map[string]string     `mapstructure:"labels"`
-	Disabled      bool                  `mapstructure:"disabled"`
-	FormatRules   []LogFormatRuleConfig `mapstructure:"format_rules"`
+	Program         string                `mapstructure:"program"`
+	Type            string                `mapstructure:"type"`
+	Paths           []string              `mapstructure:"paths"`
+	JournalUnits    []string              `mapstructure:"journal_units"`
+	EventChannels   []string              `mapstructure:"event_channels"`
+	Formatter       string                `mapstructure:"formatter"`
+	CollectMode     string                `mapstructure:"collect_mode"`
+	SeverityMap     map[string]string     `mapstructure:"severity_map"`
+	BatchSize       int                   `mapstructure:"batch_size"`
+	BufferSize      int                   `mapstructure:"buffer_size"`
+	FlushInterval   time.Duration         `mapstructure:"flush_interval"`
+	PollInterval    time.Duration         `mapstructure:"poll_interval"`
+	CursorStateFile string                `mapstructure:"cursor_state_file"`
+	Labels          map[string]string     `mapstructure:"labels"`
+	Disabled        bool                  `mapstructure:"disabled"`
+	FormatRules     []LogFormatRuleConfig `mapstructure:"format_rules"`
+}
+
+func (d *DBQueryTargetConfig) applyDefaults() {
+	if d == nil {
+		return
+	}
+	d.Name = strings.TrimSpace(d.Name)
+	d.Engine = strings.ToLower(strings.TrimSpace(d.Engine))
+	d.DSN = strings.TrimSpace(d.DSN)
+	if d.ScrapeInterval <= 0 {
+		d.ScrapeInterval = 5 * time.Second
+	}
+	if d.Name == "" {
+		if d.Engine != "" {
+			d.Name = d.Engine
+		} else {
+			d.Name = "database"
+		}
+	}
 }
 
 func (l *LogSourceConfig) applyDefaults() {
@@ -683,6 +825,7 @@ func (l *LogSourceConfig) applyDefaults() {
 	if strings.TrimSpace(l.Type) == "" {
 		l.Type = "auto"
 	}
+	l.CollectMode = NormalizeLogCollectMode(l.CollectMode)
 	if l.SeverityMap == nil {
 		l.SeverityMap = map[string]string{}
 	}
@@ -708,6 +851,40 @@ func (l *LogSourceConfig) applyDefaults() {
 	}
 	if len(l.FormatRules) > 0 && strings.TrimSpace(l.Formatter) == "" {
 		l.Formatter = "generic"
+	}
+}
+
+const (
+	LogCollectModeObserveOnly   = "observe_only"
+	LogCollectModeMetadataOnly  = "metadata_only"
+	LogCollectModeCollectParsed = "collect_parsed"
+	LogCollectModeCollectRaw    = "collect_raw"
+	LogCollectModeDisabled      = "disabled"
+)
+
+func NormalizeLogCollectMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", LogCollectModeCollectRaw:
+		return LogCollectModeCollectRaw
+	case LogCollectModeCollectParsed:
+		return LogCollectModeCollectParsed
+	case LogCollectModeMetadataOnly:
+		return LogCollectModeMetadataOnly
+	case LogCollectModeObserveOnly:
+		return LogCollectModeObserveOnly
+	case LogCollectModeDisabled:
+		return LogCollectModeDisabled
+	default:
+		return LogCollectModeDisabled
+	}
+}
+
+func LogCollectModeStartsCollector(value string) bool {
+	switch NormalizeLogCollectMode(value) {
+	case LogCollectModeCollectRaw, LogCollectModeCollectParsed:
+		return true
+	default:
+		return false
 	}
 }
 

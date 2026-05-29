@@ -45,3 +45,14 @@ func TestParsePositiveInt(t *testing.T) {
 		t.Fatal("1a should reject")
 	}
 }
+
+func TestRenderMigrationSQLOverridesReplicationNum(t *testing.T) {
+	in := `PROPERTIES ("replication_num" = "1");`
+	got := renderMigrationSQL(in, MigrationOptions{ReplicationNum: 3})
+	if got != `PROPERTIES ("replication_num" = "3");` {
+		t.Fatalf("rendered SQL = %q", got)
+	}
+	if got := renderMigrationSQL(in, MigrationOptions{}); got != in {
+		t.Fatalf("default render should preserve dev replication, got %q", got)
+	}
+}

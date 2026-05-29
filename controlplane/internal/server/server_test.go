@@ -22,6 +22,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
+	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 )
 
 func TestPingEndpointAuthentication(t *testing.T) {
@@ -1513,43 +1514,56 @@ type fakeStore struct {
 	// nodeLabels mirrors the nodes.labels JSONB column introduced by
 	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
 	// assert label propagation without depending on A's merge. Keyed by node id.
-	nodeLabels            map[uuid.UUID]map[string]any
-	leases                map[uuid.UUID]storage.RemediationLease
-	enrollmentTokens      map[string]storage.EnrollmentToken // keyed by token hash
-	remediationConfigs    map[uuid.UUID]storage.TenantRemediationConfig
-	eventFilters          map[uuid.UUID]storage.TenantEventFilters
-	knownDestinations     map[string]int64
-	knownExeHashes        map[string]int64
-	knownQueryHashes      map[string]int64
-	remediationApprovals  map[uuid.UUID]storage.RemediationApproval
-	patchApprovals        map[uuid.UUID]storage.PatchApproval
-	circuitBreakers       map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
-	remediationFailRates  map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
-	nodeCertHistory       map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
-	nodePackages          map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
-	vulnerabilityFindings []storage.VulnerabilityFinding
-	nodeServices          map[uuid.UUID][]storage.NodeService
-	firewallStates        map[uuid.UUID]storage.NodeFirewallState
-	nodeHealthScores      map[uuid.UUID]storage.NodeHealthScore
-	alerts                []storage.Alert
-	securityCounts        storage.SecurityEventCounts
-	healthCounts          storage.SecurityEventCounts
-	eventIngestBacklog    storage.EventIngestBacklogSummary
-	eventIngestBatches    []storage.EventIngestBatch
-	activeBlocks          []storage.ActiveBlock
-	patchDeployments      []storage.PatchDeployment
-	ipBehaviorCountries   []storage.IPBehaviorCountrySummary
-	ipBehaviorFindings    []storage.IPBehaviorFinding
-	webserverInstances    []storage.WebserverInstance
-	aiConfig              *storage.AIConfig
-	flowDeltas            []FlowDeltaRow
-	fileGrowthDeltas      []FileGrowthDeltaRow
-	resourceDeltas        []ResourceDeltaRow
-	logTailRows           []LogTailRow
-	rootCauseFindings     []RootCauseFinding
-	aiInvestigations      []storage.AIInvestigation
-	aiOperatorProposals   []storage.AIOperatorProposal
-	savedSearches         []storage.SavedSearch
+	nodeLabels             map[uuid.UUID]map[string]any
+	leases                 map[uuid.UUID]storage.RemediationLease
+	enrollmentTokens       map[string]storage.EnrollmentToken // keyed by token hash
+	remediationConfigs     map[uuid.UUID]storage.TenantRemediationConfig
+	eventFilters           map[uuid.UUID]storage.TenantEventFilters
+	knownDestinations      map[string]int64
+	knownExeHashes         map[string]int64
+	knownQueryHashes       map[string]int64
+	remediationApprovals   map[uuid.UUID]storage.RemediationApproval
+	actionPlans            map[uuid.UUID]storage.ActionPlan
+	actionReceipts         map[uuid.UUID][]storage.ActionReceipt
+	actionPlanApprovals    map[uuid.UUID][]storage.ActionPlanApproval
+	patchApprovals         map[uuid.UUID]storage.PatchApproval
+	circuitBreakers        map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
+	remediationFailRates   map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
+	nodeCertHistory        map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
+	nodePackages           map[uuid.UUID][]storage.NodePackage               // Sprint 4 packages-tab — read-back inventory
+	nodeAppDependencies    map[uuid.UUID][]storage.NodeAppDependency
+	vulnerabilityFindings  []storage.VulnerabilityFinding
+	nodeServices           map[uuid.UUID][]storage.NodeService
+	sourceProposals        []storage.ContentPackSourceProposalRecord
+	sourceStates           []storage.ContentPackSourceRuntimeStateRecord
+	firewallStates         map[uuid.UUID]storage.NodeFirewallState
+	privateAccessFindings  []storage.PrivateAccessExposureFindingRecord
+	nodeHealthScores       map[uuid.UUID]storage.NodeHealthScore
+	telemetryMetrics       []storage.CreateTelemetryMetricParams
+	telemetryLogs          []storage.CreateTelemetryLogParams
+	agentReplayReceipts    map[string]storage.AgentIngestReplayReceipt
+	alerts                 []storage.Alert
+	securityCounts         storage.SecurityEventCounts
+	healthCounts           storage.SecurityEventCounts
+	eventIngestBacklog     storage.EventIngestBacklogSummary
+	eventIngestBatches     []storage.EventIngestBatch
+	eventIngestReplayByKey map[string]storage.EventIngestBatch
+	eventIngestRecords     []storage.CreateEventIngestBatchParams
+	activeBlocks           []storage.ActiveBlock
+	patchDeployments       []storage.PatchDeployment
+	ipBehaviorCountries    []storage.IPBehaviorCountrySummary
+	ipBehaviorFindings     []storage.IPBehaviorFinding
+	webserverInstances     []storage.WebserverInstance
+	aiConfig               *storage.AIConfig
+	flowDeltas             []FlowDeltaRow
+	fileGrowthDeltas       []FileGrowthDeltaRow
+	resourceDeltas         []ResourceDeltaRow
+	logTailRows            []LogTailRow
+	rootCauseFindings      []RootCauseFinding
+	aiInvestigations       []storage.AIInvestigation
+	aiOperatorProposals    []storage.AIOperatorProposal
+	aiLogFixerActions      map[uuid.UUID]storage.AILogFixerAction // keyed by job id
+	savedSearches          []storage.SavedSearch
 
 	// UC7 — misconduct & whistleblowing.
 	misconductCases   map[uuid.UUID]*storage.MisconductCase
@@ -2487,11 +2501,49 @@ func (f *fakeStore) ListTelemetryLogs(_ context.Context, filter storage.Telemetr
 }
 
 func (f *fakeStore) CreateTelemetryMetrics(_ context.Context, metrics []storage.CreateTelemetryMetricParams) error {
+	f.telemetryMetrics = append(f.telemetryMetrics, metrics...)
 	return nil
 }
 
 func (f *fakeStore) CreateTelemetryLogs(_ context.Context, logs []storage.CreateTelemetryLogParams) error {
+	f.telemetryLogs = append(f.telemetryLogs, logs...)
 	return nil
+}
+func (f *fakeStore) GetAgentIngestReplayReceipt(_ context.Context, tenantID, nodeID uuid.UUID, endpoint, replayKey string) (*storage.AgentIngestReplayReceipt, error) {
+	if f.agentReplayReceipts == nil {
+		return nil, nil
+	}
+	receipt, ok := f.agentReplayReceipts[fakeAgentReplayReceiptKey(tenantID, nodeID, endpoint, replayKey)]
+	if !ok {
+		return nil, nil
+	}
+	return &receipt, nil
+}
+func (f *fakeStore) UpsertAgentIngestReplayReceipt(_ context.Context, p storage.UpsertAgentIngestReplayReceiptParams) error {
+	if f.agentReplayReceipts == nil {
+		f.agentReplayReceipts = map[string]storage.AgentIngestReplayReceipt{}
+	}
+	id := uuid.New()
+	key := fakeAgentReplayReceiptKey(p.TenantID, p.NodeID, p.Endpoint, p.ReplayKey)
+	if existing, ok := f.agentReplayReceipts[key]; ok {
+		id = existing.ID
+	}
+	f.agentReplayReceipts[key] = storage.AgentIngestReplayReceipt{
+		ID:        id,
+		TenantID:  p.TenantID,
+		NodeID:    p.NodeID,
+		Endpoint:  strings.TrimSpace(p.Endpoint),
+		ReplayKey: strings.TrimSpace(p.ReplayKey),
+		Status:    firstNonEmpty(p.Status, "accepted"),
+		Response:  append([]byte(nil), p.Response...),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	return nil
+}
+
+func fakeAgentReplayReceiptKey(tenantID, nodeID uuid.UUID, endpoint, replayKey string) string {
+	return tenantID.String() + "/" + nodeID.String() + "/" + strings.TrimSpace(endpoint) + "/" + strings.TrimSpace(replayKey)
 }
 
 func (f *fakeStore) GetComplianceAggregation(_ context.Context, filter storage.ComplianceResultFilter) (*storage.ComplianceAggregation, error) {
@@ -3622,6 +3674,272 @@ func (f *fakeStore) ExpireRemediationApprovals(_ context.Context, now time.Time)
 	return n, nil
 }
 
+func (f *fakeStore) CreateActionPlan(_ context.Context, params storage.CreateActionPlanParams) (*storage.ActionPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.actionPlans == nil {
+		f.actionPlans = map[uuid.UUID]storage.ActionPlan{}
+	}
+	if strings.TrimSpace(params.IdempotencyKey) != "" {
+		for _, existing := range f.actionPlans {
+			if existing.TenantID == params.TenantID && existing.IdempotencyKey.Valid && existing.IdempotencyKey.String == strings.TrimSpace(params.IdempotencyKey) {
+				copy := copyFakeActionPlan(existing)
+				return &copy, nil
+			}
+		}
+	}
+	state := params.State
+	if strings.TrimSpace(string(state)) == "" {
+		state = storage.ActionPlanStateProposed
+	}
+	risk := strings.TrimSpace(params.Risk)
+	if risk == "" {
+		risk = "medium"
+	}
+	now := time.Now().UTC()
+	plan := storage.ActionPlan{
+		ID:                uuid.New(),
+		TenantID:          params.TenantID,
+		Domain:            strings.TrimSpace(params.Domain),
+		ActionKind:        strings.TrimSpace(params.ActionKind),
+		State:             state,
+		Risk:              risk,
+		Scope:             copyFakeMap(params.Scope),
+		Diff:              copyFakeMap(params.Diff),
+		RequiredApprovals: copyFakeMap(params.RequiredApprovals),
+		MaintenanceWindow: copyFakeMap(params.MaintenanceWindow),
+		RollbackPlan:      copyFakeMap(params.RollbackPlan),
+		VerificationPlan:  copyFakeMap(params.VerificationPlan),
+		SourceRef:         copyFakeMap(params.SourceRef),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if params.NodeID != nil && *params.NodeID != uuid.Nil {
+		plan.NodeID = uuid.NullUUID{UUID: *params.NodeID, Valid: true}
+	}
+	if strings.TrimSpace(params.IdempotencyKey) != "" {
+		plan.IdempotencyKey = sql.NullString{String: strings.TrimSpace(params.IdempotencyKey), Valid: true}
+	}
+	if params.CreatedBy != nil && *params.CreatedBy != uuid.Nil {
+		plan.CreatedBy = uuid.NullUUID{UUID: *params.CreatedBy, Valid: true}
+	}
+	f.actionPlans[plan.ID] = plan
+	copy := copyFakeActionPlan(plan)
+	return &copy, nil
+}
+
+func (f *fakeStore) GetActionPlan(_ context.Context, id uuid.UUID) (*storage.ActionPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	plan, ok := f.actionPlans[id]
+	if !ok {
+		return nil, nil
+	}
+	copy := copyFakeActionPlan(plan)
+	return &copy, nil
+}
+
+func (f *fakeStore) ListActionPlans(_ context.Context, filter storage.ListActionPlansFilter, limit, offset int) ([]storage.ActionPlan, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []storage.ActionPlan
+	for _, plan := range f.actionPlans {
+		if filter.TenantID != uuid.Nil && plan.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && (!plan.NodeID.Valid || plan.NodeID.UUID != filter.NodeID) {
+			continue
+		}
+		if strings.TrimSpace(filter.Domain) != "" && plan.Domain != strings.TrimSpace(filter.Domain) {
+			continue
+		}
+		if strings.TrimSpace(filter.ActionKind) != "" && plan.ActionKind != strings.TrimSpace(filter.ActionKind) {
+			continue
+		}
+		if strings.TrimSpace(string(filter.State)) != "" && plan.State != filter.State {
+			continue
+		}
+		all = append(all, copyFakeActionPlan(plan))
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	total := len(all)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	return all[offset:end], total, nil
+}
+
+func (f *fakeStore) UpdateActionPlanState(_ context.Context, id uuid.UUID, state storage.ActionPlanState) (*storage.ActionPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	plan, ok := f.actionPlans[id]
+	if !ok {
+		return nil, nil
+	}
+	plan.State = state
+	plan.UpdatedAt = time.Now().UTC()
+	f.actionPlans[id] = plan
+	copy := copyFakeActionPlan(plan)
+	return &copy, nil
+}
+
+func (f *fakeStore) CreateActionPlanApproval(_ context.Context, params storage.CreateActionPlanApprovalParams) (*storage.ActionPlanApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.actionPlanApprovals == nil {
+		f.actionPlanApprovals = map[uuid.UUID][]storage.ActionPlanApproval{}
+	}
+	plan, ok := f.actionPlans[params.ActionPlanID]
+	if !ok || plan.TenantID != params.TenantID {
+		return nil, errors.New("action plan not found")
+	}
+	actorKey := fakeActionPlanApprovalActorKey(params.ActorID, params.ActorSubject)
+	if actorKey == "" {
+		return nil, errors.New("approval actor identity is required")
+	}
+	for _, existing := range f.actionPlanApprovals[params.ActionPlanID] {
+		if existing.ActorKey == actorKey {
+			return nil, errors.New("actor has already recorded an action plan approval decision")
+		}
+	}
+	decision := strings.ToLower(strings.TrimSpace(params.Decision))
+	switch decision {
+	case "approve", "approved":
+		decision = "approved"
+	case "deny", "denied", "reject", "rejected":
+		decision = "denied"
+	default:
+		return nil, fmt.Errorf("invalid action plan approval decision %q", params.Decision)
+	}
+	approval := storage.ActionPlanApproval{
+		ID:           uuid.New(),
+		ActionPlanID: params.ActionPlanID,
+		TenantID:     params.TenantID,
+		Decision:     decision,
+		ActorSubject: strings.TrimSpace(params.ActorSubject),
+		ActorKey:     actorKey,
+		ActorRoles:   append([]string{}, params.ActorRoles...),
+		Note:         strings.TrimSpace(params.Note),
+		CreatedAt:    time.Now().UTC(),
+	}
+	if params.ActorID != nil && *params.ActorID != uuid.Nil {
+		approval.ActorID = uuid.NullUUID{UUID: *params.ActorID, Valid: true}
+	}
+	f.actionPlanApprovals[params.ActionPlanID] = append(f.actionPlanApprovals[params.ActionPlanID], approval)
+	copy := copyFakeActionPlanApproval(approval)
+	return &copy, nil
+}
+
+func (f *fakeStore) ListActionPlanApprovals(_ context.Context, actionPlanID uuid.UUID) ([]storage.ActionPlanApproval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := f.actionPlanApprovals[actionPlanID]
+	out := make([]storage.ActionPlanApproval, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, copyFakeActionPlanApproval(row))
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (f *fakeStore) CreateActionReceipt(_ context.Context, params storage.CreateActionReceiptParams) (*storage.ActionReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.actionReceipts == nil {
+		f.actionReceipts = map[uuid.UUID][]storage.ActionReceipt{}
+	}
+	plan, ok := f.actionPlans[params.ActionPlanID]
+	if !ok || plan.TenantID != params.TenantID {
+		return nil, errors.New("action plan not found")
+	}
+	receipt := storage.ActionReceipt{
+		ID:           uuid.New(),
+		ActionPlanID: params.ActionPlanID,
+		TenantID:     params.TenantID,
+		NodeID:       plan.NodeID,
+		State:        params.State,
+		Receipt:      copyFakeMap(params.Receipt),
+		Verification: copyFakeMap(params.Verification),
+		RollbackRef:  strings.TrimSpace(params.RollbackRef),
+		Error:        strings.TrimSpace(params.Error),
+		CreatedAt:    time.Now().UTC(),
+	}
+	if params.NodeID != nil && *params.NodeID != uuid.Nil {
+		receipt.NodeID = uuid.NullUUID{UUID: *params.NodeID, Valid: true}
+	}
+	if params.JobID != nil && *params.JobID != uuid.Nil {
+		receipt.JobID = uuid.NullUUID{UUID: *params.JobID, Valid: true}
+	}
+	f.actionReceipts[params.ActionPlanID] = append(f.actionReceipts[params.ActionPlanID], receipt)
+	plan.State = params.State
+	plan.UpdatedAt = receipt.CreatedAt
+	f.actionPlans[params.ActionPlanID] = plan
+	copy := copyFakeActionReceipt(receipt)
+	return &copy, nil
+}
+
+func (f *fakeStore) ListActionReceipts(_ context.Context, actionPlanID uuid.UUID) ([]storage.ActionReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := f.actionReceipts[actionPlanID]
+	out := make([]storage.ActionReceipt, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, copyFakeActionReceipt(row))
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func fakeActionPlanApprovalActorKey(actorID *uuid.UUID, actorSubject string) string {
+	if actorID != nil && *actorID != uuid.Nil {
+		return "user:" + actorID.String()
+	}
+	if actorSubject = strings.TrimSpace(actorSubject); actorSubject != "" {
+		return "subject:" + strings.ToLower(actorSubject)
+	}
+	return ""
+}
+
+func copyFakeActionPlan(in storage.ActionPlan) storage.ActionPlan {
+	out := in
+	out.Scope = copyFakeMap(in.Scope)
+	out.Diff = copyFakeMap(in.Diff)
+	out.RequiredApprovals = copyFakeMap(in.RequiredApprovals)
+	out.MaintenanceWindow = copyFakeMap(in.MaintenanceWindow)
+	out.RollbackPlan = copyFakeMap(in.RollbackPlan)
+	out.VerificationPlan = copyFakeMap(in.VerificationPlan)
+	out.SourceRef = copyFakeMap(in.SourceRef)
+	return out
+}
+
+func copyFakeActionPlanApproval(in storage.ActionPlanApproval) storage.ActionPlanApproval {
+	out := in
+	out.ActorRoles = append([]string{}, in.ActorRoles...)
+	return out
+}
+
+func copyFakeActionReceipt(in storage.ActionReceipt) storage.ActionReceipt {
+	out := in
+	out.Receipt = copyFakeMap(in.Receipt)
+	out.Verification = copyFakeMap(in.Verification)
+	return out
+}
+
+func copyFakeMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func fakeBreakerKey(tenantID uuid.UUID, ruleID string) string {
 	return tenantID.String() + "|" + strings.TrimSpace(ruleID)
 }
@@ -4355,8 +4673,48 @@ func (f *fakeStore) RecordThreatFeedRefresh(_ context.Context, _ uuid.UUID, _, _
 }
 
 // --- Event ingest journal + rollup + retention stubs ---
-func (f *fakeStore) RecordEventIngest(_ context.Context, _ storage.CreateEventIngestBatchParams) (uuid.UUID, error) {
+func (f *fakeStore) RecordEventIngest(_ context.Context, p storage.CreateEventIngestBatchParams) (uuid.UUID, error) {
+	if strings.TrimSpace(p.ReplayKey) != "" {
+		key := fakeEventIngestReplayKey(p)
+		if f.eventIngestReplayByKey != nil {
+			if batch, ok := f.eventIngestReplayByKey[key]; ok {
+				return batch.ID, &storage.DuplicateEventIngestReplayError{Batch: batch}
+			}
+		} else {
+			f.eventIngestReplayByKey = map[string]storage.EventIngestBatch{}
+		}
+		id := uuid.New()
+		batch := storage.EventIngestBatch{
+			ID:          id,
+			Rows:        p.Rows,
+			Status:      firstNonEmpty(p.Status, "received"),
+			ReplayKey:   sql.NullString{String: strings.TrimSpace(p.ReplayKey), Valid: true},
+			DorisStatus: sql.NullString{String: "", Valid: true},
+		}
+		if p.TenantID != nil && *p.TenantID != uuid.Nil {
+			batch.TenantID = uuid.NullUUID{UUID: *p.TenantID, Valid: true}
+		}
+		if p.NodeID != nil && *p.NodeID != uuid.Nil {
+			batch.NodeID = uuid.NullUUID{UUID: *p.NodeID, Valid: true}
+		}
+		f.eventIngestReplayByKey[key] = batch
+		f.eventIngestRecords = append(f.eventIngestRecords, p)
+		return id, nil
+	}
+	f.eventIngestRecords = append(f.eventIngestRecords, p)
 	return uuid.New(), nil
+}
+
+func fakeEventIngestReplayKey(p storage.CreateEventIngestBatchParams) string {
+	tenantID := uuid.Nil
+	if p.TenantID != nil {
+		tenantID = *p.TenantID
+	}
+	nodeID := uuid.Nil
+	if p.NodeID != nil {
+		nodeID = *p.NodeID
+	}
+	return tenantID.String() + "/" + nodeID.String() + "/" + strings.TrimSpace(p.ReplayKey)
 }
 func (f *fakeStore) MarkEventIngestStatus(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
@@ -4663,6 +5021,43 @@ func (f *fakeStore) ListNodePackages(_ context.Context, nodeID uuid.UUID) ([]sto
 	}
 	out := make([]storage.NodePackage, len(pkgs))
 	copy(out, pkgs)
+	return out, nil
+}
+func (f *fakeStore) ReplaceNodeAppDependencies(_ context.Context, nodeID, tenantID uuid.UUID, deps []storage.NodeAppDependency) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nodeAppDependencies == nil {
+		f.nodeAppDependencies = make(map[uuid.UUID][]storage.NodeAppDependency)
+	}
+	if len(deps) == 0 {
+		delete(f.nodeAppDependencies, nodeID)
+		return nil
+	}
+	now := time.Now().UTC()
+	cp := make([]storage.NodeAppDependency, len(deps))
+	for i, dep := range deps {
+		dep.NodeID = nodeID
+		dep.TenantID = tenantID
+		if dep.ID == uuid.Nil {
+			dep.ID = uuid.New()
+		}
+		if dep.ObservedAt.IsZero() {
+			dep.ObservedAt = now
+		}
+		cp[i] = dep
+	}
+	f.nodeAppDependencies[nodeID] = cp
+	return nil
+}
+func (f *fakeStore) ListNodeAppDependencies(_ context.Context, nodeID uuid.UUID) ([]storage.NodeAppDependency, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	deps, ok := f.nodeAppDependencies[nodeID]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]storage.NodeAppDependency, len(deps))
+	copy(out, deps)
 	return out, nil
 }
 func (f *fakeStore) UpsertVulnerabilityFindings(_ context.Context, findings []storage.VulnerabilityFinding) error {
@@ -5439,6 +5834,349 @@ func (f *fakeStore) ListNodeServicesForTenant(_ context.Context, tenantID uuid.U
 	return out, nil
 }
 
+func (f *fakeStore) UpsertContentPackSourceProposals(_ context.Context, p storage.UpsertContentPackSourceProposalsParams) ([]storage.ContentPackSourceProposalRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	out := make([]storage.ContentPackSourceProposalRecord, 0, len(p.Proposals))
+	for _, proposal := range p.Proposals {
+		program := strings.ToLower(strings.TrimSpace(proposal.Program))
+		if program == "" {
+			continue
+		}
+		proposalID := strings.ToLower(strings.TrimSpace(proposal.ID))
+		if proposalID == "" {
+			proposalID = strings.ToLower(strings.TrimSpace(proposal.Kind)) + ":" + program
+		}
+		status := storage.ContentPackSourceProposalStatusProposed
+		requiresApproval := proposal.RequiresApproval || strings.EqualFold(proposal.Risk, "high") || strings.EqualFold(proposal.Risk, "critical")
+		autoEligible := proposal.AutoConnectEligible && !requiresApproval
+		switch {
+		case requiresApproval:
+			status = storage.ContentPackSourceProposalStatusApprovalRequired
+		case autoEligible:
+			status = storage.ContentPackSourceProposalStatusAutoEligible
+		}
+		record := storage.ContentPackSourceProposalRecord{
+			ID:                  uuid.New(),
+			TenantID:            p.TenantID,
+			NodeID:              p.NodeID,
+			ProposalID:          proposalID,
+			Kind:                strings.ToLower(strings.TrimSpace(proposal.Kind)),
+			Program:             program,
+			SourceID:            firstNonEmptyContentPack(proposal.Labels["content_pack_source_id"], proposal.Labels["source_id"], proposal.Labels["parser_profile"], program),
+			CollectorType:       strings.ToLower(strings.TrimSpace(proposal.CollectorType)),
+			Formatter:           strings.ToLower(strings.TrimSpace(proposal.Formatter)),
+			Status:              status,
+			Confidence:          proposal.Confidence,
+			Risk:                strings.ToLower(strings.TrimSpace(proposal.Risk)),
+			AutoConnectEligible: autoEligible,
+			RequiresApproval:    requiresApproval,
+			Reason:              strings.TrimSpace(proposal.Reason),
+			Paths:               append([]string(nil), proposal.Paths...),
+			Evidence:            append([]string(nil), proposal.Evidence...),
+			Labels:              cloneStringMapContentPack(proposal.Labels),
+			FirstSeenAt:         now,
+			LastSeenAt:          now,
+			CreatedAt:           now,
+			UpdatedAt:           now,
+		}
+		found := false
+		for i := range f.sourceProposals {
+			if f.sourceProposals[i].TenantID == p.TenantID && f.sourceProposals[i].NodeID == p.NodeID && f.sourceProposals[i].ProposalID == proposalID {
+				record.ID = f.sourceProposals[i].ID
+				record.FirstSeenAt = f.sourceProposals[i].FirstSeenAt
+				f.sourceProposals[i] = record
+				found = true
+				break
+			}
+		}
+		if !found {
+			f.sourceProposals = append(f.sourceProposals, record)
+		}
+		out = append(out, record)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListContentPackSourceProposals(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.ContentPackSourceProposalRecord, int, error) {
+	return f.ListContentPackSourceProposalsFiltered(context.Background(), tenantID, storage.ContentPackSourceProposalFilter{}, limit, offset)
+}
+
+func (f *fakeStore) ListContentPackSourceProposalsFiltered(_ context.Context, tenantID uuid.UUID, filter storage.ContentPackSourceProposalFilter, limit, offset int) ([]storage.ContentPackSourceProposalRecord, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	filtered := make([]storage.ContentPackSourceProposalRecord, 0, len(f.sourceProposals))
+	for _, row := range f.sourceProposals {
+		if row.TenantID == tenantID && fakeSourceProposalMatchesFilter(row, filter) {
+			filtered = append(filtered, row)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].LastSeenAt.After(filtered[j].LastSeenAt)
+	})
+	total := len(filtered)
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 || offset >= total {
+		if offset < 0 {
+			offset = 0
+		}
+		return []storage.ContentPackSourceProposalRecord{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return append([]storage.ContentPackSourceProposalRecord(nil), filtered[offset:end]...), total, nil
+}
+
+func (f *fakeStore) ContentPackSourceProposalSummaryFiltered(_ context.Context, tenantID uuid.UUID, filter storage.ContentPackSourceProposalFilter) (storage.ContentPackSourceProposalSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	summary := storage.ContentPackSourceProposalSummary{ByStatus: map[string]int{}}
+	for _, row := range f.sourceProposals {
+		if row.TenantID != tenantID || !fakeSourceProposalMatchesFilter(row, filter) {
+			continue
+		}
+		summary.Total++
+		summary.ByStatus[row.Status]++
+	}
+	return summary, nil
+}
+
+func fakeSourceProposalMatchesFilter(row storage.ContentPackSourceProposalRecord, filter storage.ContentPackSourceProposalFilter) bool {
+	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	if query != "" {
+		values := []string{
+			row.ID.String(),
+			row.NodeID.String(),
+			row.ProposalID,
+			row.Kind,
+			row.Program,
+			row.SourceID,
+			row.CollectorType,
+			row.Formatter,
+			row.Status,
+			row.Risk,
+			row.Reason,
+			row.ApprovedBySubject,
+			row.ApprovalNote,
+			row.RejectedBySubject,
+			row.RejectionReason,
+			strings.Join(row.Paths, " "),
+			strings.Join(row.Evidence, " "),
+		}
+		matched := false
+		for _, value := range values {
+			if strings.Contains(strings.ToLower(strings.TrimSpace(value)), query) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			for key, value := range row.Labels {
+				if strings.Contains(strings.ToLower(strings.TrimSpace(key)), query) ||
+					strings.Contains(strings.ToLower(strings.TrimSpace(value)), query) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if len(filter.Statuses) == 0 {
+		return true
+	}
+	for _, status := range filter.Statuses {
+		if strings.EqualFold(strings.TrimSpace(status), strings.TrimSpace(row.Status)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeStore) ListContentPackSourceProposalsByIDs(_ context.Context, tenantID uuid.UUID, proposalIDs []uuid.UUID) ([]storage.ContentPackSourceProposalRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ids := map[uuid.UUID]struct{}{}
+	for _, id := range proposalIDs {
+		if id != uuid.Nil {
+			ids[id] = struct{}{}
+		}
+	}
+	out := make([]storage.ContentPackSourceProposalRecord, 0, len(ids))
+	for _, row := range f.sourceProposals {
+		if row.TenantID != tenantID {
+			continue
+		}
+		if _, ok := ids[row.ID]; !ok {
+			continue
+		}
+		out = append(out, row)
+	}
+	return append([]storage.ContentPackSourceProposalRecord(nil), out...), nil
+}
+
+func (f *fakeStore) ListApprovedContentPackSourceProposalsForNode(_ context.Context, tenantID, nodeID uuid.UUID, limit int) ([]storage.ContentPackSourceProposalRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit <= 0 {
+		limit = 128
+	}
+	out := make([]storage.ContentPackSourceProposalRecord, 0, limit)
+	for _, row := range f.sourceProposals {
+		if row.TenantID != tenantID || row.NodeID != nodeID {
+			continue
+		}
+		if row.Status != storage.ContentPackSourceProposalStatusApproved {
+			continue
+		}
+		if row.Kind != connectordiscovery.KindLocalLog {
+			continue
+		}
+		if row.CollectorType != "" && row.CollectorType != connectordiscovery.CollectorTypeFile {
+			continue
+		}
+		if !storage.ContentPackSourceProposalCollectModeDeploysNodeAgent(row.CollectMode) {
+			continue
+		}
+		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return append([]storage.ContentPackSourceProposalRecord(nil), out...), nil
+}
+
+func (f *fakeStore) ApproveContentPackSourceProposal(_ context.Context, p storage.ApproveContentPackSourceProposalParams) (*storage.ContentPackSourceProposalRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for i := range f.sourceProposals {
+		if f.sourceProposals[i].TenantID != p.TenantID || f.sourceProposals[i].ID != p.ProposalID {
+			continue
+		}
+		switch f.sourceProposals[i].Status {
+		case storage.ContentPackSourceProposalStatusProposed,
+			storage.ContentPackSourceProposalStatusAutoEligible,
+			storage.ContentPackSourceProposalStatusApprovalRequired,
+			storage.ContentPackSourceProposalStatusStale:
+		default:
+			return nil, fmt.Errorf("content pack source proposal is not approvable or not found")
+		}
+		f.sourceProposals[i].Status = storage.ContentPackSourceProposalStatusApproved
+		f.sourceProposals[i].ApprovedBySubject = strings.TrimSpace(p.ApprovedBySubject)
+		f.sourceProposals[i].ApprovalNote = strings.TrimSpace(p.ApprovalNote)
+		collectMode := strings.ToLower(strings.TrimSpace(p.CollectMode))
+		if collectMode == "" {
+			collectMode = storage.ContentPackSourceProposalCollectModeCollectRaw
+		}
+		f.sourceProposals[i].CollectMode = collectMode
+		f.sourceProposals[i].ApprovedAt = &now
+		f.sourceProposals[i].RejectedBySubject = ""
+		f.sourceProposals[i].RejectedAt = nil
+		f.sourceProposals[i].RejectionReason = ""
+		f.sourceProposals[i].UpdatedAt = now
+		out := f.sourceProposals[i]
+		return &out, nil
+	}
+	return nil, fmt.Errorf("content pack source proposal is not approvable or not found")
+}
+
+func (f *fakeStore) RejectContentPackSourceProposal(_ context.Context, p storage.RejectContentPackSourceProposalParams) (*storage.ContentPackSourceProposalRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	for i := range f.sourceProposals {
+		if f.sourceProposals[i].TenantID != p.TenantID || f.sourceProposals[i].ID != p.ProposalID {
+			continue
+		}
+		switch f.sourceProposals[i].Status {
+		case storage.ContentPackSourceProposalStatusProposed,
+			storage.ContentPackSourceProposalStatusAutoEligible,
+			storage.ContentPackSourceProposalStatusApprovalRequired,
+			storage.ContentPackSourceProposalStatusStale:
+		default:
+			return nil, fmt.Errorf("content pack source proposal is not rejectable or not found")
+		}
+		f.sourceProposals[i].Status = storage.ContentPackSourceProposalStatusRejected
+		if p.PrivacyBlocked {
+			f.sourceProposals[i].Status = storage.ContentPackSourceProposalStatusPrivacyBlocked
+		}
+		f.sourceProposals[i].RejectedBySubject = strings.TrimSpace(p.RejectedBySubject)
+		f.sourceProposals[i].RejectionReason = strings.TrimSpace(p.RejectionReason)
+		f.sourceProposals[i].RejectedAt = &now
+		f.sourceProposals[i].ApprovedBySubject = ""
+		f.sourceProposals[i].ApprovedAt = nil
+		f.sourceProposals[i].ApprovalNote = ""
+		f.sourceProposals[i].CollectMode = ""
+		f.sourceProposals[i].UpdatedAt = now
+		out := f.sourceProposals[i]
+		return &out, nil
+	}
+	return nil, fmt.Errorf("content pack source proposal is not rejectable or not found")
+}
+
+func (f *fakeStore) UpsertContentPackSourceRuntimeState(_ context.Context, p storage.UpsertContentPackSourceRuntimeStateParams) (*storage.ContentPackSourceRuntimeStateRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	record := storage.ContentPackSourceRuntimeStateRecord{
+		ID:        uuid.New(),
+		TenantID:  p.TenantID,
+		State:     p.State,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if record.State.UpdatedAt.IsZero() {
+		record.State.UpdatedAt = now
+	}
+	for i := range f.sourceStates {
+		if f.sourceStates[i].TenantID == p.TenantID && f.sourceStates[i].State.SourceInstanceID == p.State.SourceInstanceID {
+			record.ID = f.sourceStates[i].ID
+			record.CreatedAt = f.sourceStates[i].CreatedAt
+			f.sourceStates[i] = record
+			out := f.sourceStates[i]
+			return &out, nil
+		}
+	}
+	f.sourceStates = append(f.sourceStates, record)
+	return &record, nil
+}
+
+func (f *fakeStore) ListContentPackSourceRuntimeStates(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.ContentPackSourceRuntimeStateRecord, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	filtered := make([]storage.ContentPackSourceRuntimeStateRecord, 0, len(f.sourceStates))
+	for _, row := range f.sourceStates {
+		if row.TenantID == tenantID {
+			filtered = append(filtered, row)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
+	})
+	total := len(filtered)
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 || offset >= total {
+		if offset < 0 {
+			offset = 0
+		}
+		return []storage.ContentPackSourceRuntimeStateRecord{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return append([]storage.ContentPackSourceRuntimeStateRecord(nil), filtered[offset:end]...), total, nil
+}
+
 func (f *fakeStore) ListIPBehaviorCountries(_ context.Context, tenantID uuid.UUID, _ time.Time, countryCode string) ([]storage.IPBehaviorCountrySummary, error) {
 	var out []storage.IPBehaviorCountrySummary
 	// Test rows do not carry tenant_id, so tenant filtering is validated in
@@ -5671,6 +6409,31 @@ func (f *fakeStore) GetAIInvestigation(_ context.Context, id uuid.UUID) (*storag
 	return nil, nil
 }
 
+func (f *fakeStore) GetPrivateAccessExposureFinding(_ context.Context, tenantID, id uuid.UUID) (*storage.PrivateAccessExposureFindingRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.privateAccessFindings {
+		if row.TenantID == tenantID && row.ID == id {
+			copy := row
+			if row.NodeID != nil {
+				nodeID := *row.NodeID
+				copy.NodeID = &nodeID
+			}
+			if row.ServiceID != nil {
+				serviceID := *row.ServiceID
+				copy.ServiceID = &serviceID
+			}
+			if row.ResolvedAt != nil {
+				resolvedAt := *row.ResolvedAt
+				copy.ResolvedAt = &resolvedAt
+			}
+			copy.Evidence = append([]string(nil), row.Evidence...)
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeStore) CreateAIOperatorProposal(_ context.Context, params storage.CreateAIOperatorProposalParams) (*storage.AIOperatorProposal, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -5733,6 +6496,86 @@ func (f *fakeStore) ListAIOperatorProposals(_ context.Context, filter storage.Li
 		end = offset + limit
 	}
 	return out[offset:end], total, nil
+}
+
+func (f *fakeStore) CreateAILogFixerAction(_ context.Context, params storage.CreateAILogFixerActionParams) (*storage.AILogFixerAction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.aiLogFixerActions == nil {
+		f.aiLogFixerActions = map[uuid.UUID]storage.AILogFixerAction{}
+	}
+	action := storage.AILogFixerAction{
+		ID:        uuid.New(),
+		TenantID:  params.TenantID,
+		NodeID:    params.NodeID,
+		JobID:     params.JobID,
+		Action:    strings.TrimSpace(params.Action),
+		Status:    "pending",
+		Policy:    copyFakeMap(params.Policy),
+		Result:    map[string]any{},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if params.RunID != nil && *params.RunID != uuid.Nil {
+		action.RunID = uuid.NullUUID{UUID: *params.RunID, Valid: true}
+	}
+	f.aiLogFixerActions[params.JobID] = action
+	copy := action
+	copy.Policy = copyFakeMap(action.Policy)
+	copy.Result = copyFakeMap(action.Result)
+	return &copy, nil
+}
+
+func (f *fakeStore) GetAILogFixerActionByJobID(_ context.Context, jobID uuid.UUID) (*storage.AILogFixerAction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	action, ok := f.aiLogFixerActions[jobID]
+	if !ok {
+		return nil, nil
+	}
+	copy := action
+	copy.Policy = copyFakeMap(action.Policy)
+	copy.Result = copyFakeMap(action.Result)
+	return &copy, nil
+}
+
+func (f *fakeStore) ListPendingAILogFixerActions(_ context.Context, nodeID uuid.UUID) ([]storage.AILogFixerAction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]storage.AILogFixerAction, 0, len(f.aiLogFixerActions))
+	for _, action := range f.aiLogFixerActions {
+		if action.NodeID == nodeID && (action.Status == "pending" || action.Status == "running") {
+			copy := action
+			copy.Policy = copyFakeMap(action.Policy)
+			copy.Result = copyFakeMap(action.Result)
+			out = append(out, copy)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (f *fakeStore) MarkAILogFixerActionStatus(_ context.Context, jobID uuid.UUID, status string, result map[string]any, errMsg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	action, ok := f.aiLogFixerActions[jobID]
+	if !ok {
+		return nil
+	}
+	action.Status = strings.TrimSpace(status)
+	action.Result = copyFakeMap(result)
+	if strings.TrimSpace(errMsg) != "" {
+		action.ErrorMessage = sql.NullString{String: strings.TrimSpace(errMsg), Valid: true}
+	} else {
+		action.ErrorMessage = sql.NullString{}
+	}
+	action.UpdatedAt = time.Now().UTC()
+	f.aiLogFixerActions[jobID] = action
+	return nil
+}
+
+func (f *fakeStore) MarkAILogFixerRunStatus(context.Context, uuid.UUID, string, map[string]any, map[string]any) error {
+	return nil
 }
 
 func (f *fakeStore) CreateSavedSearch(_ context.Context, in storage.SavedSearch) (*storage.SavedSearch, error) {

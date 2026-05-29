@@ -1,0 +1,5 @@
+DROP INDEX IF EXISTS idx_content_pack_collector_config_candidates_snapshot;
+DROP INDEX IF EXISTS idx_content_pack_collector_config_candidates_tenant_status_created;
+DROP INDEX IF EXISTS idx_content_pack_collector_config_candidates_tenant_version;
+DROP INDEX IF EXISTS idx_content_pack_collector_config_candidates_tenant_created;
+DROP TABLE IF EXISTS content_pack_collector_config_candidates;

@@ -44,12 +44,11 @@ func (s *Server) staticThreatIntelSources() []threatintel.Source {
 		threatintel.FireHOLLevel1{},
 		threatintel.TorExitNodes{},
 	}
-	abuseKey := ""
 	if s != nil && s.cfg != nil {
-		abuseKey = strings.TrimSpace(s.cfg.IPIntel.AbuseIPDBKey)
-	}
-	if abuseKey != "" || threatintel.SnapshotExists(s.threatIntelSnapshotDir(), "static", "abuseipdb") {
-		sources = append(sources, threatintel.AbuseIPDBBlocklist{APIKey: abuseKey})
+		key := strings.TrimSpace(s.cfg.IPIntel.AbuseIPDBKey)
+		if key != "" || threatintel.SnapshotExists(s.threatIntelSnapshotDir(), "static", "abuseipdb") {
+			sources = append(sources, threatintel.AbuseIPDBBlocklist{APIKey: key})
+		}
 	}
 	return sources
 }

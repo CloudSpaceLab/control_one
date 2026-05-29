@@ -161,7 +161,7 @@ func (s *Store) createTelemetryLogsBatch(ctx context.Context, logs []CreateTelem
 		valueStrings = append(valueStrings, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5, len(args)+6, len(args)+7, len(args)+8, len(args)+9, len(args)+10))
 
-		args = append(args, uuid.New(), log.TenantID, log.NodeID, log.LogLevel, log.LogMessage)
+		args = append(args, uuid.New(), nullableUUIDArg(log.TenantID), nullableUUIDArg(log.NodeID), log.LogLevel, log.LogMessage)
 
 		source := sql.NullString{}
 		if log.LogSource != nil {
@@ -294,8 +294,8 @@ func (s *Store) createTelemetryLogsCopy(ctx context.Context, logs []CreateTeleme
 
 		_, err = stmt.Exec(
 			uuid.New(),
-			log.TenantID,
-			log.NodeID,
+			nullableUUIDArg(log.TenantID),
+			nullableUUIDArg(log.NodeID),
 			log.LogLevel,
 			log.LogMessage,
 			source,

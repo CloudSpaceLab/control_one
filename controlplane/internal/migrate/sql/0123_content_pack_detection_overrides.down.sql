@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_content_pack_detection_overrides_detection;
+DROP INDEX IF EXISTS idx_content_pack_detection_overrides_tenant_state;
+DROP TABLE IF EXISTS content_pack_detection_overrides;

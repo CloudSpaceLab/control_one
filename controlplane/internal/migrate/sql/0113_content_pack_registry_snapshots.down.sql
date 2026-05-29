@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_content_pack_registry_snapshots_tenant_created;
+DROP INDEX IF EXISTS idx_content_pack_registry_snapshots_active;
+DROP TABLE IF EXISTS content_pack_registry_snapshots;

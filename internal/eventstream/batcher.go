@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/durablespool"
 )
 
 // Batcher drains a Stream and POSTs ndjson batches to the controlplane.
@@ -37,6 +41,7 @@ type Batcher struct {
 	retryMin     time.Duration
 	retryMax     time.Duration
 	stamp        func(*Event)
+	spool        *durablespool.Spool
 	mu           sync.Mutex
 	pending      []Event
 	pendingBytes int
@@ -55,6 +60,9 @@ type BatcherOptions struct {
 	// Stamp is called for every event before it is added to the pending
 	// batch. Used to attach correlation IDs across streams.
 	Stamp func(*Event)
+	// SpoolDir enables disk-backed event replay for outage/restart safety.
+	SpoolDir      string
+	SpoolMaxBytes int64
 }
 
 // NewBatcher constructs a batcher; call Run to start the loop.
@@ -77,7 +85,7 @@ func NewBatcher(client *api.Client, stream *Stream, log *zap.Logger, opts Batche
 	if opts.RetryMax <= 0 {
 		opts.RetryMax = 30 * time.Second
 	}
-	return &Batcher{
+	b := &Batcher{
 		client:     client,
 		log:        log,
 		stream:     stream,
@@ -91,6 +99,21 @@ func NewBatcher(client *api.Client, stream *Stream, log *zap.Logger, opts Batche
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}
+	if strings.TrimSpace(opts.SpoolDir) != "" {
+		spool, err := durablespool.New(durablespool.Options{
+			Dir:      opts.SpoolDir,
+			Prefix:   "eventstream",
+			MaxBytes: opts.SpoolMaxBytes,
+		})
+		if err != nil {
+			if log != nil {
+				log.Warn("eventstream spool disabled", zap.String("dir", opts.SpoolDir), zap.Error(err))
+			}
+		} else {
+			b.spool = spool
+		}
+	}
+	return b
 }
 
 // Run drains until ctx is cancelled. Safe to run as a goroutine. On exit a
@@ -100,6 +123,7 @@ func (b *Batcher) Run(ctx context.Context) {
 	defer close(b.doneCh)
 	t := time.NewTicker(b.flushEvery)
 	defer t.Stop()
+	b.drainSpool(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -109,6 +133,7 @@ func (b *Batcher) Run(ctx context.Context) {
 			b.flush(context.Background())
 			return
 		case <-t.C:
+			b.drainSpool(ctx)
 			b.flush(ctx)
 		case ev, ok := <-b.stream.Out():
 			if !ok {
@@ -130,6 +155,13 @@ func (b *Batcher) Stop() {
 	}
 	close(b.stopCh)
 	<-b.doneCh
+}
+
+func (b *Batcher) SpoolStats() (durablespool.Stats, error) {
+	if b == nil || b.spool == nil {
+		return durablespool.Stats{}, nil
+	}
+	return b.spool.Stats()
 }
 
 func (b *Batcher) append(ev Event, ctx context.Context) {
@@ -171,10 +203,96 @@ func (b *Batcher) flush(ctx context.Context) {
 		}
 		return
 	}
-	if err := b.postWithRetry(ctx, body); err != nil && b.log != nil {
+	if b.spool != nil {
+		spooled := eventSpoolBatch{ReplayKey: eventReplayKey(batch), Events: batch}
+		if _, err := b.spool.AppendJSON(spooled); err != nil {
+			if b.log != nil {
+				b.log.Warn("eventstream spool append failed; posting batch directly", zap.Int("rows", len(batch)), zap.Error(err))
+			}
+			if err := b.postWithRetry(ctx, body, spooled.ReplayKey); err != nil && b.log != nil {
+				b.log.Warn("ingest post failed",
+					zap.Int("rows", len(batch)), zap.Error(err))
+			}
+			return
+		}
+		b.drainSpool(ctx)
+		return
+	}
+	if err := b.postWithRetry(ctx, body, eventReplayKey(batch)); err != nil && b.log != nil {
 		b.log.Warn("ingest post failed",
 			zap.Int("rows", len(batch)), zap.Error(err))
 	}
+}
+
+type eventSpoolBatch struct {
+	ReplayKey string  `json:"replay_key,omitempty"`
+	Events    []Event `json:"events"`
+}
+
+func (b *Batcher) drainSpool(ctx context.Context) {
+	if b == nil || b.spool == nil || ctx.Err() != nil {
+		return
+	}
+	records, err := b.spool.Records()
+	if err != nil {
+		if b.log != nil {
+			b.log.Warn("eventstream spool list failed", zap.Error(err))
+		}
+		return
+	}
+	for _, record := range records {
+		if ctx.Err() != nil {
+			return
+		}
+		data, err := b.spool.Read(record)
+		if err != nil {
+			if b.log != nil {
+				b.log.Warn("eventstream spool read failed", zap.String("path", record.Path), zap.Error(err))
+			}
+			return
+		}
+		var batch eventSpoolBatch
+		if err := json.Unmarshal(data, &batch); err != nil || len(batch.Events) == 0 {
+			if b.log != nil {
+				b.log.Warn("eventstream spool record invalid; dropping", zap.String("path", record.Path), zap.Error(err))
+			}
+			_ = b.spool.Delete(record)
+			continue
+		}
+		body, err := encodeBatch(batch.Events)
+		if err != nil {
+			if b.log != nil {
+				b.log.Warn("eventstream spool encode failed; dropping", zap.String("path", record.Path), zap.Error(err))
+			}
+			_ = b.spool.Delete(record)
+			continue
+		}
+		replayKey := strings.TrimSpace(batch.ReplayKey)
+		if replayKey == "" {
+			replayKey = eventReplayKey(batch.Events)
+		}
+		if err := b.postWithRetry(ctx, body, replayKey); err != nil {
+			if b.log != nil {
+				b.log.Warn("eventstream spool replay failed", zap.String("path", record.Path), zap.Int("rows", len(batch.Events)), zap.Error(err))
+			}
+			return
+		}
+		if err := b.spool.Delete(record); err != nil {
+			if b.log != nil {
+				b.log.Warn("eventstream spool delete failed", zap.String("path", record.Path), zap.Error(err))
+			}
+			return
+		}
+	}
+}
+
+func eventReplayKey(events []Event) string {
+	raw, err := json.Marshal(events)
+	if err != nil {
+		raw = []byte(fmt.Sprintf("%#v", events))
+	}
+	sum := sha256.Sum256(raw)
+	return "eventstream:" + hex.EncodeToString(sum[:])
 }
 
 func encodeBatch(events []Event) ([]byte, error) {
@@ -197,13 +315,13 @@ func encodeBatch(events []Event) ([]byte, error) {
 	return gz.Bytes(), nil
 }
 
-func (b *Batcher) postWithRetry(ctx context.Context, body []byte) error {
+func (b *Batcher) postWithRetry(ctx context.Context, body []byte, replayKey string) error {
 	delay := b.retryMin
 	for attempt := 0; attempt < 6; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		retryAfter, ok, err := b.postOnce(ctx, body)
+		retryAfter, ok, err := b.postOnce(ctx, body, replayKey)
 		if ok {
 			return nil
 		}
@@ -231,13 +349,16 @@ func (b *Batcher) postWithRetry(ctx context.Context, body []byte) error {
 // postOnce returns (retryAfter, success, err). retryAfter is the server-hinted
 // delay (from `Retry-After`); success is true on 2xx; err carries non-fatal
 // transport / 5xx errors.
-func (b *Batcher) postOnce(ctx context.Context, body []byte) (time.Duration, bool, error) {
+func (b *Batcher) postOnce(ctx context.Context, body []byte, replayKey string) (time.Duration, bool, error) {
 	if b.client == nil {
 		return 0, false, fmt.Errorf("api client nil")
 	}
 	headers := map[string]string{
 		"Content-Type":     "application/x-ndjson",
 		"Content-Encoding": "gzip",
+	}
+	if replayKey = strings.TrimSpace(replayKey); replayKey != "" {
+		headers["X-ControlOne-Replay-Key"] = replayKey
 	}
 	resp, err := b.client.DoWithHeaders(ctx, http.MethodPost, b.endpoint, body, headers)
 	if err != nil {

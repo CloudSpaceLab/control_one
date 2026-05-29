@@ -259,11 +259,12 @@ func (s *Store) ListTelemetryLogs(ctx context.Context, filter TelemetryLogFilter
 	var logs []TelemetryLog
 	for rows.Next() {
 		var l TelemetryLog
+		var tenantRaw, nodeRaw sql.NullString
 		var labelsRaw []byte
 		if err := rows.Scan(
 			&l.ID,
-			&l.TenantID,
-			&l.NodeID,
+			&tenantRaw,
+			&nodeRaw,
 			&l.LogLevel,
 			&l.LogMessage,
 			&l.LogSource,
@@ -274,6 +275,12 @@ func (s *Store) ListTelemetryLogs(ctx context.Context, filter TelemetryLogFilter
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan telemetry log: %w", err)
 		}
+		if tenantRaw.Valid {
+			l.TenantID, _ = uuid.Parse(tenantRaw.String)
+		}
+		if nodeRaw.Valid {
+			l.NodeID, _ = uuid.Parse(nodeRaw.String)
+		}
 		labels, err := decodeStringMap(labelsRaw)
 		if err != nil {
 			return nil, 0, err
@@ -283,6 +290,77 @@ func (s *Store) ListTelemetryLogs(ctx context.Context, filter TelemetryLogFilter
 	}
 
 	return logs, total, nil
+}
+
+// ListTelemetryLogsForForwarding returns tenant logs strictly newer than since
+// in ascending timestamp order so external SIEM forwarding can advance a
+// checkpoint without skipping older unsent rows.
+func (s *Store) ListTelemetryLogsForForwarding(ctx context.Context, tenantID uuid.UUID, since time.Time, cursorLogID uuid.UUID, limit int) ([]TelemetryLog, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if tenantID == uuid.Nil {
+		return nil, errors.New("tenant id is required")
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	var cursorLogArg any
+	if cursorLogID != uuid.Nil {
+		cursorLogArg = cursorLogID
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, node_id, log_level, log_message, log_source, log_program, labels, timestamp, created_at
+		FROM telemetry_logs
+		WHERE tenant_id = $1
+		  AND (
+		    timestamp > $2
+		    OR ($3::uuid IS NOT NULL AND timestamp = $2 AND id > $3::uuid)
+		  )
+		ORDER BY timestamp ASC, id ASC
+		LIMIT $4
+	`, tenantID, since.UTC(), cursorLogArg, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query telemetry logs for forwarding: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var logs []TelemetryLog
+	for rows.Next() {
+		var l TelemetryLog
+		var tenantRaw, nodeRaw sql.NullString
+		var labelsRaw []byte
+		if err := rows.Scan(
+			&l.ID,
+			&tenantRaw,
+			&nodeRaw,
+			&l.LogLevel,
+			&l.LogMessage,
+			&l.LogSource,
+			&l.LogProgram,
+			&labelsRaw,
+			&l.Timestamp,
+			&l.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan telemetry log for forwarding: %w", err)
+		}
+		if tenantRaw.Valid {
+			l.TenantID, _ = uuid.Parse(tenantRaw.String)
+		}
+		if nodeRaw.Valid {
+			l.NodeID, _ = uuid.Parse(nodeRaw.String)
+		}
+		labels, err := decodeStringMap(labelsRaw)
+		if err != nil {
+			return nil, err
+		}
+		l.Labels = labels
+		logs = append(logs, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return logs, nil
 }
 
 // LogThroughputBucket is one bucket of telemetry_logs counts in PostgreSQL.
@@ -411,7 +489,7 @@ func (s *Store) CreateTelemetryLogs(ctx context.Context, logs []CreateTelemetryL
 		valueStrings = append(valueStrings, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5, len(args)+6, len(args)+7, len(args)+8, len(args)+9, len(args)+10))
 
-		args = append(args, id, log.TenantID, log.NodeID, log.LogLevel, log.LogMessage)
+		args = append(args, id, nullableUUIDArg(log.TenantID), nullableUUIDArg(log.NodeID), log.LogLevel, log.LogMessage)
 
 		source := sql.NullString{}
 		if log.LogSource != nil {
@@ -440,4 +518,11 @@ func (s *Store) CreateTelemetryLogs(ctx context.Context, logs []CreateTelemetryL
 		return fmt.Errorf("insert telemetry logs: %w", err)
 	}
 	return nil
+}
+
+func nullableUUIDArg(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
 }

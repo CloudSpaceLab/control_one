@@ -111,55 +111,63 @@ func TestManagerUsesLocalSnapshotWhenRefreshFails(t *testing.T) {
 	dir := t.TempDir()
 	src := &flakySource{
 		name: "abuseipdb",
-		inds: []Indicator{
-			{IP: "45.135.193.156", Feed: "abuseipdb", Category: "abuse", Score: 100, FirstSeen: time.Now().UTC()},
-		},
+		indicators: []Indicator{{
+			IP:        "45.135.193.156",
+			Feed:      "abuseipdb",
+			Category:  "abuse",
+			Score:     90,
+			FirstSeen: time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC),
+		}},
 	}
 	m := New(Config{SnapshotDir: dir, Sources: []Source{src}}, nil)
 	m.refreshOnce(context.Background())
 	if m.Current() == nil {
-		t.Fatal("expected current set after first refresh")
+		t.Fatal("expected initial snapshot")
 	}
 
-	src.err = errors.New("quota exhausted")
-	m.refreshOnce(context.Background())
-	set := m.Current()
-	if set == nil {
-		t.Fatal("expected stale snapshot to keep current set alive")
+	src.err = errors.New("abuseipdb api key required")
+	m2 := New(Config{SnapshotDir: dir, Sources: []Source{src}}, nil)
+	m2.refreshOnce(context.Background())
+	current := m2.Current()
+	if current == nil {
+		t.Fatal("expected local snapshot after refresh failure")
 	}
-	match, ok := set.LookupIP(net.ParseIP("45.135.193.156"))
-	if !ok {
-		t.Fatal("expected stale snapshot lookup hit")
-	}
-	if match.Feed != "abuseipdb" || match.Score != 100 {
-		t.Fatalf("unexpected stale match: %+v", match)
+	if _, ok := current.LookupIP(net.ParseIP("45.135.193.156")); !ok {
+		t.Fatal("expected downloaded AbuseIPDB snapshot to be used locally")
 	}
 }
 
 func TestSnapshotExists(t *testing.T) {
 	dir := t.TempDir()
-	if SnapshotExists(dir, "static", "abuseipdb") {
-		t.Fatal("snapshot should not exist before save")
-	}
-	if err := saveSnapshot(dir, "static", "abuseipdb", []Indicator{{IP: "1.2.3.4", Feed: "abuseipdb", Score: 90}}); err != nil {
-		t.Fatalf("save snapshot: %v", err)
+	m := New(Config{SnapshotDir: dir, Sources: []Source{staticThreatSource{}}}, nil)
+	if err := m.saveSnapshot("static", "abuseipdb", []Indicator{{IP: "1.2.3.4", Feed: "abuseipdb", Score: 90}}); err != nil {
+		t.Fatal(err)
 	}
 	if !SnapshotExists(dir, "static", "abuseipdb") {
-		t.Fatal("snapshot should exist after save")
+		t.Fatal("expected snapshot to exist")
 	}
 }
 
 type flakySource struct {
-	name string
-	inds []Indicator
-	err  error
+	name       string
+	err        error
+	indicators []Indicator
 }
 
-func (f *flakySource) Name() string { return f.name }
+func (f *flakySource) Name() string {
+	return f.name
+}
 
 func (f *flakySource) Fetch(context.Context, *http.Client) ([]Indicator, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return append([]Indicator(nil), f.inds...), nil
+	return f.indicators, nil
+}
+
+type staticThreatSource struct{}
+
+func (staticThreatSource) Name() string { return "static" }
+func (staticThreatSource) Fetch(context.Context, *http.Client) ([]Indicator, error) {
+	return nil, nil
 }

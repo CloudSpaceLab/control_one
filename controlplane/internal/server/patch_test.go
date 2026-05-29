@@ -84,6 +84,62 @@ func (p *patchTestStore) CreateNodePatchState(_ context.Context, in storage.Node
 	return &out, nil
 }
 
+func (p *patchTestStore) SetNodePatchStateJobID(_ context.Context, stateID, jobID uuid.UUID) error {
+	for i := range p.states {
+		if p.states[i].ID == stateID {
+			p.states[i].JobID = &jobID
+			return nil
+		}
+	}
+	return nil
+}
+
+func (p *patchTestStore) ListNodePatchStatesForDeployment(_ context.Context, deploymentID uuid.UUID) ([]storage.NodePatchState, error) {
+	out := make([]storage.NodePatchState, 0, len(p.states))
+	for _, state := range p.states {
+		if state.DeploymentID == deploymentID {
+			out = append(out, state)
+		}
+	}
+	return out, nil
+}
+
+func (p *patchTestStore) GetNodePatchStateByJobID(_ context.Context, jobID uuid.UUID) (*storage.NodePatchState, error) {
+	for _, state := range p.states {
+		if state.JobID != nil && *state.JobID == jobID {
+			copy := state
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (p *patchTestStore) MarkNodePatchApplied(_ context.Context, id uuid.UUID, packagesUpgraded int, logTail string) error {
+	for i := range p.states {
+		if p.states[i].ID == id {
+			p.states[i].Status = "applied"
+			p.states[i].PackagesUpgraded = &packagesUpgraded
+			p.states[i].LogTail = &logTail
+			now := time.Now().UTC()
+			p.states[i].AppliedAt = &now
+			return nil
+		}
+	}
+	return nil
+}
+
+func (p *patchTestStore) MarkNodePatchFailed(_ context.Context, id uuid.UUID, errMsg, logTail string) error {
+	for i := range p.states {
+		if p.states[i].ID == id {
+			p.states[i].Status = "failed"
+			p.states[i].Error = &errMsg
+			p.states[i].LogTail = &logTail
+			return nil
+		}
+	}
+	return nil
+}
+
 // patchOperatorPrincipal returns a stand-in operator principal for the patch
 // API tests. Subject is a real UUID so approver_id round-trips cleanly.
 func patchOperatorPrincipal() *auth.Principal {
@@ -100,6 +156,87 @@ func newPatchTestServer(store Store) *Server {
 		HTTP: config.HTTPConfig{Address: ":0"},
 	}
 	return New(zap.NewNop(), cfg, store, &stubQueue{})
+}
+
+func TestPatchDeployCreatesActionPlanAndHeartbeatReceipt(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := newPatchTestStore(tenantID, nodeID)
+	store.remediationConfigs = map[uuid.UUID]storage.TenantRemediationConfig{
+		tenantID: {
+			TenantID:              tenantID,
+			MinApprovalSeverity:   "critical",
+			CriticalOverride:      true,
+			PatchRequiresApproval: false,
+		},
+	}
+	srv := newPatchTestServer(store)
+
+	body, _ := json.Marshal(patchDeployRequest{
+		TenantID:         tenantID.String(),
+		NodeIDs:          []string{nodeID.String()},
+		Mode:             "direct",
+		PackageAllowlist: []string{"openssl"},
+		PostPatchRescan:  true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/patch/deployments", bytes.NewReader(body))
+	req = withPrincipal(req, patchOperatorPrincipal())
+	rec := httptest.NewRecorder()
+	srv.handlePatchDeployments(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.states) != 1 || store.states[0].JobID == nil {
+		t.Fatalf("expected dispatched node patch state with job, got %+v", store.states)
+	}
+	if len(store.actionPlans) != 1 {
+		t.Fatalf("expected one action plan, got %d", len(store.actionPlans))
+	}
+	var plan storage.ActionPlan
+	for _, row := range store.actionPlans {
+		plan = row
+	}
+	if plan.Domain != "patch" || plan.ActionKind != "patch.deploy" || plan.State != storage.ActionPlanStateQueued {
+		t.Fatalf("unexpected action plan: %+v", plan)
+	}
+
+	jobID := *store.states[0].JobID
+	job, err := store.GetJob(context.Background(), jobID)
+	if err != nil || job == nil {
+		t.Fatalf("expected job %s: %v", jobID, err)
+	}
+	var payload patchJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatalf("decode patch payload: %v", err)
+	}
+	if payload.ActionPlanID != plan.ID.String() {
+		t.Fatalf("expected action_plan_id %s in payload, got %s", plan.ID, payload.ActionPlanID)
+	}
+
+	srv.processHeartbeatCompletedActions(context.Background(), nodeID, []heartbeatCompletedAction{{
+		Action: JobTypePatchDeployDirect,
+		JobID:  jobID.String(),
+		Status: "succeeded",
+		Metadata: map[string]any{
+			"packages_upgraded": 1,
+			"log_tail":          "patched openssl",
+		},
+	}})
+
+	receipts := store.actionReceipts[plan.ID]
+	if len(receipts) != 1 {
+		t.Fatalf("expected one action receipt, got %d", len(receipts))
+	}
+	if receipts[0].State != storage.ActionPlanStateSucceeded || receipts[0].JobID.UUID != jobID {
+		t.Fatalf("unexpected action receipt: %+v", receipts[0])
+	}
+	updated := store.actionPlans[plan.ID]
+	if updated.State != storage.ActionPlanStateSucceeded {
+		t.Fatalf("expected action plan state succeeded, got %s", updated.State)
+	}
 }
 
 // TestPatchDeploy_ApprovalRequired_ParksRow confirms that when a tenant has
@@ -322,6 +459,79 @@ func TestPatchDeploy_ApprovalNotRequired_DispatchesImmediately(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.patchApprovals) != 0 {
 		t.Fatalf("expected 0 patch_approvals on legacy path, got %d", len(store.patchApprovals))
+	}
+}
+
+func TestPatchDeploy_CanaryWaveAdvanceAndPackagePolicy(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeA := uuid.New()
+	nodeB := uuid.New()
+	nodeC := uuid.New()
+	store := newPatchTestStore(tenantID, nodeA)
+	store.nodes = append(store.nodes,
+		storage.Node{ID: nodeB, TenantID: tenantID, Hostname: "patch-b", State: storage.NodeStateActive, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		storage.Node{ID: nodeC, TenantID: tenantID, Hostname: "patch-c", State: storage.NodeStateActive, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	)
+	store.remediationConfigs = map[uuid.UUID]storage.TenantRemediationConfig{
+		tenantID: {
+			TenantID:              tenantID,
+			MinApprovalSeverity:   "high",
+			CriticalOverride:      true,
+			PatchRequiresApproval: false,
+		},
+	}
+	srv := newPatchTestServer(store)
+
+	body, _ := json.Marshal(patchDeployRequest{
+		TenantID:         tenantID.String(),
+		NodeIDs:          []string{nodeA.String(), nodeB.String(), nodeC.String()},
+		Mode:             "direct",
+		CanaryNodeIDs:    []string{nodeA.String()},
+		WaveSize:         1,
+		PackageAllowlist: []string{"openssl", "nginx"},
+		PostPatchRescan:  true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/patch/deployments", bytes.NewReader(body))
+	req = withPrincipal(req, patchOperatorPrincipal())
+	rec := httptest.NewRecorder()
+	srv.handlePatchDeployments(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp patchDeployResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Plan == nil || len(resp.Plan.Waves) != 3 || !resp.Plan.Waves[0].Canary {
+		t.Fatalf("unexpected plan: %+v", resp.Plan)
+	}
+	if len(store.states) != 1 || store.states[0].NodeID != nodeA {
+		t.Fatalf("expected only canary dispatched, states=%+v", store.states)
+	}
+	if store.states[0].JobID == nil {
+		t.Fatal("canary state missing job id")
+	}
+	job, _ := store.GetJob(context.Background(), *store.states[0].JobID)
+	var payload patchJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatalf("decode patch payload: %v", err)
+	}
+	if !payload.PostPatchRescan || len(payload.PackageAllowlist) != 2 || payload.PackageAllowlist[0] != "openssl" {
+		t.Fatalf("payload lost package policy: %+v", payload)
+	}
+
+	store.states[0].Status = "applied"
+	advanceReq := httptest.NewRequest(http.MethodPost, "/api/v1/patch/deployments/"+resp.Deployment.ID.String()+"/advance", nil)
+	advanceReq = withPrincipal(advanceReq, patchOperatorPrincipal())
+	advanceRec := httptest.NewRecorder()
+	srv.handlePatchDeploymentSubroute(advanceRec, advanceReq)
+	if advanceRec.Code != http.StatusOK {
+		t.Fatalf("advance status=%d body=%s", advanceRec.Code, advanceRec.Body.String())
+	}
+	if len(store.states) != 2 || store.states[1].NodeID != nodeB {
+		t.Fatalf("expected second wave to dispatch nodeB, states=%+v", store.states)
 	}
 }
 

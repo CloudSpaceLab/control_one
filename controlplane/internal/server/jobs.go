@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	cpCompliance "github.com/CloudSpaceLab/control_one/controlplane/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/pdfreport"
@@ -260,6 +261,18 @@ func (s *Server) configureJobIntegrations() {
 		if _, exists := s.jobHandlers[jobType]; !exists {
 			s.jobHandlers[jobType] = s.handleWebserverHeartbeatJob
 		}
+	}
+	for _, jobType := range []string{
+		JobTypeAILogFixerPlan,
+		JobTypeAILogFixerApply,
+		JobTypeAILogFixerRollback,
+	} {
+		if _, exists := s.jobHandlers[jobType]; !exists {
+			s.jobHandlers[jobType] = s.handleAILogFixerHeartbeatJob
+		}
+	}
+	if _, exists := s.jobHandlers[JobTypePrivateAccessImport]; !exists {
+		s.jobHandlers[JobTypePrivateAccessImport] = s.handlePrivateAccessImportJob
 	}
 }
 
@@ -716,7 +729,8 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 
@@ -734,6 +748,9 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := uuid.Parse(tenantParam)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -779,7 +796,8 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r)
+	if !ok {
 		return
 	}
 
@@ -792,6 +810,19 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 	jobID, err := uuid.Parse(jobIDParam)
 	if err != nil {
 		http.Error(w, "invalid job_id", http.StatusBadRequest)
+		return
+	}
+	job, err := s.store.GetJob(r.Context(), jobID)
+	if err != nil {
+		s.logger.Error("get job for stream", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if job == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.authorizeJobRead(w, r, principal, job) {
 		return
 	}
 
@@ -900,7 +931,8 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r)
+	if !ok {
 		return
 	}
 
@@ -911,6 +943,9 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request, jobID
 	}
 	if job == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.authorizeJobRead(w, r, principal, job) {
 		return
 	}
 
@@ -938,6 +973,9 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 	}
 	if job == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if job.TenantID != uuid.Nil && !s.requireTenantAccess(w, r, principal, job.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -1072,6 +1110,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if tenantID != uuid.Nil && !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
+	}
 
 	if v, ok := payloadDetails.(*provisionPayload); ok && v != nil {
 		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
@@ -1090,6 +1131,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if v, ok := payloadDetails.(*compliancePayload); ok && v != nil {
+		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
+			http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
+			return
+		}
+	}
+	if v, ok := payloadDetails.(aiLogFixerJobPayload); ok {
 		if v.TenantID != "" && !strings.EqualFold(v.TenantID, tenantID.String()) {
 			http.Error(w, "tenant mismatch between payload and request", http.StatusBadRequest)
 			return
@@ -1115,6 +1162,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	created, err := s.store.CreateJob(ctx, job, initialEvent)
 	if err != nil {
 		s.logger.Error("create job", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if err := s.createAILogFixerActionForJob(ctx, created, payloadDetails); err != nil {
+		s.logger.Error("create ai logfixer action", zap.Error(err), zap.String("job_id", created.ID.String()))
+		_ = s.store.UpdateJobStatus(ctx, created.ID, storage.JobStatusFailed, "failed to create AI LogFixer action", map[string]any{"finished_at": time.Now()})
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -1161,6 +1214,81 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(jobResponseFromModel(created, events, nil)); err != nil {
 		s.logger.Warn("encode job response", zap.Error(err))
 	}
+}
+
+func (s *Server) authorizeJobRead(w http.ResponseWriter, r *http.Request, principal *auth.Principal, job *storage.Job) bool {
+	if principal == nil || job == nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return false
+	}
+	if strings.EqualFold(principal.Type, "agent") {
+		if jobTargetsAgentNode(job, principal) {
+			return true
+		}
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return false
+	}
+	if !principalHasAnyRole(principal, roleViewer, roleOperator, roleAdmin) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return false
+	}
+	if job.TenantID == uuid.Nil {
+		return true
+	}
+	return s.requireTenantAccess(w, r, principal, job.TenantID, roleViewer, roleOperator, roleAdmin)
+}
+
+func principalHasAnyRole(principal *auth.Principal, roles ...string) bool {
+	if principal == nil {
+		return false
+	}
+	for _, role := range roles {
+		if hasRole(principal, role) {
+			return true
+		}
+	}
+	return false
+}
+
+func jobTargetsAgentNode(job *storage.Job, principal *auth.Principal) bool {
+	if job == nil || principal == nil || len(job.Payload) == 0 {
+		return false
+	}
+	nodeID := agentPrincipalNodeID(principal)
+	if nodeID == uuid.Nil {
+		return false
+	}
+	var payload struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(payload.NodeID), nodeID.String())
+}
+
+func agentPrincipalNodeID(principal *auth.Principal) uuid.UUID {
+	if principal == nil {
+		return uuid.Nil
+	}
+	for _, raw := range []string{principal.Name, principal.Subject} {
+		candidates := []string{strings.TrimSpace(raw)}
+		if strings.HasPrefix(strings.TrimSpace(raw), "node:") {
+			candidates = append(candidates, strings.TrimPrefix(strings.TrimSpace(raw), "node:"))
+		}
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "CN=") {
+				candidates = append(candidates, strings.TrimPrefix(part, "CN="))
+			}
+		}
+		for _, candidate := range candidates {
+			if parsed, err := uuid.Parse(strings.TrimSpace(candidate)); err == nil {
+				return parsed
+			}
+		}
+	}
+	return uuid.Nil
 }
 
 func (s *Server) ensureProvisioningPlan(ctx context.Context, planID string) error {

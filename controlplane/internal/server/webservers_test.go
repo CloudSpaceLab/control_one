@@ -114,6 +114,64 @@ func TestProcessWebserverCompletedActionPersistsRequiredReceipt(t *testing.T) {
 	}
 }
 
+func TestProcessWebserverCompletedActionCreatesUnifiedActionReceipt(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	jobID := uuid.New()
+	store := &webserverReceiptStore{
+		fakeStore: &fakeStore{jobs: map[uuid.UUID]*storage.Job{
+			jobID: webserverTestJob(jobID, tenantID, nodeID, JobTypeWebserverConfigApply),
+		}},
+		action: storage.WebserverConfigAction{
+			ID:       uuid.New(),
+			TenantID: tenantID,
+			NodeID:   nodeID,
+			JobID:    uuid.NullUUID{UUID: jobID, Valid: true},
+			Action:   JobTypeWebserverConfigApply,
+			Status:   "running",
+		},
+	}
+	plan, err := store.CreateActionPlan(context.Background(), storage.CreateActionPlanParams{
+		TenantID:   tenantID,
+		NodeID:     &nodeID,
+		Domain:     "webserver",
+		ActionKind: JobTypeWebserverConfigApply,
+		State:      storage.ActionPlanStateQueued,
+	})
+	if err != nil {
+		t.Fatalf("create action plan: %v", err)
+	}
+	store.action.Policy = map[string]any{"action_plan_id": plan.ID.String()}
+	s := &Server{store: store}
+
+	s.processWebserverCompletedAction(context.Background(), jobID, heartbeatCompletedAction{
+		Action: JobTypeWebserverConfigApply,
+		Status: "succeeded",
+		Metadata: map[string]any{
+			"receipt": map[string]any{
+				"action":            JobTypeWebserverConfigApply,
+				"checksum_after":    "sha256:after",
+				"validation_status": "passed",
+				"reload_status":     "reloaded",
+				"metadata":          webserverTestReceiptMetadata(store.jobs[jobID]),
+			},
+		},
+	})
+
+	receipts := store.actionReceipts[plan.ID]
+	if len(receipts) != 1 {
+		t.Fatalf("expected one unified action receipt, got %d", len(receipts))
+	}
+	if receipts[0].State != storage.ActionPlanStateSucceeded || receipts[0].JobID.UUID != jobID {
+		t.Fatalf("unexpected unified receipt: %+v", receipts[0])
+	}
+	if got := store.actionPlans[plan.ID].State; got != storage.ActionPlanStateSucceeded {
+		t.Fatalf("action plan state = %s, want succeeded", got)
+	}
+}
+
 func TestProcessWebserverCompletedActionRejectsUnboundReceipt(t *testing.T) {
 	t.Parallel()
 
