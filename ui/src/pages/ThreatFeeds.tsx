@@ -22,8 +22,9 @@ interface FeedTypeMeta {
 
 // FEED_CATALOG describes every feed the platform knows how to fetch. The UI
 // adapts the form fields to each entry — built-in feeds need only a name,
-// provider feeds can refresh into local snapshots, custom feeds want a URL. Adding a new
-// feed type is a one-line entry here plus a case in the Go SourceFromConfig.
+// API-backed feeds download into the local blacklist snapshot; keys are for
+// upstream refresh, not per-IP scans. Adding a new feed type is a one-line
+// entry here plus a case in the Go SourceFromConfig.
 const FEED_CATALOG: FeedTypeMeta[] = [
   {
     type: 'spamhaus_drop',
@@ -60,7 +61,7 @@ const FEED_CATALOG: FeedTypeMeta[] = [
   {
     type: 'abuseipdb',
     label: 'AbuseIPDB blocklist',
-    description: 'Confidence-scored bad IPs. Downloaded into the local blacklist DB; key is only needed for refreshes.',
+    description: 'Confidence-scored bad IPs. Downloaded locally; key only refreshes upstream.',
     needsURL: 'never',
     apiKeyMode: 'optional',
   },
@@ -311,7 +312,7 @@ export function ThreatFeeds(): JSX.Element {
       <SectionHeader
         eyebrow="DETECT & RESPOND · THREAT FEEDS"
         title="Abuse IP data sources"
-        description="Choose feeds to refresh into the local blacklist database. Investigations search the cached DB first, so live lookups do not burn provider quota."
+        description="Choose which feeds to consume. Remote feeds are refreshed into a local blacklist database, so IP checks and scans do not require live reputation API calls."
         actions={
           <SelectField
             value={tenantId}
@@ -546,7 +547,7 @@ export function ThreatFeeds(): JSX.Element {
                 type="password"
                 value={form.api_key ?? ''}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                placeholder={meta.apiKeyMode === 'optional' ? 'optional refresh key' : 'paste key'}
+                placeholder={meta.apiKeyMode === 'optional' ? 'paste key to refresh upstream' : 'paste key'}
                 autoComplete="off"
               />
             </div>

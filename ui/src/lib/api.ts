@@ -1,9 +1,11 @@
 // Default to same-origin (empty string) for production builds,
 // localhost:8443 for local development
-const DEFAULT_API_BASE_URL = import.meta.env.PROD ? '' : 'http://localhost:8443';
+const DEFAULT_API_BASE_URL = import.meta.env.PROD
+  ? ""
+  : "http://localhost:8443";
 const HTTP_STATUS_UNAUTHORIZED = 401;
 
-export type HypervisorProvider = 'aws' | 'azure' | 'vmware' | 'libvirt';
+export type HypervisorProvider = "aws" | "azure" | "vmware" | "libvirt";
 
 export interface ProviderCredential {
   id: string;
@@ -87,7 +89,7 @@ export interface RiskScore {
   score: number;
   max_score: number;
   percent: number;
-  trend_direction: 'up' | 'down' | 'stable';
+  trend_direction: "up" | "down" | "stable";
   trend_delta: number;
   components: RiskComponent[];
   calculated_at: string;
@@ -118,7 +120,7 @@ export interface RemediationVelocity {
   period_count: number;
   remediations: number;
   avg_per_period: number;
-  trend_direction: 'up' | 'down' | 'stable';
+  trend_direction: "up" | "down" | "stable";
   trend_percent: number;
 }
 
@@ -170,7 +172,13 @@ export interface DashboardOverview {
   compliance_series?: ComplianceSeriesPoint[];
 }
 
-export type ControlRoomTone = 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown';
+export type ControlRoomTone =
+  | "healthy"
+  | "warning"
+  | "degraded"
+  | "critical"
+  | "info"
+  | "unknown";
 
 export interface ControlRoomMetric {
   label: string;
@@ -189,7 +197,14 @@ export interface ControlRoomDrilldownItem {
 }
 
 export interface ControlRoomLane {
-  id: 'server-health' | 'security' | 'app-db-health' | 'exposure' | 'ip-behavior' | 'patch-posture' | string;
+  id:
+    | "server-health"
+    | "security"
+    | "app-db-health"
+    | "exposure"
+    | "ip-behavior"
+    | "patch-posture"
+    | string;
   title: string;
   tone: ControlRoomTone;
   score: number;
@@ -375,33 +390,33 @@ export interface ControlRoomOverview {
 }
 
 export type CoverageDomain =
-  | 'telemetry'
-  | 'parser'
-  | 'detection'
-  | 'compliance'
-  | 'remediation'
-  | 'vulnerability'
-  | 'posture'
+  | "telemetry"
+  | "parser"
+  | "detection"
+  | "compliance"
+  | "remediation"
+  | "vulnerability"
+  | "posture"
   | (string & {});
 
 export type CoverageState =
-  | 'supported'
-  | 'partial'
-  | 'raw_only'
-  | 'unsupported'
-  | 'manual_evidence'
-  | 'stale'
-  | 'exception'
-  | 'not_applicable'
-  | 'unknown'
+  | "supported"
+  | "partial"
+  | "raw_only"
+  | "unsupported"
+  | "manual_evidence"
+  | "stale"
+  | "exception"
+  | "not_applicable"
+  | "unknown"
   | (string & {});
 
 export type CoverageQualityState =
-  | 'production_tested'
-  | 'fixture_tested'
-  | 'manual'
-  | 'untested'
-  | 'unknown'
+  | "production_tested"
+  | "fixture_tested"
+  | "manual"
+  | "untested"
+  | "unknown"
   | (string & {});
 
 export interface CoverageMatrixRow {
@@ -476,7 +491,9 @@ type RawCoverageMatrixResponse =
       items?: CoverageMatrixRow[];
     };
 
-function normalizeCoverageMatrixResponse(raw: RawCoverageMatrixResponse): CoverageMatrixResponse {
+function normalizeCoverageMatrixResponse(
+  raw: RawCoverageMatrixResponse,
+): CoverageMatrixResponse {
   if (Array.isArray(raw)) {
     return { rows: raw };
   }
@@ -489,7 +506,8 @@ function normalizeCoverageMatrixResponse(raw: RawCoverageMatrixResponse): Covera
     data?: CoverageMatrixRow[];
     items?: CoverageMatrixRow[];
   };
-  const rows = envelope.rows ?? envelope.matrix ?? envelope.data ?? envelope.items ?? [];
+  const rows =
+    envelope.rows ?? envelope.matrix ?? envelope.data ?? envelope.items ?? [];
   return {
     tenant_id: envelope.tenant_id,
     generated_at: envelope.generated_at,
@@ -499,17 +517,29 @@ function normalizeCoverageMatrixResponse(raw: RawCoverageMatrixResponse): Covera
 }
 
 // History + framework series
-export interface RiskScorePoint { ts: string; score: number; }
-export interface RiskScoreHistory { points: RiskScorePoint[]; }
-export interface RemediationVelocityPoint { ts: string; count: number; }
-export interface RemediationVelocityHistory { points: RemediationVelocityPoint[]; }
+export interface RiskScorePoint {
+  ts: string;
+  score: number;
+}
+export interface RiskScoreHistory {
+  points: RiskScorePoint[];
+}
+export interface RemediationVelocityPoint {
+  ts: string;
+  count: number;
+}
+export interface RemediationVelocityHistory {
+  points: RemediationVelocityPoint[];
+}
 export interface FrameworkComplianceSummary {
   name: string;
   pass: number;
   fail: number;
   coverage: number;
 }
-export interface ComplianceByFramework { frameworks: FrameworkComplianceSummary[]; }
+export interface ComplianceByFramework {
+  frameworks: FrameworkComplianceSummary[];
+}
 
 // Admin endpoints
 export interface AdminSelfHealth {
@@ -517,7 +547,7 @@ export interface AdminSelfHealth {
   nats_lag_ms: number;
   db_p95_ms: number;
   queue_depth: number;
-  status: 'ok' | 'degraded' | 'down';
+  status: "ok" | "degraded" | "down";
 }
 
 export interface AdminIngestSeriesPoint {
@@ -551,7 +581,9 @@ export interface AdminSLOEntry {
   burn_rate: number;
   window: string;
 }
-export interface AdminSLO { slos: AdminSLOEntry[]; }
+export interface AdminSLO {
+  slos: AdminSLOEntry[];
+}
 
 export interface AdminCapacity {
   disk_used: number;
@@ -564,8 +596,15 @@ export interface AdminCapacity {
 // Investigate / search
 export interface ClassificationChip {
   label: string;
-  tone?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown';
-  severity?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'info' | 'unknown' | string;
+  tone?: "healthy" | "warning" | "degraded" | "critical" | "info" | "unknown";
+  severity?:
+    | "healthy"
+    | "warning"
+    | "degraded"
+    | "critical"
+    | "info"
+    | "unknown"
+    | string;
 }
 
 export interface SearchHit {
@@ -575,7 +614,10 @@ export interface SearchHit {
   snippet?: string;
   classification?: ClassificationChip[];
 }
-export interface SearchFacet { type: string; count: number; }
+export interface SearchFacet {
+  type: string;
+  count: number;
+}
 export interface InvestigateSearchResult {
   facets: SearchFacet[];
   items: SearchHit[];
@@ -618,7 +660,9 @@ export interface RelatedEntity {
   score: number;
   co_occurrences: number;
 }
-export interface EntityRelated { related: RelatedEntity[]; }
+export interface EntityRelated {
+  related: RelatedEntity[];
+}
 
 export interface IpEnrichment {
   addr: string;
@@ -661,8 +705,8 @@ export interface SavedSearchInput {
 }
 
 // Onboarding wizard
-export type OnboardingProtocol = 'ssh' | 'winrm' | 'rdp';
-export type OnboardingAuth = 'password' | 'private_key' | 'agent';
+export type OnboardingProtocol = "ssh" | "winrm" | "rdp";
+export type OnboardingAuth = "password" | "private_key" | "agent";
 export interface TestConnectionPayload {
   protocol: OnboardingProtocol;
   host: string;
@@ -702,8 +746,8 @@ export interface PortRule {
   policy_id?: string;
   name: string;
   port: number;
-  protocol: 'tcp' | 'udp';
-  expected_state: 'open' | 'closed';
+  protocol: "tcp" | "udp";
+  expected_state: "open" | "closed";
   target_labels: Record<string, unknown>;
   severity: string;
   action: string;
@@ -717,8 +761,8 @@ export interface CreatePortRulePayload {
   policy_id?: string;
   name: string;
   port: number;
-  protocol: 'tcp' | 'udp';
-  expected_state: 'open' | 'closed';
+  protocol: "tcp" | "udp";
+  expected_state: "open" | "closed";
   target_labels?: Record<string, unknown>;
   severity?: string;
   action?: string;
@@ -734,7 +778,7 @@ export interface Alert {
   severity: string;
   title: string;
   summary?: string;
-  state: 'open' | 'acked' | 'resolved';
+  state: "open" | "acked" | "resolved";
   dedup_key?: string;
   context: Record<string, unknown>;
   opened_at: string;
@@ -746,12 +790,12 @@ export interface Alert {
 }
 
 export type AlertDispositionValue =
-  | 'true_positive'
-  | 'false_positive'
-  | 'benign_positive'
-  | 'accepted_risk'
-  | 'suppressed'
-  | 'resolved';
+  | "true_positive"
+  | "false_positive"
+  | "benign_positive"
+  | "accepted_risk"
+  | "suppressed"
+  | "resolved";
 
 export interface AlertDisposition {
   value: AlertDispositionValue;
@@ -772,10 +816,10 @@ export interface AccessRequest {
   tenant_id: string;
   user_id?: string;
   target_node_id?: string;
-  target_resource_type: 'ssh' | 'rdp' | 'db';
+  target_resource_type: "ssh" | "rdp" | "db";
   requested_access: string;
   justification?: string;
-  status: 'pending' | 'approved' | 'denied' | 'expired' | 'revoked';
+  status: "pending" | "approved" | "denied" | "expired" | "revoked";
   ttl_seconds: number;
   requested_at: string;
   decided_at?: string;
@@ -787,7 +831,7 @@ export interface AccessRequest {
 export interface CreateAccessRequestPayload {
   tenant_id: string;
   target_node_id?: string;
-  target_resource_type: 'ssh' | 'rdp' | 'db';
+  target_resource_type: "ssh" | "rdp" | "db";
   requested_access: string;
   justification?: string;
   ttl_seconds?: number;
@@ -810,7 +854,12 @@ export interface SessionRecording {
   updated_at: string;
 }
 
-export type SessionEventKind = 'input' | 'output' | 'resize' | 'command' | 'other';
+export type SessionEventKind =
+  | "input"
+  | "output"
+  | "resize"
+  | "command"
+  | "other";
 
 export interface SessionEvent {
   at: string;
@@ -829,14 +878,14 @@ export interface SessionParsedResponse {
 }
 
 export type ThreatFeedType =
-  | 'spamhaus_drop'
-  | 'spamhaus_edrop'
-  | 'firehol_l1'
-  | 'tor_exit'
-  | 'abuseipdb'
-  | 'otx'
-  | 'custom_lines'
-  | 'custom_spamhaus';
+  | "spamhaus_drop"
+  | "spamhaus_edrop"
+  | "firehol_l1"
+  | "tor_exit"
+  | "abuseipdb"
+  | "otx"
+  | "custom_lines"
+  | "custom_spamhaus";
 
 export interface ThreatFeed {
   id: string;
@@ -870,7 +919,7 @@ export interface ThreatIntelIndicatorSample {
 export interface ThreatIntelSourceSummary {
   feed: string;
   category?: string;
-  scope: 'global' | 'tenant';
+  scope: "global" | "tenant";
   tenant_id?: string;
   indicators: number;
   max_score: number;
@@ -995,10 +1044,10 @@ export interface CreateTenantPayload {
 }
 
 export type NodeState =
-  | 'enrollment_pending'
-  | 'active'
-  | 'enrollment_failed'
-  | 'retired';
+  | "enrollment_pending"
+  | "active"
+  | "enrollment_failed"
+  | "retired";
 
 export interface NodeSummary {
   id: string;
@@ -1087,7 +1136,7 @@ export interface UpdateNodePayload {
   labels?: Record<string, unknown>;
 }
 
-export type NetworkIsolationMode = 'online' | 'whitelist' | 'airgapped';
+export type NetworkIsolationMode = "online" | "whitelist" | "airgapped";
 
 export interface NodeIsolationPayload {
   mode: NetworkIsolationMode;
@@ -1147,11 +1196,11 @@ export interface UpdateUserRolesPayload {
 }
 
 export type JobStatus =
-  | 'queued'
-  | 'running'
-  | 'succeeded'
-  | 'failed'
-  | 'cancelled';
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export interface JobEvent {
   id: string;
@@ -1276,12 +1325,12 @@ export interface CreateTemplateVersionPayload {
 }
 
 export type AssignmentScopeType =
-  | 'tenant'
-  | 'node'
-  | 'label_selector'
-  | 'cluster'
-  | 'hypervisor_host'
-  | 'enrollment_token';
+  | "tenant"
+  | "node"
+  | "label_selector"
+  | "cluster"
+  | "hypervisor_host"
+  | "enrollment_token";
 
 export interface ScopedAssignmentPayload {
   tenant_id: string;
@@ -1676,12 +1725,25 @@ export interface PaginatedResponse<T> {
   pagination: PaginationMeta;
 }
 
+interface RawContentPackSourceProposalListResponse extends RawPaginatedResponse<ContentPackSourceProposal> {
+  summary?: ContentPackSourceProposalSummary;
+}
+
+export interface ContentPackSourceProposalListResponse extends PaginatedResponse<ContentPackSourceProposal> {
+  summary?: ContentPackSourceProposalSummary;
+}
+
 // Predictive server downtime — Use Case 5 (PR 31).
 // risk_level is one of: low | medium | high | critical | calibrating.
 // "calibrating" means the predict job hasn't seen enough samples yet
 // (<24 per metric); the UI must surface "Calibrating (N/24 samples)"
 // rather than render fake zeros.
-export type NodeHealthRiskLevel = 'low' | 'medium' | 'high' | 'critical' | 'calibrating';
+export type NodeHealthRiskLevel =
+  | "low"
+  | "medium"
+  | "high"
+  | "critical"
+  | "calibrating";
 
 export interface NodeHealthScore {
   node_id: string;
@@ -1771,10 +1833,12 @@ export interface AtRiskFleetResponse {
   high: number;
 }
 
-async function safeErrorMessage(response: Response): Promise<string | undefined> {
+async function safeErrorMessage(
+  response: Response,
+): Promise<string | undefined> {
   try {
     const data = await response.json();
-    if (data && typeof data.message === 'string') {
+    if (data && typeof data.message === "string") {
       return data.message;
     }
   } catch {
@@ -1788,7 +1852,7 @@ export class APIError extends Error {
 
   constructor(message: string, status: number) {
     super(message);
-    this.name = 'APIError';
+    this.name = "APIError";
     this.status = status;
   }
 }
@@ -1799,7 +1863,8 @@ export class APIClient {
   private unauthorizedHandler?: () => void;
 
   constructor({ baseUrl, token }: APIClientOptions = {}) {
-    const configured = baseUrl ?? (import.meta.env.VITE_API_URL as string | undefined);
+    const configured =
+      baseUrl ?? (import.meta.env.VITE_API_URL as string | undefined);
     this.baseUrl = APIClient.normalizeBase(configured);
     this.token = token ?? null;
   }
@@ -1815,9 +1880,9 @@ export class APIClient {
     if (configured === undefined || configured === null) {
       return DEFAULT_API_BASE_URL;
     }
-    if (configured === '') return '';
-    let resolved = configured.replace(/\/+$/, '');
-    resolved = resolved.replace(/\/api(?:\/v\d+)?$/i, '');
+    if (configured === "") return "";
+    let resolved = configured.replace(/\/+$/, "");
+    resolved = resolved.replace(/\/api(?:\/v\d+)?$/i, "");
     return resolved;
   }
 
@@ -1830,127 +1895,180 @@ export class APIClient {
   }
 
   async getProfile(): Promise<Profile> {
-    return this.request<Profile>('/api/v1/me');
+    return this.request<Profile>("/api/v1/me");
   }
 
   // Email/password login. Returns a session token the caller stores via
   // AuthProvider.signIn; from then on every request is Bearer-authed
   // exactly like the legacy static-token path.
-  async loginWithPassword(email: string, password: string): Promise<LoginResponse> {
-    return this.request<LoginResponse>('/api/v1/auth/login', {
-      method: 'POST',
+  async loginWithPassword(
+    email: string,
+    password: string,
+  ): Promise<LoginResponse> {
+    return this.request<LoginResponse>("/api/v1/auth/login", {
+      method: "POST",
       body: JSON.stringify({ email, password }),
     });
   }
 
   async logout(): Promise<void> {
-    await this.request<void>('/api/v1/auth/logout', { method: 'POST' });
+    await this.request<void>("/api/v1/auth/logout", { method: "POST" });
   }
 
   async getCurrentUser(): Promise<CurrentUser> {
-    return this.request<CurrentUser>('/api/v1/auth/me');
+    return this.request<CurrentUser>("/api/v1/auth/me");
   }
 
   // ---- RBAC ---------------------------------------------------------
   async listPermissions(): Promise<Permission[]> {
-    return this.request<Permission[]>('/api/v1/permissions');
+    return this.request<Permission[]>("/api/v1/permissions");
   }
   async listRolesWithPermissions(): Promise<RoleWithPermissions[]> {
-    return this.request<RoleWithPermissions[]>('/api/v1/roles/permissions');
+    return this.request<RoleWithPermissions[]>("/api/v1/roles/permissions");
   }
-  async setRolePermissions(roleId: string, permissions: string[]): Promise<void> {
-    await this.request<void>(`/api/v1/roles/${encodeURIComponent(roleId)}/permissions`, {
-      method: 'PUT',
-      body: JSON.stringify({ permissions }),
-    });
+  async setRolePermissions(
+    roleId: string,
+    permissions: string[],
+  ): Promise<void> {
+    await this.request<void>(
+      `/api/v1/roles/${encodeURIComponent(roleId)}/permissions`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ permissions }),
+      },
+    );
   }
-  async createCustomRole(payload: { name: string; description: string; permissions: string[] }): Promise<RoleWithPermissions> {
-    return this.request<RoleWithPermissions>('/api/v1/roles/', {
-      method: 'POST',
+  async createCustomRole(payload: {
+    name: string;
+    description: string;
+    permissions: string[];
+  }): Promise<RoleWithPermissions> {
+    return this.request<RoleWithPermissions>("/api/v1/roles/", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
   async deleteRole(roleId: string): Promise<void> {
-    await this.request<void>(`/api/v1/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/roles/${encodeURIComponent(roleId)}`, {
+      method: "DELETE",
+    });
   }
 
   // ---- Custom dashboards -------------------------------------------
   async listDashboards(tenantId: string): Promise<CustomDashboard[]> {
-    return this.request<CustomDashboard[]>(`/api/v1/dashboards?tenant_id=${encodeURIComponent(tenantId)}`);
+    return this.request<CustomDashboard[]>(
+      `/api/v1/dashboards?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
   }
   async getDashboard(id: string): Promise<CustomDashboard> {
-    return this.request<CustomDashboard>(`/api/v1/dashboards/${encodeURIComponent(id)}`);
+    return this.request<CustomDashboard>(
+      `/api/v1/dashboards/${encodeURIComponent(id)}`,
+    );
   }
-  async createDashboard(payload: { tenant_id: string; name: string; description?: string; shared?: boolean }): Promise<CustomDashboard> {
-    return this.request<CustomDashboard>('/api/v1/dashboards', {
-      method: 'POST',
+  async createDashboard(payload: {
+    tenant_id: string;
+    name: string;
+    description?: string;
+    shared?: boolean;
+  }): Promise<CustomDashboard> {
+    return this.request<CustomDashboard>("/api/v1/dashboards", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
-  async updateDashboard(id: string, payload: Partial<CustomDashboard>): Promise<void> {
+  async updateDashboard(
+    id: string,
+    payload: Partial<CustomDashboard>,
+  ): Promise<void> {
     await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   }
   async deleteDashboard(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  }
-  async createWidget(dashboardId: string, payload: WidgetPayload): Promise<DashboardWidget> {
-    return this.request<DashboardWidget>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
+    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     });
   }
-  async updateWidget(dashboardId: string, widgetId: string, payload: WidgetPayload): Promise<void> {
-    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+  async createWidget(
+    dashboardId: string,
+    payload: WidgetPayload,
+  ): Promise<DashboardWidget> {
+    return this.request<DashboardWidget>(
+      `/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+  async updateWidget(
+    dashboardId: string,
+    widgetId: string,
+    payload: WidgetPayload,
+  ): Promise<void> {
+    await this.request<void>(
+      `/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   }
   async deleteWidget(dashboardId: string, widgetId: string): Promise<void> {
-    await this.request<void>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}`,
+      { method: "DELETE" },
+    );
   }
 
-  async listTenants(params: ListTenantsParams = {}): Promise<PaginatedResponse<Tenant>> {
+  async listTenants(
+    params: ListTenantsParams = {},
+  ): Promise<PaginatedResponse<Tenant>> {
     const search = new URLSearchParams();
     if (params.namePrefix) {
-      search.set('name_prefix', params.namePrefix);
+      search.set("name_prefix", params.namePrefix);
     }
-    if (typeof params.limit === 'number') {
-      search.set('limit', params.limit.toString());
+    if (typeof params.limit === "number") {
+      search.set("limit", params.limit.toString());
     }
-    if (typeof params.offset === 'number') {
-      search.set('offset', params.offset.toString());
+    if (typeof params.offset === "number") {
+      search.set("offset", params.offset.toString());
     }
 
     const query = search.toString();
-    const suffix = query ? `?${query}` : '';
-    const response = await this.request<RawPaginatedResponse<Tenant>>(`/api/v1/tenants${suffix}`);
+    const suffix = query ? `?${query}` : "";
+    const response = await this.request<RawPaginatedResponse<Tenant>>(
+      `/api/v1/tenants${suffix}`,
+    );
     return {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
   }
 
-  async listNodes(options: ListNodesParams = {}): Promise<PaginatedResponse<NodeSummary>> {
+  async listNodes(
+    options: ListNodesParams = {},
+  ): Promise<PaginatedResponse<NodeSummary>> {
     const search = new URLSearchParams();
     if (options.tenantId) {
-      search.set('tenant_id', options.tenantId);
+      search.set("tenant_id", options.tenantId);
     }
     if (options.hostnamePrefix) {
-      search.set('hostname_prefix', options.hostnamePrefix);
+      search.set("hostname_prefix", options.hostnamePrefix);
     }
-    if (typeof options.limit === 'number') {
-      search.set('limit', options.limit.toString());
+    if (typeof options.limit === "number") {
+      search.set("limit", options.limit.toString());
     }
-    if (typeof options.offset === 'number') {
-      search.set('offset', options.offset.toString());
+    if (typeof options.offset === "number") {
+      search.set("offset", options.offset.toString());
     }
 
     const query = search.toString();
-    const suffix = query ? `?${query}` : '';
-    const response = await this.request<RawPaginatedResponse<NodeSummary>>(`/api/v1/nodes${suffix}`);
+    const suffix = query ? `?${query}` : "";
+    const response = await this.request<RawPaginatedResponse<NodeSummary>>(
+      `/api/v1/nodes${suffix}`,
+    );
     return {
       data: response.data,
       pagination: normalizePagination(response.pagination),
@@ -1960,24 +2078,26 @@ export class APIClient {
   async listJobs(params: ListJobsParams = {}): Promise<PaginatedResponse<Job>> {
     const search = new URLSearchParams();
     if (params.tenantId) {
-      search.set('tenant_id', params.tenantId);
+      search.set("tenant_id", params.tenantId);
     }
     if (params.status) {
-      search.set('status', params.status);
+      search.set("status", params.status);
     }
     if (params.type) {
-      search.set('type', params.type);
+      search.set("type", params.type);
     }
-    if (typeof params.limit === 'number') {
-      search.set('limit', params.limit.toString());
+    if (typeof params.limit === "number") {
+      search.set("limit", params.limit.toString());
     }
-    if (typeof params.offset === 'number') {
-      search.set('offset', params.offset.toString());
+    if (typeof params.offset === "number") {
+      search.set("offset", params.offset.toString());
     }
 
     const query = search.toString();
-    const suffix = query ? `?${query}` : '';
-    const response = await this.request<RawPaginatedResponse<Job>>(`/api/v1/jobs${suffix}`);
+    const suffix = query ? `?${query}` : "";
+    const response = await this.request<RawPaginatedResponse<Job>>(
+      `/api/v1/jobs${suffix}`,
+    );
     return {
       data: response.data,
       pagination: normalizePagination(response.pagination),
@@ -1992,24 +2112,24 @@ export class APIClient {
   async cancelJob(jobId: string): Promise<Job> {
     const encoded = encodeURIComponent(jobId);
     return this.request<Job>(`/api/v1/jobs/${encoded}/cancel`, {
-      method: 'POST',
+      method: "POST",
     });
   }
 
   async getWorkerStatus(): Promise<WorkerStatus> {
-    return this.request<WorkerStatus>('/api/v1/worker/status');
+    return this.request<WorkerStatus>("/api/v1/worker/status");
   }
 
   async createJob(payload: CreateJobRequest): Promise<Job> {
-    return this.request<Job>('/api/v1/jobs', {
-      method: 'POST',
+    return this.request<Job>("/api/v1/jobs", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async createTenant(payload: CreateTenantPayload): Promise<Tenant> {
-    return this.request<Tenant>('/api/v1/tenants', {
-      method: 'POST',
+    return this.request<Tenant>("/api/v1/tenants", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
@@ -2019,22 +2139,29 @@ export class APIClient {
     return this.request<Tenant>(`/api/v1/tenants/${encoded}`);
   }
 
-  async updateTenant(tenantId: string, payload: UpdateTenantPayload): Promise<Tenant> {
+  async updateTenant(
+    tenantId: string,
+    payload: UpdateTenantPayload,
+  ): Promise<Tenant> {
     const encoded = encodeURIComponent(tenantId);
     return this.request<Tenant>(`/api/v1/tenants/${encoded}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteTenant(tenantId: string): Promise<void> {
     const encoded = encodeURIComponent(tenantId);
-    await this.request<void>(`/api/v1/tenants/${encoded}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/tenants/${encoded}`, {
+      method: "DELETE",
+    });
   }
 
-  async registerNode(payload: RegisterNodePayload): Promise<RegisterNodeResponse> {
-    return this.request<RegisterNodeResponse>('/api/v1/register', {
-      method: 'POST',
+  async registerNode(
+    payload: RegisterNodePayload,
+  ): Promise<RegisterNodeResponse> {
+    return this.request<RegisterNodeResponse>("/api/v1/register", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
@@ -2047,22 +2174,25 @@ export class APIClient {
   async updateNode(nodeId: string, payload: UpdateNodePayload): Promise<Node> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<Node>(`/api/v1/nodes/${encoded}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   }
 
-  async setNodeIsolation(nodeId: string, payload: NodeIsolationPayload): Promise<Node> {
+  async setNodeIsolation(
+    nodeId: string,
+    payload: NodeIsolationPayload,
+  ): Promise<Node> {
     const encoded = encodeURIComponent(nodeId);
     return this.request<Node>(`/api/v1/nodes/${encoded}/isolation`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteNode(nodeId: string): Promise<void> {
     const encoded = encodeURIComponent(nodeId);
-    await this.request<void>(`/api/v1/nodes/${encoded}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/nodes/${encoded}`, { method: "DELETE" });
   }
 
   async getNodeHealth(nodeId: string): Promise<NodeHealthScore> {
@@ -2079,55 +2209,75 @@ export class APIClient {
       host_override?: string;
       port?: number;
     },
-  ): Promise<{ job_id: string; host: string; port: number; expire_at: string; message: string }> {
+  ): Promise<{
+    job_id: string;
+    host: string;
+    port: number;
+    expire_at: string;
+    message: string;
+  }> {
     const encoded = encodeURIComponent(nodeId);
     return this.request(`/api/v1/nodes/${encoded}/repair`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async listNodeServices(nodeId: string): Promise<{ data: NodeService[] }> {
     const encoded = encodeURIComponent(nodeId);
-    return this.request<{ data: NodeService[] }>(`/api/v1/nodes/${encoded}/services`);
+    return this.request<{ data: NodeService[] }>(
+      `/api/v1/nodes/${encoded}/services`,
+    );
   }
 
   async listNodePackages(nodeId: string): Promise<{ data: NodePackage[] }> {
     const encoded = encodeURIComponent(nodeId);
-    return this.request<{ data: NodePackage[] }>(`/api/v1/nodes/${encoded}/packages`);
+    return this.request<{ data: NodePackage[] }>(
+      `/api/v1/nodes/${encoded}/packages`,
+    );
   }
 
   async getAIConfig(tenantId: string): Promise<AIConfigResponse> {
-    return this.request<AIConfigResponse>(`/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`);
+    return this.request<AIConfigResponse>(
+      `/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
   }
 
   async updateAIConfig(tenantId: string, payload: AIConfigPut): Promise<void> {
-    await this.request<void>(`/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
+    await this.request<void>(
+      `/api/v1/ai/config?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
-  async testAIConfig(tenantId: string): Promise<{ ok: boolean; reply?: string; error?: string }> {
+  async testAIConfig(
+    tenantId: string,
+  ): Promise<{ ok: boolean; reply?: string; error?: string }> {
     return this.request<{ ok: boolean; reply?: string; error?: string }>(
       `/api/v1/ai/test?tenant_id=${encodeURIComponent(tenantId)}`,
-      { method: 'POST' },
+      { method: "POST" },
     );
   }
 
   async askAI(tenantId: string, question: string): Promise<AIAskResponse> {
     return this.request<AIAskResponse>(
       `/api/v1/ai/ask?tenant_id=${encodeURIComponent(tenantId)}`,
-      { method: 'POST', body: JSON.stringify({ question }) },
+      { method: "POST", body: JSON.stringify({ question }) },
     );
   }
 
   async getKnowledgeGraphMarkdown(tenantId: string): Promise<string> {
     const encoded = encodeURIComponent(tenantId);
-    const resp = await fetch(`${this.baseUrl}/api/v1/knowledge-graph/${encoded}.md`, {
-      headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
-      credentials: 'include',
-    });
+    const resp = await fetch(
+      `${this.baseUrl}/api/v1/knowledge-graph/${encoded}.md`,
+      {
+        headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+        credentials: "include",
+      },
+    );
     if (!resp.ok) {
       throw new Error(`knowledge graph fetch failed: ${resp.status}`);
     }
@@ -2137,22 +2287,26 @@ export class APIClient {
   async listAtRiskNodes(tenantId?: string): Promise<AtRiskFleetResponse> {
     const search = new URLSearchParams();
     if (tenantId) {
-      search.set('tenant_id', tenantId);
+      search.set("tenant_id", tenantId);
     }
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     return this.request<AtRiskFleetResponse>(`/api/v1/health/at-risk${suffix}`);
   }
 
-  async listUsers(params: ListUsersParams = {}): Promise<PaginatedResponse<User>> {
+  async listUsers(
+    params: ListUsersParams = {},
+  ): Promise<PaginatedResponse<User>> {
     const search = new URLSearchParams();
-    if (typeof params.limit === 'number') {
-      search.set('limit', params.limit.toString());
+    if (typeof params.limit === "number") {
+      search.set("limit", params.limit.toString());
     }
-    if (typeof params.offset === 'number') {
-      search.set('offset', params.offset.toString());
+    if (typeof params.offset === "number") {
+      search.set("offset", params.offset.toString());
     }
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    const response = await this.request<RawPaginatedResponse<User>>(`/api/v1/users${suffix}`);
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    const response = await this.request<RawPaginatedResponse<User>>(
+      `/api/v1/users${suffix}`,
+    );
     return {
       data: response.data,
       pagination: normalizePagination(response.pagination),
@@ -2164,40 +2318,47 @@ export class APIClient {
     return this.request<User>(`/api/v1/users/${encoded}`);
   }
 
-  async updateUserRoles(userID: string, payload: UpdateUserRolesPayload): Promise<User> {
+  async updateUserRoles(
+    userID: string,
+    payload: UpdateUserRolesPayload,
+  ): Promise<User> {
     const encoded = encodeURIComponent(userID);
     return this.request<User>(`/api/v1/users/${encoded}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   }
 
   async listRoles(): Promise<Role[]> {
-    return this.request<Role[]>('/api/v1/roles');
+    return this.request<Role[]>("/api/v1/roles");
   }
 
-  async listTemplates(params: ListTemplatesParams = {}): Promise<PaginatedResponse<Template>> {
+  async listTemplates(
+    params: ListTemplatesParams = {},
+  ): Promise<PaginatedResponse<Template>> {
     const search = new URLSearchParams();
     if (params.tenantId) {
-      search.set('tenant_id', params.tenantId);
+      search.set("tenant_id", params.tenantId);
     }
     if (params.provider) {
-      search.set('provider', params.provider);
+      search.set("provider", params.provider);
     }
     if (params.namePrefix) {
-      search.set('name_prefix', params.namePrefix);
+      search.set("name_prefix", params.namePrefix);
     }
-    if (typeof params.includeArchived === 'boolean') {
-      search.set('include_archived', params.includeArchived ? 'true' : 'false');
+    if (typeof params.includeArchived === "boolean") {
+      search.set("include_archived", params.includeArchived ? "true" : "false");
     }
-    if (typeof params.limit === 'number') {
-      search.set('limit', params.limit.toString());
+    if (typeof params.limit === "number") {
+      search.set("limit", params.limit.toString());
     }
-    if (typeof params.offset === 'number') {
-      search.set('offset', params.offset.toString());
+    if (typeof params.offset === "number") {
+      search.set("offset", params.offset.toString());
     }
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    const response = await this.request<RawPaginatedResponse<Template>>(`/api/v1/templates${suffix}`);
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    const response = await this.request<RawPaginatedResponse<Template>>(
+      `/api/v1/templates${suffix}`,
+    );
     return {
       data: response.data,
       pagination: normalizePagination(response.pagination),
@@ -2205,8 +2366,8 @@ export class APIClient {
   }
 
   async createTemplate(payload: CreateTemplatePayload): Promise<Template> {
-    return this.request<Template>('/api/v1/templates', {
-      method: 'POST',
+    return this.request<Template>("/api/v1/templates", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
@@ -2216,10 +2377,13 @@ export class APIClient {
     return this.request<Template>(`/api/v1/templates/${encoded}`);
   }
 
-  async updateTemplate(templateId: string, payload: UpdateTemplatePayload): Promise<Template> {
+  async updateTemplate(
+    templateId: string,
+    payload: UpdateTemplatePayload,
+  ): Promise<Template> {
     const encoded = encodeURIComponent(templateId);
     return this.request<Template>(`/api/v1/templates/${encoded}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   }
@@ -2229,13 +2393,13 @@ export class APIClient {
     params: ListTemplateVersionsParams = {},
   ): Promise<PaginatedResponse<TemplateVersion>> {
     const search = new URLSearchParams();
-    if (typeof params.limit === 'number') {
-      search.set('limit', params.limit.toString());
+    if (typeof params.limit === "number") {
+      search.set("limit", params.limit.toString());
     }
-    if (typeof params.offset === 'number') {
-      search.set('offset', params.offset.toString());
+    if (typeof params.offset === "number") {
+      search.set("offset", params.offset.toString());
     }
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const encoded = encodeURIComponent(templateId);
     const response = await this.request<RawPaginatedResponse<TemplateVersion>>(
       `/api/v1/templates/${encoded}/versions${suffix}`,
@@ -2251,21 +2415,29 @@ export class APIClient {
     payload: CreateTemplateVersionPayload,
   ): Promise<TemplateVersion> {
     const encoded = encodeURIComponent(templateId);
-    return this.request<TemplateVersion>(`/api/v1/templates/${encoded}/versions`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async promoteTemplateVersion(templateId: string, versionNumber: number): Promise<TemplateVersion> {
-    const encoded = encodeURIComponent(templateId);
     return this.request<TemplateVersion>(
-      `/api/v1/templates/${encoded}/versions/${versionNumber}/promote`,
-      { method: 'POST' },
+      `/api/v1/templates/${encoded}/versions`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
     );
   }
 
-  async listTemplateAssignments(templateId: string): Promise<{ items: TemplateAssignment[]; total: number }> {
+  async promoteTemplateVersion(
+    templateId: string,
+    versionNumber: number,
+  ): Promise<TemplateVersion> {
+    const encoded = encodeURIComponent(templateId);
+    return this.request<TemplateVersion>(
+      `/api/v1/templates/${encoded}/versions/${versionNumber}/promote`,
+      { method: "POST" },
+    );
+  }
+
+  async listTemplateAssignments(
+    templateId: string,
+  ): Promise<{ items: TemplateAssignment[]; total: number }> {
     return this.request<{ items: TemplateAssignment[]; total: number }>(
       `/api/v1/templates/${encodeURIComponent(templateId)}/assignments`,
     );
@@ -2275,16 +2447,22 @@ export class APIClient {
     templateId: string,
     payload: ScopedAssignmentPayload,
   ): Promise<TemplateAssignment> {
-    return this.request<TemplateAssignment>(`/api/v1/templates/${encodeURIComponent(templateId)}/assignments`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return this.request<TemplateAssignment>(
+      `/api/v1/templates/${encodeURIComponent(templateId)}/assignments`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
-  async deleteTemplateAssignment(templateId: string, assignmentId: string): Promise<void> {
+  async deleteTemplateAssignment(
+    templateId: string,
+    assignmentId: string,
+  ): Promise<void> {
     await this.request<void>(
       `/api/v1/templates/${encodeURIComponent(templateId)}/assignments/${encodeURIComponent(assignmentId)}`,
-      { method: 'DELETE' },
+      { method: "DELETE" },
     );
   }
 
@@ -2292,19 +2470,22 @@ export class APIClient {
     params: ListComplianceResultsParams = {},
   ): Promise<PaginatedResponse<ComplianceResult>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.node_id) search.set('node_id', params.node_id);
-    if (params.job_id) search.set('job_id', params.job_id);
-    if (params.scan_id) search.set('scan_id', params.scan_id);
-    if (params.rule_id) search.set('rule_id', params.rule_id);
-    if (typeof params.passed === 'boolean') search.set('passed', params.passed.toString());
-    if (params.severity) search.set('severity', params.severity);
-    if (params.framework) search.set('framework', params.framework);
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.node_id) search.set("node_id", params.node_id);
+    if (params.job_id) search.set("job_id", params.job_id);
+    if (params.scan_id) search.set("scan_id", params.scan_id);
+    if (params.rule_id) search.set("rule_id", params.rule_id);
+    if (typeof params.passed === "boolean")
+      search.set("passed", params.passed.toString());
+    if (params.severity) search.set("severity", params.severity);
+    if (params.framework) search.set("framework", params.framework);
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const response = await this.request<RawPaginatedResponse<ComplianceResult>>(
       `/api/v1/compliance/results${suffix}`,
     );
@@ -2314,118 +2495,184 @@ export class APIClient {
     };
   }
 
-  async getComplianceSummary(params: { tenant_id?: string; node_id?: string } = {}): Promise<ComplianceSummary> {
+  async getComplianceSummary(
+    params: { tenant_id?: string; node_id?: string } = {},
+  ): Promise<ComplianceSummary> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.node_id) search.set('node_id', params.node_id);
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    return this.request<ComplianceSummary>(`/api/v1/compliance/summary${suffix}`);
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.node_id) search.set("node_id", params.node_id);
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return this.request<ComplianceSummary>(
+      `/api/v1/compliance/summary${suffix}`,
+    );
   }
 
-  async getComplianceTrends(params: ComplianceTrendsParams = {}): Promise<ComplianceTrend[]> {
+  async getComplianceTrends(
+    params: ComplianceTrendsParams = {},
+  ): Promise<ComplianceTrend[]> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.node_id) search.set('node_id', params.node_id);
-    if (typeof params.days === 'number') search.set('days', params.days.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    const response = await this.request<{ trends: ComplianceTrend[] }>(`/api/v1/compliance/trends${suffix}`);
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.node_id) search.set("node_id", params.node_id);
+    if (typeof params.days === "number")
+      search.set("days", params.days.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    const response = await this.request<{ trends: ComplianceTrend[] }>(
+      `/api/v1/compliance/trends${suffix}`,
+    );
     return response.trends || [];
   }
 
   // ── Compliance policies ─────────────────────────────────────────────────────
 
-  async listPolicies(params: { tenant_id?: string; rule_type?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<Policy>> {
+  async listPolicies(
+    params: {
+      tenant_id?: string;
+      rule_type?: string;
+      enabled?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<Policy>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.rule_type) search.set('rule_type', params.rule_type);
-    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.rule_type) search.set("rule_type", params.rule_type);
+    if (typeof params.enabled === "boolean")
+      search.set("enabled", String(params.enabled));
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    const response = await this.request<RawPaginatedResponse<Policy>>(`/api/v1/policies${qs ? `?${qs}` : ''}`);
-    return { data: response.data, pagination: normalizePagination(response.pagination) };
+    const response = await this.request<RawPaginatedResponse<Policy>>(
+      `/api/v1/policies${qs ? `?${qs}` : ""}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
   async createPolicy(payload: CreatePolicyPayload): Promise<Policy> {
-    return this.request<Policy>('/api/v1/policies', {
-      method: 'POST',
+    return this.request<Policy>("/api/v1/policies", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async updatePolicy(id: string, payload: Partial<CreatePolicyPayload> & { archived?: boolean }): Promise<Policy> {
+  async updatePolicy(
+    id: string,
+    payload: Partial<CreatePolicyPayload> & { archived?: boolean },
+  ): Promise<Policy> {
     return this.request<Policy>(`/api/v1/policies/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   }
 
   async deletePolicy(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/policies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/policies/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
-  async listPolicyVersions(policyId: string): Promise<PaginatedResponse<PolicyVersion>> {
+  async listPolicyVersions(
+    policyId: string,
+  ): Promise<PaginatedResponse<PolicyVersion>> {
     const response = await this.request<RawPaginatedResponse<PolicyVersion>>(
       `/api/v1/policies/${encodeURIComponent(policyId)}/versions`,
     );
-    return { data: response.data, pagination: normalizePagination(response.pagination) };
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
-  async createPolicyVersion(policyId: string, payload: CreatePolicyVersionPayload): Promise<PolicyVersion> {
-    return this.request<PolicyVersion>(`/api/v1/policies/${encodeURIComponent(policyId)}/versions`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  async createPolicyVersion(
+    policyId: string,
+    payload: CreatePolicyVersionPayload,
+  ): Promise<PolicyVersion> {
+    return this.request<PolicyVersion>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/versions`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   async promotePolicyVersion(policyId: string, version: number): Promise<void> {
-    await this.request<void>(`/api/v1/policies/${encodeURIComponent(policyId)}/versions/${version}/promote`, {
-      method: 'POST',
-    });
+    await this.request<void>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/versions/${version}/promote`,
+      {
+        method: "POST",
+      },
+    );
   }
 
-  async listPolicyAssignments(policyId: string): Promise<{ items: PolicyAssignment[]; total: number }> {
+  async listPolicyAssignments(
+    policyId: string,
+  ): Promise<{ items: PolicyAssignment[]; total: number }> {
     return this.request<{ items: PolicyAssignment[]; total: number }>(
       `/api/v1/policies/${encodeURIComponent(policyId)}/assignments`,
     );
   }
 
-  async createPolicyAssignment(policyId: string, payload: CreatePolicyAssignmentPayload): Promise<PolicyAssignment> {
-    return this.request<PolicyAssignment>(`/api/v1/policies/${encodeURIComponent(policyId)}/assignments`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async deletePolicyAssignment(policyId: string, assignmentId: string): Promise<void> {
-    await this.request<void>(
-      `/api/v1/policies/${encodeURIComponent(policyId)}/assignments/${encodeURIComponent(assignmentId)}`,
-      { method: 'DELETE' },
+  async createPolicyAssignment(
+    policyId: string,
+    payload: CreatePolicyAssignmentPayload,
+  ): Promise<PolicyAssignment> {
+    return this.request<PolicyAssignment>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/assignments`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
     );
   }
 
-  async evaluateCompliance(payload: ComplianceEvaluatePayload): Promise<ComplianceEvaluateResponse> {
-    return this.request<ComplianceEvaluateResponse>('/api/v1/compliance/evaluate', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  async deletePolicyAssignment(
+    policyId: string,
+    assignmentId: string,
+  ): Promise<void> {
+    await this.request<void>(
+      `/api/v1/policies/${encodeURIComponent(policyId)}/assignments/${encodeURIComponent(assignmentId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async evaluateCompliance(
+    payload: ComplianceEvaluatePayload,
+  ): Promise<ComplianceEvaluateResponse> {
+    return this.request<ComplianceEvaluateResponse>(
+      "/api/v1/compliance/evaluate",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   // ── Audit logs ──────────────────────────────────────────────────────────────
 
-  async listAuditLogs(params: ListAuditLogsParams = {}): Promise<PaginatedResponse<AuditLog>> {
+  async listAuditLogs(
+    params: ListAuditLogsParams = {},
+  ): Promise<PaginatedResponse<AuditLog>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.actor_type) search.set('actor_type', params.actor_type);
-    if (params.action) search.set('action', params.action);
-    if (params.resource_type) search.set('resource_type', params.resource_type);
-    if (params.resource_id) search.set('resource_id', params.resource_id);
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    const response = await this.request<RawPaginatedResponse<AuditLog>>(`/api/v1/audit${suffix}`);
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.actor_type) search.set("actor_type", params.actor_type);
+    if (params.action) search.set("action", params.action);
+    if (params.resource_type) search.set("resource_type", params.resource_type);
+    if (params.resource_id) search.set("resource_id", params.resource_id);
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    const response = await this.request<RawPaginatedResponse<AuditLog>>(
+      `/api/v1/audit${suffix}`,
+    );
     return {
       data: response.data,
       pagination: normalizePagination(response.pagination),
@@ -2436,14 +2683,16 @@ export class APIClient {
     params: ListTelemetryMetricsParams = {},
   ): Promise<PaginatedResponse<TelemetryMetric>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.node_id) search.set('node_id', params.node_id);
-    if (params.metric_name) search.set('metric_name', params.metric_name);
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.node_id) search.set("node_id", params.node_id);
+    if (params.metric_name) search.set("metric_name", params.metric_name);
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const response = await this.request<RawPaginatedResponse<TelemetryMetric>>(
       `/api/v1/telemetry/metrics${suffix}`,
     );
@@ -2457,15 +2706,17 @@ export class APIClient {
     params: ListTelemetryLogsParams = {},
   ): Promise<PaginatedResponse<TelemetryLog>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.node_id) search.set('node_id', params.node_id);
-    if (params.log_level) search.set('log_level', params.log_level);
-    if (params.log_source) search.set('log_source', params.log_source);
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.node_id) search.set("node_id", params.node_id);
+    if (params.log_level) search.set("log_level", params.log_level);
+    if (params.log_source) search.set("log_source", params.log_source);
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const response = await this.request<RawPaginatedResponse<TelemetryLog>>(
       `/api/v1/telemetry/logs${suffix}`,
     );
@@ -2487,13 +2738,15 @@ export class APIClient {
     } = {},
   ): Promise<PaginatedResponse<TelemetryMetric>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.metric_name) search.set('metric_name', params.metric_name);
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.metric_name) search.set("metric_name", params.metric_name);
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const encoded = encodeURIComponent(nodeId);
     const response = await this.request<RawPaginatedResponse<TelemetryMetric>>(
       `/api/v1/telemetry/nodes/${encoded}/metrics${suffix}`,
@@ -2504,16 +2757,24 @@ export class APIClient {
     };
   }
 
-  async listWebhooks(params: ListWebhooksParams = {}): Promise<PaginatedResponse<Webhook>> {
+  async listWebhooks(
+    params: ListWebhooksParams = {},
+  ): Promise<PaginatedResponse<Webhook>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (typeof params.enabled === 'boolean') search.set('enabled', params.enabled.toString());
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    const response = await this.request<{ items: Webhook[]; total: number; limit: number; offset: number }>(
-      `/api/v1/webhooks${suffix}`,
-    );
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (typeof params.enabled === "boolean")
+      search.set("enabled", params.enabled.toString());
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    const response = await this.request<{
+      items: Webhook[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/api/v1/webhooks${suffix}`);
     return {
       data: response.items,
       pagination: {
@@ -2521,8 +2782,14 @@ export class APIClient {
         count: response.items.length,
         limit: response.limit,
         offset: response.offset,
-        nextOffset: response.offset + response.items.length < response.total ? response.offset + response.items.length : null,
-        prevOffset: response.offset > 0 ? Math.max(0, response.offset - response.limit) : null,
+        nextOffset:
+          response.offset + response.items.length < response.total
+            ? response.offset + response.items.length
+            : null,
+        prevOffset:
+          response.offset > 0
+            ? Math.max(0, response.offset - response.limit)
+            : null,
       },
     };
   }
@@ -2533,16 +2800,19 @@ export class APIClient {
   }
 
   async createWebhook(payload: CreateWebhookPayload): Promise<Webhook> {
-    return this.request<Webhook>('/api/v1/webhooks', {
-      method: 'POST',
+    return this.request<Webhook>("/api/v1/webhooks", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async updateWebhook(webhookId: string, payload: UpdateWebhookPayload): Promise<Webhook> {
+  async updateWebhook(
+    webhookId: string,
+    payload: UpdateWebhookPayload,
+  ): Promise<Webhook> {
     const encoded = encodeURIComponent(webhookId);
     return this.request<Webhook>(`/api/v1/webhooks/${encoded}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(payload),
     });
   }
@@ -2550,24 +2820,36 @@ export class APIClient {
   async deleteWebhook(webhookId: string): Promise<void> {
     const encoded = encodeURIComponent(webhookId);
     return this.request<void>(`/api/v1/webhooks/${encoded}`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   }
 
-  async testWebhook(webhookId: string, payload: { event_type: string; payload?: Record<string, unknown> }): Promise<{ success: boolean; http_status_code?: number; response_body?: string; error?: string }> {
+  async testWebhook(
+    webhookId: string,
+    payload: { event_type: string; payload?: Record<string, unknown> },
+  ): Promise<{
+    success: boolean;
+    http_status_code?: number;
+    response_body?: string;
+    error?: string;
+  }> {
     const encoded = encodeURIComponent(webhookId);
     return this.request(`/api/v1/webhooks/${encoded}/test`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async listSecretGroups(params: ListSecretGroupsParams = {}): Promise<PaginatedResponse<SecretGroup>> {
+  async listSecretGroups(
+    params: ListSecretGroupsParams = {},
+  ): Promise<PaginatedResponse<SecretGroup>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const response = await this.request<RawPaginatedResponse<SecretGroup>>(
       `/api/v1/secrets/groups${suffix}`,
     );
@@ -2582,9 +2864,11 @@ export class APIClient {
     return this.request<SecretGroup>(`/api/v1/secrets/groups/${encoded}`);
   }
 
-  async createSecretGroup(payload: CreateSecretGroupPayload): Promise<SecretGroup> {
-    return this.request<SecretGroup>('/api/v1/secrets/groups', {
-      method: 'POST',
+  async createSecretGroup(
+    payload: CreateSecretGroupPayload,
+  ): Promise<SecretGroup> {
+    return this.request<SecretGroup>("/api/v1/secrets/groups", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
@@ -2592,38 +2876,50 @@ export class APIClient {
   async deleteSecretGroup(groupId: string): Promise<void> {
     const encoded = encodeURIComponent(groupId);
     return this.request<void>(`/api/v1/secrets/groups/${encoded}`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   }
 
   async syncSecretGroup(groupId: string): Promise<void> {
     const encoded = encodeURIComponent(groupId);
     return this.request<void>(`/api/v1/secrets/groups/${encoded}/sync`, {
-      method: 'POST',
+      method: "POST",
     });
   }
 
   // ── Fleet enrollment (Sprint 2 Pillar 1.7) ────────────────────────────
 
-  async startFleetEnroll(payload: FleetEnrollRequest): Promise<FleetEnrollResponse> {
-    return this.request<FleetEnrollResponse>('/api/v1/fleet/enroll', {
-      method: 'POST',
+  async startFleetEnroll(
+    payload: FleetEnrollRequest,
+  ): Promise<FleetEnrollResponse> {
+    return this.request<FleetEnrollResponse>("/api/v1/fleet/enroll", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async getFleetEnrollStatus(jobId: string, tenantId: string): Promise<FleetEnrollStatus> {
+  async getFleetEnrollStatus(
+    jobId: string,
+    tenantId: string,
+  ): Promise<FleetEnrollStatus> {
     const encoded = encodeURIComponent(jobId);
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
-    return this.request<FleetEnrollStatus>(`/api/v1/fleet/enroll/${encoded}?${search.toString()}`);
+    search.set("tenant_id", tenantId);
+    return this.request<FleetEnrollStatus>(
+      `/api/v1/fleet/enroll/${encoded}?${search.toString()}`,
+    );
   }
 
-  async listSecretSyncs(groupId: string, params: ListSecretSyncsParams = {}): Promise<PaginatedResponse<SecretSync>> {
+  async listSecretSyncs(
+    groupId: string,
+    params: ListSecretSyncsParams = {},
+  ): Promise<PaginatedResponse<SecretSync>> {
     const search = new URLSearchParams();
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const encoded = encodeURIComponent(groupId);
     const response = await this.request<RawPaginatedResponse<SecretSync>>(
       `/api/v1/secrets/groups/${encoded}/syncs${suffix}`,
@@ -2634,9 +2930,11 @@ export class APIClient {
     };
   }
 
-  async createEnrollmentToken(payload: CreateEnrollmentTokenPayload): Promise<EnrollmentToken> {
-    return this.request<EnrollmentToken>('/api/v1/enrollment-tokens', {
-      method: 'POST',
+  async createEnrollmentToken(
+    payload: CreateEnrollmentTokenPayload,
+  ): Promise<EnrollmentToken> {
+    return this.request<EnrollmentToken>("/api/v1/enrollment-tokens", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
@@ -2645,10 +2943,12 @@ export class APIClient {
     params: ListEnrollmentTokensParams = {},
   ): Promise<PaginatedResponse<EnrollmentToken>> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
     const response = await this.request<RawPaginatedResponse<EnrollmentToken>>(
       `/api/v1/enrollment-tokens${suffix}`,
     );
@@ -2658,184 +2958,279 @@ export class APIClient {
     };
   }
 
-  async listProviderCredentials(params: { tenantId?: string; provider?: string; limit?: number; offset?: number } = {}): Promise<PaginatedItems<ProviderCredential>> {
+  async listProviderCredentials(
+    params: {
+      tenantId?: string;
+      provider?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedItems<ProviderCredential>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.provider) search.set('provider', params.provider);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    return this.request<PaginatedItems<ProviderCredential>>(`/api/v1/provider-credentials${suffix}`);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.provider) search.set("provider", params.provider);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return this.request<PaginatedItems<ProviderCredential>>(
+      `/api/v1/provider-credentials${suffix}`,
+    );
   }
 
-  async createProviderCredential(payload: CreateProviderCredentialPayload): Promise<ProviderCredential> {
+  async createProviderCredential(
+    payload: CreateProviderCredentialPayload,
+  ): Promise<ProviderCredential> {
     return this.request<ProviderCredential>(`/api/v1/provider-credentials`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async rotateProviderCredential(id: string, config: Record<string, unknown>): Promise<ProviderCredential> {
+  async rotateProviderCredential(
+    id: string,
+    config: Record<string, unknown>,
+  ): Promise<ProviderCredential> {
     const encoded = encodeURIComponent(id);
-    return this.request<ProviderCredential>(`/api/v1/provider-credentials/${encoded}/rotate`, {
-      method: 'POST',
-      body: JSON.stringify({ config }),
-    });
+    return this.request<ProviderCredential>(
+      `/api/v1/provider-credentials/${encoded}/rotate`,
+      {
+        method: "POST",
+        body: JSON.stringify({ config }),
+      },
+    );
   }
 
   async deleteProviderCredential(id: string): Promise<void> {
     const encoded = encodeURIComponent(id);
-    await this.request<void>(`/api/v1/provider-credentials/${encoded}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/provider-credentials/${encoded}`, {
+      method: "DELETE",
+    });
   }
 
-  async listHypervisorHosts(params: { tenantId?: string; provider?: string; limit?: number; offset?: number } = {}): Promise<PaginatedItems<HypervisorHost>> {
+  async listHypervisorHosts(
+    params: {
+      tenantId?: string;
+      provider?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedItems<HypervisorHost>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.provider) search.set('provider', params.provider);
-    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
-    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    return this.request<PaginatedItems<HypervisorHost>>(`/api/v1/hypervisor-hosts${suffix}`);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.provider) search.set("provider", params.provider);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return this.request<PaginatedItems<HypervisorHost>>(
+      `/api/v1/hypervisor-hosts${suffix}`,
+    );
   }
 
-  async createHypervisorHost(payload: CreateHypervisorHostPayload): Promise<HypervisorHost> {
+  async createHypervisorHost(
+    payload: CreateHypervisorHostPayload,
+  ): Promise<HypervisorHost> {
     return this.request<HypervisorHost>(`/api/v1/hypervisor-hosts`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteHypervisorHost(id: string): Promise<void> {
     const encoded = encodeURIComponent(id);
-    await this.request<void>(`/api/v1/hypervisor-hosts/${encoded}`, { method: 'DELETE' });
-  }
-
-  async verifyHypervisorHost(id: string): Promise<HypervisorHostVerifyResponse> {
-    const encoded = encodeURIComponent(id);
-    return this.request<HypervisorHostVerifyResponse>(`/api/v1/hypervisor-hosts/${encoded}/verify`, {
-      method: 'POST',
+    await this.request<void>(`/api/v1/hypervisor-hosts/${encoded}`, {
+      method: "DELETE",
     });
   }
 
-  async getDashboardOverview(tenantId?: string, period?: string): Promise<DashboardOverview> {
+  async verifyHypervisorHost(
+    id: string,
+  ): Promise<HypervisorHostVerifyResponse> {
+    const encoded = encodeURIComponent(id);
+    return this.request<HypervisorHostVerifyResponse>(
+      `/api/v1/hypervisor-hosts/${encoded}/verify`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
+  async getDashboardOverview(
+    tenantId?: string,
+    period?: string,
+  ): Promise<DashboardOverview> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    if (period) search.set('period', period);
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (period) search.set("period", period);
     const qs = search.toString();
-    const path = `/api/v1/dashboard/overview${qs ? `?${qs}` : ''}`;
+    const path = `/api/v1/dashboard/overview${qs ? `?${qs}` : ""}`;
     return this.request<DashboardOverview>(path);
   }
 
-  async getControlRoomOverview(tenantId?: string | null, period?: string): Promise<ControlRoomOverview> {
+  async getControlRoomOverview(
+    tenantId?: string | null,
+    period?: string,
+  ): Promise<ControlRoomOverview> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    if (period) search.set('period', period);
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (period) search.set("period", period);
     const qs = search.toString();
-    return this.request<ControlRoomOverview>(`/api/v1/control-room/overview${qs ? `?${qs}` : ''}`);
+    return this.request<ControlRoomOverview>(
+      `/api/v1/control-room/overview${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async getCoverageMatrix(params: CoverageMatrixParams = {}): Promise<CoverageMatrixResponse> {
+  async getCoverageMatrix(
+    params: CoverageMatrixParams = {},
+  ): Promise<CoverageMatrixResponse> {
     const search = new URLSearchParams();
-    if (params.tenant_id) search.set('tenant_id', params.tenant_id);
-    if (params.domain) search.set('domain', params.domain);
+    if (params.tenant_id) search.set("tenant_id", params.tenant_id);
+    if (params.domain) search.set("domain", params.domain);
     const qs = search.toString();
-    const raw = await this.request<RawCoverageMatrixResponse>(`/api/v1/coverage/matrix${qs ? `?${qs}` : ''}`);
+    const raw = await this.request<RawCoverageMatrixResponse>(
+      `/api/v1/coverage/matrix${qs ? `?${qs}` : ""}`,
+    );
     return normalizeCoverageMatrixResponse(raw);
   }
 
   // ---- Executive Risk Dashboard Metrics -------------------------------------------
   async getRiskScore(tenantId?: string): Promise<RiskScore> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
+    if (tenantId) search.set("tenant_id", tenantId);
     const qs = search.toString();
-    return this.request<RiskScore>(`/api/v1/metrics/risk-score${qs ? `?${qs}` : ''}`);
+    return this.request<RiskScore>(
+      `/api/v1/metrics/risk-score${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async getMTTDMetrics(tenantId?: string, severity?: string, days?: number): Promise<MTTDMetrics> {
+  async getMTTDMetrics(
+    tenantId?: string,
+    severity?: string,
+    days?: number,
+  ): Promise<MTTDMetrics> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    if (severity) search.set('severity', severity);
-    if (days) search.set('days', String(days));
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (severity) search.set("severity", severity);
+    if (days) search.set("days", String(days));
     const qs = search.toString();
-    return this.request<MTTDMetrics>(`/api/v1/metrics/mttd${qs ? `?${qs}` : ''}`);
+    return this.request<MTTDMetrics>(
+      `/api/v1/metrics/mttd${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async getMTTRMetrics(tenantId?: string, severity?: string, days?: number): Promise<MTTRMetrics> {
+  async getMTTRMetrics(
+    tenantId?: string,
+    severity?: string,
+    days?: number,
+  ): Promise<MTTRMetrics> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    if (severity) search.set('severity', severity);
-    if (days) search.set('days', String(days));
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (severity) search.set("severity", severity);
+    if (days) search.set("days", String(days));
     const qs = search.toString();
-    return this.request<MTTRMetrics>(`/api/v1/metrics/mttr${qs ? `?${qs}` : ''}`);
+    return this.request<MTTRMetrics>(
+      `/api/v1/metrics/mttr${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async getRemediationVelocity(tenantId?: string, period?: number): Promise<RemediationVelocity> {
+  async getRemediationVelocity(
+    tenantId?: string,
+    period?: number,
+  ): Promise<RemediationVelocity> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    if (period) search.set('period', String(period));
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (period) search.set("period", String(period));
     const qs = search.toString();
-    return this.request<RemediationVelocity>(`/api/v1/metrics/remediation-velocity${qs ? `?${qs}` : ''}`);
+    return this.request<RemediationVelocity>(
+      `/api/v1/metrics/remediation-velocity${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async getFindingsAging(tenantId?: string, severity?: string): Promise<FindingAging> {
+  async getFindingsAging(
+    tenantId?: string,
+    severity?: string,
+  ): Promise<FindingAging> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    if (severity) search.set('severity', severity);
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (severity) search.set("severity", severity);
     const qs = search.toString();
-    return this.request<FindingAging>(`/api/v1/metrics/findings-aging${qs ? `?${qs}` : ''}`);
+    return this.request<FindingAging>(
+      `/api/v1/metrics/findings-aging${qs ? `?${qs}` : ""}`,
+    );
   }
 
   // ── Dashboard / metric history ─────────────────────────────────────────
-  async getRiskScoreHistory(tenantId?: string, days = 90): Promise<RiskScoreHistory> {
+  async getRiskScoreHistory(
+    tenantId?: string,
+    days = 90,
+  ): Promise<RiskScoreHistory> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    search.set('days', String(days));
-    return this.request<RiskScoreHistory>(`/api/v1/dashboard/metrics/risk-score/history?${search.toString()}`);
+    if (tenantId) search.set("tenant_id", tenantId);
+    search.set("days", String(days));
+    return this.request<RiskScoreHistory>(
+      `/api/v1/dashboard/metrics/risk-score/history?${search.toString()}`,
+    );
   }
 
-  async getRemediationVelocityHistory(tenantId?: string, days = 90): Promise<RemediationVelocityHistory> {
+  async getRemediationVelocityHistory(
+    tenantId?: string,
+    days = 90,
+  ): Promise<RemediationVelocityHistory> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
-    search.set('days', String(days));
-    return this.request<RemediationVelocityHistory>(`/api/v1/dashboard/metrics/remediation-velocity/history?${search.toString()}`);
+    if (tenantId) search.set("tenant_id", tenantId);
+    search.set("days", String(days));
+    return this.request<RemediationVelocityHistory>(
+      `/api/v1/dashboard/metrics/remediation-velocity/history?${search.toString()}`,
+    );
   }
 
-  async getComplianceByFramework(tenantId?: string): Promise<ComplianceByFramework> {
+  async getComplianceByFramework(
+    tenantId?: string,
+  ): Promise<ComplianceByFramework> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
+    if (tenantId) search.set("tenant_id", tenantId);
     const qs = search.toString();
-    return this.request<ComplianceByFramework>(`/api/v1/dashboard/metrics/compliance/by-framework${qs ? `?${qs}` : ''}`);
+    return this.request<ComplianceByFramework>(
+      `/api/v1/dashboard/metrics/compliance/by-framework${qs ? `?${qs}` : ""}`,
+    );
   }
 
   // ── Admin endpoints ────────────────────────────────────────────────────
   async getAdminSelfHealth(): Promise<AdminSelfHealth> {
-    return this.request<AdminSelfHealth>('/api/v1/admin/self-health');
+    return this.request<AdminSelfHealth>("/api/v1/admin/self-health");
   }
 
   async getAdminIngestThroughput(
-    stream = 'events',
-    interval = '1m',
-    period = '1h',
+    stream = "events",
+    interval = "1m",
+    period = "1h",
   ): Promise<AdminIngestThroughput> {
     const search = new URLSearchParams();
-    search.set('stream', stream);
-    search.set('interval', interval);
-    search.set('period', period);
-    return this.request<AdminIngestThroughput>(`/api/v1/admin/ingest/throughput?${search.toString()}`);
+    search.set("stream", stream);
+    search.set("interval", interval);
+    search.set("period", period);
+    return this.request<AdminIngestThroughput>(
+      `/api/v1/admin/ingest/throughput?${search.toString()}`,
+    );
   }
 
-  async getAdminTenantsActivity(period = '24h'): Promise<AdminTenantsActivity> {
+  async getAdminTenantsActivity(period = "24h"): Promise<AdminTenantsActivity> {
     const search = new URLSearchParams();
-    search.set('period', period);
-    return this.request<AdminTenantsActivity>(`/api/v1/admin/tenants/activity?${search.toString()}`);
+    search.set("period", period);
+    return this.request<AdminTenantsActivity>(
+      `/api/v1/admin/tenants/activity?${search.toString()}`,
+    );
   }
 
   async getAdminSLO(): Promise<AdminSLO> {
-    return this.request<AdminSLO>('/api/v1/admin/slo');
+    return this.request<AdminSLO>("/api/v1/admin/slo");
   }
 
   async getAdminCapacity(): Promise<AdminCapacity> {
-    return this.request<AdminCapacity>('/api/v1/admin/capacity');
+    return this.request<AdminCapacity>("/api/v1/admin/capacity");
   }
 
   // ── Investigate / search ───────────────────────────────────────────────
@@ -2849,137 +3244,201 @@ export class APIClient {
     limit?: number;
   }): Promise<InvestigateSearchResult> {
     const search = new URLSearchParams();
-    search.set('q', params.q);
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.types?.length) search.set('types', params.types.join(','));
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (params.cursor) search.set('cursor', params.cursor);
-    if (params.limit) search.set('limit', String(params.limit));
-    return this.request<InvestigateSearchResult>(`/api/v1/search?${search.toString()}`);
+    search.set("q", params.q);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.types?.length) search.set("types", params.types.join(","));
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    return this.request<InvestigateSearchResult>(
+      `/api/v1/search?${search.toString()}`,
+    );
   }
 
-  async getEntity(type: string, id: string, params: { tenantId?: string | null } = {}): Promise<EntityDetail> {
+  async getEntity(
+    type: string,
+    id: string,
+    params: { tenantId?: string | null } = {},
+  ): Promise<EntityDetail> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const qs = search.toString();
-    return this.request<EntityDetail>(`/api/v1/entities/${type}/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`);
+    return this.request<EntityDetail>(
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`,
+    );
   }
 
   async getEntityLifecycle(
     type: string,
     id: string,
-    params: { tenantId?: string | null; since?: string; until?: string; sources?: string[]; cursor?: string; limit?: number } = {},
+    params: {
+      tenantId?: string | null;
+      since?: string;
+      until?: string;
+      sources?: string[];
+      cursor?: string;
+      limit?: number;
+    } = {},
   ): Promise<EntityLifecycle> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (params.sources?.length) search.set('sources', params.sources.join(','));
-    if (params.cursor) search.set('cursor', params.cursor);
-    if (params.limit) search.set('limit', String(params.limit));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (params.sources?.length) search.set("sources", params.sources.join(","));
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
     const qs = search.toString();
     return this.request<EntityLifecycle>(
-      `/api/v1/entities/${type}/${encodeURIComponent(id)}/lifecycle${qs ? `?${qs}` : ''}`,
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/lifecycle${qs ? `?${qs}` : ""}`,
     );
   }
 
-  async getEntityRelated(type: string, id: string, params: { tenantId?: string | null } = {}): Promise<EntityRelated> {
+  async getEntityRelated(
+    type: string,
+    id: string,
+    params: { tenantId?: string | null } = {},
+  ): Promise<EntityRelated> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const qs = search.toString();
-    return this.request<EntityRelated>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/related${qs ? `?${qs}` : ''}`);
+    return this.request<EntityRelated>(
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/related${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async enrichIp(addr: string, tenantId?: string | null): Promise<IpEnrichment> {
+  async enrichIp(
+    addr: string,
+    tenantId?: string | null,
+  ): Promise<IpEnrichment> {
     const search = new URLSearchParams();
-    if (tenantId) search.set('tenant_id', tenantId);
+    if (tenantId) search.set("tenant_id", tenantId);
     const qs = search.toString();
-    return this.request<IpEnrichment>(`/api/v1/entities/ip/${encodeURIComponent(addr)}/enrich${qs ? `?${qs}` : ''}`);
+    return this.request<IpEnrichment>(
+      `/api/v1/entities/ip/${encodeURIComponent(addr)}/enrich${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async listSavedSearches(params: { tenantId?: string | null } = {}): Promise<{ items: SavedSearch[] }> {
+  async listSavedSearches(
+    params: { tenantId?: string | null } = {},
+  ): Promise<{ items: SavedSearch[] }> {
     // Backend returns PaginatedResponse { data: [...] } but consumers expect { items: [...] }.
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const qs = search.toString();
-    const resp = await this.request<PaginatedResponse<SavedSearch>>(`/api/v1/saved-searches${qs ? `?${qs}` : ''}`);
+    const resp = await this.request<PaginatedResponse<SavedSearch>>(
+      `/api/v1/saved-searches${qs ? `?${qs}` : ""}`,
+    );
     return { items: resp.data ?? [] };
   }
 
-  async createSavedSearch(payload: SavedSearchInput, params: { tenantId?: string | null } = {}): Promise<SavedSearch> {
+  async createSavedSearch(
+    payload: SavedSearchInput,
+    params: { tenantId?: string | null } = {},
+  ): Promise<SavedSearch> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const qs = search.toString();
-    return this.request<SavedSearch>(`/api/v1/saved-searches${qs ? `?${qs}` : ''}`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return this.request<SavedSearch>(
+      `/api/v1/saved-searches${qs ? `?${qs}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   async deleteSavedSearch(id: string): Promise<void> {
-    await this.request<unknown>(`/api/v1/saved-searches/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<unknown>(
+      `/api/v1/saved-searches/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
-  async addEntityTag(type: string, id: string, tag: string, params: { tenantId?: string | null } = {}): Promise<void> {
+  async addEntityTag(
+    type: string,
+    id: string,
+    tag: string,
+    params: { tenantId?: string | null } = {},
+  ): Promise<void> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const qs = search.toString();
-    await this.request<unknown>(`/api/v1/entities/${type}/${encodeURIComponent(id)}/tags${qs ? `?${qs}` : ''}`, {
-      method: 'POST',
-      body: JSON.stringify({ tag }),
-    });
+    await this.request<unknown>(
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/tags${qs ? `?${qs}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ tag }),
+      },
+    );
   }
 
   async entityAction(
     type: string,
     id: string,
     payload: {
-      action: 'block' | 'allow' | 'quarantine';
+      action: "block" | "allow" | "quarantine";
       reason?: string;
       ttl?: number;
-      scope?: 'fleet' | 'affected';
+      scope?: "fleet" | "affected";
     },
     params: { tenantId?: string | null } = {},
   ): Promise<EntityActionResponse> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const qs = search.toString();
     return this.request<EntityActionResponse>(
-      `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions${qs ? `?${qs}` : ''}`,
-      { method: 'POST', body: JSON.stringify(payload) },
+      `/api/v1/entities/${type}/${encodeURIComponent(id)}/actions${qs ? `?${qs}` : ""}`,
+      { method: "POST", body: JSON.stringify(payload) },
     );
   }
 
-  async getIPBehaviorOverview(params: { tenantId: string; since?: string }): Promise<IPBehaviorOverview> {
+  async getIPBehaviorOverview(params: {
+    tenantId: string;
+    since?: string;
+  }): Promise<IPBehaviorOverview> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
-    return this.request<IPBehaviorOverview>(`/api/v1/ip-behavior/overview?${search.toString()}`);
-  }
-
-  async listIPBehaviorCountries(params: { tenantId: string; since?: string }): Promise<{ countries: IPBehaviorCountrySummary[]; since: string }> {
-    const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
-    return this.request<{ countries: IPBehaviorCountrySummary[]; since: string }>(
-      `/api/v1/ip-behavior/countries?${search.toString()}`,
+    search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
+    return this.request<IPBehaviorOverview>(
+      `/api/v1/ip-behavior/overview?${search.toString()}`,
     );
   }
 
-  async getIPBehaviorCountryDetail(params: { tenantId: string; code: string; since?: string }): Promise<IPBehaviorCountrySummary> {
+  async listIPBehaviorCountries(params: {
+    tenantId: string;
+    since?: string;
+  }): Promise<{ countries: IPBehaviorCountrySummary[]; since: string }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
+    search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
+    return this.request<{
+      countries: IPBehaviorCountrySummary[];
+      since: string;
+    }>(`/api/v1/ip-behavior/countries?${search.toString()}`);
+  }
+
+  async getIPBehaviorCountryDetail(params: {
+    tenantId: string;
+    code: string;
+    since?: string;
+  }): Promise<IPBehaviorCountrySummary> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
     return this.request<IPBehaviorCountrySummary>(
       `/api/v1/ip-behavior/countries/${encodeURIComponent(params.code)}?${search.toString()}`,
     );
   }
 
-  async getIPBehaviorIPProfile(params: { tenantId: string; ip: string; since?: string }): Promise<IPBehaviorIPProfile> {
+  async getIPBehaviorIPProfile(params: {
+    tenantId: string;
+    ip: string;
+    since?: string;
+  }): Promise<IPBehaviorIPProfile> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
+    search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
     return this.request<IPBehaviorIPProfile>(
       `/api/v1/ip-behavior/ips/${encodeURIComponent(params.ip)}?${search.toString()}`,
     );
@@ -2992,11 +3451,14 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<IPBehaviorBaseline>> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.dimension) search.set('dimension', params.dimension);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
-    return this.request<PaginatedResponse<IPBehaviorBaseline>>(`/api/v1/ip-behavior/baselines?${search.toString()}`);
+    search.set("tenant_id", params.tenantId);
+    if (params.dimension) search.set("dimension", params.dimension);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
+    return this.request<PaginatedResponse<IPBehaviorBaseline>>(
+      `/api/v1/ip-behavior/baselines?${search.toString()}`,
+    );
   }
 
   async createBlockProposal(payload: {
@@ -3016,8 +3478,8 @@ export class APIClient {
     protected_override?: boolean;
     protected_override_reason?: string;
   }): Promise<IPBlockProposal> {
-    return this.request<IPBlockProposal>('/api/v1/network/block-proposals', {
-      method: 'POST',
+    return this.request<IPBlockProposal>("/api/v1/network/block-proposals", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
@@ -3039,10 +3501,13 @@ export class APIClient {
     protected_override?: boolean;
     protected_override_reason?: string;
   }): Promise<ASNBlockProposalsResponse> {
-    return this.request<ASNBlockProposalsResponse>('/api/v1/network/block-proposals/asn', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return this.request<ASNBlockProposalsResponse>(
+      "/api/v1/network/block-proposals/asn",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   async listBlockProposals(params: {
@@ -3057,78 +3522,121 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<IPBlockProposal>> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.status) search.set('status', params.status);
-    if (params.ipCidr) search.set('ip_cidr', params.ipCidr);
-    if (params.serverGroup) search.set('server_group', params.serverGroup);
-    if (params.app) search.set('app', params.app);
-    if (params.vhost) search.set('vhost', params.vhost);
-    if (params.findingId) search.set('finding_id', params.findingId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
-    return this.request<PaginatedResponse<IPBlockProposal>>(`/api/v1/network/block-proposals?${search.toString()}`);
+    search.set("tenant_id", params.tenantId);
+    if (params.status) search.set("status", params.status);
+    if (params.ipCidr) search.set("ip_cidr", params.ipCidr);
+    if (params.serverGroup) search.set("server_group", params.serverGroup);
+    if (params.app) search.set("app", params.app);
+    if (params.vhost) search.set("vhost", params.vhost);
+    if (params.findingId) search.set("finding_id", params.findingId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
+    return this.request<PaginatedResponse<IPBlockProposal>>(
+      `/api/v1/network/block-proposals?${search.toString()}`,
+    );
   }
 
   async approveBlockProposal(id: string): Promise<IPBlockProposal> {
-    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/approve`, {
-      method: 'POST',
-    });
+    return this.request<IPBlockProposal>(
+      `/api/v1/network/block-proposals/${encodeURIComponent(id)}/approve`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   async promoteBlockProposal(id: string): Promise<IPBlockProposal> {
-    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/promote`, {
-      method: 'POST',
-    });
+    return this.request<IPBlockProposal>(
+      `/api/v1/network/block-proposals/${encodeURIComponent(id)}/promote`,
+      {
+        method: "POST",
+      },
+    );
   }
 
-  async rejectBlockProposal(id: string, reason?: string): Promise<IPBlockProposal> {
-    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/reject`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    });
+  async rejectBlockProposal(
+    id: string,
+    reason?: string,
+  ): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>(
+      `/api/v1/network/block-proposals/${encodeURIComponent(id)}/reject`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      },
+    );
   }
 
-  async rollbackBlockProposal(id: string, reason?: string): Promise<IPBlockProposal> {
-    return this.request<IPBlockProposal>(`/api/v1/network/block-proposals/${encodeURIComponent(id)}/rollback`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    });
+  async rollbackBlockProposal(
+    id: string,
+    reason?: string,
+  ): Promise<IPBlockProposal> {
+    return this.request<IPBlockProposal>(
+      `/api/v1/network/block-proposals/${encodeURIComponent(id)}/rollback`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      },
+    );
   }
 
-  async listWebserverInstances(params: { tenantId: string; nodeId?: string; limit?: number; offset?: number }): Promise<PaginatedResponse<WebserverInstance>> {
+  async listWebserverInstances(params: {
+    tenantId: string;
+    nodeId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<WebserverInstance>> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.nodeId) search.set('node_id', params.nodeId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
-    return this.request<PaginatedResponse<WebserverInstance>>(`/api/v1/webservers?${search.toString()}`);
+    search.set("tenant_id", params.tenantId);
+    if (params.nodeId) search.set("node_id", params.nodeId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
+    return this.request<PaginatedResponse<WebserverInstance>>(
+      `/api/v1/webservers?${search.toString()}`,
+    );
   }
 
-  async createWebserverInventoryScan(payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
-    return this.request<WebserverConfigActionResponse>('/api/v1/webservers/inventory', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  async createWebserverInventoryScan(
+    payload: WebserverConfigActionPayload,
+  ): Promise<WebserverConfigActionResponse> {
+    return this.request<WebserverConfigActionResponse>(
+      "/api/v1/webservers/inventory",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
-  async planWebserverConfig(instanceId: string, payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+  async planWebserverConfig(
+    instanceId: string,
+    payload: WebserverConfigActionPayload,
+  ): Promise<WebserverConfigActionResponse> {
     return this.request<WebserverConfigActionResponse>(
       `/api/v1/webservers/${encodeURIComponent(instanceId)}/config/plan`,
-      { method: 'POST', body: JSON.stringify(payload) },
+      { method: "POST", body: JSON.stringify(payload) },
     );
   }
 
-  async applyWebserverConfig(instanceId: string, payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+  async applyWebserverConfig(
+    instanceId: string,
+    payload: WebserverConfigActionPayload,
+  ): Promise<WebserverConfigActionResponse> {
     return this.request<WebserverConfigActionResponse>(
       `/api/v1/webservers/${encodeURIComponent(instanceId)}/config/apply`,
-      { method: 'POST', body: JSON.stringify(payload) },
+      { method: "POST", body: JSON.stringify(payload) },
     );
   }
 
-  async rollbackWebserverConfig(instanceId: string, payload: WebserverConfigActionPayload): Promise<WebserverConfigActionResponse> {
+  async rollbackWebserverConfig(
+    instanceId: string,
+    payload: WebserverConfigActionPayload,
+  ): Promise<WebserverConfigActionResponse> {
     return this.request<WebserverConfigActionResponse>(
       `/api/v1/webservers/${encodeURIComponent(instanceId)}/config/rollback`,
-      { method: 'POST', body: JSON.stringify(payload) },
+      { method: "POST", body: JSON.stringify(payload) },
     );
   }
 
@@ -3138,8 +3646,8 @@ export class APIClient {
     limit?: number;
   }): Promise<PaginatedResponse<WebserverConfigActionHistory>> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    search.set("tenant_id", params.tenantId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
     return this.request<PaginatedResponse<WebserverConfigActionHistory>>(
       `/api/v1/webservers/${encodeURIComponent(params.instanceId)}/config/actions?${search.toString()}`,
     );
@@ -3151,8 +3659,8 @@ export class APIClient {
     limit?: number;
   }): Promise<PaginatedResponse<WebserverConfigReceipt>> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    search.set("tenant_id", params.tenantId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
     return this.request<PaginatedResponse<WebserverConfigReceipt>>(
       `/api/v1/webservers/${encodeURIComponent(params.instanceId)}/config/receipts?${search.toString()}`,
     );
@@ -3165,61 +3673,74 @@ export class APIClient {
     includeRemoved?: boolean;
   }): Promise<{ blocks: ActiveBlock[]; generated_at: string }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
-    if (params.includeRemoved) search.set('include_removed', 'true');
+    search.set("tenant_id", params.tenantId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
+    if (params.includeRemoved) search.set("include_removed", "true");
     return this.request<{ blocks: ActiveBlock[]; generated_at: string }>(
       `/api/v1/network/active-blocks?${search.toString()}`,
     );
   }
 
-  async listBlockNodes(entityActionId: string): Promise<{ rules: NodeFirewallRule[] }> {
+  async listBlockNodes(
+    entityActionId: string,
+  ): Promise<{ rules: NodeFirewallRule[] }> {
     return this.request<{ rules: NodeFirewallRule[] }>(
       `/api/v1/network/blocks/${encodeURIComponent(entityActionId)}/nodes`,
     );
   }
 
-  async listPatchDeployments(params: { tenantId: string; limit?: number; offset?: number }): Promise<{ deployments: PatchDeployment[]; generated_at: string }> {
+  async listPatchDeployments(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ deployments: PatchDeployment[]; generated_at: string }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
-    return this.request<{ deployments: PatchDeployment[]; generated_at: string }>(
-      `/api/v1/patch/deployments?${search.toString()}`,
-    );
+    search.set("tenant_id", params.tenantId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
+    return this.request<{
+      deployments: PatchDeployment[];
+      generated_at: string;
+    }>(`/api/v1/patch/deployments?${search.toString()}`);
   }
 
   async createPatchDeployment(payload: {
     tenant_id: string;
     node_ids?: string[];
-    mode?: 'direct' | 'proxy' | 'airgapped' | 'auto';
+    mode?: "direct" | "proxy" | "airgapped" | "auto";
     reason?: string;
   }): Promise<PatchDeployResponse> {
-    return this.request<PatchDeployResponse>(
-      '/api/v1/patch/deployments',
-      { method: 'POST', body: JSON.stringify(payload) },
-    );
+    return this.request<PatchDeployResponse>("/api/v1/patch/deployments", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   }
 
   // ── Patch approvals (PR #65 c1-patch-approval-gate) ────────────────────
-  async listPatchApprovals(params: {
-    status?: 'pending' | 'approved' | 'denied' | 'expired';
-    tenantId?: string;
-    deploymentId?: string;
-    nodeId?: string;
-    limit?: number;
-    offset?: number;
-  } = {}): Promise<PaginatedResponse<PatchApproval>> {
+  async listPatchApprovals(
+    params: {
+      status?: "pending" | "approved" | "denied" | "expired";
+      tenantId?: string;
+      deploymentId?: string;
+      nodeId?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<PatchApproval>> {
     const search = new URLSearchParams();
-    if (params.status) search.set('status', params.status);
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.deploymentId) search.set('deployment_id', params.deploymentId);
-    if (params.nodeId) search.set('node_id', params.nodeId);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.status) search.set("status", params.status);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.deploymentId) search.set("deployment_id", params.deploymentId);
+    if (params.nodeId) search.set("node_id", params.nodeId);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const query = search.toString();
-    const suffix = query ? `?${query}` : '';
+    const suffix = query ? `?${query}` : "";
     const response = await this.request<RawPaginatedResponse<PatchApproval>>(
       `/api/v1/patch/approvals${suffix}`,
     );
@@ -3232,18 +3753,20 @@ export class APIClient {
   async approvePatchApproval(id: string): Promise<PatchApproval> {
     return this.request<PatchApproval>(
       `/api/v1/patch/approvals/${encodeURIComponent(id)}/approve`,
-      { method: 'POST' },
+      { method: "POST" },
     );
   }
 
   async denyPatchApproval(id: string): Promise<PatchApproval> {
     return this.request<PatchApproval>(
       `/api/v1/patch/approvals/${encodeURIComponent(id)}/deny`,
-      { method: 'POST' },
+      { method: "POST" },
     );
   }
 
-  async listPatchDeploymentNodes(deploymentId: string): Promise<{ rows: NodePatchState[] }> {
+  async listPatchDeploymentNodes(
+    deploymentId: string,
+  ): Promise<{ rows: NodePatchState[] }> {
     return this.request<{ rows: NodePatchState[] }>(
       `/api/v1/patch/deployments/${encodeURIComponent(deploymentId)}/nodes`,
     );
@@ -3258,18 +3781,20 @@ export class APIClient {
 
   async upsertNodePatchConfig(payload: {
     node_id: string;
-    mode: 'direct' | 'proxy' | 'airgapped';
+    mode: "direct" | "proxy" | "airgapped";
     proxy_id?: string;
     window_id?: string;
   }): Promise<NodePatchConfig> {
-    return this.request<NodePatchConfig>('/api/v1/patch/config', {
-      method: 'POST',
+    return this.request<NodePatchConfig>("/api/v1/patch/config", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   // ── Maintenance windows ────────────────────────────────────────────────
-  async listMaintenanceWindows(tenantId: string): Promise<{ windows: MaintenanceWindow[] }> {
+  async listMaintenanceWindows(
+    tenantId: string,
+  ): Promise<{ windows: MaintenanceWindow[] }> {
     return this.request<{ windows: MaintenanceWindow[] }>(
       `/api/v1/patch/maintenance-windows?tenant_id=${encodeURIComponent(tenantId)}`,
     );
@@ -3283,30 +3808,37 @@ export class APIClient {
     closes_at: string;
     allow_repos: string[];
   }): Promise<MaintenanceWindow> {
-    return this.request<MaintenanceWindow>('/api/v1/patch/maintenance-windows', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async openMaintenanceWindow(id: string): Promise<{ status: string; action: string }> {
-    return this.request<{ status: string; action: string }>(
-      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/open`,
-      { method: 'POST' },
+    return this.request<MaintenanceWindow>(
+      "/api/v1/patch/maintenance-windows",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
     );
   }
 
-  async closeMaintenanceWindow(id: string): Promise<{ status: string; action: string }> {
+  async openMaintenanceWindow(
+    id: string,
+  ): Promise<{ status: string; action: string }> {
+    return this.request<{ status: string; action: string }>(
+      `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/open`,
+      { method: "POST" },
+    );
+  }
+
+  async closeMaintenanceWindow(
+    id: string,
+  ): Promise<{ status: string; action: string }> {
     return this.request<{ status: string; action: string }>(
       `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/close`,
-      { method: 'POST' },
+      { method: "POST" },
     );
   }
 
   async forceCloseMaintenanceWindow(id: string): Promise<{ status: string }> {
     return this.request<{ status: string }>(
       `/api/v1/patch/maintenance-windows/${encodeURIComponent(id)}/force-close`,
-      { method: 'POST' },
+      { method: "POST" },
     );
   }
 
@@ -3323,16 +3855,19 @@ export class APIClient {
     port?: number;
     whitelist: string[];
   }): Promise<SquidProxy> {
-    return this.request<SquidProxy>('/api/v1/patch/proxies', {
-      method: 'POST',
+    return this.request<SquidProxy>("/api/v1/patch/proxies", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async installSquidProxy(id: string, nodeId: string): Promise<{ status: string }> {
+  async installSquidProxy(
+    id: string,
+    nodeId: string,
+  ): Promise<{ status: string }> {
     return this.request<{ status: string }>(
       `/api/v1/patch/proxies/${encodeURIComponent(id)}/install`,
-      { method: 'POST', body: JSON.stringify({ node_id: nodeId }) },
+      { method: "POST", body: JSON.stringify({ node_id: nodeId }) },
     );
   }
 
@@ -3343,210 +3878,342 @@ export class APIClient {
   ): Promise<{ status: string; validate: string }> {
     return this.request<{ status: string; validate: string }>(
       `/api/v1/patch/proxies/${encodeURIComponent(id)}/reconfigure`,
-      { method: 'POST', body: JSON.stringify({ node_id: nodeId, whitelist }) },
+      { method: "POST", body: JSON.stringify({ node_id: nodeId, whitelist }) },
     );
   }
 
   async removeSquidProxy(id: string): Promise<{ status: string }> {
     return this.request<{ status: string }>(
       `/api/v1/patch/proxies/${encodeURIComponent(id)}`,
-      { method: 'DELETE' },
+      { method: "DELETE" },
     );
   }
 
   // ── Onboarding wizard ──────────────────────────────────────────────────
-  async listOnboardingProtocols(): Promise<{ protocols: OnboardingProtocol[] }> {
-    return this.request<{ protocols: OnboardingProtocol[] }>('/api/v1/onboarding/protocols');
+  async listOnboardingProtocols(): Promise<{
+    protocols: OnboardingProtocol[];
+  }> {
+    return this.request<{ protocols: OnboardingProtocol[] }>(
+      "/api/v1/onboarding/protocols",
+    );
   }
 
-  async testServerConnection(payload: TestConnectionPayload): Promise<TestConnectionResult> {
-    return this.request<TestConnectionResult>('/api/v1/onboarding/test-connection', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  async testServerConnection(
+    payload: TestConnectionPayload,
+  ): Promise<TestConnectionResult> {
+    return this.request<TestConnectionResult>(
+      "/api/v1/onboarding/test-connection",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
-  async listPortRules(params: { tenantId?: string; policyId?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<PortRule>> {
+  async listPortRules(
+    params: {
+      tenantId?: string;
+      policyId?: string;
+      enabled?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<PortRule>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.policyId) search.set('policy_id', params.policyId);
-    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.policyId) search.set("policy_id", params.policyId);
+    if (typeof params.enabled === "boolean")
+      search.set("enabled", String(params.enabled));
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<PortRule>>(`/api/v1/rules/port${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<PortRule>>(
+      `/api/v1/rules/port${qs ? `?${qs}` : ""}`,
+    );
   }
 
   async createPortRule(payload: CreatePortRulePayload): Promise<PortRule> {
-    return this.request<PortRule>('/api/v1/rules/port', {
-      method: 'POST',
+    return this.request<PortRule>("/api/v1/rules/port", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async deletePortRule(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/rules/port/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/rules/port/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
-  async listLogRules(params: { tenantId?: string; policyId?: string; enabled?: boolean; logSource?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<LogRule>> {
+  async listLogRules(
+    params: {
+      tenantId?: string;
+      policyId?: string;
+      enabled?: boolean;
+      logSource?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<LogRule>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.policyId) search.set('policy_id', params.policyId);
-    if (params.logSource) search.set('log_source', params.logSource);
-    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.policyId) search.set("policy_id", params.policyId);
+    if (params.logSource) search.set("log_source", params.logSource);
+    if (typeof params.enabled === "boolean")
+      search.set("enabled", String(params.enabled));
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<LogRule>>(`/api/v1/rules/log${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<LogRule>>(
+      `/api/v1/rules/log${qs ? `?${qs}` : ""}`,
+    );
   }
 
   async createLogRule(payload: CreateLogRulePayload): Promise<LogRule> {
-    return this.request<LogRule>('/api/v1/rules/log', {
-      method: 'POST',
+    return this.request<LogRule>("/api/v1/rules/log", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteLogRule(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/rules/log/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/rules/log/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
-  async listAlerts(params: { tenantId?: string; state?: string; severity?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<Alert>> {
+  async listAlerts(
+    params: {
+      tenantId?: string;
+      state?: string;
+      severity?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<Alert>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.state) search.set('state', params.state);
-    if (params.severity) search.set('severity', params.severity);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.state) search.set("state", params.state);
+    if (params.severity) search.set("severity", params.severity);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<Alert>>(`/api/v1/alerts${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<Alert>>(
+      `/api/v1/alerts${qs ? `?${qs}` : ""}`,
+    );
   }
 
   async ackAlert(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/ack`, { method: 'POST' });
+    await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/ack`, {
+      method: "POST",
+    });
   }
 
   async resolveAlert(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
+    await this.request<void>(
+      `/api/v1/alerts/${encodeURIComponent(id)}/resolve`,
+      { method: "POST" },
+    );
   }
 
-  async updateAlertDisposition(id: string, payload: UpdateAlertDispositionPayload): Promise<Alert> {
-    return this.request<Alert>(`/api/v1/alerts/${encodeURIComponent(id)}/disposition`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  async updateAlertDisposition(
+    id: string,
+    payload: UpdateAlertDispositionPayload,
+  ): Promise<Alert> {
+    return this.request<Alert>(
+      `/api/v1/alerts/${encodeURIComponent(id)}/disposition`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
-  async listAccessRequests(params: { tenantId?: string; status?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<AccessRequest>> {
+  async listAccessRequests(
+    params: {
+      tenantId?: string;
+      status?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<AccessRequest>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.status) search.set('status', params.status);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.status) search.set("status", params.status);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<AccessRequest>>(`/api/v1/access-requests${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<AccessRequest>>(
+      `/api/v1/access-requests${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async createAccessRequest(payload: CreateAccessRequestPayload): Promise<AccessRequest> {
-    return this.request<AccessRequest>('/api/v1/access-requests', {
-      method: 'POST',
+  async createAccessRequest(
+    payload: CreateAccessRequestPayload,
+  ): Promise<AccessRequest> {
+    return this.request<AccessRequest>("/api/v1/access-requests", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async approveAccessRequest(id: string, reason = ''): Promise<AccessRequest> {
-    return this.request<AccessRequest>(`/api/v1/access-requests/${encodeURIComponent(id)}/approve`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    });
+  async approveAccessRequest(id: string, reason = ""): Promise<AccessRequest> {
+    return this.request<AccessRequest>(
+      `/api/v1/access-requests/${encodeURIComponent(id)}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      },
+    );
   }
 
-  async denyAccessRequest(id: string, reason = ''): Promise<AccessRequest> {
-    return this.request<AccessRequest>(`/api/v1/access-requests/${encodeURIComponent(id)}/deny`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    });
+  async denyAccessRequest(id: string, reason = ""): Promise<AccessRequest> {
+    return this.request<AccessRequest>(
+      `/api/v1/access-requests/${encodeURIComponent(id)}/deny`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      },
+    );
   }
 
-  async listRecommendations(tenantId: string): Promise<{ data: Recommendation[] }> {
+  async listRecommendations(
+    tenantId: string,
+  ): Promise<{ data: Recommendation[] }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
-    return this.request<{ data: Recommendation[] }>(`/api/v1/compliance/recommendations?${search.toString()}`);
+    search.set("tenant_id", tenantId);
+    return this.request<{ data: Recommendation[] }>(
+      `/api/v1/compliance/recommendations?${search.toString()}`,
+    );
   }
 
   async listReports(): Promise<{ data: ReportDesc[] }> {
-    return this.request<{ data: ReportDesc[] }>('/api/v1/reports');
+    return this.request<{ data: ReportDesc[] }>("/api/v1/reports");
   }
 
-  async listSessions(params: { tenantId?: string; nodeId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<SessionRecording>> {
+  async listSessions(
+    params: {
+      tenantId?: string;
+      nodeId?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<SessionRecording>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.nodeId) search.set('node_id', params.nodeId);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.nodeId) search.set("node_id", params.nodeId);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<SessionRecording>>(`/api/v1/sessions${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<SessionRecording>>(
+      `/api/v1/sessions${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async getSessionParsed(id: string, search?: string): Promise<SessionParsedResponse> {
+  async getSessionParsed(
+    id: string,
+    search?: string,
+  ): Promise<SessionParsedResponse> {
     const qs = new URLSearchParams();
-    if (search) qs.set('search', search);
+    if (search) qs.set("search", search);
     const suffix = qs.toString();
-    return this.request<SessionParsedResponse>(`/api/v1/sessions/${encodeURIComponent(id)}/parsed${suffix ? `?${suffix}` : ''}`);
+    return this.request<SessionParsedResponse>(
+      `/api/v1/sessions/${encodeURIComponent(id)}/parsed${suffix ? `?${suffix}` : ""}`,
+    );
   }
 
   async getSessionTranscript(id: string): Promise<string> {
-    const resp = await fetch(`${this.baseUrl}/api/v1/sessions/${encodeURIComponent(id)}/transcript`, {
-      headers: { ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
-    });
-    if (!resp.ok) throw new APIError('Failed to load transcript', resp.status);
+    const resp = await fetch(
+      `${this.baseUrl}/api/v1/sessions/${encodeURIComponent(id)}/transcript`,
+      {
+        headers: {
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+        },
+      },
+    );
+    if (!resp.ok) throw new APIError("Failed to load transcript", resp.status);
     return resp.text();
   }
 
   async listThreatFeeds(tenantId: string): Promise<{ data: ThreatFeed[] }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
-    return this.request<{ data: ThreatFeed[] }>(`/api/v1/threat-feeds?${search.toString()}`);
+    search.set("tenant_id", tenantId);
+    return this.request<{ data: ThreatFeed[] }>(
+      `/api/v1/threat-feeds?${search.toString()}`,
+    );
   }
 
-  async getThreatIntelSummary(params: { tenantId: string; ip?: string }): Promise<ThreatIntelSummary> {
+  async getThreatIntelSummary(params: {
+    tenantId: string;
+    ip?: string;
+  }): Promise<ThreatIntelSummary> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.ip) search.set('ip', params.ip);
-    return this.request<ThreatIntelSummary>(`/api/v1/threat-intel/summary?${search.toString()}`);
+    search.set("tenant_id", params.tenantId);
+    if (params.ip) search.set("ip", params.ip);
+    return this.request<ThreatIntelSummary>(
+      `/api/v1/threat-intel/summary?${search.toString()}`,
+    );
   }
 
-  async createThreatFeed(payload: CreateThreatFeedPayload): Promise<ThreatFeed> {
-    return this.request<ThreatFeed>('/api/v1/threat-feeds', {
-      method: 'POST',
+  async createThreatFeed(
+    payload: CreateThreatFeedPayload,
+  ): Promise<ThreatFeed> {
+    return this.request<ThreatFeed>("/api/v1/threat-feeds", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async updateThreatFeed(id: string, payload: UpdateThreatFeedPayload): Promise<ThreatFeed> {
-    return this.request<ThreatFeed>(`/api/v1/threat-feeds/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+  async updateThreatFeed(
+    id: string,
+    payload: UpdateThreatFeedPayload,
+  ): Promise<ThreatFeed> {
+    return this.request<ThreatFeed>(
+      `/api/v1/threat-feeds/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   async deleteThreatFeed(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/threat-feeds/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/threat-feeds/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
-  async simulateRule(payload: { tenant_id: string; rule_type: string; window_days?: number; rule: Record<string, unknown> }): Promise<SimulateResult> {
-    return this.request<SimulateResult>('/api/v1/compliance/simulate', {
-      method: 'POST',
+  async simulateRule(payload: {
+    tenant_id: string;
+    rule_type: string;
+    window_days?: number;
+    rule: Record<string, unknown>;
+  }): Promise<SimulateResult> {
+    return this.request<SimulateResult>("/api/v1/compliance/simulate", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  buildReportExportUrl(slug: string, params: { tenantId?: string; since?: string } = {}): string {
+  buildReportExportUrl(
+    slug: string,
+    params: { tenantId?: string; since?: string } = {},
+  ): string {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
     const qs = search.toString();
-    return `${this.baseUrl}/api/v1/reports/${encodeURIComponent(slug)}${qs ? `?${qs}` : ''}`;
+    return `${this.baseUrl}/api/v1/reports/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`;
   }
 
   // streamEvents opens an authenticated Server-Sent Events stream using
@@ -3555,21 +4222,27 @@ export class APIClient {
   // an AbortController.abort-style cleanup function.
   streamEvents(
     opts: { tenantId: string; topics?: string[]; nodeId?: string },
-    onEvent: (ev: { topic: string; payload: unknown; tenant_id: string; node_id?: string }) => void,
+    onEvent: (ev: {
+      topic: string;
+      payload: unknown;
+      tenant_id: string;
+      node_id?: string;
+    }) => void,
     onError?: (err: unknown) => void,
   ): () => void {
     const controller = new AbortController();
     const search = new URLSearchParams();
-    search.set('tenant_id', opts.tenantId);
-    if (opts.nodeId) search.set('node_id', opts.nodeId);
-    if (opts.topics && opts.topics.length) search.set('topics', opts.topics.join(','));
+    search.set("tenant_id", opts.tenantId);
+    if (opts.nodeId) search.set("node_id", opts.nodeId);
+    if (opts.topics && opts.topics.length)
+      search.set("topics", opts.topics.join(","));
     const url = `${this.baseUrl}/api/v1/events/stream?${search.toString()}`;
 
     const run = async () => {
       try {
         const resp = await fetch(url, {
           headers: {
-            Accept: 'text/event-stream',
+            Accept: "text/event-stream",
             ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           },
           signal: controller.signal,
@@ -3579,16 +4252,18 @@ export class APIClient {
         }
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
-        let buf = '';
+        let buf = "";
         while (!controller.signal.aborted) {
           const { value, done } = await reader.read();
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           let idx;
-          while ((idx = buf.indexOf('\n\n')) !== -1) {
+          while ((idx = buf.indexOf("\n\n")) !== -1) {
             const frame = buf.slice(0, idx);
             buf = buf.slice(idx + 2);
-            const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+            const dataLine = frame
+              .split("\n")
+              .find((l) => l.startsWith("data: "));
             if (!dataLine) continue;
             try {
               const parsed = JSON.parse(dataLine.slice(6));
@@ -3613,9 +4288,9 @@ export class APIClient {
   // browser handles the tarball download directly.
   buildBundleDownloadUrl(options: BundleDownloadOptions): string {
     const search = new URLSearchParams();
-    search.set('os', options.os);
-    search.set('arch', options.arch);
-    search.set('token', options.token);
+    search.set("os", options.os);
+    search.set("arch", options.arch);
+    search.set("token", options.token);
     return `${this.baseUrl}/api/v1/agent/bundle?${search.toString()}`;
   }
 
@@ -3627,52 +4302,77 @@ export class APIClient {
     offset?: number;
   }): Promise<{ items: OfflineContentBundle[]; pagination: PaginationMeta }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.bundleId) search.set('bundle_id', params.bundleId);
-    if (params.status) search.set('status', params.status);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
-    return this.request<{ items: OfflineContentBundle[]; pagination: PaginationMeta }>(
+    search.set("tenant_id", params.tenantId);
+    if (params.bundleId) search.set("bundle_id", params.bundleId);
+    if (params.status) search.set("status", params.status);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
+    return this.request<{
+      items: OfflineContentBundle[];
+      pagination: PaginationMeta;
+    }>(`/api/v1/offline-bundles?${search.toString()}`);
+  }
+
+  async importOfflineContentBundle(
+    tenantId: string,
+    bundle: Blob,
+  ): Promise<OfflineContentBundle> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<OfflineContentBundle>(
       `/api/v1/offline-bundles?${search.toString()}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: bundle,
+      },
     );
   }
 
-  async importOfflineContentBundle(tenantId: string, bundle: Blob): Promise<OfflineContentBundle> {
+  async rollbackOfflineContentBundle(
+    tenantId: string,
+    bundleId: string,
+    sequence: number,
+  ): Promise<OfflineContentBundle> {
     const search = new URLSearchParams({ tenant_id: tenantId });
-    return this.request<OfflineContentBundle>(`/api/v1/offline-bundles?${search.toString()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: bundle,
-    });
-  }
-
-  async rollbackOfflineContentBundle(tenantId: string, bundleId: string, sequence: number): Promise<OfflineContentBundle> {
-    const search = new URLSearchParams({ tenant_id: tenantId });
-    return this.request<OfflineContentBundle>(`/api/v1/offline-bundles/${encodeURIComponent(bundleId)}/rollback?${search.toString()}`, {
-      method: 'POST',
-      body: JSON.stringify({ bundle_id: bundleId, sequence }),
-    });
+    return this.request<OfflineContentBundle>(
+      `/api/v1/offline-bundles/${encodeURIComponent(bundleId)}/rollback?${search.toString()}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ bundle_id: bundleId, sequence }),
+      },
+    );
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         ...(init.headers ?? {}),
       },
     });
 
     if (!response.ok) {
-      if (response.status === HTTP_STATUS_UNAUTHORIZED && this.unauthorizedHandler) {
+      if (
+        response.status === HTTP_STATUS_UNAUTHORIZED &&
+        this.unauthorizedHandler
+      ) {
         this.unauthorizedHandler();
       }
       const message = await safeErrorMessage(response);
-      throw new APIError(message || `Request failed with status ${response.status}`, response.status);
+      throw new APIError(
+        message || `Request failed with status ${response.status}`,
+        response.status,
+      );
     }
 
-    if (response.status === 204 || response.status === 205 || response.headers.get('Content-Length') === '0') {
+    if (
+      response.status === 204 ||
+      response.status === 205 ||
+      response.headers.get("Content-Length") === "0"
+    ) {
       return undefined as T;
     }
 
@@ -3681,141 +4381,485 @@ export class APIClient {
 
   // ---- Connections / forensics (Phase 7) -------------------------------
 
-  async listConnections(params: ListConnectionsParams = {}): Promise<ConnectionRow[]> {
+  async listConnections(
+    params: ListConnectionsParams = {},
+  ): Promise<ConnectionRow[]> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.ip) search.set('ip', params.ip);
-    if (params.nodeId) search.set('node_id', params.nodeId);
-    if (typeof params.openOnly === 'boolean') search.set('open_only', String(params.openOnly));
-    if (params.since) search.set('since', params.since);
-    if (params.until) search.set('until', params.until);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.ip) search.set("ip", params.ip);
+    if (params.nodeId) search.set("node_id", params.nodeId);
+    if (typeof params.openOnly === "boolean")
+      search.set("open_only", String(params.openOnly));
+    if (params.since) search.set("since", params.since);
+    if (params.until) search.set("until", params.until);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
     const q = search.toString();
-    const resp = await this.request<ConnectionRow[] | { data: ConnectionRow[] }>(`/api/v1/connections${q ? `?${q}` : ''}`);
-    return Array.isArray(resp) ? resp : resp.data ?? [];
+    const resp = await this.request<
+      ConnectionRow[] | { data: ConnectionRow[] }
+    >(`/api/v1/connections${q ? `?${q}` : ""}`);
+    return Array.isArray(resp) ? resp : (resp.data ?? []);
   }
 
-  async getConnectionDetail(connID: string, params: { tenantId?: string | null } = {}): Promise<ConnectionDetail> {
+  async getConnectionDetail(
+    connID: string,
+    params: { tenantId?: string | null } = {},
+  ): Promise<ConnectionDetail> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
     const q = search.toString();
-    return this.request<ConnectionDetail>(`/api/v1/connections/${encodeURIComponent(connID)}${q ? `?${q}` : ''}`);
+    return this.request<ConnectionDetail>(
+      `/api/v1/connections/${encodeURIComponent(connID)}${q ? `?${q}` : ""}`,
+    );
   }
 
-  async listTopTalkers(params: { tenantId?: string; since?: string; limit?: number } = {}): Promise<TopTalker[]> {
+  async listTopTalkers(
+    params: { tenantId?: string; since?: string; limit?: number } = {},
+  ): Promise<TopTalker[]> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
     const q = search.toString();
-    return this.request<TopTalker[]>(`/api/v1/connections/top-talkers${q ? `?${q}` : ''}`);
+    return this.request<TopTalker[]>(
+      `/api/v1/connections/top-talkers${q ? `?${q}` : ""}`,
+    );
   }
 
-  async fleetHealthSnapshot(params: { tenantId?: string; since?: string } = {}): Promise<FleetHealthSnapshot> {
+  async fleetHealthSnapshot(
+    params: { tenantId?: string; since?: string } = {},
+  ): Promise<FleetHealthSnapshot> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.since) search.set('since', params.since);
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.since) search.set("since", params.since);
     const q = search.toString();
-    return this.request<FleetHealthSnapshot>(`/api/v1/fleet/health${q ? `?${q}` : ''}`);
+    return this.request<FleetHealthSnapshot>(
+      `/api/v1/fleet/health${q ? `?${q}` : ""}`,
+    );
   }
 
   async getTenantEventFilters(tenantId: string): Promise<TenantEventFilters> {
-    return this.request<TenantEventFilters>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`);
+    return this.request<TenantEventFilters>(
+      `/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`,
+    );
   }
 
-  async updateTenantEventFilters(tenantId: string, payload: Partial<TenantEventFilters>): Promise<TenantEventFilters> {
-    return this.request<TenantEventFilters>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
+  async updateTenantEventFilters(
+    tenantId: string,
+    payload: Partial<TenantEventFilters>,
+  ): Promise<TenantEventFilters> {
+    return this.request<TenantEventFilters>(
+      `/api/v1/tenants/${encodeURIComponent(tenantId)}/event-filters`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   // ── Agent self-update ─────────────────────────────────────────────────
-  async updateAgent(nodeId: string, targetVersion?: string): Promise<AgentUpdateResponse> {
-    return this.request<AgentUpdateResponse>(`/api/v1/nodes/${encodeURIComponent(nodeId)}/update-agent`, {
-      method: 'POST',
-      body: JSON.stringify({ target_version: targetVersion ?? '' }),
-    });
+  async getTenantConnectorPolicy(
+    tenantId: string,
+  ): Promise<TenantConnectorPolicy> {
+    return this.request<TenantConnectorPolicy>(
+      `/api/v1/tenants/${encodeURIComponent(tenantId)}/connector-policy`,
+    );
+  }
+
+  async updateTenantConnectorPolicy(
+    tenantId: string,
+    payload: Partial<TenantConnectorPolicy>,
+  ): Promise<TenantConnectorPolicy> {
+    return this.request<TenantConnectorPolicy>(
+      `/api/v1/tenants/${encodeURIComponent(tenantId)}/connector-policy`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async listContentPackSourceProposals(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+    q?: string;
+    status?: string;
+  }): Promise<ContentPackSourceProposalListResponse> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    if (params.q?.trim()) search.set("q", params.q.trim());
+    if (params.status?.trim()) search.set("status", params.status.trim());
+    const response =
+      await this.request<RawContentPackSourceProposalListResponse>(
+        `/api/v1/content-packs/source-proposals?${search.toString()}`,
+      );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+      summary: response.summary,
+    };
+  }
+
+  async approveContentPackSourceProposal(
+    tenantId: string,
+    proposalId: string,
+    payload: {
+      note?: string;
+      collect_mode?: ContentPackSourceProposalCollectMode;
+    } = {},
+  ): Promise<ContentPackSourceProposal> {
+    return this.request<ContentPackSourceProposal>(
+      `/api/v1/content-packs/source-proposals/${encodeURIComponent(proposalId)}/approve?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async rejectContentPackSourceProposal(
+    tenantId: string,
+    proposalId: string,
+    payload: { reason?: string; privacy_blocked?: boolean } = {},
+  ): Promise<ContentPackSourceProposal> {
+    return this.request<ContentPackSourceProposal>(
+      `/api/v1/content-packs/source-proposals/${encodeURIComponent(proposalId)}/reject?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async getContentPackSourceHealth(
+    tenantId: string,
+    params: {
+      limit?: number;
+      offset?: number;
+      q?: string;
+      state?: string;
+    } = {},
+  ): Promise<ContentPackSourceHealthResponse> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    if (params.q?.trim()) search.set("q", params.q.trim());
+    if (params.state?.trim()) search.set("state", params.state.trim());
+    const response = await this.request<RawContentPackSourceHealthResponse>(
+      `/api/v1/content-packs/source-health?${search.toString()}`,
+    );
+    return {
+      ...response,
+      pagination: response.pagination
+        ? normalizePagination(response.pagination)
+        : undefined,
+    };
+  }
+
+  async createContentPackSourceHealthInvestigation(
+    tenantId: string,
+    payload: { runtime_state_id: string; note?: string },
+  ): Promise<ContentPackSourceHealthInvestigationResponse> {
+    return this.request<ContentPackSourceHealthInvestigationResponse>(
+      `/api/v1/content-packs/source-health/investigate?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async listSOCCases(params: {
+    tenantId: string;
+    status?: string;
+    triggerType?: string;
+    triggerEventType?: string;
+    nodeId?: string;
+    includeNotes?: boolean;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<SOCCase>> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (params.status?.trim()) search.set("status", params.status.trim());
+    if (params.triggerType?.trim())
+      search.set("trigger_type", params.triggerType.trim());
+    if (params.triggerEventType?.trim())
+      search.set("trigger_event_type", params.triggerEventType.trim());
+    if (params.nodeId?.trim()) search.set("node_id", params.nodeId.trim());
+    if (params.includeNotes) search.set("include_notes", "true");
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const response = await this.request<RawPaginatedResponse<SOCCase>>(
+      `/api/v1/soc/cases?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async createSOCCaseNote(
+    tenantId: string,
+    caseId: string,
+    payload: { note: string; citations?: string[] },
+  ): Promise<SOCCaseNote> {
+    return this.request<SOCCaseNote>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/notes?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async listContentPackEdgeCollectors(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<ContentPackEdgeCollector>> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const response = await this.request<
+      RawPaginatedResponse<ContentPackEdgeCollector>
+    >(`/api/v1/content-packs/collectors?${search.toString()}`);
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async listContentPackOTelConfigCandidates(params: {
+    tenantId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<ContentPackOTelConfigCandidate>> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params.offset === "number")
+      search.set("offset", params.offset.toString());
+    const response = await this.request<
+      RawPaginatedResponse<ContentPackOTelConfigCandidate>
+    >(`/api/v1/content-packs/otel-config/candidates?${search.toString()}`);
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getContentPackOTelConfigCandidate(
+    tenantId: string,
+    candidateId: string,
+  ): Promise<ContentPackOTelConfigCandidateDetail> {
+    return this.request<ContentPackOTelConfigCandidateDetail>(
+      `/api/v1/content-packs/otel-config/candidates/${encodeURIComponent(candidateId)}?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+  }
+
+  async createContentPackOTelConfigCandidate(
+    tenantId: string,
+    payload: ContentPackOTelConfigRenderRequest,
+  ): Promise<ContentPackOTelConfigRenderResponse> {
+    return this.request<ContentPackOTelConfigRenderResponse>(
+      `/api/v1/content-packs/otel-config/candidates?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async approveContentPackOTelConfigCandidate(
+    tenantId: string,
+    candidateId: string,
+    payload: { note?: string; reviewed_config_version: string },
+  ): Promise<ContentPackOTelConfigCandidate> {
+    return this.request<ContentPackOTelConfigCandidate>(
+      `/api/v1/content-packs/otel-config/candidates/${encodeURIComponent(candidateId)}/approve?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async queueContentPackOTelConfigCandidate(
+    tenantId: string,
+    candidateId: string,
+    payload: {
+      collector_id?: string;
+      note?: string;
+      expected_config_version: string;
+    },
+  ): Promise<ContentPackOTelConfigCandidate> {
+    return this.request<ContentPackOTelConfigCandidate>(
+      `/api/v1/content-packs/otel-config/candidates/${encodeURIComponent(candidateId)}/queue?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async updateAgent(
+    nodeId: string,
+    targetVersion?: string,
+  ): Promise<AgentUpdateResponse> {
+    return this.request<AgentUpdateResponse>(
+      `/api/v1/nodes/${encodeURIComponent(nodeId)}/update-agent`,
+      {
+        method: "POST",
+        body: JSON.stringify({ target_version: targetVersion ?? "" }),
+      },
+    );
   }
 
   // ── Behavioral baselines ──────────────────────────────────────────────
-  async listBehavioralBaselines(params: { tenantId?: string; nodeId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<BehavioralBaseline>> {
+  async listBehavioralBaselines(
+    params: {
+      tenantId?: string;
+      nodeId?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<BehavioralBaseline>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.nodeId) search.set('node_id', params.nodeId);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.nodeId) search.set("node_id", params.nodeId);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<BehavioralBaseline>>(`/api/v1/behavioral/baselines${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<BehavioralBaseline>>(
+      `/api/v1/behavioral/baselines${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async listAnomalies(params: { tenantId?: string; baselineId?: string; sourceIp?: string; resolved?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<BehavioralAnomaly>> {
+  async listAnomalies(
+    params: {
+      tenantId?: string;
+      baselineId?: string;
+      sourceIp?: string;
+      resolved?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<BehavioralAnomaly>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (params.baselineId) search.set('baseline_id', params.baselineId);
-    if (params.sourceIp) search.set('src_ip', params.sourceIp);
-    if (typeof params.resolved === 'boolean') search.set('resolved', String(params.resolved));
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (params.baselineId) search.set("baseline_id", params.baselineId);
+    if (params.sourceIp) search.set("src_ip", params.sourceIp);
+    if (typeof params.resolved === "boolean")
+      search.set("resolved", String(params.resolved));
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<BehavioralAnomaly>>(`/api/v1/behavioral/anomalies${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<BehavioralAnomaly>>(
+      `/api/v1/behavioral/anomalies${qs ? `?${qs}` : ""}`,
+    );
   }
 
   async suppressAnomaly(id: string): Promise<BehavioralAnomaly> {
-    return this.request<BehavioralAnomaly>(`/api/v1/behavioral/anomalies/${encodeURIComponent(id)}/suppress`, {
-      method: 'POST',
-    });
+    return this.request<BehavioralAnomaly>(
+      `/api/v1/behavioral/anomalies/${encodeURIComponent(id)}/suppress`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   async resolveAnomaly(id: string): Promise<BehavioralAnomaly> {
-    return this.request<BehavioralAnomaly>(`/api/v1/behavioral/anomalies/${encodeURIComponent(id)}/resolve`, {
-      method: 'POST',
-    });
+    return this.request<BehavioralAnomaly>(
+      `/api/v1/behavioral/anomalies/${encodeURIComponent(id)}/resolve`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   // ── Correlation rules ─────────────────────────────────────────────────
-  async listCorrelationRules(params: { tenantId?: string; enabled?: boolean; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<CorrelationRule>> {
+  async listCorrelationRules(
+    params: {
+      tenantId?: string;
+      enabled?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<CorrelationRule>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (typeof params.enabled === 'boolean') search.set('enabled', String(params.enabled));
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (typeof params.enabled === "boolean")
+      search.set("enabled", String(params.enabled));
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<CorrelationRule>>(`/api/v1/correlation-rules${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<CorrelationRule>>(
+      `/api/v1/correlation-rules${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async createCorrelationRule(payload: CreateCorrelationRulePayload): Promise<CorrelationRule> {
-    return this.request<CorrelationRule>('/api/v1/correlation-rules', {
-      method: 'POST',
+  async createCorrelationRule(
+    payload: CreateCorrelationRulePayload,
+  ): Promise<CorrelationRule> {
+    return this.request<CorrelationRule>("/api/v1/correlation-rules", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   // ---- DLP / Data Classification (Sprint 2) --------------------------------
 
-  async listDLPRules(tenantId: string): Promise<PaginatedResponse<DataClassificationRule>> {
+  async listDLPRules(
+    tenantId: string,
+  ): Promise<PaginatedResponse<DataClassificationRule>> {
     return this.request<PaginatedResponse<DataClassificationRule>>(
       `/api/v1/dlp/rules?tenant_id=${encodeURIComponent(tenantId)}`,
     );
   }
 
-  async createDLPRule(payload: CreateDLPRulePayload): Promise<DataClassificationRule> {
-    return this.request<DataClassificationRule>('/api/v1/dlp/rules', {
-      method: 'POST',
+  async createDLPRule(
+    payload: CreateDLPRulePayload,
+  ): Promise<DataClassificationRule> {
+    return this.request<DataClassificationRule>("/api/v1/dlp/rules", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   // ---- Sprint 3: Compliance Evidence + Audit Reports + Frameworks ----------
 
-  async uploadComplianceEvidence(formData: FormData): Promise<ComplianceEvidence> {
+  async uploadComplianceEvidence(
+    formData: FormData,
+  ): Promise<ComplianceEvidence> {
     const url = `${this.baseUrl}/api/v1/compliance/evidence`;
     const headers: Record<string, string> = {};
-    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
-    const res = await fetch(url, { method: 'POST', headers, body: formData });
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    const res = await fetch(url, { method: "POST", headers, body: formData });
     if (res.status === HTTP_STATUS_UNAUTHORIZED) {
       this.unauthorizedHandler?.();
-      throw new APIError('Unauthorized', res.status);
+      throw new APIError("Unauthorized", res.status);
     }
     if (!res.ok) {
       const msg = await safeErrorMessage(res);
@@ -3836,24 +4880,26 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<ComplianceEvidence>> {
     const q = new URLSearchParams({ tenant_id: params.tenantId });
-    if (params.framework) q.set('framework', params.framework);
-    if (params.controlRef) q.set('control_ref', params.controlRef);
-    if (params.evidenceType) q.set('evidence_type', params.evidenceType);
-    if (params.since) q.set('since', params.since);
-    if (params.until) q.set('until', params.until);
-    if (params.includeExpired !== undefined) q.set('include_expired', String(params.includeExpired));
-    if (params.limit !== undefined) q.set('limit', String(params.limit));
-    if (params.offset !== undefined) q.set('offset', String(params.offset));
-    const raw = await this.request<{ data: ComplianceEvidence[]; pagination: ServerPaginationMeta }>(
-      `/api/v1/compliance/evidence?${q.toString()}`
-    );
+    if (params.framework) q.set("framework", params.framework);
+    if (params.controlRef) q.set("control_ref", params.controlRef);
+    if (params.evidenceType) q.set("evidence_type", params.evidenceType);
+    if (params.since) q.set("since", params.since);
+    if (params.until) q.set("until", params.until);
+    if (params.includeExpired !== undefined)
+      q.set("include_expired", String(params.includeExpired));
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.offset !== undefined) q.set("offset", String(params.offset));
+    const raw = await this.request<{
+      data: ComplianceEvidence[];
+      pagination: ServerPaginationMeta;
+    }>(`/api/v1/compliance/evidence?${q.toString()}`);
     return {
       data: raw.data ?? [],
       pagination: {
         total: raw.pagination?.total ?? 0,
         count: (raw.data ?? []).length,
-        limit: raw.pagination?.limit ?? (params.limit ?? 50),
-        offset: raw.pagination?.offset ?? (params.offset ?? 0),
+        limit: raw.pagination?.limit ?? params.limit ?? 50,
+        offset: raw.pagination?.offset ?? params.offset ?? 0,
         nextOffset: raw.pagination?.next_offset ?? null,
         prevOffset: raw.pagination?.prev_offset ?? null,
       },
@@ -3862,17 +4908,21 @@ export class APIClient {
 
   async deleteComplianceEvidence(id: string, tenantId: string): Promise<void> {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
+    search.set("tenant_id", tenantId);
     await this.request<void>(
       `/api/v1/compliance/evidence/${encodeURIComponent(id)}?${search.toString()}`,
-      { method: 'DELETE' },
+      { method: "DELETE" },
     );
   }
 
-  async listComplianceFrameworks(): Promise<{ frameworks: string[]; controls: Record<string, FrameworkControl[]> }> {
-    return this.request<{ frameworks: string[]; controls: Record<string, FrameworkControl[]> }>(
-      '/api/v1/compliance/frameworks'
-    );
+  async listComplianceFrameworks(): Promise<{
+    frameworks: string[];
+    controls: Record<string, FrameworkControl[]>;
+  }> {
+    return this.request<{
+      frameworks: string[];
+      controls: Record<string, FrameworkControl[]>;
+    }>("/api/v1/compliance/frameworks");
   }
 
   async getControlPosture(params: {
@@ -3882,196 +4932,300 @@ export class APIClient {
     period_end?: string;
   }): Promise<ControlPostureResponse> {
     const search = new URLSearchParams();
-    search.set('framework', params.framework);
-    search.set('tenant_id', params.tenant_id);
-    if (params.period_start) search.set('period_start', params.period_start);
-    if (params.period_end) search.set('period_end', params.period_end);
-    return this.request<ControlPostureResponse>(`/api/v1/compliance/control-posture?${search.toString()}`);
+    search.set("framework", params.framework);
+    search.set("tenant_id", params.tenant_id);
+    if (params.period_start) search.set("period_start", params.period_start);
+    if (params.period_end) search.set("period_end", params.period_end);
+    return this.request<ControlPostureResponse>(
+      `/api/v1/compliance/control-posture?${search.toString()}`,
+    );
   }
 
-  async createAuditReport(payload: CreateAuditReportPayload): Promise<AuditReport> {
-    return this.request<AuditReport>('/api/v1/compliance/reports', {
-      method: 'POST',
+  async createAuditReport(
+    payload: CreateAuditReportPayload,
+  ): Promise<AuditReport> {
+    return this.request<AuditReport>("/api/v1/compliance/reports", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteCorrelationRule(id: string, tenantId: string): Promise<void> {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
+    search.set("tenant_id", tenantId);
     await this.request<void>(
       `/api/v1/correlation-rules/${encodeURIComponent(id)}?${search.toString()}`,
-      { method: 'DELETE' },
+      { method: "DELETE" },
     );
   }
 
   // ── Command ACLs ──────────────────────────────────────────────────────
-  async listCommandACLs(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<CommandACL>> {
+  async listCommandACLs(
+    params: { tenantId?: string; limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<CommandACL>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<CommandACL>>(`/api/v1/command-acls${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<CommandACL>>(
+      `/api/v1/command-acls${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async createCommandACL(payload: CreateCommandACLPayload): Promise<CommandACL> {
-    return this.request<CommandACL>('/api/v1/command-acls', {
-      method: 'POST',
+  async createCommandACL(
+    payload: CreateCommandACLPayload,
+  ): Promise<CommandACL> {
+    return this.request<CommandACL>("/api/v1/command-acls", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteCommandACL(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/command-acls/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/command-acls/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   // ── Cluster rollout waves ─────────────────────────────────────────────
-  async listClusters(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<Cluster>> {
+  async listClusters(
+    params: { tenantId?: string; limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<Cluster>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    const response = await this.request<RawPaginatedResponse<Cluster>>(`/api/v1/clusters${qs ? `?${qs}` : ''}`);
-    return { data: response.data, pagination: normalizePagination(response.pagination) };
+    const response = await this.request<RawPaginatedResponse<Cluster>>(
+      `/api/v1/clusters${qs ? `?${qs}` : ""}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
-  async listClusterRolloutWaves(params: { tenantId?: string; limit?: number; offset?: number } = {}): Promise<PaginatedResponse<ClusterRolloutWave>> {
+  async listClusterRolloutWaves(
+    params: { tenantId?: string; limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<ClusterRolloutWave>> {
     const search = new URLSearchParams();
-    if (params.tenantId) search.set('tenant_id', params.tenantId);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    if (params.tenantId) search.set("tenant_id", params.tenantId);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<ClusterRolloutWave>>(`/api/v1/rollout/waves${qs ? `?${qs}` : ''}`);
+    return this.request<PaginatedResponse<ClusterRolloutWave>>(
+      `/api/v1/rollout/waves${qs ? `?${qs}` : ""}`,
+    );
   }
 
-  async updateClusterRolloutWave(id: string, payload: UpdateClusterRolloutWavePayload): Promise<ClusterRolloutWave> {
-    return this.request<ClusterRolloutWave>(`/api/v1/rollout/waves/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+  async updateClusterRolloutWave(
+    id: string,
+    payload: UpdateClusterRolloutWavePayload,
+  ): Promise<ClusterRolloutWave> {
+    return this.request<ClusterRolloutWave>(
+      `/api/v1/rollout/waves/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   // ── MFA factors ───────────────────────────────────────────────────────
   async listMFAFactors(): Promise<{ factors: MFAFactor[] }> {
-    return this.request<{ factors: MFAFactor[] }>('/api/v1/auth/mfa/factors');
+    return this.request<{ factors: MFAFactor[] }>("/api/v1/auth/mfa/factors");
   }
 
   async deleteMFAFactor(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/auth/mfa/factors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/auth/mfa/factors/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   async getMFARecoveryCodes(): Promise<{ codes: string[] }> {
-    return this.request<{ codes: string[] }>('/api/v1/auth/mfa/recovery-codes');
+    return this.request<{ codes: string[] }>("/api/v1/auth/mfa/recovery-codes");
   }
 
   // TOTP enrollment
-  async beginTOTPEnroll(): Promise<{ factor_id: string; secret: string; provisioning_uri: string }> {
-    return this.request<{ factor_id: string; secret: string; provisioning_uri: string }>('/api/v1/mfa/totp/enroll/begin', { method: 'POST' });
+  async beginTOTPEnroll(): Promise<{
+    factor_id: string;
+    secret: string;
+    provisioning_uri: string;
+  }> {
+    return this.request<{
+      factor_id: string;
+      secret: string;
+      provisioning_uri: string;
+    }>("/api/v1/mfa/totp/enroll/begin", { method: "POST" });
   }
 
-  async finishTOTPEnroll(factorId: string, code: string, label: string): Promise<{ factor_id: string; verified: boolean }> {
-    return this.request<{ factor_id: string; verified: boolean }>('/api/v1/mfa/totp/enroll/finish', {
-      method: 'POST',
-      body: JSON.stringify({ factor_id: factorId, code, label }),
-    });
+  async finishTOTPEnroll(
+    factorId: string,
+    code: string,
+    label: string,
+  ): Promise<{ factor_id: string; verified: boolean }> {
+    return this.request<{ factor_id: string; verified: boolean }>(
+      "/api/v1/mfa/totp/enroll/finish",
+      {
+        method: "POST",
+        body: JSON.stringify({ factor_id: factorId, code, label }),
+      },
+    );
   }
 
   // WebAuthn enrollment
   async beginWebAuthnEnroll(): Promise<{ challenge: unknown; user: unknown }> {
-    return this.request<{ challenge: unknown; user: unknown }>('/api/v1/mfa/webauthn/enroll/begin', { method: 'POST' });
+    return this.request<{ challenge: unknown; user: unknown }>(
+      "/api/v1/mfa/webauthn/enroll/begin",
+      { method: "POST" },
+    );
   }
 
-  async finishWebAuthnEnroll(credential: unknown): Promise<{ factor_id: string; verified: boolean }> {
-    return this.request<{ factor_id: string; verified: boolean }>('/api/v1/mfa/webauthn/enroll/finish', {
-      method: 'POST',
-      body: JSON.stringify(credential),
-    });
+  async finishWebAuthnEnroll(
+    credential: unknown,
+  ): Promise<{ factor_id: string; verified: boolean }> {
+    return this.request<{ factor_id: string; verified: boolean }>(
+      "/api/v1/mfa/webauthn/enroll/finish",
+      {
+        method: "POST",
+        body: JSON.stringify(credential),
+      },
+    );
   }
 
   // ── Trust Center admin ───────────────────────────────────────────────
   async listSubprocessors(tenantId: string): Promise<unknown[]> {
-    return this.request<unknown[]>(`/api/v1/trust/subprocessors?tenant_id=${encodeURIComponent(tenantId)}`);
+    return this.request<unknown[]>(
+      `/api/v1/trust/subprocessors?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
   }
 
-  async createSubprocessor(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
-    return this.request<unknown>('/api/v1/trust/subprocessors', {
-      method: 'POST',
+  async createSubprocessor(
+    tenantId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request<unknown>("/api/v1/trust/subprocessors", {
+      method: "POST",
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
   }
 
   async deleteSubprocessor(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/trust/subprocessors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/trust/subprocessors/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   async listCertifications(tenantId: string): Promise<unknown[]> {
-    return this.request<unknown[]>(`/api/v1/trust/certifications?tenant_id=${encodeURIComponent(tenantId)}`);
+    return this.request<unknown[]>(
+      `/api/v1/trust/certifications?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
   }
 
-  async createCertification(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
-    return this.request<unknown>('/api/v1/trust/certifications', {
-      method: 'POST',
+  async createCertification(
+    tenantId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request<unknown>("/api/v1/trust/certifications", {
+      method: "POST",
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
   }
 
   async deleteCertification(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/trust/certifications/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/trust/certifications/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   async listFAQItems(tenantId: string): Promise<unknown[]> {
-    return this.request<unknown[]>(`/api/v1/trust/faq?tenant_id=${encodeURIComponent(tenantId)}`);
+    return this.request<unknown[]>(
+      `/api/v1/trust/faq?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
   }
 
-  async createFAQItem(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
-    return this.request<unknown>('/api/v1/trust/faq', {
-      method: 'POST',
+  async createFAQItem(
+    tenantId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request<unknown>("/api/v1/trust/faq", {
+      method: "POST",
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
   }
 
   async deleteFAQItem(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/trust/faq/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/trust/faq/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   async listIncidents(tenantId: string): Promise<unknown[]> {
-    return this.request<unknown[]>(`/api/v1/trust/incidents?tenant_id=${encodeURIComponent(tenantId)}`);
+    return this.request<unknown[]>(
+      `/api/v1/trust/incidents?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
   }
 
-  async createIncident(tenantId: string, data: Record<string, unknown>): Promise<unknown> {
-    return this.request<unknown>('/api/v1/trust/incidents', {
-      method: 'POST',
+  async createIncident(
+    tenantId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request<unknown>("/api/v1/trust/incidents", {
+      method: "POST",
       body: JSON.stringify({ ...data, tenant_id: tenantId }),
     });
   }
 
   async deleteIncident(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/trust/incidents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/trust/incidents/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   // ── Tenant remediation config ─────────────────────────────────────────
-  async getTenantRemediationConfig(tenantId: string): Promise<TenantRemediationConfig> {
-    return this.request<TenantRemediationConfig>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`);
+  async getTenantRemediationConfig(
+    tenantId: string,
+  ): Promise<TenantRemediationConfig> {
+    return this.request<TenantRemediationConfig>(
+      `/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`,
+    );
   }
 
-  async upsertTenantRemediationConfig(tenantId: string, payload: Partial<TenantRemediationConfig>): Promise<TenantRemediationConfig> {
-    return this.request<TenantRemediationConfig>(`/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
+  async upsertTenantRemediationConfig(
+    tenantId: string,
+    payload: Partial<TenantRemediationConfig>,
+  ): Promise<TenantRemediationConfig> {
+    return this.request<TenantRemediationConfig>(
+      `/api/v1/tenants/${encodeURIComponent(tenantId)}/remediation-config`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   // ── Worker pool status ────────────────────────────────────────────────
   async getWorkerPoolStatus(): Promise<WorkerPoolStatus> {
-    return this.request<WorkerPoolStatus>('/api/v1/admin/worker-pool');
+    return this.request<WorkerPoolStatus>("/api/v1/admin/worker-pool");
   }
 
   // ---- DLP / Data Classification (Sprint 2) --------------------------------
 
   async deleteDLPRule(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/dlp/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(`/api/v1/dlp/rules/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   async listColumnClassifications(params: {
@@ -4080,9 +5234,11 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<ColumnClassification>> {
     const q = new URLSearchParams({ tenant_id: params.tenantId });
-    if (params.limit !== undefined) q.set('limit', String(params.limit));
-    if (params.offset !== undefined) q.set('offset', String(params.offset));
-    return this.request<PaginatedResponse<ColumnClassification>>(`/api/v1/dlp/columns?${q}`);
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.offset !== undefined) q.set("offset", String(params.offset));
+    return this.request<PaginatedResponse<ColumnClassification>>(
+      `/api/v1/dlp/columns?${q}`,
+    );
   }
 
   async listPIIFindings(params: {
@@ -4092,21 +5248,27 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<PIIFinding>> {
     const q = new URLSearchParams({ tenant_id: params.tenantId });
-    if (params.resolved !== undefined) q.set('resolved', String(params.resolved));
-    if (params.limit !== undefined) q.set('limit', String(params.limit));
-    if (params.offset !== undefined) q.set('offset', String(params.offset));
-    return this.request<PaginatedResponse<PIIFinding>>(`/api/v1/dlp/findings?${q}`);
+    if (params.resolved !== undefined)
+      q.set("resolved", String(params.resolved));
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.offset !== undefined) q.set("offset", String(params.offset));
+    return this.request<PaginatedResponse<PIIFinding>>(
+      `/api/v1/dlp/findings?${q}`,
+    );
   }
 
   async resolvePIIFinding(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve`, {
-      method: 'POST',
-    });
+    await this.request<void>(
+      `/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   async seedDLPRules(tenantId: string): Promise<{ seeded: number }> {
-    return this.request<{ seeded: number }>('/api/v1/dlp/seed-rules', {
-      method: 'POST',
+    return this.request<{ seeded: number }>("/api/v1/dlp/seed-rules", {
+      method: "POST",
       body: JSON.stringify({ tenant_id: tenantId }),
     });
   }
@@ -4119,18 +5281,19 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<AuditReport>> {
     const q = new URLSearchParams({ tenant_id: params.tenantId });
-    if (params.limit !== undefined) q.set('limit', String(params.limit));
-    if (params.offset !== undefined) q.set('offset', String(params.offset));
-    const raw = await this.request<{ data: AuditReport[]; pagination: ServerPaginationMeta }>(
-      `/api/v1/compliance/reports?${q.toString()}`
-    );
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.offset !== undefined) q.set("offset", String(params.offset));
+    const raw = await this.request<{
+      data: AuditReport[];
+      pagination: ServerPaginationMeta;
+    }>(`/api/v1/compliance/reports?${q.toString()}`);
     return {
       data: raw.data ?? [],
       pagination: {
         total: raw.pagination?.total ?? 0,
         count: (raw.data ?? []).length,
-        limit: raw.pagination?.limit ?? (params.limit ?? 50),
-        offset: raw.pagination?.offset ?? (params.offset ?? 0),
+        limit: raw.pagination?.limit ?? params.limit ?? 50,
+        offset: raw.pagination?.offset ?? params.offset ?? 0,
         nextOffset: raw.pagination?.next_offset ?? null,
         prevOffset: raw.pagination?.prev_offset ?? null,
       },
@@ -4139,13 +5302,13 @@ export class APIClient {
 
   buildReportDownloadUrl(id: string, tenantId: string): string {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
+    search.set("tenant_id", tenantId);
     return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download?${search.toString()}`;
   }
 
   buildEvidenceDownloadUrl(id: string, tenantId: string): string {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
+    search.set("tenant_id", tenantId);
     return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download?${search.toString()}`;
   }
 
@@ -4157,40 +5320,52 @@ export class APIClient {
     offset?: number;
   }): Promise<PaginatedResponse<ComplianceReview>> {
     const q = new URLSearchParams({ tenant_id: params.tenantId });
-    if (params.limit !== undefined) q.set('limit', String(params.limit));
-    if (params.offset !== undefined) q.set('offset', String(params.offset));
-    const raw = await this.request<{ data: ComplianceReview[]; pagination: ServerPaginationMeta }>(
-      `/api/v1/compliance/reviews?${q.toString()}`
-    );
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.offset !== undefined) q.set("offset", String(params.offset));
+    const raw = await this.request<{
+      data: ComplianceReview[];
+      pagination: ServerPaginationMeta;
+    }>(`/api/v1/compliance/reviews?${q.toString()}`);
     return {
       data: raw.data ?? [],
       pagination: {
         total: raw.pagination?.total ?? 0,
         count: (raw.data ?? []).length,
-        limit: raw.pagination?.limit ?? (params.limit ?? 50),
-        offset: raw.pagination?.offset ?? (params.offset ?? 0),
+        limit: raw.pagination?.limit ?? params.limit ?? 50,
+        offset: raw.pagination?.offset ?? params.offset ?? 0,
         nextOffset: raw.pagination?.next_offset ?? null,
         prevOffset: raw.pagination?.prev_offset ?? null,
       },
     };
   }
 
-  async createComplianceReview(payload: CreateComplianceReviewPayload): Promise<ComplianceReview> {
-    return this.request<ComplianceReview>('/api/v1/compliance/reviews', {
-      method: 'POST',
+  async createComplianceReview(
+    payload: CreateComplianceReviewPayload,
+  ): Promise<ComplianceReview> {
+    return this.request<ComplianceReview>("/api/v1/compliance/reviews", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async completeComplianceReview(id: string, notes?: string): Promise<ComplianceReview> {
-    return this.request<ComplianceReview>(`/api/v1/compliance/reviews/${encodeURIComponent(id)}/complete`, {
-      method: 'POST',
-      body: JSON.stringify({ notes }),
-    });
+  async completeComplianceReview(
+    id: string,
+    notes?: string,
+  ): Promise<ComplianceReview> {
+    return this.request<ComplianceReview>(
+      `/api/v1/compliance/reviews/${encodeURIComponent(id)}/complete`,
+      {
+        method: "POST",
+        body: JSON.stringify({ notes }),
+      },
+    );
   }
 
   async deleteComplianceReview(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/compliance/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/compliance/reviews/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   // ---- Misconduct & whistleblowing (UC7) -----------------------------
@@ -4200,105 +5375,158 @@ export class APIClient {
 
   async listMisconductCases(params: {
     tenantId: string;
-    status?: 'open' | 'investigating' | 'closed';
+    status?: "open" | "investigating" | "closed";
     limit?: number;
     offset?: number;
-  }): Promise<{ data: MisconductCase[]; pagination: { total: number; limit: number; offset: number } }> {
+  }): Promise<{
+    data: MisconductCase[];
+    pagination: { total: number; limit: number; offset: number };
+  }> {
     const search = new URLSearchParams();
-    search.set('tenant_id', params.tenantId);
-    if (params.status) search.set('status', params.status);
-    if (typeof params.limit === 'number') search.set('limit', String(params.limit));
-    if (typeof params.offset === 'number') search.set('offset', String(params.offset));
+    search.set("tenant_id", params.tenantId);
+    if (params.status) search.set("status", params.status);
+    if (typeof params.limit === "number")
+      search.set("limit", String(params.limit));
+    if (typeof params.offset === "number")
+      search.set("offset", String(params.offset));
     return this.request(`/api/v1/misconduct/cases?${search.toString()}`);
   }
 
-  async createMisconductCase(payload: CreateMisconductCasePayload): Promise<MisconductCase> {
-    return this.request<MisconductCase>('/api/v1/misconduct/cases', {
-      method: 'POST',
+  async createMisconductCase(
+    payload: CreateMisconductCasePayload,
+  ): Promise<MisconductCase> {
+    return this.request<MisconductCase>("/api/v1/misconduct/cases", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
   async getMisconductCase(id: string): Promise<MisconductCase> {
-    return this.request<MisconductCase>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}`);
+    return this.request<MisconductCase>(
+      `/api/v1/misconduct/cases/${encodeURIComponent(id)}`,
+    );
   }
 
-  async updateMisconductCase(id: string, payload: UpdateMisconductCasePayload): Promise<MisconductCase> {
-    return this.request<MisconductCase>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+  async updateMisconductCase(
+    id: string,
+    payload: UpdateMisconductCasePayload,
+  ): Promise<MisconductCase> {
+    return this.request<MisconductCase>(
+      `/api/v1/misconduct/cases/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   async listCaseSignals(id: string): Promise<{ data: RiskSignal[] }> {
-    return this.request(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/signals`);
+    return this.request(
+      `/api/v1/misconduct/cases/${encodeURIComponent(id)}/signals`,
+    );
   }
 
   async listCaseEvidence(id: string): Promise<{ data: CaseEvidenceLink[] }> {
-    return this.request(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`);
+    return this.request(
+      `/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`,
+    );
   }
 
-  async attachCaseEvidence(id: string, evidenceId: string): Promise<CaseEvidenceLink> {
-    return this.request<CaseEvidenceLink>(`/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`, {
-      method: 'POST',
-      body: JSON.stringify({ evidence_id: evidenceId }),
-    });
+  async attachCaseEvidence(
+    id: string,
+    evidenceId: string,
+  ): Promise<CaseEvidenceLink> {
+    return this.request<CaseEvidenceLink>(
+      `/api/v1/misconduct/cases/${encodeURIComponent(id)}/evidence`,
+      {
+        method: "POST",
+        body: JSON.stringify({ evidence_id: evidenceId }),
+      },
+    );
   }
 
   // ── Finacle integration (UC6) ────────────────────────────────────────────
-  async listFinacleConnections(tenantId: string): Promise<{ connections: FinacleConnection[] }> {
+  async listFinacleConnections(
+    tenantId: string,
+  ): Promise<{ connections: FinacleConnection[] }> {
     return this.request<{ connections: FinacleConnection[] }>(
       `/api/v1/finacle/connections?tenant_id=${encodeURIComponent(tenantId)}`,
     );
   }
 
-  async createFinacleConnection(payload: CreateFinacleConnectionPayload): Promise<FinacleConnection> {
-    return this.request<FinacleConnection>('/api/v1/finacle/connections', {
-      method: 'POST',
+  async createFinacleConnection(
+    payload: CreateFinacleConnectionPayload,
+  ): Promise<FinacleConnection> {
+    return this.request<FinacleConnection>("/api/v1/finacle/connections", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async updateFinacleConnection(id: string, payload: UpdateFinacleConnectionPayload): Promise<FinacleConnection> {
-    return this.request<FinacleConnection>(`/api/v1/finacle/connections/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async deleteFinacleConnection(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/finacle/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  }
-
-  async testFinacleConnection(id: string): Promise<FinacleConnectionTestResult> {
-    return this.request<FinacleConnectionTestResult>(
-      `/api/v1/finacle/connections/${encodeURIComponent(id)}/test`,
-      { method: 'POST' },
+  async updateFinacleConnection(
+    id: string,
+    payload: UpdateFinacleConnectionPayload,
+  ): Promise<FinacleConnection> {
+    return this.request<FinacleConnection>(
+      `/api/v1/finacle/connections/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
     );
   }
 
-  async listFinacleShiftConfigs(tenantId: string): Promise<{ configs: FinacleShiftConfig[] }> {
+  async deleteFinacleConnection(id: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/finacle/connections/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async testFinacleConnection(
+    id: string,
+  ): Promise<FinacleConnectionTestResult> {
+    return this.request<FinacleConnectionTestResult>(
+      `/api/v1/finacle/connections/${encodeURIComponent(id)}/test`,
+      { method: "POST" },
+    );
+  }
+
+  async listFinacleShiftConfigs(
+    tenantId: string,
+  ): Promise<{ configs: FinacleShiftConfig[] }> {
     return this.request<{ configs: FinacleShiftConfig[] }>(
       `/api/v1/finacle/shift-configs?tenant_id=${encodeURIComponent(tenantId)}`,
     );
   }
 
-  async createFinacleShiftConfig(payload: CreateFinacleShiftConfigPayload): Promise<FinacleShiftConfig> {
-    return this.request<FinacleShiftConfig>('/api/v1/finacle/shift-configs', {
-      method: 'POST',
+  async createFinacleShiftConfig(
+    payload: CreateFinacleShiftConfigPayload,
+  ): Promise<FinacleShiftConfig> {
+    return this.request<FinacleShiftConfig>("/api/v1/finacle/shift-configs", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async updateFinacleShiftConfig(id: string, payload: UpdateFinacleShiftConfigPayload): Promise<FinacleShiftConfig> {
-    return this.request<FinacleShiftConfig>(`/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+  async updateFinacleShiftConfig(
+    id: string,
+    payload: UpdateFinacleShiftConfigPayload,
+  ): Promise<FinacleShiftConfig> {
+    return this.request<FinacleShiftConfig>(
+      `/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   async deleteFinacleShiftConfig(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/api/v1/finacle/shift-configs/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   async listFinacleProfiles(
@@ -4306,9 +5534,10 @@ export class APIClient {
     params: { limit?: number; offset?: number } = {},
   ): Promise<PaginatedResponse<FinacleProfile>> {
     const search = new URLSearchParams();
-    search.set('tenant_id', tenantId);
-    if (params.limit !== undefined) search.set('limit', String(params.limit));
-    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    search.set("tenant_id", tenantId);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined)
+      search.set("offset", String(params.offset));
     const response = await this.request<RawPaginatedResponse<FinacleProfile>>(
       `/api/v1/finacle/profiles?${search.toString()}`,
     );
@@ -4318,18 +5547,29 @@ export class APIClient {
     };
   }
 
-  async updateFinacleProfile(id: string, payload: UpdateFinacleProfilePayload): Promise<FinacleProfile> {
-    return this.request<FinacleProfile>(`/api/v1/finacle/profiles/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+  async updateFinacleProfile(
+    id: string,
+    payload: UpdateFinacleProfilePayload,
+  ): Promise<FinacleProfile> {
+    return this.request<FinacleProfile>(
+      `/api/v1/finacle/profiles/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
-  async triggerFinacleShiftRotate(payload: FinacleShiftRotatePayload): Promise<FinacleShiftRotateResponse> {
-    return this.request<FinacleShiftRotateResponse>('/api/v1/finacle/shift-rotate', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  async triggerFinacleShiftRotate(
+    payload: FinacleShiftRotatePayload,
+  ): Promise<FinacleShiftRotateResponse> {
+    return this.request<FinacleShiftRotateResponse>(
+      "/api/v1/finacle/shift-rotate",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 }
 
@@ -4351,11 +5591,11 @@ export interface MisconductSubmitResponse {
 }
 
 export interface MisconductStatusResponse {
-  status: 'received' | 'under_review' | 'closed' | 'unknown';
+  status: "received" | "under_review" | "closed" | "unknown";
 }
 
 export async function fetchMisconductChallenge(): Promise<MisconductChallenge> {
-  const r = await fetch('/api/v1/misconduct/challenge');
+  const r = await fetch("/api/v1/misconduct/challenge");
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -4367,9 +5607,9 @@ export async function submitWhistleblowerReport(payload: {
   challenge: string;
   nonce: string;
 }): Promise<MisconductSubmitResponse> {
-  const r = await fetch('/api/v1/misconduct/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  const r = await fetch("/api/v1/misconduct/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!r.ok) {
@@ -4379,10 +5619,12 @@ export async function submitWhistleblowerReport(payload: {
   return r.json();
 }
 
-export async function fetchIntakeStatus(token: string): Promise<MisconductStatusResponse> {
-  const r = await fetch('/api/v1/misconduct/intake-status', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+export async function fetchIntakeStatus(
+  token: string,
+): Promise<MisconductStatusResponse> {
+  const r = await fetch("/api/v1/misconduct/intake-status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
   });
   if (!r.ok) throw new APIError(`HTTP ${r.status}`, r.status);
@@ -4394,7 +5636,7 @@ export async function fetchIntakeStatus(token: string): Promise<MisconductStatus
 export interface MisconductCase {
   id: string;
   tenant_id: string;
-  status: 'open' | 'investigating' | 'closed';
+  status: "open" | "investigating" | "closed";
   opened_at: string;
   opened_by?: string;
   summary: string;
@@ -4413,7 +5655,7 @@ export interface CreateMisconductCasePayload {
 }
 
 export interface UpdateMisconductCasePayload {
-  status?: 'open' | 'investigating' | 'closed';
+  status?: "open" | "investigating" | "closed";
   summary?: string;
   subject_user_id?: string;
   subject_label?: string;
@@ -4423,7 +5665,7 @@ export interface RiskSignal {
   id: string;
   case_id: string;
   signal_type: string;
-  severity: 'critical' | 'high' | 'medium' | 'low';
+  severity: "critical" | "high" | "medium" | "low";
   source_id?: string;
   source_table?: string;
   occurred_at: string;
@@ -4463,7 +5705,7 @@ export interface EntityActionResponse {
   created_at: string;
   nodes_dispatched: number;
   node_ids?: string[];
-  scope?: 'affected' | 'fleet';
+  scope?: "affected" | "fleet";
 }
 
 export interface ActiveBlock {
@@ -4495,7 +5737,18 @@ export interface IPBlockProposal {
   app: string;
   vhost: string;
   enforcement: string;
-  status: 'proposed' | 'approved' | 'canary' | 'dispatching' | 'active' | 'failed' | 'expired' | 'removed' | 'denied' | 'rejected' | 'rolled_back';
+  status:
+    | "proposed"
+    | "approved"
+    | "canary"
+    | "dispatching"
+    | "active"
+    | "failed"
+    | "expired"
+    | "removed"
+    | "denied"
+    | "rejected"
+    | "rolled_back";
   reason: string;
   score: number;
   expires_at?: string;
@@ -4678,7 +5931,7 @@ export interface NodeFirewallRule {
   Source?: string;
   Dest?: string;
   Tag: string;
-  Status: 'pending' | 'applied' | 'failed' | 'removed';
+  Status: "pending" | "applied" | "failed" | "removed";
   Error?: string;
   JobID?: string;
   RequestedAt: string;
@@ -4691,8 +5944,8 @@ export interface NodeFirewallRule {
 export interface PatchDeployment {
   ID: string;
   TenantID: string;
-  Mode: 'direct' | 'proxy' | 'airgapped';
-  Status: 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed';
+  Mode: "direct" | "proxy" | "airgapped";
+  Status: "pending" | "in_progress" | "completed" | "partial" | "failed";
   TargetNodeCount: number;
   RequestedBy?: string;
   RequestedAt: string;
@@ -4709,7 +5962,7 @@ export interface NodePatchState {
   DeploymentID: string;
   NodeID: string;
   TenantID: string;
-  Status: 'pending' | 'applied' | 'failed';
+  Status: "pending" | "applied" | "failed";
   PackagesUpgraded?: number;
   LogTail?: string;
   Error?: string;
@@ -4727,7 +5980,11 @@ export interface PatchDeployResponse {
   succeeded?: string[];
   failed?: { node_id: string; error: string }[];
   gate_blocked?: { node_id: string; reason: string }[];
-  awaiting_approval?: { node_id: string; approval_id?: string; reason?: string }[];
+  awaiting_approval?: {
+    node_id: string;
+    approval_id?: string;
+    reason?: string;
+  }[];
 }
 
 // PatchApproval mirrors patchApprovalResponse on the server.
@@ -4739,7 +5996,7 @@ export interface PatchApproval {
   mode: string;
   proxy_id?: string;
   window_id?: string;
-  status: 'pending' | 'approved' | 'denied' | 'expired';
+  status: "pending" | "approved" | "denied" | "expired";
   approved_by?: string;
   approved_at?: string;
   created_at: string;
@@ -4751,7 +6008,7 @@ export interface PatchApproval {
 
 export interface NodePatchConfig {
   NodeID: string;
-  Mode: 'direct' | 'proxy' | 'airgapped';
+  Mode: "direct" | "proxy" | "airgapped";
   ProxyID?: string;
   WindowID?: string;
   UpdatedAt: string;
@@ -4765,7 +6022,7 @@ export interface MaintenanceWindow {
   OpensAt: string;
   ClosesAt: string;
   AllowRepos: string[];
-  Status: 'scheduled' | 'open' | 'closing' | 'closed' | 'aborted';
+  Status: "scheduled" | "open" | "closing" | "closed" | "aborted";
   OpenedBy?: string;
   ForceClosedAt?: string;
   CreatedAt: string;
@@ -4777,7 +6034,7 @@ export interface SquidProxy {
   TenantID: string;
   Host: string;
   Port: number;
-  Status: 'installing' | 'healthy' | 'degraded' | 'removing' | 'removed';
+  Status: "installing" | "healthy" | "degraded" | "removing" | "removed";
   Whitelist: string[];
   LastValidatedAt?: string;
   LastError?: string;
@@ -4815,7 +6072,7 @@ export interface ConnectionRow {
 
 export interface ForensicEvent {
   ts: string;
-  source: 'event' | 'file' | 'db' | 'log' | 'alert' | 'process';
+  source: "event" | "file" | "db" | "log" | "alert" | "process";
   event_type: string;
   pid?: number;
   process_name?: string;
@@ -4852,11 +6109,11 @@ export interface NodeHealthSummary {
   conn_count?: number;
   threat_hits?: number;
   alerts_open?: number;
-  state?: 'healthy' | 'warning' | 'degraded' | 'critical' | 'unknown';
+  state?: "healthy" | "warning" | "degraded" | "critical" | "unknown";
 }
 
 export interface FleetHealthSnapshot {
-  source: 'doris' | 'postgres-fallback';
+  source: "doris" | "postgres-fallback";
   totals: {
     nodes: number;
     healthy: number;
@@ -4883,6 +6140,290 @@ export interface TenantEventFilters {
   trusted_proxy_cidrs: string[];
   db_query_text_capture: boolean;
   forensic_mode: boolean;
+  connector_auto_connect_medium_risk?: boolean;
+  connector_auto_connect_high_risk?: boolean;
+  connector_auto_connect_programs?: string[];
+  connector_approval_required_programs?: string[];
+  connector_blocked_programs?: string[];
+}
+
+export interface TenantConnectorPolicy {
+  tenant_id: string;
+  allow_medium_risk: boolean;
+  allow_high_risk: boolean;
+  auto_connect_programs: string[];
+  approval_required_programs: string[];
+  blocked_programs: string[];
+  updated_at?: string;
+}
+
+export interface ContentPackSourceProposal {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  proposal_id: string;
+  kind: string;
+  program: string;
+  source_id?: string;
+  collector_type?: string;
+  formatter?: string;
+  status: string;
+  confidence: number;
+  risk?: string;
+  auto_connect_eligible: boolean;
+  requires_approval: boolean;
+  reason?: string;
+  paths?: string[];
+  evidence?: string[];
+  labels?: Record<string, string>;
+  first_seen_at: string;
+  last_seen_at: string;
+  approved_by_subject?: string;
+  approved_at?: string;
+  approval_note?: string;
+  collect_mode?: ContentPackSourceProposalCollectMode | string;
+  rejected_by_subject?: string;
+  rejected_at?: string;
+  rejection_reason?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContentPackSourceProposalSummary {
+  total: number;
+  by_status: Record<string, number>;
+}
+
+export type ContentPackSourceProposalCollectMode =
+  | "observe_only"
+  | "metadata_only"
+  | "collect_parsed"
+  | "collect_raw"
+  | "disabled";
+
+export interface ContentPackSourceRuntimeMetrics {
+  events_received?: number;
+  events_parsed?: number;
+  events_failed?: number;
+  events_dropped?: number;
+  queue_depth?: number;
+  retry_count?: number;
+  [key: string]: number | undefined;
+}
+
+export interface ContentPackSourceHealthAction {
+  id: string;
+  action: string;
+  label: string;
+  description?: string;
+  enabled: boolean;
+}
+
+export interface ContentPackSourceHealth {
+  runtime_state_id?: string;
+  source_instance_id?: string;
+  collector_id: string;
+  source_id: string;
+  receiver_id?: string;
+  node_id?: string;
+  pack_id?: string;
+  pack_version?: string;
+  parser_id?: string;
+  collector_mode?: string;
+  config_version?: string;
+  content_version?: string;
+  display_name?: string;
+  coverage_state: string;
+  approval_required?: boolean;
+  approval_id?: string;
+  metrics?: ContentPackSourceRuntimeMetrics;
+  labels?: Record<string, string>;
+  last_event_at?: string;
+  last_parsed_at?: string;
+  last_health_at?: string;
+  last_error?: string;
+  recommended_actions?: ContentPackSourceHealthAction[];
+}
+
+export interface ContentPackSourceHealthInvestigationCase {
+  case_id: string;
+  tenant_id?: string;
+  node_id?: string;
+  title?: string;
+  status?: string;
+  severity?: string;
+  source?: string;
+  trigger_type?: string;
+  trigger_event_type?: string;
+  dedup_key?: string;
+  summary?: string;
+  evidence?: Record<string, unknown>;
+  evidence_refs?: SOCCaseEvidenceRef[];
+  notes?: SOCCaseNote[];
+  coverage_badges?: SOCCaseCoverageBadge[];
+  export_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type SOCCase = ContentPackSourceHealthInvestigationCase;
+
+export interface SOCCaseEvidenceRef {
+  id: string;
+  kind: string;
+}
+
+export interface SOCCaseCoverageBadge {
+  id: string;
+  label: string;
+  tone: string;
+}
+
+export interface SOCCaseNote {
+  id: string;
+  tenant_id: string;
+  case_id: string;
+  note: string;
+  citations?: SOCCaseEvidenceRef[];
+  audit_id?: string;
+  created_at: string;
+  created_by?: string;
+  guardrails?: string[];
+}
+
+export interface ContentPackSourceHealthInvestigationResponse {
+  case_id: string;
+  case: ContentPackSourceHealthInvestigationCase;
+}
+
+export interface ContentPackSourceHealthResponse {
+  tenant_id: string;
+  generated_at: string;
+  items: ContentPackSourceHealth[];
+  totals: {
+    sources: number;
+    collectors_reporting: number;
+    by_state: Record<string, number>;
+    metrics?: ContentPackSourceRuntimeMetrics;
+  };
+  pagination?: PaginationMeta;
+}
+
+type RawContentPackSourceHealthResponse = Omit<
+  ContentPackSourceHealthResponse,
+  "pagination"
+> & {
+  pagination?: ServerPaginationMeta;
+};
+
+export interface ContentPackOTelCollectorSourcePlan {
+  source_id: string;
+  pack_id?: string;
+  pack_version?: string;
+  mode: string;
+  receiver: string;
+  receiver_ids: string[];
+  pipeline_id: string;
+  pipeline_type: string;
+  resource_processor_id: string;
+  collect_mode?: string;
+  approval_ref?: string;
+  warnings?: string[];
+}
+
+export interface ContentPackOTelConfigRenderRequest {
+  endpoint: string;
+  collector_id?: string;
+  source_ids?: string[];
+  source_proposal_ids?: string[];
+  sources?: Array<{
+    source_id: string;
+    mode?: string;
+    collect_mode?: string;
+    approval_ref?: string;
+  }>;
+  headers?: Record<string, string>;
+  insecure_tls?: boolean;
+  compression?: string;
+  timeout?: string;
+  memory_limit_mib?: number;
+  memory_spike_limit_mib?: number;
+  batch_timeout?: string;
+  batch_send_batch_size?: number;
+  disable_persistent_storage?: boolean;
+  storage_extension_id?: string;
+  storage_directory?: string;
+  exporter_queue_size?: number;
+  exporter_queue_consumers?: number;
+  exporter_retry_max_elapsed_time?: string;
+  source_approval_refs?: Record<string, string>;
+  additional_attributes?: Record<string, string>;
+}
+
+export interface ContentPackOTelConfigRenderResponse {
+  tenant_id: string;
+  generated_at: string;
+  snapshot_id: string;
+  snapshot_created_at: string;
+  config_version: string;
+  candidate_id?: string;
+  candidate_status?: string;
+  sources: ContentPackOTelCollectorSourcePlan[];
+  warnings?: string[];
+  config: Record<string, unknown>;
+  yaml: string;
+}
+
+export interface ContentPackOTelConfigCandidate {
+  id: string;
+  tenant_id: string;
+  registry_snapshot_id?: string;
+  status: string;
+  config_version: string;
+  collector_id?: string;
+  endpoint?: string;
+  source_ids?: string[];
+  created_by_subject?: string;
+  approved_by_subject?: string;
+  approval_note?: string;
+  reviewed_config_version?: string;
+  reviewed_yaml_sha256?: string;
+  approved_at?: string;
+  queued_by_subject?: string;
+  queue_note?: string;
+  target_collector_id?: string;
+  queued_at?: string;
+  deployed_at?: string;
+  failed_at?: string;
+  deployment_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContentPackOTelConfigCandidateDetail extends ContentPackOTelConfigCandidate {
+  sources: ContentPackOTelCollectorSourcePlan[];
+  warnings?: string[];
+  yaml: string;
+}
+
+export interface ContentPackEdgeCollector {
+  id: string;
+  tenant_id: string;
+  collector_id: string;
+  kind: string;
+  display_name?: string;
+  endpoint?: string;
+  version?: string;
+  status: string;
+  desired_config_version?: string;
+  running_config_version?: string;
+  token_last_four?: string;
+  token_issued_at?: string;
+  health?: Record<string, unknown>;
+  last_error?: string;
+  last_heartbeat_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 function normalizePagination(meta: ServerPaginationMeta): PaginationMeta {
@@ -4933,7 +6474,11 @@ export interface RoleWithPermissions {
   permissions: string[];
 }
 
-export type WidgetType = 'db_query' | 'sys_resources' | 'log_size' | 'network_bytes';
+export type WidgetType =
+  | "db_query"
+  | "sys_resources"
+  | "log_size"
+  | "network_bytes";
 
 export interface DashboardWidget {
   id: string;
@@ -5036,7 +6581,7 @@ export interface CommandACL {
   tenant_id: string;
   name: string;
   pattern: string;
-  action: 'allow' | 'deny';
+  action: "allow" | "deny";
   roles: string[];
   created_at: string;
   updated_at: string;
@@ -5046,7 +6591,7 @@ export interface CreateCommandACLPayload {
   tenant_id: string;
   name: string;
   pattern: string;
-  action: 'allow' | 'deny';
+  action: "allow" | "deny";
   roles: string[];
 }
 
@@ -5092,7 +6637,7 @@ export interface ClusterRolloutWave {
   tenant_id: string;
   name: string;
   order: number;
-  status: 'pending' | 'running' | 'paused' | 'done' | 'aborted';
+  status: "pending" | "running" | "paused" | "done" | "aborted";
   node_count: number;
   done_count: number;
   started_at?: string;
@@ -5102,12 +6647,12 @@ export interface ClusterRolloutWave {
 }
 
 export interface UpdateClusterRolloutWavePayload {
-  status?: 'paused' | 'running' | 'aborted';
+  status?: "paused" | "running" | "aborted";
 }
 
 export interface MFAFactor {
   id: string;
-  type: 'totp' | 'webauthn' | 'recovery';
+  type: "totp" | "webauthn" | "recovery";
   name: string;
   created_at: string;
   last_used_at?: string;
@@ -5116,7 +6661,13 @@ export interface MFAFactor {
 export interface TenantRemediationConfig {
   TenantID: string;
   MinApprovalSeverity: string;
-  ChangeWindows: { days: number[]; start_hour: number; end_hour: number; timezone?: string; label?: string }[];
+  ChangeWindows: {
+    days: number[];
+    start_hour: number;
+    end_hour: number;
+    timezone?: string;
+    label?: string;
+  }[];
   CriticalOverride: boolean;
   CircuitBreakerWindowMin: number;
   CircuitBreakerFailPct: number;
@@ -5228,7 +6779,7 @@ export interface ControlCoverage {
   control_id: string;
   title: string;
   applicability?: string;
-  status: 'PASS' | 'PARTIAL' | 'FAIL' | 'NO_COVERAGE';
+  status: "PASS" | "PARTIAL" | "FAIL" | "NO_COVERAGE";
   nodes_checked: number;
   nodes_passing: number;
   nodes_failing: number;
@@ -5259,7 +6810,7 @@ export interface ComplianceReview {
   scheduled_for?: string;
   completed_at?: string;
   reviewed_by?: string;
-  status: 'pending' | 'completed' | 'overdue';
+  status: "pending" | "completed" | "overdue";
   notes?: string;
   recurrence?: string;
   created_at: string;
@@ -5274,9 +6825,13 @@ export interface CreateComplianceReviewPayload {
 }
 
 // ── Finacle integration (UC6) ────────────────────────────────────────────────
-export type FinacleAuthMethod = 'oauth2_client_credentials' | 'basic';
+export type FinacleAuthMethod = "oauth2_client_credentials" | "basic";
 
-export type FinacleShiftModel = '3_shift' | '2_shift' | 'branch_hours' | 'always_on';
+export type FinacleShiftModel =
+  | "3_shift"
+  | "2_shift"
+  | "branch_hours"
+  | "always_on";
 
 export interface FinacleConnection {
   id: string;
@@ -5304,7 +6859,7 @@ export interface UpdateFinacleConnectionPayload {
 }
 
 export interface FinacleConnectionTestResult {
-  status: 'ok' | 'failed';
+  status: "ok" | "failed";
   message?: string;
   connection: FinacleConnection;
 }
@@ -5312,7 +6867,7 @@ export interface FinacleConnectionTestResult {
 export interface FinacleShiftBand {
   name: string;
   start: string; // "HH:MM"
-  end: string;   // "HH:MM"
+  end: string; // "HH:MM"
 }
 
 export interface FinacleShiftConfig {
@@ -5362,7 +6917,7 @@ export interface UpdateFinacleProfilePayload {
 export interface FinacleShiftRotatePayload {
   tenant_id: string;
   shift_id: string;
-  direction: 'enable' | 'disable';
+  direction: "enable" | "disable";
 }
 
 export interface FinacleShiftRotateResponse {

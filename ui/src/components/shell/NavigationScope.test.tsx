@@ -66,6 +66,7 @@ const PRIMARY_DESTINATIONS = [
   'Search & lifecycle',
   'Servers',
   'Network & exposure',
+  'SIEM coverage',
   'Patch posture',
   'Compliance',
   'Access',

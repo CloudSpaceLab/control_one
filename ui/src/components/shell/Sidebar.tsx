@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
+  DatabaseZap,
   FileText,
   KeyRound,
   Network,
@@ -67,6 +68,7 @@ const NAV_GROUPS: NavGroupDef[] = [
         badge: <NodeStatusBadge />,
       },
       { to: '/security/network', label: 'Network & exposure', icon: Network },
+      { to: '/security/siem', label: 'SIEM coverage', icon: DatabaseZap },
       {
         to: '/infrastructure/patch',
         label: 'Patch posture',

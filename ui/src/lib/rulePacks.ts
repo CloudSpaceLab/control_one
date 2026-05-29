@@ -1,3 +1,9 @@
+// Legacy/demo seed catalog only.
+//
+// Production SIEM detections are authored, replay-tested, governed, and
+// enabled through signed content-pack detection artifacts. Keep this file for
+// existing rule UI compatibility; do not add new production detection content
+// here.
 export type Category =
   | 'Web servers'
   | 'Databases'

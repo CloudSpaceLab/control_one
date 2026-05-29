@@ -32,6 +32,7 @@ const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Ale
 const Access = lazy(() => import('./pages/Access').then((m) => ({ default: m.Access })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
 const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
+const SIEMCoverage = lazy(() => import('./pages/SIEMCoverage').then((m) => ({ default: m.SIEMCoverage })));
 const WebserverAutoControl = lazy(() => import('./pages/WebserverAutoControl').then((m) => ({ default: m.WebserverAutoControl })));
 const PatchManagement = lazy(() => import('./pages/PatchManagement').then((m) => ({ default: m.PatchManagement })));
 const Roles = lazy(() => import('./pages/Roles').then((m) => ({ default: m.Roles })));
@@ -136,6 +137,7 @@ export function App(): JSX.Element {
                 <Route path="reports" element={<Navigate to="/compliance?tab=reports" replace />} />
                 {/* Network Security (PR 3) — consolidated tab surface. */}
                 <Route path="security/network" element={<NetworkSecurity />} />
+                <Route path="security/siem" element={<SIEMCoverage />} />
                 <Route path="security/webservers" element={<WebserverAutoControl />} />
                 {/* Patch Management (PR 4) */}
                 <Route path="infrastructure/patch" element={<PatchManagement />} />

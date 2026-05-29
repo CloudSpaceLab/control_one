@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import type { ReactNode } from 'react';
 
 interface ConfirmModalProps {
   open: boolean;
@@ -15,6 +16,7 @@ interface ConfirmModalProps {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'default' | 'danger';
+  children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -26,6 +28,7 @@ export function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'default',
+  children,
   onConfirm,
   onCancel,
 }: ConfirmModalProps): JSX.Element {
@@ -36,6 +39,7 @@ export function ConfirmModal({
           <DialogTitle>{title}</DialogTitle>
           {body ? <DialogDescription>{body}</DialogDescription> : null}
         </DialogHeader>
+        {children}
         <DialogFooter>
           <Button type="button" variant="secondary" onClick={onCancel}>
             {cancelLabel}
