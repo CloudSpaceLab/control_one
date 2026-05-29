@@ -113,6 +113,11 @@ const DRILLDOWN_ONLY_LABELS = [
   'Roles',
 ];
 
+function navLinkName(label: string): RegExp {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}`, 'i');
+}
+
 describe('navigation scope', () => {
   it('keeps the sidebar focused on core control-room destinations', () => {
     render(
@@ -125,7 +130,7 @@ describe('navigation scope', () => {
     expect(within(nav).getAllByRole('link')).toHaveLength(PRIMARY_DESTINATIONS.length);
 
     for (const label of PRIMARY_DESTINATIONS) {
-      expect(within(nav).getByRole('link', { name: new RegExp(label, 'i') })).toBeInTheDocument();
+      expect(within(nav).getByRole('link', { name: navLinkName(label) })).toBeInTheDocument();
     }
     for (const label of DRILLDOWN_ONLY_LABELS) {
       expect(within(nav).queryByText(label)).not.toBeInTheDocument();
