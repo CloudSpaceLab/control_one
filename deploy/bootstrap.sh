@@ -15,6 +15,37 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+hostctl() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo ">> root or sudo is required to set Doris host prerequisites." >&2
+    exit 1
+  fi
+}
+
+ensure_doris_host_prereqs() {
+  if command -v sysctl >/dev/null 2>&1; then
+    current_map_count="$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)"
+    if [[ "${current_map_count:-0}" -lt 2000000 ]]; then
+      echo ">> Setting vm.max_map_count=2000000 for Doris BE..."
+      hostctl sysctl -w vm.max_map_count=2000000 >/dev/null
+    fi
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      printf 'vm.max_map_count=2000000\n' > /etc/sysctl.d/99-control-one-doris.conf
+    elif command -v sudo >/dev/null 2>&1; then
+      printf 'vm.max_map_count=2000000\n' | sudo tee /etc/sysctl.d/99-control-one-doris.conf >/dev/null
+    fi
+  fi
+
+  if command -v swapon >/dev/null 2>&1 && swapon --noheadings --show | grep -q .; then
+    echo ">> Disabling active host swap for Doris BE..."
+    hostctl swapoff -a
+  fi
+}
+
 echo ">> [1/5] Building images (this can take a few minutes the first time)..."
 docker compose build
 
@@ -31,6 +62,7 @@ for svc in postgres redis; do
 done
 
 echo ">> [3/5] Bootstrapping Doris (FE + BE)..."
+ensure_doris_host_prereqs
 docker compose up -d doris-fe doris-be
 # Wait for FE health endpoint, then bootstrap database + add backend.
 for _ in {1..60}; do

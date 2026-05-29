@@ -105,6 +105,26 @@ jobs:
             chmod 750 '$DEPLOY_DIR/threat-intel'
           "
 
+      - name: Ensure Doris host prerequisites
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" '
+            set -e
+            if command -v sysctl >/dev/null 2>&1; then
+              current_map_count=$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)
+              if [ "${current_map_count:-0}" -lt 2000000 ]; then
+                sysctl -w vm.max_map_count=2000000 >/dev/null
+              fi
+              printf "vm.max_map_count=2000000\n" > /etc/sysctl.d/99-control-one-doris.conf || true
+            fi
+            if command -v swapon >/dev/null 2>&1 && swapon --noheadings --show | grep -q .; then
+              swapoff -a
+            fi
+          '
+
       - name: Upload Go binaries
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -164,6 +184,7 @@ jobs:
               -f Dockerfile.controlplane.prebuilt .
             docker build -t controlone/console:latest \
               -f Dockerfile.console.prebuilt .
+            docker compose up -d doris-fe doris-be
             docker compose up -d --force-recreate --no-deps controlplane console
           "
 
@@ -185,14 +206,28 @@ jobs:
               if curl -fsS --max-time 5 http://127.0.0.1:8443/healthz 2>/dev/null; then
                 echo
                 echo "✓ controlplane /healthz OK"
-                exit 0
+                break
               fi
               echo "... attempt $i: waiting 5s"
               sleep 5
+              if [ "$i" = "6" ]; then
+                echo "controlplane /healthz never returned 200"
+                docker logs deploy-controlplane-1 --tail 30 || true
+                exit 1
+              fi
             done
-            echo "✗ /healthz never returned 200"
-            docker logs deploy-controlplane-1 --tail 30 || true
-            exit 1
+            echo "checking doris-be stability"
+            doris_restarts_before=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
+            sleep 20
+            doris_running=$(docker inspect deploy-doris-be-1 --format "{{.State.Running}}" 2>/dev/null || echo false)
+            doris_restarts_after=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
+            if [ "$doris_running" != "true" ] || [ "$doris_restarts_after" != "$doris_restarts_before" ]; then
+              echo "doris-be is not stable after deploy"
+              docker inspect deploy-doris-be-1 --format "running={{.State.Running}} restarts={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}" || true
+              docker logs deploy-doris-be-1 --tail 60 || true
+              exit 1
+            fi
+            echo "doris-be stable"
           '
 
       - name: Public smoke check (best-effort, warns on Cloudflare 403)
