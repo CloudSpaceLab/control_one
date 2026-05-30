@@ -225,8 +225,9 @@ Storage strategy correction:
 
 - Single-node/demo Doris migrations now rewrite table and dynamic partition
   bucket counts to `BUCKETS 1` / `"dynamic_partition.buckets" = "1"`;
-  HA/bank clusters with `replication_num > 1` keep the larger production
-  bucket counts.
+  they also create a bounded 30-day hot history window so recent replay does
+  not fail on missing partitions. HA/bank clusters with `replication_num > 1`
+  keep the larger production bucket and retention settings.
 - Control One should not behave like a traditional raw-first SIEM. Raw log/event
   storage should be bounded by source policy, retention class, and replay need.
 - Durable analytic storage should prefer normalized security facts, compact

@@ -34,6 +34,8 @@ type MigrationOptions struct {
 var addColumnIfNotExistsRE = regexp.MustCompile(`(?is)^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$`)
 var bucketsRE = regexp.MustCompile(`(?i)\bBUCKETS\s+[0-9]+`)
 var dynamicPartitionBucketsRE = regexp.MustCompile(`(?i)"dynamic_partition\.buckets"\s*=\s*"[0-9]+"`)
+var dynamicPartitionStartRE = regexp.MustCompile(`(?i)"dynamic_partition\.start"\s*=\s*"-[0-9]+"`)
+var dynamicPartitionCreateHistoryRE = regexp.MustCompile(`(?i)"dynamic_partition\.create_history_partition"\s*=\s*"(true|false)"`)
 
 // migrationFile is one parsed entry from the embed FS.
 type migrationFile struct {
@@ -204,6 +206,15 @@ func renderMigrationSQL(sql string, opts MigrationOptions) string {
 	if opts.BucketCount > 0 {
 		sql = bucketsRE.ReplaceAllString(sql, fmt.Sprintf("BUCKETS %d", opts.BucketCount))
 		sql = dynamicPartitionBucketsRE.ReplaceAllString(sql, fmt.Sprintf(`"dynamic_partition.buckets" = "%d"`, opts.BucketCount))
+		if opts.ReplicationNum == 1 && opts.BucketCount == 1 {
+			sql = dynamicPartitionStartRE.ReplaceAllString(sql, `"dynamic_partition.start" = "-30"`)
+			if dynamicPartitionCreateHistoryRE.MatchString(sql) {
+				sql = dynamicPartitionCreateHistoryRE.ReplaceAllString(sql, `"dynamic_partition.create_history_partition" = "true"`)
+			} else {
+				bucketProperty := fmt.Sprintf(`"dynamic_partition.buckets" = "%d"`, opts.BucketCount)
+				sql = strings.ReplaceAll(sql, bucketProperty, bucketProperty+",\n  "+`"dynamic_partition.create_history_partition" = "true"`)
+			}
+		}
 	}
 	return sql
 }

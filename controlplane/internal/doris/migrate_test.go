@@ -65,6 +65,7 @@ func TestRenderMigrationSQLRewritesBucketsForSingleNode(t *testing.T) {
 	in := `DISTRIBUTED BY HASH (tenant_id) BUCKETS 16
 PROPERTIES (
   "replication_num" = "1",
+  "dynamic_partition.start" = "-90",
   "dynamic_partition.buckets" = "16"
 );`
 	got := renderMigrationSQL(in, MigrationOptions{})
@@ -80,12 +81,19 @@ PROPERTIES (
 	if strings.Contains(got, `"dynamic_partition.buckets" = "16"`) {
 		t.Fatalf("single-node render retained large dynamic partition bucket count:\n%s", got)
 	}
+	if !strings.Contains(got, `"dynamic_partition.start" = "-30"`) {
+		t.Fatalf("single-node render should cap hot Doris history to 30 days, got:\n%s", got)
+	}
+	if !strings.Contains(got, `"dynamic_partition.create_history_partition" = "true"`) {
+		t.Fatalf("single-node render should create bounded history partitions, got:\n%s", got)
+	}
 }
 
 func TestRenderMigrationSQLPreservesBucketsForHA(t *testing.T) {
 	in := `DISTRIBUTED BY HASH (tenant_id) BUCKETS 16
 PROPERTIES (
   "replication_num" = "1",
+  "dynamic_partition.start" = "-90",
   "dynamic_partition.buckets" = "16"
 );`
 	got := renderMigrationSQL(in, MigrationOptions{ReplicationNum: 3})
@@ -94,6 +102,12 @@ PROPERTIES (
 	}
 	if !strings.Contains(got, `"dynamic_partition.buckets" = "16"`) {
 		t.Fatalf("HA render should preserve dynamic partition bucket count, got:\n%s", got)
+	}
+	if !strings.Contains(got, `"dynamic_partition.start" = "-90"`) {
+		t.Fatalf("HA render should preserve dynamic partition retention, got:\n%s", got)
+	}
+	if strings.Contains(got, `"dynamic_partition.create_history_partition"`) {
+		t.Fatalf("HA render should not add demo history partition settings, got:\n%s", got)
 	}
 	if !strings.Contains(got, `"replication_num" = "3"`) {
 		t.Fatalf("HA render should still rewrite replication, got:\n%s", got)
