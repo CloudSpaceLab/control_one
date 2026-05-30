@@ -150,3 +150,23 @@ func TestEventsPipelineMigrationDoesNotBuildInlineRollup(t *testing.T) {
 		t.Fatalf("migration should document why the inline rollup is omitted")
 	}
 }
+
+func TestDashboardAnalyticsMigrationCreatesReaderTables(t *testing.T) {
+	raw, err := os.ReadFile("migrations/0004_dashboard_analytics_tables.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := string(raw)
+	for _, table := range []string{
+		"telemetry_logs",
+		"security_events",
+		"rule_trigger_log",
+		"telemetry_metrics_1m",
+		"unique_counters",
+		"threat_observations",
+	} {
+		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("migration missing CREATE TABLE for %s", table)
+		}
+	}
+}

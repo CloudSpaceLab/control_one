@@ -283,6 +283,10 @@ Storage strategy correction:
 - Live UX validation also caught and closed a Doris timeline paging bug: entity
   lifecycle queries now request newest timeline rows first, so capped pages and
   `last_seen` evidence reflect current hot events instead of the oldest slice.
+- Fresh Doris volumes now also migrate the dashboard/investigation compatibility
+  tables (`security_events`, `telemetry_logs`, rule/metric/unique/threat
+  rollups), preventing related-entity and dashboard readers from failing after
+  an analytic reset.
 - Full-fidelity raw should spill to cheaper archive/object storage when a bank
   requires evidentiary retention; Doris should hold hot searchable facts and
   compressed investigation pivots.
