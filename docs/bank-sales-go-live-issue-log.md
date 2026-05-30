@@ -223,9 +223,10 @@ Exit criteria:
 
 Storage strategy correction:
 
-- Single-node/demo Doris migrations now rewrite table bucket counts to
-  `BUCKETS 1`; HA/bank clusters with `replication_num > 1` keep the larger
-  production bucket counts.
+- Single-node/demo Doris migrations now rewrite table and dynamic partition
+  bucket counts to `BUCKETS 1` / `"dynamic_partition.buckets" = "1"`;
+  HA/bank clusters with `replication_num > 1` keep the larger production
+  bucket counts.
 - Control One should not behave like a traditional raw-first SIEM. Raw log/event
   storage should be bounded by source policy, retention class, and replay need.
 - Durable analytic storage should prefer normalized security facts, compact

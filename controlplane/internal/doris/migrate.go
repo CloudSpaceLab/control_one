@@ -33,6 +33,7 @@ type MigrationOptions struct {
 
 var addColumnIfNotExistsRE = regexp.MustCompile(`(?is)^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$`)
 var bucketsRE = regexp.MustCompile(`(?i)\bBUCKETS\s+[0-9]+`)
+var dynamicPartitionBucketsRE = regexp.MustCompile(`(?i)"dynamic_partition\.buckets"\s*=\s*"[0-9]+"`)
 
 // migrationFile is one parsed entry from the embed FS.
 type migrationFile struct {
@@ -202,6 +203,7 @@ func renderMigrationSQL(sql string, opts MigrationOptions) string {
 	sql = strings.ReplaceAll(sql, `"replication_num" = "1"`, repl)
 	if opts.BucketCount > 0 {
 		sql = bucketsRE.ReplaceAllString(sql, fmt.Sprintf("BUCKETS %d", opts.BucketCount))
+		sql = dynamicPartitionBucketsRE.ReplaceAllString(sql, fmt.Sprintf(`"dynamic_partition.buckets" = "%d"`, opts.BucketCount))
 	}
 	return sql
 }

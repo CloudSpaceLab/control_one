@@ -63,7 +63,10 @@ func TestRenderMigrationSQLOverridesReplicationNum(t *testing.T) {
 
 func TestRenderMigrationSQLRewritesBucketsForSingleNode(t *testing.T) {
 	in := `DISTRIBUTED BY HASH (tenant_id) BUCKETS 16
-PROPERTIES ("replication_num" = "1");`
+PROPERTIES (
+  "replication_num" = "1",
+  "dynamic_partition.buckets" = "16"
+);`
 	got := renderMigrationSQL(in, MigrationOptions{})
 	if !strings.Contains(got, "BUCKETS 1") {
 		t.Fatalf("single-node render should use BUCKETS 1, got:\n%s", got)
@@ -71,14 +74,26 @@ PROPERTIES ("replication_num" = "1");`
 	if strings.Contains(got, "BUCKETS 16") {
 		t.Fatalf("single-node render retained large bucket count:\n%s", got)
 	}
+	if !strings.Contains(got, `"dynamic_partition.buckets" = "1"`) {
+		t.Fatalf("single-node render should use dynamic_partition.buckets 1, got:\n%s", got)
+	}
+	if strings.Contains(got, `"dynamic_partition.buckets" = "16"`) {
+		t.Fatalf("single-node render retained large dynamic partition bucket count:\n%s", got)
+	}
 }
 
 func TestRenderMigrationSQLPreservesBucketsForHA(t *testing.T) {
 	in := `DISTRIBUTED BY HASH (tenant_id) BUCKETS 16
-PROPERTIES ("replication_num" = "1");`
+PROPERTIES (
+  "replication_num" = "1",
+  "dynamic_partition.buckets" = "16"
+);`
 	got := renderMigrationSQL(in, MigrationOptions{ReplicationNum: 3})
 	if !strings.Contains(got, "BUCKETS 16") {
 		t.Fatalf("HA render should preserve production bucket count, got:\n%s", got)
+	}
+	if !strings.Contains(got, `"dynamic_partition.buckets" = "16"`) {
+		t.Fatalf("HA render should preserve dynamic partition bucket count, got:\n%s", got)
 	}
 	if !strings.Contains(got, `"replication_num" = "3"`) {
 		t.Fatalf("HA render should still rewrite replication, got:\n%s", got)
