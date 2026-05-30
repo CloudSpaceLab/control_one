@@ -19,6 +19,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
+	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 )
 
 func TestValidateIngestedEventContractForWebAndRemediationEvents(t *testing.T) {
@@ -417,6 +418,47 @@ func TestHandleEventsIngestReturnsReplayReceiptForDuplicateKey(t *testing.T) {
 	}
 	if len(store.eventIngestReplayByKey) != 1 {
 		t.Fatalf("event ingest replay records = %d, want 1", len(store.eventIngestReplayByKey))
+	}
+}
+
+func TestHandleEventsIngestProjectsAgentEventstreamSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{nodes: []storage.Node{{ID: nodeID, TenantID: tenantID}}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	body := gzipNDJSON(t,
+		IngestedEvent{Type: "conn.open", TS: time.Now().UTC().Add(-time.Minute), SrcIP: "203.0.113.10"},
+		IngestedEvent{Type: "proc.exec", TS: time.Now().UTC().Add(-30 * time.Second), ProcessName: "nginx"},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/events/ingest", bytes.NewReader(body))
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	req = withPrincipal(req, &auth.Principal{
+		Type:    "agent",
+		Name:    nodeID.String(),
+		Subject: nodeID.String(),
+		Roles:   []string{"agent"},
+	})
+	rec := httptest.NewRecorder()
+	srv.handleEventsIngest(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("event ingest status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(store.sourceStates) != 1 {
+		t.Fatalf("source states = %#v", store.sourceStates)
+	}
+	state := store.sourceStates[0].State
+	if state.SourceID != "control_one.agent_eventstream" || state.CollectorMode != contentpacks.CollectorControlOneNode {
+		t.Fatalf("eventstream source identity = %#v", state)
+	}
+	if state.Metrics.EventsReceived != 2 || state.Metrics.EventsParsed != 2 {
+		t.Fatalf("eventstream metrics = %#v", state.Metrics)
+	}
+	if state.Labels["control_one.metrics_semantics"] != "delta" || !strings.Contains(state.Labels["control_one.event_types"], "conn.open:1") {
+		t.Fatalf("eventstream labels = %#v", state.Labels)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 	"github.com/CloudSpaceLab/control_one/internal/securityschema"
 )
 
@@ -287,6 +289,7 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 	if fanoutErr != nil {
 		s.logger.Warn("fanout event ingest", zap.Error(fanoutErr), zap.String("doris_status", dorisStatus))
 	}
+	s.persistAgentEventstreamSourceRuntimeState(r.Context(), tenantID, nodeID, events)
 
 	resp := map[string]any{
 		"batch_id":     batchID.String(),
@@ -296,6 +299,87 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) persistAgentEventstreamSourceRuntimeState(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) {
+	if s == nil || s.store == nil || tenantID == uuid.Nil || nodeID == uuid.Nil || len(events) == 0 {
+		return
+	}
+	store, ok := s.store.(contentPackSourceRuntimeStateStore)
+	if !ok || store == nil {
+		return
+	}
+	now := time.Now().UTC()
+	latestEventAt := time.Time{}
+	typeCounts := map[string]int{}
+	for i := range events {
+		ts := events[i].TS.UTC()
+		if latestEventAt.IsZero() || ts.After(latestEventAt) {
+			latestEventAt = ts
+		}
+		if typ := strings.TrimSpace(events[i].Type); typ != "" {
+			typeCounts[typ]++
+		}
+	}
+	if latestEventAt.IsZero() {
+		latestEventAt = now
+	}
+	sourceID := "control_one.agent_eventstream"
+	state := contentpacks.SourceRuntimeState{
+		SourceInstanceID: contentPackProposalSourceInstanceID(nodeID, sourceID),
+		SourceID:         sourceID,
+		DisplayName:      "Control One agent eventstream",
+		NodeID:           nodeID.String(),
+		CollectorID:      nodeID.String(),
+		CollectorMode:    contentpacks.CollectorControlOneNode,
+		ParserID:         "control_one.event_contract.v1",
+		CoverageState:    contentpacks.CoverageState(contentpacks.CoverageCollecting),
+		LastEventAt:      &latestEventAt,
+		LastParsedAt:     &latestEventAt,
+		LastHealthAt:     &now,
+		Metrics: contentpacks.SourceRuntimeMetrics{
+			EventsReceived: int64(len(events)),
+			EventsParsed:   int64(len(events)),
+		},
+		Labels: map[string]string{
+			"source":                           "agent_eventstream",
+			"control_one.health_kind":          "agent_eventstream",
+			"control_one.metrics_semantics":    "delta",
+			"control_one.event_types":          compactEventTypeCounts(typeCounts, 8),
+			contentPackCollectionOwnerLabel:    contentPackCollectionOwnerNodeAgent,
+			contentPackCollectionIdentityLabel: contentPackProposalSourceInstanceID(nodeID, sourceID),
+		},
+		UpdatedAt: now,
+	}
+	if _, err := store.UpsertContentPackSourceRuntimeState(ctx, storage.UpsertContentPackSourceRuntimeStateParams{
+		TenantID: tenantID,
+		State:    state,
+	}); err != nil {
+		s.logger.Warn("persist agent eventstream source runtime state",
+			zap.String("node_id", nodeID.String()),
+			zap.Int("events", len(events)),
+			zap.Error(err),
+		)
+	}
+}
+
+func compactEventTypeCounts(counts map[string]int, limit int) string {
+	if len(counts) == 0 || limit <= 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s:%d", key, counts[key]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func sanitizeReplayKey(raw string) (string, error) {

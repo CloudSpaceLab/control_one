@@ -273,6 +273,10 @@ Storage strategy correction:
   across batches instead of being overwritten by the most recent batch. Agent
   log batches without explicit content-pack labels also fall back to entry
   program/source/collector identity so real runtime flow is not invisible.
+- Agent eventstream ingest now also projects a `control_one.agent_eventstream`
+  runtime source per node with accepted/parsed event-count deltas, so source
+  health proves host event flow even when no approved local log source is
+  currently active.
 - Investigate entity lifecycle now merges Doris timeline facts with Postgres
   alerts/audit/actions and the raw-events tab renders structured rows instead
   of an operator-hostile JSON wall.
