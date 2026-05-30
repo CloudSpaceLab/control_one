@@ -280,6 +280,9 @@ Storage strategy correction:
 - Investigate entity lifecycle now merges Doris timeline facts with Postgres
   alerts/audit/actions and the raw-events tab renders structured rows instead
   of an operator-hostile JSON wall.
+- Live UX validation also caught and closed a Doris timeline paging bug: entity
+  lifecycle queries now request newest timeline rows first, so capped pages and
+  `last_seen` evidence reflect current hot events instead of the oldest slice.
 - Full-fidelity raw should spill to cheaper archive/object storage when a bank
   requires evidentiary retention; Doris should hold hot searchable facts and
   compressed investigation pivots.

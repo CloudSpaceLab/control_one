@@ -359,7 +359,7 @@ func TestBuildTimelineSQLScopesEveryUnionArmByTenant(t *testing.T) {
 	if got := strings.Count(query, "tenant_id = ?"); got != 6 {
 		t.Fatalf("tenant predicate count = %d, want 6:\n%s", got, query)
 	}
-	if !strings.Contains(query, "events") || !strings.Contains(query, "ORDER BY ts ASC") || !strings.Contains(query, "LIMIT 1000") {
+	if !strings.Contains(query, "events") || !strings.Contains(query, "ORDER BY ts DESC") || !strings.Contains(query, "LIMIT 1000") {
 		t.Fatalf("timeline query missing expected ordering/limit:\n%s", query)
 	}
 	if strings.Contains(query, "203.0.113.10") {

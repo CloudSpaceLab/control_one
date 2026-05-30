@@ -872,7 +872,7 @@ func buildTimelineSQL(p TimelineBuildParams) (string, []any, error) {
 			FROM web_requests
 			WHERE ` + webWhere + `
 		) timeline
-		ORDER BY ts ASC`
+		ORDER BY ts DESC`
 	args := append(append(append(append(append(eventsArgs, connArgs...), lineageArgs...), fileArgs...), dbArgs...), webArgs...)
 	return withLimit(query, clampTimelineLimit(p.Limit)), args, nil
 }
