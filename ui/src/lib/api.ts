@@ -683,6 +683,7 @@ export interface LifecycleItem {
   target?: string;
   summary: string;
   raw_id?: string;
+  metadata?: Record<string, unknown>;
 }
 export interface EntityLifecycle {
   items: LifecycleItem[];

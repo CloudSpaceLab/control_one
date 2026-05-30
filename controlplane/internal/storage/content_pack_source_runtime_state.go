@@ -85,11 +85,57 @@ func (s *Store) UpsertContentPackSourceRuntimeState(ctx context.Context, p Upser
 		    approval_id = EXCLUDED.approval_id,
 		    config_version = EXCLUDED.config_version,
 		    content_version = EXCLUDED.content_version,
-		    last_event_at = EXCLUDED.last_event_at,
-		    last_parsed_at = EXCLUDED.last_parsed_at,
+		    last_event_at = CASE
+		        WHEN COALESCE(EXCLUDED.labels->>'control_one.metrics_semantics', '') = 'delta' THEN
+		            CASE
+		                WHEN content_pack_source_runtime_states.last_event_at IS NULL THEN EXCLUDED.last_event_at
+		                WHEN EXCLUDED.last_event_at IS NULL THEN content_pack_source_runtime_states.last_event_at
+		                WHEN EXCLUDED.last_event_at > content_pack_source_runtime_states.last_event_at THEN EXCLUDED.last_event_at
+		                ELSE content_pack_source_runtime_states.last_event_at
+		            END
+		        ELSE EXCLUDED.last_event_at
+		    END,
+		    last_parsed_at = CASE
+		        WHEN COALESCE(EXCLUDED.labels->>'control_one.metrics_semantics', '') = 'delta' THEN
+		            CASE
+		                WHEN content_pack_source_runtime_states.last_parsed_at IS NULL THEN EXCLUDED.last_parsed_at
+		                WHEN EXCLUDED.last_parsed_at IS NULL THEN content_pack_source_runtime_states.last_parsed_at
+		                WHEN EXCLUDED.last_parsed_at > content_pack_source_runtime_states.last_parsed_at THEN EXCLUDED.last_parsed_at
+		                ELSE content_pack_source_runtime_states.last_parsed_at
+		            END
+		        ELSE EXCLUDED.last_parsed_at
+		    END,
 		    last_health_at = EXCLUDED.last_health_at,
 		    last_error = EXCLUDED.last_error,
-		    metrics = EXCLUDED.metrics,
+		    metrics = CASE
+		        WHEN COALESCE(EXCLUDED.labels->>'control_one.metrics_semantics', '') = 'delta' THEN jsonb_build_object(
+		            'events_received',
+		                COALESCE((content_pack_source_runtime_states.metrics->>'events_received')::bigint, 0)
+		                + COALESCE((EXCLUDED.metrics->>'events_received')::bigint, 0),
+		            'events_parsed',
+		                COALESCE((content_pack_source_runtime_states.metrics->>'events_parsed')::bigint, 0)
+		                + COALESCE((EXCLUDED.metrics->>'events_parsed')::bigint, 0),
+		            'events_dropped',
+		                COALESCE((content_pack_source_runtime_states.metrics->>'events_dropped')::bigint, 0)
+		                + COALESCE((EXCLUDED.metrics->>'events_dropped')::bigint, 0),
+		            'parse_failures',
+		                COALESCE((content_pack_source_runtime_states.metrics->>'parse_failures')::bigint, 0)
+		                + COALESCE((EXCLUDED.metrics->>'parse_failures')::bigint, 0),
+		            'lag_millis',
+		                GREATEST(COALESCE((content_pack_source_runtime_states.metrics->>'lag_millis')::bigint, 0),
+		                         COALESCE((EXCLUDED.metrics->>'lag_millis')::bigint, 0)),
+		            'queue_depth',
+		                COALESCE((EXCLUDED.metrics->>'queue_depth')::bigint,
+		                         COALESCE((content_pack_source_runtime_states.metrics->>'queue_depth')::bigint, 0)),
+		            'cursor_age_millis',
+		                GREATEST(COALESCE((content_pack_source_runtime_states.metrics->>'cursor_age_millis')::bigint, 0),
+		                         COALESCE((EXCLUDED.metrics->>'cursor_age_millis')::bigint, 0)),
+		            'retry_count',
+		                COALESCE((content_pack_source_runtime_states.metrics->>'retry_count')::bigint, 0)
+		                + COALESCE((EXCLUDED.metrics->>'retry_count')::bigint, 0)
+		        )
+		        ELSE EXCLUDED.metrics
+		    END,
 		    labels = EXCLUDED.labels,
 		    updated_at = NOW()
 		RETURNING id

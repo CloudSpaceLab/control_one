@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -661,7 +662,7 @@ func (s *Server) flushDorisEventFanout(ctx context.Context, batchID, tenantID, n
 	dorisStatus := ""
 	var dorisErr error
 
-	dorisRows := buildDorisEventRows(tenantID, nodeID, events)
+	dorisRows := buildDorisEventRows(tenantID, nodeID, coalesceDorisHotEvents(tenantID, nodeID, events))
 	syncDoris := batchID != uuid.Nil && s.dorisClient != nil
 	if syncDoris {
 		if err := s.streamLoadDorisEventRows(ctx, batchID, dorisRows); err != nil {
@@ -681,6 +682,202 @@ func (s *Server) flushDorisEventFanout(ctx context.Context, batchID, tenantID, n
 	}
 
 	return dorisStatus, dorisErr
+}
+
+const (
+	dorisHotCoalesceWindow      = 20 * time.Minute
+	dorisHotCoalesceSampleLimit = 20
+)
+
+type dorisHotEventAggregate struct {
+	outIndex      int
+	count         int64
+	bucket        time.Time
+	firstSeen     time.Time
+	lastSeen      time.Time
+	totalDuration int64
+	maxDuration   int64
+	samples       []string
+	rawRefs       []string
+	signature     string
+}
+
+func coalesceDorisHotEvents(tenantID, nodeID uuid.UUID, events []IngestedEvent) []IngestedEvent {
+	if len(events) <= 1 {
+		return events
+	}
+	out := make([]IngestedEvent, 0, len(events))
+	aggregates := map[string]*dorisHotEventAggregate{}
+	for i := range events {
+		ev := events[i]
+		if strings.TrimSpace(ev.TenantID) == "" && tenantID != uuid.Nil {
+			ev.TenantID = tenantID.String()
+		}
+		if strings.TrimSpace(ev.NodeID) == "" && nodeID != uuid.Nil {
+			ev.NodeID = nodeID.String()
+		}
+		if !isDorisHotCoalescibleEvent(&ev) {
+			out = append(out, ev)
+			continue
+		}
+		bucket := ev.TS.UTC().Truncate(dorisHotCoalesceWindow)
+		signature := dorisHotCoalesceSignature(&ev, bucket)
+		if agg, ok := aggregates[signature]; ok {
+			mergeDorisHotEventAggregate(&out[agg.outIndex], agg, ev)
+			continue
+		}
+		idx := len(out)
+		out = append(out, ev)
+		aggregates[signature] = newDorisHotEventAggregate(idx, bucket, signature, ev)
+	}
+	for _, agg := range aggregates {
+		if agg.count > 1 {
+			finalizeDorisHotEventAggregate(&out[agg.outIndex], agg)
+		}
+	}
+	return out
+}
+
+func isDorisHotCoalescibleEvent(ev *IngestedEvent) bool {
+	if ev == nil || ev.TS.IsZero() || strings.TrimSpace(ev.Message) == "" {
+		return false
+	}
+	switch strings.TrimSpace(ev.Type) {
+	case "log.line", "web.request", "web.error":
+		return true
+	default:
+		return false
+	}
+}
+
+func newDorisHotEventAggregate(idx int, bucket time.Time, signature string, ev IngestedEvent) *dorisHotEventAggregate {
+	agg := &dorisHotEventAggregate{
+		outIndex:      idx,
+		count:         1,
+		bucket:        bucket,
+		firstSeen:     ev.TS.UTC(),
+		lastSeen:      ev.TS.UTC(),
+		totalDuration: ev.DurationMS,
+		maxDuration:   ev.DurationMS,
+		signature:     signature,
+	}
+	agg.addSample(ev)
+	return agg
+}
+
+func mergeDorisHotEventAggregate(dst *IngestedEvent, agg *dorisHotEventAggregate, ev IngestedEvent) {
+	agg.count++
+	ts := ev.TS.UTC()
+	if ts.Before(agg.firstSeen) {
+		agg.firstSeen = ts
+	}
+	if ts.After(agg.lastSeen) {
+		agg.lastSeen = ts
+		dst.TS = ev.TS
+	}
+	dst.BytesIn += ev.BytesIn
+	dst.BytesOut += ev.BytesOut
+	agg.totalDuration += ev.DurationMS
+	if ev.DurationMS > agg.maxDuration {
+		agg.maxDuration = ev.DurationMS
+	}
+	agg.addSample(ev)
+}
+
+func (agg *dorisHotEventAggregate) addSample(ev IngestedEvent) {
+	if len(agg.samples) < dorisHotCoalesceSampleLimit {
+		agg.samples = append(agg.samples, ev.TS.UTC().Format(time.RFC3339Nano))
+	}
+	if ref := strings.TrimSpace(firstNonEmpty(ev.RawRef, ev.EventID, ev.CorrelationID, ev.DedupKey)); ref != "" && len(agg.rawRefs) < dorisHotCoalesceSampleLimit {
+		agg.rawRefs = append(agg.rawRefs, ref)
+	}
+}
+
+func finalizeDorisHotEventAggregate(ev *IngestedEvent, agg *dorisHotEventAggregate) {
+	details := cloneAnyMap(ev.Details)
+	details["coalesced"] = true
+	details["coalesced_count"] = agg.count
+	details["coalesced_window_seconds"] = int64(dorisHotCoalesceWindow / time.Second)
+	details["first_seen_at"] = agg.firstSeen.Format(time.RFC3339Nano)
+	details["last_seen_at"] = agg.lastSeen.Format(time.RFC3339Nano)
+	details["sample_timestamps"] = append([]string(nil), agg.samples...)
+	if len(agg.rawRefs) > 0 {
+		details["sample_refs"] = append([]string(nil), agg.rawRefs...)
+	}
+	if agg.totalDuration > 0 {
+		details["total_duration_ms"] = agg.totalDuration
+		details["max_duration_ms"] = agg.maxDuration
+		details["avg_duration_ms"] = agg.totalDuration / agg.count
+		ev.DurationMS = agg.maxDuration
+	}
+	sigHash := hashString(agg.signature)
+	if len(sigHash) > 16 {
+		sigHash = sigHash[:16]
+	}
+	ev.Details = details
+	ev.RawRef = ""
+	ev.EventID = ""
+	ev.DedupKey = fmt.Sprintf("hot.coalesced:%s:%s:%d:%s", strings.ReplaceAll(ev.Type, ".", "_"), strings.TrimSpace(ev.NodeID), agg.bucket.Unix(), sigHash)
+	ev.CorrelationID = ev.DedupKey
+}
+
+func dorisHotCoalesceSignature(ev *IngestedEvent, bucket time.Time) string {
+	parts := []string{
+		strings.TrimSpace(ev.Type),
+		bucket.Format(time.RFC3339),
+		strings.TrimSpace(ev.TenantID),
+		strings.TrimSpace(ev.NodeID),
+		strings.ToLower(strings.TrimSpace(ev.Severity)),
+		strings.ToLower(strings.TrimSpace(ev.Collector)),
+		strings.ToLower(strings.TrimSpace(ev.Parser)),
+		strings.ToLower(strings.TrimSpace(ev.ParserStatus)),
+		strings.ToLower(strings.TrimSpace(ev.ProcessName)),
+		strings.ToLower(strings.TrimSpace(ev.UserName)),
+		strings.TrimSpace(ev.SrcIP),
+		strings.TrimSpace(ev.DstIP),
+		strconv.Itoa(ev.DstPort),
+		strings.ToLower(strings.TrimSpace(ev.Protocol)),
+		strings.TrimSpace(ev.Message),
+	}
+	switch strings.TrimSpace(ev.Type) {
+	case "log.line":
+		parts = append(parts,
+			detailsString(ev.Details, "program", ""),
+			detailsString(ev.Details, "source", ""),
+			detailsString(ev.Details, "collector_type", ""),
+			detailsString(ev.Details, "hostname", ""),
+		)
+	case "web.request", "web.error":
+		for _, key := range []string{
+			"method", "path_template", "path_hash", "status_code", "status_family",
+			"webserver_kind", "app", "vhost", "socket_ip", "upstream_status",
+			"user_agent_hash", "referrer_host", "source_file", "parser_profile",
+		} {
+			parts = append(parts, detailsValueString(ev.Details, key))
+		}
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func detailsValueString(d map[string]any, key string) string {
+	if len(d) == 0 {
+		return ""
+	}
+	if v, ok := d[key]; ok && v != nil {
+		return fmt.Sprint(v)
+	}
+	return ""
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 type dorisEventRows struct {

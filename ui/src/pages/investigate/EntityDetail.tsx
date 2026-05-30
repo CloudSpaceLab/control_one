@@ -102,6 +102,10 @@ export function EntityDetail(): JSX.Element {
     enabled: !!id && safeType === 'ip' && !!currentTenantId,
   });
   const ipBehaviorFindings = ipBehaviorFindingsQ.data?.data ?? [];
+  const headerDetail = useMemo(
+    () => detailWithLifecycleEventCount(detailQ.data, accumulated),
+    [detailQ.data, accumulated],
+  );
 
   const onAction = async (action: 'block' | 'allow' | 'quarantine') => {
     if (!currentTenantId) {
@@ -149,7 +153,7 @@ export function EntityDetail(): JSX.Element {
       <EntityHeader
         type={safeType}
         id={id}
-        detail={detailQ.data}
+        detail={headerDetail}
         loading={detailQ.isLoading}
         canMutate={canMutate}
         onAction={onAction}
@@ -206,9 +210,7 @@ export function EntityDetail(): JSX.Element {
                 {accumulated.length === 0 ? (
                   <EmptyState title="No raw events" />
                 ) : (
-                  <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-[0.7rem] leading-relaxed text-text-secondary">
-                    {JSON.stringify(accumulated, null, 2)}
-                  </pre>
+                  <RawEventsTable items={accumulated} />
                 )}
               </TabsContent>
             </Tabs>
@@ -223,6 +225,98 @@ export function EntityDetail(): JSX.Element {
       </DashboardGrid>
     </div>
   );
+}
+
+function detailWithLifecycleEventCount(detail: EntityDetailData | undefined, items: LifecycleItem[]): EntityDetailData | undefined {
+  if (!detail) return detail;
+  const eventCount = items.filter((item) => item.source === 'event' || item.source === 'events' || item.source === 'telemetry').length;
+  if (eventCount <= (detail.counts?.events ?? 0)) return detail;
+  return {
+    ...detail,
+    counts: {
+      events: eventCount,
+      alerts: detail.counts?.alerts ?? 0,
+      audit: detail.counts?.audit ?? 0,
+      sessions: detail.counts?.sessions ?? 0,
+      remediations: detail.counts?.remediations ?? 0,
+    },
+  };
+}
+
+function RawEventsTable({ items }: { items: LifecycleItem[] }) {
+  return (
+    <div className="overflow-x-auto rounded-md border border-border-subtle bg-surface">
+      <table className="min-w-full divide-y divide-border-subtle text-left text-xs">
+        <thead className="bg-surface-2 text-[0.65rem] uppercase text-text-muted">
+          <tr>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">Time</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">Source</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">Severity</th>
+            <th className="px-3 py-2 font-medium">Summary</th>
+            <th className="px-3 py-2 font-medium">Evidence</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {items.map((item, index) => (
+            <tr key={`${item.raw_id ?? item.ts}-${index}`} className="align-top">
+              <td className="whitespace-nowrap px-3 py-2 font-mono text-text-secondary">{formatTs(item.ts)}</td>
+              <td className="whitespace-nowrap px-3 py-2">
+                <StatusTag tone={sourceTone(item.source)}>{item.source}</StatusTag>
+              </td>
+              <td className="whitespace-nowrap px-3 py-2">
+                {item.severity ? <StatusTag tone={severityTone(item.severity)}>{item.severity}</StatusTag> : <span className="text-text-muted">-</span>}
+              </td>
+              <td className="max-w-[28rem] px-3 py-2">
+                <div className="line-clamp-2 text-text-primary">{item.summary || item.raw_id || '-'}</div>
+                {(item.actor || item.target) && (
+                  <div className="mt-1 truncate font-mono text-[0.68rem] text-text-muted">
+                    {[item.actor, item.target].filter(Boolean).join(' -> ')}
+                  </div>
+                )}
+              </td>
+              <td className="max-w-[24rem] px-3 py-2">
+                <div className="truncate font-mono text-[0.68rem] text-text-secondary">{rawEvidenceText(item)}</div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function rawEvidenceText(item: LifecycleItem): string {
+  const pairs = metadataPairs(item.metadata);
+  const prefix = item.raw_id ? [`id=${item.raw_id}`] : [];
+  const out = [...prefix, ...pairs];
+  return out.length > 0 ? out.join('  ') : '-';
+}
+
+function metadataPairs(metadata?: Record<string, unknown>): string[] {
+  if (!metadata) return [];
+  return Object.entries(metadata)
+    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+    .slice(0, 5)
+    .map(([key, value]) => `${key}=${String(value)}`);
+}
+
+function sourceTone(source: string): StateTone {
+  switch (source) {
+    case 'alert':
+      return 'degraded';
+    case 'audit':
+    case 'event':
+    case 'events':
+    case 'telemetry':
+      return 'info';
+    case 'session':
+      return 'healthy';
+    case 'action':
+    case 'remediation':
+      return 'warning';
+    default:
+      return 'unknown';
+  }
 }
 
 function IPBehaviorSummaryPanel({

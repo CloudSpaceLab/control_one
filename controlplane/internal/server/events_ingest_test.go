@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -304,6 +305,69 @@ func TestBuildDorisEventRowsKeepsTypedFactsOutOfGenericEvents(t *testing.T) {
 	}
 	if len(rows.web) != 1 {
 		t.Fatalf("web fact rows = %d, want 1", len(rows.web))
+	}
+}
+
+func TestCoalesceDorisHotEventsGroupsRepeatedLogLinesInTwentyMinuteBucket(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	start := time.Date(2026, 5, 30, 9, 0, 0, 0, time.UTC)
+	events := make([]IngestedEvent, 0, 1200)
+	for i := 0; i < 1200; i++ {
+		ts := start.Add(time.Duration(i) * time.Second)
+		events = append(events, IngestedEvent{
+			Type:     "log.line",
+			TS:       ts,
+			TenantID: tenantID.String(),
+			NodeID:   nodeID.String(),
+			Severity: "info",
+			Message:  "same exact message",
+			Details: map[string]any{
+				"program": "nginx",
+				"source":  "/var/log/nginx/access.log",
+			},
+			DedupKey: fmt.Sprintf("log.line:%d", i),
+		})
+	}
+
+	got := coalesceDorisHotEvents(tenantID, nodeID, events)
+	if len(got) != 1 {
+		t.Fatalf("coalesced events = %d, want 1", len(got))
+	}
+	details := got[0].Details
+	if details["coalesced"] != true {
+		t.Fatalf("coalesced marker missing: %#v", details)
+	}
+	if details["coalesced_count"] != int64(1200) {
+		t.Fatalf("coalesced_count = %#v, want 1200", details["coalesced_count"])
+	}
+	if got[0].TS != start.Add(1199*time.Second) {
+		t.Fatalf("coalesced timestamp = %s, want last seen", got[0].TS)
+	}
+	if !strings.HasPrefix(got[0].DedupKey, "hot.coalesced:log_line:") || got[0].CorrelationID != got[0].DedupKey {
+		t.Fatalf("coalesced keys not deterministic: %+v", got[0])
+	}
+	samples, ok := details["sample_timestamps"].([]string)
+	if !ok || len(samples) != dorisHotCoalesceSampleLimit {
+		t.Fatalf("sample_timestamps = %#v, want capped samples", details["sample_timestamps"])
+	}
+}
+
+func TestCoalesceDorisHotEventsKeepsDifferentBucketsSeparate(t *testing.T) {
+	t.Parallel()
+
+	nodeID := uuid.New()
+	start := time.Date(2026, 5, 30, 9, 19, 59, 0, time.UTC)
+	events := []IngestedEvent{
+		{Type: "log.line", TS: start, NodeID: nodeID.String(), Severity: "info", Message: "same exact message", Details: map[string]any{"program": "nginx"}},
+		{Type: "log.line", TS: start.Add(2 * time.Second), NodeID: nodeID.String(), Severity: "info", Message: "same exact message", Details: map[string]any{"program": "nginx"}},
+	}
+
+	got := coalesceDorisHotEvents(uuid.New(), nodeID, events)
+	if len(got) != 2 {
+		t.Fatalf("coalesced events = %d, want bucket boundary to keep 2", len(got))
 	}
 }
 

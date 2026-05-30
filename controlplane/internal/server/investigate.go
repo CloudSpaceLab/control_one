@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -213,6 +214,7 @@ func (s *Server) handleEntityOverview(w http.ResponseWriter, r *http.Request, en
 		writeJSON(w, http.StatusOK, &storage.EntitySummary{Type: entityType, ID: entityID, Counts: map[string]int{}})
 		return
 	}
+	s.augmentEntitySummaryWithDorisTimeline(r.Context(), tenantID, entityType, entityID, summary)
 
 	// Tack on classification chips for IPs.
 	if entityType == EntityTypeIP {
@@ -329,6 +331,10 @@ func (s *Server) handleEntityLifecycle(w http.ResponseWriter, r *http.Request, e
 		writeJSON(w, http.StatusOK, lifecycleResponse{Items: []storage.LifecycleItem{}})
 		return
 	}
+	if lifecycleWantsEventSource(filter.Sources) {
+		items = s.mergeDorisEntityLifecycle(r.Context(), filter, items, limit+1)
+	}
+	sortLifecycleItemsDesc(items)
 
 	resp := lifecycleResponse{}
 	if len(items) > limit {
@@ -338,6 +344,191 @@ func (s *Server) handleEntityLifecycle(w http.ResponseWriter, r *http.Request, e
 	}
 	resp.Items = items
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func lifecycleWantsEventSource(sources []string) bool {
+	if len(sources) == 0 {
+		return true
+	}
+	for _, source := range sources {
+		switch strings.ToLower(strings.TrimSpace(source)) {
+		case "event", "events", "doris", "telemetry":
+			return true
+		}
+	}
+	return false
+}
+
+func sortLifecycleItemsDesc(items []storage.LifecycleItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Timestamp.Equal(items[j].Timestamp) {
+			return items[i].RawID > items[j].RawID
+		}
+		return items[i].Timestamp.After(items[j].Timestamp)
+	})
+}
+
+func (s *Server) augmentEntitySummaryWithDorisTimeline(ctx context.Context, tenantID uuid.UUID, entityType, entityID string, summary *storage.EntitySummary) {
+	if s == nil || s.dorisClient == nil || summary == nil || tenantID == uuid.Nil {
+		return
+	}
+	since, until := defaultEntityLifecycleWindow()
+	rows, err := s.dorisClient.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   tenantID.String(),
+		EntityType: entityType,
+		EntityID:   entityID,
+		Since:      since,
+		Until:      until,
+		Limit:      1000,
+	})
+	if err != nil {
+		s.logger.Debug("doris entity summary timeline unavailable", zap.Error(err), zap.String("entity_type", entityType), zap.String("entity_id", entityID))
+		return
+	}
+	if summary.Counts == nil {
+		summary.Counts = map[string]int{}
+	}
+	if len(rows) > summary.Counts["events"] {
+		summary.Counts["events"] = len(rows)
+	}
+	for _, row := range rows {
+		ts := row.TS
+		if ts.IsZero() {
+			continue
+		}
+		if summary.FirstSeen == nil || ts.Before(*summary.FirstSeen) {
+			t := ts
+			summary.FirstSeen = &t
+		}
+		if summary.LastSeen == nil || ts.After(*summary.LastSeen) {
+			t := ts
+			summary.LastSeen = &t
+		}
+	}
+}
+
+func (s *Server) mergeDorisEntityLifecycle(ctx context.Context, filter storage.LifecycleFilter, items []storage.LifecycleItem, limit int) []storage.LifecycleItem {
+	if s == nil || s.dorisClient == nil || filter.TenantID == uuid.Nil {
+		return items
+	}
+	since, until := lifecycleWindowFromFilter(filter)
+	rows, err := s.dorisClient.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   filter.TenantID.String(),
+		EntityType: filter.EntityType,
+		EntityID:   filter.EntityID,
+		Since:      since,
+		Until:      until,
+		Limit:      limit,
+	})
+	if err != nil {
+		s.logger.Debug("doris entity lifecycle unavailable", zap.Error(err), zap.String("entity_type", filter.EntityType), zap.String("entity_id", filter.EntityID))
+		return items
+	}
+	out := make([]storage.LifecycleItem, 0, len(items)+len(rows))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		key := lifecycleItemIdentity(item)
+		if key != "" {
+			seen[key] = struct{}{}
+		}
+		out = append(out, item)
+	}
+	for _, row := range rows {
+		item := dorisTimelineLifecycleItem(row)
+		key := lifecycleItemIdentity(item)
+		if key != "" {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func lifecycleWindowFromFilter(filter storage.LifecycleFilter) (time.Time, time.Time) {
+	since, until := defaultEntityLifecycleWindow()
+	if filter.Since != nil && !filter.Since.IsZero() {
+		since = filter.Since.UTC()
+	}
+	if filter.Until != nil && !filter.Until.IsZero() {
+		until = filter.Until.UTC()
+	}
+	return since, until
+}
+
+func defaultEntityLifecycleWindow() (time.Time, time.Time) {
+	now := time.Now().UTC()
+	return now.AddDate(0, 0, -30), now.Add(time.Minute)
+}
+
+func dorisTimelineLifecycleItem(row doris.TimelineItem) storage.LifecycleItem {
+	rawID := dorisTimelineLifecycleRawID(row)
+	metadata := map[string]any{
+		"source_table": row.SourceTable,
+		"event_type":   row.EventType,
+	}
+	if row.EventID != "" {
+		metadata["event_id"] = row.EventID
+	}
+	if row.RawRef != "" {
+		metadata["raw_ref"] = row.RawRef
+	}
+	if row.NodeID != "" {
+		metadata["node_id"] = row.NodeID
+	}
+	if row.CorrelationID != "" {
+		metadata["correlation_id"] = row.CorrelationID
+	}
+	if row.ConnID != "" {
+		metadata["conn_id"] = row.ConnID
+	}
+	if row.ProcessName != "" {
+		metadata["process_name"] = row.ProcessName
+	}
+	if row.SrcIP != "" {
+		metadata["src_ip"] = row.SrcIP
+	}
+	if row.DstIP != "" {
+		metadata["dst_ip"] = row.DstIP
+	}
+	if row.Path != "" {
+		metadata["path"] = row.Path
+	}
+	if row.DetailsJSON != "" {
+		metadata["details_json"] = row.DetailsJSON
+	}
+	return storage.LifecycleItem{
+		Timestamp: row.TS,
+		Source:    "event",
+		Severity:  row.Severity,
+		Actor:     row.UserName,
+		Target:    firstNonEmpty(row.DstIP, row.Path, row.ConnID),
+		Summary:   firstNonEmpty(row.Message, row.EventType),
+		RawID:     rawID,
+		Metadata:  metadata,
+	}
+}
+
+func dorisTimelineLifecycleRawID(row doris.TimelineItem) string {
+	prefix := strings.TrimSpace(row.SourceTable)
+	if prefix == "" {
+		prefix = "doris"
+	}
+	for _, value := range []string{row.EventID, row.RawRef, row.CorrelationID, row.ConnID} {
+		if value = strings.TrimSpace(value); value != "" {
+			return prefix + ":" + value
+		}
+	}
+	return fmt.Sprintf("%s:%s:%s", prefix, row.EventType, row.TS.UTC().Format(time.RFC3339Nano))
+}
+
+func lifecycleItemIdentity(item storage.LifecycleItem) string {
+	if item.RawID != "" {
+		return item.Source + "\x00" + item.RawID
+	}
+	return item.Source + "\x00" + item.Timestamp.UTC().Format(time.RFC3339Nano) + "\x00" + item.Summary
 }
 
 // ===== Related =====

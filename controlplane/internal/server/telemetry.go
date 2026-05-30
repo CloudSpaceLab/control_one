@@ -473,12 +473,22 @@ func (s *Server) persistContentPackSourceRuntimeStateFromAgentLogs(ctx context.C
 	for _, entry := range body.Entries {
 		labels = mergeStringLabels(labels, entry.Labels)
 	}
+	logSource := firstNonEmpty(firstString(body.Paths), firstString(body.JournalUnits), firstString(body.EventChannels), body.CollectorType)
+	entryProgram := ""
+	for _, entry := range body.Entries {
+		if entryProgram = strings.TrimSpace(entry.Program); entryProgram != "" {
+			break
+		}
+	}
 	sourceID := strings.TrimSpace(firstNonEmpty(
 		labels["control_one.content_pack_source_id"],
 		labels["content_pack_source_id"],
 		labels["source_id"],
 		labels["parser_profile"],
 		body.Program,
+		entryProgram,
+		logSource,
+		body.CollectorType,
 	))
 	if sourceID == "" {
 		return
@@ -505,12 +515,12 @@ func (s *Server) persistContentPackSourceRuntimeStateFromAgentLogs(ctx context.C
 		lastParsedAt = &t
 	}
 	lastHealthAt := now
-	logSource := firstNonEmpty(firstString(body.Paths), firstString(body.JournalUnits), firstString(body.EventChannels), body.CollectorType)
 	stateLabels := map[string]string{
 		"program":                           strings.TrimSpace(body.Program),
 		"collector_type":                    strings.TrimSpace(body.CollectorType),
 		"source":                            strings.TrimSpace(logSource),
 		"collect_mode":                      strings.TrimSpace(labels["control_one.collect_mode"]),
+		"control_one.metrics_semantics":     "delta",
 		contentPackCollectionOwnerLabel:     contentPackCollectionOwnerNodeAgent,
 		contentPackCollectionIdentityLabel:  contentPackAgentLogCollectionIdentity(nodeID, sourceID, labels),
 		"control_one.collection_log_source": strings.TrimSpace(logSource),
@@ -529,7 +539,7 @@ func (s *Server) persistContentPackSourceRuntimeStateFromAgentLogs(ctx context.C
 	state := contentpacks.SourceRuntimeState{
 		SourceInstanceID: contentPackProposalSourceInstanceID(nodeID, sourceID),
 		SourceID:         sourceID,
-		DisplayName:      strings.TrimSpace(firstNonEmpty(body.Program, sourceID)),
+		DisplayName:      strings.TrimSpace(firstNonEmpty(body.Program, entryProgram, sourceID)),
 		NodeID:           nodeID.String(),
 		CollectorID:      nodeID.String(),
 		CollectorMode:    contentpacks.CollectorNodeFileLog,

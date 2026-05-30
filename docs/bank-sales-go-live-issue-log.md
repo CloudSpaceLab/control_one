@@ -260,6 +260,22 @@ Storage strategy correction:
 - High-volume repeated events need deterministic coalescing: same source,
   parser, node, event type, entity, outcome, and time bucket should become
   count/range evidence with sample refs, not unbounded duplicate rows.
+- Implemented closeout: hot Doris fanout now coalesces identical `log.line`,
+  `web.request`, and `web.error` facts within deterministic 20-minute buckets.
+  If the same exact log message arrives 1,200 times in 20 minutes from the
+  same node/source/program/signature, Doris receives one hot analytic fact with
+  `coalesced_count=1200`, first/last-seen timestamps, and capped sample
+  timestamps/refs. The short-retention raw telemetry/journal path can still
+  retain individual rows for replay/evidence according to source policy, but
+  Doris no longer treats redundant messages as 1,200 independent hot facts.
+- Source-health event/parsed counters from agent log batches are now written as
+  metric deltas for source runtime state, so the UI/API totals accumulate
+  across batches instead of being overwritten by the most recent batch. Agent
+  log batches without explicit content-pack labels also fall back to entry
+  program/source/collector identity so real runtime flow is not invisible.
+- Investigate entity lifecycle now merges Doris timeline facts with Postgres
+  alerts/audit/actions and the raw-events tab renders structured rows instead
+  of an operator-hostile JSON wall.
 - Full-fidelity raw should spill to cheaper archive/object storage when a bank
   requires evidentiary retention; Doris should hold hot searchable facts and
   compressed investigation pivots.
