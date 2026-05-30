@@ -169,4 +169,11 @@ func TestDashboardAnalyticsMigrationCreatesReaderTables(t *testing.T) {
 			t.Fatalf("migration missing CREATE TABLE for %s", table)
 		}
 	}
+	if strings.Index(sql, "`timestamp`") > strings.Index(sql, "`node_id`") {
+		t.Fatalf("telemetry_logs timestamp key column should be declared before node_id")
+	}
+	securityEvents := sql[strings.Index(sql, "CREATE TABLE IF NOT EXISTS security_events"):]
+	if strings.Index(securityEvents, "`fired_at`") > strings.Index(securityEvents, "`node_id`") {
+		t.Fatalf("security_events fired_at key column should be declared before node_id")
+	}
 }

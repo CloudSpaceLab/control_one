@@ -8,8 +8,8 @@
 CREATE TABLE IF NOT EXISTS telemetry_logs (
   `event_date`   DATE        NOT NULL,
   `tenant_id`    VARCHAR(36) NOT NULL,
-  `node_id`      VARCHAR(36),
   `timestamp`    DATETIME(3) NOT NULL,
+  `node_id`      VARCHAR(36),
   `log_level`    VARCHAR(16),
   `log_source`   VARCHAR(64),
   `log_program`  VARCHAR(128),
@@ -34,8 +34,8 @@ PROPERTIES (
 CREATE TABLE IF NOT EXISTS security_events (
   `event_date`  DATE        NOT NULL,
   `tenant_id`   VARCHAR(36) NOT NULL,
-  `node_id`     VARCHAR(36),
   `fired_at`    DATETIME(3) NOT NULL,
+  `node_id`     VARCHAR(36),
   `event_type`  VARCHAR(64) NOT NULL,
   `severity`    VARCHAR(16) NOT NULL,
   `source`      VARCHAR(64) NOT NULL,
