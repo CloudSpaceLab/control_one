@@ -393,6 +393,16 @@ for i in $(seq 1 60); do
   sleep 5
 done
 
+echo ">> verifying Doris FE heap cap..."
+FE_CMDLINE=$(docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1' || true)
+case "$FE_CMDLINE" in
+  *-Xmx1500m*) ;;
+  *) echo "Doris FE heap cap is not active; expected -Xmx1500m." >&2; exit 1 ;;
+esac
+case "$FE_CMDLINE" in
+  *-Xmx8192m*) echo "Doris FE is still using the image default 8 GB heap." >&2; exit 1 ;;
+esac
+
 # Bootstrap Doris: set root password (no-op if already set), create the
 # database, register the BE node. All idempotent — `|| true` swallows the
 # "backend already added" error on re-runs.

@@ -46,6 +46,19 @@ ensure_doris_host_prereqs() {
   fi
 }
 
+doris_fe_cmdline() {
+  docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1'
+}
+
+ensure_doris_fe_heap_cap() {
+  local cmdline
+  cmdline="$(doris_fe_cmdline || true)"
+  if [[ "${cmdline}" != *"-Xmx1500m"* || "${cmdline}" == *"-Xmx8192m"* ]]; then
+    echo ">> Doris FE heap cap is not active; expected -Xmx1500m and no -Xmx8192m." >&2
+    exit 1
+  fi
+}
+
 echo ">> [1/5] Building images (this can take a few minutes the first time)..."
 docker compose build
 
@@ -71,6 +84,7 @@ for _ in {1..60}; do
   fi
   sleep 5
 done
+ensure_doris_fe_heap_cap
 # Set the root password + create database + register the BE. All idempotent
 # (BE-add silently fails on re-run; SET PASSWORD is no-op when same value).
 DORIS_PASS="${DORIS_PASSWORD:-$(grep '^DORIS_PASSWORD=' .env | cut -d= -f2-)}"

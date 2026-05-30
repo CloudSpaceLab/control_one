@@ -79,7 +79,8 @@ services:
 
   doris-fe:
     # Apache Doris frontend. Memory tuned LOW (1.5 GB) for a small box
-    # (8 GB total). FE_JVM_HEAP_SIZE overrides the default 8 GB heap.
+    # (8 GB total). Doris start_fe.sh exports JVM options from fe.conf, so the
+    # entrypoint rewrites the image default 8 GB heap before init_fe.sh runs.
     # FE/BE require IP literals in FE_SERVERS / BE_ADDR — Docker DNS
     # names won't parse — so we assign static IPs on a dedicated network.
     image: apache/doris:fe-2.1.7
@@ -87,7 +88,16 @@ services:
     environment:
       FE_SERVERS: "fe1:172.31.0.10:9010"
       FE_ID: "1"
-      JAVA_OPTS_FOR_JDK_17: "-Xmx1500m -Xms512m"
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        fe_conf=/opt/apache-doris/fe/conf/fe.conf
+        sed -i -E -e 's/-Xmx[0-9]+m/-Xmx1500m/g' -e 's/-Xms[0-9]+m/-Xms512m/g' "$fe_conf"
+        grep -q -- '-Xmx1500m' "$fe_conf"
+        exec /bin/bash /usr/local/bin/init_fe.sh "$@"
+      - init_fe_wrapper
     networks:
       doris:
         ipv4_address: 172.31.0.10
