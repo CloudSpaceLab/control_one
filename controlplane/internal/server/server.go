@@ -2510,6 +2510,27 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 	}
 }
 
+func applyDorisMigrationsWithRetry(ctx context.Context, logger *zap.Logger, client *doris.Client, opts doris.MigrationOptions) error {
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		if err := doris.ApplyMigrationsWithOptions(ctx, client, opts); err == nil {
+			if attempt > 1 {
+				logger.Info("doris migrations complete", zap.Int("attempt", attempt))
+			}
+			return nil
+		} else {
+			lastErr = err
+			logger.Warn("doris migrations not ready; retrying", zap.Int("attempt", attempt), zap.Error(err))
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("doris migrations did not complete before startup timeout: %w", lastErr)
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 // New constructs a Server with default routes and middleware.
 func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) *Server {
 	mux := http.NewServeMux()
@@ -2603,21 +2624,27 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		if derr != nil {
 			logger.Error("init doris client", zap.Error(derr))
 		} else {
-			s.dorisClient = dorisCli
-			s.dorisWriter = doris.NewWriter(dorisCli, doris.WriterOptions{
-				FlushInterval: 2 * time.Second,
-				MaxBatchRows:  5000,
-				Metrics:       doris.NewPrometheusReporter(nil),
-				OnError: func(table string, e error) {
-					logger.Warn("doris write", zap.String("table", table), zap.Error(e))
-				},
-			})
+			dorisReady := true
 			if cfg.Doris.ApplyMigrations {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				if mErr := doris.ApplyMigrationsWithOptions(ctx, dorisCli, doris.MigrationOptions{ReplicationNum: cfg.Doris.ReplicationNum}); mErr != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				if mErr := applyDorisMigrationsWithRetry(ctx, logger, dorisCli, doris.MigrationOptions{ReplicationNum: cfg.Doris.ReplicationNum}); mErr != nil {
 					logger.Error("apply doris migrations", zap.Error(mErr))
+					dorisReady = false
 				}
 				cancel()
+			}
+			if dorisReady {
+				s.dorisClient = dorisCli
+				s.dorisWriter = doris.NewWriter(dorisCli, doris.WriterOptions{
+					FlushInterval: 2 * time.Second,
+					MaxBatchRows:  5000,
+					Metrics:       doris.NewPrometheusReporter(nil),
+					OnError: func(table string, e error) {
+						logger.Warn("doris write", zap.String("table", table), zap.Error(e))
+					},
+				})
+			} else {
+				logger.Warn("doris writer disabled because migrations are not ready")
 			}
 		}
 	}
