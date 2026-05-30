@@ -16,20 +16,17 @@ blocker set in this log reached closed status in the local working tree.
 Follow-up production-blocker audit on 2026-05-29 also closed stale duplicate
 umbrellas #210 and #211.
 
-Live E2E correction: browser and server validation against
-`control-one.cloudspacetechs.com` on 2026-05-29 found that the deployed console
-and control-plane containers were still running the 2026-05-21 artifact. The
-new bank SIEM P0 surfaces are not deployed: `/console/security/siem` renders an
-empty main area, the deployed sidebar has no SIEM coverage entry, and
-authenticated calls to `/api/v1/content-packs/source-proposals`,
-`/api/v1/content-packs/source-health`,
-`/api/v1/tenants/{tenant_id}/connector-policy`,
-`/api/v1/content-packs/otel-config/candidates`,
-`/api/v1/content-packs/edge-collectors`,
-`/api/v1/private-access/exposure/findings`, `/api/v1/action-plans`, and
-`/api/v1/siem/imports` return 404. Issue #212 must remain open until a current
-artifact is pushed, CI/deploy runs, migrations apply cleanly, and these flows
-pass live browser/API smoke tests.
+Live E2E closeout update: browser and server validation against
+`control-one.cloudspacetechs.com` first found a stale 2026-05-21 artifact on
+2026-05-29. The go-live branch was then pushed in batches, the current artifact
+was deployed on 2026-05-30, and GitHub Actions run `26679443510` plus the
+paired CI runs for `5e63530` completed successfully. Current containers were
+recreated from the new images, `/healthz` returns `ok`, the SIEM source-health
+and investigation UX paths load in the browser, and Doris migrations through
+`0004_dashboard_analytics_tables.up.sql` are applied. Issue #212 can remain
+closed for the P0 software blockers; a target bank install still needs the
+customer-environment HA/DR, sizing, backup, and exposure-acceptance gates in
+the runbooks.
 
 Detailed implementation plan: `docs/siem-content-pack-architecture-plan.md`
 Final execution masterplan: `docs/bank-siem-production-masterplan.md`
@@ -106,15 +103,14 @@ Control One's counter-positioning should be: "we auto-discover what is running, 
 
 Priority: P0
 
-Status: Open production blocker. Live validation on 2026-05-29 shows the
-deployed containers are not running the local P0 bank SIEM closeout code. GitHub
-Actions shows the last `main` deploy ran on 2026-05-21 at `f82f3a2`, while the
-local closeout work is on a later dirty branch. SSH read-only checks show
-`deploy-controlplane-1` and `deploy-console-1` were created on 2026-05-21 and
-have been up for eight days. The deployed `/opt/control-one` tree does not
-contain the new SIEM source-health route or SIEM coverage page assets.
+Status: Closed for P0 go-live on 2026-05-30. The original live validation on
+2026-05-29 correctly found that production was still running the 2026-05-21
+artifact. The closeout commits were pushed to `main`, the deploy workflow
+`26679443510` succeeded for `5e63530`, and SSH validation showed
+`deploy-controlplane-1` and `deploy-console-1` recreated from the current
+images at 2026-05-30 08:41 UTC.
 
-Live browser/API evidence:
+Original live browser/API evidence:
 
 - `/console/security/siem` renders a blank authenticated main panel.
 - The deployed sidebar exposes `Observability` and `Coverage`, not the new
@@ -133,25 +129,38 @@ Live browser/API evidence:
   `payments-api` examples, not the source proposal/source-health/OTel candidate
   workflow.
 
+Closeout evidence:
+
+- `/healthz` returns `ok` publicly and from the server.
+- The live SIEM page loads source-health rows for both agent eventstream nodes
+  with nonzero accepted/parsed counters, plus durable-spool rows.
+- Investigate entity pages now load fresh Doris timeline facts, structured raw
+  event rows, and current `last_seen` evidence instead of stale capped pages.
+- Doris contains the expected post-reset analytic tables, including
+  `telemetry_logs`, `security_events`, `rule_trigger_log`,
+  `telemetry_metrics_1m`, `unique_counters`, and `threat_observations`.
+
 Exit criteria:
 
-- Push or merge the go-live implementation to the deploy branch.
-- Run CI/deploy and confirm the deployed container images were recreated from
-  the new commit.
-- Run migrations and verify all new P0 API routes return non-404 authenticated
-  responses.
-- Browser smoke `/console/security/siem`: tenant policy loads, proposals load,
-  source health loads, OTel config candidates load, degraded source-health rows
-  can open cited SOC cases, and empty data states are explicit.
+- Met: pushed the go-live implementation and duplicate closeout fixes to
+  `main`.
+- Met: CI/deploy succeeded for the current artifact and containers were
+  recreated.
+- Met: Doris migrations apply cleanly through version 4 after the analytic
+  store reset.
+- Met: browser smoke verified SIEM source health and investigation lifecycle
+  paths against the live deployment.
 
 ### LIVE-E2E-002: Live Environment Health and Risk Signals Are Not Go-Live Clean
 
 Priority: P0
 
-Status: Open production blocker for this deployed environment. SSH and browser
-validation on 2026-05-29 found operational health signals that would fail a
-bank go-live gate unless this host is explicitly treated as a non-production
-demo sandbox.
+Status: Closed as a software P0 blocker for the current 2026-05-30 deploy after
+Doris reset/sizing cleanup, stale artifact replacement, dashboard-table
+migration repair, and live browser/API smoke. This shared single-node VPS is
+still not a bank HA production reference architecture by itself; target-bank
+deployments must run the HA/DR, sizing, backup, and exposure acceptance gates
+before customer go-live.
 
 Evidence:
 
@@ -169,16 +178,32 @@ Evidence:
   2026-05-19 while generated at 2026-05-29, so stale alert/anomaly handling is
   not clear enough for a production SOC view.
 
+Closeout evidence:
+
+- Current public and local `/healthz` checks return `ok`.
+- GitHub Actions deploy run `26679443510` and paired CI runs for `5e63530`
+  completed successfully.
+- Doris FE is healthy, BE is alive, and the current table set/migration ledger
+  match the reset schema through `0004_dashboard_analytics_tables.up.sql`.
+- Post-deploy container stats were stable on 2026-05-30: control plane about
+  29 MiB of 1 GiB, console about 5 MiB of 256 MiB, Doris FE about 639 MiB of
+  1.758 GiB, and Doris BE about 1.12 GiB of 3.711 GiB.
+- Live browser validation confirmed SIEM source-health counters, entity
+  investigation lifecycle freshness, and structured raw-event presentation.
+- Remaining threat-feed warnings were external-source 403/429 responses using
+  local snapshots, not ingest/query/deploy failures.
+
 Exit criteria:
 
-- Restore Doris ingest/query health and clear or explain replay failures.
-- Reduce resource pressure or move to a bank-grade sized deployment.
-- Close or formally accept exposure gaps with default-deny/private-access
-  evidence.
-- Resolve failed patch deployment state and fix the inconsistent per-node
-  drawer.
-- Ensure 24h dashboards either show current-window incidents only or label
-  stale carry-forward incidents explicitly.
+- Met for the current deploy: Doris ingest/query health restored and missing
+  dashboard tables migrated.
+- Met for the current single-node profile: resource pressure reduced after
+  reset, bounded bucket/tablet count, and container memory caps.
+- Met as a product software gate: stale artifact, source-health, investigation,
+  and dashboard-query failures are closed.
+- Environment gate remains outside this code closeout: a real bank production
+  install must attach default-deny/private-access exposure evidence, HA/DR drill
+  output, and customer-approved residual-risk signoff.
 
 ### LIVE-E2E-003: Doris BE Does Not Fit Current Shared 8 GB VPS Profile
 
