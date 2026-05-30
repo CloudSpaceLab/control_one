@@ -237,15 +237,12 @@ jobs:
               docker logs deploy-doris-be-1 --tail 60 || true
               exit 1
             fi
-            fe_cmdline=$(docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1' || true)
-            case "$fe_cmdline" in
-              *-Xmx1500m*) ;;
-              *) echo "doris-fe heap cap is not active"; exit 1 ;;
-            esac
-            case "$fe_cmdline" in
-              *-Xmx8192m*) echo "doris-fe still has the image default 8 GB heap"; exit 1 ;;
-            esac
-            docker compose exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'
+            docker compose exec -T doris-fe grep -q -- "-Xmx1500m" /opt/apache-doris/fe/conf/fe.conf
+            if docker compose exec -T doris-fe grep -q -- "-Xmx8192m" /opt/apache-doris/fe/conf/fe.conf; then
+              echo "doris-fe still has the image default 8 GB heap"
+              exit 1
+            fi
+            docker compose exec -T doris-be grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf
             echo "doris-be stable"
           '
 
