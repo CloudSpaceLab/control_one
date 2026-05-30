@@ -26,9 +26,13 @@ const migrationDir = "migrations"
 
 type MigrationOptions struct {
 	ReplicationNum int
+	// BucketCount rewrites Doris table BUCKETS clauses for small single-node
+	// deployments. Leave zero for production defaults when ReplicationNum > 1.
+	BucketCount int
 }
 
 var addColumnIfNotExistsRE = regexp.MustCompile(`(?is)^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$`)
+var bucketsRE = regexp.MustCompile(`(?i)\bBUCKETS\s+[0-9]+`)
 
 // migrationFile is one parsed entry from the embed FS.
 type migrationFile struct {
@@ -121,6 +125,9 @@ func normalizeMigrationOptions(opts MigrationOptions) MigrationOptions {
 	if opts.ReplicationNum <= 0 {
 		opts.ReplicationNum = 1
 	}
+	if opts.BucketCount <= 0 && opts.ReplicationNum == 1 {
+		opts.BucketCount = 1
+	}
 	return opts
 }
 
@@ -192,7 +199,11 @@ func runMigration(ctx context.Context, c *Client, mig migrationFile, opts Migrat
 func renderMigrationSQL(sql string, opts MigrationOptions) string {
 	opts = normalizeMigrationOptions(opts)
 	repl := fmt.Sprintf(`"replication_num" = "%d"`, opts.ReplicationNum)
-	return strings.ReplaceAll(sql, `"replication_num" = "1"`, repl)
+	sql = strings.ReplaceAll(sql, `"replication_num" = "1"`, repl)
+	if opts.BucketCount > 0 {
+		sql = bucketsRE.ReplaceAllString(sql, fmt.Sprintf("BUCKETS %d", opts.BucketCount))
+	}
+	return sql
 }
 
 func prepareMigrationStatement(ctx context.Context, c *Client, stmt string) (string, bool, error) {

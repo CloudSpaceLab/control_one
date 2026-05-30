@@ -180,6 +180,65 @@ Exit criteria:
 - Ensure 24h dashboards either show current-window incidents only or label
   stale carry-forward incidents explicitly.
 
+### LIVE-E2E-003: Doris BE Does Not Fit Current Shared 8 GB VPS Profile
+
+Priority: P0
+
+Status: Open production blocker. Live validation after the 2026-05-30 reboot
+showed `doris_be` repeatedly OOM-killed at the container memory limit while
+recovering metadata/loading tablets. Pausing `doris-be` immediately restored
+host memory headroom and public `/healthz`/`/console/` responsiveness. Applying
+the small-node profile, FE heap cap, and THP `madvise` hotfix reduced FE memory
+and stopped the immediate restart loop, but BE still climbed back to the
+3.7 GiB cgroup ceiling, consumed most CPU, remained unreachable from FE, and
+never became an alive backend.
+
+Reset update: the Doris FE/BE analytic volumes were wiped on 2026-05-30 and
+recreated from empty volumes. The old BE volume was about 5.8 GiB and the FE
+catalog reported 1,567 tablets. Fresh startup reduced BE memory to about
+1.3 GiB and the BE reached `Alive=true`, but the freshly bootstrapped schema
+still created 263 tablets before the bucket-count migration fix below.
+
+Evidence:
+
+- Kernel OOM logs show repeated cgroup and global OOM kills of `doris_be`.
+- The live BE volume is about 5.8 GiB with roughly 400k files and 1,567 tablets.
+- FE reports the backend as `Alive=false` with connection-refused/host-unreachable
+  heartbeat errors while BE is pinned near its memory limit.
+- The host runs multiple non-Control One workloads on the same 8 GB VPS, leaving
+  no safe headroom for Doris FE/BE plus app/control-plane services.
+
+Exit criteria:
+
+- Move Doris to a dedicated, appropriately sized analytics node/cluster, or
+  explicitly downgrade this VPS to a non-Doris demo profile with Postgres/journal
+  fallback and reduced SIEM analytics claims.
+- For any single-node/demo Doris profile, recreate the analytics store with
+  much lower bucket/tablet counts and bounded retention; do not reuse the current
+  bloated tablet set on the 8 GB shared host.
+- Keep THP `madvise`, FE/BE JVM caps, swap disabled, and `vm.max_map_count`
+  enforced before Doris starts.
+- Do not mark production ready until BE reaches `Alive=true`, remains stable
+  without OOM/restarts under replay load, and live browser/API SIEM smoke passes.
+
+Storage strategy correction:
+
+- Single-node/demo Doris migrations now rewrite table bucket counts to
+  `BUCKETS 1`; HA/bank clusters with `replication_num > 1` keep the larger
+  production bucket counts.
+- Control One should not behave like a traditional raw-first SIEM. Raw log/event
+  storage should be bounded by source policy, retention class, and replay need.
+- Durable analytic storage should prefer normalized security facts, compact
+  process/connection/file/query lifecycle events, source-health counters,
+  parser-error samples, and time-windowed rollups over storing every redundant
+  line forever.
+- High-volume repeated events need deterministic coalescing: same source,
+  parser, node, event type, entity, outcome, and time bucket should become
+  count/range evidence with sample refs, not unbounded duplicate rows.
+- Full-fidelity raw should spill to cheaper archive/object storage when a bank
+  requires evidentiary retention; Doris should hold hot searchable facts and
+  compressed investigation pivots.
+
 ### C1-SIEM-001: Connector Coverage Truth Dashboard
 
 Priority: P0

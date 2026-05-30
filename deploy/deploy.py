@@ -376,7 +376,28 @@ echo ">> docker compose build"
 docker compose build
 
 echo ">> bringing up redis + doris..."
-docker compose up -d redis doris-fe doris-be
+if command -v sysctl >/dev/null 2>&1; then
+  current_map_count=$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)
+  if [ "${current_map_count:-0}" -lt 2000000 ]; then
+    sysctl -w vm.max_map_count=2000000 >/dev/null
+  fi
+  printf "vm.max_map_count=2000000\n" > /etc/sysctl.d/99-control-one-doris.conf || true
+fi
+if command -v swapon >/dev/null 2>&1 && swapon --noheadings --show | grep -q .; then
+  swapoff -a
+fi
+if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
+  printf "madvise\n" > /sys/kernel/mm/transparent_hugepage/enabled || true
+  if [ -f /sys/kernel/mm/transparent_hugepage/defrag ]; then
+    printf "madvise\n" > /sys/kernel/mm/transparent_hugepage/defrag || true
+  fi
+  cat > /etc/tmpfiles.d/control-one-thp.conf <<EOF
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
+EOF
+fi
+docker compose up -d redis
+docker compose up -d --force-recreate doris-fe doris-be
 
 echo ">> waiting for redis health..."
 for i in $(seq 1 30); do
@@ -402,6 +423,7 @@ esac
 case "$FE_CMDLINE" in
   *-Xmx8192m*) echo "Doris FE is still using the image default 8 GB heap." >&2; exit 1 ;;
 esac
+docker compose exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'
 
 # Bootstrap Doris: set root password (no-op if already set), create the
 # database, register the BE node. All idempotent — `|| true` swallows the

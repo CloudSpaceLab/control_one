@@ -123,6 +123,16 @@ jobs:
             if command -v swapon >/dev/null 2>&1 && swapon --noheadings --show | grep -q .; then
               swapoff -a
             fi
+            if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
+              printf "madvise\n" > /sys/kernel/mm/transparent_hugepage/enabled || true
+              if [ -f /sys/kernel/mm/transparent_hugepage/defrag ]; then
+                printf "madvise\n" > /sys/kernel/mm/transparent_hugepage/defrag || true
+              fi
+              cat > /etc/tmpfiles.d/control-one-thp.conf <<EOF
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
+EOF
+            fi
           '
 
       - name: Upload Go binaries
@@ -184,7 +194,7 @@ jobs:
               -f Dockerfile.controlplane.prebuilt .
             docker build -t controlone/console:latest \
               -f Dockerfile.console.prebuilt .
-            docker compose up -d doris-fe doris-be
+            docker compose up -d --force-recreate doris-fe doris-be
             docker compose up -d --force-recreate --no-deps controlplane console
           "
 
@@ -227,6 +237,15 @@ jobs:
               docker logs deploy-doris-be-1 --tail 60 || true
               exit 1
             fi
+            fe_cmdline=$(docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1' || true)
+            case "$fe_cmdline" in
+              *-Xmx1500m*) ;;
+              *) echo "doris-fe heap cap is not active"; exit 1 ;;
+            esac
+            case "$fe_cmdline" in
+              *-Xmx8192m*) echo "doris-fe still has the image default 8 GB heap"; exit 1 ;;
+            esac
+            docker compose exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'
             echo "doris-be stable"
           '
 

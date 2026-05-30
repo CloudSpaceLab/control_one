@@ -26,6 +26,19 @@ hostctl() {
   fi
 }
 
+write_sysfs_value() {
+  local path="$1"
+  local value="$2"
+  if [[ ! -w "${path}" && "${EUID:-$(id -u)}" -ne 0 && ! -x "$(command -v sudo 2>/dev/null || true)" ]]; then
+    return 0
+  fi
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    printf '%s\n' "${value}" > "${path}" 2>/dev/null || true
+  elif command -v sudo >/dev/null 2>&1; then
+    printf '%s\n' "${value}" | sudo tee "${path}" >/dev/null 2>&1 || true
+  fi
+}
+
 ensure_doris_host_prereqs() {
   if command -v sysctl >/dev/null 2>&1; then
     current_map_count="$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)"
@@ -44,10 +57,36 @@ ensure_doris_host_prereqs() {
     echo ">> Disabling active host swap for Doris BE..."
     hostctl swapoff -a
   fi
+
+  if [[ -f /sys/kernel/mm/transparent_hugepage/enabled ]]; then
+    echo ">> Setting transparent huge pages to madvise for Doris BE..."
+    write_sysfs_value /sys/kernel/mm/transparent_hugepage/enabled madvise
+    if [[ -f /sys/kernel/mm/transparent_hugepage/defrag ]]; then
+      write_sysfs_value /sys/kernel/mm/transparent_hugepage/defrag madvise
+    fi
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      cat > /etc/tmpfiles.d/control-one-thp.conf <<'EOF'
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
+EOF
+    elif command -v sudo >/dev/null 2>&1; then
+      cat <<'EOF' | sudo tee /etc/tmpfiles.d/control-one-thp.conf >/dev/null
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
+EOF
+    fi
+  fi
 }
 
 doris_fe_cmdline() {
   docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1'
+}
+
+ensure_doris_be_heap_cap() {
+  if ! docker compose exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'; then
+    echo ">> Doris BE heap cap is not active; expected -Xmx512m in be.conf." >&2
+    exit 1
+  fi
 }
 
 ensure_doris_fe_heap_cap() {
@@ -76,7 +115,7 @@ done
 
 echo ">> [3/5] Bootstrapping Doris (FE + BE)..."
 ensure_doris_host_prereqs
-docker compose up -d doris-fe doris-be
+docker compose up -d --force-recreate doris-fe doris-be
 # Wait for FE health endpoint, then bootstrap database + add backend.
 for _ in {1..60}; do
   if docker compose exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health >/dev/null 2>&1; then
@@ -85,6 +124,7 @@ for _ in {1..60}; do
   sleep 5
 done
 ensure_doris_fe_heap_cap
+ensure_doris_be_heap_cap
 # Set the root password + create database + register the BE. All idempotent
 # (BE-add silently fails on re-run; SET PASSWORD is no-op when same value).
 DORIS_PASS="${DORIS_PASSWORD:-$(grep '^DORIS_PASSWORD=' .env | cut -d= -f2-)}"

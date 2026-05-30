@@ -93,9 +93,8 @@ services:
       - -lc
       - |
         set -euo pipefail
-        fe_conf=/opt/apache-doris/fe/conf/fe.conf
-        sed -i -E -e 's/-Xmx[0-9]+m/-Xmx1500m/g' -e 's/-Xms[0-9]+m/-Xms512m/g' "$fe_conf"
-        grep -q -- '-Xmx1500m' "$fe_conf"
+        sed -i -E -e 's/-Xmx[0-9]+m/-Xmx1500m/g' -e 's/-Xms[0-9]+m/-Xms512m/g' /opt/apache-doris/fe/conf/fe.conf
+        grep -q -- '-Xmx1500m' /opt/apache-doris/fe/conf/fe.conf
         exec /bin/bash /usr/local/bin/init_fe.sh "$@"
       - init_fe_wrapper
     networks:
@@ -135,13 +134,21 @@ services:
     environment:
       FE_SERVERS: "fe1:172.31.0.10:9010"
       BE_ADDR: "172.31.0.20:9050"
-      JAVA_OPTS_FOR_JDK_17: "-Xmx512m -Xms128m"
       # init_be.sh registers BE by running `mysql -uroot ...` against FE
       # on port 9030. FE root has DORIS_PASSWORD set, so without this
       # env the mysql client auths with no password and the entrypoint
       # loops forever printing "register is failed, wait next~". MYSQL_PWD
       # is the documented mysql-client env for this exact case.
       MYSQL_PWD: "${DORIS_PASSWORD}"
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        sed -i -E 's/-Xmx[0-9]+m/-Xmx512m/g' /opt/apache-doris/be/conf/be.conf
+        grep -q -- '-Xmx512m' /opt/apache-doris/be/conf/be.conf
+        exec /bin/bash /usr/local/bin/entry_point.sh "$@"
+      - entry_point_wrapper
     ulimits:
       nofile:
         soft: 655350
