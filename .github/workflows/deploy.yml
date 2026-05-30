@@ -128,10 +128,10 @@ jobs:
               if [ -f /sys/kernel/mm/transparent_hugepage/defrag ]; then
                 printf "madvise\n" > /sys/kernel/mm/transparent_hugepage/defrag || true
               fi
-              cat > /etc/tmpfiles.d/control-one-thp.conf <<EOF
-w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
-w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
-EOF
+              printf "%s\n%s\n" \
+                "w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise" \
+                "w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise" \
+                > /etc/tmpfiles.d/control-one-thp.conf
             fi
           '
 
