@@ -2525,7 +2525,58 @@ func (f *fakeStore) UpdateRollout(_ context.Context, id uuid.UUID, params storag
 }
 
 func (f *fakeStore) ListTelemetryMetrics(_ context.Context, filter storage.TelemetryMetricFilter, limit, offset int) ([]storage.TelemetryMetric, int, error) {
-	return nil, 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]storage.TelemetryMetric, 0, len(f.telemetryMetrics))
+	for _, row := range f.telemetryMetrics {
+		if filter.TenantID != uuid.Nil && row.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.NodeID != uuid.Nil && row.NodeID != filter.NodeID {
+			continue
+		}
+		if strings.TrimSpace(filter.MetricName) != "" && row.MetricName != strings.TrimSpace(filter.MetricName) {
+			continue
+		}
+		if filter.Since != nil && row.Timestamp.Before(*filter.Since) {
+			continue
+		}
+		if filter.Until != nil && row.Timestamp.After(*filter.Until) {
+			continue
+		}
+		metric := storage.TelemetryMetric{
+			ID:          uuid.New(),
+			TenantID:    row.TenantID,
+			NodeID:      row.NodeID,
+			MetricName:  row.MetricName,
+			MetricValue: row.MetricValue,
+			Labels:      cloneStringMapContentPack(row.Labels),
+			Timestamp:   row.Timestamp,
+			CreatedAt:   row.Timestamp,
+		}
+		if row.MetricUnit != nil {
+			metric.MetricUnit = sql.NullString{String: *row.MetricUnit, Valid: true}
+		}
+		if metric.Timestamp.IsZero() {
+			metric.Timestamp = time.Now().UTC()
+			metric.CreatedAt = metric.Timestamp
+		}
+		out = append(out, metric)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Timestamp.After(out[j].Timestamp)
+	})
+	total := len(out)
+	if offset > total {
+		return []storage.TelemetryMetric{}, total, nil
+	}
+	if offset > 0 {
+		out = out[offset:]
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
 }
 
 func (f *fakeStore) ListTelemetryLogs(_ context.Context, filter storage.TelemetryLogFilter, limit, offset int) ([]storage.TelemetryLog, int, error) {
@@ -5523,8 +5574,22 @@ func (f *fakeStore) GetNodeHealthScore(_ context.Context, id uuid.UUID) (*storag
 	}
 	return nil, nil
 }
-func (f *fakeStore) UpsertNodeHealthScore(_ context.Context, _ storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error) {
-	return nil, nil
+func (f *fakeStore) UpsertNodeHealthScore(_ context.Context, params storage.UpsertNodeHealthScoreParams) (*storage.NodeHealthScore, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nodeHealthScores == nil {
+		f.nodeHealthScores = map[uuid.UUID]storage.NodeHealthScore{}
+	}
+	score := storage.NodeHealthScore{
+		NodeID:     params.NodeID,
+		Score:      params.Score,
+		RiskLevel:  params.RiskLevel,
+		Components: params.Components,
+		ComputedAt: time.Now().UTC(),
+	}
+	f.nodeHealthScores[params.NodeID] = score
+	copy := score
+	return &copy, nil
 }
 func (f *fakeStore) ListAtRiskNodes(_ context.Context, _ uuid.UUID, _ int) ([]storage.AtRiskNodeRow, error) {
 	return nil, nil

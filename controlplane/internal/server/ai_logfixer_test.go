@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,75 @@ func TestBuildAILogFixerTriggerBundleFromWebRequest5xx(t *testing.T) {
 	}
 	if err := bundle.Request.Validate(); err != nil {
 		t.Fatalf("request should be contract-valid: %v", err)
+	}
+}
+
+func TestBuildAILogFixerTriggerBundleRecognizesLaravelConfigCacheDrift(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	ev := IngestedEvent{
+		Type:        "log.line",
+		TS:          time.Date(2026, 5, 30, 9, 0, 0, 0, time.UTC),
+		NodeID:      nodeID.String(),
+		EventID:     "evt-laravel-db-credential-cache",
+		Severity:    "error",
+		Message:     "Laravel production.ERROR: SQLSTATE[HY000] [1045] Access denied for user 'bank_app'@'10.0.3.14'",
+		DedupKey:    "laravel-db-auth-failure",
+		Collector:   "filelog",
+		ProcessName: "php-fpm",
+		Details: map[string]any{
+			"service":      "core-banking",
+			"environment":  "prod",
+			"server_group": "app",
+			"framework":    "laravel",
+			"log_path":     "storage/logs/laravel.log",
+		},
+	}
+
+	bundle, ok := buildAILogFixerTriggerBundle(tenantID, uuid.Nil, ev)
+	if !ok {
+		t.Fatal("expected Laravel database credential log to trigger AI LogFixer")
+	}
+	if bundle.Diagnosis.Confidence < 0.8 {
+		t.Fatalf("confidence = %.2f, want Laravel-specific confidence", bundle.Diagnosis.Confidence)
+	}
+	if !strings.Contains(strings.ToLower(bundle.Diagnosis.SuspectedRootCause), "config/cache") {
+		t.Fatalf("root cause did not identify cached config drift: %s", bundle.Diagnosis.SuspectedRootCause)
+	}
+	if !bundle.RemediationPlan.ApprovalRequired {
+		t.Fatalf("Laravel temporary fix must require approval: %+v", bundle.RemediationPlan)
+	}
+	var hasApply bool
+	for _, action := range bundle.RemediationPlan.NextActions {
+		if action.ActionType == JobTypeAILogFixerApply {
+			hasApply = true
+			break
+		}
+	}
+	if !hasApply {
+		t.Fatalf("remediation plan missing approved apply next action: %+v", bundle.RemediationPlan.NextActions)
+	}
+	var hasArtisanStep bool
+	for _, rec := range bundle.Diagnosis.Recommendations {
+		for _, step := range rec.Steps {
+			if strings.Contains(step, "php artisan config:clear") {
+				hasArtisanStep = true
+				break
+			}
+		}
+	}
+	if !hasArtisanStep {
+		t.Fatalf("recommendations missing Laravel artisan cache refresh: %+v", bundle.Diagnosis.Recommendations)
+	}
+	var hasLaravelTag bool
+	for _, tag := range bundle.Request.SignalFingerprint.Tags {
+		if tag == "framework:laravel" {
+			hasLaravelTag = true
+			break
+		}
+	}
+	if !hasLaravelTag {
+		t.Fatalf("request tags missing Laravel marker: %+v", bundle.Request.SignalFingerprint.Tags)
 	}
 }
 

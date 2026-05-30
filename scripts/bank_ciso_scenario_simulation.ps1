@@ -85,6 +85,18 @@ $scenarios = @(
                 Run = "Test(ContentPackSourceHealthAPIListsCollectorEvidence|ContentPackSourceHealthInvestigationCreatesSOCCase|HeartbeatProjectsAgentSpoolBackpressureToSourceHealth|CoalesceDorisHotEventsGroupsRepeatedLogLinesInTwentyMinuteBucket|LogIngestProjectsAgentLocalSourceRuntimeState)$"
             }
         )
+    },
+    [ordered]@{
+        Id = "06"
+        Name = "Laravel log growth and disk-pressure temporary fix"
+        CisoQuestion = "Can we predict disk pressure from runaway Laravel logs and stage a safe temporary repair before the server fails?"
+        ExpectedResponse = "Score a 20 point disk-usage surge before the disk is critical, recognize stale Laravel DB config/cache drift from error logs, and require approval before dispatching the temporary cache refresh/reload runbook."
+        Suites = @(
+            [ordered]@{
+                Package = "./controlplane/internal/server"
+                Run = "Test(HealthPredictScoresDiskUsageSurgeBeforeCritical|BuildAILogFixerTriggerBundleRecognizesLaravelConfigCacheDrift|LaravelTemporaryFixScriptRequiresApprovalBeforeExecution)$"
+            }
+        )
     }
 )
 

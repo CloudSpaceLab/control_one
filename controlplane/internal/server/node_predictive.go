@@ -98,6 +98,13 @@ func healthSignalsCatalog() []healthSignal {
 			optional:   true,
 		},
 		{
+			metricName: metrics.MetricDiskUsagePercent,
+			penalty:    30,
+			primaryKey: "disk_usage_surge",
+			trigger:    triggerDiskUsageSurge(20, 70, 90),
+			optional:   true,
+		},
+		{
 			metricName: metrics.MetricHostIowaitPct,
 			penalty:    15,
 			primaryKey: "iowait_sustained",
@@ -138,6 +145,23 @@ func healthSignalsCatalog() []healthSignal {
 		// baseline — it doesn't fit the static-threshold trigger shape.
 		// It is also optional because it only emits when ICMP probes are
 		// configured and the host can run ping.
+	}
+}
+
+func triggerDiskUsageSurge(minDelta, warningThreshold, criticalThreshold float64) func([]storage.TelemetryMetric) bool {
+	return func(samples []storage.TelemetryMetric) bool {
+		if len(samples) == 0 {
+			return false
+		}
+		latest := samples[0].MetricValue
+		if latest >= criticalThreshold {
+			return true
+		}
+		if latest < warningThreshold || len(samples) < 2 {
+			return false
+		}
+		oldest := samples[len(samples)-1].MetricValue
+		return latest-oldest >= minDelta
 	}
 }
 

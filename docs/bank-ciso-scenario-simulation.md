@@ -1,6 +1,6 @@
 # Bank CISO Scenario Simulation
 
-This is a repeatable, code-backed demo path for five scenarios a bank CISO will
+This is a repeatable, code-backed demo path for six scenarios a bank CISO will
 usually care about. It does not mock a slide narrative; it runs focused tests
 against the implemented parser, detection, source-health, exposure,
 vulnerability, patch, approval, and investigation code paths.
@@ -166,6 +166,39 @@ Runner tests:
 - `TestHeartbeatProjectsAgentSpoolBackpressureToSourceHealth`
 - `TestLogIngestProjectsAgentLocalSourceRuntimeState`
 - `TestCoalesceDorisHotEventsGroupsRepeatedLogLinesInTwentyMinuteBucket`
+
+## 6. Laravel Log Growth And Disk-Pressure Temporary Fix
+
+CISO question: Can we predict disk pressure from runaway Laravel logs and stage
+a safe temporary repair before the server fails?
+
+Simulation response:
+
+- Scores a sudden disk usage move, for example 55 percent to 76 percent, as a
+  predictive health risk before the server reaches a critical disk threshold.
+- Recognizes Laravel database credential failures that are consistent with
+  stale cached configuration after a credential rotation.
+- Produces a temporary cache refresh/reload runbook with `php artisan
+  config:clear`, `cache:clear`, `config:cache`, runtime reload, and post-fix log
+  verification steps.
+- Requires approval before dispatching a privileged temporary repair script, so
+  the system can propose and stage the fix without silently mutating a bank
+  production application.
+
+Primary code evidence:
+
+- `controlplane/internal/server/node_predictive.go`
+- `controlplane/internal/server/ai_logfixer.go`
+- `controlplane/internal/server/remediation.go`
+- `controlplane/internal/server/node_predictive_test.go`
+- `controlplane/internal/server/ai_logfixer_test.go`
+- `controlplane/internal/server/remediation_execute_test.go`
+
+Runner tests:
+
+- `TestHealthPredictScoresDiskUsageSurgeBeforeCritical`
+- `TestBuildAILogFixerTriggerBundleRecognizesLaravelConfigCacheDrift`
+- `TestLaravelTemporaryFixScriptRequiresApprovalBeforeExecution`
 
 ## Demo Framing
 

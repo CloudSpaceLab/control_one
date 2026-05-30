@@ -387,12 +387,6 @@ func buildAILogFixerTriggerBundle(tenantID, fallbackNodeID uuid.UUID, ev Ingeste
 		ExternalRefs:      externalRefs,
 		CreatedAt:         now,
 	}
-	if err := diagnosis.Validate(); err != nil {
-		diagnosis.UserMessage += " Contract validation warning: " + err.Error()
-	}
-	if err := plan.Validate(); err != nil {
-		plan.UserMessage += " Contract validation warning: " + err.Error()
-	}
 	request := contractsv1.InvestigationRequest{
 		ID:              requestID,
 		ContractVersion: contractsv1.ContractVersion,
@@ -416,6 +410,15 @@ func buildAILogFixerTriggerBundle(tenantID, fallbackNodeID uuid.UUID, ev Ingeste
 		ExternalRefs:  externalRefs,
 		CreatedAt:     now,
 	}
+	if isLaravelConfigCacheDriftSignal(ev, serviceKey) {
+		applyLaravelConfigCacheRunbook(&diagnosis, &plan, &request, serviceKey, now)
+	}
+	if err := diagnosis.Validate(); err != nil {
+		diagnosis.UserMessage += " Contract validation warning: " + err.Error()
+	}
+	if err := plan.Validate(); err != nil {
+		plan.UserMessage += " Contract validation warning: " + err.Error()
+	}
 	if err := request.Validate(); err != nil {
 		request.UserMessage += " Contract validation warning: " + err.Error()
 	}
@@ -435,6 +438,79 @@ func buildAILogFixerTriggerBundle(tenantID, fallbackNodeID uuid.UUID, ev Ingeste
 		ProposalApprovalKind: approvalKind,
 		ProposalApprovalPath: approvalPath,
 	}, true
+}
+
+func isLaravelConfigCacheDriftSignal(ev IngestedEvent, serviceKey string) bool {
+	text := strings.ToLower(strings.Join([]string{
+		serviceKey,
+		ev.Message,
+		ev.ProcessName,
+		detailsString(ev.Details, "service", ""),
+		detailsString(ev.Details, "app", ""),
+		detailsString(ev.Details, "application", ""),
+		detailsString(ev.Details, "framework", ""),
+		detailsString(ev.Details, "program", ""),
+		detailsString(ev.Details, "source", ""),
+	}, " "))
+	if !strings.Contains(text, "laravel") {
+		return false
+	}
+	dbCredentialFailure := strings.Contains(text, "sqlstate") ||
+		strings.Contains(text, "access denied for user") ||
+		strings.Contains(text, "authentication failed") ||
+		strings.Contains(text, "database credentials") ||
+		strings.Contains(text, "could not connect") ||
+		strings.Contains(text, "connection refused")
+	return dbCredentialFailure
+}
+
+func applyLaravelConfigCacheRunbook(diagnosis *contractsv1.DiagnosisResult, plan *contractsv1.RemediationPlan, request *contractsv1.InvestigationRequest, serviceKey string, now time.Time) {
+	if diagnosis == nil || plan == nil || request == nil {
+		return
+	}
+	diagnosis.Confidence = 0.82
+	diagnosis.Summary = "Control One detected Laravel database credential failures consistent with stale cached configuration."
+	diagnosis.SuspectedRootCause = "Laravel config/cache likely still contains the previous database credential after an application credential reconfiguration."
+	diagnosis.DisplayStatus = "Laravel cache refresh candidate"
+	diagnosis.UserMessage = "Review and approve a temporary Laravel cache refresh/reload plan before disk pressure from repeated error logs becomes critical."
+	diagnosis.Recommendations = append([]contractsv1.RunbookRecommendation{{
+		ID:         "rec_laravel_refresh_config_cache",
+		Title:      "Refresh Laravel config/cache and reload PHP runtime",
+		Reason:     "Laravel logs indicate database authentication failures after credential changes; stale cached config commonly keeps the old value active until artisan cache commands and PHP runtime reload are performed.",
+		Confidence: 0.82,
+		Steps: []string{
+			"Verify the active secret or .env database credential matches the approved change ticket.",
+			"Run php artisan config:clear, php artisan cache:clear, and php artisan config:cache from the Laravel release directory.",
+			"Reload the PHP runtime or queue workers using the approved service manager command.",
+			"Tail storage/logs/laravel.log and confirm the database authentication error rate stops increasing.",
+			"Rotate or truncate only the runaway application log after evidence capture if disk free space remains low.",
+		},
+		RequiredPermissions: []string{"control_one.operator", "application.release_operator"},
+		EstimatedRisk:       contractsv1.SafetyReadOnly,
+		RequiresApproval:    true,
+	}}, diagnosis.Recommendations...)
+	plan.Summary = "Prepare a policy-gated temporary Laravel cache refresh for " + serviceKey + "."
+	plan.ApprovalRequired = true
+	plan.FixPreview = contractsv1.DiffPreview{
+		Before: "Laravel continues using stale cached DB credentials and emits repeated database errors into application logs.",
+		After:  "After approval, the app cache/config cache is refreshed, PHP/runtime workers are reloaded, and runaway log growth is verified as stopped.",
+	}
+	plan.DisplayStatus = "Awaiting approval for temporary Laravel cache refresh"
+	plan.UserMessage = "This is a temporary production-safe runbook candidate; execution requires an approved AI LogFixer apply job or an approved remediation script bound to the target node."
+	plan.NextActions = []contractsv1.NextAction{
+		{ID: "next_run_plan", Label: "Run dry-run plan", ActionType: JobTypeAILogFixerPlan, Description: "Collect service-local evidence and render the exact Laravel cache refresh command plan.", Enabled: true},
+		{ID: "next_request_apply", Label: "Request approved apply", ActionType: JobTypeAILogFixerApply, Description: "After review, dispatch the policy-approved temporary cache refresh and reload action.", Enabled: true},
+	}
+	plan.TimelineEvents = append(plan.TimelineEvents, contractsv1.TimelineEvent{
+		ID:        "tl_laravel_cache_candidate_" + hashString(serviceKey + now.String())[:12],
+		Type:      "remediation.temporary_fix_candidate",
+		Message:   "Laravel cache refresh/reload candidate attached to AI LogFixer plan.",
+		Severity:  "warning",
+		Timestamp: now,
+	})
+	request.Symptom = "Laravel database credential cache drift causing repeated application errors"
+	request.SignalFingerprint.Symptom = request.Symptom
+	request.SignalFingerprint.Tags = sanitizeStringSlice(append(request.SignalFingerprint.Tags, "framework:laravel", "temporary_fix:config_cache_refresh"), 12)
 }
 
 func aiLogFixerTriggerReason(ev IngestedEvent) (bool, string, string) {

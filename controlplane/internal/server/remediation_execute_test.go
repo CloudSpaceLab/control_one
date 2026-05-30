@@ -178,6 +178,89 @@ func TestExecuteRemediationScriptRequiresApprovalForMutableScript(t *testing.T) 
 	}
 }
 
+func TestLaravelTemporaryFixScriptRequiresApprovalBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	scriptID := uuid.New()
+	script := &storage.RemediationScript{
+		ID:         scriptID,
+		RuleID:     "laravel.temporary-cache-refresh",
+		Platform:   "linux",
+		ScriptType: "bash",
+		ScriptContent: `set -e
+cd /srv/bank-laravel
+php artisan config:clear
+php artisan cache:clear
+php artisan config:cache
+systemctl reload php8.2-fpm`,
+		Enabled: true,
+		Metadata: map[string]any{
+			"action_type":       "laravel.temporary_cache_refresh",
+			"safety_class":      "privileged",
+			"requires_approval": true,
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	store := &remediationTestStore{
+		scripts:     map[string]*storage.RemediationScript{script.RuleID: script},
+		scriptsByID: map[uuid.UUID]*storage.RemediationScript{scriptID: script},
+	}
+	store.nodes = []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "bank-laravel-app-01"}}
+	store.jobs = make(map[uuid.UUID]*storage.Job)
+	store.events = make(map[uuid.UUID][]storage.JobEvent)
+	store.remediationApprovals = map[uuid.UUID]storage.RemediationApproval{}
+	queue := &trackingQueue{}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:        config.HTTPConfig{Address: ":0"},
+		Remediation: config.RemediationConfig{MaxConcurrentPerTenant: 10, LeaseTTL: time.Minute},
+	}, store, queue)
+	srv.auditAsync = false
+
+	body, _ := json.Marshal(executeRemediationScriptRequest{NodeID: nodeID.String(), Reason: "stale Laravel DB credentials are growing logs"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remediation/scripts/"+scriptID.String()+"/execute", bytes.NewReader(body))
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: uuid.New().String(), Roles: []string{roleOperator}})
+	rec := httptest.NewRecorder()
+
+	srv.handleExecuteRemediationScript(rec, req, scriptID)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	var resp executeRemediationScriptResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "approval_required" || resp.SafetyClass != "privileged" || !resp.RequiresApproval {
+		t.Fatalf("unexpected approval response: %#v", resp)
+	}
+	if len(store.jobs) != 0 {
+		t.Fatalf("approval-required Laravel temporary fix created %d jobs", len(store.jobs))
+	}
+	queue.mu.Lock()
+	if len(queue.tasks) != 0 {
+		t.Fatalf("approval-required Laravel temporary fix queued %d tasks", len(queue.tasks))
+	}
+	queue.mu.Unlock()
+	if len(store.remediationApprovals) != 1 {
+		t.Fatalf("expected one approval, got %d", len(store.remediationApprovals))
+	}
+	for _, approval := range store.remediationApprovals {
+		var payload map[string]any
+		if err := json.Unmarshal(approval.TaskPayload, &payload); err != nil {
+			t.Fatalf("decode approval payload: %v", err)
+		}
+		if payload["action_type"] != "laravel.temporary_cache_refresh" || payload["safety_class"] != "privileged" {
+			t.Fatalf("approval payload lost Laravel action metadata: %#v", payload)
+		}
+		if _, ok := payload["script_content"]; ok {
+			t.Fatalf("approval payload must not persist script content before approval: %#v", payload)
+		}
+	}
+}
+
 func TestApproveRemediationApprovalRejectsChangedScriptArtifact(t *testing.T) {
 	t.Parallel()
 
