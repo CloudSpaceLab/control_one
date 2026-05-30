@@ -397,7 +397,7 @@ w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
 EOF
 fi
 docker compose up -d redis
-docker compose up -d --force-recreate doris-fe doris-be
+docker compose up -d doris-fe doris-be
 
 echo ">> waiting for redis health..."
 for i in $(seq 1 30); do

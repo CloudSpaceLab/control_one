@@ -194,7 +194,7 @@ jobs:
               -f Dockerfile.controlplane.prebuilt .
             docker build -t controlone/console:latest \
               -f Dockerfile.console.prebuilt .
-            docker compose up -d --force-recreate doris-fe doris-be
+            docker compose up -d doris-fe doris-be
             docker compose up -d --force-recreate --no-deps controlplane console
           "
 

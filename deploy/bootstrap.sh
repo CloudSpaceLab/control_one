@@ -115,7 +115,7 @@ done
 
 echo ">> [3/5] Bootstrapping Doris (FE + BE)..."
 ensure_doris_host_prereqs
-docker compose up -d --force-recreate doris-fe doris-be
+docker compose up -d doris-fe doris-be
 # Wait for FE health endpoint, then bootstrap database + add backend.
 for _ in {1..60}; do
   if docker compose exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health >/dev/null 2>&1; then

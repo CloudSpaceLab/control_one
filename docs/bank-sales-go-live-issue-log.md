@@ -218,6 +218,9 @@ Exit criteria:
   bloated tablet set on the 8 GB shared host.
 - Keep THP `madvise`, FE/BE JVM caps, swap disabled, and `vm.max_map_count`
   enforced before Doris starts.
+- Do not force-recreate Doris FE/BE during routine app deploys; the single-node
+  FE must either keep its running container/volume pair or be reset deliberately
+  as a full FE/BE analytic-store wipe.
 - Do not mark production ready until BE reaches `Alive=true`, remains stable
   without OOM/restarts under replay load, and live browser/API SIEM smoke passes.
 
