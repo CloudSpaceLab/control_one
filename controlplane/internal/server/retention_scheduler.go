@@ -22,6 +22,8 @@ type RetentionScheduler struct {
 	logger *zap.Logger
 }
 
+const eventIngestJournalRetention = 24 * time.Hour
+
 // NewRetentionScheduler creates a scheduler bound to the given server.
 func NewRetentionScheduler(s *Server) *RetentionScheduler {
 	return &RetentionScheduler{
@@ -74,6 +76,7 @@ func (rs *RetentionScheduler) runOnce() {
 	}
 	totalLogs := int64(0)
 	totalMetrics := int64(0)
+	totalEventIngestBatches := int64(0)
 	for _, t := range tenants {
 		n, err := rs.server.store.DeleteExpiredTelemetry(ctx, t.ID, "logs")
 		if err != nil {
@@ -93,9 +96,15 @@ func (rs *RetentionScheduler) runOnce() {
 	if m, err := rs.server.store.DeleteExpiredTelemetry(ctx, uuid.Nil, "metrics"); err == nil {
 		totalMetrics += m
 	}
+	if n, err := rs.server.store.PruneAcceptedEventIngestBatches(ctx, eventIngestJournalRetention); err != nil {
+		rs.logger.Warn("prune event ingest replay journal", zap.Duration("retention", eventIngestJournalRetention), zap.Error(err))
+	} else {
+		totalEventIngestBatches = n
+	}
 	rs.logger.Info("retention sweep complete",
 		zap.Int64("rows_logs", totalLogs),
 		zap.Int64("rows_metrics", totalMetrics),
+		zap.Int64("event_ingest_batches", totalEventIngestBatches),
 		zap.Int("tenants", len(tenants)),
 	)
 }

@@ -299,6 +299,8 @@ func TestBuildEventQuerySQLRequiresTenantAndUsesBoundFilters(t *testing.T) {
 	}
 	for _, want := range []string{
 		"FROM events",
+		"FROM process_connections",
+		"FROM web_requests",
 		"tenant_id = ?",
 		"node_id = ?",
 		"correlation_id = ?",
@@ -311,11 +313,28 @@ func TestBuildEventQuerySQLRequiresTenantAndUsesBoundFilters(t *testing.T) {
 			t.Fatalf("query missing %q:\n%s", want, query)
 		}
 	}
-	if !strings.Contains(countQuery, "SELECT COUNT(*) FROM events WHERE tenant_id = ?") {
+	if !strings.Contains(countQuery, "SELECT COUNT(*) FROM (") || !strings.Contains(countQuery, "FROM process_connections") || !strings.Contains(countQuery, "WHERE tenant_id = ?") {
 		t.Fatalf("count query missing tenant predicate: %s", countQuery)
 	}
 	if len(args) != 8 {
 		t.Fatalf("args len = %d, want 8 (%+v)", len(args), args)
+	}
+}
+
+func TestBuildEventQuerySQLSearchUsesPortableUnionPredicate(t *testing.T) {
+	query, _, args, err := buildEventQuerySQL(EventQueryParams{
+		TenantID: "tenant-1",
+		Search:   "Nginx Error",
+		Limit:    25,
+	})
+	if err != nil {
+		t.Fatalf("build event query: %v", err)
+	}
+	if !strings.Contains(query, "LOWER(message) LIKE ?") {
+		t.Fatalf("query should search the normalized union message column:\n%s", query)
+	}
+	if len(args) != 2 || args[1] != "%nginx error%" {
+		t.Fatalf("search args = %#v, want lowercase LIKE pattern", args)
 	}
 }
 

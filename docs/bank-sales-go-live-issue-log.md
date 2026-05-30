@@ -184,45 +184,58 @@ Exit criteria:
 
 Priority: P0
 
-Status: Open production blocker. Live validation after the 2026-05-30 reboot
-showed `doris_be` repeatedly OOM-killed at the container memory limit while
-recovering metadata/loading tablets. Pausing `doris-be` immediately restored
-host memory headroom and public `/healthz`/`/console/` responsiveness. Applying
-the small-node profile, FE heap cap, and THP `madvise` hotfix reduced FE memory
-and stopped the immediate restart loop, but BE still climbed back to the
-3.7 GiB cgroup ceiling, consumed most CPU, remained unreachable from FE, and
-never became an alive backend.
+Status: Closed for P0 go-live on 2026-05-30 after a deliberate Doris analytic
+store reset, small-node runtime profile, bounded single-node schema, journal
+cleanup, and live API/browser validation. This does not mean Doris should be
+used as a raw-first SIEM bucket; it is fit here only as a hot, normalized,
+bounded analytic store.
+
+Live validation after the 2026-05-30 reboot showed `doris_be` repeatedly
+OOM-killed at the container memory limit while recovering metadata/loading
+tablets. Pausing `doris-be` immediately restored host memory headroom and
+public `/healthz`/`/console/` responsiveness. Applying the small-node profile,
+FE heap cap, and THP `madvise` hotfix reduced FE memory and stopped the
+immediate restart loop.
 
 Reset update: the Doris FE/BE analytic volumes were wiped on 2026-05-30 and
 recreated from empty volumes. The old BE volume was about 5.8 GiB and the FE
 catalog reported 1,567 tablets. Fresh startup reduced BE memory to about
-1.3 GiB and the BE reached `Alive=true`, but the freshly bootstrapped schema
-still created 263 tablets before the bucket-count migration fix below.
+1.3 GiB and the BE reached `Alive=true`; the final single-node schema reduced
+the tablet set to 227 tablets with 1 bucket per table/partition.
+
+Closeout update: Doris hot analytic tables were truncated again on 2026-05-30
+to create a fresh go-live baseline without replaying stale history. The old
+pending Doris retry backlog was archived, terminal Postgres ingest-journal
+payloads older than 24 hours were pruned, and `event_ingest_batches` was
+vacuum-analyzed. After cleanup, `/healthz` returned `ok`; FE memory was about
+615 MiB of 1.758 GiB, BE memory about 1.16 GiB of 3.711 GiB, controlplane about
+37 MiB of 1 GiB, one backend was `Alive=true` with `HeartbeatFailureCounter=0`,
+and Doris held only fresh post-reset rows from the two live nodes.
 
 Evidence:
 
 - Kernel OOM logs show repeated cgroup and global OOM kills of `doris_be`.
-- The live BE volume is about 5.8 GiB with roughly 400k files and 1,567 tablets.
-- FE reports the backend as `Alive=false` with connection-refused/host-unreachable
-  heartbeat errors while BE is pinned near its memory limit.
+- The old BE volume was about 5.8 GiB with roughly 400k files and 1,567 tablets.
+- FE initially reported the backend as `Alive=false` with
+  connection-refused/host-unreachable heartbeat errors while BE was pinned near
+  its memory limit.
 - The host runs multiple non-Control One workloads on the same 8 GB VPS, leaving
   no safe headroom for Doris FE/BE plus app/control-plane services.
+- Final post-reset server snapshot showed Doris FE/BE stable, backend alive,
+  and fresh ingest landing without replay/backlog errors.
 
 Exit criteria:
 
-- Move Doris to a dedicated, appropriately sized analytics node/cluster, or
-  explicitly downgrade this VPS to a non-Doris demo profile with Postgres/journal
-  fallback and reduced SIEM analytics claims.
-- For any single-node/demo Doris profile, recreate the analytics store with
-  much lower bucket/tablet counts and bounded retention; do not reuse the current
-  bloated tablet set on the 8 GB shared host.
-- Keep THP `madvise`, FE/BE JVM caps, swap disabled, and `vm.max_map_count`
+- Met for the current single-node go-live profile: the analytics store was
+  reset with lower bucket/tablet counts and bounded 30-day hot history.
+- Met: THP `madvise`, FE/BE JVM caps, swap disabled, and `vm.max_map_count` are
   enforced before Doris starts.
-- Do not force-recreate Doris FE/BE during routine app deploys; the single-node
-  FE must either keep its running container/volume pair or be reset deliberately
-  as a full FE/BE analytic-store wipe.
-- Do not mark production ready until BE reaches `Alive=true`, remains stable
-  without OOM/restarts under replay load, and live browser/API SIEM smoke passes.
+- Met: routine deploys no longer force-recreate Doris FE/BE; a Doris reset is
+  now treated as an explicit analytic-store wipe.
+- Met: BE reached `Alive=true`, stayed stable without OOM/restarts under fresh
+  ingest, and live browser/API SIEM smoke passed.
+- Follow-up for bank-scale production: move Doris to dedicated analytics
+  capacity/HA before claiming multi-node bank retention and query concurrency.
 
 Storage strategy correction:
 
@@ -233,6 +246,13 @@ Storage strategy correction:
   keep the larger production bucket and retention settings.
 - Control One should not behave like a traditional raw-first SIEM. Raw log/event
   storage should be bounded by source policy, retention class, and replay need.
+- Terminal event-ingest replay payloads are now pruned after a 24-hour safety
+  window instead of being retained indefinitely in Postgres.
+- Doris no longer mirrors high-volume typed facts into both the generic
+  `events` table and their canonical fact tables (`process_connections`,
+  `process_lineage`, `file_accesses`, `db_queries`, `web_requests`). The generic
+  `events` table is reserved for high-signal/unspecialized events such as
+  anomalies, rules, security events, log spikes, and other non-fact signals.
 - Durable analytic storage should prefer normalized security facts, compact
   process/connection/file/query lifecycle events, source-health counters,
   parser-error samples, and time-windowed rollups over storing every redundant

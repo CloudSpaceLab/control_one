@@ -696,7 +696,9 @@ func buildDorisEventRows(tenantID, nodeID uuid.UUID, events []IngestedEvent) dor
 	rows := dorisEventRows{events: make([]map[string]any, 0, len(events))}
 	for i := range events {
 		ev := &events[i]
-		rows.events = append(rows.events, eventToDorisRow(tenantID, nodeID, ev))
+		if shouldStoreGenericDorisEvent(ev.Type) {
+			rows.events = append(rows.events, eventToDorisRow(tenantID, nodeID, ev))
+		}
 		switch ev.Type {
 		case "conn.open", "conn.close", "conn.state_change", "conn.summary":
 			rows.conns = append(rows.conns, eventToConnRow(tenantID, nodeID, ev))
@@ -711,6 +713,19 @@ func buildDorisEventRows(tenantID, nodeID uuid.UUID, events []IngestedEvent) dor
 		}
 	}
 	return rows
+}
+
+func shouldStoreGenericDorisEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "conn.open", "conn.close", "conn.state_change", "conn.summary",
+		"proc.exec", "proc.exit",
+		"file.open", "file.read.summary", "file.write.summary", "file.unlink", "file.rename",
+		"db.query", "db.query.long_running",
+		"web.request", "web.error":
+		return false
+	default:
+		return true
+	}
 }
 
 type dorisEventTableRows struct {

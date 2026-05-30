@@ -348,8 +348,9 @@ func (s *Store) ListEventIngestBacklogBatches(ctx context.Context, tenantID uuid
 	return out, rows.Err()
 }
 
-// PruneAcceptedEventIngestBatches deletes batch rows older than retain whose
-// status is 'accepted'. Returns the number of rows deleted.
+// PruneAcceptedEventIngestBatches deletes terminal replay-journal rows older
+// than retain. Accepted rows already completed fan-out; archived rows were
+// explicitly taken out of the retry path by an operator/reset workflow.
 func (s *Store) PruneAcceptedEventIngestBatches(ctx context.Context, retain time.Duration) (int64, error) {
 	if s.db == nil {
 		return 0, errors.New("store database not initialized")
@@ -357,7 +358,7 @@ func (s *Store) PruneAcceptedEventIngestBatches(ctx context.Context, retain time
 	cutoff := time.Now().UTC().Add(-retain)
 	res, err := s.db.ExecContext(ctx, `
 		DELETE FROM event_ingest_batches
-		WHERE status = 'accepted' AND received_at < $1
+		WHERE status IN ('accepted', 'archived') AND received_at < $1
 	`, cutoff)
 	if err != nil {
 		return 0, err

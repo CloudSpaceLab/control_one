@@ -266,6 +266,47 @@ func TestIngestedEventContractV2MetadataPreserved(t *testing.T) {
 	}
 }
 
+func TestBuildDorisEventRowsKeepsTypedFactsOutOfGenericEvents(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	rows := buildDorisEventRows(tenantID, nodeID, []IngestedEvent{
+		{
+			Type:     "conn.summary",
+			TS:       time.Date(2026, 5, 30, 7, 0, 0, 0, time.UTC),
+			ConnID:   "conn-1",
+			DedupKey: "conn.summary:conn-1",
+		},
+		{
+			Type:     "web.request",
+			TS:       time.Date(2026, 5, 30, 7, 1, 0, 0, time.UTC),
+			SrcIP:    "203.0.113.20",
+			DedupKey: "web.request:1",
+			Details:  map[string]any{"status_code": float64(200)},
+		},
+		{
+			Type:     "rule.trigger",
+			TS:       time.Date(2026, 5, 30, 7, 2, 0, 0, time.UTC),
+			Severity: "high",
+			Message:  "suspicious activity",
+		},
+	})
+
+	if len(rows.events) != 1 {
+		t.Fatalf("generic events rows = %d, want only high-signal row", len(rows.events))
+	}
+	if got := rows.events[0]["event_type"]; got != "rule.trigger" {
+		t.Fatalf("generic event type = %v, want rule.trigger", got)
+	}
+	if len(rows.conns) != 1 {
+		t.Fatalf("connection fact rows = %d, want 1", len(rows.conns))
+	}
+	if len(rows.web) != 1 {
+		t.Fatalf("web fact rows = %d, want 1", len(rows.web))
+	}
+}
+
 func TestHandleEventsIngestReturnsReplayReceiptForDuplicateKey(t *testing.T) {
 	t.Parallel()
 

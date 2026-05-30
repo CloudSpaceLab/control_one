@@ -514,7 +514,8 @@ type EventRow struct {
 	DedupKey      string
 }
 
-// QueryEvents returns normalized rows from events ordered newest first.
+// QueryEvents returns normalized rows from the generic signal table plus
+// canonical typed fact tables, ordered newest first.
 func (c *Client) QueryEvents(ctx context.Context, p EventQueryParams) ([]EventRow, int, error) {
 	if c == nil || c.db == nil {
 		return nil, 0, fmt.Errorf("doris client unavailable")
@@ -551,6 +552,7 @@ func buildEventQuerySQL(p EventQueryParams) (string, string, []any, error) {
 	if err != nil {
 		return "", "", nil, err
 	}
+	unionSQL := eventQueryUnionSQL()
 	selectSQL := `
 		SELECT schema_version, event_id, raw_ref, collector, parser, parser_status,
 		       tenant_id, ts, node_id, event_type, severity, correlation_id, conn_id,
@@ -558,12 +560,77 @@ func buildEventQuerySQL(p EventQueryParams) (string, string, []any, error) {
 		       src_ip, src_port, dst_ip, dst_port, protocol,
 		       bytes_in, bytes_out, duration_ms, rule_id, threat_feed, threat_score,
 		       message, details_json, dedup_key
-		FROM events
+		FROM (` + unionSQL + `) normalized_events
 		WHERE ` + where + `
 		ORDER BY ts DESC`
 	query := withLimitOffset(selectSQL, clampEventQueryLimit(p.Limit), maxInt(p.Offset, 0))
-	countQuery := "SELECT COUNT(*) FROM events WHERE " + where
+	countQuery := "SELECT COUNT(*) FROM (" + unionSQL + ") normalized_events WHERE " + where
 	return query, countQuery, args, nil
+}
+
+func eventQueryUnionSQL() string {
+	return `
+		SELECT schema_version, event_id, raw_ref, collector, parser, parser_status,
+		       tenant_id, ts, node_id, event_type, severity, correlation_id, conn_id,
+		       bastion_session_id, pid, process_name, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, duration_ms, rule_id, threat_feed, threat_score,
+		       message, details_json, dedup_key
+		FROM events
+		UNION ALL
+		SELECT 1 AS schema_version, '' AS event_id, '' AS raw_ref, '' AS collector,
+		       '' AS parser, '' AS parser_status,
+		       tenant_id, started_at AS ts, node_id,
+		       CONCAT('conn.', COALESCE(NULLIF(direction, ''), 'flow')) AS event_type,
+		       CASE WHEN threat_match THEN 'high' ELSE 'info' END AS severity,
+		       correlation_id, conn_id, bastion_session_id, pid, process_name, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, duration_ms, '' AS rule_id, threat_feed, threat_score,
+		       CONCAT(COALESCE(process_name, ''), ' ', COALESCE(src_ip, ''), ' -> ', COALESCE(dst_ip, '')) AS message,
+		       '' AS details_json, conn_id AS dedup_key
+		FROM process_connections
+		UNION ALL
+		SELECT 1 AS schema_version, '' AS event_id, '' AS raw_ref, '' AS collector,
+		       '' AS parser, '' AS parser_status,
+		       tenant_id, observed_at AS ts, node_id,
+		       CASE WHEN exited_at IS NULL THEN 'proc.exec' ELSE 'proc.exit' END AS event_type,
+		       'info' AS severity,
+		       '' AS correlation_id, '' AS conn_id, '' AS bastion_session_id,
+		       pid, process_name, user_name,
+		       '' AS src_ip, 0 AS src_port, '' AS dst_ip, 0 AS dst_port, '' AS protocol,
+		       0 AS bytes_in, 0 AS bytes_out, 0 AS duration_ms, '' AS rule_id, '' AS threat_feed, 0 AS threat_score,
+		       CONCAT(COALESCE(process_name, ''), ' ', COALESCE(cmdline, '')) AS message,
+		       '' AS details_json, '' AS dedup_key
+		FROM process_lineage
+		UNION ALL
+		SELECT 1 AS schema_version, '' AS event_id, '' AS raw_ref, '' AS collector,
+		       '' AS parser, '' AS parser_status,
+		       tenant_id, ts, node_id, CONCAT('file.', op) AS event_type, 'info' AS severity,
+		       correlation_id, conn_id, '' AS bastion_session_id, pid, process_name, user_name,
+		       '' AS src_ip, 0 AS src_port, '' AS dst_ip, 0 AS dst_port, '' AS protocol,
+		       bytes AS bytes_in, 0 AS bytes_out, 0 AS duration_ms, '' AS rule_id, '' AS threat_feed, 0 AS threat_score,
+		       path AS message, '' AS details_json, '' AS dedup_key
+		FROM file_accesses
+		UNION ALL
+		SELECT 1 AS schema_version, '' AS event_id, '' AS raw_ref, '' AS collector,
+		       '' AS parser, '' AS parser_status,
+		       tenant_id, ts, node_id, 'db.query' AS event_type, 'info' AS severity,
+		       correlation_id, conn_id, '' AS bastion_session_id, pid, '' AS process_name, user_name,
+		       src_ip, 0 AS src_port, '' AS dst_ip, 0 AS dst_port, '' AS protocol,
+		       0 AS bytes_in, exec_time_ms AS bytes_out, exec_time_ms AS duration_ms,
+		       '' AS rule_id, '' AS threat_feed, 0 AS threat_score,
+		       query_text AS message, '' AS details_json, query_hash AS dedup_key
+		FROM db_queries
+		UNION ALL
+		SELECT schema_version, event_id, raw_ref, collector, parser, parser_status,
+		       tenant_id, ts, node_id,
+		       CASE WHEN status_code >= 500 THEN 'web.error' ELSE 'web.request' END AS event_type,
+		       CASE WHEN status_code >= 500 THEN 'high' WHEN status_code >= 400 THEN 'medium' ELSE 'info' END AS severity,
+		       correlation_id, '' AS conn_id, '' AS bastion_session_id, 0 AS pid, webserver_kind AS process_name, '' AS user_name,
+		       src_ip, 0 AS src_port, socket_ip AS dst_ip, 0 AS dst_port, '' AS protocol,
+		       bytes_in, bytes_out, duration_ms, '' AS rule_id, '' AS threat_feed, reputation_score AS threat_score,
+		       message, details_json, event_id AS dedup_key
+		FROM web_requests`
 }
 
 func scanEventRow(s rowScanner) (EventRow, error) {
@@ -997,8 +1064,8 @@ func eventWhereClause(p EventQueryParams, timeColumn string) (string, []any, err
 		where = append(where, "event_type IN ("+strings.Join(placeholders, ", ")+")")
 	}
 	if v := strings.TrimSpace(p.Search); v != "" {
-		where = append(where, "message MATCH_ANY ?")
-		args = append(args, v)
+		where = append(where, "LOWER(message) LIKE ?")
+		args = append(args, "%"+strings.ToLower(v)+"%")
 	}
 	return strings.Join(where, " AND "), args, nil
 }
