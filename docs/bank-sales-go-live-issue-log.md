@@ -662,6 +662,14 @@ Live audit evidence from 2026-06-06:
   deployed small-mode pass show `analytics backend selected` with `mode=small`;
   this new SQLite-backed slice still needs post-deploy live API/browser
   verification before it is counted as live evidence.
+- 2026-06-07 architecture decision: keep the demo host on the hyper-light
+  Redis+SQLite small profile and treat Doris as opt-in OLAP only. The intended
+  integration is additive: Postgres remains canonical, Redis stays
+  TTL-bounded/non-evidentiary, SQLite/WAL serves recent evidence-grade analytic
+  reads, and Doris adapters are preserved behind the same API contracts for
+  larger fleets. Remaining small-mode work is to route event query, timeline,
+  entity enrichment, log-volume, and admin health copy away from Doris-specific
+  assumptions without removing UI features.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and

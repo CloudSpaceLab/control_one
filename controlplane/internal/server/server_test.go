@@ -1008,7 +1008,7 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 		},
 		userList: []storage.User{targetUser},
 		userRoles: map[uuid.UUID][]string{
-			targetUserID: {"viewer"},
+			targetUserID: {"viewer", "viewer"},
 		},
 		overrideRoles: map[uuid.UUID][]string{},
 		rolesCatalog: []storage.Role{
@@ -1067,6 +1067,13 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 		if !found {
 			t.Fatalf("expected response to include user %s, got %+v", targetUserID, resp.Data)
 		}
+		for _, u := range resp.Data {
+			if u.ID == targetUserID.String() {
+				if len(u.Roles) != 1 || u.Roles[0] != "viewer" {
+					t.Fatalf("expected duplicate effective roles to be deduped, got %+v", u.Roles)
+				}
+			}
+		}
 	})
 
 	t.Run("get user details", func(t *testing.T) {
@@ -1079,7 +1086,7 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 			t.Fatalf("decode user response: %v", err)
 		}
 		if len(resp.Roles) != 1 || resp.Roles[0] != "viewer" {
-			t.Fatalf("expected viewer role, got %+v", resp.Roles)
+			t.Fatalf("expected duplicate effective roles to be deduped, got %+v", resp.Roles)
 		}
 		if resp.Email == nil || *resp.Email != "sample@example.com" {
 			t.Fatalf("expected stored email propagated, got %+v", resp.Email)

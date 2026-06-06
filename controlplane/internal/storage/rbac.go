@@ -330,11 +330,15 @@ func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, 
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-        SELECT r.name
-        FROM user_roles ur
-        JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = $1
-        ORDER BY r.name
+        SELECT name
+        FROM (
+            SELECT LOWER(r.name) AS sort_key, MIN(r.name) AS name
+            FROM user_roles ur
+            JOIN roles r ON ur.role_id = r.id
+            WHERE ur.user_id = $1
+            GROUP BY LOWER(r.name)
+        ) deduped
+        ORDER BY sort_key
     `, userID)
 	if err != nil {
 		return nil, fmt.Errorf("query user roles: %w", err)

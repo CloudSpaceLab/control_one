@@ -1530,9 +1530,30 @@ func userResponseFromModel(u storage.User, roles []string) userResponse {
 		ExternalID:  u.ExternalID,
 		DisplayName: nullStringPtr(u.DisplayName),
 		Email:       nullStringPtr(u.Email),
-		Roles:       append([]string{}, roles...),
+		Roles:       uniqueRoleNames(roles),
 		CreatedAt:   u.CreatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+func uniqueRoleNames(roles []string) []string {
+	if len(roles) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(roles))
+	seen := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		trimmed := strings.TrimSpace(role)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 type roleResponse struct {

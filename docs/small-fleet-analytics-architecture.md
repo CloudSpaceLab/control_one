@@ -32,6 +32,46 @@ Use a local analytic backend for demo, branch, and small-fleet deployments:
 This is not a feature reduction. The API contract and UI surfaces stay intact;
 only the backing analytic store changes for small fleets.
 
+## 2026-06-07 Demo Architecture Decision
+
+For the current demo and any small fleet that fits this envelope, make
+`analytics.mode=small` the default operating model and keep Doris stopped. The
+runtime should have only four data services in the hot path:
+
+- Postgres for canonical product state, ingest journal, rollups, audit, cases,
+  and replay.
+- Redis for bounded hot state: worker/asynq queues, live counters, dashboard
+  cache, writer lag, and short streams.
+- SQLite/WAL inside the controlplane container for recent indexed analytic read
+  models.
+- Optional object/archive storage for long-retention exports when a customer
+  asks for more evidence history than the local SQLite window should hold.
+
+Doris remains a supported `analytics.mode=olap` backend for larger fleets, but
+it should be treated as a dedicated-capacity warehouse, not a dependency of the
+demo host. The small-fleet path must be additive: replace backend adapters and
+query sources, do not hide or delete connection, investigation, timeline,
+search, dashboard, or export features.
+
+The practical integration shape is:
+
+1. Ingest succeeds only after Postgres writes the replay journal.
+2. Local fanout updates Postgres rollups, live event subscribers, detections,
+   and the SQLite analytic read model.
+3. Redis receives TTL-bound counters/streams for low-latency UI freshness.
+4. API handlers read Redis first where freshness matters, then SQLite for
+   evidence-grade recent facts, then Postgres rollups as the durable fallback.
+5. Doris adapters remain behind the same analytic interface for OLAP mode and
+   migration/dual-read tests.
+
+Current code is already past the first slice: `controlplane/internal/smallanalytics`
+uses the pure-Go SQLite driver in WAL mode, writes `process_connections`, and
+serves connection list, connection detail, and top talkers in small mode. The
+next demo-hardening work should focus on the remaining Doris-named read paths:
+event query, timeline build, entity enrichment, log-volume buckets, and admin
+health copy that still talks about `doris_status` even when the active backend
+is local analytics.
+
 ## Current Implementation State
 
 The repo is already partially aligned with this decision:
