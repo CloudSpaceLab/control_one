@@ -139,6 +139,19 @@ Closeout evidence:
 - Doris contains the expected post-reset analytic tables, including
   `telemetry_logs`, `security_events`, `rule_trigger_log`,
   `telemetry_metrics_1m`, `unique_counters`, and `threat_observations`.
+- 2026-06-06 follow-up: commits `50e8b56` and `ad27e24` replaced the
+  Observability guided setup mock path with live tenant signals from nodes,
+  coverage matrix rows, webserver inventory, and content-pack source health,
+  then cleaned duplicate webserver labels such as `nginx nginx` and duplicate
+  version prefixes.
+- Deploy `27069180934` and CI runs `27069180933` plus `27069180929` attempt 2
+  succeeded for `ad27e24`. A production browser reload of
+  `/console/observability?verify=ad27e24` showed the `default live stack`, no
+  `payments-api` copy, no reference-blueprint fallback, nginx/webserver rows,
+  and parser/source-health rows. The page called `/api/v1/nodes`,
+  `/api/v1/coverage/matrix`, `/api/v1/webservers`, and
+  `/api/v1/content-packs/source-health` with HTTP 200 responses and no console
+  warnings/errors; only Cloudflare RUM aborts were observed.
 
 Exit criteria:
 
@@ -150,6 +163,8 @@ Exit criteria:
   store reset.
 - Met: browser smoke verified SIEM source health and investigation lifecycle
   paths against the live deployment.
+- Met: browser smoke verified the Observability page is now backed by live
+  fleet/source-health/coverage signals instead of hard-coded demo data.
 
 ### LIVE-E2E-002: Live Environment Health and Risk Signals Are Not Go-Live Clean
 
