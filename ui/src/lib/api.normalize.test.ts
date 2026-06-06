@@ -127,3 +127,34 @@ describe('APIClient.listTopTalkers', () => {
     ]);
   });
 });
+
+describe('APIClient.listConnectionsDetailed', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('preserves small analytics source metadata while normalizing rows', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [],
+          source: 'small-analytics-pending',
+          guardrails: ['raw connection rows require the small analytics store or OLAP mode'],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    const result = await client.listConnectionsDetailed({ tenantId: 'tenant-1', externalOnly: true });
+    const [url] = fetchMock.mock.calls[0];
+
+    expect(url).toBe('https://cp.example.com/api/v1/connections?tenant_id=tenant-1&external_only=true');
+    expect(result).toEqual({
+      rows: [],
+      source: 'small-analytics-pending',
+      guardrails: ['raw connection rows require the small analytics store or OLAP mode'],
+    });
+  });
+});

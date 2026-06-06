@@ -4559,6 +4559,12 @@ export class APIClient {
   async listConnections(
     params: ListConnectionsParams = {},
   ): Promise<ConnectionRow[]> {
+    return (await this.listConnectionsDetailed(params)).rows;
+  }
+
+  async listConnectionsDetailed(
+    params: ListConnectionsParams = {},
+  ): Promise<ConnectionListResult> {
     const search = new URLSearchParams();
     if (params.tenantId) search.set("tenant_id", params.tenantId);
     if (params.ip) search.set("ip", params.ip);
@@ -4573,10 +4579,18 @@ export class APIClient {
       search.set("limit", String(params.limit));
     const q = search.toString();
     const resp = await this.request<
-      Array<ConnectionRow | RawConnectionRow> | { data: Array<ConnectionRow | RawConnectionRow> }
+      Array<ConnectionRow | RawConnectionRow> | {
+        data?: Array<ConnectionRow | RawConnectionRow>;
+        source?: string;
+        guardrails?: string[];
+      }
     >(`/api/v1/connections${q ? `?${q}` : ""}`);
     const rows = Array.isArray(resp) ? resp : resp.data ?? [];
-    return rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id));
+    return {
+      rows: rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id)),
+      source: Array.isArray(resp) ? undefined : resp.source,
+      guardrails: Array.isArray(resp) ? [] : resp.guardrails ?? [],
+    };
   }
 
   async getConnectionDetail(
@@ -6255,6 +6269,12 @@ export interface ConnectionRow {
 }
 
 type RawConnectionRow = Partial<ConnectionRow> & Record<string, unknown>;
+
+export interface ConnectionListResult {
+  rows: ConnectionRow[];
+  source?: string;
+  guardrails: string[];
+}
 
 interface RawConnectionDetail {
   connection: ConnectionRow | RawConnectionRow;

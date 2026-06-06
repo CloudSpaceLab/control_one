@@ -32,6 +32,7 @@ import { useNode } from '@/hooks/useNode';
 import { useToast } from '@/providers/ToastProvider';
 import type {
   AgentUpdateResponse,
+  ConnectionRow,
   Job,
   NodeHealthRiskLevel,
   TelemetryMetric,
@@ -518,11 +519,12 @@ function ActivityTab({ nodeId, tenantId }: ActivityProps) {
 
 function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string }) {
   const api = useApiClient();
-  const [rows, setRows] = useState<import('@/lib/api').ConnectionRow[]>([]);
+  const [rows, setRows] = useState<ConnectionRow[]>([]);
   const [countries, setCountries] = useState<Record<string, string>>({});
   const [openConnId, setOpenConnId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [analyticsNotice, setAnalyticsNotice] = useState<string | null>(null);
   const [listeningOnly, setListeningOnly] = useState(false);
   const [showInternal, setShowInternal] = useState(false);
 
@@ -532,7 +534,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
     setLoading(true);
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const resp = await api.listConnections({
+      const resp = await api.listConnectionsDetailed({
         tenantId,
         nodeId,
         openOnly: false,
@@ -540,10 +542,16 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         since,
         limit: 250,
       });
-      setRows(resp);
+      setRows(resp.rows);
+      setAnalyticsNotice(
+        resp.source === 'small-analytics-pending'
+          ? 'Connection-level history is awaiting the small analytics store; fleet health and rollups remain live.'
+          : null,
+      );
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'load failed');
+      setAnalyticsNotice(null);
     } finally {
       setLoading(false);
     }
@@ -561,7 +569,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
   // but some agent versions report them via the absence of a peer or via
   // an explicit state field. Accept any reasonable signal so the toggle
   // stays useful across heterogeneous fleets.
-  const isListening = useCallback((row: import('@/lib/api').ConnectionRow): boolean => {
+  const isListening = useCallback((row: ConnectionRow): boolean => {
     return isListeningConnection(row);
   }, []);
 
@@ -632,7 +640,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
 
   // Bandwidth: byte rate across the lifetime of the connection. For rows
   // without a duration we cannot compute a rate, so expose the total instead.
-  const bandwidthFor = useCallback((row: import('@/lib/api').ConnectionRow): { label: string; tooltip: string } => {
+  const bandwidthFor = useCallback((row: ConnectionRow): { label: string; tooltip: string } => {
     const total = (row.bytes_in ?? 0) + (row.bytes_out ?? 0);
     const ms = row.duration_ms ?? 0;
     if (ms <= 0) {
@@ -645,7 +653,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
 
   // Status derived from closed_reason and ended_at. Summary rows can have an
   // ended_at because it marks the observation window, not necessarily a close.
-  const statusFor = useCallback((row: import('@/lib/api').ConnectionRow): { label: string; tone: StateTone } => {
+  const statusFor = useCallback((row: ConnectionRow): { label: string; tone: StateTone } => {
     const reason = (row.closed_reason ?? '').toLowerCase();
     if (!reason) return row.ended_at ? { label: 'Observed', tone: 'unknown' } : { label: 'Open', tone: 'healthy' };
     if (reason === 'normal') return { label: 'Closed (normal)', tone: 'unknown' };
@@ -709,6 +717,11 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         }
       >
         {err && <Alert variant="critical">{err}</Alert>}
+        {analyticsNotice && (
+          <Alert variant="info" title="Connection history pending" className="mb-3">
+            {analyticsNotice}
+          </Alert>
+        )}
         {!listeningOnly && !showInternal && (
           <p className="mb-3 text-xs text-text-muted">
             {externalHiddenRows > 0

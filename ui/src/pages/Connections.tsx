@@ -30,6 +30,7 @@ export function Connections(): JSX.Element {
   const [rows, setRows] = useState<ConnectionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [analyticsNotice, setAnalyticsNotice] = useState<string | null>(null);
   const [ipInput, setIpInput] = useState('');
   const [threatOnly, setThreatOnly] = useState(false);
   const [showInternal, setShowInternal] = useState(false);
@@ -39,20 +40,27 @@ export function Connections(): JSX.Element {
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
       setRows([]);
+      setAnalyticsNotice(null);
       return;
     }
     setLoading(true);
     try {
-      const resp = await client.listConnections({
+      const resp = await client.listConnectionsDetailed({
         tenantId: currentTenantId,
         since,
         externalOnly: !showInternal,
         limit: 500,
       });
-      setRows(resp);
+      setRows(resp.rows);
+      setAnalyticsNotice(
+        resp.source === 'small-analytics-pending'
+          ? 'Connection-level history is awaiting the small analytics store; fleet health and rollups remain live.'
+          : null,
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'load failed');
+      setAnalyticsNotice(null);
     } finally {
       setLoading(false);
     }
@@ -245,6 +253,11 @@ export function Connections(): JSX.Element {
       </form>
 
       {error && <Alert variant="critical">{error}</Alert>}
+      {analyticsNotice && (
+        <Alert variant="info" title="Connection history pending">
+          {analyticsNotice}
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <KpiTile label="Total bytes out" value={formatBytes(totals.bytesOut)} tone="warning" />
