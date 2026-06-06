@@ -192,7 +192,7 @@ auth:
 	}
 }
 
-func TestLoadBindsSmallAnalyticsDorisEnvOverrides(t *testing.T) {
+func TestLoadBindsProductionEnvOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "controlplane.yaml")
 	config := `http:
   address: ":0"
@@ -214,6 +214,9 @@ doris:
 	t.Setenv("CONTROLPLANE_ANALYTICS_MODE", "small")
 	t.Setenv("CONTROLPLANE_DORIS_ENABLED", "false")
 	t.Setenv("CONTROLPLANE_DORIS_APPLY_MIGRATIONS", "false")
+	t.Setenv("CONTROLPLANE_WORKER_BACKEND", "asynq")
+	t.Setenv("CONTROLPLANE_WORKER_ASYNQ_ENABLED", "true")
+	t.Setenv("CONTROLPLANE_WORKER_ASYNQ_REDIS_ADDRESS", "redis:6379")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -227,6 +230,15 @@ doris:
 	}
 	if cfg.Doris.ApplyMigrations {
 		t.Fatal("Doris.ApplyMigrations = true, want false from env override")
+	}
+	if cfg.Worker.Backend != "asynq" {
+		t.Fatalf("Worker.Backend = %q, want asynq", cfg.Worker.Backend)
+	}
+	if !cfg.Worker.Asynq.Enabled {
+		t.Fatal("Worker.Asynq.Enabled = false, want true")
+	}
+	if cfg.Worker.Asynq.RedisAddress != "redis:6379" {
+		t.Fatalf("Worker.Asynq.RedisAddress = %q, want redis:6379", cfg.Worker.Asynq.RedisAddress)
 	}
 }
 

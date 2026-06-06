@@ -455,6 +455,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("worker.asynq.redis_address", "127.0.0.1:6379")
 	v.SetDefault("worker.asynq.redis_db", 0)
 	v.SetDefault("worker.asynq.redis_password", "")
+	_ = v.BindEnv("worker.backend", "CONTROLPLANE_WORKER_BACKEND")
+	_ = v.BindEnv("worker.asynq.enabled", "CONTROLPLANE_WORKER_ASYNQ_ENABLED")
+	_ = v.BindEnv("worker.asynq.redis_address", "CONTROLPLANE_WORKER_ASYNQ_REDIS_ADDRESS", "CONTROLPLANE_WORKER_REDIS_ADDRESS")
+	_ = v.BindEnv("worker.asynq.redis_db", "CONTROLPLANE_WORKER_ASYNQ_REDIS_DB")
+	_ = v.BindEnv("worker.asynq.redis_password", "CONTROLPLANE_WORKER_ASYNQ_REDIS_PASSWORD", "CONTROLPLANE_WORKER_REDIS_PASSWORD")
 
 	v.SetDefault("jobs.provisioning.auto_remediation", true)
 	v.SetDefault("jobs.compliance.auto_apply", true)
