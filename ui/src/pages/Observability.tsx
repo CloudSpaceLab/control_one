@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -31,7 +31,17 @@ import {
   StatusTag,
   type StateTone,
 } from '@/components/kit';
+import { useApiClient } from '@/hooks/useApiClient';
+import { useCoverageMatrix } from '@/hooks/useCoverageMatrix';
+import { useNodes } from '@/hooks/useNodes';
+import type {
+  ContentPackSourceHealth,
+  CoverageMatrixRow,
+  NodeSummary,
+  WebserverInstance,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useTenant } from '@/providers/TenantProvider';
 
 type ObservabilityState =
   | 'healthy'
@@ -57,6 +67,7 @@ interface ObservabilityService {
   setup: string[];
   verification: string[];
   snippet?: string;
+  href?: string;
 }
 
 interface ActionItem {
@@ -78,7 +89,7 @@ interface KnowledgeChunk {
   openedFrom: string[];
 }
 
-const SERVICES: ObservabilityService[] = [
+const REFERENCE_SERVICES: ObservabilityService[] = [
   {
     id: 'svc-nginx',
     name: 'nginx edge',
@@ -94,7 +105,7 @@ const SERVICES: ObservabilityService[] = [
   },
   {
     id: 'svc-fastapi',
-    name: 'payments FastAPI',
+    name: 'Example FastAPI service',
     kind: 'app framework',
     state: 'partial',
     evidence: ['application logs', 'request IDs'],
@@ -163,7 +174,7 @@ const SERVICES: ObservabilityService[] = [
   },
 ];
 
-const ACTIONS: ActionItem[] = [
+const REFERENCE_ACTIONS: ActionItem[] = [
   {
     id: 'postgres-audit',
     title: 'Create PostgreSQL read-only audit user',
@@ -198,7 +209,7 @@ const ACTIONS: ActionItem[] = [
   },
 ];
 
-const KNOWLEDGE_CHUNKS: KnowledgeChunk[] = [
+const REFERENCE_KNOWLEDGE_CHUNKS: KnowledgeChunk[] = [
   {
     id: 'kt-postgres-audit-001',
     source: 'PostgreSQL core',
@@ -210,7 +221,7 @@ const KNOWLEDGE_CHUNKS: KnowledgeChunk[] = [
   },
   {
     id: 'kt-fastapi-trace-007',
-    source: 'payments FastAPI',
+    source: 'Example FastAPI service',
     topic: 'Instrumentation fallback',
     state: 'stale',
     summary: 'Application logs are present; middleware verification has not refreshed after the latest deploy.',
@@ -283,9 +294,22 @@ const CHUNK_TONE: Record<KnowledgeChunk['state'], StateTone> = {
 };
 
 export function Observability(): JSX.Element {
-  const [selectedId, setSelectedId] = useState('svc-postgres');
+  const api = useApiClient();
+  const { currentTenantId, currentTenant } = useTenant();
+  const [selectedId, setSelectedId] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [selectedChunkId, setSelectedChunkId] = useState(KNOWLEDGE_CHUNKS[0].id);
+  const [selectedChunkId, setSelectedChunkId] = useState<string>('');
+  const [liveState, setLiveState] = useState<{
+    webservers: WebserverInstance[];
+    sourceHealth: ContentPackSourceHealth[];
+    loading: boolean;
+    error: string | null;
+  }>({
+    webservers: [],
+    sourceHealth: [],
+    loading: false,
+    error: null,
+  });
   const [debug, setDebug] = useState({
     scope: '',
     ttl: '',
@@ -295,10 +319,94 @@ export function Observability(): JSX.Element {
     rollback: '',
     approval: false,
   });
-  const selected = SERVICES.find((service) => service.id === selectedId) ?? SERVICES[0];
+
+  const tenantId = currentTenantId ?? undefined;
+  const tenantLabel = currentTenant?.name ?? 'Current tenant';
+  const {
+    data: nodes,
+    loading: nodesLoading,
+    error: nodesError,
+  } = useNodes({ tenantId, limit: 200, offset: 0 });
+  const coverage = useCoverageMatrix({ tenantId, enabled: Boolean(tenantId) });
+
+  useEffect(() => {
+    if (!tenantId) {
+      setLiveState({ webservers: [], sourceHealth: [], loading: false, error: null });
+      return;
+    }
+
+    let cancelled = false;
+    setLiveState((current) => ({ ...current, loading: true, error: null }));
+
+    Promise.allSettled([
+      api.listWebserverInstances({ tenantId, limit: 100 }),
+      api.getContentPackSourceHealth(tenantId, { limit: 100 }),
+    ]).then(([webserverResult, sourceHealthResult]) => {
+      if (cancelled) return;
+
+      const errors: string[] = [];
+      const webservers =
+        webserverResult.status === 'fulfilled'
+          ? webserverResult.value.data
+          : [];
+      const sourceHealth =
+        sourceHealthResult.status === 'fulfilled'
+          ? sourceHealthResult.value.items
+          : [];
+
+      if (webserverResult.status === 'rejected') {
+        errors.push(errorMessage(webserverResult.reason, 'webserver inventory unavailable'));
+      }
+      if (sourceHealthResult.status === 'rejected') {
+        errors.push(errorMessage(sourceHealthResult.reason, 'source health unavailable'));
+      }
+
+      setLiveState({
+        webservers,
+        sourceHealth,
+        loading: false,
+        error: errors.length ? errors.join('; ') : null,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, tenantId]);
+
+  const liveServices = useMemo(
+    () =>
+      buildLiveObservabilityServices({
+        nodes,
+        webservers: liveState.webservers,
+        sourceHealth: liveState.sourceHealth,
+        coverageRows: coverage.data?.rows ?? [],
+      }),
+    [coverage.data?.rows, liveState.sourceHealth, liveState.webservers, nodes],
+  );
+  const referenceMode = liveServices.length === 0;
+  const services = referenceMode ? REFERENCE_SERVICES : liveServices;
+  const selected = services.find((service) => service.id === selectedId) ?? services[0];
+  const actions = useMemo(
+    () => (referenceMode ? REFERENCE_ACTIONS : deriveActions(services)),
+    [referenceMode, services],
+  );
+  const knowledgeChunks = useMemo(
+    () =>
+      referenceMode
+        ? REFERENCE_KNOWLEDGE_CHUNKS
+        : deriveKnowledgeChunks(services, coverage.data?.rows ?? []),
+    [coverage.data?.rows, referenceMode, services],
+  );
   const selectedChunk =
-    KNOWLEDGE_CHUNKS.find((chunk) => chunk.id === selectedChunkId) ?? KNOWLEDGE_CHUNKS[0];
-  const summary = useMemo(() => summarizeServices(SERVICES), []);
+    knowledgeChunks.find((chunk) => chunk.id === selectedChunkId) ?? knowledgeChunks[0];
+  const summary = useMemo(() => summarizeServices(services), [services]);
+  const dbService =
+    services.find((service) => /db|postgres|mysql|mssql|database/i.test(`${service.kind} ${service.name}`)) ??
+    services.find((service) => service.state === 'needs_access') ??
+    selected;
+  const loading = nodesLoading || liveState.loading || coverage.loading;
+  const loadErrors = [nodesError, liveState.error, coverage.error].filter(Boolean);
   const debugReady = Boolean(
     debug.scope.trim() &&
       Number(debug.ttl) > 0 &&
@@ -308,6 +416,20 @@ export function Observability(): JSX.Element {
       debug.rollback.trim() &&
       debug.approval,
   );
+
+  useEffect(() => {
+    if (services.length === 0) return;
+    if (!selectedId || !services.some((service) => service.id === selectedId)) {
+      setSelectedId(preferredServiceId(services));
+    }
+  }, [selectedId, services]);
+
+  useEffect(() => {
+    if (knowledgeChunks.length === 0) return;
+    if (!selectedChunkId || !knowledgeChunks.some((chunk) => chunk.id === selectedChunkId)) {
+      setSelectedChunkId(knowledgeChunks[0].id);
+    }
+  }, [knowledgeChunks, selectedChunkId]);
 
   const copySnippet = async (service: ObservabilityService) => {
     if (!service.snippet) return;
@@ -320,9 +442,13 @@ export function Observability(): JSX.Element {
       <SectionHeader
         eyebrow="OBSERVABILITY"
         title="Guided setup"
-        description="Connector, instrumentation, debug, and knowledge states translated into operator decisions."
+        description={`${tenantLabel} connector, instrumentation, debug, and knowledge states translated into operator decisions.`}
         actions={
           <div className="flex flex-wrap gap-2">
+            <StatusTag tone={referenceMode ? 'warning' : 'healthy'}>
+              {referenceMode ? 'reference' : 'live data'}
+            </StatusTag>
+            {loading ? <StatusTag tone="info">loading</StatusTag> : null}
             <Button asChild variant="outline" size="sm">
               <Link to="/coverage?domain=db_audit">
                 Coverage
@@ -338,6 +464,14 @@ export function Observability(): JSX.Element {
         }
       />
 
+      {loadErrors.length > 0 ? (
+        <Panel padding="sm" toneAccent="warning">
+          <p className="text-sm text-text-secondary" role="alert">
+            Some live observability signals are partial: {loadErrors.join('; ')}
+          </p>
+        </Panel>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <KpiTile label="Detected services" value={summary.total.toString()} tone="info" icon={<Network />} />
         <KpiTile label="Healthy" value={summary.healthy.toString()} tone="healthy" icon={<ShieldCheck />} />
@@ -347,7 +481,7 @@ export function Observability(): JSX.Element {
       </div>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Panel padding="md" eyebrow="STACK MAP" title="payments-api">
+        <Panel padding="md" eyebrow="STACK MAP" title={referenceMode ? 'Reference blueprint' : `${tenantLabel} live stack`}>
           <div className="overflow-x-auto rounded-lg border border-border-subtle">
             <table className="w-full min-w-[720px] text-sm">
               <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-text-secondary">
@@ -360,7 +494,7 @@ export function Observability(): JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {SERVICES.map((service) => {
+                {services.map((service) => {
                   const meta = STATE_META[service.state];
                   return (
                     <tr key={service.id} className="border-t border-border-subtle">
@@ -422,13 +556,21 @@ export function Observability(): JSX.Element {
               </pre>
             </div>
           ) : null}
+          {!selected.snippet && selected.href ? (
+            <Button asChild variant="outline" size="sm">
+              <Link to={selected.href}>
+                {selected.cta}
+                <ArrowRight />
+              </Link>
+            </Button>
+          ) : null}
         </Panel>
       </div>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <Panel padding="md" eyebrow="NEXT ACTIONS" title="Ranked setup queue">
           <div className="grid gap-3">
-            {ACTIONS.map((action, index) => (
+            {actions.map((action, index) => (
               <ActionRow
                 key={action.id}
                 action={action}
@@ -442,12 +584,7 @@ export function Observability(): JSX.Element {
 
         <Panel padding="md" eyebrow="DBMS ONBOARDING" title="Least-privilege path">
           <div className="grid gap-3">
-            {[
-              ['Detect engine', 'PostgreSQL found from process, port, and app fingerprint.'],
-              ['Explain access', 'Audit logs, slow query logs, and role metadata are missing.'],
-              ['Generate grant', 'Grant statements are copied without collecting raw secrets.'],
-              ['Test access', 'Coverage moves only after the audit source verifies.'],
-            ].map(([label, detail], index) => (
+            {dbOnboardingSteps(dbService).map(([label, detail], index) => (
               <div key={label} className="grid grid-cols-[auto_1fr] gap-3 rounded-md border border-border-subtle bg-surface p-3">
                 <span className="grid h-7 w-7 place-items-center rounded-md bg-brand-500/15 font-mono text-xs text-brand-400">
                   {index + 1}
@@ -465,7 +602,7 @@ export function Observability(): JSX.Element {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <Panel padding="md" eyebrow="INSTRUMENTATION" title="Framework setup cards">
           <div className="grid gap-3">
-            {SERVICES.filter((service) => service.kind === 'app framework' || service.kind === 'worker').map((service) => (
+            {setupCardServices(services).map((service) => (
               <div key={service.id} className="rounded-md border border-border-subtle bg-surface p-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -490,7 +627,7 @@ export function Observability(): JSX.Element {
         <Panel padding="md" eyebrow="KNOWLEDGE TREE" title="Citations and vault chunks">
           <div className="grid gap-3 lg:grid-cols-[15rem_1fr]">
             <div className="flex flex-col gap-2">
-              {KNOWLEDGE_CHUNKS.map((chunk) => (
+              {knowledgeChunks.map((chunk) => (
                 <button
                   key={chunk.id}
                   type="button"
@@ -541,6 +678,393 @@ export function Observability(): JSX.Element {
       </div>
     </div>
   );
+}
+
+function buildLiveObservabilityServices({
+  nodes,
+  webservers,
+  sourceHealth,
+  coverageRows,
+}: {
+  nodes: NodeSummary[];
+  webservers: WebserverInstance[];
+  sourceHealth: ContentPackSourceHealth[];
+  coverageRows: CoverageMatrixRow[];
+}): ObservabilityService[] {
+  const services: ObservabilityService[] = [];
+
+  services.push(...webservers.slice(0, 8).map(serviceFromWebserver));
+  services.push(...sourceHealth.slice(0, 10).map(serviceFromSourceHealth));
+
+  const attentionRows = coverageRows
+    .filter((row) => isAttentionCoverageState(row.coverage_state ?? row.state))
+    .slice(0, 8)
+    .map(serviceFromCoverageRow);
+  services.push(...attentionRows);
+
+  const nodeRows = nodes
+    .slice(0, 6)
+    .map(serviceFromNode)
+    .filter((service) => !services.some((candidate) => candidate.id === service.id));
+  services.push(...nodeRows);
+
+  return dedupeServices(services).slice(0, 24);
+}
+
+function serviceFromWebserver(instance: WebserverInstance): ObservabilityService {
+  const name = compact([instance.Kind, instance.ServiceName]).join(' ') || 'webserver';
+  const vhostCount = Array.isArray(instance.VHosts) ? instance.VHosts.length : 0;
+  const hasAccess = Boolean(instance.AccessLogPath);
+  const hasError = Boolean(instance.ErrorLogPath);
+  const state: ObservabilityState = hasAccess && hasError ? 'healthy' : 'partial';
+
+  return {
+    id: `webserver:${instance.ID}`,
+    name,
+    kind: 'webserver',
+    state,
+    evidence: compact([
+      instance.Version ? `version ${instance.Version}` : '',
+      instance.ConfigPath,
+      hasAccess ? 'access log path' : '',
+      hasError ? 'error log path' : '',
+      vhostCount ? `${vhostCount} vhosts` : '',
+      instance.ObservedAt ? `observed ${formatDateLabel(instance.ObservedAt)}` : '',
+    ]),
+    missing: compact([!hasAccess ? 'access log path' : '', !hasError ? 'error log path' : '']),
+    why:
+      state === 'healthy'
+        ? 'Webserver inventory includes config and log paths that can back investigations and receipts.'
+        : 'Webserver inventory exists, but capture evidence is not complete enough for full citation coverage.',
+    nextAction:
+      state === 'healthy'
+        ? 'Keep parser version, vhost, and retention evidence fresh.'
+        : 'Run capture setup for missing webserver log paths.',
+    cta: 'Open webserver controls',
+    setup: ['Review discovered config', 'Confirm managed capture policy', 'Keep parser evidence fresh'],
+    verification: ['inventory current', 'log path cited', 'receipt path linked'],
+    href: '/security/webservers',
+  };
+}
+
+function serviceFromSourceHealth(item: ContentPackSourceHealth): ObservabilityService {
+  const state = stateFromSourceHealth(item.coverage_state);
+  const name = item.display_name || item.source_id || item.source_instance_id || 'source health';
+  const metrics = item.metrics ?? {};
+  const evidence = compact([
+    item.collector_id ? `collector ${item.collector_id}` : '',
+    item.parser_id ? `parser ${item.parser_id}` : '',
+    item.collector_mode ? `mode ${item.collector_mode}` : '',
+    typeof metrics.events_received === 'number' ? `${metrics.events_received} events` : '',
+    typeof metrics.events_parsed === 'number' ? `${metrics.events_parsed} parsed` : '',
+    item.last_event_at ? `last event ${formatDateLabel(item.last_event_at)}` : '',
+  ]);
+  const missing = compact([
+    item.coverage_state && state !== 'healthy' ? item.coverage_state : '',
+    item.last_error,
+    item.approval_required ? 'approval required' : '',
+  ]);
+
+  return {
+    id: `source-health:${item.runtime_state_id || item.source_instance_id || item.source_id}`,
+    name,
+    kind: item.parser_id ? 'parser source' : 'telemetry source',
+    state,
+    evidence,
+    missing,
+    why:
+      state === 'healthy'
+        ? 'Source runtime health is reporting enough evidence to cite this source.'
+        : 'Source runtime health needs attention before it can count as complete observability coverage.',
+    nextAction: firstRecommendedAction(item) ?? actionForState(state, name),
+    cta: 'Open SIEM source health',
+    setup: ['Review source identity', 'Check parser/runtime state', 'Confirm approval and retention labels'],
+    verification: ['events received', 'parser state current', 'source health cited'],
+    href: '/security/siem',
+  };
+}
+
+function serviceFromCoverageRow(row: CoverageMatrixRow): ObservabilityService {
+  const state = stateFromCoverage(row.coverage_state ?? row.state);
+  const title = row.title || row.name || row.subject || row.domain || 'coverage row';
+  const domain = String(row.domain || 'coverage').replaceAll('_', ' ');
+  const evidence = compact([
+    ...(row.evidence ?? []),
+    row.source,
+    row.last_seen_at ? `last seen ${formatDateLabel(row.last_seen_at)}` : '',
+    typeof row.evidence_count === 'number' ? `${row.evidence_count} evidence refs` : '',
+  ]);
+  const gaps = compact([...(row.gaps ?? []), ...(row.required_sources ?? [])]);
+
+  return {
+    id: `coverage:${row.domain}:${sanitizeKey(title)}`,
+    name: title,
+    kind: domain,
+    state,
+    evidence,
+    missing: gaps,
+    why: row.reason || row.details || row.description || 'Coverage matrix marks this row as needing attention.',
+    nextAction: gaps[0] ? `Close coverage gap: ${gaps[0]}` : actionForState(state, title),
+    cta: 'Open coverage',
+    setup: ['Review coverage row', 'Attach source evidence', 'Refresh tenant overlay'],
+    verification: ['coverage state updated', 'evidence count current', 'gaps cleared'],
+    href: `/coverage?domain=${encodeURIComponent(String(row.domain || ''))}`,
+  };
+}
+
+function serviceFromNode(node: NodeSummary): ObservabilityService {
+  const fresh = isFresh(node.last_seen_at);
+  return {
+    id: `node:${node.id}`,
+    name: node.hostname || shortId(node.id),
+    kind: 'node agent',
+    state: fresh ? 'healthy' : 'stale',
+    evidence: compact([
+      node.os,
+      node.agent_version ? `agent ${node.agent_version}` : '',
+      node.public_ip,
+      node.last_seen_at ? `last seen ${formatDateLabel(node.last_seen_at)}` : '',
+    ]),
+    missing: fresh ? [] : ['fresh heartbeat'],
+    why: fresh
+      ? 'Node agent is reporting current inventory and can anchor observability evidence.'
+      : 'Node agent heartbeat is outside the freshness window for live observability proof.',
+    nextAction: fresh ? 'Keep node telemetry policy current.' : 'Repair or re-enroll the stale node agent.',
+    cta: 'Open node',
+    setup: ['Confirm agent service', 'Review telemetry profile', 'Check source labels'],
+    verification: ['heartbeat current', 'services discovered', 'coverage rows linked'],
+    href: `/nodes/${node.id}`,
+  };
+}
+
+function deriveActions(services: ObservabilityService[]): ActionItem[] {
+  const attention = services.filter((service) => service.state !== 'healthy').slice(0, 6);
+  if (attention.length === 0 && services.length > 0) {
+    return [
+      {
+        id: 'maintain-evidence-freshness',
+        title: 'Keep observability evidence fresh',
+        impact: 'Current live signals are healthy; keep parsers, source labels, and receipts current.',
+        serviceId: services[0].id,
+        effort: 'Low',
+        risk: 'healthy',
+      },
+    ];
+  }
+
+  return attention.map((service) => ({
+    id: `action:${service.id}`,
+    title: service.nextAction,
+    impact: service.why,
+    serviceId: service.id,
+    effort: effortForState(service.state),
+    risk: STATE_META[service.state].tone,
+  }));
+}
+
+function deriveKnowledgeChunks(
+  services: ObservabilityService[],
+  coverageRows: CoverageMatrixRow[],
+): KnowledgeChunk[] {
+  const serviceChunks = services.slice(0, 5).map((service) => ({
+    id: `chunk:${service.id}`,
+    source: service.name,
+    topic: `${STATE_META[service.state].label} evidence`,
+    state: chunkStateForService(service.state),
+    summary: service.why,
+    citations: compact([
+      `observability:${service.id}`,
+      ...service.evidence.slice(0, 2),
+      ...service.missing.slice(0, 1),
+    ]),
+    openedFrom: ['Ask AI', 'Timeline', 'Case'],
+  }));
+
+  const coverageChunks = coverageRows
+    .filter((row) => isAttentionCoverageState(row.coverage_state ?? row.state))
+    .slice(0, 3)
+    .map((row) => ({
+      id: `chunk:coverage:${row.domain}:${sanitizeKey(row.title || row.name || row.subject || 'row')}`,
+      source: row.title || row.name || row.subject || String(row.domain || 'coverage'),
+      topic: 'Coverage gap',
+      state: 'stale' as const,
+      summary: row.reason || row.details || row.description || 'Coverage matrix row needs attention.',
+      citations: compact([`coverage:${row.domain}`, ...(row.evidence ?? []).slice(0, 2), ...(row.gaps ?? []).slice(0, 1)]),
+      openedFrom: ['Coverage', 'Ask AI'],
+    }));
+
+  return dedupeChunks([...serviceChunks, ...coverageChunks]).slice(0, 8);
+}
+
+function setupCardServices(services: ObservabilityService[]): ObservabilityService[] {
+  const attention = services.filter((service) => service.state !== 'healthy');
+  return (attention.length ? attention : services).slice(0, 4);
+}
+
+function dbOnboardingSteps(service: ObservabilityService): Array<[string, string]> {
+  return [
+    ['Detect source', `${service.name} is visible from ${service.evidence.slice(0, 2).join(', ') || 'live inventory'}.`],
+    ['Explain access', service.missing.length ? `${service.missing.slice(0, 3).join(', ')} still needs evidence.` : 'No missing evidence is currently reported.'],
+    ['Generate least privilege path', service.snippet ? 'A copyable least-privilege snippet is available.' : service.nextAction],
+    ['Verify coverage', 'Coverage moves only after the source verifies and can be cited.'],
+  ];
+}
+
+function preferredServiceId(services: ObservabilityService[]): string {
+  return (
+    services.find((service) => service.state === 'needs_access') ??
+    services.find((service) => service.state !== 'healthy') ??
+    services[0]
+  ).id;
+}
+
+function stateFromSourceHealth(state: string | undefined): ObservabilityState {
+  switch ((state ?? '').toLowerCase()) {
+    case 'healthy':
+    case 'parser_healthy':
+    case 'collecting':
+    case 'deployed':
+      return 'healthy';
+    case 'raw_only':
+      return 'raw_only';
+    case 'parser_failed':
+    case 'failed':
+    case 'collection_conflict':
+      return 'failed';
+    case 'silent':
+    case 'stale':
+    case 'backpressured':
+      return 'stale';
+    case 'approval_required':
+    case 'approved':
+    case 'proposed':
+      return 'needs_access';
+    case 'unsupported':
+    case 'privacy_blocked':
+      return 'unsupported';
+    default:
+      return 'detected_only';
+  }
+}
+
+function stateFromCoverage(state: string | undefined): ObservabilityState {
+  switch ((state ?? '').toLowerCase()) {
+    case 'supported':
+    case 'healthy':
+    case 'passing':
+    case 'collecting':
+    case 'parser_healthy':
+      return 'healthy';
+    case 'partial':
+    case 'manual_evidence':
+      return 'partial';
+    case 'raw_only':
+      return 'raw_only';
+    case 'unsupported':
+      return 'unsupported';
+    case 'stale':
+      return 'stale';
+    case 'failed':
+    case 'parser_failed':
+      return 'failed';
+    case 'approval_required':
+      return 'needs_access';
+    default:
+      return 'detected_only';
+  }
+}
+
+function isAttentionCoverageState(state: string | undefined): boolean {
+  const normalized = (state ?? '').toLowerCase();
+  return Boolean(
+    normalized &&
+      !['supported', 'healthy', 'passing', 'not_applicable', 'exception'].includes(normalized),
+  );
+}
+
+function actionForState(state: ObservabilityState, name: string): string {
+  switch (state) {
+    case 'needs_access':
+      return `Grant least-privilege access for ${name}`;
+    case 'raw_only':
+      return `Attach parser coverage for ${name}`;
+    case 'unsupported':
+      return `Create connector contract for ${name}`;
+    case 'stale':
+      return `Refresh stale observability evidence for ${name}`;
+    case 'failed':
+      return `Investigate failed observability state for ${name}`;
+    case 'partial':
+    case 'detected_only':
+    case 'fallback_active':
+      return `Complete observability setup for ${name}`;
+    case 'healthy':
+    default:
+      return `Keep ${name} evidence fresh`;
+  }
+}
+
+function firstRecommendedAction(item: ContentPackSourceHealth): string | undefined {
+  return item.recommended_actions?.find((action) => action.enabled)?.label;
+}
+
+function effortForState(state: ObservabilityState): string {
+  if (state === 'unsupported' || state === 'failed') return 'High';
+  if (state === 'needs_access' || state === 'stale') return 'Medium';
+  return 'Low';
+}
+
+function chunkStateForService(state: ObservabilityState): KnowledgeChunk['state'] {
+  if (state === 'healthy') return 'fresh';
+  if (state === 'failed' || state === 'unsupported') return 'failed';
+  return 'stale';
+}
+
+function isFresh(value?: string, hours = 24): boolean {
+  if (!value) return false;
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return false;
+  return Date.now() - ts <= hours * 60 * 60 * 1000;
+}
+
+function formatDateLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function compact(values: Array<string | null | undefined | false>): string[] {
+  return values.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean);
+}
+
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+function sanitizeKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'item';
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function dedupeServices(services: ObservabilityService[]): ObservabilityService[] {
+  const seen = new Set<string>();
+  return services.filter((service) => {
+    if (seen.has(service.id)) return false;
+    seen.add(service.id);
+    return true;
+  });
+}
+
+function dedupeChunks(chunks: KnowledgeChunk[]): KnowledgeChunk[] {
+  const seen = new Set<string>();
+  return chunks.filter((chunk) => {
+    if (seen.has(chunk.id)) return false;
+    seen.add(chunk.id);
+    return true;
+  });
 }
 
 function ConnectorFacts({
@@ -643,7 +1167,7 @@ function DebugSessionSheet({
           </SheetDescription>
         </SheetHeader>
         <div className="grid gap-4">
-          <DebugInput label="Scope" value={debug.scope} onChange={(value) => onChange('scope', value)} placeholder="payments-api / postgres" />
+          <DebugInput label="Scope" value={debug.scope} onChange={(value) => onChange('scope', value)} placeholder="service / postgres" />
           <DebugInput label="TTL minutes" type="number" value={debug.ttl} onChange={(value) => onChange('ttl', value)} placeholder="30" />
           <DebugInput label="Reason" value={debug.reason} onChange={(value) => onChange('reason', value)} placeholder="Investigate latency spike" />
           <label className="grid gap-1 text-sm">
