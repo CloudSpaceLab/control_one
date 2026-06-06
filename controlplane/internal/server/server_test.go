@@ -461,6 +461,37 @@ func TestTopTalkersSmallAnalyticsDegradesGracefully(t *testing.T) {
 	}
 }
 
+func TestConnectionsListSmallAnalyticsDegradesGracefully(t *testing.T) {
+	tenantID := uuid.New()
+	store := &fakeStore{}
+	cfg := &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("viewer", "connections-viewer"),
+		Analytics: config.AnalyticsConfig{Mode: "small"},
+	}
+	srv := New(zap.NewNop(), cfg, store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/connections?tenant_id="+tenantID.String()+"&external_only=true", nil)
+	req.Header.Set("Authorization", "Bearer connections-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Source     string                `json:"source"`
+		Data       []doris.ConnectionRow `json:"data"`
+		Guardrails []string              `json:"guardrails"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Source != "small-analytics-pending" || len(resp.Data) != 0 || len(resp.Guardrails) == 0 {
+		t.Fatalf("unexpected connections response: %+v", resp)
+	}
+}
+
 func TestRolloutWavesRouteListsUIPayload(t *testing.T) {
 	logger := zap.NewNop()
 	tenantID := uuid.New()

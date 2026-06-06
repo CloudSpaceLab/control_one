@@ -17,9 +17,9 @@ import (
 //
 //	GET /api/v1/connections?tenant_id=...&ip=...&node_id=...&open_only=true&since=...&until=...&limit=...
 //
-// Backed by the Doris `process_connections` table. When Doris is not
-// configured the endpoint returns 503 — the UI degrades to its
-// "fast view" sourced from event_rollups_hourly.
+// Backed by the Doris `process_connections` table. In small analytics mode
+// the raw connection row store is intentionally absent, so the endpoint
+// returns an empty, successful envelope and lets fleet rollups remain fast.
 func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -29,13 +29,17 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	if !s.usesDorisAnalytics() {
-		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	tenantID, err := requiredTenantID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.usesDorisAnalytics() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data":       []doris.ConnectionRow{},
+			"source":     "small-analytics-pending",
+			"guardrails": []string{"raw connection rows require the Redis+SQLite small analytics store or OLAP mode"},
+		})
 		return
 	}
 	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
