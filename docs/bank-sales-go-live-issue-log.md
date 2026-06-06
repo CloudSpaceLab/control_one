@@ -331,6 +331,11 @@ Post-fix live evidence:
   Connections table with live rows instead of pending copy, zero current
   console warnings/errors, current app API calls returning `200`, and
   document-level horizontal overflow of `0` at both 381px and 1430px widths.
+- Follow-up ownership hardening commit `c71263eb` deployed successfully in run
+  `27075444975`; CI runs `27075444960` and `27075444961` also succeeded.
+  Post-deploy logs still showed `small analytics sqlite store ready`, the
+  analytics directory stayed owned by uid 65532, and authenticated
+  connections/top-talkers checks continued returning `source=small-analytics`.
 
 2026-06-06 follow-up: the corrected workflow is now on `main` and deploy runs
 `27065886666`, `27066201594`, and `27066409247` succeeded with Doris disabled.
