@@ -196,7 +196,7 @@ export function Cases(): JSX.Element {
           {selectedCase ? (
             <div className="grid gap-5">
               <div className="rounded-md border border-border-subtle bg-surface p-3">
-                <p className="text-sm leading-6 text-text-secondary">{selectedCase.summary || selectedCase.trigger_event_type}</p>
+                <p className="text-sm leading-6 text-text-secondary">{caseSummaryText(selectedCase)}</p>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {selectedCase.coverage_badges.map((badge) => (
                     <StatusTag key={badge.id} tone={normalizeTone(badge.tone)}>
@@ -275,7 +275,7 @@ function CaseQueueRow({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">{row.title}</p>
           <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-secondary">
-            {row.summary || row.trigger_event_type || row.dedup_key}
+            {caseSummaryText(row)}
           </p>
         </div>
         <StatusTag tone={severityTone(row.severity)}>{row.severity}</StatusTag>
@@ -597,6 +597,13 @@ function summarizeCases(rows: SOCCase[]) {
 
 function caseEvidenceCount(row: SOCCase): number {
   return (row.evidence_refs?.length ?? 0) || (row.citations?.length ?? 0);
+}
+
+export function caseSummaryText(row: Pick<SOCCase, 'title' | 'summary' | 'trigger_event_type' | 'dedup_key'>): string {
+  const title = row.title.trim();
+  const summary = (row.summary ?? '').trim();
+  if (summary && summary.toLowerCase() !== title.toLowerCase()) return summary;
+  return row.trigger_event_type || row.dedup_key || summary || title;
 }
 
 function caseFacts(row: SOCCase): Array<{ label: string; value: string; tone?: StateTone; to?: string }> {

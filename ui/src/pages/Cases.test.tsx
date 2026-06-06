@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Cases } from './Cases';
+import { Cases, caseSummaryText } from './Cases';
 import * as useApiClientModule from '@/hooks/useApiClient';
 import * as useTenantModule from '@/providers/TenantProvider';
 import type { SOCCase, SOCCaseExport } from '@/lib/api';
@@ -118,5 +118,14 @@ describe('Cases', () => {
     expect(await screen.findByText('soc-case-export-v1')).toBeInTheDocument();
     expect(screen.getByText('evidence_refs_only')).toBeInTheDocument();
     expect(screen.getByText('no_enforcement_execution')).toBeInTheDocument();
+  });
+
+  it('uses trigger type as secondary text when case title and summary match', () => {
+    expect(caseSummaryText({
+      title: 'first connection to 20.169.85.72',
+      summary: 'first connection to 20.169.85.72',
+      trigger_event_type: 'anomaly.new_destination',
+      dedup_key: 'anomaly.new_dst:tenant-1:20.169.85.72',
+    })).toBe('anomaly.new_destination');
   });
 });
