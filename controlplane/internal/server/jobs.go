@@ -18,7 +18,6 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/pdfreport"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/internal/provisioning"
@@ -1241,12 +1240,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if s.worker != nil {
-		task := worker.Task{
-			Name:         fmt.Sprintf("job-%s", created.ID),
-			Job:          s.buildJobExecution(created.ID, created.Type, created.MaxRetries),
-			MaxAttempts:  created.MaxRetries,
-			RetryBackoff: s.cfg.Worker.RetryBackoff,
-		}
+		task := s.durableJobTask(created, fmt.Sprintf("job-%s", created.ID))
 		if err := s.worker.Enqueue(task); err != nil {
 			s.logger.Error("enqueue job", zap.Error(err))
 			_ = s.store.UpdateJobStatus(r.Context(), created.ID, storage.JobStatusFailed, fmt.Sprintf("enqueue failed: %v", err), map[string]any{"finished_at": time.Now()})

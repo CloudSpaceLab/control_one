@@ -492,10 +492,20 @@ post-deploy verification on `/console/?verify=3db08217` showed
 instead of the previous hundreds-of-thousands event-count values; public
 `/healthz` returned HTTP `200` in about 0.61s.
 
-Remaining caveat: the current Asynq worker adapter persists queue envelopes in
-Redis, but executable job handlers are still registered in-process by task
-name. This is acceptable for the current demo safety posture, but true
-restart-resumable production jobs still need serialized job payload handlers.
+2026-06-06 worker durability implementation follow-up: the Asynq caveat is now
+closed in the local tree for persisted `jobs` rows. Worker tasks can carry a
+serialized durable job reference (`job_id` plus `job_type`) instead of relying
+only on an in-memory closure name. The server registers a wildcard durable job
+handler that reloads the persisted job row, validates the type, and runs the
+existing audited job lifecycle. Attempts now derive from persisted
+`jobs.retries`, so restart/retry accounting survives process replacement.
+Generic API-created jobs, private-access import jobs, scheduled compliance
+scans, and scheduled health jobs now enqueue durable references while retaining
+the in-process function for the memory worker backend. Local verification
+passed for `go test ./controlplane/internal/worker`, focused server
+job/scheduler tests, Go vet on the touched worker/server/controlplane packages,
+and the full short sweep `$env:GOMAXPROCS='4'; go test -short -p 1 ./...`. Live deploy
+verification for this follow-up is pending.
 Manual recovery also showed that Windows-cross-compiled controlplane binaries
 should not be used for live deploys until the Go runtime crash is investigated;
 the live controlplane was recovered with the Linux-runner-built binary.

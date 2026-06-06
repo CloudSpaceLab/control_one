@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -784,6 +783,10 @@ type TaskQueue interface {
 
 type workerStatusProvider interface {
 	Status() worker.Status
+}
+
+type durableJobRegistrar interface {
+	RegisterDurableJobHandler(string, worker.DurableJobHandler)
 }
 
 // Server wraps the HTTP server lifecycle for the control plane API.
@@ -2432,9 +2435,7 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
-	var attemptCounter int32
 	return func(ctx context.Context) error {
-		currentAttempt := int(atomic.AddInt32(&attemptCounter, 1))
 		principal := s.systemActor()
 
 		s.configureJobIntegrations()
@@ -2456,6 +2457,7 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 			outcome = metricsStatusFailure
 			return fmt.Errorf("job %s not found", jobID)
 		}
+		currentAttempt := job.Retries + 1
 
 		startFields := map[string]any{}
 		if job.StartedAt == nil {
@@ -2526,6 +2528,53 @@ func (s *Server) buildJobExecution(jobID uuid.UUID, jobType string, maxAttempts 
 		outcome = metricsStatusSuccess
 		return nil
 	}
+}
+
+func (s *Server) durableJobTask(job *storage.Job, name string) worker.Task {
+	task := worker.Task{
+		Name:         name,
+		Job:          s.buildJobExecution(job.ID, job.Type, job.MaxRetries),
+		DurableJob:   worker.DurableJobRef{ID: job.ID.String(), Type: job.Type},
+		MaxAttempts:  job.MaxRetries,
+		RetryBackoff: s.cfg.Worker.RetryBackoff,
+	}
+	if task.MaxAttempts <= 0 {
+		task.MaxAttempts = 1
+	}
+	return task
+}
+
+func (s *Server) registerDurableJobHandler() {
+	registrar, ok := s.worker.(durableJobRegistrar)
+	if !ok || registrar == nil {
+		return
+	}
+	registrar.RegisterDurableJobHandler("*", s.executeDurableWorkerJob)
+}
+
+func (s *Server) executeDurableWorkerJob(ctx context.Context, ref worker.DurableJobRef) error {
+	if s.store == nil {
+		return errors.New("job store unavailable")
+	}
+	jobID, err := uuid.Parse(strings.TrimSpace(ref.ID))
+	if err != nil {
+		return fmt.Errorf("invalid durable job id: %w", err)
+	}
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("load durable job: %w", err)
+	}
+	if job == nil {
+		return fmt.Errorf("durable job %s not found", jobID)
+	}
+	jobType := strings.TrimSpace(ref.Type)
+	if jobType == "" {
+		jobType = job.Type
+	}
+	if job.Type != jobType {
+		return fmt.Errorf("durable job type mismatch: payload=%s persisted=%s", jobType, job.Type)
+	}
+	return s.buildJobExecution(job.ID, job.Type, job.MaxRetries)(ctx)
 }
 
 func applyDorisMigrationsWithRetry(ctx context.Context, logger *zap.Logger, client *doris.Client, opts doris.MigrationOptions) error {
@@ -2699,6 +2748,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		}
 	}
 	s.configureJobIntegrations()
+	s.registerDurableJobHandler()
 	s.registerRoutes()
 
 	if cfg.Jobs.Compliance.ScheduleEnabled {

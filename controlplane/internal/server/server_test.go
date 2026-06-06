@@ -1912,6 +1912,8 @@ func TestRBACAuthorization(t *testing.T) {
 		store.tenants = []storage.Tenant{
 			{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)},
 		}
+		queue := srv.worker.(*stubQueue)
+		queue.tasks = nil
 		body := fmt.Sprintf(`{
 			"type":"%s",
 			"tenant_id":"%s",
@@ -1928,6 +1930,16 @@ func TestRBACAuthorization(t *testing.T) {
 
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("expected 202 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if len(queue.tasks) != 1 {
+			t.Fatalf("expected one queued task, got %d", len(queue.tasks))
+		}
+		task := queue.tasks[0]
+		if task.DurableJob.ID == "" || task.DurableJob.Type != JobTypeProvisionApply {
+			t.Fatalf("task missing durable job ref: %#v", task.DurableJob)
+		}
+		if task.Job == nil {
+			t.Fatal("task should keep an in-process job for memory workers")
 		}
 	})
 
@@ -2095,6 +2107,44 @@ func TestRBACAuthorization(t *testing.T) {
 		}
 		if attempt, _ := logs[1].Metadata["attempt"].(int); attempt != 1 {
 			t.Fatalf("expected succeeded attempt metadata 1, got %v", logs[1].Metadata["attempt"])
+		}
+	})
+
+	t.Run("executeDurableWorkerJob rehydrates persisted job", func(t *testing.T) {
+		logger := zap.NewNop()
+		cfg := &config.Config{
+			HTTP:   config.HTTPConfig{Address: ":0"},
+			TLS:    config.TLSConfig{RequireClientTLS: false},
+			Auth:   authWithTokens("operator", "job-durable"),
+			Worker: config.WorkerConfig{RetryBackoff: 5 * time.Millisecond},
+		}
+		durableStore := &fakeStore{}
+		srv := New(logger, cfg, durableStore, &stubQueue{})
+		srv.auditAsync = false
+
+		const jobType = "test.job.durable"
+		srv.jobHandlers = map[string]jobHandler{
+			jobType: func(ctx context.Context, job *storage.Job) error {
+				return nil
+			},
+		}
+
+		job := &storage.Job{
+			ID:         uuid.New(),
+			Type:       jobType,
+			Status:     storage.JobStatusQueued,
+			MaxRetries: 2,
+		}
+		if _, err := durableStore.CreateJob(context.Background(), job, &storage.JobEvent{Status: storage.JobStatusQueued}); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+
+		ref := worker.DurableJobRef{ID: job.ID.String(), Type: job.Type}
+		if err := srv.executeDurableWorkerJob(context.Background(), ref); err != nil {
+			t.Fatalf("execute durable worker job: %v", err)
+		}
+		if got := durableStore.jobs[job.ID].Status; got != storage.JobStatusSucceeded {
+			t.Fatalf("job status = %s, want succeeded", got)
 		}
 	})
 
@@ -2367,14 +2417,17 @@ type fakeStore struct {
 	portObservations []storage.CreatePortObservationParams
 }
 
-type stubQueue struct{}
+type stubQueue struct {
+	tasks []worker.Task
+}
 
-func (s *stubQueue) Enqueue(worker.Task) error {
+func (s *stubQueue) Enqueue(task worker.Task) error {
+	s.tasks = append(s.tasks, task)
 	return nil
 }
 
-func (s *stubQueue) EnqueueAt(worker.Task, time.Time) error {
-	return nil
+func (s *stubQueue) EnqueueAt(task worker.Task, _ time.Time) error {
+	return s.Enqueue(task)
 }
 
 func (f *fakeStore) CreateNode(_ context.Context, node *storage.Node) (*storage.Node, error) {

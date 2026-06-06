@@ -11,7 +11,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
 
 // ComplianceScheduler runs periodic compliance scans across all nodes.
@@ -140,18 +139,9 @@ func (cs *ComplianceScheduler) createScanJobs(ctx context.Context, tenantID uuid
 		jobIDs = append(jobIDs, created.ID)
 
 		if cs.server.worker != nil {
-			handler, ok := cs.server.jobHandlers[JobTypeComplianceScan]
-			if ok {
-				jobCopy := *created
-				task := worker.Task{
-					Name: fmt.Sprintf("%s:%s", JobTypeComplianceScan, created.ID.String()),
-					Job: func(taskCtx context.Context) error {
-						return handler(taskCtx, &jobCopy)
-					},
-				}
-				if err := cs.server.worker.Enqueue(task); err != nil {
-					cs.logger.Warn("enqueue scan job", zap.Error(err), zap.String("job_id", created.ID.String()))
-				}
+			task := cs.server.durableJobTask(created, fmt.Sprintf("%s:%s", JobTypeComplianceScan, created.ID.String()))
+			if err := cs.server.worker.Enqueue(task); err != nil {
+				cs.logger.Warn("enqueue scan job", zap.Error(err), zap.String("job_id", created.ID.String()))
 			}
 		}
 	}

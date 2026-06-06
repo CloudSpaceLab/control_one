@@ -10,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
 
 // HealthScheduler runs the hourly predictive-health pipeline:
@@ -90,18 +89,7 @@ func (hs *HealthScheduler) enqueueJob(ctx context.Context, jobType string) {
 	if hs.server.worker == nil {
 		return
 	}
-	handler, ok := hs.server.jobHandlers[jobType]
-	if !ok {
-		hs.logger.Warn("no handler for health job type", zap.String("type", jobType))
-		return
-	}
-	jobCopy := *created
-	task := worker.Task{
-		Name: fmt.Sprintf("%s:%s", jobType, created.ID.String()),
-		Job: func(taskCtx context.Context) error {
-			return handler(taskCtx, &jobCopy)
-		},
-	}
+	task := hs.server.durableJobTask(created, fmt.Sprintf("%s:%s", jobType, created.ID.String()))
 	if err := hs.server.worker.Enqueue(task); err != nil {
 		hs.logger.Warn("enqueue health job", zap.String("type", jobType), zap.Error(err))
 	}

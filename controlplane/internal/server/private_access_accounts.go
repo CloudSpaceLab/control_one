@@ -16,7 +16,6 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/privateaccess"
 )
 
@@ -573,12 +572,7 @@ func (s *Server) enqueuePrivateAccessImportJob(ctx context.Context, store privat
 		return nil, nil, err
 	}
 	if s.worker != nil {
-		task := worker.Task{
-			Name:         fmt.Sprintf("private-access-import-%s", job.ID),
-			Job:          s.buildJobExecution(job.ID, job.Type, job.MaxRetries),
-			MaxAttempts:  job.MaxRetries,
-			RetryBackoff: s.cfg.Worker.RetryBackoff,
-		}
+		task := s.durableJobTask(job, fmt.Sprintf("private-access-import-%s", job.ID))
 		if err := s.worker.Enqueue(task); err != nil {
 			_ = s.store.UpdateJobStatus(ctx, job.ID, storage.JobStatusFailed, fmt.Sprintf("enqueue failed: %v", err), map[string]any{"finished_at": time.Now()})
 			_, _ = store.UpdatePrivateAccessImportRun(ctx, run.ID, storage.UpdatePrivateAccessImportRunParams{Status: storage.PrivateAccessImportStatusFailed, Error: err.Error(), FinishedAt: &now})

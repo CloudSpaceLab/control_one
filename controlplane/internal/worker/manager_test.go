@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -222,6 +223,93 @@ func TestManagerProcessesTaskAsynq(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("asynq task was not processed")
+	}
+}
+
+func TestManagerProcessesDurableAsynqTaskAfterRestart(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	logger := zaptest.NewLogger(t)
+	cfg := config.WorkerConfig{
+		Concurrency: 1,
+		Backend:     "asynq",
+		Asynq: config.AsynqConfig{
+			Enabled:      true,
+			RedisAddress: mr.Addr(),
+		},
+	}
+
+	ref := DurableJobRef{ID: "job-123", Type: "test.job"}
+	payload, err := json.Marshal(asynqTaskPayload{Name: "durable-restart", JobID: ref.ID, JobType: ref.Type})
+	if err != nil {
+		t.Fatalf("marshal durable payload: %v", err)
+	}
+	client := asynq.NewClient(asynq.RedisClientOpt{Addr: mr.Addr()})
+	if _, err := client.Enqueue(asynq.NewTask(asynqTaskType, payload)); err != nil {
+		t.Fatalf("seed durable task: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close seed client: %v", err)
+	}
+
+	mgr2 := New(logger, cfg)
+	done := make(chan DurableJobRef, 1)
+	mgr2.RegisterDurableJobHandler("*", func(ctx context.Context, got DurableJobRef) error {
+		done <- got
+		return nil
+	})
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	if err := mgr2.Start(ctx2); err != nil {
+		t.Fatalf("start second manager: %v", err)
+	}
+	defer func() {
+		stopDone := make(chan error, 1)
+		go func() {
+			stopDone <- mgr2.Stop(context.Background())
+		}()
+		select {
+		case err := <-stopDone:
+			if err != nil {
+				t.Fatalf("stop second manager: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("stop second manager timed out")
+		}
+	}()
+
+	select {
+	case got := <-done:
+		if got != ref {
+			t.Fatalf("durable ref = %#v, want %#v", got, ref)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("durable asynq task was not processed after restart")
+	}
+}
+
+func TestManagerExecuteDurableJobUsesWildcardHandler(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	mgr := New(logger, config.WorkerConfig{Backend: "memory"})
+	ref := DurableJobRef{ID: "job-456", Type: "custom.job"}
+	var called bool
+	mgr.RegisterDurableJobHandler("*", func(ctx context.Context, got DurableJobRef) error {
+		called = true
+		if got != ref {
+			t.Fatalf("durable ref = %#v, want %#v", got, ref)
+		}
+		return nil
+	})
+
+	if err := mgr.executeDurableJob(context.Background(), ref); err != nil {
+		t.Fatalf("execute durable job: %v", err)
+	}
+	if !called {
+		t.Fatal("wildcard durable handler was not called")
 	}
 }
 

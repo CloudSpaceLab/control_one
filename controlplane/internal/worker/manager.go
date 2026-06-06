@@ -22,9 +22,25 @@ const defaultRetryBackoff = 5 * time.Second
 type Task struct {
 	Name         string
 	Job          func(context.Context) error
+	DurableJob   DurableJobRef
 	MaxAttempts  int
 	RetryBackoff time.Duration
 }
+
+// DurableJobRef identifies a persisted job that can be rehydrated after a
+// process restart instead of relying on an in-memory closure.
+type DurableJobRef struct {
+	ID   string `json:"job_id,omitempty"`
+	Type string `json:"job_type,omitempty"`
+}
+
+// Valid reports whether the task carries enough metadata for a durable handler.
+func (r DurableJobRef) Valid() bool {
+	return strings.TrimSpace(r.ID) != "" && strings.TrimSpace(r.Type) != ""
+}
+
+// DurableJobHandler executes a persisted job reference.
+type DurableJobHandler func(context.Context, DurableJobRef) error
 
 // Status describes the worker backend state for health checks and diagnostics.
 type Status struct {
@@ -162,8 +178,18 @@ func (m *Manager) enqueueAsynq(task Task, processAt time.Time) error {
 	if strings.TrimSpace(task.Name) == "" {
 		return errors.New("task name required for asynq backend")
 	}
-	m.tasks.Store(task.Name, task.Job)
-	payloadBytes, err := json.Marshal(asynqTaskPayload{Name: task.Name})
+	if !task.DurableJob.Valid() {
+		if task.Job == nil {
+			return errors.New("task job cannot be nil")
+		}
+		m.tasks.Store(task.Name, task.Job)
+	}
+	payload := asynqTaskPayload{Name: task.Name}
+	if task.DurableJob.Valid() {
+		payload.JobID = strings.TrimSpace(task.DurableJob.ID)
+		payload.JobType = strings.TrimSpace(task.DurableJob.Type)
+	}
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal asynq payload: %w", err)
 	}
@@ -195,6 +221,20 @@ func (m *Manager) handleAsynqTask(ctx context.Context, t *asynq.Task) error {
 		outcome = metricsStatusError
 		return fmt.Errorf("decode asynq payload: %w", err)
 	}
+	if strings.TrimSpace(payload.JobID) != "" || strings.TrimSpace(payload.JobType) != "" {
+		ref := DurableJobRef{ID: payload.JobID, Type: payload.JobType}
+		if !ref.Valid() {
+			outcome = metricsStatusError
+			return fmt.Errorf("durable job payload requires job_id and job_type")
+		}
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		if err := m.executeDurableJob(ctx, ref); err != nil {
+			outcome = metricsStatusFailure
+			return err
+		}
+		return nil
+	}
 	value, ok := m.tasks.Load(payload.Name)
 	if !ok {
 		outcome = metricsStatusError
@@ -213,6 +253,26 @@ func (m *Manager) handleAsynqTask(ctx context.Context, t *asynq.Task) error {
 	}
 	m.tasks.Delete(payload.Name)
 	return nil
+}
+
+func (m *Manager) executeDurableJob(ctx context.Context, ref DurableJobRef) error {
+	ref.ID = strings.TrimSpace(ref.ID)
+	ref.Type = strings.TrimSpace(ref.Type)
+	if !ref.Valid() {
+		return errors.New("durable job reference requires id and type")
+	}
+	value, ok := m.durableJobs.Load(ref.Type)
+	if !ok {
+		value, ok = m.durableJobs.Load("*")
+	}
+	if !ok {
+		return fmt.Errorf("durable job handler not registered for %s", ref.Type)
+	}
+	handler, ok := value.(DurableJobHandler)
+	if !ok {
+		return fmt.Errorf("invalid durable job handler for %s", ref.Type)
+	}
+	return handler(ctx, ref)
 }
 
 var (
@@ -239,6 +299,7 @@ type Manager struct {
 	asynqServer    *asynq.Server
 	asynqInspector *asynq.Inspector
 	tasks          sync.Map
+	durableJobs    sync.Map
 
 	statusMu         sync.RWMutex
 	statusQueueDepth int
@@ -250,7 +311,9 @@ const asynqTaskType = "control_one:execute"
 const asynqQueueDefault = "default"
 
 type asynqTaskPayload struct {
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	JobID   string `json:"job_id,omitempty"`
+	JobType string `json:"job_type,omitempty"`
 }
 
 // New constructs a Manager with the provided configuration.
@@ -272,6 +335,16 @@ func New(log *zap.Logger, cfg config.WorkerConfig) *Manager {
 		log: log.Named("worker"),
 		cfg: cfg,
 	}
+}
+
+// RegisterDurableJobHandler registers an executor for persisted jobs. Use "*"
+// as jobType to provide a default handler for all durable job references.
+func (m *Manager) RegisterDurableJobHandler(jobType string, handler DurableJobHandler) {
+	jobType = strings.TrimSpace(jobType)
+	if jobType == "" || handler == nil {
+		return
+	}
+	m.durableJobs.Store(jobType, handler)
 }
 
 // Status returns a snapshot of the worker manager state.
@@ -389,7 +462,7 @@ func (m *Manager) EnqueueAt(task Task, processAt time.Time) error {
 }
 
 func (m *Manager) enqueue(task Task, processAt time.Time) error {
-	if task.Job == nil {
+	if task.Job == nil && !task.DurableJob.Valid() {
 		return errors.New("task job cannot be nil")
 	}
 
@@ -415,6 +488,10 @@ func (m *Manager) enqueue(task Task, processAt time.Time) error {
 		}
 		metricsRecordEnqueueResult(backendLabel, metricsStatusSuccess)
 		return nil
+	}
+	if task.Job == nil {
+		metricsRecordEnqueueResult(backendLabel, metricsStatusFailure)
+		return errors.New("task job cannot be nil for memory backend")
 	}
 
 	// Memory backend: wrap the job so the worker waits until processAt before

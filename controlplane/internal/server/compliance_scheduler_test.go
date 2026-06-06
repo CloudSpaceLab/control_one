@@ -74,6 +74,14 @@ func TestComplianceSchedulerCreateScanJobs(t *testing.T) {
 		if len(queue.tasks) != 2 {
 			t.Fatalf("expected 2 enqueued tasks, got %d", len(queue.tasks))
 		}
+		for _, task := range queue.tasks {
+			if !task.DurableJob.Valid() || task.DurableJob.Type != JobTypeComplianceScan {
+				t.Fatalf("scheduled scan task missing durable job ref: %#v", task.DurableJob)
+			}
+			if task.Job == nil {
+				t.Fatal("scheduled scan task should retain an in-process job for memory workers")
+			}
+		}
 	})
 
 	t.Run("scans specific tenant only", func(t *testing.T) {
