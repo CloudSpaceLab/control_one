@@ -88,12 +88,21 @@ func (s *Server) detectFirstSeenDestination(ctx context.Context, tenantID, nodeI
 		Protocol:      ev.Protocol,
 		ThreatFeed:    ev.ThreatFeed,
 		ThreatScore:   ev.ThreatScore,
-		Message:       fmt.Sprintf("first connection to %s by %s", ev.DstIP, ev.ProcessName),
+		Message:       firstSeenDestinationMessage(ev.DstIP, ev.ProcessName),
 		Details: map[string]any{
 			"first_seen": true,
 		},
 		DedupKey: fmt.Sprintf("anomaly.new_dst:%s:%s", tenantID, ev.DstIP),
 	}
+}
+
+func firstSeenDestinationMessage(dstIP, processName string) string {
+	dstIP = strings.TrimSpace(dstIP)
+	processName = strings.TrimSpace(processName)
+	if processName == "" {
+		return fmt.Sprintf("first connection to %s", dstIP)
+	}
+	return fmt.Sprintf("first connection to %s by %s", dstIP, processName)
 }
 
 // F.2: long connection — duration > 3× p95 from the rolling baseline.

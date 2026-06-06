@@ -257,17 +257,18 @@ func newSOCCaseResponse(row storage.AIInvestigation) socCaseResponse {
 	evidence := parseSOCCaseEvidence(row.Evidence)
 	citation := workflowCitation("ai_investigations", row.ID.String(), "soc_case")
 	evidenceRefs := socCaseEvidenceRefsForRow(row, evidence, citation)
+	summary := cleanSOCCaseText(row.Summary)
 	resp := socCaseResponse{
 		CaseID:           row.ID.String(),
 		TenantID:         row.TenantID.String(),
-		Title:            firstNonEmptyString(strings.TrimSpace(row.Summary), strings.TrimSpace(row.TriggerEventType), "Investigation case"),
+		Title:            firstNonEmptyString(summary, strings.TrimSpace(row.TriggerEventType), "Investigation case"),
 		Status:           string(row.Status),
 		Severity:         firstNonEmptyString(strings.ToLower(strings.TrimSpace(row.Severity)), "info"),
 		Source:           "ai_investigation",
 		TriggerType:      row.TriggerType,
 		TriggerEventType: row.TriggerEventType,
 		DedupKey:         row.TriggerDedupKey,
-		Summary:          row.Summary,
+		Summary:          summary,
 		Evidence:         evidence,
 		EvidenceRefs:     evidenceRefs,
 		Citations:        []aiWorkflowCitation{citation},
@@ -286,6 +287,14 @@ func newSOCCaseResponse(row storage.AIInvestigation) socCaseResponse {
 	}
 	resp.Timeline = socCaseTimeline(row, evidence, evidenceRefs, citation, resp.CreatedAt, resp.UpdatedAt, resp.Summary)
 	return resp
+}
+
+func cleanSOCCaseText(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "first connection to ") && strings.HasSuffix(strings.ToLower(value), " by") {
+		return strings.TrimSpace(value[:len(value)-len(" by")])
+	}
+	return value
 }
 
 func newSOCCaseExportResponse(c socCaseResponse, generatedAt time.Time) socCaseExportResponse {
@@ -705,7 +714,7 @@ func socCaseTimeline(row storage.AIInvestigation, evidence map[string]any, refs 
 			Event:       "signal.observed",
 			Source:      firstNonEmptyString(socCaseString(evidence["collector"]), socCaseString(evidence["parser"]), "collector"),
 			CitationID:  firstSOCCaseEvidenceCitation(refs, citation.ID),
-			Description: firstNonEmptyString(socCaseString(evidence["message"]), summary, row.TriggerEventType),
+			Description: cleanSOCCaseText(firstNonEmptyString(socCaseString(evidence["message"]), summary, row.TriggerEventType)),
 		})
 	}
 	items = append(items, socCaseTimelineItem{

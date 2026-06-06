@@ -202,6 +202,46 @@ func TestSOCCaseDerivesEvidenceAndTimelineFromAnomalyRows(t *testing.T) {
 	}
 }
 
+func TestSOCCaseResponseCleansDanglingFirstConnectionProcess(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	evidence := map[string]any{
+		"event_id": "event-8",
+		"ts":       "2026-06-06T16:05:26Z",
+		"node_id":  nodeID.String(),
+		"message":  "first connection to 20.169.85.72 by",
+	}
+	rawEvidence, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("marshal evidence: %v", err)
+	}
+	row := storage.AIInvestigation{
+		ID:               uuid.New(),
+		TenantID:         tenantID,
+		NodeID:           nodeID,
+		TriggerType:      "anomaly",
+		TriggerEventType: "anomaly.new_destination",
+		TriggerDedupKey:  "anomaly.new_dst:" + tenantID.String() + ":20.169.85.72",
+		Severity:         "low",
+		Summary:          "first connection to 20.169.85.72 by",
+		Evidence:         rawEvidence,
+		Status:           storage.AIInvestigationStatusOpen,
+		CreatedAt:        mustParseTime(t, "2026-06-06T16:05:27Z"),
+		UpdatedAt:        mustParseTime(t, "2026-06-06T16:05:27Z"),
+	}
+
+	resp := newSOCCaseResponse(row)
+	if resp.Title != "first connection to 20.169.85.72" || resp.Summary != "first connection to 20.169.85.72" {
+		t.Fatalf("case response kept dangling process suffix: title=%q summary=%q", resp.Title, resp.Summary)
+	}
+	timeline := stringsForCaseTimeline(resp.Timeline)
+	if contains(timeline, "first connection to 20.169.85.72 by") {
+		t.Fatalf("timeline kept dangling process suffix: %s", timeline)
+	}
+}
+
 func TestSOCCaseNoteRejectsUnlinkedCitation(t *testing.T) {
 	t.Parallel()
 

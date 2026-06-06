@@ -124,3 +124,38 @@ func TestFanOutEventsPersistsAnomalyInvestigation(t *testing.T) {
 		t.Fatalf("unexpected investigation list: %+v", list)
 	}
 }
+
+func TestFirstSeenDestinationMessageOmitsUnknownProcess(t *testing.T) {
+	tests := []struct {
+		name    string
+		dstIP   string
+		process string
+		want    string
+	}{
+		{
+			name:    "with process",
+			dstIP:   "198.51.100.10",
+			process: "curl",
+			want:    "first connection to 198.51.100.10 by curl",
+		},
+		{
+			name:  "without process",
+			dstIP: "20.169.85.72",
+			want:  "first connection to 20.169.85.72",
+		},
+		{
+			name:    "trims process",
+			dstIP:   "20.169.85.72",
+			process: "  nginx  ",
+			want:    "first connection to 20.169.85.72 by nginx",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := firstSeenDestinationMessage(tt.dstIP, tt.process); got != tt.want {
+				t.Fatalf("firstSeenDestinationMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
