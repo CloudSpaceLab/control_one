@@ -483,7 +483,14 @@ export function Observability(): JSX.Element {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <Panel padding="md" eyebrow="STACK MAP" title={referenceMode ? 'Reference blueprint' : `${tenantLabel} live stack`}>
           <div className="overflow-x-auto rounded-lg border border-border-subtle">
-            <table className="w-full min-w-[720px] text-sm">
+            <table className="w-full table-fixed text-sm sm:min-w-[640px] xl:min-w-0">
+              <colgroup>
+                <col className="w-[22%]" />
+                <col className="w-[17%]" />
+                <col className="w-[28%]" />
+                <col className="w-[23%]" />
+                <col className="w-[10%]" />
+              </colgroup>
               <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-text-secondary">
                 <tr>
                   <th className="px-3 py-2">Service</th>
@@ -498,19 +505,21 @@ export function Observability(): JSX.Element {
                   const meta = STATE_META[service.state];
                   return (
                     <tr key={service.id} className="border-t border-border-subtle">
-                      <td className="px-3 py-3">
-                        <div className="font-medium text-foreground">{service.name}</div>
-                        <div className="text-xs text-text-muted">{service.kind}</div>
+                      <td className="min-w-0 px-3 py-3 align-top">
+                        <div className="break-words font-medium text-foreground">{service.name}</div>
+                        <div className="break-words text-xs text-text-muted">{service.kind}</div>
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="min-w-0 px-3 py-3 align-top">
                         <StatusTag tone={meta.tone}>{meta.label}</StatusTag>
-                        <p className="mt-1 max-w-[14rem] text-xs text-text-muted">{meta.plain}</p>
+                        <p className="mt-1 text-xs leading-5 text-text-muted">{meta.plain}</p>
                       </td>
-                      <td className="px-3 py-3 text-xs text-text-secondary">
-                        {service.evidence.join(', ') || 'none'}
+                      <td className="min-w-0 px-3 py-3 align-top text-xs text-text-secondary">
+                        <span className="block break-words leading-5">{service.evidence.join(', ') || 'none'}</span>
                       </td>
-                      <td className="px-3 py-3 text-xs text-text-secondary">{service.nextAction}</td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="min-w-0 px-3 py-3 align-top text-xs text-text-secondary">
+                        <span className="block break-words leading-5">{service.nextAction}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right align-top">
                         <Button
                           type="button"
                           variant={selected.id === service.id ? 'secondary' : 'ghost'}
