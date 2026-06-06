@@ -338,6 +338,26 @@ func TestBuildEventQuerySQLSearchUsesPortableUnionPredicate(t *testing.T) {
 	}
 }
 
+func TestFleetHealthSnapshotSQLAvoidsMemoryHeavyDistinctAndNullScans(t *testing.T) {
+	query := fleetHealthSnapshotSQL()
+	if strings.Contains(strings.ToUpper(query), "COUNT(DISTINCT") {
+		t.Fatalf("fleet health query should avoid memory-heavy distinct counts:\n%s", query)
+	}
+	for _, want := range []string{
+		"IFNULL(node_id, '')",
+		"event_type LIKE 'conn.%'",
+		"IFNULL(SUM(IFNULL(bytes_in, 0)), 0)",
+		"IFNULL(SUM(IFNULL(bytes_out, 0)), 0)",
+		"IFNULL(MAX(severity), '')",
+		"tenant_id = ?",
+		"ts >= ?",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("fleet health query missing %q:\n%s", want, query)
+		}
+	}
+}
+
 func TestBuildTimelineSQLScopesEveryUnionArmByTenant(t *testing.T) {
 	query, args, err := buildTimelineSQL(TimelineBuildParams{
 		TenantID:      "tenant-1",

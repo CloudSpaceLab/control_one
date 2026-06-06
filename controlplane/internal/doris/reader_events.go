@@ -1399,23 +1399,9 @@ func (c *Client) FleetHealthSnapshot(ctx context.Context, tenantID string, since
 	if c == nil || c.db == nil {
 		return nil, fmt.Errorf("doris client unavailable")
 	}
-	q := `
-		SELECT node_id,
-		       COUNT(DISTINCT conn_id)                       AS conns_active,
-		       SUM(bytes_in)                                  AS bytes_in,
-		       SUM(bytes_out)                                 AS bytes_out,
-		       SUM(CASE WHEN threat_feed != '' THEN 1 ELSE 0 END) AS threat_hits,
-		       MAX(ts)                                        AS last_event_at,
-		       MAX(severity)                                  AS sev_max
-		FROM events
-		WHERE tenant_id = ? AND ts >= ?
-		GROUP BY node_id
-		ORDER BY threat_hits DESC, conns_active DESC
-		LIMIT 1000
-	`
 	qctx, cancel := context.WithTimeout(ctx, c.cfg.QueryTimeout)
 	defer cancel()
-	rows, err := c.db.QueryContext(qctx, q, tenantID, since)
+	rows, err := c.db.QueryContext(qctx, fleetHealthSnapshotSQL(), tenantID, since)
 	if err != nil {
 		return nil, err
 	}
@@ -1433,6 +1419,23 @@ func (c *Client) FleetHealthSnapshot(ctx context.Context, tenantID string, since
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func fleetHealthSnapshotSQL() string {
+	return `
+		SELECT IFNULL(node_id, '') AS node_id,
+		       SUM(CASE WHEN event_type LIKE 'conn.%' THEN 1 ELSE 0 END) AS conns_active,
+		       IFNULL(SUM(IFNULL(bytes_in, 0)), 0) AS bytes_in,
+		       IFNULL(SUM(IFNULL(bytes_out, 0)), 0) AS bytes_out,
+		       SUM(CASE WHEN IFNULL(threat_feed, '') != '' THEN 1 ELSE 0 END) AS threat_hits,
+		       MAX(ts) AS last_event_at,
+		       IFNULL(MAX(severity), '') AS sev_max
+		FROM events
+		WHERE tenant_id = ? AND ts >= ?
+		GROUP BY IFNULL(node_id, '')
+		ORDER BY threat_hits DESC, conns_active DESC
+		LIMIT 1000
+	`
 }
 
 // LogVolumeBucketed returns per-bucket message counts so the dashboard can
