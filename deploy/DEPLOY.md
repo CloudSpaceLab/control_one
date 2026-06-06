@@ -76,14 +76,18 @@ $SSH $HOST 'cd /opt/control-one/deploy && bash ./bootstrap.sh'
 The script:
 
 1. Builds the three images (controlplane, console, landing).
-2. Starts Postgres + Redis and waits for healthchecks.
-3. Starts the app services.
+2. Starts Redis and waits for healthchecks.
+3. Skips Doris by default for the small-fleet/demo profile.
 4. Brings up `nginx-edge` with HTTP-only bootstrap config.
 5. Asks Let's Encrypt for a certificate via HTTP-01.
 6. Swaps in the HTTPS edge config and reloads nginx.
 7. Starts the certbot renewal sidecar.
 
 Expect 5–10 minutes on the first run (image builds dominate).
+
+Small-fleet analytics is the default. To run Doris for a dedicated OLAP
+deployment, set `ANALYTICS_MODE=olap` and `DORIS_ENABLED=true` in `.env`; the
+compose file keeps `doris-fe` and `doris-be` behind the `olap` profile.
 
 ## 6. Verify
 

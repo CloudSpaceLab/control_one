@@ -376,7 +376,31 @@ cd /opt/control-one/deploy
 echo ">> docker compose build"
 docker compose build
 
-echo ">> bringing up redis + doris..."
+ANALYTICS_MODE=$({ grep '^ANALYTICS_MODE=' .env || true; } | tail -1 | cut -d= -f2-)
+DORIS_ENABLED=$({ grep '^DORIS_ENABLED=' .env || true; } | tail -1 | cut -d= -f2-)
+ANALYTICS_MODE=${ANALYTICS_MODE:-small}
+DORIS_ENABLED=${DORIS_ENABLED:-false}
+ANALYTICS_MODE_LC=$(printf '%s' "$ANALYTICS_MODE" | tr '[:upper:]' '[:lower:]')
+DORIS_ENABLED_LC=$(printf '%s' "$DORIS_ENABLED" | tr '[:upper:]' '[:lower:]')
+RUN_DORIS=false
+if [ "$ANALYTICS_MODE_LC" = "olap" ]; then
+  RUN_DORIS=true
+fi
+case "$DORIS_ENABLED_LC" in
+  true|1|yes) RUN_DORIS=true ;;
+esac
+
+echo ">> bringing up redis..."
+docker compose up -d redis
+
+echo ">> waiting for redis health..."
+for i in $(seq 1 30); do
+  if docker compose ps redis --format json | grep -q '"Health":"healthy"'; then break; fi
+  sleep 2
+done
+
+if [ "$RUN_DORIS" = "true" ]; then
+  echo ">> bringing up Doris OLAP profile..."
 if command -v sysctl >/dev/null 2>&1; then
   current_map_count=$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)
   if [ "${current_map_count:-0}" -lt 2000000 ]; then
@@ -397,18 +421,11 @@ w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
 w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
 EOF
 fi
-docker compose up -d redis
-docker compose up -d doris-fe doris-be
-
-echo ">> waiting for redis health..."
-for i in $(seq 1 30); do
-  if docker compose ps redis --format json | grep -q '"Health":"healthy"'; then break; fi
-  sleep 2
-done
+docker compose --profile olap up -d doris-fe doris-be
 
 echo ">> waiting for Doris FE health (up to 5 min on cold boot)..."
 for i in $(seq 1 60); do
-  if docker compose exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health >/dev/null 2>&1; then
+  if docker compose --profile olap exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health >/dev/null 2>&1; then
     echo "   doris-fe healthy"
     break
   fi
@@ -416,7 +433,7 @@ for i in $(seq 1 60); do
 done
 
 echo ">> verifying Doris FE heap cap..."
-FE_CMDLINE=$(docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1' || true)
+FE_CMDLINE=$(docker compose --profile olap exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1' || true)
 case "$FE_CMDLINE" in
   *-Xmx1500m*) ;;
   *) echo "Doris FE heap cap is not active; expected -Xmx1500m." >&2; exit 1 ;;
@@ -424,18 +441,22 @@ esac
 case "$FE_CMDLINE" in
   *-Xmx8192m*) echo "Doris FE is still using the image default 8 GB heap." >&2; exit 1 ;;
 esac
-docker compose exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'
+docker compose --profile olap exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'
 
 # Bootstrap Doris: set root password (no-op if already set), create the
 # database, register the BE node. All idempotent — `|| true` swallows the
 # "backend already added" error on re-runs.
 DORIS_PASS=$(grep '^DORIS_PASSWORD=' .env | cut -d= -f2-)
 echo ">> bootstrapping Doris database controlone..."
-docker compose exec -T doris-fe bash -lc "mysql -h127.0.0.1 -P9030 -uroot -e \"
+docker compose --profile olap exec -T doris-fe bash -lc "mysql -h127.0.0.1 -P9030 -uroot -e \"
   SET PASSWORD FOR 'root'@'%' = PASSWORD('${DORIS_PASS}');
   CREATE DATABASE IF NOT EXISTS controlone;
   ALTER SYSTEM ADD BACKEND '172.31.0.20:9050';
 \"" 2>&1 || true
+else
+  echo ">> skipping Doris (ANALYTICS_MODE=${ANALYTICS_MODE}, DORIS_ENABLED=${DORIS_ENABLED})"
+  docker compose --profile olap stop doris-fe doris-be >/dev/null 2>&1 || true
+fi
 
 echo ">> bringing up controlplane + console + landing + nginx-edge..."
 docker compose up -d controlplane console landing nginx-edge
@@ -577,9 +598,26 @@ def seed_default_users(remote: Remote) -> list:
 
 def check_doris_ready(remote: Remote) -> None:
     """Probe the Doris FE health endpoint inside the compose network."""
+    _, env_text, _ = remote.run(
+        "cd /opt/control-one/deploy && "
+        "grep -E '^(ANALYTICS_MODE|DORIS_ENABLED)=' .env 2>/dev/null || true",
+        check=False, quiet=True,
+    )
+    env = {}
+    for line in env_text.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            env[key.strip()] = value.strip().lower()
+    analytics_mode = env.get("ANALYTICS_MODE", "small")
+    doris_enabled = env.get("DORIS_ENABLED", "false")
+    if analytics_mode != "olap" and doris_enabled not in {"true", "1", "yes"}:
+        log("  Doris FE: skipped (small analytics mode)")
+        return
+
     rc, out, _ = remote.run(
         "cd /opt/control-one/deploy && "
-        "docker compose exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health 2>&1 || echo unhealthy",
+        "docker compose --profile olap exec -T doris-fe "
+        "curl -fs http://127.0.0.1:8030/api/health 2>&1 || echo unhealthy",
         check=False, quiet=True,
     )
     if rc == 0 and "unhealthy" not in out:

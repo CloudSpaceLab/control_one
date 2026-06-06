@@ -15,6 +15,22 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+env_value() {
+  { grep -E "^$1=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-
+}
+
+ANALYTICS_MODE="${ANALYTICS_MODE:-$(env_value ANALYTICS_MODE)}"
+DORIS_ENABLED="${DORIS_ENABLED:-$(env_value DORIS_ENABLED)}"
+ANALYTICS_MODE="${ANALYTICS_MODE:-small}"
+DORIS_ENABLED="${DORIS_ENABLED:-false}"
+RUN_DORIS=false
+if [[ "${ANALYTICS_MODE,,}" == "olap" ]]; then
+  RUN_DORIS=true
+fi
+case "${DORIS_ENABLED,,}" in
+  true|1|yes) RUN_DORIS=true ;;
+esac
+
 hostctl() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
@@ -79,11 +95,11 @@ EOF
 }
 
 doris_fe_cmdline() {
-  docker compose exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1'
+  docker compose --profile olap exec -T doris-fe bash -lc 'for p in /proc/[0-9]*/cmdline; do cmd=$(tr "\0" " " < "$p" 2>/dev/null || true); case "$cmd" in *org.apache.doris.DorisFE*) printf "%s\n" "$cmd"; exit 0;; esac; done; exit 1'
 }
 
 ensure_doris_be_heap_cap() {
-  if ! docker compose exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'; then
+  if ! docker compose --profile olap exec -T doris-be bash -lc 'grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf'; then
     echo ">> Doris BE heap cap is not active; expected -Xmx512m in be.conf." >&2
     exit 1
   fi
@@ -101,11 +117,11 @@ ensure_doris_fe_heap_cap() {
 echo ">> [1/5] Building images (this can take a few minutes the first time)..."
 docker compose build
 
-echo ">> [2/5] Starting Postgres + Redis..."
-docker compose up -d postgres redis
+echo ">> [2/5] Starting Redis..."
+docker compose up -d redis
 
 # Wait for healthchecks to flip to healthy.
-for svc in postgres redis; do
+for svc in redis; do
   for _ in {1..30}; do
     state=$(docker compose ps --format json "$svc" | head -1 | grep -o '"Health":"[a-z]*"' | head -1 | cut -d'"' -f4)
     if [[ "$state" == "healthy" ]]; then break; fi
@@ -113,26 +129,31 @@ for svc in postgres redis; do
   done
 done
 
-echo ">> [3/5] Bootstrapping Doris (FE + BE)..."
-ensure_doris_host_prereqs
-docker compose up -d doris-fe doris-be
-# Wait for FE health endpoint, then bootstrap database + add backend.
-for _ in {1..60}; do
-  if docker compose exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health >/dev/null 2>&1; then
-    break
-  fi
-  sleep 5
-done
-ensure_doris_fe_heap_cap
-ensure_doris_be_heap_cap
-# Set the root password + create database + register the BE. All idempotent
-# (BE-add silently fails on re-run; SET PASSWORD is no-op when same value).
-DORIS_PASS="${DORIS_PASSWORD:-$(grep '^DORIS_PASSWORD=' .env | cut -d= -f2-)}"
-docker compose exec -T doris-fe bash -lc "mysql -h127.0.0.1 -P9030 -uroot -e \"
-  SET PASSWORD FOR 'root' = PASSWORD('${DORIS_PASS}');
-  CREATE DATABASE IF NOT EXISTS controlone;
-  ALTER SYSTEM ADD BACKEND 'doris-be:9050';
-\" 2>&1" || true
+if [[ "${RUN_DORIS}" == "true" ]]; then
+  echo ">> [3/5] Bootstrapping Doris OLAP profile (FE + BE)..."
+  ensure_doris_host_prereqs
+  docker compose --profile olap up -d doris-fe doris-be
+  # Wait for FE health endpoint, then bootstrap database + add backend.
+  for _ in {1..60}; do
+    if docker compose --profile olap exec -T doris-fe curl -fs http://127.0.0.1:8030/api/health >/dev/null 2>&1; then
+      break
+    fi
+    sleep 5
+  done
+  ensure_doris_fe_heap_cap
+  ensure_doris_be_heap_cap
+  # Set the root password + create database + register the BE. All idempotent
+  # (BE-add silently fails on re-run; SET PASSWORD is no-op when same value).
+  DORIS_PASS="${DORIS_PASSWORD:-$(grep '^DORIS_PASSWORD=' .env | cut -d= -f2-)}"
+  docker compose --profile olap exec -T doris-fe bash -lc "mysql -h127.0.0.1 -P9030 -uroot -e \"
+    SET PASSWORD FOR 'root' = PASSWORD('${DORIS_PASS}');
+    CREATE DATABASE IF NOT EXISTS controlone;
+    ALTER SYSTEM ADD BACKEND 'doris-be:9050';
+  \" 2>&1" || true
+else
+  echo ">> [3/5] Skipping Doris (ANALYTICS_MODE=${ANALYTICS_MODE}, DORIS_ENABLED=${DORIS_ENABLED})..."
+  docker compose --profile olap stop doris-fe doris-be >/dev/null 2>&1 || true
+fi
 
 echo ">> [4/5] Starting controlplane + console + landing..."
 docker compose up -d controlplane console landing

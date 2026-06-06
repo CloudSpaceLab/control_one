@@ -58,6 +58,7 @@ postgres-data/
 /deploy/controlplane.yaml
 /deploy/controlplane.yaml.tmpl
 /deploy/.env*
+!/deploy/.env.example
 /deploy/fix_migration_0061.py
 /deploy/diagnose_output.txt
 diagnose_output.txt

@@ -1,6 +1,6 @@
 # Small-Fleet Analytics Architecture
 
-Status: Proposal
+Status: Decision proposal
 
 Date: 2026-06-06
 
@@ -15,6 +15,44 @@ still too memory-sensitive for the current demo host. A small-fleet default
 should be boring, bounded, and recoverable: Redis for hot state, SQLite for
 indexed recent facts, Postgres for canonical product state and replay journals,
 and Doris only as an optional large-fleet OLAP backend.
+
+## Decision Summary
+
+Use a local analytic backend for demo, branch, and small-fleet deployments:
+
+- Postgres remains the source of truth for product state, durable ingest
+  journals, audit records, cases, and operator workflows.
+- Redis keeps only bounded hot state: live counters, short streams, leases,
+  writer lag, and dashboard acceleration.
+- SQLite stores recent indexed analytic facts in WAL-mode tenant databases:
+  events, process connections, timeline links, and hourly rollups.
+- Doris remains supported behind `analytics.mode=olap`, but it becomes opt-in
+  and should not start in the default demo compose profile.
+
+This is not a feature reduction. The API contract and UI surfaces stay intact;
+only the backing analytic store changes for small fleets.
+
+## Small-Fleet Fit Envelope
+
+The Redis+SQLite mode is the right default for:
+
+- demos and proofs of value;
+- one to roughly 50 monitored nodes;
+- low to moderate telemetry rates, roughly up to 250 sustained EPS before
+  tuning and up to 500 EPS with short retention and a fast disk;
+- recent investigation windows measured in days, not multi-year warehouse
+  searches;
+- one controlplane instance with Postgres already available.
+
+Expected memory profile on the shared 8 GB VPS:
+
+- controlplane: 512 MB to 1 GB;
+- Redis: 128 MB for demo, 256-512 MB for branch deployments;
+- SQLite: no daemon, bounded in-process page cache;
+- no Doris FE JVM and no Doris BE process.
+
+Move to Doris or another dedicated analytic warehouse when sustained ingestion,
+retention, tenant concurrency, or ad hoc search volume exceed that envelope.
 
 ## Current Doris Responsibilities
 
@@ -44,6 +82,23 @@ deployment for worker/runtime coordination.
    per-tenant files prevent one noisy tenant from wedging the whole controlplane.
 5. Keep Doris optional. It remains the right answer for large, multi-node,
    high-EPS analytic clusters, not for the smallest production footprint.
+
+## Why This Shape
+
+Redis alone is too volatile to be an evidence store. It is excellent for hot
+counters and low-latency dashboards, but eviction, TTLs, and approximate
+structures must never decide what a bank can later prove.
+
+Postgres alone can carry the replay journal and rollups, and the current small
+mode already uses that path for fleet health. However, pushing high-cardinality
+connection drilldowns, full-text event search, and timeline facts into the same
+transactional database risks turning investigation traffic into product-state
+contention.
+
+SQLite gives the small deployment a local indexed read model without a separate
+memory-heavy service. Because the Postgres journal is canonical, SQLite can be
+treated as durable but reconstructable: if a tenant database is missing or
+corrupt, replay the journal and rebuild the analytic file.
 
 ## Proposed Components
 
@@ -95,6 +150,30 @@ Recommended layout:
 
 The per-tenant file choice keeps lock contention and retention isolated. For a
 single-tenant demo it behaves like one tiny embedded analytics database.
+
+Recommended runtime settings:
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+PRAGMA temp_store = FILE;
+PRAGMA cache_size = -32768; -- 32 MiB per active tenant connection pool
+PRAGMA wal_autocheckpoint = 1000;
+```
+
+Use `synchronous=NORMAL` for the demo because Postgres keeps the replay journal.
+For bank production small-fleet installs that treat SQLite as evidence storage
+between backups, allow `synchronous=FULL` as an explicit config option.
+
+Cap the writer queue, batch size, and query window:
+
+- writer queue: default 5,000 events per tenant, reject or mark degraded after
+  the cap instead of growing memory unbounded;
+- writer batch size: 250-1,000 rows per transaction;
+- default query window: 24 hours;
+- maximum unprivileged query window: 7 days;
+- admin override window: bounded by configured retention.
 
 Candidate tables:
 
@@ -205,6 +284,28 @@ SQLite should use a pure-Go driver or a build profile that preserves the current
 cross-compile deployment path. The current deploy builds with `CGO_ENABLED=0`,
 so a cgo-only driver would be a deployment regression.
 
+### Derived-Store Crash Semantics
+
+The small analytic database is durable, but the recovery model is replay-first:
+
+1. Accept ingest only after the Postgres journal write succeeds.
+2. Normalize events and write local fanout metadata as the code does today.
+3. Write Redis hot counters with TTLs.
+4. Append SQLite facts in a bounded writer transaction.
+5. Mark the journal batch complete for the active analytic backend only after
+   SQLite commits.
+
+The existing `doris_status` column can remain for compatibility during the
+transition, but new code should treat it as backend status and expose it as
+`analytics_status` in API/admin copy. Status values should distinguish
+`local_completed`, `pending_local`, `pending_olap`, `failed`, and `archived`
+without requiring an immediate destructive migration.
+
+If the process crashes after the journal write but before SQLite commit, the
+drainer replays the batch. If SQLite fails health checks, the server keeps
+accepting journaled ingest only up to configured backlog limits and reports
+analytic freshness as degraded.
+
 ## API Source Mapping
 
 The server should depend on a new internal interface, not directly on
@@ -248,6 +349,32 @@ Endpoint behavior:
 Responses should expose `source: "small-analytics"` or more granular
 `source: "redis+sqlite"` so audits can prove the active backend.
 
+Endpoint compatibility rules:
+
+- Do not remove UI panels, routes, filters, exports, or investigation affordances
+  just because the backend changes.
+- Small mode should return successful envelopes with data whenever the SQLite
+  store is healthy. Guardrail text is reserved for true degraded or not-yet-built
+  paths.
+- The same tenant, RBAC, redaction, capture-policy, and citation checks must run
+  in both `small` and `olap` modes.
+- The same fixture events should produce equivalent normalized rows from Doris
+  and SQLite in dual-read tests.
+
+## Query Budget
+
+Default query targets for the demo host:
+
+- fleet health: p95 under 500 ms;
+- top talkers: p95 under 500 ms for a 24-hour window;
+- connection list: p95 under 700 ms for 1,000 returned rows or fewer;
+- connection detail and correlated events: p95 under 700 ms;
+- timeline build: p95 under 1.5 s for the configured recent window.
+
+Every small-mode query must have a bounded time window, limit, and context
+timeout. Expensive searches should return a typed partial/degraded response
+instead of blocking the controlplane.
+
 ## Ingest Flow
 
 1. Validate and normalize incoming telemetry/events.
@@ -256,13 +383,29 @@ Responses should expose `source: "small-analytics"` or more granular
 4. Update Redis hot counters and streams with TTLs.
 5. Append typed facts to the SQLite writer queue.
 6. The SQLite writer commits the batch in one transaction.
-7. Mark the journal batch `analytics_status = local-complete`.
+7. Mark the journal batch `analytics_status = local_completed`.
 8. Optional: mirror to Doris when `analytics.mode = olap` or `mirror_doris =
    true`.
 
 If SQLite is unavailable, ingest still writes the Postgres journal, marks
 analytics pending, and the UI reports degraded analytic freshness rather than
 losing events or consuming unbounded memory.
+
+## Redis Data Model
+
+Redis key families should be tenant-scoped, TTL-bound, and safe under eviction:
+
+```text
+co:hot:fleet:{tenant}:nodes                       hash, ttl 24h
+co:hot:fleet:{tenant}:node:{node}:counters        hash, ttl 24h
+co:hot:toptalkers:{tenant}:{yyyyMMddHH}           zset, ttl 48h
+co:stream:events:{tenant}                         stream, maxlen approximate
+co:analytics:writer:{tenant}:lag                  string/gauge, ttl 5m
+co:analytics:writer:{tenant}:degraded             string, ttl 5m
+```
+
+Use Redis for speed and operator freshness, not for citations. Any value shown
+as evidence must be traceable to SQLite/Postgres by ID.
 
 ## Retention Defaults
 
@@ -324,6 +467,10 @@ Add an analytics mode:
 analytics:
   mode: small # small | olap | disabled
   sqlite_dir: /var/lib/control-one/analytics
+  sqlite_cache_mb: 32
+  sqlite_synchronous: normal # normal | full
+  writer_queue_events: 5000
+  writer_batch_size: 500
   hot_retention_days: 7
   rollup_retention_days: 90
   redis_hot_ttl: 24h
@@ -333,7 +480,8 @@ analytics:
 For the current demo VPS:
 
 - set `CONTROLPLANE_DORIS_ENABLED=false`;
-- stop/remove Doris FE and BE from the default compose profile;
+- put Doris FE and BE behind an explicit `olap` compose profile so a normal
+  `docker compose up -d` cannot accidentally start them;
 - keep Redis;
 - mount `/opt/control-one/deploy/analytics` into the controlplane container;
 - expose analytics health in `/healthz` detail/admin health endpoints.
@@ -343,6 +491,31 @@ For larger installs:
 - set `analytics.mode=olap`;
 - run Doris/OpenSearch/warehouse on dedicated hosts;
 - optionally dual-write from small analytics to OLAP during migration.
+
+## Observability And Operations
+
+Expose enough status for a live demo and for bank operators:
+
+- `analytics_mode`, `analytics_source`, and `analytics_backend_healthy`;
+- SQLite DB size, WAL size, last checkpoint time, quick-check status;
+- writer queue depth, writer lag seconds, failed batch count;
+- Redis hot-key availability and eviction count;
+- journal replay backlog by tenant and oldest pending age;
+- endpoint-level source labels in the JSON responses used by the console.
+
+Recovery runbook:
+
+1. Keep Postgres and Redis running.
+2. Stop the controlplane.
+3. Move the affected tenant SQLite file aside.
+4. Start the controlplane with replay enabled.
+5. Rebuild from `event_ingest_batches` until backlog reaches zero.
+6. Run `PRAGMA quick_check` and a browser/API smoke test.
+
+Backups should use SQLite online backup or `VACUUM INTO` after a WAL checkpoint.
+For the demo, backing up the `/var/lib/control-one/analytics` directory is
+acceptable only when the controlplane is stopped or the backup tool is
+SQLite-aware.
 
 ## Migration Plan
 
@@ -359,6 +532,45 @@ For larger installs:
 7. Add deploy profile `small` that disables Doris and enables the SQLite volume.
 8. Run live audit against `source: small-analytics`, then remove Doris from the
    demo host.
+
+## Demo-First Implementation Slice
+
+The fastest useful implementation is narrower than the final store:
+
+1. Add `internal/analytics` and a `smallanalytics.Store` skeleton with health,
+   migrations, tenant DB open/close, WAL settings, and writer queue limits.
+2. Persist connection facts and hourly rollups from the already-normalized
+   `conn.open` and `conn.close` event fanout.
+3. Route `/api/v1/fleet/health`, `/api/v1/connections/top-talkers`, and
+   `/api/v1/connections` through the analytics interface.
+4. Keep `/api/v1/events/query`, timeline build, and deeper enrichment on their
+   current fallback/OLAP behavior until the SQLite event and FTS tables land.
+5. Add compose profiles so Doris is opt-in and the default demo stack cannot
+   consume Doris memory by accident.
+
+This first slice should turn the current `small-analytics-pending` responses for
+top talkers and connection lists into real Redis+SQLite data while preserving
+the existing guardrail behavior if the local store is degraded.
+
+## Demo Acceptance Criteria
+
+Before calling the demo architecture ready:
+
+- `docker compose up -d` starts no Doris containers unless `--profile olap` is
+  passed.
+- `/healthz` and the admin health detail report `analytics.mode=small` and a
+  healthy SQLite store.
+- `/api/v1/fleet/health`, `/api/v1/connections/top-talkers`, and
+  `/api/v1/connections` return `source=redis+sqlite` or `source=small-analytics`
+  with non-error envelopes.
+- Browser validation shows the network, investigation, and dashboard routes
+  loading without console errors, horizontal overflow, or misleading empty-state
+  copy.
+- Restarting the controlplane does not lose recent analytic facts.
+- Deleting a tenant SQLite file and replaying the journal rebuilds the same
+  connection/top-talker results from fixtures.
+- Redis memory remains bounded under noisy ingest and eviction does not remove
+  evidence because evidence is read from SQLite/Postgres.
 
 ## Non-Goals
 

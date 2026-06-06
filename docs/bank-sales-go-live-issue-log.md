@@ -284,6 +284,13 @@ Live 2026-06-06 evidence after deploying the lightweight mode:
 
 2026-06-06 follow-up: the corrected workflow is now on `main` and deploy runs
 `27065886666`, `27066201594`, and `27066409247` succeeded with Doris disabled.
+The small-fleet architecture pass also made the deployment contract explicit:
+`deploy/docker-compose.yaml` keeps Doris FE/BE behind the `olap` profile,
+`.env.example` defaults to `ANALYTICS_MODE=small` and `DORIS_ENABLED=false`,
+and `deploy.py`, `bootstrap.sh`, and the GitHub production deploy workflow skip
+Doris host prerequisites/bootstrap unless OLAP is selected. This preserves the
+Doris feature path without letting the demo stack start memory-heavy services by
+accident.
 The live browser now opens the console without creating `/api/v1/events/stream`
 requests, avoiding Cloudflare HTTP/3/QUIC stream noise; alert/rule freshness is
 preserved by bounded polling unless a deployment explicitly opts into

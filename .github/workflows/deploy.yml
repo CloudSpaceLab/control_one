@@ -118,6 +118,22 @@ jobs:
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" '
             set -e
+            cd /opt/control-one/deploy
+            analytics_mode=$({ grep "^ANALYTICS_MODE=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
+            doris_enabled=$({ grep "^DORIS_ENABLED=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
+            analytics_mode=$(printf "%s" "${analytics_mode:-small}" | tr "[:upper:]" "[:lower:]")
+            doris_enabled=$(printf "%s" "${doris_enabled:-false}" | tr "[:upper:]" "[:lower:]")
+            run_doris=false
+            if [ "$analytics_mode" = "olap" ]; then
+              run_doris=true
+            fi
+            case "$doris_enabled" in
+              true|1|yes) run_doris=true ;;
+            esac
+            if [ "$run_doris" != "true" ]; then
+              echo "Doris host prerequisites skipped for small analytics mode"
+              exit 0
+            fi
             if command -v sysctl >/dev/null 2>&1; then
               current_map_count=$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)
               if [ "${current_map_count:-0}" -lt 2000000 ]; then
@@ -198,15 +214,26 @@ jobs:
             # Free the small VPS' hottest optional memory consumer before
             # Docker assembles the two prebuilt images. Doris is only started
             # for explicit OLAP deployments.
-            docker compose stop -t 30 doris-be || true
+            docker compose --profile olap stop -t 30 doris-be || true
             docker build -t controlone/controlplane:latest \
               -f Dockerfile.controlplane.prebuilt .
             docker build -t controlone/console:latest \
               -f Dockerfile.console.prebuilt .
-            if grep -q '^DORIS_ENABLED=true' .env 2>/dev/null; then
-              docker compose up -d doris-fe doris-be
+            analytics_mode=\$({ grep '^ANALYTICS_MODE=' .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
+            doris_enabled=\$({ grep '^DORIS_ENABLED=' .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
+            analytics_mode=\$(printf '%s' "\${analytics_mode:-small}" | tr '[:upper:]' '[:lower:]')
+            doris_enabled=\$(printf '%s' "\${doris_enabled:-false}" | tr '[:upper:]' '[:lower:]')
+            run_doris=false
+            if [ "\$analytics_mode" = "olap" ]; then
+              run_doris=true
+            fi
+            case "\$doris_enabled" in
+              true|1|yes) run_doris=true ;;
+            esac
+            if [ "\$run_doris" = "true" ]; then
+              docker compose --profile olap up -d doris-fe doris-be
             else
-              docker compose stop -t 30 doris-be doris-fe || true
+              docker compose --profile olap stop -t 30 doris-be doris-fe || true
             fi
             docker compose up -d --force-recreate --no-deps controlplane console
           "
@@ -242,7 +269,18 @@ jobs:
                 exit 1
               fi
             done
-            if grep -q '^DORIS_ENABLED=true' .env 2>/dev/null; then
+            analytics_mode=$({ grep "^ANALYTICS_MODE=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
+            doris_enabled=$({ grep "^DORIS_ENABLED=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
+            analytics_mode=$(printf "%s" "${analytics_mode:-small}" | tr "[:upper:]" "[:lower:]")
+            doris_enabled=$(printf "%s" "${doris_enabled:-false}" | tr "[:upper:]" "[:lower:]")
+            run_doris=false
+            if [ "$analytics_mode" = "olap" ]; then
+              run_doris=true
+            fi
+            case "$doris_enabled" in
+              true|1|yes) run_doris=true ;;
+            esac
+            if [ "$run_doris" = "true" ]; then
               echo "checking doris-be stability"
               doris_restarts_before=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
               sleep 20
@@ -254,12 +292,12 @@ jobs:
                 docker logs deploy-doris-be-1 --tail 60 || true
                 exit 1
               fi
-              docker compose exec -T doris-fe grep -q -- "-Xmx1500m" /opt/apache-doris/fe/conf/fe.conf
-              if docker compose exec -T doris-fe grep -q -- "-Xmx8192m" /opt/apache-doris/fe/conf/fe.conf; then
+              docker compose --profile olap exec -T doris-fe grep -q -- "-Xmx1500m" /opt/apache-doris/fe/conf/fe.conf
+              if docker compose --profile olap exec -T doris-fe grep -q -- "-Xmx8192m" /opt/apache-doris/fe/conf/fe.conf; then
                 echo "doris-fe still has the image default 8 GB heap"
                 exit 1
               fi
-              docker compose exec -T doris-be grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf
+              docker compose --profile olap exec -T doris-be grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf
               echo "doris-be stable"
             else
               echo "Doris disabled for small-analytics deploy; skipped FE/BE stability checks"

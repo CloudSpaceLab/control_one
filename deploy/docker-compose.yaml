@@ -80,6 +80,7 @@ services:
           memory: 1024m
 
   doris-fe:
+    profiles: ["olap"]
     # Apache Doris frontend. Memory tuned LOW (1.5 GB) for a small box
     # (8 GB total). Doris start_fe.sh exports JVM options from fe.conf, so the
     # entrypoint rewrites the image default 8 GB heap before init_fe.sh runs.
@@ -121,6 +122,7 @@ services:
           memory: 1800m
 
   doris-be:
+    profiles: ["olap"]
     # BE memory cap for the current 4 vCPU / 8 GB single-node SIEM deploy.
     # The mounted be_custom.conf keeps Doris' internal limit below this cgroup
     # ceiling so native/JVM allocator overhead and replay bursts do not exhaust
