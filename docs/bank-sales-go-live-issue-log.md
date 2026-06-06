@@ -378,6 +378,30 @@ current-page browser console warnings/errors were zero. The live tenant had no
 command-policy rows, so the delete-button accessible-name fix was verified by
 unit test rather than by mutating production data.
 
+2026-06-06 mobile/small-mode follow-up: a live authenticated browser sweep at
+390x844 covered 26 routes: Control Room, Alerts, Cases, Search & lifecycle, Ask
+AI, Servers, Network & exposure, Observability, SIEM coverage, Patch posture,
+Coverage, Compliance, Access, Audit log, Settings, Templates, Secrets, Offline
+bundle, Tenants, Users, Roles, Jobs, Webserver auto-control, Data security,
+Misconduct, and Finacle access. Every route loaded with document-level
+`overflowPx=0`, no loading/error copy, zero current-page console warnings or
+errors, and zero app network failures; wide tables stayed contained inside
+horizontal table scrollers rather than widening the document. During the same
+small-mode verification, live `/api/v1/fleet/health` returned
+`source=small-analytics-postgres` but exposed a correctness bug: fallback
+`ConnsActive` was a cumulative `conn.*` event count, not active connections.
+Commit `3db08217` fixed both Postgres fallback and Doris fleet-health SQL to
+estimate active connections as `conn.open - conn.close`, clamped at zero, while
+preserving byte totals and source labels. Focused fleet-health/Doris tests,
+`go vet ./controlplane/internal/server ./controlplane/internal/doris`, and
+`GOMAXPROCS=4 go test -short -p 1 ./...` passed locally. Deploy run
+`27071972583` and CI runs `27071972591` and `27071972567` succeeded. Live
+post-deploy verification on `/console/?verify=3db08217` showed
+`/api/v1/fleet/health` returning HTTP `200` in about 330 ms with
+`source=small-analytics-postgres` and `ConnsActive` values of `100` and `6`
+instead of the previous hundreds-of-thousands event-count values; public
+`/healthz` returned HTTP `200` in about 0.61s.
+
 Remaining caveat: the current Asynq worker adapter persists queue envelopes in
 Redis, but executable job handlers are still registered in-process by task
 name. This is acceptable for the current demo safety posture, but true
@@ -552,9 +576,11 @@ Exit criteria:
   and removed the default privileged JIT request value.
 - Reframe: small-fleet/demo mode should keep Doris disabled; bank-scale OLAP
   must move to dedicated HA analytics capacity and pass a sustained soak window.
-- Continue: confirm fallback values remain accurate in small mode and Doris mode
-  still works when explicitly enabled on sized infrastructure.
-- Continue: re-test mobile production routes at 390px and confirm no
+- Met for current small mode: fleet-health fallback now estimates active
+  connections from opens minus closes, and live values no longer reflect raw
+  connection-event volume. Continue separately for bank-scale Doris soak on
+  sized infrastructure.
+- Met: live mobile sweep at 390px covered 26 authenticated routes with no
   document-level horizontal overflow.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
