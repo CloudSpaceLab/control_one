@@ -63,7 +63,7 @@ function freshnessTone(status: string | undefined): StateTone {
 }
 
 function formatDate(v?: string | null): string {
-  if (!v) return '—';
+  if (!v) return '-';
   const d = new Date(v);
   return isNaN(d.getTime()) ? v : d.toLocaleDateString();
 }
@@ -158,8 +158,11 @@ export function ComplianceEvidence(): JSX.Element {
     }
   }, [tenantList, selectedTenant]);
 
+  const canUploadEvidence = Boolean(selectedTenant && form.title.trim() && form.evidence_type && !uploading);
+
   const handleUpload = async () => {
-    if (!selectedTenant || !form.title) {
+    const title = form.title.trim();
+    if (!selectedTenant || !title) {
       setUploadError('Tenant and title are required.');
       return;
     }
@@ -169,7 +172,7 @@ export function ComplianceEvidence(): JSX.Element {
 
     const fd = new FormData();
     fd.append('tenant_id', selectedTenant);
-    fd.append('title', form.title);
+    fd.append('title', title);
     fd.append('evidence_type', form.evidence_type);
     if (form.framework) fd.append('framework', form.framework);
     if (form.control_ref) fd.append('control_ref', form.control_ref);
@@ -228,7 +231,7 @@ export function ComplianceEvidence(): JSX.Element {
       header: 'Freshness',
       cell: ({ getValue }) => {
         const v = getValue() as string | undefined;
-        if (!v) return <span className="text-muted-foreground">â€”</span>;
+        if (!v) return <span className="text-muted-foreground">-</span>;
         return <StatusTag tone={freshnessTone(v)}>{v}</StatusTag>;
       },
     },
@@ -345,7 +348,10 @@ export function ComplianceEvidence(): JSX.Element {
                   <input
                     className="border rounded px-3 py-1.5 text-sm bg-background"
                     value={form.title}
-                    onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+                    onChange={(e) => {
+                      setForm((p) => ({ ...p, title: e.target.value }));
+                      if (uploadError) setUploadError(null);
+                    }}
                     placeholder="e.g. Q1 Security Training"
                   />
                 </div>
@@ -414,7 +420,7 @@ export function ComplianceEvidence(): JSX.Element {
                 <Button
                   size="sm"
                   onClick={() => void handleUpload()}
-                  disabled={uploading || !selectedTenant}
+                  disabled={!canUploadEvidence}
                 >
                   <Upload className="w-3.5 h-3.5 mr-1.5" />
                   {uploading ? 'Uploading...' : 'Upload evidence'}
