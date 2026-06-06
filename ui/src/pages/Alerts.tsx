@@ -30,6 +30,7 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
+import { formatBytes } from '../lib/format';
 import type { Alert, AlertDispositionValue, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -179,6 +180,19 @@ function contextString(ctx: Record<string, unknown>, ...keys: string[]): string 
     const value = ctx[key];
     if (typeof value === 'string' && value.trim()) return value.trim();
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function contextBytes(ctx: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = ctx[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return formatBytes(value);
+    if (typeof value === 'string' && value.trim()) {
+      const trimmed = value.trim();
+      const numeric = Number(trimmed);
+      return Number.isFinite(numeric) ? formatBytes(numeric) : trimmed;
+    }
   }
   return '';
 }
@@ -1263,7 +1277,7 @@ function alertResolutionFacts(alert: Alert, category: string, scope: string, ip:
   addFact(facts, 'Origin', [country, asn ? `ASN ${asn}` : ''].filter(Boolean).join(' / '), 'degraded');
   addFact(facts, 'Confidence', formatPercentLike(contextString(ctx, 'confidence', 'score', 'auto_alert_threshold', 'threat_confidence')), severityTone(alert.severity));
   addFact(facts, 'Request burst', contextString(ctx, 'request_burst', 'requests_1m', 'request_count', 'events'), 'warning');
-  addFact(facts, 'Outbound', contextString(ctx, 'outbound_transfer', 'outbound_bytes', 'bytes_out'), 'critical');
+  addFact(facts, 'Outbound', contextBytes(ctx, 'outbound_transfer', 'outbound_bytes', 'bytes_out'), 'critical');
   addFact(facts, 'Probed paths', contextListString(ctx, 'top_probed_paths', 'probed_paths', 'paths'), 'warning');
   return facts.slice(0, 9);
 }
