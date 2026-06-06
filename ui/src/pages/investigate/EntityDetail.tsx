@@ -319,7 +319,7 @@ function sourceTone(source: string): StateTone {
   }
 }
 
-function IPBehaviorSummaryPanel({
+export function IPBehaviorSummaryPanel({
   ip,
   profile,
   findings,
@@ -387,7 +387,7 @@ function IPBehaviorSummaryPanel({
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             <EvidenceBlock label="Country / ASN" value={[profile?.countries?.join(', '), profile?.asns?.join(', ')].filter(Boolean).join(' / ') || 'Unknown'} />
             <EvidenceBlock label="App / group" value={[profile?.apps?.join(', '), profile?.server_groups?.join(', ')].filter(Boolean).join(' / ') || 'Unknown'} />
-            <EvidenceBlock label="Observed" value={`${formatTs(profile?.first_seen_at)} - ${formatTs(profile?.last_seen_at)}`} />
+            <EvidenceBlock label="Observed" value={formatObservedRange(profile)} />
           </div>
 
           {topPaths.length > 0 ? (
@@ -478,7 +478,7 @@ export function IPBehaviorRecommendationPanel({
           </div>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <RecommendationMetric label="Observed" value={`${formatTs(profile?.first_seen_at)} - ${formatTs(profile?.last_seen_at)}`} />
+            <RecommendationMetric label="Observed" value={formatObservedRange(profile)} />
             <RecommendationMetric label="Traffic" value={`${(profile?.request_count ?? 0).toLocaleString()} req / ${formatBytes(bytesOut)} out`} />
             <RecommendationMetric label="Failure signal" value={`${authFailures.toLocaleString()} auth / ${serverErrors.toLocaleString()} server`} />
           </div>
@@ -551,6 +551,23 @@ function RecommendationMetric({ label, value }: { label: string; value: string }
       <p className="mt-1 text-sm text-foreground">{value}</p>
     </div>
   );
+}
+
+function formatObservedRange(profile?: Pick<IPBehaviorIPProfile, 'first_seen_at' | 'last_seen_at'>): string {
+  const firstSeen = meaningfulTimestamp(profile?.first_seen_at);
+  const lastSeen = meaningfulTimestamp(profile?.last_seen_at);
+  if (firstSeen && lastSeen) return `${firstSeen} - ${lastSeen}`;
+  if (firstSeen) return `Since ${firstSeen}`;
+  if (lastSeen) return `Until ${lastSeen}`;
+  return 'No observations';
+}
+
+function meaningfulTimestamp(value?: string): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (parsed.getUTCFullYear() < 2000) return null;
+  return formatTs(value);
 }
 
 function ipBehaviorResponsePlan(category: string, confidence: number, listed: boolean): {
