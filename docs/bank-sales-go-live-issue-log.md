@@ -332,6 +332,33 @@ selected case detail whose summary is `anomaly.new_destination`. The non-mutatin
 warnings/errors remained zero and the app API calls returned `200`; only
 Cloudflare RUM abort noise appeared in the network list.
 
+2026-06-06 compliance/investigation follow-up: commit `497b7357` fixed the
+Compliance Evidence upload workflow so `Upload evidence` stays disabled until
+the tenant, required title, and evidence type are present, trims the submitted
+title, and removes the stale placeholder mojibake. Deploy run `27070034433`
+and CI runs `27070034439` and `27070034446` succeeded. Live browser
+verification on `/console/compliance?tab=evidence&verify=497b7357` confirmed
+the evidence tab loaded for the `default` tenant, the upload button was disabled
+with an empty title, became enabled after entering `Access review proof`, and
+was not submitted during the non-mutating check. Compliance evidence, tenant,
+fleet-health, node, alert, and identity APIs returned `200`; current-page
+browser console warnings/errors were zero, no mojibake was present, and only
+Cloudflare RUM abort noise appeared.
+
+Commit `efe6df06` fixed the live investigation IP drill-in by rendering empty
+or sentinel IP-behavior observation timestamps as `No observations` instead of
+fake year-0001 dates, and by hardening reusable panel headers so long action
+toolbars wrap below readable titles. Focused `EntityDetail`/`IpLifecyclePanel`
+tests, UI lint, and polling-mode production build passed locally. Deploy run
+`27070461202` and CI runs `27070461195` and `27070461205` succeeded. Live
+browser verification on `/console/investigate/ip/8.8.8.8?verify=efe6df06`
+confirmed the `Observed` evidence block says `No observations`, no `1/1/1` or
+`0001` timestamp remains, `Connections to/from 8.8.8.8` renders at full width,
+and lifecycle actions wrap beneath the title. The investigation APIs for
+connections, nodes, entity detail, lifecycle, related entities, enrichment,
+IP-behavior profile, and anomalies returned `200`; current-page browser console
+warnings/errors were zero and no mojibake was present.
+
 Remaining caveat: the current Asynq worker adapter persists queue envelopes in
 Redis, but executable job handlers are still registered in-process by task
 name. This is acceptable for the current demo safety posture, but true
