@@ -285,6 +285,20 @@ The Settings/System health tab now reports worker backend `asynq`, status
 `worker manager started` with `backend=asynq` and `analytics backend selected`
 with `mode=small`.
 
+2026-06-06 alert-review follow-up: commit `fedccb6` fixed the alert resolution
+evidence modal so outbound byte context is rendered as an operator-readable
+size instead of a raw integer. Deploy run `27066740791` succeeded, both CI runs
+`27066740790` and `27066740793` passed, and live browser verification on
+`/console/alerts` confirmed the first alert review dialog now shows
+`Outbound 32.8 MB`, keeps `Record disposition` disabled until an evidence
+reason is entered, makes the expected IP investigation/block/webserver/audit
+links available, and produces zero browser console warnings/errors. Control One
+API requests for alerts, nodes, fleet health, and correlation rules returned
+`200`; the only failed browser network entries were Cloudflare RUM aborts.
+Post-deploy server checks showed console/controlplane/redis up, Doris absent,
+public `/healthz` at `HTTP 200` in about 0.60s, `analytics backend selected`
+with `mode=small`, and `worker manager started` with `backend=asynq`.
+
 Remaining caveat: the current Asynq worker adapter persists queue envelopes in
 Redis, but executable job handlers are still registered in-process by task
 name. This is acceptable for the current demo safety posture, but true
@@ -292,6 +306,9 @@ restart-resumable production jobs still need serialized job payload handlers.
 Manual recovery also showed that Windows-cross-compiled controlplane binaries
 should not be used for live deploys until the Go runtime crash is investigated;
 the live controlplane was recovered with the Linux-runner-built binary.
+GitHub Actions now warns that Node.js 20-based actions will be forced to Node 24
+by GitHub starting 2026-06-16 and removed from the runner on 2026-09-16; update
+the affected workflow actions before that switch to avoid CI/deploy drift.
 
 Evidence:
 
