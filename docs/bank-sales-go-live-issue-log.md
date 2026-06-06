@@ -359,6 +359,25 @@ connections, nodes, entity detail, lifecycle, related entities, enrichment,
 IP-behavior profile, and anomalies returned `200`; current-page browser console
 warnings/errors were zero and no mojibake was present.
 
+Commit `a89eddfe` fixed the live Access JIT workflow so privileged access is no
+longer prefilled as `root`; operators must specify the exact requested access
+before `Request access` enables, and command-policy delete icon buttons now have
+rule-specific accessible names. Focused `Access` tests, UI lint,
+`git diff --check`, and polling-mode production build passed locally. Deploy run
+`27071109446`, matrix CI run `27071109418`, and service-backed CI run
+`27071109431` attempt 2 succeeded; attempt 1 of `27071109431` stopped in the Go
+race/coverage test job without a Go failure message, then the rerun passed the
+race/coverage test and Docker image build jobs. Live browser verification on
+`/console/access?verify=a89eddfe` confirmed the requested-access field starts
+blank, `Request access` is disabled until a value such as `root@prod-db-01` is
+entered, and the field was cleared without submitting a production request. The
+Access command-policy tab loaded without the previous command-ACL 404s; live
+tenant, access-request, command-ACL, node, fleet-health, alert, and identity API
+calls returned `200`; public `/healthz` returned `HTTP 200` in about 0.73s;
+current-page browser console warnings/errors were zero. The live tenant had no
+command-policy rows, so the delete-button accessible-name fix was verified by
+unit test rather than by mutating production data.
+
 Remaining caveat: the current Asynq worker adapter persists queue envelopes in
 Redis, but executable job handlers are still registered in-process by task
 name. This is acceptable for the current demo safety posture, but true
@@ -529,8 +548,8 @@ Exit criteria:
 - Met: deployed the command-ACL, fleet-health fallback, mobile-shell, live-event
   polling, worker Redis binding, alert evidence formatting, and SOC case copy
   fixes.
-- Continue: re-run the authenticated route audit and confirm Access has no 404s
-  for command ACLs.
+- Met: live Access route audit for `a89eddfe` returned `200` for command ACLs
+  and removed the default privileged JIT request value.
 - Reframe: small-fleet/demo mode should keep Doris disabled; bank-scale OLAP
   must move to dedicated HA analytics capacity and pass a sustained soak window.
 - Continue: confirm fallback values remain accurate in small mode and Doris mode
