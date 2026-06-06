@@ -520,9 +520,16 @@ requests returning `200`, and zero current console warnings/errors.
 Manual recovery also showed that Windows-cross-compiled controlplane binaries
 should not be used for live deploys until the Go runtime crash is investigated;
 the live controlplane was recovered with the Linux-runner-built binary.
-GitHub Actions now warns that Node.js 20-based actions will be forced to Node 24
-by GitHub starting 2026-06-16 and removed from the runner on 2026-09-16; update
-the affected workflow actions before that switch to avoid CI/deploy drift.
+2026-06-07 CI/deploy correction: the Node.js 20 action-runtime warning from
+the latest GitHub runs was reproduced through check-run annotations. The
+workflows now opt into `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`, upgrade the
+GitHub/Docker/Azure/GoReleaser/golangci actions that have Node 24 majors, move
+SARIF upload to `github/codeql-action/upload-sarif@v4`, replace
+`actions/create-release@v1` with `softprops/action-gh-release@v3`, and pin
+Trivy to `aquasecurity/trivy-action@v0.36.0` instead of mutable `master`. Local
+`actionlint` and `git diff --check` passed; final closeout requires the
+post-push GitHub CI/deploy runs to complete without the prior Node 20/CodeQL
+annotations.
 
 Evidence:
 
