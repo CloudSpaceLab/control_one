@@ -483,7 +483,7 @@ export function Observability(): JSX.Element {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <Panel padding="md" eyebrow="STACK MAP" title={referenceMode ? 'Reference blueprint' : `${tenantLabel} live stack`}>
           <div className="overflow-x-auto rounded-lg border border-border-subtle">
-            <table className="w-full table-fixed text-sm sm:min-w-[640px] xl:min-w-0">
+            <table className="w-full min-w-[640px] table-fixed text-sm xl:min-w-0">
               <colgroup>
                 <col className="w-[22%]" />
                 <col className="w-[17%]" />
