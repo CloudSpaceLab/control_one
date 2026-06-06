@@ -99,3 +99,31 @@ describe('APIClient.getCoverageMatrix', () => {
     ]);
   });
 });
+
+describe('APIClient.listTopTalkers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('normalizes backend data envelopes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [{ ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false }],
+          source: 'small-analytics-pending',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    const talkers = await client.listTopTalkers({ tenantId: 'tenant-1', limit: 5 });
+    const [url] = fetchMock.mock.calls[0];
+
+    expect(url).toBe('https://cp.example.com/api/v1/connections/top-talkers?tenant_id=tenant-1&limit=5');
+    expect(talkers).toEqual([
+      { ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false },
+    ]);
+  });
+});

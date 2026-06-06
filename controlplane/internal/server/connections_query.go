@@ -29,7 +29,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	if s.dorisClient == nil {
+	if !s.usesDorisAnalytics() {
 		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -79,7 +79,7 @@ func (s *Server) handleConnectionDetail(w http.ResponseWriter, r *http.Request) 
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	if s.dorisClient == nil {
+	if !s.usesDorisAnalytics() {
 		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -125,8 +125,12 @@ func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	if s.dorisClient == nil {
-		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
+	if !s.usesDorisAnalytics() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data":       []doris.TopTalker{},
+			"source":     "small-analytics-pending",
+			"guardrails": []string{"top talkers require the Redis+SQLite small analytics store or OLAP mode"},
+		})
 		return
 	}
 	tenantID, err := requiredTenantID(r)
@@ -163,7 +167,11 @@ func (s *Server) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	since, _ := parseTimeWindow(r, 24*time.Hour)
-	if s.dorisClient != nil {
+	source := "postgres-fallback"
+	if effectiveAnalyticsMode(s.cfg) == analyticsModeSmall {
+		source = "small-analytics-postgres"
+	}
+	if s.usesDorisAnalytics() {
 		rows, err := s.dorisClient.FleetHealthSnapshot(r.Context(), tenantID.String(), since)
 		if err == nil {
 			writeJSON(w, http.StatusOK, map[string]any{"data": rows, "source": "doris"})
@@ -222,7 +230,7 @@ func (s *Server) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
 			SeverityMax:   a.sevMax,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": fallback, "source": "postgres-fallback"})
+	writeJSON(w, http.StatusOK, map[string]any{"data": fallback, "source": source})
 }
 
 func parseTimeWindow(r *http.Request, defaultSpan time.Duration) (since, until time.Time) {

@@ -190,15 +190,19 @@ jobs:
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
             set -e
             cd '$DEPLOY_DIR'
-            # Free the small VPS' hottest memory consumer before Docker
-            # assembles the two prebuilt images. Recent OOM evidence showed
-            # docker-buildx and Doris BE competing on this shared host.
+            # Free the small VPS' hottest optional memory consumer before
+            # Docker assembles the two prebuilt images. Doris is only started
+            # for explicit OLAP deployments.
             docker compose stop -t 30 doris-be || true
             docker build -t controlone/controlplane:latest \
               -f Dockerfile.controlplane.prebuilt .
             docker build -t controlone/console:latest \
               -f Dockerfile.console.prebuilt .
-            docker compose up -d doris-fe doris-be
+            if grep -q '^DORIS_ENABLED=true' .env 2>/dev/null; then
+              docker compose up -d doris-fe doris-be
+            else
+              docker compose stop -t 30 doris-be doris-fe || true
+            fi
             docker compose up -d --force-recreate --no-deps controlplane console
           "
 
@@ -217,9 +221,8 @@ jobs:
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" '
             set -e
             cd /opt/control-one/deploy
-            # Restarting Doris BE to free memory during image builds can make
-            # the controlplane wait for queryable Doris replicas before it
-            # opens HTTP. Give the single-node profile a real startup window.
+            # In small-analytics mode the controlplane should not wait for
+            # Doris; OLAP deployments can still opt in through DORIS_ENABLED.
             for i in $(seq 1 24); do
               if curl -fsS --max-time 5 http://127.0.0.1:8443/healthz 2>/dev/null; then
                 echo
@@ -234,24 +237,28 @@ jobs:
                 exit 1
               fi
             done
-            echo "checking doris-be stability"
-            doris_restarts_before=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
-            sleep 20
-            doris_running=$(docker inspect deploy-doris-be-1 --format "{{.State.Running}}" 2>/dev/null || echo false)
-            doris_restarts_after=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
-            if [ "$doris_running" != "true" ] || [ "$doris_restarts_after" != "$doris_restarts_before" ]; then
-              echo "doris-be is not stable after deploy"
-              docker inspect deploy-doris-be-1 --format "running={{.State.Running}} restarts={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}" || true
-              docker logs deploy-doris-be-1 --tail 60 || true
-              exit 1
+            if grep -q '^DORIS_ENABLED=true' .env 2>/dev/null; then
+              echo "checking doris-be stability"
+              doris_restarts_before=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
+              sleep 20
+              doris_running=$(docker inspect deploy-doris-be-1 --format "{{.State.Running}}" 2>/dev/null || echo false)
+              doris_restarts_after=$(docker inspect deploy-doris-be-1 --format "{{.RestartCount}}" 2>/dev/null || echo -1)
+              if [ "$doris_running" != "true" ] || [ "$doris_restarts_after" != "$doris_restarts_before" ]; then
+                echo "doris-be is not stable after deploy"
+                docker inspect deploy-doris-be-1 --format "running={{.State.Running}} restarts={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}" || true
+                docker logs deploy-doris-be-1 --tail 60 || true
+                exit 1
+              fi
+              docker compose exec -T doris-fe grep -q -- "-Xmx1500m" /opt/apache-doris/fe/conf/fe.conf
+              if docker compose exec -T doris-fe grep -q -- "-Xmx8192m" /opt/apache-doris/fe/conf/fe.conf; then
+                echo "doris-fe still has the image default 8 GB heap"
+                exit 1
+              fi
+              docker compose exec -T doris-be grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf
+              echo "doris-be stable"
+            else
+              echo "Doris disabled for small-analytics deploy; skipped FE/BE stability checks"
             fi
-            docker compose exec -T doris-fe grep -q -- "-Xmx1500m" /opt/apache-doris/fe/conf/fe.conf
-            if docker compose exec -T doris-fe grep -q -- "-Xmx8192m" /opt/apache-doris/fe/conf/fe.conf; then
-              echo "doris-fe still has the image default 8 GB heap"
-              exit 1
-            fi
-            docker compose exec -T doris-be grep -q -- "-Xmx512m" /opt/apache-doris/be/conf/be.conf
-            echo "doris-be stable"
           '
 
       - name: Public smoke check (best-effort, warns on Cloudflare 403)

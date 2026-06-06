@@ -38,8 +38,6 @@ services:
         condition: service_healthy
       ipq:
         condition: service_started
-      doris-fe:
-        condition: service_started   # don't block on FE health; controlplane retries
     # Doris FE redirects stream loads to the BE's 172.31.0.x address.
     # Attach the controlplane to that network too so follow-up PUTs can land.
     networks:
@@ -55,7 +53,8 @@ services:
       CONTROLPLANE_WEBAUTHN_RP_ID: "control-one.cloudspacetechs.com"
       CONTROLPLANE_WEBAUTHN_RP_NAME: "Control One"
       CONTROLPLANE_WEBAUTHN_RP_ORIGIN: "https://control-one.cloudspacetechs.com"
-      CONTROLPLANE_DORIS_ENABLED: "${DORIS_ENABLED:-true}"
+      CONTROLPLANE_ANALYTICS_MODE: "${ANALYTICS_MODE:-small}"
+      CONTROLPLANE_DORIS_ENABLED: "${DORIS_ENABLED:-false}"
       CONTROLPLANE_DORIS_HTTP_ENDPOINT: "http://doris-fe:8030"
       CONTROLPLANE_DORIS_DSN: "root:${DORIS_PASSWORD}@tcp(doris-fe:9030)/controlone?parseTime=true"
       CONTROLPLANE_DORIS_DATABASE: "controlone"

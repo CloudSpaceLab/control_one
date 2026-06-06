@@ -20,6 +20,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
@@ -335,9 +336,10 @@ func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
 		},
 	}
 	cfg := &config.Config{
-		HTTP: config.HTTPConfig{Address: ":0"},
-		TLS:  config.TLSConfig{RequireClientTLS: false},
-		Auth: authWithTokens("viewer", "fleet-viewer"),
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("viewer", "fleet-viewer"),
+		Analytics: config.AnalyticsConfig{Mode: "olap"},
 	}
 	srv := New(logger, cfg, store, nil)
 
@@ -372,6 +374,90 @@ func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
 	}
 	if resp.Data[0].BytesIn24h != 110 || resp.Data[0].BytesOut24h != 220 {
 		t.Fatalf("fallback byte totals changed unexpectedly: %+v", resp.Data[0])
+	}
+}
+
+func TestFleetHealthSmallAnalyticsUsesPostgresRollupWithoutDoris(t *testing.T) {
+	logger := zap.NewNop()
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	base := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Hour)
+	store := &fakeStore{
+		hourlyRollups: []storage.HourlyRollupRow{
+			{
+				TenantID:  tenantID,
+				NodeID:    uuid.NullUUID{UUID: nodeID, Valid: true},
+				EventType: "conn.close",
+				HourTS:    base,
+				Count:     4,
+				BytesIn:   40,
+				BytesOut:  80,
+				SevMax:    sql.NullString{String: "low", Valid: true},
+			},
+		},
+	}
+	cfg := &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("viewer", "fleet-viewer"),
+		Analytics: config.AnalyticsConfig{Mode: "small"},
+		Doris:     config.DorisConfig{Enabled: true, DSN: "root:secret@tcp(doris-fe:9030)/controlone"},
+	}
+	srv := New(logger, cfg, store, nil)
+	if srv.dorisClient != nil || srv.dorisWriter != nil {
+		t.Fatal("small analytics mode should not initialize Doris")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/fleet/health?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer fleet-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Source string `json:"source"`
+		Data   []struct {
+			NodeID      string `json:"NodeID"`
+			ConnsActive int64  `json:"ConnsActive"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Source != "small-analytics-postgres" || len(resp.Data) != 1 || resp.Data[0].ConnsActive != 4 {
+		t.Fatalf("unexpected small analytics response: %+v", resp)
+	}
+}
+
+func TestTopTalkersSmallAnalyticsDegradesGracefully(t *testing.T) {
+	tenantID := uuid.New()
+	store := &fakeStore{}
+	cfg := &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("viewer", "talkers-viewer"),
+		Analytics: config.AnalyticsConfig{Mode: "small"},
+	}
+	srv := New(zap.NewNop(), cfg, store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/connections/top-talkers?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer talkers-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Source     string            `json:"source"`
+		Data       []doris.TopTalker `json:"data"`
+		Guardrails []string          `json:"guardrails"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Source != "small-analytics-pending" || len(resp.Data) != 0 || len(resp.Guardrails) == 0 {
+		t.Fatalf("unexpected top talkers response: %+v", resp)
 	}
 }
 

@@ -314,7 +314,8 @@ def render_env_file(secrets_obj: Secrets, tag: str = "latest") -> str:
         f"SECRETS_ENCRYPTION_KEY={secrets_obj.encryption_key}\n"
         f"BOOTSTRAP_TOKEN={secrets_obj.bootstrap_token}\n"
         f"DORIS_PASSWORD={secrets_obj.doris_password}\n"
-        f"DORIS_ENABLED=true\n"
+        f"ANALYTICS_MODE=small\n"
+        f"DORIS_ENABLED=false\n"
         f"TAG={tag}\n"
     )
 

@@ -4604,9 +4604,10 @@ export class APIClient {
     if (typeof params.limit === "number")
       search.set("limit", String(params.limit));
     const q = search.toString();
-    return this.request<TopTalker[]>(
+    const resp = await this.request<TopTalker[] | { data?: TopTalker[] }>(
       `/api/v1/connections/top-talkers${q ? `?${q}` : ""}`,
     );
+    return Array.isArray(resp) ? resp : resp.data ?? [];
   }
 
   async fleetHealthSnapshot(

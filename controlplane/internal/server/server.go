@@ -2618,9 +2618,12 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	} else {
 		logger.Info("ipintel disabled — set IPQUERY_BASE_URL or ABUSEIPDB_API_KEY to enable")
 	}
-	// Doris analytic store. Optional — when unconfigured, ingest stays
-	// on Postgres + journal (see /events/ingest).
-	if cfg.Doris.Enabled && cfg.Doris.DSN != "" {
+	analyticsMode := effectiveAnalyticsMode(cfg)
+	logger.Info("analytics backend selected", zap.String("mode", analyticsMode))
+
+	// Doris analytic store. Optional — when unconfigured or when the small
+	// analytics mode is selected, ingest stays on Postgres + journal/rollups.
+	if analyticsMode == analyticsModeOLAP && cfg.Doris.Enabled && cfg.Doris.DSN != "" {
 		dorisCli, derr := doris.New(doris.Config{
 			DSN:          cfg.Doris.DSN,
 			HTTPEndpoint: cfg.Doris.HTTPEndpoint,

@@ -25,6 +25,7 @@ type Config struct {
 	Remediation    RemediationConfig    `mapstructure:"remediation"`
 	Secrets        SecretsConfig        `mapstructure:"secrets"`
 	WebAuthn       WebAuthnConfig       `mapstructure:"webauthn"`
+	Analytics      AnalyticsConfig      `mapstructure:"analytics"`
 	Doris          DorisConfig          `mapstructure:"doris"`
 	Bastion        BastionConfig        `mapstructure:"bastion"`
 	LDAP           LDAPConfig           `mapstructure:"ldap"`
@@ -178,6 +179,14 @@ type DorisConfig struct {
 	Password        string `mapstructure:"password"`
 	ApplyMigrations bool   `mapstructure:"apply_migrations"`
 	ReplicationNum  int    `mapstructure:"replication_num"`
+}
+
+// AnalyticsConfig selects the analytic read/write backend used by dashboard
+// and investigation surfaces. "small" keeps the demo/small-fleet path on
+// Postgres rollups now and leaves room for the Redis+SQLite store; "olap"
+// enables the Doris-backed paths for larger installs.
+type AnalyticsConfig struct {
+	Mode string `mapstructure:"mode"` // auto | small | olap | disabled
 }
 
 // WebAuthnConfig configures the relying-party identity advertised to browsers
@@ -473,6 +482,18 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.cache_ttl", time.Minute*5)
 	v.SetDefault("auth.rbac.default_role", "viewer")
 
+	v.SetDefault("analytics.mode", "auto")
+	_ = v.BindEnv("analytics.mode", "CONTROLPLANE_ANALYTICS_MODE")
+
+	v.SetDefault("doris.enabled", false)
+	_ = v.BindEnv("doris.enabled", "CONTROLPLANE_DORIS_ENABLED")
+	_ = v.BindEnv("doris.http_endpoint", "CONTROLPLANE_DORIS_HTTP_ENDPOINT")
+	_ = v.BindEnv("doris.dsn", "CONTROLPLANE_DORIS_DSN")
+	_ = v.BindEnv("doris.database", "CONTROLPLANE_DORIS_DATABASE")
+	_ = v.BindEnv("doris.user", "CONTROLPLANE_DORIS_USER")
+	_ = v.BindEnv("doris.password", "CONTROLPLANE_DORIS_PASSWORD")
+	_ = v.BindEnv("doris.apply_migrations", "CONTROLPLANE_DORIS_APPLY_MIGRATIONS")
+
 	// IP intelligence (Investigate)
 	v.SetDefault("ipintel.enabled", true)
 	v.SetDefault("ipintel.cache_ttl", time.Hour)
@@ -589,6 +610,9 @@ func applyFallbacks(cfg *Config) {
 	if cfg.SIEMForwarding.MaxDestinationsPerTenant <= 0 {
 		cfg.SIEMForwarding.MaxDestinationsPerTenant = 100
 	}
+	if strings.TrimSpace(cfg.Analytics.Mode) == "" {
+		cfg.Analytics.Mode = "auto"
+	}
 	if cfg.PrivateAccess.ImportSchedulerInterval <= 0 {
 		cfg.PrivateAccess.ImportSchedulerInterval = 5 * time.Minute
 	}
@@ -632,6 +656,11 @@ func Validate(cfg *Config) error {
 	case "", "memory", "redis":
 	default:
 		return fmt.Errorf("ip_behavior.counters.backend must be memory or redis")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Analytics.Mode)) {
+	case "", "auto", "small", "olap", "disabled":
+	default:
+		return fmt.Errorf("analytics.mode must be auto, small, olap, or disabled")
 	}
 	if strings.EqualFold(strings.TrimSpace(cfg.IPBehavior.Counters.Backend), "redis") && strings.TrimSpace(cfg.IPBehavior.Counters.RedisAddress) == "" {
 		return fmt.Errorf("ip_behavior.counters.redis_address is required when redis counters are enabled")

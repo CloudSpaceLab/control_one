@@ -74,6 +74,14 @@ func TestValidateRequiresEssentials(t *testing.T) {
 		}
 	})
 
+	t.Run("analytics mode must be known", func(t *testing.T) {
+		cfg := base()
+		cfg.Analytics.Mode = "doris-lite-ish"
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("expected error for invalid analytics mode")
+		}
+	})
+
 	t.Run("oidc requires issuer and client id", func(t *testing.T) {
 		cfg := base()
 		cfg.Auth.OIDC.Enabled = true
@@ -142,6 +150,9 @@ func TestApplyFallbacksSetsEnforcementSafetyDefaults(t *testing.T) {
 	if cfg.Doris.ReplicationNum != 1 {
 		t.Fatalf("Doris.ReplicationNum = %d, want dev default 1", cfg.Doris.ReplicationNum)
 	}
+	if cfg.Analytics.Mode != "auto" {
+		t.Fatalf("Analytics.Mode = %q, want auto", cfg.Analytics.Mode)
+	}
 	if cfg.Vault.Timeout != 30*time.Second {
 		t.Fatalf("Vault.Timeout = %s, want 30s", cfg.Vault.Timeout)
 	}
@@ -178,6 +189,44 @@ auth:
 	}
 	if _, ok := cfg.Auth.OIDC.StaticTokens[strings.ToLower(token)]; ok {
 		t.Fatalf("did not expect lower-cased static token key")
+	}
+}
+
+func TestLoadBindsSmallAnalyticsDorisEnvOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "controlplane.yaml")
+	config := `http:
+  address: ":0"
+database:
+  url: "postgres://localhost/db"
+auth:
+  rbac:
+    default_role: "viewer"
+analytics:
+  mode: "olap"
+doris:
+  enabled: true
+  dsn: "root:secret@tcp(doris-fe:9030)/controlone"
+  apply_migrations: true
+`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CONTROLPLANE_ANALYTICS_MODE", "small")
+	t.Setenv("CONTROLPLANE_DORIS_ENABLED", "false")
+	t.Setenv("CONTROLPLANE_DORIS_APPLY_MIGRATIONS", "false")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Analytics.Mode != "small" {
+		t.Fatalf("Analytics.Mode = %q, want small", cfg.Analytics.Mode)
+	}
+	if cfg.Doris.Enabled {
+		t.Fatal("Doris.Enabled = true, want false from env override")
+	}
+	if cfg.Doris.ApplyMigrations {
+		t.Fatal("Doris.ApplyMigrations = true, want false from env override")
 	}
 }
 
