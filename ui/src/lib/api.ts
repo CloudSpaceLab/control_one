@@ -5120,18 +5120,34 @@ export class APIClient {
     if (typeof params.offset === "number")
       search.set("offset", String(params.offset));
     const qs = search.toString();
-    return this.request<PaginatedResponse<CommandACL>>(
+    const response = await this.request<PaginatedResponse<CommandACL>>(
       `/api/v1/command-acls${qs ? `?${qs}` : ""}`,
     );
+    return {
+      ...response,
+      data: response.data.map(normalizeCommandACL),
+    };
   }
 
   async createCommandACL(
     payload: CreateCommandACLPayload,
   ): Promise<CommandACL> {
-    return this.request<CommandACL>("/api/v1/command-acls", {
+    const role = payload.roles?.find((item) => item.trim()) ?? "operator";
+    const response = await this.request<CommandACL>("/api/v1/command-acls", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        tenant_id: payload.tenant_id,
+        name: payload.name,
+        role,
+        enabled: true,
+        allow_commands: payload.action === "allow" ? [payload.pattern] : [],
+        deny_commands: payload.action === "deny" ? [payload.pattern] : [],
+        pattern: payload.pattern,
+        action: payload.action,
+        roles: [role],
+      }),
     });
+    return normalizeCommandACL(response);
   }
 
   async deleteCommandACL(id: string): Promise<void> {
@@ -5190,18 +5206,34 @@ export class APIClient {
 
   // ── MFA factors ───────────────────────────────────────────────────────
   async listMFAFactors(): Promise<{ factors: MFAFactor[] }> {
-    return this.request<{ factors: MFAFactor[] }>("/api/v1/auth/mfa/factors");
+    const response = await this.request<{
+      factors?: unknown[];
+      data?: unknown[];
+    }>("/api/v1/mfa/factors");
+    const rawFactors = response.factors ?? response.data ?? [];
+    return { factors: rawFactors.map(normalizeMFAFactor) };
   }
 
   async deleteMFAFactor(id: string): Promise<void> {
     await this.request<void>(
-      `/api/v1/auth/mfa/factors/${encodeURIComponent(id)}`,
+      `/api/v1/mfa/factors/${encodeURIComponent(id)}`,
       { method: "DELETE" },
     );
   }
 
-  async getMFARecoveryCodes(): Promise<{ codes: string[] }> {
-    return this.request<{ codes: string[] }>("/api/v1/auth/mfa/recovery-codes");
+  async generateMFARecoveryCodes(count = 10): Promise<{
+    factor_id: string;
+    codes: string[];
+    created_at: string;
+  }> {
+    return this.request<{
+      factor_id: string;
+      codes: string[];
+      created_at: string;
+    }>("/api/v1/mfa/recovery-codes", {
+      method: "POST",
+      body: JSON.stringify({ count }),
+    });
   }
 
   // TOTP enrollment
@@ -6763,6 +6795,11 @@ export interface CommandACL {
   pattern: string;
   action: "allow" | "deny";
   roles: string[];
+  role?: string;
+  node_label_selector?: Record<string, unknown>;
+  allow_commands?: string[];
+  deny_commands?: string[];
+  enabled?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -6773,6 +6810,22 @@ export interface CreateCommandACLPayload {
   pattern: string;
   action: "allow" | "deny";
   roles: string[];
+}
+
+function normalizeCommandACL(acl: CommandACL): CommandACL {
+  const denyCommands = acl.deny_commands ?? [];
+  const allowCommands = acl.allow_commands ?? [];
+  const action = acl.action ?? (denyCommands.length > 0 ? "deny" : "allow");
+  const pattern =
+    acl.pattern || (action === "deny" ? denyCommands[0] : allowCommands[0]) || "";
+  const roles = acl.roles?.length ? acl.roles : acl.role ? [acl.role] : [];
+  return {
+    ...acl,
+    pattern,
+    action,
+    roles,
+    updated_at: acl.updated_at || acl.created_at,
+  };
 }
 
 export interface ClusterMember {
@@ -6828,6 +6881,34 @@ export interface ClusterRolloutWave {
 
 export interface UpdateClusterRolloutWavePayload {
   status?: "paused" | "running" | "aborted";
+}
+
+function mfaStringField(
+  raw: Record<string, unknown>,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      return value;
+    }
+  }
+  return "";
+}
+
+function normalizeMFAFactor(raw: unknown): MFAFactor {
+  const item =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const rawType = mfaStringField(item, "type", "factor_type").toLowerCase();
+  const type: MFAFactor["type"] =
+    rawType === "webauthn" || rawType === "recovery" ? rawType : "totp";
+  return {
+    id: mfaStringField(item, "id"),
+    type,
+    name: mfaStringField(item, "name", "label") || type.toUpperCase(),
+    created_at: mfaStringField(item, "created_at"),
+    last_used_at: mfaStringField(item, "last_used_at") || undefined,
+  };
 }
 
 export interface MFAFactor {

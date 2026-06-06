@@ -25,7 +25,7 @@ export function TenantSwitcher() {
           role="combobox"
           aria-expanded={open}
           aria-label="Select tenant"
-          className="h-9 max-w-[220px] justify-between gap-2"
+          className="h-9 max-w-[7.5rem] justify-between gap-1.5 px-2 sm:max-w-[220px] sm:gap-2 sm:px-3"
         >
           <Building2 className="h-4 w-4 text-text-muted" />
           <span className="truncate text-xs">

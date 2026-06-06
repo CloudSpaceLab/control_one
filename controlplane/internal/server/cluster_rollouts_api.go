@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +70,20 @@ type clusterRolloutWaveResponse struct {
 	GateResult  map[string]any `json:"gate_result,omitempty"`
 }
 
+type rolloutWaveListItemResponse struct {
+	ID         string  `json:"id"`
+	TenantID   string  `json:"tenant_id"`
+	Name       string  `json:"name"`
+	Order      int     `json:"order"`
+	Status     string  `json:"status"`
+	NodeCount  int     `json:"node_count"`
+	DoneCount  int     `json:"done_count"`
+	StartedAt  *string `json:"started_at,omitempty"`
+	FinishedAt *string `json:"finished_at,omitempty"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+}
+
 type clusterRolloutDetailResponse struct {
 	clusterRolloutResponse
 	ClusterID string                       `json:"cluster_id"`
@@ -80,6 +95,309 @@ type clusterRolloutAcceptedResponse struct {
 	RolloutID string `json:"rollout_id"`
 	JobID     string `json:"job_id"`
 	State     string `json:"state"`
+}
+
+type updateRolloutWaveRequest struct {
+	Status string `json:"status"`
+}
+
+// handleRolloutWavesCollection is a compatibility surface used by the
+// Templates page for a fleet-wide rollout wave table.
+func (s *Server) handleRolloutWavesCollection(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.URL.Path != "/api/v1/rollout/waves" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
+		return
+	}
+	s.handleListRolloutWaves(w, r, principal)
+}
+
+func (s *Server) handleRolloutWaveSubroutes(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	rawID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/rollout/waves/"), "/")
+	if rawID == "" || strings.Contains(rawID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	waveID, err := uuid.Parse(rawID)
+	if err != nil {
+		http.Error(w, "invalid wave id", http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodPatch {
+		w.Header().Set("Allow", http.MethodPatch)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	s.handleUpdateRolloutWave(w, r, waveID, principal)
+}
+
+type rolloutWaveAggregate struct {
+	cluster storage.Cluster
+	rollout storage.ClusterRollout
+	wave    storage.ClusterRolloutWave
+}
+
+func (s *Server) handleListRolloutWaves(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var tenantID uuid.UUID
+	rawTenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if rawTenantID != "" {
+		parsed, err := uuid.Parse(rawTenantID)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, parsed, roleViewer, roleOperator, roleAdmin) {
+			return
+		}
+		tenantID = parsed
+	} else if !hasRole(principal, roleAdmin) {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := s.collectRolloutWaves(r, tenantID)
+	if err != nil {
+		s.logger.Error("list rollout waves", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	sort.SliceStable(rows, func(i, j int) bool {
+		if !rows[i].wave.StartedAt.Equal(rows[j].wave.StartedAt) {
+			return rows[i].wave.StartedAt.After(rows[j].wave.StartedAt)
+		}
+		if rows[i].rollout.CreatedAt != rows[j].rollout.CreatedAt {
+			return rows[i].rollout.CreatedAt.After(rows[j].rollout.CreatedAt)
+		}
+		return rows[i].wave.WaveNumber < rows[j].wave.WaveNumber
+	})
+
+	total := len(rows)
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+
+	items := make([]rolloutWaveListItemResponse, 0, end-offset)
+	for _, row := range rows[offset:end] {
+		items = append(items, newRolloutWaveListItemResponse(row.cluster, row.rollout, row.wave))
+	}
+	writeJSON(w, http.StatusOK, paginatedResponse[rolloutWaveListItemResponse]{
+		Data:       items,
+		Pagination: newPaginationMeta(total, limit, offset, len(items)),
+	})
+}
+
+func (s *Server) collectRolloutWaves(r *http.Request, tenantID uuid.UUID) ([]rolloutWaveAggregate, error) {
+	clusters, _, err := s.store.ListClusters(r.Context(), tenantID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]rolloutWaveAggregate, 0)
+	for _, cluster := range clusters {
+		rollouts, _, err := s.store.ListClusterRollouts(r.Context(), cluster.ID, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, rollout := range rollouts {
+			waves, err := s.store.ListClusterRolloutWaves(r.Context(), rollout.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, wave := range waves {
+				rows = append(rows, rolloutWaveAggregate{
+					cluster: cluster,
+					rollout: rollout,
+					wave:    wave,
+				})
+			}
+		}
+	}
+	return rows, nil
+}
+
+func (s *Server) handleUpdateRolloutWave(w http.ResponseWriter, r *http.Request, waveID uuid.UUID, principal *auth.Principal) {
+	wave, err := s.store.GetClusterRolloutWave(r.Context(), waveID)
+	if err != nil {
+		s.logger.Error("get rollout wave", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if wave == nil {
+		http.NotFound(w, r)
+		return
+	}
+	rollout, err := s.store.GetClusterRolloutByID(r.Context(), wave.RolloutID)
+	if err != nil {
+		s.logger.Error("get rollout for wave", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if rollout == nil {
+		http.NotFound(w, r)
+		return
+	}
+	cluster, err := s.store.GetClusterByID(r.Context(), rollout.ClusterID)
+	if err != nil {
+		s.logger.Error("get cluster for rollout wave", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if cluster == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, cluster.TenantID, roleOperator, roleAdmin) {
+		return
+	}
+
+	var req updateRolloutWaveRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	state, rolloutState, err := rolloutWaveUpdateStates(req.Status)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	params := storage.UpdateClusterRolloutWaveParams{State: &state}
+	if state == storage.ClusterRolloutWaveStateAborted || state == storage.ClusterRolloutWaveStateUnhealthy {
+		now := time.Now().UTC()
+		params.CompletedAt = &now
+	}
+	updatedWave, err := s.store.UpdateClusterRolloutWave(r.Context(), waveID, params)
+	if err != nil {
+		s.logger.Error("update rollout wave", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if updatedWave == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if rolloutState != "" {
+		if updatedRollout, err := s.store.UpdateClusterRollout(r.Context(), rollout.ID, storage.UpdateClusterRolloutParams{State: &rolloutState}); err != nil {
+			s.logger.Error("update rollout for wave action", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		} else if updatedRollout != nil {
+			rollout = updatedRollout
+		}
+	}
+
+	s.recordAudit(r.Context(), principal, cluster.TenantID, "cluster.rollout.wave.update", "cluster_rollout_wave", waveID.String(), map[string]any{
+		"cluster_id":  cluster.ID.String(),
+		"rollout_id":  rollout.ID.String(),
+		"wave_number": updatedWave.WaveNumber,
+		"status":      req.Status,
+	})
+
+	writeJSON(w, http.StatusOK, newRolloutWaveListItemResponse(*cluster, *rollout, *updatedWave))
+}
+
+func rolloutWaveUpdateStates(status string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running":
+		return storage.ClusterRolloutWaveStateRunning, RolloutStateRunning, nil
+	case "paused":
+		return storage.ClusterRolloutWaveStateUnhealthy, RolloutStateHalted, nil
+	case "aborted":
+		return storage.ClusterRolloutWaveStateAborted, RolloutStateAborted, nil
+	default:
+		return "", "", fmt.Errorf("unsupported wave status %q", status)
+	}
+}
+
+func newRolloutWaveListItemResponse(cluster storage.Cluster, rollout storage.ClusterRollout, wave storage.ClusterRolloutWave) rolloutWaveListItemResponse {
+	startedAt := formatRolloutOptionalTime(wave.StartedAt)
+	finishedAt := formatRolloutOptionalTimePtr(wave.CompletedAt)
+	updatedAt := wave.StartedAt
+	if wave.CompletedAt != nil {
+		updatedAt = *wave.CompletedAt
+	}
+	status := rolloutWavePresentationStatus(wave.State)
+	nodeCount := len(wave.MemberIDs)
+	doneCount := 0
+	if status == "done" {
+		doneCount = nodeCount
+	}
+	return rolloutWaveListItemResponse{
+		ID:         wave.ID.String(),
+		TenantID:   cluster.TenantID.String(),
+		Name:       fmt.Sprintf("%s wave %d", cluster.Name, wave.WaveNumber+1),
+		Order:      wave.WaveNumber + 1,
+		Status:     status,
+		NodeCount:  nodeCount,
+		DoneCount:  doneCount,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		CreatedAt:  formatTime(wave.StartedAt),
+		UpdatedAt:  formatTime(updatedAt),
+	}
+}
+
+func rolloutWavePresentationStatus(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case storage.ClusterRolloutWaveStateRunning:
+		return "running"
+	case storage.ClusterRolloutWaveStateHealthy, "done", RolloutStateCompleted:
+		return "done"
+	case storage.ClusterRolloutWaveStateUnhealthy, "paused", RolloutStateHalted:
+		return "paused"
+	case storage.ClusterRolloutWaveStateAborted:
+		return "aborted"
+	default:
+		return "pending"
+	}
+}
+
+func formatRolloutOptionalTime(t time.Time) *string {
+	if t.IsZero() {
+		return nil
+	}
+	formatted := formatTime(t)
+	return &formatted
+}
+
+func formatRolloutOptionalTimePtr(t *time.Time) *string {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	formatted := formatTime(*t)
+	return &formatted
 }
 
 // handleClusterRolloutsRoute dispatches the /api/v1/clusters/{id}/rollouts...

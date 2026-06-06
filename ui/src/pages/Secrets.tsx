@@ -5,6 +5,7 @@ import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { useTenant } from '../providers/TenantProvider';
 import { CreateSecretGroupPayload } from '../lib/api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -63,7 +64,8 @@ export function Secrets(): JSX.Element {
   const api = useApiClient();
   const [limit] = useState(50);
   const [offset, setOffset] = useState(0);
-  const [selectedTenant] = useState<string | undefined>(undefined);
+  const { currentTenantId } = useTenant();
+  const selectedTenant = currentTenantId ?? undefined;
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -140,7 +142,7 @@ export function Secrets(): JSX.Element {
     try {
       const payload: CreateSecretGroupPayload = {
         ...formData,
-        tenant_id: selectedTenant || undefined,
+        tenant_id: selectedTenant,
       };
       await api.createSecretGroup(payload);
       showSuccess('Secret group created successfully');

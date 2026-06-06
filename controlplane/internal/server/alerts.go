@@ -473,6 +473,11 @@ func (s *Server) userIDForPrincipalCtx(ctx context.Context, principal *auth.Prin
 	if principal == nil || strings.TrimSpace(principal.Subject) == "" || s.store == nil {
 		return uuid.Nil
 	}
+	if id, err := uuid.Parse(strings.TrimSpace(principal.Subject)); err == nil && id != uuid.Nil {
+		if user, err := s.store.GetUser(ctx, id); err == nil && user != nil {
+			return user.ID
+		}
+	}
 	user, err := s.store.GetUserByExternalID(ctx, principal.Subject)
 	if err != nil || user == nil {
 		return uuid.Nil

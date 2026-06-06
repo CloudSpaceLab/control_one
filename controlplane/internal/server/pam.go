@@ -566,10 +566,22 @@ type commandACLResponse struct {
 	AllowCommands     []string       `json:"allow_commands"`
 	DenyCommands      []string       `json:"deny_commands"`
 	Enabled           bool           `json:"enabled"`
+	Pattern           string         `json:"pattern"`
+	Action            string         `json:"action"`
+	Roles             []string       `json:"roles"`
 	CreatedAt         string         `json:"created_at"`
+	UpdatedAt         string         `json:"updated_at"`
 }
 
 func newCommandACLResponse(a storage.CommandACL) commandACLResponse {
+	pattern := ""
+	action := "allow"
+	if len(a.DenyCommands) > 0 {
+		pattern = a.DenyCommands[0]
+		action = "deny"
+	} else if len(a.AllowCommands) > 0 {
+		pattern = a.AllowCommands[0]
+	}
 	out := commandACLResponse{
 		ID:                a.ID.String(),
 		TenantID:          a.TenantID.String(),
@@ -579,7 +591,14 @@ func newCommandACLResponse(a storage.CommandACL) commandACLResponse {
 		AllowCommands:     a.AllowCommands,
 		DenyCommands:      a.DenyCommands,
 		Enabled:           a.Enabled,
+		Pattern:           pattern,
+		Action:            action,
+		Roles:             []string{},
 		CreatedAt:         formatTime(a.CreatedAt),
+		UpdatedAt:         formatTime(a.UpdatedAt),
+	}
+	if a.Role != "" {
+		out.Roles = []string{a.Role}
 	}
 	if out.NodeLabelSelector == nil {
 		out.NodeLabelSelector = map[string]any{}
@@ -601,6 +620,9 @@ type createCommandACLRequest struct {
 	AllowCommands     []string       `json:"allow_commands"`
 	DenyCommands      []string       `json:"deny_commands"`
 	Enabled           *bool          `json:"enabled"`
+	Pattern           string         `json:"pattern"`
+	Action            string         `json:"action"`
+	Roles             []string       `json:"roles"`
 }
 
 func (s *Server) handleCommandACLCollection(w http.ResponseWriter, r *http.Request) {
@@ -648,6 +670,27 @@ func (s *Server) handleCommandACLCollection(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 			return
 		}
+		role := strings.TrimSpace(req.Role)
+		if role == "" && len(req.Roles) > 0 {
+			role = strings.TrimSpace(req.Roles[0])
+		}
+		pattern := strings.TrimSpace(req.Pattern)
+		allowCommands := append([]string(nil), req.AllowCommands...)
+		denyCommands := append([]string(nil), req.DenyCommands...)
+		if pattern != "" && len(allowCommands) == 0 && len(denyCommands) == 0 {
+			switch strings.ToLower(strings.TrimSpace(req.Action)) {
+			case "", "deny":
+				denyCommands = []string{pattern}
+			case "allow":
+				allowCommands = []string{pattern}
+			default:
+				http.Error(w, "action must be allow or deny", http.StatusBadRequest)
+				return
+			}
+		}
+		if role == "" {
+			role = "operator"
+		}
 		enabled := true
 		if req.Enabled != nil {
 			enabled = *req.Enabled
@@ -655,10 +698,10 @@ func (s *Server) handleCommandACLCollection(w http.ResponseWriter, r *http.Reque
 		acl, err := s.store.CreateCommandACL(r.Context(), storage.CreateCommandACLParams{
 			TenantID:          tenantID,
 			Name:              req.Name,
-			Role:              req.Role,
+			Role:              role,
 			NodeLabelSelector: req.NodeLabelSelector,
-			AllowCommands:     req.AllowCommands,
-			DenyCommands:      req.DenyCommands,
+			AllowCommands:     allowCommands,
+			DenyCommands:      denyCommands,
 			Enabled:           enabled,
 		})
 		if err != nil {
@@ -678,6 +721,9 @@ func (s *Server) handleCommandACLSubroutes(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/command-acl/")
+	if idStr == r.URL.Path {
+		idStr = strings.TrimPrefix(r.URL.Path, "/api/v1/command-acls/")
+	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)

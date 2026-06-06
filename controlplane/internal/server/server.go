@@ -284,11 +284,13 @@ type Store interface {
 	AggregatePortObservations(context.Context, uuid.UUID, time.Time) ([]storage.PortObservationStats, error)
 	// MFA.
 	CreateMFAFactor(context.Context, storage.CreateMFAFactorParams) (*storage.MFAFactor, error)
+	UpsertMFARecoveryFactor(context.Context, uuid.UUID, string, []byte, []byte) (*storage.MFAFactor, error)
 	GetMFAFactor(context.Context, uuid.UUID) (*storage.MFAFactor, error)
 	ListMFAFactors(context.Context, uuid.UUID) ([]storage.MFAFactor, error)
 	DisableMFAFactor(context.Context, uuid.UUID) error
 	EnableMFAFactor(context.Context, uuid.UUID, string) error
 	RecordMFAUse(context.Context, uuid.UUID, int64) error
+	UpdateMFAFactorSecretIfSignCount(context.Context, uuid.UUID, []byte, []byte, int64, int64) (bool, error)
 	CreateStepUpChallenge(context.Context, uuid.UUID, string, string, []byte, time.Duration) (*storage.StepUpChallenge, error)
 	ConsumeStepUpChallenge(context.Context, uuid.UUID) (*storage.StepUpChallenge, error)
 	// Threat-intel feeds (operator-managed).
@@ -1070,6 +1072,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll/", s.handleFleetEnrollStatus)
 	s.baseRouter.HandleFunc("/api/v1/compliance/scan", s.handleComplianceBatchScan)
+	s.baseRouter.HandleFunc("/api/v1/rollout/waves", s.handleRolloutWavesCollection)
+	s.baseRouter.HandleFunc("/api/v1/rollout/waves/", s.handleRolloutWaveSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/clusters", s.handleClusters)
 	s.baseRouter.HandleFunc("/api/v1/clusters/", s.handleClusterSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/provider-credentials", s.handleProviderCredentialsCollection)
@@ -1131,6 +1135,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/ssh-ca/sign-cert", s.handleSSHCASignCert)
 	s.baseRouter.HandleFunc("/api/v1/command-acl", s.handleCommandACLCollection)
 	s.baseRouter.HandleFunc("/api/v1/command-acl/", s.handleCommandACLSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/command-acls", s.handleCommandACLCollection)
+	s.baseRouter.HandleFunc("/api/v1/command-acls/", s.handleCommandACLSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/correlation-rules", s.handleCorrelationRulesCollection)
 	s.baseRouter.HandleFunc("/api/v1/correlation-rules/", s.handleCorrelationRuleSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/compliance/recommendations", s.handleRecommendations)
@@ -1139,6 +1145,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/reports/", s.handleReportExport)
 	s.baseRouter.HandleFunc("/api/v1/mfa/factors", s.handleMFAFactors)
 	s.baseRouter.HandleFunc("/api/v1/mfa/factors/", s.handleMFAFactorSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/mfa/recovery-codes", s.handleMFARecoveryCodes)
 	s.baseRouter.HandleFunc("/api/v1/mfa/totp/enroll/begin", s.handleTOTPEnrollBegin)
 	s.baseRouter.HandleFunc("/api/v1/mfa/totp/enroll/finish", s.handleTOTPEnrollFinish)
 	s.baseRouter.HandleFunc("/api/v1/mfa/step-up/begin", s.handleStepUpBegin)

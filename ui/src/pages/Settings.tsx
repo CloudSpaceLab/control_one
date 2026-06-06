@@ -4,6 +4,7 @@ import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
+import { useTenant } from '../providers/TenantProvider';
 import { useWorkerStatus } from '../hooks/useWorkerStatus';
 import { Webhook, CreateWebhookPayload, UpdateWebhookPayload, MFAFactor } from '../lib/api';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -55,7 +56,7 @@ export function Settings(): JSX.Element {
   const [totpLabel, setTotpLabel] = useState('Authenticator app');
   const [webauthnEnrollStep, setWebauthnEnrollStep] = useState<'idle' | 'enrolling'>('idle');
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
-  const [showRecoveryCodes, setShowRecoveryCodes] = useState(false);
+  const [recoveryCodesLoading, setRecoveryCodesLoading] = useState(false);
 
   // Worker pool
   const { status: workerStatus, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus({ pollIntervalMs: 0 });
@@ -121,19 +122,12 @@ export function Settings(): JSX.Element {
     }
   };
 
-  const handleViewRecoveryCodes = async () => {
-    try {
-      const data = await api.getMFARecoveryCodes();
-      setRecoveryCodes(data.codes);
-      setShowRecoveryCodes(true);
-    } catch (err) {
-      console.error('Failed to fetch recovery codes', err);
-    }
-  };
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [isCreatingWebhook, setIsCreatingWebhook] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<Webhook | null>(null);
 
+  const { currentTenantId } = useTenant();
+  const effectiveTenant = selectedTenant ?? currentTenantId ?? undefined;
   const { data: tenants } = useTenants();
   const {
     data: webhooks,
@@ -141,7 +135,7 @@ export function Settings(): JSX.Element {
     error: webhooksError,
     reload: reloadWebhooks,
   } = useWebhooks({
-    tenant_id: selectedTenant,
+    tenant_id: effectiveTenant,
     limit: 100,
   });
 
@@ -155,6 +149,25 @@ export function Settings(): JSX.Element {
   const { showToast } = useToast();
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const hasRecoveryFactor = mfaFactors.some((factor) => factor.type === 'recovery');
+
+  const handleGenerateRecoveryCodes = async () => {
+    try {
+      setRecoveryCodesLoading(true);
+      const data = await api.generateMFARecoveryCodes(10);
+      setRecoveryCodes(data.codes);
+      setMfaReloadToken((n) => n + 1);
+      showToast(
+        hasRecoveryFactor ? 'Backup codes regenerated. Store them now.' : 'Backup codes generated. Store them now.',
+        'success',
+      );
+    } catch (err) {
+      console.error('Failed to generate recovery codes', err);
+      showToast('Could not generate backup codes. Confirm MFA encryption is configured.', 'error');
+    } finally {
+      setRecoveryCodesLoading(false);
+    }
+  };
 
   const [webhookForm, setWebhookForm] = useState<CreateWebhookPayload>({
     name: '',
@@ -218,6 +231,10 @@ export function Settings(): JSX.Element {
       showError('Name, URL, and at least one event are required');
       return;
     }
+    if (!effectiveTenant) {
+      showError('Tenant is required');
+      return;
+    }
 
     setSaving(true);
     resetFeedback();
@@ -238,7 +255,7 @@ export function Settings(): JSX.Element {
       } else {
         const payload: CreateWebhookPayload = {
           ...webhookForm,
-          tenant_id: selectedTenant,
+          tenant_id: effectiveTenant,
         };
         await api.createWebhook(payload);
         showSuccess('Webhook created successfully');
@@ -308,11 +325,10 @@ export function Settings(): JSX.Element {
             <SelectField
               id="tenant-filter"
               label="Filter by tenant"
-              value={selectedTenant ?? ''}
+              value={effectiveTenant ?? ''}
               onChange={(e) => setSelectedTenant(e.target.value || undefined)}
               wrapperClassName="w-64"
             >
-              <option value="">All tenants</option>
               {tenants.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
@@ -657,21 +673,24 @@ export function Settings(): JSX.Element {
                 type="button"
                 variant="secondary"
                 size="sm"
-                onClick={handleViewRecoveryCodes}
+                onClick={handleGenerateRecoveryCodes}
+                disabled={recoveryCodesLoading}
               >
-                View Codes
+                {recoveryCodesLoading ? 'Generating...' : hasRecoveryFactor ? 'Regenerate Codes' : 'Generate Codes'}
               </Button>
             }
           >
             <p className="text-sm text-text-secondary mb-4">
-              Recovery codes can be used to access your account if you lose your MFA device. Store them securely.
+              Generate one-time backup codes for MFA step-up if your authenticator is unavailable.
             </p>
-            {showRecoveryCodes && recoveryCodes && (
-              <div className="p-4 rounded-lg border border-border-subtle bg-surface">
-                <p className="text-xs text-state-critical mb-2">Save these codes now. They won&apos;t be shown again.</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {recoveryCodes.map((code, idx) => (
-                    <code key={idx} className="text-sm font-mono bg-surface-2 px-2 py-1 rounded">{code}</code>
+            {recoveryCodes && (
+              <div className="rounded-lg border border-border-subtle bg-surface p-4">
+                <p className="mb-2 text-xs text-state-critical">Save these codes now. They will not be shown again.</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {recoveryCodes.map((code) => (
+                    <code key={code} className="rounded bg-surface-2 px-2 py-1 font-mono text-sm">
+                      {code}
+                    </code>
                   ))}
                 </div>
               </div>
@@ -740,7 +759,7 @@ export function Settings(): JSX.Element {
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                 <Button variant="secondary" asChild>
-                  <a href={`/trust/${selectedTenant || 'default'}`} target="_blank" rel="noopener noreferrer">
+                  <a href={`/trust/${effectiveTenant || 'default'}`} target="_blank" rel="noopener noreferrer">
                     View Public Trust Center
                   </a>
                 </Button>

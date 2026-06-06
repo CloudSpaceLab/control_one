@@ -853,37 +853,44 @@ export function SIEMCoverage(): JSX.Element {
     }
   };
 
-  const createCandidateFromProposal = async (
-    proposal: ContentPackSourceProposal,
-  ) => {
-    if (!currentTenantId) return;
-    const endpoint = deploymentDraft.endpoint.trim();
-    if (!endpoint) {
-      toast.error("OTel exporter endpoint is required");
-      return;
-    }
-    setBusyProposalId(proposal.id);
-    try {
-      const rendered = await api.createContentPackOTelConfigCandidate(
-        currentTenantId,
-        {
-          endpoint,
-          collector_id: deploymentDraft.collectorId.trim() || undefined,
-          source_proposal_ids: [proposal.id],
-        },
-      );
-      toast.success(
-        `Rendered candidate ${rendered.candidate_id || rendered.config_version}`,
-      );
-      await load();
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Candidate render failed",
-      );
-    } finally {
-      setBusyProposalId(null);
-    }
-  };
+  const createCandidateFromProposal = useCallback(
+    async (proposal: ContentPackSourceProposal) => {
+      if (!currentTenantId) return;
+      const endpoint = deploymentDraft.endpoint.trim();
+      if (!endpoint) {
+        toast.error("OTel exporter endpoint is required");
+        return;
+      }
+      setBusyProposalId(proposal.id);
+      try {
+        const rendered = await api.createContentPackOTelConfigCandidate(
+          currentTenantId,
+          {
+            endpoint,
+            collector_id: deploymentDraft.collectorId.trim() || undefined,
+            source_proposal_ids: [proposal.id],
+          },
+        );
+        toast.success(
+          `Rendered candidate ${rendered.candidate_id || rendered.config_version}`,
+        );
+        await load();
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Candidate render failed",
+        );
+      } finally {
+        setBusyProposalId(null);
+      }
+    },
+    [
+      api,
+      currentTenantId,
+      deploymentDraft.collectorId,
+      deploymentDraft.endpoint,
+      load,
+    ],
+  );
 
   const approveCandidate = async (
     candidate: ContentPackOTelConfigCandidate,
@@ -913,60 +920,66 @@ export function SIEMCoverage(): JSX.Element {
     }
   };
 
-  const queueCandidate = async (candidate: ContentPackOTelConfigCandidate) => {
-    if (!currentTenantId) return;
-    const collectorId = (
-      deploymentDraft.collectorId ||
-      candidate.collector_id ||
-      candidate.target_collector_id ||
-      ""
-    ).trim();
-    if (!collectorId) {
-      toast.error("Collector ID is required");
-      return;
-    }
-    setBusyCandidateId(candidate.id);
-    try {
-      const updated = await api.queueContentPackOTelConfigCandidate(
-        currentTenantId,
-        candidate.id,
-        {
-          collector_id: collectorId,
-          note: "Queued from SIEM coverage",
-          expected_config_version: candidate.config_version,
-        },
-      );
-      setCandidateDetail((current) =>
-        current?.id === updated.id ? { ...current, ...updated } : current,
-      );
-      toast.success("Collector config queued");
-      await load();
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Candidate queue failed",
-      );
-    } finally {
-      setBusyCandidateId(null);
-    }
-  };
+  const queueCandidate = useCallback(
+    async (candidate: ContentPackOTelConfigCandidate) => {
+      if (!currentTenantId) return;
+      const collectorId = (
+        deploymentDraft.collectorId ||
+        candidate.collector_id ||
+        candidate.target_collector_id ||
+        ""
+      ).trim();
+      if (!collectorId) {
+        toast.error("Collector ID is required");
+        return;
+      }
+      setBusyCandidateId(candidate.id);
+      try {
+        const updated = await api.queueContentPackOTelConfigCandidate(
+          currentTenantId,
+          candidate.id,
+          {
+            collector_id: collectorId,
+            note: "Queued from SIEM coverage",
+            expected_config_version: candidate.config_version,
+          },
+        );
+        setCandidateDetail((current) =>
+          current?.id === updated.id ? { ...current, ...updated } : current,
+        );
+        toast.success("Collector config queued");
+        await load();
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Candidate queue failed",
+        );
+      } finally {
+        setBusyCandidateId(null);
+      }
+    },
+    [api, currentTenantId, deploymentDraft.collectorId, load],
+  );
 
-  const reviewCandidate = async (candidate: ContentPackOTelConfigCandidate) => {
-    if (!currentTenantId) return;
-    setReviewingCandidateId(candidate.id);
-    try {
-      const detail = await api.getContentPackOTelConfigCandidate(
-        currentTenantId,
-        candidate.id,
-      );
-      setCandidateDetail(detail);
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Candidate review failed",
-      );
-    } finally {
-      setReviewingCandidateId(null);
-    }
-  };
+  const reviewCandidate = useCallback(
+    async (candidate: ContentPackOTelConfigCandidate) => {
+      if (!currentTenantId) return;
+      setReviewingCandidateId(candidate.id);
+      try {
+        const detail = await api.getContentPackOTelConfigCandidate(
+          currentTenantId,
+          candidate.id,
+        );
+        setCandidateDetail(detail);
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Candidate review failed",
+        );
+      } finally {
+        setReviewingCandidateId(null);
+      }
+    },
+    [api, currentTenantId],
+  );
 
   const proposalColumns = useMemo<ColumnDef<ContentPackSourceProposal>[]>(
     () => [
@@ -1137,10 +1150,9 @@ export function SIEMCoverage(): JSX.Element {
     ],
     [
       busyProposalId,
-      deploymentDraft.collectorId,
-      deploymentDraft.endpoint,
       healthBySource,
       isAdmin,
+      createCandidateFromProposal,
       openProposalDecision,
     ],
   );
@@ -1367,8 +1379,9 @@ export function SIEMCoverage(): JSX.Element {
     [
       busyCandidateId,
       canReviewCollectorConfig,
-      deploymentDraft.collectorId,
       isAdmin,
+      queueCandidate,
+      reviewCandidate,
       reviewingCandidateId,
     ],
   );

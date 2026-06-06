@@ -109,11 +109,11 @@ export function GlobalSearch({ trigger }: { trigger?: ReactNode }) {
     <button
       type="button"
       onClick={() => setOpen(true)}
-      className="group relative flex h-9 w-full max-w-lg items-center gap-2.5 rounded-full border border-border-subtle bg-surface/60 px-3.5 text-sm text-text-muted shadow-sm transition-all hover:border-border-strong hover:bg-surface hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+      className="group relative flex h-9 min-w-0 max-w-lg items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface/60 px-2.5 text-sm text-text-muted shadow-sm transition-all hover:border-border-strong hover:bg-surface hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 sm:w-full sm:justify-start sm:gap-2.5 sm:px-3.5"
       aria-label="Open search"
     >
       <Search className="h-3.5 w-3.5 shrink-0 text-text-muted group-hover:text-text-secondary transition-colors" />
-      <span className="flex-1 text-left text-sm">Search anything…</span>
+      <span className="hidden min-w-0 flex-1 truncate text-left text-sm min-[420px]:block">Search anything…</span>
       <span className="hidden items-center gap-0.5 sm:flex">
         <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface px-1 font-mono text-[0.6rem] text-text-muted">
           {isMac ? '⌘' : 'Ctrl'}

@@ -18,6 +18,10 @@ interface UseTelemetryMetricsResult extends TelemetryMetricsState {
   reload: () => void;
 }
 
+function emptyPagination(limit?: number, offset?: number) {
+  return { total: 0, count: 0, limit: limit ?? 0, offset: offset ?? 0, nextOffset: null, prevOffset: null };
+}
+
 export function useTelemetryMetrics(params: ListTelemetryMetricsParams = {}): UseTelemetryMetricsResult {
   const api = useApiClient();
   const handleError = useApiErrorHandler('Failed to load telemetry metrics');
@@ -52,6 +56,17 @@ export function useTelemetryMetrics(params: ListTelemetryMetricsParams = {}): Us
 
   useEffect(() => {
     let cancelled = false;
+    if (!normalizedParams.tenant_id) {
+      setState({
+        data: [],
+        pagination: emptyPagination(normalizedParams.limit, normalizedParams.offset),
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     api
@@ -65,7 +80,7 @@ export function useTelemetryMetrics(params: ListTelemetryMetricsParams = {}): Us
         if (!cancelled) {
           setState({
             data: [],
-            pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
+            pagination: emptyPagination(normalizedParams.limit, normalizedParams.offset),
             loading: false,
             error: handleError(error),
           });
@@ -128,6 +143,17 @@ export function useTelemetryLogs(params: ListTelemetryLogsParams = {}): UseTelem
 
   useEffect(() => {
     let cancelled = false;
+    if (!normalizedParams.tenant_id) {
+      setState({
+        data: [],
+        pagination: emptyPagination(normalizedParams.limit, normalizedParams.offset),
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     api
@@ -141,7 +167,7 @@ export function useTelemetryLogs(params: ListTelemetryLogsParams = {}): UseTelem
         if (!cancelled) {
           setState({
             data: [],
-            pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
+            pagination: emptyPagination(normalizedParams.limit, normalizedParams.offset),
             loading: false,
             error: handleError(error),
           });

@@ -123,6 +123,7 @@ export function Access(): JSX.Element {
   const [deleteAclId, setDeleteAclId] = useState<string | null>(null);
   const [showCreateAcl, setShowCreateAcl] = useState(false);
   const [aclName, setAclName] = useState('');
+  const [aclRole, setAclRole] = useState('operator');
   const [aclPattern, setAclPattern] = useState('');
   const [aclAction, setAclAction] = useState<'allow' | 'deny'>('deny');
   const [creatingAcl, setCreatingAcl] = useState(false);
@@ -163,9 +164,16 @@ export function Access(): JSX.Element {
   // Command ACL effects + handlers
   useEffect(() => {
     let cancelled = false;
+    if (!tenantId) {
+      setAcls([]);
+      setAclsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     setAclsLoading(true);
     client
-      .listCommandACLs({ tenantId: tenantId || undefined })
+      .listCommandACLs({ tenantId })
       .then((r) => { if (!cancelled) setAcls(r.data ?? []); })
       .catch(() => { if (!cancelled) setAcls([]); })
       .finally(() => { if (!cancelled) setAclsLoading(false); });
@@ -181,9 +189,10 @@ export function Access(): JSX.Element {
         name: aclName.trim(),
         pattern: aclPattern.trim(),
         action: aclAction,
-        roles: [],
+        roles: [aclRole.trim() || 'operator'],
       });
       setAclName('');
+      setAclRole('operator');
       setAclPattern('');
       setShowCreateAcl(false);
       setAclsReloadToken((n) => n + 1);
@@ -331,6 +340,15 @@ export function Access(): JSX.Element {
       header: 'Name',
       accessorKey: 'name',
       cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
+    },
+    {
+      header: 'Role',
+      accessorKey: 'roles',
+      cell: ({ row }) => (
+        <span className="font-mono text-xs text-text-secondary">
+          {row.original.roles?.[0] ?? row.original.role ?? 'operator'}
+        </span>
+      ),
     },
     {
       header: 'Pattern',
@@ -497,6 +515,19 @@ export function Access(): JSX.Element {
                       placeholder="Block rm -rf"
                       className="h-8 w-44"
                     />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="acl-role">Role</Label>
+                    <select
+                      id="acl-role"
+                      className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                      value={aclRole}
+                      onChange={(e) => setAclRole(e.target.value)}
+                    >
+                      <option value="operator">Operator</option>
+                      <option value="admin">Admin</option>
+                      <option value="investigator">Investigator</option>
+                    </select>
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="acl-pattern">Regex pattern</Label>

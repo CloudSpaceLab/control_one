@@ -18,6 +18,7 @@ import {
 import { useTelemetryMetrics, useTelemetryLogs } from '../hooks/useTelemetry';
 import { useTenants } from '../hooks/useTenants';
 import { useNodes } from '../hooks/useNodes';
+import { useTenant } from '../providers/TenantProvider';
 import type { TelemetryLog, TelemetryMetric } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -48,8 +49,10 @@ export function Telemetry(): JSX.Element {
   const [limit] = useState(100);
   const [offset, setOffset] = useState(0);
 
+  const { currentTenantId } = useTenant();
+  const effectiveTenant = selectedTenant ?? currentTenantId ?? undefined;
   const { data: tenants } = useTenants();
-  const { data: nodes } = useNodes({ tenantId: selectedTenant, limit: 1000 });
+  const { data: nodes } = useNodes({ tenantId: effectiveTenant, limit: 1000 });
 
   const {
     data: metrics,
@@ -58,7 +61,7 @@ export function Telemetry(): JSX.Element {
     pagination: metricsPagination,
     reload: reloadMetrics,
   } = useTelemetryMetrics({
-    tenant_id: selectedTenant,
+    tenant_id: effectiveTenant,
     node_id: selectedNode,
     metric_name: metricNameFilter || undefined,
     limit,
@@ -72,7 +75,7 @@ export function Telemetry(): JSX.Element {
     pagination: logsPagination,
     reload: reloadLogs,
   } = useTelemetryLogs({
-    tenant_id: selectedTenant,
+    tenant_id: effectiveTenant,
     node_id: selectedNode,
     log_level: logLevelFilter || undefined,
     log_source: logSourceFilter || undefined,
@@ -299,16 +302,13 @@ export function Telemetry(): JSX.Element {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <FilterSelect
             label="Tenant"
-            value={selectedTenant ?? ''}
+            value={effectiveTenant ?? ''}
             onChange={(v) => {
               setSelectedTenant(v || undefined);
               setSelectedNode(undefined);
               setOffset(0);
             }}
-            options={[
-              { label: 'All tenants', value: '' },
-              ...tenants.map((t) => ({ label: t.name, value: t.id })),
-            ]}
+            options={tenants.map((t) => ({ label: t.name, value: t.id }))}
           />
           <FilterSelect
             label="Node"
@@ -321,7 +321,7 @@ export function Telemetry(): JSX.Element {
               { label: 'All nodes', value: '' },
               ...nodes.map((n) => ({ label: n.hostname, value: n.id })),
             ]}
-            disabled={!selectedTenant}
+            disabled={!effectiveTenant}
           />
           {viewMode === 'metrics' ? (
             <FilterSelect

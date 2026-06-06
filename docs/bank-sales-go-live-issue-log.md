@@ -316,6 +316,72 @@ Storage strategy correction:
   requires evidentiary retention; Doris should hold hot searchable facts and
   compressed investigation pivots.
 
+### LIVE-E2E-004: 2026-06-06 Production Audit Reopened Go-Live Risk
+
+Priority: P0
+
+Status: Open for production go-live. Local software fixes are staged in the
+working tree, but the live deployment at `control-one.cloudspacetechs.com` still
+needs those fixes deployed and the host/Doris memory profile remediated before
+it can honestly be called bank-grade clean.
+
+Live audit evidence from 2026-06-06:
+
+- Authenticated browser smoke covered Control Room, Alerts, Cases, Search &
+  lifecycle, Ask AI, Servers, Network & exposure, Observability, SIEM coverage,
+  Patch posture, Coverage, Compliance, Access, and Audit log. All pages loaded,
+  but Access emitted 404s for `/api/v1/command-acls` and
+  `/api/v1/command-acls?tenant_id=...` while the singular
+  `/api/v1/command-acl` endpoint still returned 200. This breaks the privileged
+  command-policy surface in production.
+- Local remediation now adds plural command-ACL routes, accepts the compact UI
+  `pattern`/`action`/`roles` payload, normalizes backend ACLs for the UI, and
+  exposes a role selector in the Access command-policy form. The fix is covered
+  by `TestCommandACLPluralRouteAcceptsCompactUIPayload` but is not deployed yet.
+- Live `/api/v1/fleet/health` was served from `source:
+  "postgres-fallback"` because Doris fleet-health queries are degraded. Before
+  the local fallback fix, non-connection rollups inflated active-connection
+  counts and returned zero `LastEventAt`, which is misleading for a SOC view.
+  Local remediation now counts only `conn.*` rows as active connections and
+  carries the latest rollup timestamp in fallback responses.
+- SSH host validation showed `doris_be` was OOM-killed on Saturday,
+  2026-06-06 at 10:35:50 UTC. The BE container had restarted shortly before the
+  audit, swap was disabled, disk was about 84% used, and Doris logs showed
+  memory-limit query cancellation. This is an environment/architecture blocker,
+  not just a UI bug.
+- Mobile browser sampling at 390x844 found production document-level horizontal
+  overflow on core routes: the top-bar theme/profile controls were pushed past
+  the right edge. Local shell remediation compacts the top bar on mobile by
+  shrinking search/tenant controls and hiding non-critical actions below `sm`.
+  A local built preview at `http://127.0.0.1:5175/console/` measured
+  `scrollWidth=381` and `clientWidth=381` at 390px after the fix.
+- SIEM coverage itself loaded live runtime source-health rows and the Source
+  health Inspect panel rendered identity, parser, runtime metrics, and evidence
+  labels. One browser console error was still observed for the alert event
+  stream: `ERR_QUIC_PROTOCOL_ERROR` on `/api/v1/events/stream`.
+
+Verification completed locally after the 2026-06-06 fixes:
+
+- `GOMAXPROCS=4 go test -short -p 1 ./...` passed.
+- `GOMAXPROCS=4 go vet -p 1 ./...` passed.
+- `npm run lint`, `npm run build`, and `npm test -- --watch=false` passed in
+  `ui/` after the command-ACL and mobile-shell changes.
+- Focused backend coverage passed for command-ACL compatibility and honest
+  fleet-health fallback counting.
+
+Exit criteria:
+
+- Deploy the local command-ACL, fleet-health fallback, and mobile-shell fixes.
+- Re-run the authenticated route audit and confirm Access has no 404s for
+  command ACLs.
+- Keep Doris BE alive without OOM under realistic ingest/query load for at
+  least a sustained soak window; add swap or move to a bank-sized HA profile.
+- Confirm fleet health uses Doris when available and fallback values remain
+  accurate when Doris is degraded.
+- Re-test mobile production routes at 390px and confirm no document-level
+  horizontal overflow.
+- Investigate and either fix or explicitly classify the event-stream QUIC error.
+
 ### C1-SIEM-001: Connector Coverage Truth Dashboard
 
 Priority: P0

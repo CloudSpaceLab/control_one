@@ -20,6 +20,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
@@ -78,6 +79,526 @@ func TestPingEndpointAuthentication(t *testing.T) {
 			t.Fatalf("expected body to contain principal token, got %s", body)
 		}
 	})
+}
+
+func TestMFAFactorsAcceptsLocalSessionUUIDSubject(t *testing.T) {
+	userID := uuid.New()
+	store := &fakeStore{
+		usersByID: map[uuid.UUID]*storage.User{
+			userID: {
+				ID:         userID,
+				ExternalID: "admin@local",
+			},
+		},
+	}
+	srv := &Server{store: store, logger: zap.NewNop()}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mfa/factors", nil)
+	req = withPrincipal(req, &auth.Principal{
+		Type:    "user",
+		Subject: userID.String(),
+		Email:   "admin@local",
+		Roles:   []string{roleViewer},
+	})
+	rec := httptest.NewRecorder()
+
+	srv.handleMFAFactors(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !contains(rec.Body.String(), `"data"`) {
+		t.Fatalf("expected data envelope, got %s", rec.Body.String())
+	}
+}
+
+func TestMFARecoveryCodesGenerateAndListFactor(t *testing.T) {
+	userID := uuid.New()
+	store := &fakeStore{
+		usersByID: map[uuid.UUID]*storage.User{
+			userID: {ID: userID, ExternalID: "admin@local"},
+		},
+	}
+	sealer, err := secretbox.NewSealer(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{store: store, logger: zap.NewNop(), sealer: sealer}
+
+	body := strings.NewReader(`{"count":10}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mfa/recovery-codes", body)
+	req = withPrincipal(req, &auth.Principal{
+		Type:    "user",
+		Subject: userID.String(),
+		Email:   "admin@local",
+		Roles:   []string{roleViewer},
+	})
+	rec := httptest.NewRecorder()
+
+	srv.handleMFARecoveryCodes(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var generated recoveryCodesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &generated); err != nil {
+		t.Fatal(err)
+	}
+	if generated.FactorID == "" || len(generated.Codes) != 10 {
+		t.Fatalf("generated response = %#v", generated)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/mfa/factors", nil)
+	listReq = withPrincipal(listReq, &auth.Principal{
+		Type:    "user",
+		Subject: userID.String(),
+		Email:   "admin@local",
+		Roles:   []string{roleViewer},
+	})
+	listRec := httptest.NewRecorder()
+	srv.handleMFAFactors(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	if !contains(listRec.Body.String(), `"factor_type":"recovery"`) {
+		t.Fatalf("expected recovery factor in list, got %s", listRec.Body.String())
+	}
+}
+
+func TestMFARecoveryCodeStepUpConsumesCodeOnce(t *testing.T) {
+	userID := uuid.New()
+	store := &fakeStore{
+		usersByID: map[uuid.UUID]*storage.User{
+			userID: {ID: userID, ExternalID: "admin@local"},
+		},
+	}
+	sealer, err := secretbox.NewSealer(bytes.Repeat([]byte{9}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{store: store, logger: zap.NewNop(), sealer: sealer}
+	principal := &auth.Principal{
+		Type:    "user",
+		Subject: userID.String(),
+		Email:   "admin@local",
+		Roles:   []string{roleViewer},
+	}
+
+	genReq := httptest.NewRequest(http.MethodPost, "/api/v1/mfa/recovery-codes", strings.NewReader(`{"count":8}`))
+	genReq = withPrincipal(genReq, principal)
+	genRec := httptest.NewRecorder()
+	srv.handleMFARecoveryCodes(genRec, genReq)
+	if genRec.Code != http.StatusOK {
+		t.Fatalf("generate status = %d body=%s", genRec.Code, genRec.Body.String())
+	}
+	var generated recoveryCodesResponse
+	if err := json.Unmarshal(genRec.Body.Bytes(), &generated); err != nil {
+		t.Fatal(err)
+	}
+	factorID := uuid.MustParse(generated.FactorID)
+	code := generated.Codes[0]
+
+	challenge, err := store.CreateStepUpChallenge(context.Background(), userID, "settings.mfa.test", "", []byte("challenge"), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyBody, _ := json.Marshal(stepUpVerifyRequest{
+		ChallengeID: challenge.ID.String(),
+		FactorID:    factorID.String(),
+		Code:        code,
+	})
+	verifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/mfa/step-up/verify", bytes.NewReader(verifyBody))
+	verifyReq = withPrincipal(verifyReq, principal)
+	verifyRec := httptest.NewRecorder()
+	srv.handleStepUpVerify(verifyRec, verifyReq)
+	if verifyRec.Code != http.StatusOK {
+		t.Fatalf("verify status = %d body=%s", verifyRec.Code, verifyRec.Body.String())
+	}
+
+	reuseChallenge, err := store.CreateStepUpChallenge(context.Background(), userID, "settings.mfa.test", "", []byte("challenge"), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reuseBody, _ := json.Marshal(stepUpVerifyRequest{
+		ChallengeID: reuseChallenge.ID.String(),
+		FactorID:    factorID.String(),
+		Code:        code,
+	})
+	reuseReq := httptest.NewRequest(http.MethodPost, "/api/v1/mfa/step-up/verify", bytes.NewReader(reuseBody))
+	reuseReq = withPrincipal(reuseReq, principal)
+	reuseRec := httptest.NewRecorder()
+	srv.handleStepUpVerify(reuseRec, reuseReq)
+	if reuseRec.Code != http.StatusUnauthorized {
+		t.Fatalf("reuse status = %d body=%s", reuseRec.Code, reuseRec.Body.String())
+	}
+}
+
+func TestCommandACLPluralRouteAcceptsCompactUIPayload(t *testing.T) {
+	logger := zap.NewNop()
+	tenantID := uuid.New()
+	now := time.Unix(1780740000, 0).UTC()
+	existingID := uuid.New()
+	store := &fakeStore{
+		commandACLs: []storage.CommandACL{
+			{
+				ID:           existingID,
+				TenantID:     tenantID,
+				Name:         "Block destructive shell",
+				Role:         "operator",
+				DenyCommands: []string{`^rm\s+-rf`},
+				Enabled:      true,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			},
+		},
+	}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "acl-admin"),
+	}
+	srv := New(logger, cfg, store, nil)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/command-acls?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer acl-admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResp struct {
+		Data []commandACLResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listResp.Data) != 1 {
+		t.Fatalf("expected one ACL, got %d", len(listResp.Data))
+	}
+	if listResp.Data[0].Pattern != `^rm\s+-rf` || listResp.Data[0].Action != "deny" || listResp.Data[0].Roles[0] != "operator" {
+		t.Fatalf("unexpected compatibility fields: %+v", listResp.Data[0])
+	}
+
+	payload := map[string]any{
+		"tenant_id": tenantID.String(),
+		"name":      "Allow systemctl status",
+		"pattern":   `^systemctl\s+status`,
+		"action":    "allow",
+		"roles":     []string{"investigator"},
+	}
+	body, _ := json.Marshal(payload)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/command-acls", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer acl-admin")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.commandACLs) != 2 {
+		t.Fatalf("expected persisted ACL, got %d", len(store.commandACLs))
+	}
+	created := store.commandACLs[1]
+	if created.Role != "investigator" || len(created.AllowCommands) != 1 || created.AllowCommands[0] != `^systemctl\s+status` {
+		t.Fatalf("compact payload was not mapped to backend ACL: %+v", created)
+	}
+}
+
+func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
+	logger := zap.NewNop()
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+	store := &fakeStore{
+		hourlyRollups: []storage.HourlyRollupRow{
+			{
+				TenantID:  tenantID,
+				NodeID:    uuid.NullUUID{UUID: nodeID, Valid: true},
+				EventType: "conn.open",
+				HourTS:    base,
+				Count:     3,
+				BytesIn:   10,
+				BytesOut:  20,
+				SevMax:    sql.NullString{String: "medium", Valid: true},
+			},
+			{
+				TenantID:  tenantID,
+				NodeID:    uuid.NullUUID{UUID: nodeID, Valid: true},
+				EventType: "web.request",
+				HourTS:    base.Add(time.Hour),
+				Count:     1200,
+				BytesIn:   100,
+				BytesOut:  200,
+				SevMax:    sql.NullString{String: "critical", Valid: true},
+			},
+		},
+	}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "fleet-viewer"),
+	}
+	srv := New(logger, cfg, store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/fleet/health?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer fleet-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Source string `json:"source"`
+		Data   []struct {
+			NodeID      string    `json:"NodeID"`
+			ConnsActive int64     `json:"ConnsActive"`
+			LastEventAt time.Time `json:"LastEventAt"`
+			BytesIn24h  int64     `json:"BytesIn24h"`
+			BytesOut24h int64     `json:"BytesOut24h"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Source != "postgres-fallback" || len(resp.Data) != 1 {
+		t.Fatalf("unexpected fallback response: %+v", resp)
+	}
+	if resp.Data[0].ConnsActive != 3 {
+		t.Fatalf("fallback counted non-connection events as active connections: %+v", resp.Data[0])
+	}
+	if !resp.Data[0].LastEventAt.Equal(base.Add(time.Hour)) {
+		t.Fatalf("fallback did not carry latest event time: %+v", resp.Data[0])
+	}
+	if resp.Data[0].BytesIn24h != 110 || resp.Data[0].BytesOut24h != 220 {
+		t.Fatalf("fallback byte totals changed unexpectedly: %+v", resp.Data[0])
+	}
+}
+
+func TestRolloutWavesRouteListsUIPayload(t *testing.T) {
+	logger := zap.NewNop()
+	tenantID := uuid.New()
+	otherTenantID := uuid.New()
+	clusterID := uuid.New()
+	otherClusterID := uuid.New()
+	rolloutID := uuid.New()
+	otherRolloutID := uuid.New()
+	waveID := uuid.New()
+	now := time.Unix(1780740000, 0).UTC()
+	completedAt := now.Add(5 * time.Minute)
+	memberID := uuid.New()
+	store := &fakeStore{
+		clusters: map[uuid.UUID]*storage.Cluster{
+			clusterID: {
+				ID:                    clusterID,
+				TenantID:              tenantID,
+				Name:                  "core-banking",
+				Provider:              "linux",
+				DesiredSize:           2,
+				RolePlan:              map[string]any{},
+				Labels:                map[string]any{},
+				FailureDomainStrategy: "single-zone",
+				State:                 "active",
+				CreatedAt:             now,
+				UpdatedAt:             now,
+			},
+			otherClusterID: {
+				ID:                    otherClusterID,
+				TenantID:              otherTenantID,
+				Name:                  "other-bank",
+				Provider:              "linux",
+				DesiredSize:           1,
+				RolePlan:              map[string]any{},
+				Labels:                map[string]any{},
+				FailureDomainStrategy: "single-zone",
+				State:                 "active",
+				CreatedAt:             now,
+				UpdatedAt:             now,
+			},
+		},
+		clusterRollouts: map[uuid.UUID][]storage.ClusterRollout{
+			clusterID: {
+				{
+					ID:                rolloutID,
+					ClusterID:         clusterID,
+					TemplateVersionID: uuid.New(),
+					WaveSize:          1,
+					WaveStrategy:      "rolling",
+					HealthGate:        map[string]any{},
+					State:             RolloutStateCompleted,
+					CurrentWave:       0,
+					CreatedAt:         now,
+					UpdatedAt:         completedAt,
+				},
+			},
+			otherClusterID: {
+				{
+					ID:                otherRolloutID,
+					ClusterID:         otherClusterID,
+					TemplateVersionID: uuid.New(),
+					WaveSize:          1,
+					WaveStrategy:      "rolling",
+					HealthGate:        map[string]any{},
+					State:             RolloutStateRunning,
+					CurrentWave:       0,
+					CreatedAt:         now,
+					UpdatedAt:         now,
+				},
+			},
+		},
+		clusterRolloutWaves: map[uuid.UUID][]storage.ClusterRolloutWave{
+			rolloutID: {
+				{
+					ID:          waveID,
+					RolloutID:   rolloutID,
+					WaveNumber:  0,
+					MemberIDs:   []uuid.UUID{memberID},
+					State:       storage.ClusterRolloutWaveStateHealthy,
+					StartedAt:   now,
+					CompletedAt: &completedAt,
+					GateResult:  map[string]any{"passed": true},
+				},
+			},
+			otherRolloutID: {
+				{
+					ID:         uuid.New(),
+					RolloutID:  otherRolloutID,
+					WaveNumber: 0,
+					MemberIDs:  []uuid.UUID{uuid.New()},
+					State:      storage.ClusterRolloutWaveStateRunning,
+					StartedAt:  now,
+				},
+			},
+		},
+	}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "rollout-admin"),
+	}
+	srv := New(logger, cfg, store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/rollout/waves?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer rollout-admin")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []rolloutWaveListItemResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected one tenant-scoped wave, got %d: %+v", len(resp.Data), resp.Data)
+	}
+	got := resp.Data[0]
+	if got.ID != waveID.String() || got.TenantID != tenantID.String() || got.Name != "core-banking wave 1" {
+		t.Fatalf("unexpected wave identity fields: %+v", got)
+	}
+	if got.Status != "done" || got.NodeCount != 1 || got.DoneCount != 1 || got.Order != 1 {
+		t.Fatalf("unexpected wave presentation fields: %+v", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/rollout/waves", nil)
+	req.Header.Set("Authorization", "Bearer rollout-admin")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("all-tenant status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode all-tenant response: %v", err)
+	}
+	if len(resp.Data) != 2 {
+		t.Fatalf("expected admin all-tenant waves, got %d", len(resp.Data))
+	}
+}
+
+func TestRolloutWaveRouteUpdatesUIPayloadStatus(t *testing.T) {
+	logger := zap.NewNop()
+	tenantID := uuid.New()
+	clusterID := uuid.New()
+	rolloutID := uuid.New()
+	waveID := uuid.New()
+	now := time.Unix(1780740000, 0).UTC()
+	store := &fakeStore{
+		clusters: map[uuid.UUID]*storage.Cluster{
+			clusterID: {
+				ID:                    clusterID,
+				TenantID:              tenantID,
+				Name:                  "payments",
+				Provider:              "linux",
+				DesiredSize:           1,
+				RolePlan:              map[string]any{},
+				Labels:                map[string]any{},
+				FailureDomainStrategy: "single-zone",
+				State:                 "active",
+				CreatedAt:             now,
+				UpdatedAt:             now,
+			},
+		},
+		clusterRollouts: map[uuid.UUID][]storage.ClusterRollout{
+			clusterID: {
+				{
+					ID:                rolloutID,
+					ClusterID:         clusterID,
+					TemplateVersionID: uuid.New(),
+					WaveSize:          1,
+					WaveStrategy:      "rolling",
+					HealthGate:        map[string]any{},
+					State:             RolloutStateRunning,
+					CurrentWave:       0,
+					CreatedAt:         now,
+					UpdatedAt:         now,
+				},
+			},
+		},
+		clusterRolloutWaves: map[uuid.UUID][]storage.ClusterRolloutWave{
+			rolloutID: {
+				{
+					ID:         waveID,
+					RolloutID:  rolloutID,
+					WaveNumber: 0,
+					MemberIDs:  []uuid.UUID{uuid.New()},
+					State:      storage.ClusterRolloutWaveStateRunning,
+					StartedAt:  now,
+				},
+			},
+		},
+	}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "rollout-admin"),
+	}
+	srv := New(logger, cfg, store, nil)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/rollout/waves/"+waveID.String(), bytes.NewReader([]byte(`{"status":"paused"}`)))
+	req.Header.Set("Authorization", "Bearer rollout-admin")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp rolloutWaveListItemResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "paused" || resp.Name != "payments wave 1" {
+		t.Fatalf("unexpected patch response: %+v", resp)
+	}
+	waves := store.clusterRolloutWaves[rolloutID]
+	if len(waves) != 1 || waves[0].State != storage.ClusterRolloutWaveStateUnhealthy {
+		t.Fatalf("expected paused UI state to halt wave via unhealthy state, got %+v", waves)
+	}
+	rollouts := store.clusterRollouts[clusterID]
+	if len(rollouts) != 1 || rollouts[0].State != RolloutStateHalted {
+		t.Fatalf("expected rollout halted, got %+v", rollouts)
+	}
 }
 
 func TestHandleComplianceScanPersistsResultsAndAudits(t *testing.T) {
@@ -1531,6 +2052,8 @@ type fakeStore struct {
 	lastUserID          uuid.UUID
 	overrideRoles       map[uuid.UUID][]string
 	skipUserPersistence bool
+	mfaFactors          map[uuid.UUID]storage.MFAFactor
+	stepUpChallenges    map[uuid.UUID]storage.StepUpChallenge
 	templates           []storage.ProvisioningTemplate
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	templateAssignments []storage.ProvisioningTemplateAssignment
@@ -1581,8 +2104,10 @@ type fakeStore struct {
 	eventIngestBatches     []storage.EventIngestBatch
 	eventIngestReplayByKey map[string]storage.EventIngestBatch
 	eventIngestRecords     []storage.CreateEventIngestBatchParams
+	hourlyRollups          []storage.HourlyRollupRow
 	activeBlocks           []storage.ActiveBlock
 	patchDeployments       []storage.PatchDeployment
+	commandACLs            []storage.CommandACL
 	ipBehaviorCountries    []storage.IPBehaviorCountrySummary
 	ipBehaviorFindings     []storage.IPBehaviorFinding
 	webserverInstances     []storage.WebserverInstance
@@ -4492,23 +5017,189 @@ func (f *fakeStore) CountRuleTriggersSince(_ context.Context, _ uuid.UUID, _ tim
 
 // --- MFA stubs (Phase 4 iter) ---
 
-func (f *fakeStore) CreateMFAFactor(_ context.Context, _ storage.CreateMFAFactorParams) (*storage.MFAFactor, error) {
-	return nil, errors.New("not implemented")
+func (f *fakeStore) CreateMFAFactor(_ context.Context, params storage.CreateMFAFactorParams) (*storage.MFAFactor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mfaFactors == nil {
+		f.mfaFactors = make(map[uuid.UUID]storage.MFAFactor)
+	}
+	id := uuid.New()
+	now := time.Now().UTC()
+	factor := storage.MFAFactor{
+		ID:           id,
+		UserID:       params.UserID,
+		FactorType:   params.FactorType,
+		SecretSealed: append([]byte(nil), params.SecretSealed...),
+		Nonce:        append([]byte(nil), params.Nonce...),
+		Enabled:      true,
+		CreatedAt:    now,
+	}
+	if strings.TrimSpace(params.Label) != "" {
+		factor.Label = sql.NullString{String: strings.TrimSpace(params.Label), Valid: true}
+	}
+	if strings.TrimSpace(params.WebAuthnCredID) != "" {
+		factor.WebAuthnCredID = sql.NullString{String: strings.TrimSpace(params.WebAuthnCredID), Valid: true}
+	}
+	f.mfaFactors[id] = factor
+	copy := factor
+	return &copy, nil
 }
-func (f *fakeStore) GetMFAFactor(_ context.Context, _ uuid.UUID) (*storage.MFAFactor, error) {
+
+func (f *fakeStore) UpsertMFARecoveryFactor(_ context.Context, userID uuid.UUID, label string, sealed, nonce []byte) (*storage.MFAFactor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mfaFactors == nil {
+		f.mfaFactors = make(map[uuid.UUID]storage.MFAFactor)
+	}
+	for id, factor := range f.mfaFactors {
+		if factor.UserID == userID && factor.FactorType == "recovery" {
+			factor.Label = sql.NullString{String: strings.TrimSpace(label), Valid: strings.TrimSpace(label) != ""}
+			factor.SecretSealed = append([]byte(nil), sealed...)
+			factor.Nonce = append([]byte(nil), nonce...)
+			factor.SignCount = 0
+			factor.Enabled = true
+			factor.LastUsedAt = sql.NullTime{}
+			f.mfaFactors[id] = factor
+			copy := factor
+			return &copy, nil
+		}
+	}
+	id := uuid.New()
+	factor := storage.MFAFactor{
+		ID:           id,
+		UserID:       userID,
+		FactorType:   "recovery",
+		Label:        sql.NullString{String: strings.TrimSpace(label), Valid: strings.TrimSpace(label) != ""},
+		SecretSealed: append([]byte(nil), sealed...),
+		Nonce:        append([]byte(nil), nonce...),
+		Enabled:      true,
+		CreatedAt:    time.Now().UTC(),
+	}
+	f.mfaFactors[id] = factor
+	copy := factor
+	return &copy, nil
+}
+
+func (f *fakeStore) GetMFAFactor(_ context.Context, id uuid.UUID) (*storage.MFAFactor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mfaFactors == nil {
+		return nil, nil
+	}
+	if factor, ok := f.mfaFactors[id]; ok {
+		copy := factor
+		copy.SecretSealed = append([]byte(nil), factor.SecretSealed...)
+		copy.Nonce = append([]byte(nil), factor.Nonce...)
+		return &copy, nil
+	}
 	return nil, nil
 }
-func (f *fakeStore) ListMFAFactors(_ context.Context, _ uuid.UUID) ([]storage.MFAFactor, error) {
-	return nil, nil
+
+func (f *fakeStore) ListMFAFactors(_ context.Context, userID uuid.UUID) ([]storage.MFAFactor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mfaFactors == nil {
+		return nil, nil
+	}
+	out := make([]storage.MFAFactor, 0)
+	for _, factor := range f.mfaFactors {
+		if factor.UserID == userID && factor.Enabled {
+			copy := factor
+			copy.SecretSealed = append([]byte(nil), factor.SecretSealed...)
+			copy.Nonce = append([]byte(nil), factor.Nonce...)
+			out = append(out, copy)
+		}
+	}
+	return out, nil
 }
-func (f *fakeStore) DisableMFAFactor(_ context.Context, _ uuid.UUID) error          { return nil }
-func (f *fakeStore) EnableMFAFactor(_ context.Context, _ uuid.UUID, _ string) error { return nil }
-func (f *fakeStore) RecordMFAUse(_ context.Context, _ uuid.UUID, _ int64) error     { return nil }
-func (f *fakeStore) CreateStepUpChallenge(_ context.Context, _ uuid.UUID, _, _ string, _ []byte, _ time.Duration) (*storage.StepUpChallenge, error) {
-	return nil, errors.New("not implemented")
+
+func (f *fakeStore) DisableMFAFactor(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if factor, ok := f.mfaFactors[id]; ok {
+		factor.Enabled = false
+		f.mfaFactors[id] = factor
+	}
+	return nil
 }
-func (f *fakeStore) ConsumeStepUpChallenge(_ context.Context, _ uuid.UUID) (*storage.StepUpChallenge, error) {
-	return nil, nil
+
+func (f *fakeStore) EnableMFAFactor(_ context.Context, id uuid.UUID, label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if factor, ok := f.mfaFactors[id]; ok {
+		factor.Enabled = true
+		if strings.TrimSpace(label) != "" {
+			factor.Label = sql.NullString{String: strings.TrimSpace(label), Valid: true}
+		}
+		f.mfaFactors[id] = factor
+	}
+	return nil
+}
+
+func (f *fakeStore) RecordMFAUse(_ context.Context, id uuid.UUID, signCount int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if factor, ok := f.mfaFactors[id]; ok {
+		factor.SignCount = signCount
+		factor.LastUsedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		f.mfaFactors[id] = factor
+	}
+	return nil
+}
+
+func (f *fakeStore) UpdateMFAFactorSecretIfSignCount(_ context.Context, id uuid.UUID, sealed, nonce []byte, expectedSignCount, nextSignCount int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	factor, ok := f.mfaFactors[id]
+	if !ok || factor.SignCount != expectedSignCount {
+		return false, nil
+	}
+	factor.SecretSealed = append([]byte(nil), sealed...)
+	factor.Nonce = append([]byte(nil), nonce...)
+	factor.SignCount = nextSignCount
+	factor.LastUsedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	f.mfaFactors[id] = factor
+	return true, nil
+}
+
+func (f *fakeStore) CreateStepUpChallenge(_ context.Context, userID uuid.UUID, action, resourceID string, challenge []byte, ttl time.Duration) (*storage.StepUpChallenge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stepUpChallenges == nil {
+		f.stepUpChallenges = make(map[uuid.UUID]storage.StepUpChallenge)
+	}
+	id := uuid.New()
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	record := storage.StepUpChallenge{
+		ID:        id,
+		UserID:    userID,
+		Action:    action,
+		Challenge: append([]byte(nil), challenge...),
+		ExpiresAt: time.Now().UTC().Add(ttl),
+		CreatedAt: time.Now().UTC(),
+	}
+	if strings.TrimSpace(resourceID) != "" {
+		record.ResourceID = sql.NullString{String: strings.TrimSpace(resourceID), Valid: true}
+	}
+	f.stepUpChallenges[id] = record
+	copy := record
+	return &copy, nil
+}
+
+func (f *fakeStore) ConsumeStepUpChallenge(_ context.Context, id uuid.UUID) (*storage.StepUpChallenge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.stepUpChallenges[id]
+	if !ok || record.Consumed || record.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, nil
+	}
+	record.Consumed = true
+	record.ConsumedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	f.stepUpChallenges[id] = record
+	copy := record
+	return &copy, nil
 }
 
 // --- Phase 3 stubs (alerts, PAM, correlation, baselines) ---
@@ -4632,16 +5323,55 @@ func (f *fakeStore) ListIssuedCerts(_ context.Context, _ uuid.UUID, _, _ int) ([
 	return nil, 0, nil
 }
 
-func (f *fakeStore) CreateCommandACL(_ context.Context, _ storage.CreateCommandACLParams) (*storage.CommandACL, error) {
-	return nil, errors.New("not implemented")
+func (f *fakeStore) CreateCommandACL(_ context.Context, p storage.CreateCommandACLParams) (*storage.CommandACL, error) {
+	acl := storage.CommandACL{
+		ID:                uuid.New(),
+		TenantID:          p.TenantID,
+		Name:              p.Name,
+		Role:              p.Role,
+		NodeLabelSelector: p.NodeLabelSelector,
+		AllowCommands:     append([]string(nil), p.AllowCommands...),
+		DenyCommands:      append([]string(nil), p.DenyCommands...),
+		Enabled:           p.Enabled,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+	}
+	f.commandACLs = append(f.commandACLs, acl)
+	return &acl, nil
 }
-func (f *fakeStore) GetCommandACL(_ context.Context, _ uuid.UUID) (*storage.CommandACL, error) {
+func (f *fakeStore) GetCommandACL(_ context.Context, id uuid.UUID) (*storage.CommandACL, error) {
+	for i := range f.commandACLs {
+		if f.commandACLs[i].ID == id {
+			return &f.commandACLs[i], nil
+		}
+	}
 	return nil, nil
 }
-func (f *fakeStore) ListCommandACLs(_ context.Context, _ uuid.UUID, _, _ int) ([]storage.CommandACL, int, error) {
-	return nil, 0, nil
+func (f *fakeStore) ListCommandACLs(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.CommandACL, int, error) {
+	var filtered []storage.CommandACL
+	for _, acl := range f.commandACLs {
+		if acl.TenantID == tenantID {
+			filtered = append(filtered, acl)
+		}
+	}
+	total := len(filtered)
+	if offset > total {
+		return []storage.CommandACL{}, total, nil
+	}
+	if limit <= 0 || offset+limit > total {
+		limit = total - offset
+	}
+	return filtered[offset : offset+limit], total, nil
 }
-func (f *fakeStore) DeleteCommandACL(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) DeleteCommandACL(_ context.Context, id uuid.UUID) error {
+	for i := range f.commandACLs {
+		if f.commandACLs[i].ID == id {
+			f.commandACLs = append(f.commandACLs[:i], f.commandACLs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
 
 func (f *fakeStore) CreateCorrelationRule(_ context.Context, _ storage.CreateCorrelationRuleParams) (*storage.CorrelationRule, error) {
 	return nil, errors.New("not implemented")
@@ -4842,8 +5572,18 @@ func (f *fakeStore) PruneAcceptedEventIngestBatches(_ context.Context, _ time.Du
 func (f *fakeStore) IncrementHourlyRollup(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ time.Time, _, _, _ int64, _ string) error {
 	return nil
 }
-func (f *fakeStore) QueryHourlyRollup(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]storage.HourlyRollupRow, error) {
-	return nil, nil
+func (f *fakeStore) QueryHourlyRollup(_ context.Context, tenantID uuid.UUID, since, until time.Time) ([]storage.HourlyRollupRow, error) {
+	var out []storage.HourlyRollupRow
+	for _, row := range f.hourlyRollups {
+		if row.TenantID != tenantID {
+			continue
+		}
+		if row.HourTS.Before(since) || row.HourTS.After(until) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out, nil
 }
 
 func (f *fakeStore) CalculateRiskScore(_ context.Context, _ uuid.UUID) (*storage.RiskScore, error) {

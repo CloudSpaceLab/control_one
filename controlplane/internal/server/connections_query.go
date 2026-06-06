@@ -180,11 +180,12 @@ func (s *Server) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	// Aggregate across event_type per node for the topology view.
 	type acc struct {
-		count    int64
+		connRows int64
 		bytesIn  int64
 		bytesOut int64
 		sevMax   string
 		nodeID   string
+		lastAt   time.Time
 	}
 	byNode := map[string]*acc{}
 	for _, r := range rollups {
@@ -197,21 +198,27 @@ func (s *Server) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
 			a = &acc{nodeID: nID}
 			byNode[nID] = a
 		}
-		a.count += r.Count
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.EventType)), "conn.") {
+			a.connRows += r.Count
+		}
 		a.bytesIn += r.BytesIn
 		a.bytesOut += r.BytesOut
 		if r.SevMax.Valid {
 			a.sevMax = r.SevMax.String
+		}
+		if r.HourTS.After(a.lastAt) {
+			a.lastAt = r.HourTS
 		}
 	}
 	var fallback []doris.FleetSnapshotRow
 	for _, a := range byNode {
 		fallback = append(fallback, doris.FleetSnapshotRow{
 			NodeID:        a.nodeID,
-			ConnsActive:   a.count,
+			ConnsActive:   a.connRows,
 			BytesIn24h:    a.bytesIn,
 			BytesOut24h:   a.bytesOut,
 			ThreatHits24h: 0,
+			LastEventAt:   a.lastAt,
 			SeverityMax:   a.sevMax,
 		})
 	}

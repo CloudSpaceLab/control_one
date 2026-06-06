@@ -1,6 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useApiClient } from './useApiClient';
 import { SecretGroup, SecretSync, ListSecretGroupsParams, ListSecretSyncsParams } from '../lib/api';
+
+function emptyPagination(limit = 50, offset = 0) {
+  return { total: 0, count: 0, limit, offset };
+}
 
 export function useSecretGroups(params: ListSecretGroupsParams = {}) {
   const api = useApiClient();
@@ -8,12 +12,27 @@ export function useSecretGroups(params: ListSecretGroupsParams = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ total: 0, count: 0, limit: 50, offset: 0 });
+  const normalizedParams = useMemo(
+    () => ({
+      tenant_id: params.tenant_id,
+      limit: params.limit,
+      offset: params.offset,
+    }),
+    [params.tenant_id, params.limit, params.offset],
+  );
 
   const reload = useCallback(async () => {
+    if (!normalizedParams.tenant_id) {
+      setData([]);
+      setPagination(emptyPagination(normalizedParams.limit, normalizedParams.offset));
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const response = await api.listSecretGroups(params);
+      const response = await api.listSecretGroups(normalizedParams);
       setData(response.data);
       setPagination(response.pagination);
     } catch (err: unknown) {
@@ -21,7 +40,7 @@ export function useSecretGroups(params: ListSecretGroupsParams = {}) {
     } finally {
       setLoading(false);
     }
-  }, [api, params]);
+  }, [api, normalizedParams]);
 
   useEffect(() => {
     reload();
@@ -36,17 +55,26 @@ export function useSecretSyncs(groupId: string | null, params: ListSecretSyncsPa
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ total: 0, count: 0, limit: 50, offset: 0 });
+  const normalizedParams = useMemo(
+    () => ({
+      limit: params.limit,
+      offset: params.offset,
+    }),
+    [params.limit, params.offset],
+  );
 
   const reload = useCallback(async () => {
     if (!groupId) {
       setData([]);
+      setPagination(emptyPagination(normalizedParams.limit, normalizedParams.offset));
+      setError(null);
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const response = await api.listSecretSyncs(groupId, params);
+      const response = await api.listSecretSyncs(groupId, normalizedParams);
       setData(response.data);
       setPagination(response.pagination);
     } catch (err: unknown) {
@@ -54,7 +82,7 @@ export function useSecretSyncs(groupId: string | null, params: ListSecretSyncsPa
     } finally {
       setLoading(false);
     }
-  }, [api, groupId, params]);
+  }, [api, groupId, normalizedParams]);
 
   useEffect(() => {
     reload();

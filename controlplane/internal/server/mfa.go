@@ -3,8 +3,12 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -128,6 +132,221 @@ func (s *Server) handleMFAFactorSubroutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type recoveryCodesRequest struct {
+	Count int `json:"count"`
+}
+
+type recoveryCodesResponse struct {
+	FactorID  string   `json:"factor_id"`
+	Codes     []string `json:"codes"`
+	CreatedAt string   `json:"created_at"`
+}
+
+type recoveryCodeBundle struct {
+	Version     int                  `json:"version"`
+	GeneratedAt string               `json:"generated_at"`
+	Codes       []recoveryCodeRecord `json:"codes"`
+}
+
+type recoveryCodeRecord struct {
+	Salt   string `json:"salt"`
+	Hash   string `json:"hash"`
+	UsedAt string `json:"used_at,omitempty"`
+}
+
+const defaultRecoveryCodeCount = 10
+
+func (s *Server) handleMFARecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if s.sealer == nil {
+		http.Error(w, "secrets encryption not configured", http.StatusServiceUnavailable)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
+		return
+	}
+	userID := s.userIDForPrincipalCtx(r.Context(), principal)
+	if userID == uuid.Nil {
+		http.Error(w, "user not registered", http.StatusForbidden)
+		return
+	}
+	var req recoveryCodesRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+	count := req.Count
+	if count <= 0 {
+		count = defaultRecoveryCodeCount
+	}
+	if count < 8 {
+		count = 8
+	}
+	if count > 16 {
+		count = 16
+	}
+
+	codes, bundle, err := generateRecoveryCodeBundle(count, time.Now().UTC())
+	if err != nil {
+		http.Error(w, "generate recovery codes", http.StatusInternalServerError)
+		return
+	}
+	payload, err := json.Marshal(bundle)
+	if err != nil {
+		http.Error(w, "encode recovery codes", http.StatusInternalServerError)
+		return
+	}
+	sealed, nonce, err := s.sealer.Seal(payload)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("seal recovery codes: %v", err), http.StatusInternalServerError)
+		return
+	}
+	factor, err := s.store.UpsertMFARecoveryFactor(r.Context(), userID, "Backup codes", sealed, nonce)
+	if err != nil {
+		s.logger.Error("upsert mfa recovery factor", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	s.recordAudit(r.Context(), principal, uuid.Nil, "mfa.recovery.generate", "mfa_factor", factor.ID.String(), map[string]any{
+		"count": count,
+	})
+	writeJSON(w, http.StatusOK, recoveryCodesResponse{
+		FactorID:  factor.ID.String(),
+		Codes:     codes,
+		CreatedAt: formatTime(time.Now().UTC()),
+	})
+}
+
+func generateRecoveryCodeBundle(count int, generatedAt time.Time) ([]string, recoveryCodeBundle, error) {
+	codes := make([]string, 0, count)
+	records := make([]recoveryCodeRecord, 0, count)
+	seen := make(map[string]struct{}, count)
+	for len(codes) < count {
+		code, err := newRecoveryCode()
+		if err != nil {
+			return nil, recoveryCodeBundle{}, err
+		}
+		normalized := normalizeRecoveryCode(code)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		salt := make([]byte, 16)
+		if _, err := rand.Read(salt); err != nil {
+			return nil, recoveryCodeBundle{}, err
+		}
+		codes = append(codes, code)
+		records = append(records, recoveryCodeRecord{
+			Salt: base64.RawStdEncoding.EncodeToString(salt),
+			Hash: base64.RawStdEncoding.EncodeToString(hashRecoveryCode(salt, normalized)),
+		})
+	}
+	return codes, recoveryCodeBundle{
+		Version:     1,
+		GeneratedAt: generatedAt.Format(time.RFC3339),
+		Codes:       records,
+	}, nil
+}
+
+func newRecoveryCode() (string, error) {
+	raw := make([]byte, 10)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw)
+	if len(encoded) > 16 {
+		encoded = encoded[:16]
+	}
+	parts := make([]string, 0, 4)
+	for i := 0; i < len(encoded); i += 4 {
+		end := i + 4
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		parts = append(parts, encoded[i:end])
+	}
+	return strings.Join(parts, "-"), nil
+}
+
+func normalizeRecoveryCode(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	var b strings.Builder
+	for _, r := range code {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '2' && r <= '7':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func hashRecoveryCode(salt []byte, normalized string) []byte {
+	h := sha256.New()
+	h.Write(salt)
+	h.Write([]byte(":"))
+	h.Write([]byte(normalized))
+	return h.Sum(nil)
+}
+
+func (s *Server) consumeRecoveryCode(ctx context.Context, factor *storage.MFAFactor, code string) (bool, error) {
+	normalized := normalizeRecoveryCode(code)
+	if normalized == "" {
+		return false, nil
+	}
+	plain, err := s.sealer.Open(factor.SecretSealed, factor.Nonce)
+	if err != nil {
+		return false, fmt.Errorf("unseal recovery codes: %w", err)
+	}
+	var bundle recoveryCodeBundle
+	if err := json.Unmarshal(plain, &bundle); err != nil {
+		return false, fmt.Errorf("decode recovery codes: %w", err)
+	}
+	match := -1
+	for i, record := range bundle.Codes {
+		if strings.TrimSpace(record.UsedAt) != "" {
+			continue
+		}
+		salt, err := base64.RawStdEncoding.DecodeString(record.Salt)
+		if err != nil {
+			return false, fmt.Errorf("decode recovery code salt: %w", err)
+		}
+		want, err := base64.RawStdEncoding.DecodeString(record.Hash)
+		if err != nil {
+			return false, fmt.Errorf("decode recovery code hash: %w", err)
+		}
+		got := hashRecoveryCode(salt, normalized)
+		if subtle.ConstantTimeCompare(got, want) == 1 {
+			match = i
+		}
+	}
+	if match < 0 {
+		return false, nil
+	}
+	bundle.Codes[match].UsedAt = time.Now().UTC().Format(time.RFC3339)
+	updatedPayload, err := json.Marshal(bundle)
+	if err != nil {
+		return false, fmt.Errorf("encode recovery codes: %w", err)
+	}
+	sealed, nonce, err := s.sealer.Seal(updatedPayload)
+	if err != nil {
+		return false, fmt.Errorf("seal recovery codes: %w", err)
+	}
+	updated, err := s.store.UpdateMFAFactorSecretIfSignCount(ctx, factor.ID, sealed, nonce, factor.SignCount, factor.SignCount+1)
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
 }
 
 // --- TOTP enrolment ----------------------------------------------------
@@ -390,6 +609,7 @@ func (s *Server) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	useRecorded := false
 	switch factor.FactorType {
 	case "totp":
 		secret, err := s.sealer.Open(factor.SecretSealed, factor.Nonce)
@@ -445,13 +665,28 @@ func (s *Server) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		// Persist the bumped sign count to detect cloned authenticators.
 		if updated != nil {
 			_ = s.store.RecordMFAUse(r.Context(), factor.ID, int64(updated.Authenticator.SignCount))
+			useRecorded = true
 		}
+	case "recovery":
+		ok, err := s.consumeRecoveryCode(r.Context(), factor, req.Code)
+		if err != nil {
+			s.logger.Error("consume recovery code", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "invalid code", http.StatusUnauthorized)
+			return
+		}
+		useRecorded = true
 	default:
 		http.Error(w, "unknown factor type", http.StatusBadRequest)
 		return
 	}
 
-	_ = s.store.RecordMFAUse(r.Context(), factor.ID, factor.SignCount+1)
+	if !useRecorded {
+		_ = s.store.RecordMFAUse(r.Context(), factor.ID, factor.SignCount+1)
+	}
 	token, expiresAt, err := s.issueStepUpToken(userID, challenge.Action)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("issue token: %v", err), http.StatusInternalServerError)
