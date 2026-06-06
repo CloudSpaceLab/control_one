@@ -267,10 +267,28 @@ Live 2026-06-06 evidence after deploying the lightweight mode:
   `/console/security/network?tab=connections` showed the small-mode notice,
   zero console warnings/errors, and the connections request returning `200`.
 
-Deployment caveat: GitHub workflow dispatches from this branch still execute the
-workflow definition from `main`, which currently starts and checks Doris
-unconditionally. The branch contains the corrected workflow logic, but it must
-be merged before GitHub Actions can be trusted for Doris-disabled deploys.
+2026-06-06 follow-up: the corrected workflow is now on `main` and deploy runs
+`27065886666`, `27066201594`, and `27066409247` succeeded with Doris disabled.
+The live browser now opens the console without creating `/api/v1/events/stream`
+requests, avoiding Cloudflare HTTP/3/QUIC stream noise; alert/rule freshness is
+preserved by bounded polling unless a deployment explicitly opts into
+`VITE_LIVE_EVENTS_MODE=sse`. Re-testing the Connections toggle returned two
+`/api/v1/connections` `200` responses and zero console warnings/errors.
+
+Additional live browser checks on 2026-06-06 loaded Control Room, Servers,
+node detail including the Connections tab, SIEM coverage including source
+inspection, Access including command policy, Patch posture including the
+deployment drawer, and Settings/System health. Control One API calls on those
+paths returned `200` and browser console warnings/errors remained at zero.
+The Settings/System health tab now reports worker backend `asynq`, status
+`Running`, queue depth `0`, and no last-error. Controlplane logs confirm
+`worker manager started` with `backend=asynq` and `analytics backend selected`
+with `mode=small`.
+
+Remaining caveat: the current Asynq worker adapter persists queue envelopes in
+Redis, but executable job handlers are still registered in-process by task
+name. This is acceptable for the current demo safety posture, but true
+restart-resumable production jobs still need serialized job payload handlers.
 Manual recovery also showed that Windows-cross-compiled controlplane binaries
 should not be used for live deploys until the Go runtime crash is investigated;
 the live controlplane was recovered with the Linux-runner-built binary.
