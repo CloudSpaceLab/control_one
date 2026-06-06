@@ -381,7 +381,12 @@ export function Access(): JSX.Element {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <Button variant="ghost" size="sm" onClick={() => setDeleteAclId(row.original.id)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={`Delete command policy rule ${row.original.name}`}
+          onClick={() => setDeleteAclId(row.original.id)}
+        >
           <Trash2 className="h-3.5 w-3.5 text-state-critical" />
         </Button>
       ),
@@ -625,7 +630,7 @@ function RequestForm({
   const [form, setForm] = useState<CreateAccessRequestPayload>({
     tenant_id: tenantId,
     target_resource_type: 'ssh',
-    requested_access: 'root',
+    requested_access: '',
     justification: '',
     ttl_seconds: 1800,
   });
@@ -639,11 +644,17 @@ function RequestForm({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tenantId) return;
+    const requestedAccess = form.requested_access.trim();
+    if (!tenantId || !requestedAccess) return;
     setSubmitting(true);
     try {
-      await client.createAccessRequest(form);
-      setForm((f) => ({ ...f, justification: '' }));
+      await client.createAccessRequest({
+        ...form,
+        tenant_id: tenantId,
+        requested_access: requestedAccess,
+        justification: form.justification?.trim() || undefined,
+      });
+      setForm((f) => ({ ...f, tenant_id: tenantId, requested_access: '', justification: '' }));
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
       onCreated();
@@ -651,6 +662,7 @@ function RequestForm({
       setSubmitting(false);
     }
   };
+  const canRequestAccess = Boolean(tenantId && form.requested_access.trim() && !submitting);
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
@@ -738,7 +750,7 @@ function RequestForm({
         <Button
           type="submit"
           variant="primary"
-          disabled={submitting || !tenantId}
+          disabled={!canRequestAccess}
         >
           {submitting ? 'Submitting…' : 'Request access'}
         </Button>
