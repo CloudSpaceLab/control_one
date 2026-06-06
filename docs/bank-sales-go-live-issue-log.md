@@ -303,6 +303,35 @@ Postgres integration database at `localhost:5432/controlone_test`; in the
 current workstation state those integration tests fail before exercising this
 change because Postgres is not listening.
 
+Live deployment follow-up for commit `8b29ae2f`: production deploy run
+`27075192642` succeeded and cross-compiled the controlplane with the pure-Go
+SQLite driver. The first live boot exposed an operations bug rather than a code
+path bug: `/opt/control-one/deploy/analytics` was root-owned while the
+controlplane image runs as uid `65532`, so logs showed
+`small analytics sqlite store unavailable` with `unable to open database file`.
+The live directory was corrected to `65532:65532`/`750`, the controlplane was
+restarted, and logs then showed `small analytics sqlite store ready` for
+`/var/lib/control-one/analytics`. The deploy workflow and manual `deploy.py`
+path now create/chown/chmod that analytics directory before restart.
+
+Post-fix live evidence:
+
+- `docker compose ps` showed console/controlplane up, Redis healthy, and no
+  Doris services running in the small profile.
+- `/opt/control-one/deploy/analytics` contained
+  `controlone-small-analytics.db`, `-shm`, and `-wal` files owned by uid 65532.
+- Public `/healthz` returned `HTTP 200` in about 1.32s.
+- Authenticated API checks for the default tenant returned
+  `/api/v1/connections` with `source=small-analytics`, 5 rows, about 342 ms;
+  `/api/v1/connections/top-talkers` with `source=small-analytics`, 5 rows,
+  about 361 ms; and `/api/v1/connections/{conn_id}` with
+  `source=small-analytics`, a real connection body, about 294 ms.
+- Browser checks on
+  `/console/security/network?tab=connections&verify=8b29ae2f` showed the
+  Connections table with live rows instead of pending copy, zero current
+  console warnings/errors, current app API calls returning `200`, and
+  document-level horizontal overflow of `0` at both 381px and 1430px widths.
+
 2026-06-06 follow-up: the corrected workflow is now on `main` and deploy runs
 `27065886666`, `27066201594`, and `27066409247` succeeded with Doris disabled.
 The small-fleet architecture pass also made the deployment contract explicit:

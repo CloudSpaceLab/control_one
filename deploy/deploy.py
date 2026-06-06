@@ -498,6 +498,11 @@ def deploy(remote: Remote, domain: str, email: str, secrets_obj: Secrets) -> Non
     yaml_text = render_controlplane_yaml(secrets_obj)
     remote.put_text(f"{REMOTE_ROOT}/deploy/.env", env_text, mode=0o600)
     remote.put_text(f"{REMOTE_ROOT}/deploy/controlplane.yaml", yaml_text, mode=0o644)
+    remote.run(
+        f"mkdir -p {REMOTE_ROOT}/deploy/analytics && "
+        f"chown 65532:65532 {REMOTE_ROOT}/deploy/analytics && "
+        f"chmod 750 {REMOTE_ROOT}/deploy/analytics"
+    )
 
     log("Step 4/7 — building agent binaries")
     build_agent_binaries(remote)
@@ -722,6 +727,11 @@ def main() -> int:
         yaml_text = render_controlplane_yaml(secrets_obj)
         remote.put_text(f"{REMOTE_ROOT}/deploy/.env", env_text, mode=0o600)
         remote.put_text(f"{REMOTE_ROOT}/deploy/controlplane.yaml", yaml_text, mode=0o644)
+        remote.run(
+            f"mkdir -p {REMOTE_ROOT}/deploy/analytics && "
+            f"chown 65532:65532 {REMOTE_ROOT}/deploy/analytics && "
+            f"chmod 750 {REMOTE_ROOT}/deploy/analytics"
+        )
 
         log("Step 4/7 — building agent binaries")
         try:

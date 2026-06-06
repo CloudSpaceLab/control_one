@@ -105,9 +105,9 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
-            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel'
-            chown 65532:65532 '$DEPLOY_DIR/threat-intel'
-            chmod 750 '$DEPLOY_DIR/threat-intel'
+            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics'
+            chown 65532:65532 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics'
+            chmod 750 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics'
           "
 
       - name: Ensure Doris host prerequisites
