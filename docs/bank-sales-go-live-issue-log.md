@@ -521,15 +521,22 @@ Manual recovery also showed that Windows-cross-compiled controlplane binaries
 should not be used for live deploys until the Go runtime crash is investigated;
 the live controlplane was recovered with the Linux-runner-built binary.
 2026-06-07 CI/deploy correction: the Node.js 20 action-runtime warning from
-the latest GitHub runs was reproduced through check-run annotations. The
-workflows now opt into `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`, upgrade the
+the latest GitHub runs was reproduced through check-run annotations. Commits
+`11aa1933` and `293a7661` opt the workflows into
+`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`, upgrade the
 GitHub/Docker/Azure/GoReleaser/golangci actions that have Node 24 majors, move
 SARIF upload to `github/codeql-action/upload-sarif@v4`, replace
-`actions/create-release@v1` with `softprops/action-gh-release@v3`, and pin
-Trivy to `aquasecurity/trivy-action@v0.36.0` instead of mutable `master`. Local
-`actionlint` and `git diff --check` passed; final closeout requires the
-post-push GitHub CI/deploy runs to complete without the prior Node 20/CodeQL
-annotations.
+`actions/create-release@v1` with `softprops/action-gh-release@v3`, pin Trivy to
+`aquasecurity/trivy-action@v0.36.0` instead of mutable `master`, and pin the
+Windows matrix to `windows-2025-vs2026` after GitHub warned that
+`windows-latest` will redirect there on 2026-06-15. Local `actionlint` and
+`git diff --check` passed. GitHub deploy run `27076776221` and CI runs
+`27076776220`/`27076776217` succeeded, and every check run on those three runs
+reported zero annotations. Post-deploy SSH/browser-edge checks showed
+`/healthz` returning `ok`, Redis healthy, no Doris FE/BE services in the small
+profile, logs with `worker manager started`, `analytics backend selected`
+`mode=small`, and `small analytics sqlite store ready`, and public
+`https://control-one.cloudspacetechs.com/healthz` returning `ok`.
 
 Evidence:
 
