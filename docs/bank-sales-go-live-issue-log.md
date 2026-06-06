@@ -318,6 +318,23 @@ The Settings/System health tab now reports worker backend `asynq`, status
 `worker manager started` with `backend=asynq` and `analytics backend selected`
 with `mode=small`.
 
+2026-06-06 Observability responsive follow-up: an authenticated desktop sweep
+across 41 live console routes found no app HTTP 4xx/5xx responses, no browser
+console warnings/errors, no page crashes, and no document-level horizontal
+overflow, but it caught the Observability Stack Map table forcing the `Next
+action` and `Open` columns behind an internal horizontal scroll at 1440px.
+Commits `2d0c4c9f` and `a9a84464` keep the same Stack Map evidence/actions
+while wrapping dense evidence text, showing all columns at desktop width, and
+preserving an internal table scroller on mobile. Local `npm run lint`,
+`npx vitest run src/pages/Observability.test.tsx --coverage=false`, and
+`npm run build` passed. Deploy runs `27073845351` and `27074130774` succeeded;
+CI runs `27073845345`, `27073845353`, `27074130772`, and `27074130786`
+succeeded. Final live browser verification on
+`/console/observability?verify=a9a84464-*` showed desktop `docOverflowX=0`,
+all Stack Map columns visible, mobile `docOverflowX=0` with table scroller
+`306/646`, zero HTTP failures, zero console warnings/errors, and no lingering
+loading text.
+
 2026-06-06 alert-review follow-up: commit `fedccb6` fixed the alert resolution
 evidence modal so outbound byte context is rendered as an operator-readable
 size instead of a raw integer. Deploy run `27066740791` succeeded, both CI runs
@@ -578,6 +595,16 @@ Live audit evidence from 2026-06-06:
   process is unknown, and identical title/summary cases now use the trigger type
   as the secondary/detail summary. Commits `7730fca` and `a4cea77` are deployed
   and live export preview still returns `soc-case-export-v1` evidence.
+- An authenticated desktop sweep across 41 live console routes found no app
+  HTTP failures, browser console warnings/errors, page crashes, lingering
+  loading copy, or document-level horizontal overflow. The sweep did uncover a
+  real Observability layout defect where the Stack Map hid the `Next action`
+  and `Open` columns behind an internal scroll at 1440px. Commits `2d0c4c9f`
+  and `a9a84464` are deployed: desktop now shows all Stack Map columns with
+  wrapped evidence/action text, while mobile keeps the dense table inside its
+  own scroller. Final live verification on 2026-06-06 showed desktop
+  `docOverflowX=0`, mobile `docOverflowX=0`, zero app HTTP failures, and zero
+  console warnings/errors on `/console/observability?verify=a9a84464-*`.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -591,6 +618,9 @@ Verification completed locally after the 2026-06-06 fixes:
   duplicate-title summary fallback; `npm run lint`,
   `npm test -- --watch=false Cases`, and
   `VITE_LIVE_EVENTS_MODE=polling npm run build` passed in `ui/`.
+- Focused Observability coverage passed after the Stack Map responsive fix:
+  `npm run lint`, `npx vitest run src/pages/Observability.test.tsx
+  --coverage=false`, and `npm run build` passed in `ui/`.
 
 Exit criteria:
 
