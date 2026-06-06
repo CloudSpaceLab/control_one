@@ -1424,7 +1424,10 @@ func (c *Client) FleetHealthSnapshot(ctx context.Context, tenantID string, since
 func fleetHealthSnapshotSQL() string {
 	return `
 		SELECT IFNULL(node_id, '') AS node_id,
-		       SUM(CASE WHEN event_type LIKE 'conn.%' THEN 1 ELSE 0 END) AS conns_active,
+		       CASE
+		         WHEN SUM(CASE WHEN event_type = 'conn.open' THEN 1 WHEN event_type = 'conn.close' THEN -1 ELSE 0 END) < 0 THEN 0
+		         ELSE SUM(CASE WHEN event_type = 'conn.open' THEN 1 WHEN event_type = 'conn.close' THEN -1 ELSE 0 END)
+		       END AS conns_active,
 		       IFNULL(SUM(IFNULL(bytes_in, 0)), 0) AS bytes_in,
 		       IFNULL(SUM(IFNULL(bytes_out, 0)), 0) AS bytes_out,
 		       SUM(CASE WHEN IFNULL(threat_feed, '') != '' THEN 1 ELSE 0 END) AS threat_hits,

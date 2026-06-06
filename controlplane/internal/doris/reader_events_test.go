@@ -345,7 +345,8 @@ func TestFleetHealthSnapshotSQLAvoidsMemoryHeavyDistinctAndNullScans(t *testing.
 	}
 	for _, want := range []string{
 		"IFNULL(node_id, '')",
-		"event_type LIKE 'conn.%'",
+		"event_type = 'conn.open'",
+		"event_type = 'conn.close'",
 		"IFNULL(SUM(IFNULL(bytes_in, 0)), 0)",
 		"IFNULL(SUM(IFNULL(bytes_out, 0)), 0)",
 		"IFNULL(MAX(severity), '')",

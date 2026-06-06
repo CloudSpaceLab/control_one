@@ -326,6 +326,16 @@ func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
 			{
 				TenantID:  tenantID,
 				NodeID:    uuid.NullUUID{UUID: nodeID, Valid: true},
+				EventType: "conn.close",
+				HourTS:    base.Add(30 * time.Minute),
+				Count:     1,
+				BytesIn:   5,
+				BytesOut:  10,
+				SevMax:    sql.NullString{String: "low", Valid: true},
+			},
+			{
+				TenantID:  tenantID,
+				NodeID:    uuid.NullUUID{UUID: nodeID, Valid: true},
 				EventType: "web.request",
 				HourTS:    base.Add(time.Hour),
 				Count:     1200,
@@ -366,13 +376,13 @@ func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
 	if resp.Source != "postgres-fallback" || len(resp.Data) != 1 {
 		t.Fatalf("unexpected fallback response: %+v", resp)
 	}
-	if resp.Data[0].ConnsActive != 3 {
-		t.Fatalf("fallback counted non-connection events as active connections: %+v", resp.Data[0])
+	if resp.Data[0].ConnsActive != 2 {
+		t.Fatalf("fallback should estimate active connections from opens minus closes only: %+v", resp.Data[0])
 	}
 	if !resp.Data[0].LastEventAt.Equal(base.Add(time.Hour)) {
 		t.Fatalf("fallback did not carry latest event time: %+v", resp.Data[0])
 	}
-	if resp.Data[0].BytesIn24h != 110 || resp.Data[0].BytesOut24h != 220 {
+	if resp.Data[0].BytesIn24h != 115 || resp.Data[0].BytesOut24h != 230 {
 		t.Fatalf("fallback byte totals changed unexpectedly: %+v", resp.Data[0])
 	}
 }
@@ -425,7 +435,7 @@ func TestFleetHealthSmallAnalyticsUsesPostgresRollupWithoutDoris(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Source != "small-analytics-postgres" || len(resp.Data) != 1 || resp.Data[0].ConnsActive != 4 {
+	if resp.Source != "small-analytics-postgres" || len(resp.Data) != 1 || resp.Data[0].ConnsActive != 0 {
 		t.Fatalf("unexpected small analytics response: %+v", resp)
 	}
 }
