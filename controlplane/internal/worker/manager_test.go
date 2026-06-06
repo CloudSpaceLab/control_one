@@ -10,6 +10,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/hibiken/asynq"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -316,6 +317,18 @@ func TestManagerStartAsynqMissingRedis(t *testing.T) {
 
 	if err := mgr.Start(context.Background()); err == nil {
 		t.Fatal("expected error when redis address missing")
+	}
+}
+
+func TestIsAsynqQueueMissing(t *testing.T) {
+	if !isAsynqQueueMissing(asynq.ErrQueueNotFound) {
+		t.Fatal("expected public asynq queue-not-found error to be treated as missing queue")
+	}
+	if !isAsynqQueueMissing(errors.New(`NOT_FOUND: queue "default" does not exist`)) {
+		t.Fatal("expected redis stats queue-not-found error to be treated as missing queue")
+	}
+	if isAsynqQueueMissing(errors.New("dial tcp redis:6379: connection refused")) {
+		t.Fatal("did not expect redis connectivity failure to be treated as missing queue")
 	}
 }
 

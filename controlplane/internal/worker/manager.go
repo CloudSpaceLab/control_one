@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -586,10 +587,27 @@ func (m *Manager) refreshAsynqQueueDepth() {
 	}
 	stats, err := inspector.GetQueueInfo(asynqQueueDefault)
 	if err != nil {
+		if isAsynqQueueMissing(err) {
+			m.setLastError(nil)
+			m.recordQueueDepth(metricsBackendAsynq, 0)
+			return
+		}
 		m.setLastError(err)
 		return
 	}
 	m.setLastError(nil)
 	depth := stats.Pending + stats.Active
 	m.recordQueueDepth(metricsBackendAsynq, depth)
+}
+
+func isAsynqQueueMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, asynq.ErrQueueNotFound) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "queue "+strconv.Quote(asynqQueueDefault)+" does not exist") ||
+		strings.Contains(msg, "queue not found")
 }
