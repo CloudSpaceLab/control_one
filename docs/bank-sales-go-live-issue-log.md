@@ -291,6 +291,17 @@ and `deploy.py`, `bootstrap.sh`, and the GitHub production deploy workflow skip
 Doris host prerequisites/bootstrap unless OLAP is selected. This preserves the
 Doris feature path without letting the demo stack start memory-heavy services by
 accident.
+
+2026-06-06 deploy-contract correction: commits `c90298d0` and `41aca30e`
+made the Doris opt-in profile executable from the full deploy path and reduced
+CI race-test runner pressure. Production deploy runs `27072903352` and
+`27073047055` succeeded. The latest follow-up CI runs `27073047058` and
+`27073047060` also succeeded. Final live verification showed
+`ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Compose profile `olap`, console
+and controlplane up, Redis healthy, Doris FE/BE stopped, direct control-plane
+health returning `ok`, and public `/healthz` returning `HTTP 200` in about
+0.64s.
+
 The live browser now opens the console without creating `/api/v1/events/stream`
 requests, avoiding Cloudflare HTTP/3/QUIC stream noise; alert/rule freshness is
 preserved by bounded polling unless a deployment explicitly opts into
@@ -541,6 +552,13 @@ Live audit evidence from 2026-06-06:
   SQLite/WAL analytics store as the intended lightweight connection-history
   layer. Live server logs now show `analytics backend selected` with
   `mode=small`.
+- Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
+  Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
+  skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
+  the race test runner is serialized for the CI environment. Deploy runs
+  `27072903352` and `27073047055` succeeded; latest CI runs `27073047058` and
+  `27073047060` succeeded; live verification showed only app services plus
+  healthy Redis running, with Doris FE/BE stopped and `/healthz` at `HTTP 200`.
 - Mobile browser sampling at 390x844 found production document-level horizontal
   overflow on core routes: the top-bar theme/profile controls were pushed past
   the right edge. Local shell remediation compacts the top bar on mobile by
