@@ -237,6 +237,44 @@ vacuum-analyzed. After cleanup, `/healthz` returned `ok`; FE memory was about
 37 MiB of 1 GiB, one backend was `Alive=true` with `HeartbeatFailureCounter=0`,
 and Doris held only fresh post-reset rows from the two live nodes.
 
+2026-06-06 small-fleet correction: the current shared 8 GB demo VPS should not
+run Doris as a default dependency. Commit `df668a1` documents the replacement
+architecture in `docs/small-fleet-analytics-architecture.md`: Postgres remains
+the durable source of truth, Redis carries hot counters/leases/rate state, and a
+future embedded SQLite/WAL analytic store should hold bounded connection-history
+and top-talker facts for small fleets. Commits `2e013a7`, `57f70cd`, and
+`eb73263` make this a deployable mode without removing OLAP support: analytics
+mode is selectable, Doris initialization is skipped in `small` mode, fleet
+health uses Postgres rollups, raw connection/top-talker endpoints return
+successful small-mode envelopes instead of 503s, and the UI now tells operators
+that connection-level history is pending while fleet health remains live.
+
+Live 2026-06-06 evidence after deploying the lightweight mode:
+
+- `/opt/control-one/deploy/.env` has `ANALYTICS_MODE=small` and
+  `DORIS_ENABLED=false`.
+- `deploy-controlplane-1` and `deploy-console-1` are up; `deploy-doris-fe-1`
+  and `deploy-doris-be-1` are exited.
+- Controlplane logs show `analytics backend selected` with `mode=small`.
+- Public `/healthz` returned `HTTP 200` in three follow-up samples at about
+  0.61-0.63s after the host settled.
+- Authenticated API checks returned:
+  `/api/v1/connections` in about 336 ms with
+  `source=small-analytics-pending`, `/api/v1/fleet/health` in about 325 ms with
+  `source=small-analytics-postgres`, and `/api/v1/connections/top-talkers` in
+  about 320 ms with `source=small-analytics-pending`.
+- Browser validation on
+  `/console/security/network?tab=connections` showed the small-mode notice,
+  zero console warnings/errors, and the connections request returning `200`.
+
+Deployment caveat: GitHub workflow dispatches from this branch still execute the
+workflow definition from `main`, which currently starts and checks Doris
+unconditionally. The branch contains the corrected workflow logic, but it must
+be merged before GitHub Actions can be trusted for Doris-disabled deploys.
+Manual recovery also showed that Windows-cross-compiled controlplane binaries
+should not be used for live deploys until the Go runtime crash is investigated;
+the live controlplane was recovered with the Linux-runner-built binary.
+
 Evidence:
 
 - Kernel OOM logs show repeated cgroup and global OOM kills of `doris_be`.
@@ -1331,8 +1369,18 @@ Acceptance:
 
 ## Recommended Sales-Ready Architecture
 
+2026-06-06 sizing update: for demos and small fleets, use the lightweight
+analytics profile by default: Postgres for durable facts/rollups, Redis for hot
+counters and coordination, and a bounded embedded SQLite/WAL analytic store for
+raw connection-history/top-talker slices as it lands. Doris remains valuable for
+large retention windows and concurrent analytic queries, but only as an opt-in
+OLAP tier on dedicated analytics capacity.
+
 1. Control One core on prem:
-   - Control plane, Postgres, Doris, object storage, worker, UI, offline content store.
+   - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
+     analytics, object storage, worker, UI, offline content store.
+   - Bank HA/OLAP: dedicated Postgres HA, object storage, worker tier, UI,
+     offline content store, and optional Doris/OLAP cluster sized separately.
    - Edge collector tier for syslog/CEF/LEEF/OTLP/WEF/vendor API connectors.
 
 2. Node agents:
