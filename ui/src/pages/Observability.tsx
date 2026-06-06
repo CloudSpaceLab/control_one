@@ -712,7 +712,7 @@ function buildLiveObservabilityServices({
 }
 
 function serviceFromWebserver(instance: WebserverInstance): ObservabilityService {
-  const name = compact([instance.Kind, instance.ServiceName]).join(' ') || 'webserver';
+  const name = webserverDisplayName(instance);
   const vhostCount = Array.isArray(instance.VHosts) ? instance.VHosts.length : 0;
   const hasAccess = Boolean(instance.AccessLogPath);
   const hasError = Boolean(instance.ErrorLogPath);
@@ -724,7 +724,7 @@ function serviceFromWebserver(instance: WebserverInstance): ObservabilityService
     kind: 'webserver',
     state,
     evidence: compact([
-      instance.Version ? `version ${instance.Version}` : '',
+      versionEvidence(instance.Version),
       instance.ConfigPath,
       hasAccess ? 'access log path' : '',
       hasError ? 'error log path' : '',
@@ -745,6 +745,21 @@ function serviceFromWebserver(instance: WebserverInstance): ObservabilityService
     verification: ['inventory current', 'log path cited', 'receipt path linked'],
     href: '/security/webservers',
   };
+}
+
+function webserverDisplayName(instance: WebserverInstance): string {
+  const kind = instance.Kind?.trim();
+  const serviceName = instance.ServiceName?.trim();
+  if (kind && serviceName && kind.toLowerCase() !== serviceName.toLowerCase()) {
+    return `${kind} ${serviceName}`;
+  }
+  return kind || serviceName || 'webserver';
+}
+
+function versionEvidence(version: string | undefined): string {
+  const clean = version?.trim();
+  if (!clean) return '';
+  return /\bversion\b/i.test(clean) ? clean : `version ${clean}`;
 }
 
 function serviceFromSourceHealth(item: ContentPackSourceHealth): ObservabilityService {

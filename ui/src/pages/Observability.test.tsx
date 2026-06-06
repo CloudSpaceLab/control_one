@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -90,8 +90,22 @@ describe('Observability', () => {
           Capabilities: {},
           ObservedAt: '2026-06-06T12:00:00Z',
         },
+        {
+          ID: 'web-2',
+          TenantID: 'tenant-1',
+          NodeID: 'node-1',
+          Kind: 'nginx',
+          Version: 'nginx version: nginx/1.20.1',
+          ServiceName: 'nginx',
+          ConfigPath: '/etc/nginx/nginx.conf',
+          AccessLogPath: '/var/log/nginx/access.log',
+          ErrorLogPath: '/var/log/nginx/error.log',
+          VHosts: [{ server_name: 'bank.example' }],
+          Capabilities: {},
+          ObservedAt: '2026-06-06T12:00:00Z',
+        },
       ],
-      pagination: { total: 1, count: 1, limit: 100, offset: 0, nextOffset: null, prevOffset: null },
+      pagination: { total: 2, count: 2, limit: 100, offset: 0, nextOffset: null, prevOffset: null },
     });
     mocks.getContentPackSourceHealth.mockResolvedValue({
       tenant_id: 'tenant-1',
@@ -126,6 +140,8 @@ describe('Observability', () => {
     expect(screen.getAllByText('live data').length).toBeGreaterThan(0);
     expect(screen.queryByText(/payments-api/i)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Grant least-privilege access for PostgreSQL audit/i).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/nginx nginx/i);
+    expect(document.body.textContent).not.toMatch(/version nginx version/i);
   });
 
   it('keeps debug start blocked until safety fields are explicit and exposes live citations', async () => {
@@ -141,12 +157,12 @@ describe('Observability', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('button', { name: /start preview/i })).toBeDisabled();
 
-    await user.type(within(dialog).getByLabelText(/scope/i), 'postgres');
-    await user.type(within(dialog).getByLabelText(/ttl minutes/i), '30');
-    await user.type(within(dialog).getByLabelText(/reason/i), 'Audit proof check');
-    await user.type(within(dialog).getByLabelText(/quota/i), '100 MB');
-    await user.type(within(dialog).getByLabelText(/rollback plan/i), 'Restore baseline log level');
-    await user.click(within(dialog).getByLabelText(/approval state reviewed/i));
+    fireEvent.change(within(dialog).getByLabelText(/scope/i), { target: { value: 'postgres' } });
+    fireEvent.change(within(dialog).getByLabelText(/ttl minutes/i), { target: { value: '30' } });
+    fireEvent.change(within(dialog).getByLabelText(/reason/i), { target: { value: 'Audit proof check' } });
+    fireEvent.change(within(dialog).getByLabelText(/quota/i), { target: { value: '100 MB' } });
+    fireEvent.change(within(dialog).getByLabelText(/rollback plan/i), { target: { value: 'Restore baseline log level' } });
+    fireEvent.click(within(dialog).getByLabelText(/approval state reviewed/i));
     expect(within(dialog).getByRole('button', { name: /start preview/i })).toBeEnabled();
 
     await user.click(within(dialog).getByRole('button', { name: /close/i }));
