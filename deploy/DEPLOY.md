@@ -110,6 +110,14 @@ Browser checks:
 * `https://control-one.cloudspacetechs.com/console/` → operator UI loads, redirects to `/login` on first visit
 * `https://control-one.cloudspacetechs.com/api/v1/ping` → `{"status":"ok"}`
 
+Realtime transport:
+
+* Cloudflare-fronted demo builds should use `VITE_LIVE_EVENTS_MODE=polling`.
+  This preserves correctness through bounded page refreshes and avoids
+  browser-visible HTTP/3/QUIC failures on long-lived SSE fetch streams.
+* Direct nginx or private deployments can set `VITE_LIVE_EVENTS_MODE=sse` at
+  UI build time to enable immediate event-driven invalidation.
+
 ## 7. First-tenant + admin
 
 ```bash

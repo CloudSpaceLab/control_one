@@ -35,6 +35,7 @@ import { Recommendations } from './Recommendations';
 const RuleBuilder = lazy(() => import('./RuleBuilder').then((m) => ({ default: m.RuleBuilder })));
 
 type Tab = 'port' | 'log' | 'builder' | 'templates' | 'drafts';
+const RULES_POLL_MS = 30_000;
 
 function severityTone(severity: string): StateTone {
   const s = severity.toLowerCase();
@@ -91,7 +92,11 @@ export function Rules(): JSX.Element {
   }, [client, tenantId]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, RULES_POLL_MS);
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   useEventStream(tenantId, ['policy.updated', 'rule.triggered'], (ev) => {

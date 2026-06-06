@@ -36,6 +36,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
+const ALERTS_POLL_MS = 30_000;
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
   value: AlertDispositionValue;
@@ -228,7 +229,11 @@ export function Alerts(): JSX.Element {
   }, [client, tenantId, state]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, ALERTS_POLL_MS);
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   useEventStream(tenantId, ['alert.opened'], () => refresh());

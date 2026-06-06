@@ -73,6 +73,11 @@ jobs:
           # the controlplane container. Setting VITE_API_URL here would
           # double-prefix '/api/api/...'.
           VITE_API_URL: ''
+          # Cloudflare advertises HTTP/3 on the demo host, and long-lived
+          # fetch streams can surface QUIC transport noise in Chromium. Keep
+          # correctness via page polling unless the deployment explicitly
+          # opts back into SSE.
+          VITE_LIVE_EVENTS_MODE: ${{ vars.VITE_LIVE_EVENTS_MODE || 'polling' }}
         run: |
           npm ci --no-audit --no-fund
           npm run build

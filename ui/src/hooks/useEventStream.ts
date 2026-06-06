@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { liveEventsUseSSE } from '@/config/live';
 import { useApiClient } from './useApiClient';
 
 export interface StreamedEvent {
@@ -22,7 +23,7 @@ export function useEventStream(
   handlerRef.current = onEvent;
 
   useEffect(() => {
-    if (!tenantId || !client?.streamEvents) return undefined;
+    if (!tenantId || !client?.streamEvents || !liveEventsUseSSE()) return undefined;
     const cancel = client.streamEvents(
       { tenantId, topics },
       (ev) => handlerRef.current(ev as StreamedEvent),
