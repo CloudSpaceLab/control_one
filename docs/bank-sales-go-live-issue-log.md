@@ -504,8 +504,19 @@ scans, and scheduled health jobs now enqueue durable references while retaining
 the in-process function for the memory worker backend. Local verification
 passed for `go test ./controlplane/internal/worker`, focused server
 job/scheduler tests, Go vet on the touched worker/server/controlplane packages,
-and the full short sweep `$env:GOMAXPROCS='4'; go test -short -p 1 ./...`. Live deploy
-verification for this follow-up is pending.
+and the full short sweep `$env:GOMAXPROCS='4'; go test -short -p 1 ./...`.
+Commit `127ede46` deployed successfully in run `27076037726`; CI runs
+`27076037732` and `27076037727` also succeeded. Post-deploy SSH validation
+showed the new control plane and console containers recreated, Redis healthy,
+`worker manager started` with `backend=asynq`, `analytics backend selected`
+with `mode=small`, and `small analytics sqlite store ready`. Authenticated API
+checks returned worker backend `asynq`, `started=true`, queue depth `0`, no
+last error, fleet health from `source=small-analytics-postgres`, connection
+history from `source=small-analytics`, and jobs API rows. Browser verification
+on `/console/jobs?verify=127ede46` and `/console/settings?verify=127ede46`
+showed the Jobs page and System Health worker pool card rendering Asynq/Running
+with queue depth `0`, document-level horizontal overflow `0`, current app API
+requests returning `200`, and zero current console warnings/errors.
 Manual recovery also showed that Windows-cross-compiled controlplane binaries
 should not be used for live deploys until the Go runtime crash is investigated;
 the live controlplane was recovered with the Linux-runner-built binary.
