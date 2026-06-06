@@ -186,7 +186,9 @@ type DorisConfig struct {
 // Postgres rollups now and leaves room for the Redis+SQLite store; "olap"
 // enables the Doris-backed paths for larger installs.
 type AnalyticsConfig struct {
-	Mode string `mapstructure:"mode"` // auto | small | olap | disabled
+	Mode      string `mapstructure:"mode"` // auto | small | olap | disabled
+	SQLiteDir string `mapstructure:"sqlite_dir"`
+	CacheMB   int    `mapstructure:"sqlite_cache_mb"`
 }
 
 // WebAuthnConfig configures the relying-party identity advertised to browsers
@@ -488,7 +490,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.rbac.default_role", "viewer")
 
 	v.SetDefault("analytics.mode", "auto")
+	v.SetDefault("analytics.sqlite_dir", "")
+	v.SetDefault("analytics.sqlite_cache_mb", 32)
 	_ = v.BindEnv("analytics.mode", "CONTROLPLANE_ANALYTICS_MODE")
+	_ = v.BindEnv("analytics.sqlite_dir", "CONTROLPLANE_ANALYTICS_SQLITE_DIR")
+	_ = v.BindEnv("analytics.sqlite_cache_mb", "CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB")
 
 	v.SetDefault("doris.enabled", false)
 	_ = v.BindEnv("doris.enabled", "CONTROLPLANE_DORIS_ENABLED")
@@ -617,6 +623,9 @@ func applyFallbacks(cfg *Config) {
 	}
 	if strings.TrimSpace(cfg.Analytics.Mode) == "" {
 		cfg.Analytics.Mode = "auto"
+	}
+	if cfg.Analytics.CacheMB <= 0 {
+		cfg.Analytics.CacheMB = 32
 	}
 	if cfg.PrivateAccess.ImportSchedulerInterval <= 0 {
 		cfg.PrivateAccess.ImportSchedulerInterval = 5 * time.Minute

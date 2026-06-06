@@ -1,6 +1,6 @@
 # Small-Fleet Analytics Architecture
 
-Status: Decision proposal
+Status: Recommended small-fleet design
 
 Date: 2026-06-06
 
@@ -31,6 +31,28 @@ Use a local analytic backend for demo, branch, and small-fleet deployments:
 
 This is not a feature reduction. The API contract and UI surfaces stay intact;
 only the backing analytic store changes for small fleets.
+
+## Current Implementation State
+
+The repo is already partially aligned with this decision:
+
+- `ANALYTICS_MODE=small` is the deploy default.
+- Docker Compose keeps Doris FE/BE behind the explicit `olap` profile.
+- The controlplane does not initialize Doris while small mode is selected, even
+  if Doris credentials are present.
+- Fleet health can already fall back to Postgres rollups with
+  `source=small-analytics-postgres`.
+- A first SQLite/WAL slice now persists process-connection facts from the
+  existing ingest fanout and serves connection list, connection detail, and top
+  talker APIs with `source=small-analytics` when `analytics.sqlite_dir` is
+  configured.
+- Redis-backed hot counters remain the next acceleration layer; SQLite is the
+  evidence-grade local read model for this first slice.
+
+The next implementation step should therefore be additive: land the local
+analytic store behind the remaining event-query and timeline API contracts, then
+add Redis acceleration for live counters and dashboard cache. Do not delete the
+Doris code path; keep it as the opt-in OLAP backend for larger deployments.
 
 ## Small-Fleet Fit Envelope
 

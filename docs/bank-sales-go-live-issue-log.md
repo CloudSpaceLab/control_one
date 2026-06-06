@@ -282,6 +282,27 @@ Live 2026-06-06 evidence after deploying the lightweight mode:
   `/console/security/network?tab=connections` showed the small-mode notice,
   zero console warnings/errors, and the connections request returning `200`.
 
+2026-06-06 small-analytics implementation follow-up: the first embedded
+SQLite/WAL slice is now implemented behind small mode without removing the
+Doris OLAP path. `analytics.sqlite_dir` opens a local read store, connection
+ingest appends normalized `process_connections` rows from the existing fanout,
+and `/api/v1/connections`, `/api/v1/connections/{conn_id}`, and
+`/api/v1/connections/top-talkers` can return `source=small-analytics` instead
+of the previous pending guardrail when the store is configured. Deploy config
+now mounts `/var/lib/control-one/analytics` into the controlplane container.
+Focused validation passed:
+`go test ./controlplane/internal/smallanalytics`,
+`go test ./controlplane/internal/config`,
+`go test ./controlplane/internal/doris ./controlplane/internal/storage`,
+`go test ./controlplane/cmd/controlplane`, and targeted server tests for
+small-mode connections/top-talkers plus graceful pending fallback. Additional
+`CGO_ENABLED=0` checks passed for `./controlplane/internal/smallanalytics` and
+`./controlplane/cmd/controlplane`, preserving the current deploy build shape. A full
+`go test ./controlplane/internal/server` still requires the repo's local
+Postgres integration database at `localhost:5432/controlone_test`; in the
+current workstation state those integration tests fail before exercising this
+change because Postgres is not listening.
+
 2026-06-06 follow-up: the corrected workflow is now on `main` and deploy runs
 `27065886666`, `27066201594`, and `27066409247` succeeded with Doris disabled.
 The small-fleet architecture pass also made the deployment contract explicit:
@@ -566,9 +587,12 @@ Live audit evidence from 2026-06-06:
 - The current demo/small-fleet architecture response is to avoid Doris as a
   default dependency: `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Postgres as
   source of truth, Redis for hot coordination/counters, and a bounded embedded
-  SQLite/WAL analytics store as the intended lightweight connection-history
-  layer. Live server logs now show `analytics backend selected` with
-  `mode=small`.
+  SQLite/WAL analytics store for lightweight connection-history reads. The
+  first local slice now covers connection list/detail and top talkers when
+  `analytics.sqlite_dir` is configured. Live server logs from the earlier
+  deployed small-mode pass show `analytics backend selected` with `mode=small`;
+  this new SQLite-backed slice still needs post-deploy live API/browser
+  verification before it is counted as live evidence.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and

@@ -747,6 +747,11 @@ func (s *Server) flushDorisEventFanout(ctx context.Context, batchID, tenantID, n
 	var dorisErr error
 
 	dorisRows := buildDorisEventRows(tenantID, nodeID, coalesceDorisHotEvents(tenantID, nodeID, events))
+	if s.localAnalytics != nil && len(dorisRows.conns) > 0 {
+		if err := s.localAnalytics.AppendConnectionRows(ctx, dorisRows.conns); err != nil {
+			return "pending_local", fmt.Errorf("small analytics append connections: %w", err)
+		}
+	}
 	syncDoris := batchID != uuid.Nil && s.dorisClient != nil
 	if syncDoris {
 		if err := s.streamLoadDorisEventRows(ctx, batchID, dorisRows); err != nil {
@@ -1083,6 +1088,11 @@ func (s *Server) drainEventIngestBatch(ctx context.Context, batch storage.EventI
 	}
 	ingest := s.eventIngestService()
 	if isDorisOnlyEventIngestStatus(batch.Status) {
+		if effectiveAnalyticsMode(s.cfg) != analyticsModeOLAP {
+			return drainEventIngestBatchDorisOnly(ctx, batch, s.store, func(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
+				return ingest.flushDoris(ctx, batch.ID, tenantID, nodeID, events)
+			})
+		}
 		if s.dorisClient != nil {
 			return drainEventIngestBatchDorisOnly(ctx, batch, s.store, func(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) (string, error) {
 				return ingest.flushDoris(ctx, batch.ID, tenantID, nodeID, events)

@@ -212,6 +212,8 @@ doris:
 		t.Fatalf("write config: %v", err)
 	}
 	t.Setenv("CONTROLPLANE_ANALYTICS_MODE", "small")
+	t.Setenv("CONTROLPLANE_ANALYTICS_SQLITE_DIR", "/var/lib/control-one/analytics")
+	t.Setenv("CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB", "64")
 	t.Setenv("CONTROLPLANE_DORIS_ENABLED", "false")
 	t.Setenv("CONTROLPLANE_DORIS_APPLY_MIGRATIONS", "false")
 	t.Setenv("CONTROLPLANE_WORKER_BACKEND", "asynq")
@@ -224,6 +226,12 @@ doris:
 	}
 	if cfg.Analytics.Mode != "small" {
 		t.Fatalf("Analytics.Mode = %q, want small", cfg.Analytics.Mode)
+	}
+	if cfg.Analytics.SQLiteDir != "/var/lib/control-one/analytics" {
+		t.Fatalf("Analytics.SQLiteDir = %q, want deployment path", cfg.Analytics.SQLiteDir)
+	}
+	if cfg.Analytics.CacheMB != 64 {
+		t.Fatalf("Analytics.CacheMB = %d, want 64", cfg.Analytics.CacheMB)
 	}
 	if cfg.Doris.Enabled {
 		t.Fatal("Doris.Enabled = true, want false from env override")

@@ -34,7 +34,35 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+	nodeID := strings.TrimSpace(r.URL.Query().Get("node_id"))
+	externalOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("external_only")), "true")
+	since, until := parseTimeWindow(r, 24*time.Hour)
+	limit := parseLimitDefault(r, 100, 1000)
 	if !s.usesDorisAnalytics() {
+		if s.localAnalytics != nil {
+			var rows []doris.ConnectionRow
+			if nodeID != "" {
+				if _, err := uuid.Parse(nodeID); err != nil {
+					http.Error(w, "invalid node_id", http.StatusBadRequest)
+					return
+				}
+				openOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("open_only")), "true")
+				rows, err = s.localAnalytics.ListConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly, externalOnly)
+			} else if ip != "" {
+				rows, err = s.localAnalytics.ListConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
+			} else {
+				rows, err = s.localAnalytics.ListConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
+			}
+			if err != nil {
+				s.logger.Warn("small analytics list connections", zap.Error(err))
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			rows = sanitizeConnectionThreatRows(rows)
+			writeJSON(w, http.StatusOK, map[string]any{"data": rows, "source": "small-analytics"})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data":       []doris.ConnectionRow{},
 			"source":     "small-analytics-pending",
@@ -42,11 +70,6 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
-	nodeID := strings.TrimSpace(r.URL.Query().Get("node_id"))
-	externalOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("external_only")), "true")
-	since, until := parseTimeWindow(r, 24*time.Hour)
-	limit := parseLimitDefault(r, 100, 1000)
 
 	var rows []doris.ConnectionRow
 	if nodeID != "" {
@@ -83,10 +106,6 @@ func (s *Server) handleConnectionDetail(w http.ResponseWriter, r *http.Request) 
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	if !s.usesDorisAnalytics() {
-		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	tenantID, err := requiredTenantID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -95,6 +114,24 @@ func (s *Server) handleConnectionDetail(w http.ResponseWriter, r *http.Request) 
 	connID := strings.TrimPrefix(r.URL.Path, "/api/v1/connections/")
 	if connID == "" || strings.Contains(connID, "/") {
 		http.Error(w, "conn_id required", http.StatusBadRequest)
+		return
+	}
+	if !s.usesDorisAnalytics() {
+		if s.localAnalytics == nil {
+			http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		row, err := s.localAnalytics.ConnectionLifetime(r.Context(), tenantID.String(), connID)
+		if err != nil {
+			s.logger.Warn("small analytics connection lifetime", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if row != nil {
+			sanitized := sanitizeConnectionThreatRow(*row)
+			row = &sanitized
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"connection": row, "source": "small-analytics"})
 		return
 	}
 	row, err := s.dorisClient.ConnectionLifetime(r.Context(), tenantID.String(), connID)
@@ -129,14 +166,6 @@ func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.authorize(w, r, roleViewer); !ok {
 		return
 	}
-	if !s.usesDorisAnalytics() {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"data":       []doris.TopTalker{},
-			"source":     "small-analytics-pending",
-			"guardrails": []string{"top talkers require the Redis+SQLite small analytics store or OLAP mode"},
-		})
-		return
-	}
 	tenantID, err := requiredTenantID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -144,6 +173,24 @@ func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 	}
 	since, _ := parseTimeWindow(r, 24*time.Hour)
 	limit := parseLimitDefault(r, 10, 100)
+	if !s.usesDorisAnalytics() {
+		if s.localAnalytics != nil {
+			rows, err := s.localAnalytics.TopTalkers(r.Context(), tenantID.String(), since, limit)
+			if err != nil {
+				s.logger.Warn("small analytics top talkers", zap.Error(err))
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": rows, "source": "small-analytics"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data":       []doris.TopTalker{},
+			"source":     "small-analytics-pending",
+			"guardrails": []string{"top talkers require the Redis+SQLite small analytics store or OLAP mode"},
+		})
+		return
+	}
 	rows, err := s.dorisClient.TopTalkers(r.Context(), tenantID.String(), since, limit)
 	if err != nil {
 		s.logger.Warn("doris top talkers", zap.Error(err))

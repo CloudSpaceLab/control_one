@@ -502,6 +502,112 @@ func TestConnectionsListSmallAnalyticsDegradesGracefully(t *testing.T) {
 	}
 }
 
+func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	base := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	cfg := &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("viewer", "small-analytics-viewer"),
+		Analytics: config.AnalyticsConfig{Mode: "small", SQLiteDir: t.TempDir()},
+	}
+	srv := New(zap.NewNop(), cfg, store, nil)
+	defer func() { _ = srv.Stop(context.Background()) }()
+	if srv.localAnalytics == nil {
+		t.Fatal("localAnalytics was not initialized")
+	}
+	if err := srv.localAnalytics.AppendConnectionRows(context.Background(), []map[string]any{
+		smallAnalyticsConnRow(tenantID, nodeID, "conn-1", base, time.Time{}, "outbound", "10.0.0.5", "8.8.8.8", 0, 0, ""),
+		smallAnalyticsConnRow(tenantID, nodeID, "conn-1", base, base.Add(2*time.Minute), "outbound", "10.0.0.5", "8.8.8.8", 100, 250, "abuseipdb"),
+	}); err != nil {
+		t.Fatalf("append connection rows: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/connections?tenant_id="+tenantID.String()+"&external_only=true&since="+base.Add(-time.Hour).Format(time.RFC3339), nil)
+	req.Header.Set("Authorization", "Bearer small-analytics-viewer")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("connections status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResp struct {
+		Source string                `json:"source"`
+		Data   []doris.ConnectionRow `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode connections: %v", err)
+	}
+	if listResp.Source != "small-analytics" || len(listResp.Data) != 1 || listResp.Data[0].ConnID != "conn-1" || listResp.Data[0].BytesOut != 250 {
+		t.Fatalf("unexpected connections response: %+v", listResp)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/connections/top-talkers?tenant_id="+tenantID.String()+"&since="+base.Add(-time.Hour).Format(time.RFC3339), nil)
+	req.Header.Set("Authorization", "Bearer small-analytics-viewer")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("top talkers status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var talkerResp struct {
+		Source string            `json:"source"`
+		Data   []doris.TopTalker `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &talkerResp); err != nil {
+		t.Fatalf("decode top talkers: %v", err)
+	}
+	if talkerResp.Source != "small-analytics" || len(talkerResp.Data) != 1 || talkerResp.Data[0].IP != "8.8.8.8" || talkerResp.Data[0].ThreatHits != 1 {
+		t.Fatalf("unexpected top talkers response: %+v", talkerResp)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/connections/conn-1?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer small-analytics-viewer")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("connection detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var detailResp struct {
+		Source     string               `json:"source"`
+		Connection *doris.ConnectionRow `json:"connection"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &detailResp); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detailResp.Source != "small-analytics" || detailResp.Connection == nil || detailResp.Connection.ConnID != "conn-1" {
+		t.Fatalf("unexpected detail response: %+v", detailResp)
+	}
+}
+
+func smallAnalyticsConnRow(tenantID, nodeID uuid.UUID, connID string, startedAt, endedAt time.Time, direction, srcIP, dstIP string, bytesIn, bytesOut int64, threatFeed string) map[string]any {
+	row := map[string]any{
+		"tenant_id":      tenantID.String(),
+		"node_id":        nodeID.String(),
+		"conn_id":        connID,
+		"correlation_id": connID + "-corr",
+		"started_at":     startedAt.UTC().Format("2006-01-02 15:04:05.000"),
+		"duration_ms":    int64(120000),
+		"direction":      direction,
+		"pid":            int64(4242),
+		"process_name":   "curl",
+		"user_name":      "svc",
+		"src_ip":         srcIP,
+		"src_port":       51515,
+		"dst_ip":         dstIP,
+		"dst_port":       443,
+		"protocol":       "tcp",
+		"bytes_in":       bytesIn,
+		"bytes_out":      bytesOut,
+		"threat_match":   threatFeed != "",
+		"threat_feed":    threatFeed,
+	}
+	if !endedAt.IsZero() {
+		row["ended_at"] = endedAt.UTC().Format("2006-01-02 15:04:05.000")
+	}
+	return row
+}
+
 func TestRolloutWavesRouteListsUIPayload(t *testing.T) {
 	logger := zap.NewNop()
 	tenantID := uuid.New()

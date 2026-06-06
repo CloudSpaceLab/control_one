@@ -34,6 +34,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/smallanalytics"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
@@ -842,6 +843,9 @@ type Server struct {
 	// Doris analytic store. Both nil when not configured.
 	dorisClient *doris.Client
 	dorisWriter *doris.Writer
+	// Local small-fleet analytic read store. Nil when disabled or not yet
+	// configured.
+	localAnalytics *smallanalytics.Store
 	// Per-(tenant, node) token-bucket rate limiter for /events/ingest. Lazily
 	// initialised on first request.
 	ingestLimiter *rateLimiterRegistry
@@ -910,6 +914,13 @@ func (s *Server) deepHealthy(ctx context.Context) bool {
 	}
 	if s.dorisWriter != nil && !s.dorisWriter.Healthy() {
 		return false
+	}
+	if s.localAnalytics != nil {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if err := s.localAnalytics.Healthy(ctx); err != nil {
+			return false
+		}
 	}
 	return true
 }
@@ -2620,6 +2631,18 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	}
 	analyticsMode := effectiveAnalyticsMode(cfg)
 	logger.Info("analytics backend selected", zap.String("mode", analyticsMode))
+	if analyticsMode == analyticsModeSmall && strings.TrimSpace(cfg.Analytics.SQLiteDir) != "" {
+		localStore, err := smallanalytics.Open(context.Background(), smallanalytics.Config{
+			Dir:     cfg.Analytics.SQLiteDir,
+			CacheMB: cfg.Analytics.CacheMB,
+		})
+		if err != nil {
+			logger.Warn("small analytics sqlite store unavailable", zap.Error(err), zap.String("dir", cfg.Analytics.SQLiteDir))
+		} else {
+			s.localAnalytics = localStore
+			logger.Info("small analytics sqlite store ready", zap.String("dir", cfg.Analytics.SQLiteDir))
+		}
+	}
 
 	// Doris analytic store. Optional — when unconfigured or when the small
 	// analytics mode is selected, ingest stays on Postgres + journal/rollups.
@@ -2844,6 +2867,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	if closer, ok := s.ipBehaviorWindows.(interface{ Close() error }); ok {
 		_ = closer.Close()
+	}
+	if s.localAnalytics != nil {
+		_ = s.localAnalytics.Close()
 	}
 	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
