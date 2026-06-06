@@ -299,6 +299,24 @@ Post-deploy server checks showed console/controlplane/redis up, Doris absent,
 public `/healthz` at `HTTP 200` in about 0.60s, `analytics backend selected`
 with `mode=small`, and `worker manager started` with `backend=asynq`.
 
+2026-06-06 SOC-cases follow-up: live browser audit of `/console/cases` found
+first-seen-destination case copy rendering as `first connection to <ip> by`
+when the process name was empty, then found the row/detail summary duplicated
+the case title after the server-side text cleanup. Commit `7730fca` now omits
+the dangling process phrase and sanitizes existing stored SOC case titles,
+summaries, and timeline evidence. Commit `a4cea77` now uses the trigger event
+type as the secondary/detail summary when title and summary are identical. Deploy
+runs `27067443819` and `27067562931` succeeded, and CI runs `27067443815`,
+`27067443818`, `27067562929`, and `27067562932` passed. Live verification on
+`/console/cases` showed `50` open cases, `50` export-ready cases, zero evidence
+gaps, queue rows with human title plus `anomaly.new_destination` secondary text,
+clean process-less titles such as `first connection to 20.169.85.72`, and a
+selected case detail whose summary is `anomaly.new_destination`. The non-mutating
+`Preview export` action returned `200` and rendered `soc-case-export-v1`,
+`6 evidence refs / 0 notes`, and export guardrail labels. Browser console
+warnings/errors remained zero and the app API calls returned `200`; only
+Cloudflare RUM abort noise appeared in the network list.
+
 Remaining caveat: the current Asynq worker adapter persists queue envelopes in
 Redis, but executable job handlers are still registered in-process by task
 name. This is acceptable for the current demo safety posture, but true
@@ -393,10 +411,13 @@ Storage strategy correction:
 
 Priority: P0
 
-Status: Open for production go-live. Local software fixes are staged in the
-working tree, but the live deployment at `control-one.cloudspacetechs.com` still
-needs those fixes deployed and the host/Doris memory profile remediated before
-it can honestly be called bank-grade clean.
+Status: Open for the broader production go-live audit. The specific 2026-06-06
+live software blockers from this slice have been deployed to
+`control-one.cloudspacetechs.com`, and the shared demo VPS now runs the
+lightweight small-fleet analytics profile with Doris disabled. This still does
+not make the single VPS a bank-grade HA reference environment by itself; the
+remaining go-live gate is continued route-by-route live validation plus
+customer-environment HA/DR, backup/restore, exposure, and soak evidence.
 
 Live audit evidence from 2026-06-06:
 
@@ -407,10 +428,10 @@ Live audit evidence from 2026-06-06:
   `/api/v1/command-acls?tenant_id=...` while the singular
   `/api/v1/command-acl` endpoint still returned 200. This breaks the privileged
   command-policy surface in production.
-- Local remediation now adds plural command-ACL routes, accepts the compact UI
-  `pattern`/`action`/`roles` payload, normalizes backend ACLs for the UI, and
-  exposes a role selector in the Access command-policy form. The fix is covered
-  by `TestCommandACLPluralRouteAcceptsCompactUIPayload` but is not deployed yet.
+- Commit `3503819` deployed the remediation: plural command-ACL routes, compact
+  UI `pattern`/`action`/`roles` payload support, UI-normalized backend ACLs, and
+  a role selector in the Access command-policy form. The fix is covered by
+  `TestCommandACLPluralRouteAcceptsCompactUIPayload`.
 - Live `/api/v1/fleet/health` was served from `source:
   "postgres-fallback"` because Doris fleet-health queries are degraded. Before
   the local fallback fix, non-connection rollups inflated active-connection
@@ -422,6 +443,12 @@ Live audit evidence from 2026-06-06:
   audit, swap was disabled, disk was about 84% used, and Doris logs showed
   memory-limit query cancellation. This is an environment/architecture blocker,
   not just a UI bug.
+- The current demo/small-fleet architecture response is to avoid Doris as a
+  default dependency: `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Postgres as
+  source of truth, Redis for hot coordination/counters, and a bounded embedded
+  SQLite/WAL analytics store as the intended lightweight connection-history
+  layer. Live server logs now show `analytics backend selected` with
+  `mode=small`.
 - Mobile browser sampling at 390x844 found production document-level horizontal
   overflow on core routes: the top-bar theme/profile controls were pushed past
   the right edge. Local shell remediation compacts the top bar on mobile by
@@ -432,6 +459,15 @@ Live audit evidence from 2026-06-06:
   health Inspect panel rendered identity, parser, runtime metrics, and evidence
   labels. One browser console error was still observed for the alert event
   stream: `ERR_QUIC_PROTOCOL_ERROR` on `/api/v1/events/stream`.
+- Commit `9bc1d3b` made the live event transport configurable and production now
+  deploys polling mode by default. Follow-up browser checks did not create
+  `/api/v1/events/stream` requests and the console warning/error count stayed
+  at zero.
+- Live `/console/cases` follow-up found and closed two SOC packet UX/data-copy
+  defects: first-seen-destination cases no longer show a dangling `by` when the
+  process is unknown, and identical title/summary cases now use the trigger type
+  as the secondary/detail summary. Commits `7730fca` and `a4cea77` are deployed
+  and live export preview still returns `soc-case-export-v1` evidence.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -441,19 +477,27 @@ Verification completed locally after the 2026-06-06 fixes:
   `ui/` after the command-ACL and mobile-shell changes.
 - Focused backend coverage passed for command-ACL compatibility and honest
   fleet-health fallback counting.
+- Focused SOC case coverage passed for first-seen-destination copy cleanup and
+  duplicate-title summary fallback; `npm run lint`,
+  `npm test -- --watch=false Cases`, and
+  `VITE_LIVE_EVENTS_MODE=polling npm run build` passed in `ui/`.
 
 Exit criteria:
 
-- Deploy the local command-ACL, fleet-health fallback, and mobile-shell fixes.
-- Re-run the authenticated route audit and confirm Access has no 404s for
-  command ACLs.
-- Keep Doris BE alive without OOM under realistic ingest/query load for at
-  least a sustained soak window; add swap or move to a bank-sized HA profile.
-- Confirm fleet health uses Doris when available and fallback values remain
-  accurate when Doris is degraded.
-- Re-test mobile production routes at 390px and confirm no document-level
-  horizontal overflow.
-- Investigate and either fix or explicitly classify the event-stream QUIC error.
+- Met: deployed the command-ACL, fleet-health fallback, mobile-shell, live-event
+  polling, worker Redis binding, alert evidence formatting, and SOC case copy
+  fixes.
+- Continue: re-run the authenticated route audit and confirm Access has no 404s
+  for command ACLs.
+- Reframe: small-fleet/demo mode should keep Doris disabled; bank-scale OLAP
+  must move to dedicated HA analytics capacity and pass a sustained soak window.
+- Continue: confirm fallback values remain accurate in small mode and Doris mode
+  still works when explicitly enabled on sized infrastructure.
+- Continue: re-test mobile production routes at 390px and confirm no
+  document-level horizontal overflow.
+- Met for current deploy: event-stream QUIC noise is avoided by polling mode.
+- Continue: keep auditing remaining console routes and safe workflows before
+  calling the whole product bank-grade clean.
 
 ### C1-SIEM-001: Connector Coverage Truth Dashboard
 
