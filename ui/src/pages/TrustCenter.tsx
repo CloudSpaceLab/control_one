@@ -56,6 +56,28 @@ interface Incident {
 
 type Tab = 'overview' | 'subprocessors' | 'certifications' | 'incidents' | 'faq';
 
+function normalizeTrustCenterData(raw: Partial<TrustCenterData>): TrustCenterData {
+  const subprocessors = Array.isArray(raw.subprocessors) ? raw.subprocessors : [];
+  const certifications = Array.isArray(raw.certifications) ? raw.certifications : [];
+  const faq = Array.isArray(raw.faq) ? raw.faq : [];
+  const incidents = Array.isArray(raw.incidents) ? raw.incidents : [];
+
+  return {
+    tenant_slug: raw.tenant_slug ?? '',
+    tenant_name: raw.tenant_name ?? raw.tenant_slug ?? 'Trust Center',
+    subprocessors: subprocessors.map((sp) => ({
+      ...sp,
+      data_types: Array.isArray(sp.data_types) ? sp.data_types : [],
+    })),
+    certifications,
+    faq,
+    incidents,
+    security_email: raw.security_email,
+    trust_portal_url: raw.trust_portal_url,
+    last_updated: raw.last_updated ?? '',
+  };
+}
+
 function formatDate(v?: string): string {
   if (!v) return '—';
   const d = new Date(v);
@@ -97,7 +119,7 @@ export function TrustCenter(): JSX.Element {
         return res.json();
       })
       .then((d) => {
-        if (!cancelled) setData(d);
+        if (!cancelled) setData(normalizeTrustCenterData(d));
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load trust center');

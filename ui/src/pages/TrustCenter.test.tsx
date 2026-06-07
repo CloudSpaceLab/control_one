@@ -38,4 +38,35 @@ describe('TrustCenter', () => {
     });
     expect(await screen.findByRole('heading', { name: 'Tenant A' })).toBeInTheDocument();
   });
+
+  it('renders empty public trust data when collection fields are null', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        tenant_slug: 'default',
+        tenant_name: 'default',
+        subprocessors: null,
+        certifications: null,
+        faq: null,
+        incidents: null,
+        last_updated: '2026-06-07T00:00:00Z',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/trust/default']}>
+        <Routes>
+          <Route path="/trust/:tenantSlug" element={<TrustCenter />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'default' })).toBeInTheDocument();
+    expect(screen.getByText('Active Certifications')).toBeInTheDocument();
+    expect(screen.getAllByText('Subprocessors').length).toBeGreaterThan(0);
+    expect(screen.getByText('Published Incidents')).toBeInTheDocument();
+  });
 });

@@ -82,6 +82,47 @@ func TestPingEndpointAuthentication(t *testing.T) {
 	})
 }
 
+func TestTrustCenterPublicEmptyCollectionsEncodeAsArrays(t *testing.T) {
+	store := &fakeStore{
+		trustCenterData: &storage.TrustCenterData{
+			TenantSlug:  "default",
+			TenantName:  "default",
+			LastUpdated: time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/trust/default", nil)
+	req.SetPathValue("name", "default")
+	rec := httptest.NewRecorder()
+
+	srv.handleTrustCenterPublic(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var resp TrustCenterPublicResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Subprocessors == nil || resp.Certifications == nil || resp.FAQ == nil || resp.Incidents == nil {
+		t.Fatalf("trust center collections must encode as empty arrays, got %#v", resp)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	for _, key := range []string{"subprocessors", "certifications", "faq", "incidents"} {
+		items, ok := raw[key].([]any)
+		if !ok {
+			t.Fatalf("%s encoded as %T, want array; body=%s", key, raw[key], rec.Body.String())
+		}
+		if len(items) != 0 {
+			t.Fatalf("%s length=%d, want 0", key, len(items))
+		}
+	}
+}
+
 func TestMFAFactorsAcceptsLocalSessionUUIDSubject(t *testing.T) {
 	userID := uuid.New()
 	store := &fakeStore{
@@ -2479,6 +2520,7 @@ type fakeStore struct {
 	agentReplayReceipts    map[string]storage.AgentIngestReplayReceipt
 	alerts                 []storage.Alert
 	securityCounts         storage.SecurityEventCounts
+	trustCenterData        *storage.TrustCenterData
 	healthCounts           storage.SecurityEventCounts
 	eventIngestBacklog     storage.EventIngestBacklogSummary
 	eventIngestBatches     []storage.EventIngestBatch
@@ -5887,7 +5929,7 @@ func (f *fakeStore) DeleteSubprocessor(_ context.Context, _ string) error {
 	return nil
 }
 func (f *fakeStore) GetTrustCenterData(_ context.Context, _ string) (*storage.TrustCenterData, error) {
-	return nil, nil
+	return f.trustCenterData, nil
 }
 func (f *fakeStore) GetTenantByName(_ context.Context, _ string) (*storage.Tenant, error) {
 	return nil, nil

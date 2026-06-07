@@ -87,9 +87,13 @@ func (s *Server) handleTrustCenterPublic(w http.ResponseWriter, r *http.Request)
 	}
 
 	resp := TrustCenterPublicResponse{
-		TenantSlug:  data.TenantSlug,
-		TenantName:  data.TenantName,
-		LastUpdated: data.LastUpdated,
+		TenantSlug:     data.TenantSlug,
+		TenantName:     data.TenantName,
+		Subprocessors:  []TrustSubprocessor{},
+		Certifications: []TrustCertification{},
+		FAQ:            []TrustFAQItem{},
+		Incidents:      []TrustIncident{},
+		LastUpdated:    data.LastUpdated,
 	}
 
 	// Map subprocessors (sanitize internal IDs)

@@ -2,7 +2,7 @@
 
 Status: Recommended small-fleet design
 
-Date: 2026-06-06
+Date: 2026-06-07
 
 ## Purpose
 
@@ -31,6 +31,28 @@ Use a local analytic backend for demo, branch, and small-fleet deployments:
 
 This is not a feature reduction. The API contract and UI surfaces stay intact;
 only the backing analytic store changes for small fleets.
+
+## Architecture Contract
+
+The small-fleet profile is a deliberately boring Redis + SQLite + Postgres
+architecture:
+
+- Postgres is the only ingest acceptance source of truth. A batch is accepted
+  only after its replay journal row commits.
+- SQLite/WAL is the local, evidence-readable analytic projection. It is durable
+  on disk, but always reconstructable from the Postgres journal.
+- Redis is hot, bounded, and disposable. It accelerates freshness, queues,
+  counters, and short streams, but it never becomes the evidence store.
+- Doris consumes zero memory in small mode. FE/BE containers start only through
+  the explicit `olap` profile and `analytics.mode=olap`.
+- UI and API features are preserved. Dashboard, connection, investigation,
+  timeline, search, and export surfaces keep their routes and contracts while
+  the backend adapter changes behind `analytics.mode`.
+
+For the demo host this means the normal running data plane is Postgres on the
+host plus the controlplane, Redis, console, landing, and IP enrichment
+containers. The analytic daemon count is zero because SQLite runs embedded in
+the controlplane process.
 
 ## 2026-06-07 Hyper-Light Demo Profile
 
