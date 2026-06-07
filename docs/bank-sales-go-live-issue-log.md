@@ -1145,6 +1145,31 @@ Live audit evidence from 2026-06-06:
   in the small profile, controlplane about 147 MiB of 1 GiB, console about
   4.6 MiB of 256 MiB, Redis about 7.8 MiB of 192 MiB, landing about 5.7 MiB of
   128 MiB, and ipq about 4.8 MiB of 128 MiB.
+- 2026-06-07 safe workflow interaction follow-up: a whitelist-only production
+  browser pass at 390x844 exercised non-mutating interactions across 18 routes:
+  Alerts tabs/review panel, Network Security tabs, SIEM Inspect/search/clear,
+  Observability debug/detail/evidence selection, Patch tabs/deploy dialog open,
+  Compliance tabs, Access command-policy/new-rule open, Users role edit open,
+  Jobs submit panel open, Settings tabs, Secrets group dialog open, Webserver
+  inventory/plan, and Data Security tabs. The sweep avoided destructive
+  buttons such as ack, approve, reject, apply, deploy, delete, save, and submit.
+  It found one real mobile polish defect: a long Observability evidence path
+  chip (`controlplane/internal/server/db_audit_discovery.go`) could extend
+  roughly 7 px outside the viewport after selecting Knowledge Tree evidence.
+  The shared `StatusTag` now constrains badge width and allows long evidence
+  values to wrap inside the chip, preserving the citation instead of truncating
+  or removing it. Local checks passed
+  `npm run test -- src/pages/Observability.test.tsx src/components/coverage/CoverageTruth.test.tsx`
+  and `npm run build`; the console-only deploy completed. Live retest on
+  Observability initial, Healthy evidence, Coverage gap, Compliance evidence,
+  SIEM coverage, and Settings security at mobile width showed
+  `scrollWidth=clientWidth`, zero overflow offenders, zero failed app API
+  responses, zero browser console/page errors, zero Doris/analytic-store copy,
+  and zero `/api/v1/events/stream` requests. Host checks after deploy showed
+  public `/healthz=ok`, only the small-profile services running, no Doris FE/BE
+  under the `olap` profile, console about 6 MiB of 256 MiB, controlplane about
+  194 MiB of 1 GiB, Redis about 7.5 MiB of 192 MiB, landing about 5.7 MiB of
+  128 MiB, and ipq about 4.8 MiB of 128 MiB.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -1179,6 +1204,9 @@ Exit criteria:
   document-level horizontal overflow.
 - Met: later live mobile sweep at 390px covered 36 authenticated routes with no
   document-level horizontal overflow or unscrollable overflow candidates.
+- Met: live safe-workflow interaction sweep covered 18 authenticated routes
+  with non-mutating clicks/filters/dialog opens and no app API, console,
+  stream, or page-error failures after the evidence-chip polish fix.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
   calling the whole product bank-grade clean.
