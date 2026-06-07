@@ -670,6 +670,19 @@ Live audit evidence from 2026-06-06:
   larger fleets. Remaining small-mode work is to route event query, timeline,
   entity enrichment, log-volume, and admin health copy away from Doris-specific
   assumptions without removing UI features.
+- 2026-06-07 Users/RBAC follow-up: live browser validation on
+  `/console/users?verify=2773897d` found duplicated effective role labels for
+  default local users (`viewer viewer`, `operator operator`, `ciso ciso`,
+  `admin admin`). Commit `2773897d` keeps all useful grants but dedupes
+  effective role names in storage/API serialization. Local focused checks,
+  `go vet` on the touched packages, `GOMAXPROCS=4 go test -short -p 1 ./...`,
+  and `npm --prefix ui run build` passed. Deploy run `27077266406` and CI runs
+  `27077266403`/`27077266404` succeeded. Post-deploy checks showed
+  `/healthz` returning `ok`, app/console containers recreated, Redis healthy,
+  Doris absent in the small profile, authenticated `/api/v1/users?limit=20`
+  returning 6 users with `duplicate_role_count=0`, and the live Users page
+  rendering single role chips with zero console warnings/errors and no document
+  horizontal overflow at the checked desktop viewport.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
