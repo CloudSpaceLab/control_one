@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 import { useWebhooks } from '../hooks/useWebhooks';
 import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
@@ -67,6 +68,97 @@ function webhookHasHeaders(webhook?: Webhook | null): boolean {
   return Boolean(webhook?.headers_configured) || Object.keys(webhook?.headers ?? {}).length > 0;
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function base64URLToArrayBuffer(value: string): ArrayBuffer {
+  let base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = base64.length % 4;
+  if (padding > 0) {
+    base64 += '='.repeat(4 - padding);
+  }
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64URL(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return window.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function prepareWebAuthnCreationOptions(options: unknown): PublicKeyCredentialCreationOptions {
+  const wrapper = objectRecord(options);
+  const rawPublicKey = objectRecord(wrapper?.publicKey) ?? wrapper;
+  if (!rawPublicKey) {
+    throw new Error('WebAuthn enrollment response did not include publicKey options');
+  }
+  const publicKey: Record<string, unknown> = { ...rawPublicKey };
+  if (typeof publicKey.challenge !== 'string') {
+    throw new Error('WebAuthn enrollment challenge was missing');
+  }
+  publicKey.challenge = base64URLToArrayBuffer(publicKey.challenge);
+
+  const user = objectRecord(publicKey.user);
+  if (user) {
+    const userID = user.id;
+    publicKey.user = {
+      ...user,
+      id: typeof userID === 'string' ? base64URLToArrayBuffer(userID) : userID,
+    };
+  }
+
+  if (Array.isArray(publicKey.excludeCredentials)) {
+    publicKey.excludeCredentials = publicKey.excludeCredentials.map((item) => {
+      const descriptor = objectRecord(item);
+      if (!descriptor || typeof descriptor.id !== 'string') {
+        return item;
+      }
+      return {
+        ...descriptor,
+        id: base64URLToArrayBuffer(descriptor.id),
+      };
+    });
+  }
+
+  return publicKey as unknown as PublicKeyCredentialCreationOptions;
+}
+
+function isPublicKeyCredential(credential: Credential | null): credential is PublicKeyCredential {
+  return Boolean(credential && credential.type === 'public-key' && 'rawId' in credential && 'response' in credential);
+}
+
+function serializeWebAuthnAttestation(credential: PublicKeyCredential): Record<string, unknown> {
+  const response = credential.response as AuthenticatorAttestationResponse;
+  if (!(credential.rawId instanceof ArrayBuffer) || !(response.clientDataJSON instanceof ArrayBuffer) || !(response.attestationObject instanceof ArrayBuffer)) {
+    throw new Error('Browser returned an incomplete WebAuthn attestation');
+  }
+  const serializedResponse: Record<string, unknown> = {
+    clientDataJSON: arrayBufferToBase64URL(response.clientDataJSON),
+    attestationObject: arrayBufferToBase64URL(response.attestationObject),
+  };
+  const transports = response.getTransports?.();
+  if (transports && transports.length > 0) {
+    serializedResponse.transports = transports;
+  }
+  return {
+    id: credential.id,
+    rawId: arrayBufferToBase64URL(credential.rawId),
+    type: credential.type,
+    response: serializedResponse,
+    clientExtensionResults: credential.getClientExtensionResults?.() ?? {},
+  };
+}
+
 export function Settings(): JSX.Element {
   const api = useApiClient();
   const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai'>('webhooks');
@@ -78,6 +170,7 @@ export function Settings(): JSX.Element {
   const [deleteMfaId, setDeleteMfaId] = useState<string | null>(null);
   const [totpEnrollStep, setTotpEnrollStep] = useState<'idle' | 'scanning' | 'verifying'>('idle');
   const [totpEnrollData, setTotpEnrollData] = useState<{ factor_id: string; secret: string; provisioning_uri: string } | null>(null);
+  const [totpQrDataUrl, setTotpQrDataUrl] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState('');
   const [totpLabel, setTotpLabel] = useState('Authenticator app');
   const [webauthnEnrollStep, setWebauthnEnrollStep] = useState<'idle' | 'enrolling'>('idle');
@@ -108,10 +201,23 @@ export function Settings(): JSX.Element {
   const handleBeginTOTPEnroll = async () => {
     try {
       const data = await api.beginTOTPEnroll();
+      let qrDataUrl: string | null = null;
+      try {
+        qrDataUrl = await QRCode.toDataURL(data.provisioning_uri, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 200,
+        });
+      } catch (qrError) {
+        console.error('Failed to render local TOTP QR code', qrError);
+        showToast('Could not render the QR code locally. Enter the secret manually.', 'error');
+      }
       setTotpEnrollData(data);
+      setTotpQrDataUrl(qrDataUrl);
       setTotpEnrollStep('scanning');
     } catch (err) {
       console.error('Failed to begin TOTP enrollment', err);
+      showToast('Could not start TOTP enrollment.', 'error');
     }
   };
 
@@ -122,28 +228,44 @@ export function Settings(): JSX.Element {
       await api.finishTOTPEnroll(totpEnrollData.factor_id, totpCode, totpLabel);
       setTotpEnrollStep('idle');
       setTotpEnrollData(null);
+      setTotpQrDataUrl(null);
       setTotpCode('');
       setMfaReloadToken((n) => n + 1);
+      showToast('TOTP factor enrolled successfully', 'success');
     } catch (err) {
       console.error('Failed to finish TOTP enrollment', err);
+      showToast('Could not verify the TOTP code.', 'error');
     }
   };
 
   const handleCancelTOTPEnroll = () => {
     setTotpEnrollStep('idle');
     setTotpEnrollData(null);
+    setTotpQrDataUrl(null);
     setTotpCode('');
   };
 
   const handleBeginWebAuthnEnroll = async () => {
     try {
+      if (!window.PublicKeyCredential || !navigator.credentials?.create) {
+        showToast('This browser does not support security key enrollment.', 'error');
+        return;
+      }
       setWebauthnEnrollStep('enrolling');
       const data = await api.beginWebAuthnEnroll();
-      // The browser credential ceremony is wired here after the challenge is issued.
-      console.log('WebAuthn enrollment challenge:', data);
+      const credential = await navigator.credentials.create({
+        publicKey: prepareWebAuthnCreationOptions(data.options),
+      });
+      if (!isPublicKeyCredential(credential)) {
+        throw new Error('No security key credential was created');
+      }
+      await api.finishWebAuthnEnroll(data.challenge_id, 'Security key', serializeWebAuthnAttestation(credential));
+      setMfaReloadToken((n) => n + 1);
+      showToast('Security key enrolled successfully', 'success');
       setWebauthnEnrollStep('idle');
     } catch (err) {
       console.error('Failed to begin WebAuthn enrollment', err);
+      showToast(err instanceof Error ? err.message : 'Could not enroll the security key.', 'error');
       setWebauthnEnrollStep('idle');
     }
   };
@@ -681,7 +803,7 @@ export function Settings(): JSX.Element {
                   onClick={handleBeginWebAuthnEnroll}
                   disabled={webauthnEnrollStep !== 'idle' || mfaLoading}
                 >
-                  Add Security Key
+                  {webauthnEnrollStep === 'enrolling' ? 'Adding...' : 'Add Security Key'}
                 </Button>
                 <Button
                   type="button"
@@ -699,7 +821,9 @@ export function Settings(): JSX.Element {
               <div className="p-4 rounded-lg border border-border-subtle bg-surface mb-4">
                 <h3 className="text-sm font-medium text-foreground mb-2">Scan QR Code</h3>
                 <div className="flex flex-col gap-3">
-                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(totpEnrollData.provisioning_uri)}`} alt="TOTP QR Code" className="w-48 h-48 mx-auto" />
+                  {totpQrDataUrl && (
+                    <img src={totpQrDataUrl} alt="TOTP QR Code" className="w-48 h-48 mx-auto" />
+                  )}
                   <p className="text-xs text-text-muted text-center">Or enter this secret: <code className="bg-surface-2 px-1 rounded">{totpEnrollData.secret}</code></p>
                   <form onSubmit={handleFinishTOTPEnroll} className="flex flex-col gap-2">
                     <Label htmlFor="totp-code">Verification Code</Label>

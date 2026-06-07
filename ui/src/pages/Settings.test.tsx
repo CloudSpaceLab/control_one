@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
   const testWebhook = vi.fn();
   const reloadWebhooks = vi.fn();
   const showToast = vi.fn();
+  const qrToDataURL = vi.fn();
 
   return {
     webhooks: [] as Webhook[],
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
     testWebhook,
     reloadWebhooks,
     showToast,
+    qrToDataURL,
     apiClient: {
       createWebhook,
       updateWebhook,
@@ -30,10 +32,18 @@ const mocks = vi.hoisted(() => {
       beginTOTPEnroll: vi.fn(),
       finishTOTPEnroll: vi.fn(),
       beginWebAuthnEnroll: vi.fn(),
+      finishWebAuthnEnroll: vi.fn(),
       generateMFARecoveryCodes: vi.fn().mockResolvedValue({ codes: [] }),
     },
   };
 });
+
+vi.mock('qrcode', () => ({
+  default: {
+    toDataURL: mocks.qrToDataURL,
+  },
+  toDataURL: mocks.qrToDataURL,
+}));
 
 vi.mock('../hooks/useApiClient', () => ({
   useApiClient: () => mocks.apiClient,
@@ -171,5 +181,107 @@ describe('Settings webhooks', () => {
     const [, payload] = mocks.updateWebhook.mock.calls[0];
     expect(payload).not.toHaveProperty('secret');
     expect(payload).not.toHaveProperty('headers');
+  });
+});
+
+describe('Settings MFA enrollment', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.webhooks = [];
+    mocks.apiClient.listMFAFactors.mockResolvedValue({ factors: [] });
+    mocks.apiClient.deleteMFAFactor.mockResolvedValue(undefined);
+    mocks.apiClient.finishTOTPEnroll.mockResolvedValue({ factor_id: 'factor-totp', verified: true });
+    mocks.apiClient.finishWebAuthnEnroll.mockResolvedValue({ factor_id: 'factor-key', verified: true });
+    mocks.qrToDataURL.mockResolvedValue('data:image/png;base64,localqr');
+  });
+
+  it('renders TOTP QR codes locally without exposing the provisioning URI to a third party', async () => {
+    const user = userEvent.setup();
+    mocks.apiClient.beginTOTPEnroll.mockResolvedValue({
+      factor_id: 'factor-totp',
+      secret: 'ABC123',
+      provisioning_uri: 'otpauth://totp/Control%20One:admin@local?secret=ABC123&issuer=Control%20One',
+    });
+
+    const { container } = render(<Settings />);
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+    await user.click(screen.getByRole('button', { name: /add totp/i }));
+
+    const image = await screen.findByRole('img', { name: /totp qr code/i });
+    expect(mocks.qrToDataURL).toHaveBeenCalledWith(
+      expect.stringContaining('otpauth://totp/Control%20One'),
+      expect.objectContaining({ width: 200 }),
+    );
+    expect(image).toHaveAttribute('src', 'data:image/png;base64,localqr');
+    expect(container.innerHTML).not.toContain('api.qrserver.com');
+  });
+
+  it('completes WebAuthn enrollment through the browser credential ceremony', async () => {
+    const user = userEvent.setup();
+    const createCredential = vi.fn().mockResolvedValue({
+      id: 'cred-id',
+      type: 'public-key',
+      rawId: new Uint8Array([9, 8, 7]).buffer,
+      response: {
+        clientDataJSON: new Uint8Array([1]).buffer,
+        attestationObject: new Uint8Array([2]).buffer,
+        getTransports: () => ['usb'],
+      },
+      getClientExtensionResults: () => ({ appid: false }),
+    });
+    Object.defineProperty(window, 'PublicKeyCredential', {
+      configurable: true,
+      value: function PublicKeyCredential() {},
+    });
+    Object.defineProperty(window.navigator, 'credentials', {
+      configurable: true,
+      value: { create: createCredential },
+    });
+    mocks.apiClient.beginWebAuthnEnroll.mockResolvedValue({
+      challenge_id: 'challenge-1',
+      options: {
+        publicKey: {
+          challenge: 'AQID',
+          rp: { name: 'Control One', id: 'control-one.cloudspacetechs.com' },
+          user: { id: 'BAUG', name: 'admin@local', displayName: 'Admin' },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+          excludeCredentials: [{ type: 'public-key', id: 'BwgJ' }],
+          timeout: 60000,
+          attestation: 'none',
+        },
+      },
+    });
+
+    render(<Settings />);
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+    await user.click(screen.getByRole('button', { name: /add security key/i }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalled();
+    });
+    expect(createCredential).toHaveBeenCalledWith({
+      publicKey: expect.objectContaining({
+        challenge: expect.any(ArrayBuffer),
+        user: expect.objectContaining({ id: expect.any(ArrayBuffer) }),
+        excludeCredentials: [expect.objectContaining({ id: expect.any(ArrayBuffer) })],
+      }),
+    });
+    await waitFor(() => {
+      expect(mocks.apiClient.finishWebAuthnEnroll).toHaveBeenCalledWith(
+        'challenge-1',
+        'Security key',
+        expect.objectContaining({
+          id: 'cred-id',
+          rawId: 'CQgH',
+          response: expect.objectContaining({
+            clientDataJSON: 'AQ',
+            attestationObject: 'Ag',
+            transports: ['usb'],
+          }),
+        }),
+      );
+    });
   });
 });

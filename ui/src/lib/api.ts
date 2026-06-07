@@ -5310,21 +5310,27 @@ export class APIClient {
   }
 
   // WebAuthn enrollment
-  async beginWebAuthnEnroll(): Promise<{ challenge: unknown; user: unknown }> {
-    return this.request<{ challenge: unknown; user: unknown }>(
+  async beginWebAuthnEnroll(): Promise<WebAuthnEnrollBeginResponse> {
+    return this.request<WebAuthnEnrollBeginResponse>(
       "/api/v1/mfa/webauthn/enroll/begin",
       { method: "POST" },
     );
   }
 
   async finishWebAuthnEnroll(
-    credential: unknown,
+    challengeId: string,
+    label: string,
+    attestation: unknown,
   ): Promise<{ factor_id: string; verified: boolean }> {
     return this.request<{ factor_id: string; verified: boolean }>(
       "/api/v1/mfa/webauthn/enroll/finish",
       {
         method: "POST",
-        body: JSON.stringify(credential),
+        body: JSON.stringify({
+          challenge_id: challengeId,
+          label,
+          attestation,
+        }),
       },
     );
   }
@@ -6970,6 +6976,11 @@ export interface MFAFactor {
   name: string;
   created_at: string;
   last_used_at?: string;
+}
+
+export interface WebAuthnEnrollBeginResponse {
+  challenge_id: string;
+  options: unknown;
 }
 
 export interface TenantRemediationConfig {
