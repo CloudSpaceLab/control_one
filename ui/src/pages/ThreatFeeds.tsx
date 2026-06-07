@@ -56,7 +56,7 @@ const FEED_CATALOG: FeedTypeMeta[] = [
     description: 'Exit-node IPs. Useful as a separate signal, not always malicious.',
     needsURL: 'optional',
     apiKeyMode: 'never',
-    defaultURL: 'https://www.dan.me.uk/torlist/?exit',
+    defaultURL: 'https://check.torproject.org/exit-addresses',
   },
   {
     type: 'abuseipdb',

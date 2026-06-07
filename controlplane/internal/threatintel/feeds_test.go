@@ -46,6 +46,23 @@ func TestParseLineListWithComments(t *testing.T) {
 	}
 }
 
+func TestParseTorExitAddresses(t *testing.T) {
+	body := []byte(`ExitNode 64D74AAA74F30DC2CFB36343CE5D4451B9A4DBA8
+Published 2026-06-06 16:17:59
+LastStatus 2026-06-07 08:00:00
+ExitAddress 171.25.193.25 2026-06-07 08:13:30
+ExitAddress not-an-ip 2026-06-07 08:13:30
+ExitAddress 80.67.167.81 2026-06-07 08:42:48
+`)
+	inds := parseTorExitAddresses(body)
+	if len(inds) != 2 {
+		t.Fatalf("want 2 tor exits, got %d", len(inds))
+	}
+	if inds[0].IP != "171.25.193.25" || inds[0].Feed != "tor-exit" || inds[0].Category != "tor" || inds[0].Score != 50 {
+		t.Fatalf("unexpected first tor indicator: %+v", inds[0])
+	}
+}
+
 func TestIndicatorSetLookup(t *testing.T) {
 	inds := []Indicator{
 		{CIDR: "1.2.3.0/24", Feed: "x", Score: 90},
@@ -112,6 +129,21 @@ func TestSpamhausFetchHTTP(t *testing.T) {
 	}
 	if len(inds) != 1 || inds[0].CIDR != "1.2.3.0/24" {
 		t.Fatalf("unexpected inds: %+v", inds)
+	}
+}
+
+func TestFetchBodySetsUserAgent(t *testing.T) {
+	var gotUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte("1.2.3.4\n"))
+	}))
+	defer server.Close()
+	if _, err := fetchBody(context.Background(), http.DefaultClient, server.URL); err != nil {
+		t.Fatal(err)
+	}
+	if gotUserAgent == "" {
+		t.Fatal("expected product user agent")
 	}
 }
 
