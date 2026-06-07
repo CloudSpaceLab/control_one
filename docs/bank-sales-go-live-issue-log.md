@@ -850,6 +850,35 @@ Live audit evidence from 2026-06-06:
   `/api/v1/secrets/groups` returning HTTP 200, and zero console
   warnings/errors. No live secret group was created or deleted during final
   verification.
+- 2026-06-07 Settings/Webhooks follow-up: code review found that the backend
+  webhook response could expose configured outbound custom headers, including
+  values commonly used for `Authorization`, API key, token, secret, signature,
+  or auth headers. The Settings UI also did not expose the already-supported
+  signing secret or custom header features, forcing operators away from the
+  console for a useful production integration. Commit `f13d3991` preserves the
+  webhook feature path while redacting sensitive response headers, adding
+  `secret_configured`/`headers_configured` response flags, surfacing signed and
+  custom-header badges, and adding edit-safe signing-secret/custom-header JSON
+  controls. Blank edit fields keep existing secret/header settings, while
+  explicit clear checkboxes remove them. Local checks passed
+  `go test ./controlplane/internal/server -run TestWebhookToResponseRedactsSensitiveHeaders -count=1`,
+  focused server RBAC/job coverage, `go vet ./controlplane/internal/server`,
+  `npm --prefix ui test -- Settings.test.tsx`, `npm --prefix ui test -- Settings.test.tsx Roles.test.tsx`,
+  full `npm --prefix ui test`, `npm --prefix ui run lint`,
+  `npm --prefix ui run build`, and `git diff --check` aside from the normal
+  LF/CRLF notices. Deploy run `27081585322` succeeded. CI run `27081585318`
+  succeeded; CI run `27081585319` initially failed in an unrelated Roles UI
+  test after rendering zero mocked roles, while the new Settings tests passed,
+  then passed on rerun with Ubuntu/macOS/Windows jobs green. Post-deploy live
+  browser verification on `/console/settings?verify=f13d3991` showed the
+  Webhooks tab loading, `GET /api/v1/webhooks?...` returning HTTP 200, the
+  `Signing secret` and `Custom headers JSON` controls visible, zero console
+  warnings/errors, no mojibake/ellipsis/middle-dot copy in the rendered Settings
+  text, and no document horizontal overflow. The form was opened and cancelled;
+  no live webhook was created, tested, edited, or deleted. Host checks showed
+  `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Redis healthy, public
+  `/healthz=ok`, no Doris services running, controlplane about 75 MiB, console
+  about 4.5 MiB, and Redis about 11 MiB.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
