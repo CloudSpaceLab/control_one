@@ -189,6 +189,9 @@ describe('navigation scope', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Primary navigation' });
     expect(dialog).toHaveAccessibleDescription('Main console navigation links.');
     expect(within(dialog).getByRole('complementary', { name: /primary navigation/i })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /close/i }));
+    expect(screen.queryByRole('dialog', { name: 'Primary navigation' })).not.toBeInTheDocument();
   });
 
   it('keeps deeper enrollment paths in the profile drilldown', async () => {
