@@ -180,12 +180,12 @@ export function Compliance(): JSX.Element {
         description="Define policies, run evaluations, prove continuous control."
       />
       <Tabs value={tab} onValueChange={onTabChange}>
-        <TabsList>
-          <TabsTrigger value="posture">Posture</TabsTrigger>
-          <TabsTrigger value="policies">Policies</TabsTrigger>
-          <TabsTrigger value="evidence">Evidence</TabsTrigger>
-          <TabsTrigger value="frameworks">Frameworks</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="posture">Posture</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="policies">Policies</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="evidence">Evidence</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="frameworks">Frameworks</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="reports">Reports</TabsTrigger>
         </TabsList>
         <TabsContent value="posture" className="mt-5">
           <PostureTab />
