@@ -2892,3 +2892,37 @@ matches, no Doris FE/BE containers were running, and memory stayed within the
 small-fleet envelope: console about 4.5 MiB / 256 MiB, controlplane about
 83.7 MiB / 1 GiB, Redis about 6.7 MiB / 192 MiB, and ipq about 4.8 MiB /
 128 MiB.
+
+2026-06-07 node drill-down go-live audit: this pass focused on the core
+operator path from fleet inventory into a specific host. The live API first
+selected node `0d4893c0-867a-4bf1-8aa9-e247680280ab`
+(`vmi2172335.contaboserver.net`) from `/api/v1/nodes?limit=20&offset=0`.
+Direct contract checks returned HTTP 200 for node metadata, node health, node
+telemetry, node services, node packages, and node-scoped connections. Observed
+timings were approximately: metadata 671 ms, health 341 ms, telemetry 526 ms,
+services 469 ms, packages 607 ms, and connections 944 ms.
+
+Live browser verification then opened `/console/nodes`, authenticated through
+the normal password login flow, and confirmed the fleet overview rendered the
+two active agents. The selected node detail page rendered the expected
+predictive score, vitals, current telemetry, and host identity. A desktop
+browser pass exercised all node detail tabs: Overview, Activity, Connections,
+Knowledge graph, Packages, Recommendations, and Settings. Each tab selected
+correctly, showed expected content, had no visible critical error or failed-load
+message, and produced no same-origin 4xx/5xx responses, request failures, page
+errors, or browser console warnings/errors. The calls observed from that pass
+included `/api/v1/nodes/{id}`, `/health`, `/telemetry/nodes/{id}/metrics`,
+node-scoped `/connections`, `/services`, `/packages`, and
+`/compliance/recommendations`.
+
+Mobile verification at 390x844 exercised the same node's Overview, Connections,
+Packages, and Settings tabs. The dense tables and tab strip stayed inside the
+viewport (`overflowX=false`), expected content rendered, and there were no
+same-origin failed requests, browser console warnings/errors, or page errors.
+No product code changes were required in this slice. Host evidence after the
+audit: `/healthz=ok`, strict recent console/controlplane log scans showed no
+actual nginx 4xx/5xx or controlplane 5xx/panic/database-lock/analytics-unavailable
+matches, no Doris FE/BE containers were running, and memory remained within the
+small-fleet envelope: console about 4.5 MiB / 256 MiB, controlplane about
+87.5 MiB / 1 GiB, Redis about 6.7 MiB / 192 MiB, and ipq about 4.8 MiB /
+128 MiB.
