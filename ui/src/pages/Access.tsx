@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, KeyRound, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { useRoles } from '../hooks/useRoles';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -35,6 +36,33 @@ const TTL_PRESETS = [
   { label: '4 hr', seconds: 14400 },
   { label: '8 hr', seconds: 28800 },
 ];
+
+const CANONICAL_COMMAND_POLICY_ROLES = ['admin', 'ciso', 'investigator', 'operator', 'viewer'];
+
+function uniqueRoleNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  names.forEach((name) => {
+    const normalized = name.trim();
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) return;
+    seen.add(key);
+    out.push(normalized);
+  });
+  return out;
+}
+
+function sortRoleNames(names: string[]): string[] {
+  const priority = new Map(CANONICAL_COMMAND_POLICY_ROLES.map((role, index) => [role, index]));
+  return [...names].sort((a, b) => {
+    const ai = priority.get(a.toLowerCase());
+    const bi = priority.get(b.toLowerCase());
+    if (ai !== undefined && bi !== undefined) return ai - bi;
+    if (ai !== undefined) return -1;
+    if (bi !== undefined) return 1;
+    return a.localeCompare(b);
+  });
+}
 
 function fmtTTL(s: number): string {
   if (s < 3600) return `${Math.round(s / 60)}m`;
@@ -109,6 +137,7 @@ function DecisionPanel({ request, intent, onConfirm, onCancel }: DecisionPanelPr
 export function Access(): JSX.Element {
   const client = useApiClient();
   const { data: tenants } = useTenants({ limit: 50, offset: 0 });
+  const { data: roles, error: rolesError } = useRoles();
   const [tenantId, setTenantId] = useState('');
   const [tab, setTab] = useState<Tab>('pending');
   const [items, setItems] = useState<AccessRequest[]>([]);
@@ -128,9 +157,21 @@ export function Access(): JSX.Element {
   const [aclAction, setAclAction] = useState<'allow' | 'deny'>('deny');
   const [creatingAcl, setCreatingAcl] = useState(false);
 
+  const roleOptions = useMemo(() => {
+    const apiRoleNames = roles.map((role) => role.name);
+    const source = apiRoleNames.length > 0 ? apiRoleNames : CANONICAL_COMMAND_POLICY_ROLES;
+    return sortRoleNames(uniqueRoleNames(source));
+  }, [roles]);
+
   useEffect(() => {
     if (!tenantId && tenants[0]?.id) setTenantId(tenants[0].id);
   }, [tenants, tenantId]);
+
+  useEffect(() => {
+    if (roleOptions.length === 0) return;
+    if (roleOptions.some((role) => role.toLowerCase() === aclRole.toLowerCase())) return;
+    setAclRole(roleOptions.find((role) => role.toLowerCase() === 'operator') ?? roleOptions[0]);
+  }, [aclRole, roleOptions]);
 
   const refresh = useCallback(async () => {
     if (!tenantId) return;
@@ -529,10 +570,17 @@ export function Access(): JSX.Element {
                       value={aclRole}
                       onChange={(e) => setAclRole(e.target.value)}
                     >
-                      <option value="operator">Operator</option>
-                      <option value="admin">Admin</option>
-                      <option value="investigator">Investigator</option>
+                      {roleOptions.map((role) => (
+                        <option key={role} value={role}>
+                          {role}
+                        </option>
+                      ))}
                     </select>
+                    {rolesError ? (
+                      <span className="text-[0.7rem] text-state-warning">
+                        Role list unavailable; using built-in defaults.
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="acl-pattern">Regex pattern</Label>

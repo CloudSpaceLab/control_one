@@ -11,6 +11,14 @@ const mocks = vi.hoisted(() => {
   const listCommandACLs = vi.fn();
   const createCommandACL = vi.fn();
   const deleteCommandACL = vi.fn();
+  const roles = [
+    { id: 'role-admin', name: 'admin', description: 'Admin', built_in: true, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'role-ciso', name: 'ciso', description: 'CISO', built_in: true, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'role-investigator', name: 'investigator', description: 'Investigator', built_in: true, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'role-operator', name: 'operator', description: 'Operator', built_in: true, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'role-viewer', name: 'viewer', description: 'Viewer', built_in: true, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'role-custom', name: 'soc-reviewer', description: 'SOC reviewer', built_in: false, created_at: '2026-01-01T00:00:00Z' },
+  ];
   return {
     apiClient: {
       listAccessRequests,
@@ -24,6 +32,8 @@ const mocks = vi.hoisted(() => {
     listAccessRequests,
     createAccessRequest,
     listCommandACLs,
+    createCommandACL,
+    roles,
   };
 });
 
@@ -34,6 +44,15 @@ vi.mock('../hooks/useApiClient', () => ({
 vi.mock('../hooks/useTenants', () => ({
   useTenants: () => ({
     data: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }],
+    loading: false,
+    error: null,
+    reload: vi.fn(),
+  }),
+}));
+
+vi.mock('../hooks/useRoles', () => ({
+  useRoles: () => ({
+    data: mocks.roles,
     loading: false,
     error: null,
     reload: vi.fn(),
@@ -103,5 +122,40 @@ describe('Access', () => {
     expect(
       await screen.findByRole('button', { name: /delete command policy rule block dangerous command/i }),
     ).toBeInTheDocument();
+  });
+
+  it('uses the canonical role API list when creating command policy rules', async () => {
+    const user = userEvent.setup();
+    mocks.createCommandACL.mockResolvedValue({});
+    render(<Access />);
+
+    await user.click(await screen.findByRole('tab', { name: /command policy/i }));
+    await user.click(await screen.findByRole('button', { name: /new rule/i }));
+
+    const roleSelect = screen.getByLabelText(/role/i) as HTMLSelectElement;
+    expect(Array.from(roleSelect.options).map((option) => option.value)).toEqual([
+      'admin',
+      'ciso',
+      'investigator',
+      'operator',
+      'viewer',
+      'soc-reviewer',
+    ]);
+
+    await user.type(screen.getByLabelText(/name/i), 'SOC shell review');
+    await user.selectOptions(roleSelect, 'soc-reviewer');
+    await user.type(screen.getByLabelText(/regex pattern/i), '^journalctl');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(mocks.createCommandACL).toHaveBeenCalledTimes(1));
+    expect(mocks.createCommandACL).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenant_id: 'tenant-1',
+        name: 'SOC shell review',
+        pattern: '^journalctl',
+        action: 'deny',
+        roles: ['soc-reviewer'],
+      }),
+    );
   });
 });
