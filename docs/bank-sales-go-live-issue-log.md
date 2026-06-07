@@ -879,6 +879,17 @@ Live audit evidence from 2026-06-06:
   `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Redis healthy, public
   `/healthz=ok`, no Doris services running, controlplane about 75 MiB, console
   about 4.5 MiB, and Redis about 11 MiB.
+- 2026-06-07 hyper-light analytics design follow-up: the demo/small-fleet
+  architecture is now explicitly Redis+SQLite+Postgres, with Doris preserved as
+  an opt-in OLAP backend rather than a default dependency. The deploy defaults
+  now cap Redis hot state at `REDIS_MAXMEMORY=128mb`, set the demo SQLite cache
+  to `ANALYTICS_SQLITE_CACHE_MB=16`, and keep `DORIS_ENABLED=false`. The design
+  keeps all Control One dashboard, connection, investigation, timeline, search,
+  and export surfaces intact: backend adapters change behind
+  `analytics.mode`, while missing small-mode projections become backlog work
+  instead of deleted UI. Next small-fleet implementation work is Redis
+  hot-counter acceleration, broader SQLite event/FTS/timeline projections,
+  backend-neutral analytics health copy, and restart/replay acceptance tests.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and

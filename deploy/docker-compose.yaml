@@ -2,7 +2,14 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "${REDIS_MAXMEMORY:-128mb}"
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redisdata:/data
     healthcheck:
@@ -13,7 +20,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
+          memory: "${REDIS_MEMORY_LIMIT:-192m}"
 
   ipq:
     image: akyriako78/ipquery:0.1.18
@@ -58,6 +65,7 @@ services:
       CONTROLPLANE_WEBAUTHN_RP_ORIGIN: "https://control-one.cloudspacetechs.com"
       CONTROLPLANE_ANALYTICS_MODE: "${ANALYTICS_MODE:-small}"
       CONTROLPLANE_ANALYTICS_SQLITE_DIR: "/var/lib/control-one/analytics"
+      CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB: "${ANALYTICS_SQLITE_CACHE_MB:-16}"
       CONTROLPLANE_DORIS_ENABLED: "${DORIS_ENABLED:-false}"
       CONTROLPLANE_DORIS_HTTP_ENDPOINT: "http://doris-fe:8030"
       CONTROLPLANE_DORIS_DSN: "root:${DORIS_PASSWORD}@tcp(doris-fe:9030)/controlone?parseTime=true"

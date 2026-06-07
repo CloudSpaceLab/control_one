@@ -315,6 +315,9 @@ def render_env_file(secrets_obj: Secrets, tag: str = "latest") -> str:
         f"BOOTSTRAP_TOKEN={secrets_obj.bootstrap_token}\n"
         f"DORIS_PASSWORD={secrets_obj.doris_password}\n"
         f"ANALYTICS_MODE=small\n"
+        f"ANALYTICS_SQLITE_CACHE_MB=16\n"
+        f"REDIS_MAXMEMORY=128mb\n"
+        f"REDIS_MEMORY_LIMIT=192m\n"
         f"DORIS_ENABLED=false\n"
         f"TAG={tag}\n"
     )

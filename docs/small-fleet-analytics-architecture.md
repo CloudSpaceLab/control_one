@@ -32,6 +32,56 @@ Use a local analytic backend for demo, branch, and small-fleet deployments:
 This is not a feature reduction. The API contract and UI surfaces stay intact;
 only the backing analytic store changes for small fleets.
 
+## 2026-06-07 Hyper-Light Demo Profile
+
+Decision: for demos and small fleets, Control One should run the analytic path
+as Postgres + Redis + embedded SQLite/WAL, with Doris at zero memory unless an
+operator explicitly selects `analytics.mode=olap`.
+
+The demo profile should stay inside this default budget:
+
+- Redis: `REDIS_MAXMEMORY=128mb` and a small container ceiling, used only for
+  hot counters, streams, queues, leases, freshness gauges, and cacheable
+  dashboard summaries.
+- SQLite: `ANALYTICS_SQLITE_CACHE_MB=16` in the deployment profile, WAL mode,
+  serialized in-process writes, a small bounded read pool, and replayable files
+  under `/var/lib/control-one/analytics`.
+- Postgres: canonical product state, ingest journal, rollups, audit, cases,
+  RBAC, and replay source.
+- Doris: `DORIS_ENABLED=false` and stopped by default; FE/BE start only through
+  the explicit Compose `olap` profile for dedicated-capacity analytic
+  deployments.
+
+This gives the demo one analytic process: the controlplane. Redis is memory
+bounded and non-evidentiary, SQLite is the local recent-evidence read model,
+and Postgres remains the source that can rebuild SQLite if a file is lost or
+corrupt.
+
+The additive integration rule is strict:
+
+- Do not remove console routes, API routes, filters, exports, investigation
+  pivots, timeline views, or dashboard features because Doris is disabled.
+- Route those features through the backend selected by `analytics.mode`.
+- When small mode is not yet at OLAP parity, return bounded, cited
+  `source=small-analytics` results for the facts already projected locally, and
+  make the missing projection an implementation backlog item instead of hiding
+  the workflow.
+- Keep dual-read tests and the Doris adapter path so large-fleet customers can
+  move to OLAP without relearning the UI.
+
+The next engineering priorities for the hyper-light profile are:
+
+1. Add Redis hot-counter acceleration for fleet health, top talkers, dashboard
+   freshness, and writer lag while keeping evidence reads on SQLite/Postgres.
+2. Expand SQLite beyond `process_connections` into normalized `events`, FTS5,
+   `timeline_entities`, log-volume buckets, and enrichment facts.
+3. Rename remaining Doris-specific admin/status copy to backend-neutral
+   analytics health without changing the persisted compatibility fields before
+   a deliberate migration.
+4. Add restart/replay acceptance tests: ingest, stop controlplane, restart, and
+   prove dashboard/investigation results survive; then delete/rebuild a tenant
+   SQLite file from the Postgres journal.
+
 ## 2026-06-07 Demo Architecture Decision
 
 For the current demo and any small fleet that fits this envelope, make
