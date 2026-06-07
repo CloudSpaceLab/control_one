@@ -16,8 +16,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/smallanalytics"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -55,7 +57,7 @@ func TestInvestigationScopeRequiresTenantAndClampsLimit(t *testing.T) {
 	}
 }
 
-func TestEventsQueryHandlerValidatesAuthAndDorisAvailability(t *testing.T) {
+func TestEventsQueryHandlerValidatesAuthAndSmallAnalyticsPending(t *testing.T) {
 	t.Parallel()
 
 	srv := &Server{}
@@ -71,8 +73,15 @@ func TestEventsQueryHandlerValidatesAuthAndDorisAvailability(t *testing.T) {
 	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
 	rec = httptest.NewRecorder()
 	srv.handleEventsQuery(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected pending 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var pendingResp eventsQueryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decode pending response: %v", err)
+	}
+	if pendingResp.Source != "small-analytics-pending" || len(pendingResp.Data) != 0 || len(pendingResp.Guardrails) == 0 {
+		t.Fatalf("unexpected pending response: %+v", pendingResp)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/events/query", bytes.NewReader([]byte(`{}`)))
@@ -81,6 +90,22 @@ func TestEventsQueryHandlerValidatesAuthAndDorisAvailability(t *testing.T) {
 	srv.handleEventsQuery(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected missing tenant 400 got %d", rec.Code)
+	}
+}
+
+func TestEventsQueryHandlerKeepsOLAPUnavailableLoud(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	srv := &Server{cfg: &config.Config{Analytics: config.AnalyticsConfig{Mode: "olap"}}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/events/query", bytes.NewReader([]byte(`{"tenant_id":"`+tenantID.String()+`"}`)))
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	srv.handleEventsQuery(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected OLAP unavailable 503 got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -96,6 +121,103 @@ func TestTimelineBuildRequiresPivot(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTimelineBuildHandlerSmallAnalyticsPending(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", bytes.NewReader([]byte(`{
+		"tenant_id":"`+tenantID.String()+`",
+		"entity_type":"ip",
+		"entity_id":"8.8.8.8"
+	}`)))
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	(&Server{}).handleTimelineBuild(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected pending 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timelineBuildResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode pending timeline: %v", err)
+	}
+	if resp.Source != "small-analytics-pending" || len(resp.Items) != 0 || len(resp.Guardrails) == 0 {
+		t.Fatalf("unexpected pending timeline: %+v", resp)
+	}
+}
+
+func TestEventsAndTimelineHandlersUseSmallAnalyticsSQLite(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	base := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Second)
+	store, err := smallanalytics.Open(context.Background(), smallanalytics.Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open small analytics: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.AppendConnectionRows(context.Background(), []map[string]any{
+		smallAnalyticsConnRow(tenantID, nodeID, "conn-1", base, base.Add(2*time.Minute), "outbound", "10.0.0.5", "8.8.8.8", 100, 250, "abuseipdb"),
+	}); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+	srv := &Server{
+		cfg:            &config.Config{Analytics: config.AnalyticsConfig{Mode: "small"}},
+		localAnalytics: store,
+	}
+
+	eventBody := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"event_types":["conn.open","conn.close"],
+		"since":"` + base.Add(-time.Minute).Format(time.RFC3339) + `",
+		"until":"` + base.Add(3*time.Minute).Format(time.RFC3339) + `",
+		"limit":10
+	}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/events/query", eventBody)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+	srv.handleEventsQuery(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var eventsResp eventsQueryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &eventsResp); err != nil {
+		t.Fatalf("decode events: %v", err)
+	}
+	if eventsResp.Source != "small-analytics" || eventsResp.Pagination.Total != 2 || len(eventsResp.Data) != 2 || len(eventsResp.Citations) != 2 {
+		t.Fatalf("unexpected events response: %+v", eventsResp)
+	}
+	if eventsResp.Data[0].EventType != "conn.close" || eventsResp.Data[0].CitationIDs[0] != eventsResp.Citations[0].ID {
+		t.Fatalf("events should be cited newest-first: %+v citations=%+v", eventsResp.Data, eventsResp.Citations)
+	}
+
+	timelineBody := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"ip",
+		"entity_id":"8.8.8.8",
+		"since":"` + base.Add(-time.Minute).Format(time.RFC3339) + `",
+		"until":"` + base.Add(3*time.Minute).Format(time.RFC3339) + `",
+		"limit":10
+	}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", timelineBody)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec = httptest.NewRecorder()
+	srv.handleTimelineBuild(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("timeline status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var timelineResp timelineBuildResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &timelineResp); err != nil {
+		t.Fatalf("decode timeline: %v", err)
+	}
+	if timelineResp.Source != "small-analytics" || len(timelineResp.Items) != 2 || len(timelineResp.Citations) != 2 {
+		t.Fatalf("unexpected timeline response: %+v", timelineResp)
+	}
+	if timelineResp.Items[0].SourceTable != "process_connections" || timelineResp.Items[0].EventType != "conn.close" {
+		t.Fatalf("timeline should use cited process connection facts: %+v", timelineResp.Items)
 	}
 }
 
@@ -404,6 +526,68 @@ func TestEventsQueryAIToolRejectsCrossTenantNodeBeforeDoris(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "outside requested tenant") {
 		t.Fatalf("expected cross-tenant node rejection, got %v", err)
+	}
+}
+
+func TestEventsAndTimelineAIToolsUseSmallAnalyticsSQLite(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	base := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Second)
+	store, err := smallanalytics.Open(context.Background(), smallanalytics.Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open small analytics: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.AppendConnectionRows(context.Background(), []map[string]any{
+		smallAnalyticsConnRow(tenantID, nodeID, "conn-ai-1", base, base.Add(time.Minute), "outbound", "10.0.0.5", "8.8.4.4", 20, 40, ""),
+	}); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+	srv := &Server{
+		cfg:            &config.Config{Analytics: config.AnalyticsConfig{Mode: "small"}},
+		localAnalytics: store,
+	}
+	principal := &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}}
+
+	exec, err := srv.executeAITool(context.Background(), principal, tenantID, llm.ToolCall{
+		Name: "events_query",
+		Input: map[string]any{
+			"event_types": []any{"conn.open", "conn.close"},
+			"since":       base.Add(-time.Minute).Format(time.RFC3339),
+			"until":       base.Add(2 * time.Minute).Format(time.RFC3339),
+			"limit":       10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute events_query: %v", err)
+	}
+	eventsResp, ok := exec.Payload.(eventsQueryResponse)
+	if !ok {
+		t.Fatalf("events payload type = %T", exec.Payload)
+	}
+	if eventsResp.Source != "small-analytics" || len(eventsResp.Data) != 2 {
+		t.Fatalf("unexpected events tool response: %+v", eventsResp)
+	}
+
+	exec, err = srv.executeAITool(context.Background(), principal, tenantID, llm.ToolCall{
+		Name: "timeline_build",
+		Input: map[string]any{
+			"entity_type": "ip",
+			"entity_id":   "8.8.4.4",
+			"since":       base.Add(-time.Minute).Format(time.RFC3339),
+			"until":       base.Add(2 * time.Minute).Format(time.RFC3339),
+			"limit":       10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute timeline_build: %v", err)
+	}
+	timelineResp, ok := exec.Payload.(timelineBuildResponse)
+	if !ok {
+		t.Fatalf("timeline payload type = %T", exec.Payload)
+	}
+	if timelineResp.Source != "small-analytics" || len(timelineResp.Items) != 2 {
+		t.Fatalf("unexpected timeline tool response: %+v", timelineResp)
 	}
 }
 

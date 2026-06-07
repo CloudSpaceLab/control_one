@@ -729,14 +729,11 @@ func (s *Server) runEventsQueryTool(ctx context.Context, tc aiToolContext, input
 	if err != nil {
 		return aiToolExecution{}, err
 	}
-	if s.dorisClient == nil {
-		return aiToolExecution{}, errors.New("analytic store unavailable")
-	}
 	eventTypes := stringListFromToolInput(input, "event_types")
 	if eventType := strings.TrimSpace(stringFromToolInput(input, "event_type")); eventType != "" {
 		eventTypes = append(eventTypes, eventType)
 	}
-	rows, total, err := s.dorisClient.QueryEvents(ctx, doris.EventQueryParams{
+	rows, total, source, backendGuardrails, err := s.queryInvestigationEvents(ctx, doris.EventQueryParams{
 		TenantID:      tc.TenantID.String(),
 		NodeID:        nodeID,
 		CorrelationID: strings.TrimSpace(stringFromToolInput(input, "correlation_id")),
@@ -755,6 +752,7 @@ func (s *Server) runEventsQueryTool(ctx context.Context, tc aiToolContext, input
 	if err != nil {
 		return aiToolExecution{}, err
 	}
+	guardrails = append(guardrails, backendGuardrails...)
 	items := make([]eventQueryItem, 0, len(rows))
 	citations := make([]eventCitation, 0, len(rows))
 	for _, row := range rows {
@@ -768,7 +766,7 @@ func (s *Server) runEventsQueryTool(ctx context.Context, tc aiToolContext, input
 		}
 	}
 	payload := eventsQueryResponse{
-		Source:     "doris",
+		Source:     source,
 		TenantID:   tc.TenantID.String(),
 		Since:      scope.Since,
 		Until:      scope.Until,
@@ -815,10 +813,7 @@ func (s *Server) runTimelineBuildTool(ctx context.Context, tc aiToolContext, inp
 	if err != nil {
 		return aiToolExecution{}, err
 	}
-	if s.dorisClient == nil {
-		return aiToolExecution{}, errors.New("analytic store unavailable")
-	}
-	rows, err := s.dorisClient.BuildTimeline(ctx, doris.TimelineBuildParams{
+	rows, source, backendGuardrails, err := s.buildInvestigationTimeline(ctx, doris.TimelineBuildParams{
 		TenantID:      tc.TenantID.String(),
 		CorrelationID: strings.TrimSpace(stringFromToolInput(input, "correlation_id")),
 		NodeID:        nodeID,
@@ -832,6 +827,7 @@ func (s *Server) runTimelineBuildTool(ctx context.Context, tc aiToolContext, inp
 	if err != nil {
 		return aiToolExecution{}, err
 	}
+	guardrails = append(guardrails, backendGuardrails...)
 	items := make([]timelineItemResponse, 0, len(rows))
 	citations := make([]eventCitation, 0, len(rows))
 	for _, row := range rows {
@@ -857,7 +853,7 @@ func (s *Server) runTimelineBuildTool(ctx context.Context, tc aiToolContext, inp
 		}
 	}
 	payload := timelineBuildResponse{
-		Source:     "doris",
+		Source:     source,
 		TenantID:   tc.TenantID.String(),
 		Since:      scope.Since,
 		Until:      scope.Until,

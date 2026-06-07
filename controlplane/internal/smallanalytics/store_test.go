@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 )
 
 func TestStorePersistsConnectionRowsAndTopTalkers(t *testing.T) {
@@ -52,6 +54,71 @@ func TestStorePersistsConnectionRowsAndTopTalkers(t *testing.T) {
 	}
 	if detail == nil || detail.ConnID != "conn-1" || detail.BytesIn != 100 {
 		t.Fatalf("unexpected connection detail: %#v", detail)
+	}
+}
+
+func TestStoreProjectsConnectionRowsToEventsAndTimeline(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)
+	if err := store.AppendConnectionRows(ctx, []map[string]any{
+		connRow("tenant-1", "node-1", "conn-1", base, base.Add(90*time.Second), "outbound", "10.0.0.5", "8.8.8.8", 100, 250, "abuseipdb"),
+	}); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+
+	events, total, err := store.QueryEvents(ctx, doris.EventQueryParams{
+		TenantID:   "tenant-1",
+		EventTypes: []string{"conn.open", "conn.close"},
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("query events: %v", err)
+	}
+	if total != 2 || len(events) != 2 {
+		t.Fatalf("events total=%d len=%d rows=%+v", total, len(events), events)
+	}
+	if events[0].EventType != "conn.close" || events[0].ConnID != "conn-1" || events[0].ThreatScore != 100 {
+		t.Fatalf("unexpected newest event: %+v", events[0])
+	}
+	if events[0].Collector != "small-analytics" || events[0].Parser != "process_connections" || events[0].DetailsJSON == "" {
+		t.Fatalf("event did not preserve citation details: %+v", events[0])
+	}
+
+	directionEvents, total, err := store.QueryEvents(ctx, doris.EventQueryParams{
+		TenantID:   "tenant-1",
+		EventTypes: []string{"conn.outbound"},
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("query direction events: %v", err)
+	}
+	if total != 2 || len(directionEvents) != 2 {
+		t.Fatalf("direction alias should match the connection events, total=%d rows=%+v", total, directionEvents)
+	}
+
+	timeline, err := store.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "ip",
+		EntityID:   "8.8.8.8",
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build timeline: %v", err)
+	}
+	if len(timeline) != 2 || timeline[0].SourceTable != "process_connections" || timeline[0].EventType != "conn.close" {
+		t.Fatalf("unexpected timeline: %+v", timeline)
 	}
 }
 

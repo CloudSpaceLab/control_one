@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -154,6 +155,7 @@ func (s *Store) migrate(ctx context.Context, cacheMB int) error {
 		"CREATE INDEX IF NOT EXISTS process_connections_tenant_src_started_idx ON process_connections(tenant_id, src_ip, started_at_ms DESC)",
 		"CREATE INDEX IF NOT EXISTS process_connections_tenant_dst_started_idx ON process_connections(tenant_id, dst_ip, started_at_ms DESC)",
 		"CREATE INDEX IF NOT EXISTS process_connections_tenant_conn_idx ON process_connections(tenant_id, conn_id)",
+		"CREATE INDEX IF NOT EXISTS process_connections_tenant_corr_started_idx ON process_connections(tenant_id, correlation_id, started_at_ms DESC)",
 		"INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (1, ?)",
 	}
 	for _, stmt := range stmts {
@@ -298,6 +300,71 @@ func (s *Store) ConnectionLifetime(ctx context.Context, tenantID, connID string)
 	return &out, nil
 }
 
+// QueryEvents projects SQLite connection facts into the normalized
+// investigation event shape. The small backend starts with connection evidence
+// and keeps the same API contract as the Doris event query.
+func (s *Store) QueryEvents(ctx context.Context, p doris.EventQueryParams) ([]doris.EventRow, int, error) {
+	if s == nil || s.db == nil {
+		return nil, 0, fmt.Errorf("small analytics unavailable")
+	}
+	query, countQuery, args, err := buildConnectionEventQuerySQL(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	var total int
+	if err := s.db.QueryRowContext(qctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count small analytics events: %w", err)
+	}
+	rows, err := s.db.QueryContext(qctx, query, append(args, clampSmallEventLimit(p.Limit), maxInt(p.Offset, 0))...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query small analytics events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]doris.EventRow, 0, clampSmallEventLimit(p.Limit))
+	for rows.Next() {
+		ev, err := scanConnectionEvent(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, ev.eventRow())
+	}
+	return out, total, rows.Err()
+}
+
+// BuildTimeline returns a bounded connection timeline from the local SQLite
+// read model. Broader file/db/web/process timelines remain an OLAP feature until
+// their typed facts are mirrored into SQLite.
+func (s *Store) BuildTimeline(ctx context.Context, p doris.TimelineBuildParams) ([]doris.TimelineItem, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("small analytics unavailable")
+	}
+	query, args, err := buildConnectionTimelineSQL(p)
+	if err != nil {
+		return nil, err
+	}
+	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(qctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("build small analytics timeline: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]doris.TimelineItem, 0, clampSmallTimelineLimit(p.Limit))
+	for rows.Next() {
+		ev, err := scanConnectionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev.timelineItem())
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) TopTalkers(ctx context.Context, tenantID string, since time.Time, limit int) ([]doris.TopTalker, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
@@ -400,6 +467,426 @@ func (s *Store) queryConnections(ctx context.Context, where string, args []any, 
 		}
 	}
 	return out, rows.Err()
+}
+
+type connectionEvent struct {
+	TenantID       string
+	RowKey         string
+	ConnID         string
+	CorrelationID  string
+	StartedAt      time.Time
+	EndedAt        time.Time
+	TS             time.Time
+	DurationMS     int64
+	Direction      string
+	Phase          string
+	EventType      string
+	Severity       string
+	PID            int64
+	ProcessName    string
+	Cmdline        string
+	UserName       string
+	SrcIP          string
+	SrcPort        int
+	DstIP          string
+	DstPort        int
+	Protocol       string
+	BytesIn        int64
+	BytesOut       int64
+	PacketsIn      int64
+	PacketsOut     int64
+	ThreatMatch    bool
+	ThreatFeed     string
+	ClosedReason   string
+	BastionSession string
+	NodeID         string
+	EventID        string
+	RawRef         string
+	Message        string
+}
+
+func buildConnectionEventQuerySQL(p doris.EventQueryParams) (string, string, []any, error) {
+	where, args, err := connectionEventWhereClause(p)
+	if err != nil {
+		return "", "", nil, err
+	}
+	base := connectionEventProjectionSQL()
+	selectSQL := selectConnectionEventColumns + `
+		FROM (` + base + `) connection_events
+		WHERE ` + where + `
+		ORDER BY ts_ms DESC, event_id DESC
+		LIMIT ? OFFSET ?`
+	countSQL := `SELECT COUNT(*) FROM (` + base + `) connection_events WHERE ` + where
+	return selectSQL, countSQL, args, nil
+}
+
+func buildConnectionTimelineSQL(p doris.TimelineBuildParams) (string, []any, error) {
+	where, args, err := connectionTimelineWhereClause(p)
+	if err != nil {
+		return "", nil, err
+	}
+	query := selectConnectionEventColumns + `
+		FROM (` + connectionEventProjectionSQL() + `) connection_events
+		WHERE ` + where + `
+		ORDER BY ts_ms DESC, event_id DESC
+		LIMIT ?`
+	args = append(args, clampSmallTimelineLimit(p.Limit))
+	return query, args, nil
+}
+
+const selectConnectionEventColumns = `SELECT tenant_id, row_key, conn_id, correlation_id,
+	started_at_ms, ended_at_ms, ts_ms, duration_ms, direction, event_phase, event_type, severity,
+	pid, process_name, cmdline, user_name,
+	src_ip, src_port, dst_ip, dst_port, protocol,
+	bytes_in, bytes_out, packets_in, packets_out,
+	threat_match, threat_feed, closed_reason, bastion_session_id, node_id,
+	event_id, raw_ref, message`
+
+func connectionEventProjectionSQL() string {
+	return `
+		SELECT tenant_id, row_key, conn_id, correlation_id,
+		       started_at_ms, ended_at_ms, started_at_ms AS ts_ms,
+		       duration_ms, direction, 'open' AS event_phase, 'conn.open' AS event_type,
+		       CASE WHEN threat_match != 0 THEN 'high' ELSE 'info' END AS severity,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id,
+		       'conn:' || COALESCE(NULLIF(conn_id, ''), row_key) || ':open' AS event_id,
+		       'smallanalytics://process_connections/' || tenant_id || '/' || COALESCE(NULLIF(conn_id, ''), row_key) || '/open' AS raw_ref,
+		       TRIM(COALESCE(NULLIF(process_name, ''), 'process') || ' opened ' ||
+		            COALESCE(src_ip, '') || ':' || CAST(COALESCE(src_port, 0) AS TEXT) ||
+		            ' -> ' || COALESCE(dst_ip, '') || ':' || CAST(COALESCE(dst_port, 0) AS TEXT)) AS message,
+		       CASE WHEN direction != '' THEN 'conn.' || direction ELSE 'conn.flow' END AS direction_event_type
+		FROM process_connections
+		UNION ALL
+		SELECT tenant_id, row_key, conn_id, correlation_id,
+		       started_at_ms, ended_at_ms, ended_at_ms AS ts_ms,
+		       duration_ms, direction, 'close' AS event_phase, 'conn.close' AS event_type,
+		       CASE WHEN threat_match != 0 THEN 'high' ELSE 'info' END AS severity,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id,
+		       'conn:' || COALESCE(NULLIF(conn_id, ''), row_key) || ':close' AS event_id,
+		       'smallanalytics://process_connections/' || tenant_id || '/' || COALESCE(NULLIF(conn_id, ''), row_key) || '/close' AS raw_ref,
+		       TRIM(COALESCE(NULLIF(process_name, ''), 'process') || ' closed ' ||
+		            COALESCE(src_ip, '') || ':' || CAST(COALESCE(src_port, 0) AS TEXT) ||
+		            ' -> ' || COALESCE(dst_ip, '') || ':' || CAST(COALESCE(dst_port, 0) AS TEXT)) AS message,
+		       CASE WHEN direction != '' THEN 'conn.' || direction ELSE 'conn.flow' END AS direction_event_type
+		FROM process_connections
+		WHERE ended_at_ms IS NOT NULL`
+}
+
+func connectionEventWhereClause(p doris.EventQueryParams) (string, []any, error) {
+	tenantID := strings.TrimSpace(p.TenantID)
+	if tenantID == "" {
+		return "", nil, fmt.Errorf("tenant_id required")
+	}
+	where := []string{"tenant_id = ?"}
+	args := []any{tenantID}
+	if !p.Since.IsZero() {
+		where = append(where, "ts_ms >= ?")
+		args = append(args, timeMillis(p.Since))
+	}
+	if !p.Until.IsZero() {
+		where = append(where, "ts_ms <= ?")
+		args = append(args, timeMillis(p.Until))
+	}
+	if v := strings.TrimSpace(p.NodeID); v != "" {
+		where = append(where, "node_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.CorrelationID); v != "" {
+		where = append(where, "correlation_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.ConnID); v != "" {
+		where = append(where, "conn_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.EventID); v != "" {
+		where = append(where, "event_id = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.RawRef); v != "" {
+		where = append(where, "raw_ref = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.Severity); v != "" {
+		where = append(where, "severity = ?")
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(p.ParserStatus); v != "" {
+		where = append(where, "? IN ('normalized', 'parsed', '')")
+		args = append(args, strings.ToLower(v))
+	}
+	if types := cleanEventTypes(p.EventTypes); len(types) > 0 {
+		placeholders := make([]string, len(types))
+		directionPlaceholders := make([]string, len(types))
+		for i, typ := range types {
+			placeholders[i] = "?"
+			directionPlaceholders[i] = "?"
+			args = append(args, typ)
+		}
+		for _, typ := range types {
+			args = append(args, typ)
+		}
+		where = append(where, "(event_type IN ("+strings.Join(placeholders, ", ")+") OR direction_event_type IN ("+strings.Join(directionPlaceholders, ", ")+"))")
+	}
+	if v := strings.TrimSpace(p.Search); v != "" {
+		where = append(where, `LOWER(
+			COALESCE(message, '') || ' ' || COALESCE(process_name, '') || ' ' ||
+			COALESCE(cmdline, '') || ' ' || COALESCE(user_name, '') || ' ' ||
+			COALESCE(src_ip, '') || ' ' || COALESCE(dst_ip, '') || ' ' ||
+			COALESCE(threat_feed, '') || ' ' || COALESCE(closed_reason, '')
+		) LIKE ?`)
+		args = append(args, "%"+strings.ToLower(v)+"%")
+	}
+	return strings.Join(where, " AND "), args, nil
+}
+
+func connectionTimelineWhereClause(p doris.TimelineBuildParams) (string, []any, error) {
+	eventParams := doris.EventQueryParams{
+		TenantID:      p.TenantID,
+		NodeID:        p.NodeID,
+		CorrelationID: p.CorrelationID,
+		ConnID:        p.ConnID,
+		Since:         p.Since,
+		Until:         p.Until,
+	}
+	where, args, err := connectionEventWhereClause(eventParams)
+	if err != nil {
+		return "", nil, err
+	}
+	return appendConnectionEntityPredicate(where, args, p.EntityType, p.EntityID)
+}
+
+func appendConnectionEntityPredicate(where string, args []any, entityType, entityID string) (string, []any, error) {
+	entityType = strings.ToLower(strings.TrimSpace(entityType))
+	entityID = strings.TrimSpace(entityID)
+	if entityType == "" || entityID == "" {
+		return where, args, nil
+	}
+	switch entityType {
+	case "ip":
+		args = append(args, entityID, entityID)
+		return where + " AND (src_ip = ? OR dst_ip = ?)", args, nil
+	case "user":
+		args = append(args, entityID)
+		return where + " AND user_name = ?", args, nil
+	case "process":
+		args = append(args, entityID)
+		return where + " AND process_name = ?", args, nil
+	case "host", "node":
+		args = append(args, entityID)
+		return where + " AND node_id = ?", args, nil
+	case "connection":
+		args = append(args, entityID)
+		return where + " AND conn_id = ?", args, nil
+	case "event":
+		args = append(args, entityID)
+		return where + " AND event_id = ?", args, nil
+	case "raw_ref":
+		args = append(args, entityID)
+		return where + " AND raw_ref = ?", args, nil
+	default:
+		return where + " AND 1 = 0", args, nil
+	}
+}
+
+func scanConnectionEvent(s interface{ Scan(dest ...any) error }) (connectionEvent, error) {
+	var ev connectionEvent
+	var startedMS, tsMS int64
+	var endedMS sql.NullInt64
+	var connID, correlationID, direction, phase, eventType, severity sql.NullString
+	var processName, cmdline, userName, srcIP, dstIP, protocol sql.NullString
+	var threatFeed, closedReason, bastionSession, nodeID, eventID, rawRef, message sql.NullString
+	var durationMS, pid, srcPort, dstPort, bytesIn, bytesOut, packetsIn, packetsOut sql.NullInt64
+	var threatMatch sql.NullInt64
+	if err := s.Scan(&ev.TenantID, &ev.RowKey, &connID, &correlationID,
+		&startedMS, &endedMS, &tsMS, &durationMS, &direction, &phase, &eventType, &severity,
+		&pid, &processName, &cmdline, &userName,
+		&srcIP, &srcPort, &dstIP, &dstPort, &protocol,
+		&bytesIn, &bytesOut, &packetsIn, &packetsOut,
+		&threatMatch, &threatFeed, &closedReason, &bastionSession, &nodeID,
+		&eventID, &rawRef, &message); err != nil {
+		return ev, err
+	}
+	ev.ConnID = connID.String
+	ev.CorrelationID = correlationID.String
+	ev.StartedAt = millisTime(startedMS)
+	if endedMS.Valid {
+		ev.EndedAt = millisTime(endedMS.Int64)
+	}
+	ev.TS = millisTime(tsMS)
+	ev.DurationMS = durationMS.Int64
+	ev.Direction = direction.String
+	ev.Phase = phase.String
+	ev.EventType = eventType.String
+	ev.Severity = severity.String
+	ev.PID = pid.Int64
+	ev.ProcessName = processName.String
+	ev.Cmdline = cmdline.String
+	ev.UserName = userName.String
+	ev.SrcIP = srcIP.String
+	ev.SrcPort = int(srcPort.Int64)
+	ev.DstIP = dstIP.String
+	ev.DstPort = int(dstPort.Int64)
+	ev.Protocol = protocol.String
+	ev.BytesIn = bytesIn.Int64
+	ev.BytesOut = bytesOut.Int64
+	ev.PacketsIn = packetsIn.Int64
+	ev.PacketsOut = packetsOut.Int64
+	ev.ThreatMatch = threatMatch.Int64 != 0
+	ev.ThreatFeed = threatFeed.String
+	ev.ClosedReason = closedReason.String
+	ev.BastionSession = bastionSession.String
+	ev.NodeID = nodeID.String
+	ev.EventID = eventID.String
+	ev.RawRef = rawRef.String
+	ev.Message = message.String
+	return ev, nil
+}
+
+func (ev connectionEvent) eventRow() doris.EventRow {
+	threatScore := 0
+	if ev.ThreatMatch {
+		threatScore = 100
+	}
+	return doris.EventRow{
+		SchemaVersion: 1,
+		EventID:       ev.EventID,
+		RawRef:        ev.RawRef,
+		Collector:     "small-analytics",
+		Parser:        "process_connections",
+		ParserStatus:  "normalized",
+		TenantID:      ev.TenantID,
+		TS:            ev.TS,
+		NodeID:        ev.NodeID,
+		EventType:     ev.EventType,
+		Severity:      ev.Severity,
+		CorrelationID: ev.CorrelationID,
+		ConnID:        ev.ConnID,
+		BastionSessID: ev.BastionSession,
+		PID:           ev.PID,
+		ProcessName:   ev.ProcessName,
+		UserName:      ev.UserName,
+		SrcIP:         ev.SrcIP,
+		SrcPort:       ev.SrcPort,
+		DstIP:         ev.DstIP,
+		DstPort:       ev.DstPort,
+		Protocol:      ev.Protocol,
+		BytesIn:       ev.BytesIn,
+		BytesOut:      ev.BytesOut,
+		DurationMS:    ev.DurationMS,
+		ThreatFeed:    ev.ThreatFeed,
+		ThreatScore:   threatScore,
+		Message:       ev.Message,
+		DetailsJSON:   ev.detailsJSON(),
+		DedupKey:      ev.EventID,
+	}
+}
+
+func (ev connectionEvent) timelineItem() doris.TimelineItem {
+	return doris.TimelineItem{
+		SourceTable:   "process_connections",
+		SchemaVersion: 1,
+		EventID:       ev.EventID,
+		RawRef:        ev.RawRef,
+		Collector:     "small-analytics",
+		Parser:        "process_connections",
+		ParserStatus:  "normalized",
+		TenantID:      ev.TenantID,
+		TS:            ev.TS,
+		NodeID:        ev.NodeID,
+		EventType:     ev.EventType,
+		Severity:      ev.Severity,
+		Message:       ev.Message,
+		CorrelationID: ev.CorrelationID,
+		ConnID:        ev.ConnID,
+		PID:           ev.PID,
+		ProcessName:   ev.ProcessName,
+		UserName:      ev.UserName,
+		SrcIP:         ev.SrcIP,
+		DstIP:         ev.DstIP,
+		DstPort:       ev.DstPort,
+		BytesIn:       ev.BytesIn,
+		BytesOut:      ev.BytesOut,
+		DetailsJSON:   ev.detailsJSON(),
+	}
+}
+
+func (ev connectionEvent) detailsJSON() string {
+	details := map[string]any{
+		"source_table":       "process_connections",
+		"event_phase":        ev.Phase,
+		"direction":          ev.Direction,
+		"started_at":         ev.StartedAt.UTC().Format(time.RFC3339Nano),
+		"duration_ms":        ev.DurationMS,
+		"src_port":           ev.SrcPort,
+		"dst_port":           ev.DstPort,
+		"protocol":           ev.Protocol,
+		"packets_in":         ev.PacketsIn,
+		"packets_out":        ev.PacketsOut,
+		"threat_match":       ev.ThreatMatch,
+		"threat_feed":        ev.ThreatFeed,
+		"closed_reason":      ev.ClosedReason,
+		"bastion_session_id": ev.BastionSession,
+		"cmdline":            ev.Cmdline,
+	}
+	if !ev.EndedAt.IsZero() {
+		details["ended_at"] = ev.EndedAt.UTC().Format(time.RFC3339Nano)
+	}
+	body, err := json.Marshal(details)
+	if err != nil {
+		return ""
+	}
+	return string(body)
+}
+
+func cleanEventTypes(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func clampSmallEventLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func clampSmallTimelineLimit(limit int) int {
+	if limit <= 0 {
+		return 200
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func scanConnection(s interface{ Scan(dest ...any) error }) (doris.ConnectionRow, error) {

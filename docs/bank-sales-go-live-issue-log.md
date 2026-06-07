@@ -667,9 +667,10 @@ Live audit evidence from 2026-06-06:
   integration is additive: Postgres remains canonical, Redis stays
   TTL-bounded/non-evidentiary, SQLite/WAL serves recent evidence-grade analytic
   reads, and Doris adapters are preserved behind the same API contracts for
-  larger fleets. Remaining small-mode work is to route event query, timeline,
-  entity enrichment, log-volume, and admin health copy away from Doris-specific
-  assumptions without removing UI features.
+  larger fleets. Remaining small-mode work is to broaden event/timeline coverage
+  beyond connection facts and route entity enrichment, log-volume, Redis
+  acceleration, and admin health copy away from Doris-specific assumptions
+  without removing UI features.
 - 2026-06-07 small-analytics hardening follow-up: live control-plane logs
   exposed `SQLITE_BUSY` / `database is locked` during small-mode connection
   fanout. Commit `c4921f86` keeps the Redis+SQLite feature path and hardens the
@@ -690,6 +691,24 @@ Live audit evidence from 2026-06-06:
   list, top talkers, and connection detail all returned HTTP 200 with
   `source=small-analytics`, zero app API failures, zero console warnings/errors,
   zero page errors, and no document horizontal overflow.
+- 2026-06-07 small-mode investigation architecture follow-up: the Redis+SQLite
+  path should also keep investigation workflows alive instead of returning a
+  Doris-only 503. The local implementation now projects SQLite
+  `process_connections` into cited `conn.open`/`conn.close` rows for
+  `/api/v1/events/query`, `/api/v1/timelines/build`, and the matching AI
+  investigation tools when `analytics.mode=small`; explicit OLAP mode still
+  fails loudly if Doris is configured but unavailable, preserving the large
+  fleet backend contract. This is deliberately additive: Doris remains the
+  opt-in full generic/file/db/web timeline backend, while the demo gets
+  memory-light connection-fact investigations from SQLite. Local checks passed:
+  `go test ./controlplane/internal/smallanalytics -count=1`, focused
+  investigation server tests for small-mode HTTP/tool events and timelines,
+  `go vet ./controlplane/internal/smallanalytics ./controlplane/internal/server`,
+  and `go test -short -p 1 ./...`. A non-short package test run for
+  `./controlplane/internal/smallanalytics ./controlplane/internal/server`
+  reached unrelated integration tests that require a local Postgres test
+  database on `localhost:5432`; the smallanalytics package passed, while the
+  server integration subset was blocked by the missing local DB.
 - 2026-06-07 Users/RBAC follow-up: live browser validation on
   `/console/users?verify=2773897d` found duplicated effective role labels for
   default local users (`viewer viewer`, `operator operator`, `ciso ciso`,

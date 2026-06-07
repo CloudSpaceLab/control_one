@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,6 +18,8 @@ const (
 	investigationQueryMaxBody = 64 << 10
 	investigationMaxWindow    = 30 * 24 * time.Hour
 )
+
+var errInvestigationAnalyticsUnavailable = errors.New("analytic store unavailable")
 
 type eventsQueryRequest struct {
 	TenantID      string   `json:"tenant_id"`
@@ -183,15 +186,11 @@ func (s *Server) handleEventsQuery(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTenantAccess(w, r, principal, scope.TenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
-	if s.dorisClient == nil {
-		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	eventTypes := append([]string(nil), req.EventTypes...)
 	if strings.TrimSpace(req.EventType) != "" {
 		eventTypes = append(eventTypes, req.EventType)
 	}
-	rows, total, err := s.dorisClient.QueryEvents(r.Context(), doris.EventQueryParams{
+	rows, total, source, backendGuardrails, err := s.queryInvestigationEvents(r.Context(), doris.EventQueryParams{
 		TenantID:      scope.TenantID.String(),
 		NodeID:        strings.TrimSpace(req.NodeID),
 		CorrelationID: strings.TrimSpace(req.CorrelationID),
@@ -208,9 +207,14 @@ func (s *Server) handleEventsQuery(w http.ResponseWriter, r *http.Request) {
 		Offset:        scope.Offset,
 	})
 	if err != nil {
+		if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	guardrails = append(guardrails, backendGuardrails...)
 	items := make([]eventQueryItem, 0, len(rows))
 	citations := make([]eventCitation, 0, len(rows))
 	for _, row := range rows {
@@ -225,7 +229,7 @@ func (s *Server) handleEventsQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, eventsQueryResponse{
-		Source:     "doris",
+		Source:     source,
 		TenantID:   scope.TenantID.String(),
 		Since:      scope.Since,
 		Until:      scope.Until,
@@ -274,11 +278,7 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTenantAccess(w, r, principal, scope.TenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
-	if s.dorisClient == nil {
-		http.Error(w, "analytic store unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	rows, err := s.dorisClient.BuildTimeline(r.Context(), doris.TimelineBuildParams{
+	rows, source, backendGuardrails, err := s.buildInvestigationTimeline(r.Context(), doris.TimelineBuildParams{
 		TenantID:      scope.TenantID.String(),
 		CorrelationID: strings.TrimSpace(req.CorrelationID),
 		NodeID:        strings.TrimSpace(req.NodeID),
@@ -290,9 +290,14 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Limit:         scope.Limit,
 	})
 	if err != nil {
+		if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	guardrails = append(guardrails, backendGuardrails...)
 	items := make([]timelineItemResponse, 0, len(rows))
 	citations := make([]eventCitation, 0, len(rows))
 	for _, row := range rows {
@@ -319,7 +324,7 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, timelineBuildResponse{
-		Source:     "doris",
+		Source:     source,
 		TenantID:   scope.TenantID.String(),
 		Since:      scope.Since,
 		Until:      scope.Until,
@@ -328,6 +333,36 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Citations:  citations,
 		Guardrails: guardrails,
 	})
+}
+
+func (s *Server) queryInvestigationEvents(ctx context.Context, p doris.EventQueryParams) ([]doris.EventRow, int, string, []string, error) {
+	if s != nil && s.usesDorisAnalytics() {
+		rows, total, err := s.dorisClient.QueryEvents(ctx, p)
+		return rows, total, "doris", nil, err
+	}
+	if s != nil && effectiveAnalyticsMode(s.cfg) == analyticsModeOLAP {
+		return nil, 0, "doris", nil, errInvestigationAnalyticsUnavailable
+	}
+	if s != nil && s.localAnalytics != nil {
+		rows, total, err := s.localAnalytics.QueryEvents(ctx, p)
+		return rows, total, "small-analytics", []string{"small analytics currently projects connection facts; OLAP mode is required for full generic/file/db/web event search"}, err
+	}
+	return nil, 0, "small-analytics-pending", []string{"small analytics event query requires analytics.sqlite_dir or OLAP mode"}, nil
+}
+
+func (s *Server) buildInvestigationTimeline(ctx context.Context, p doris.TimelineBuildParams) ([]doris.TimelineItem, string, []string, error) {
+	if s != nil && s.usesDorisAnalytics() {
+		rows, err := s.dorisClient.BuildTimeline(ctx, p)
+		return rows, "doris", nil, err
+	}
+	if s != nil && effectiveAnalyticsMode(s.cfg) == analyticsModeOLAP {
+		return nil, "doris", nil, errInvestigationAnalyticsUnavailable
+	}
+	if s != nil && s.localAnalytics != nil {
+		rows, err := s.localAnalytics.BuildTimeline(ctx, p)
+		return rows, "small-analytics", []string{"small analytics currently builds timelines from connection facts; OLAP mode is required for full generic/file/db/web timelines"}, err
+	}
+	return nil, "small-analytics-pending", []string{"small analytics timeline requires analytics.sqlite_dir or OLAP mode"}, nil
 }
 
 func (s *Server) dbQueryTextCaptureAllowed(ctx context.Context, tenantID uuid.UUID) bool {

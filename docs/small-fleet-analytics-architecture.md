@@ -66,15 +66,18 @@ The practical integration shape is:
 
 Current code is already past the first slice: `controlplane/internal/smallanalytics`
 uses the pure-Go SQLite driver in WAL mode, writes `process_connections`, and
-serves connection list, connection detail, and top talkers in small mode. On
-2026-06-07 the live demo host was also hardened after a `SQLITE_BUSY` fanout
-warning: SQLite pragmas now apply through the driver DSN to every pooled
-connection, transactions start with immediate locking, and in-process writers
-are serialized while reads remain available through a small bounded pool. The
-next demo-hardening work should focus on the remaining Doris-named read paths:
-event query, timeline build, entity enrichment, log-volume buckets, and admin
-health copy that still talks about `doris_status` even when the active backend
-is local analytics.
+serves connection list, connection detail, top talkers, investigation event
+query, and timeline build in small mode. On 2026-06-07 the live demo host was
+also hardened after a `SQLITE_BUSY` fanout warning: SQLite pragmas now apply
+through the driver DSN to every pooled connection, transactions start with
+immediate locking, and in-process writers are serialized while reads remain
+available through a small bounded pool. The event/timeline implementation is a
+demo-grade connection-fact projection today: it emits cited `conn.open` and
+`conn.close` rows from SQLite and keeps Doris as the opt-in OLAP backend for
+full generic/file/db/web event timelines. The next demo-hardening work should
+focus on entity enrichment, log-volume buckets, Redis hot-counter acceleration,
+and admin health copy that still talks about `doris_status` even when the active
+backend is local analytics.
 
 ## Current Implementation State
 
@@ -90,6 +93,9 @@ The repo is already partially aligned with this decision:
   existing ingest fanout and serves connection list, connection detail, and top
   talker APIs with `source=small-analytics` when `analytics.sqlite_dir` is
   configured.
+- The same local connection facts now project into `/api/v1/events/query` and
+  `/api/v1/timelines/build` as cited `conn.open`/`conn.close` rows, while OLAP
+  mode keeps the existing Doris-backed full timeline/search path.
 - The live demo host has verified this first slice post-deploy: connection
   list, top talkers, and connection detail returned `source=small-analytics`
   with Doris disabled, while recent control-plane logs showed no SQLite
@@ -97,10 +103,10 @@ The repo is already partially aligned with this decision:
 - Redis-backed hot counters remain the next acceleration layer; SQLite is the
   evidence-grade local read model for this first slice.
 
-The next implementation step should therefore be additive: land the local
-analytic store behind the remaining event-query and timeline API contracts, then
-add Redis acceleration for live counters and dashboard cache. Do not delete the
-Doris code path; keep it as the opt-in OLAP backend for larger deployments.
+The next implementation step should therefore be additive: add Redis
+acceleration for live counters and dashboard cache, then expand SQLite beyond
+connection facts into full normalized event/FTS/timeline tables. Do not delete
+the Doris code path; keep it as the opt-in OLAP backend for larger deployments.
 
 ## Small-Fleet Fit Envelope
 
@@ -410,9 +416,15 @@ Endpoint behavior:
   SQLite `process_connections`.
 - Connection drilldown: SQLite `process_connections` plus `events` by
   `correlation_id`.
-- Events query: SQLite `events` with B-tree filters and FTS5 search.
-- Timeline build: SQLite `timeline_entities` plus typed events, merged with
-  existing Postgres lifecycle items.
+- Events query, current demo slice: SQLite `process_connections` projected into
+  cited `conn.open` and `conn.close` normalized rows with bounded filters.
+- Events query, full small-fleet slice: SQLite `events` with B-tree filters and
+  FTS5 search.
+- Timeline build, current demo slice: SQLite `process_connections` projected
+  into connection timelines for `ip`, `node`, `host`, `process`, `user`,
+  `connection`, `event`, and `raw_ref` pivots where the facts exist.
+- Timeline build, full small-fleet slice: SQLite `timeline_entities` plus typed
+  events, merged with existing Postgres lifecycle items.
 - Investigation enrichment: SQLite for recent facts, Postgres for durable case,
   alert, audit, and compliance facts.
 
@@ -595,8 +607,9 @@ SQLite-aware.
 3. Route fleet health and top talkers first. These have the highest dashboard
    impact and can use Redis/rollups immediately.
 4. Route connection list/detail to SQLite.
-5. Route events query and timeline build to SQLite with FTS5 and
-   `timeline_entities`.
+5. Route events query and timeline build to SQLite in two stages: first project
+   cited `conn.open`/`conn.close` rows from `process_connections`, then add FTS5
+   and `timeline_entities` for full generic/file/db/web coverage.
 6. Add dual-read comparison tests: Doris vs SQLite fixtures return equivalent
    normalized rows and citations.
 7. Add deploy profile `small` that disables Doris and enables the SQLite volume.
@@ -613,14 +626,17 @@ The fastest useful implementation is narrower than the final store:
    `conn.open` and `conn.close` event fanout.
 3. Route `/api/v1/fleet/health`, `/api/v1/connections/top-talkers`, and
    `/api/v1/connections` through the analytics interface.
-4. Keep `/api/v1/events/query`, timeline build, and deeper enrichment on their
-   current fallback/OLAP behavior until the SQLite event and FTS tables land.
+4. Route `/api/v1/events/query` and `/api/v1/timelines/build` through the same
+   backend choice. In small mode, return cited connection-fact events/timeline
+   rows from SQLite. In OLAP mode, keep the full Doris-backed timeline/search
+   implementation.
 5. Add compose profiles so Doris is opt-in and the default demo stack cannot
    consume Doris memory by accident.
 
-This first slice should turn the current `small-analytics-pending` responses for
-top talkers and connection lists into real Redis+SQLite data while preserving
-the existing guardrail behavior if the local store is degraded.
+This first slice turns `small-analytics-pending` responses for top talkers,
+connection lists, event query, and timeline build into real SQLite-backed data
+where connection facts exist, while preserving the existing guardrail behavior
+if the local store is degraded.
 
 ## Demo Acceptance Criteria
 
@@ -630,9 +646,10 @@ Before calling the demo architecture ready:
   passed.
 - `/healthz` and the admin health detail report `analytics.mode=small` and a
   healthy SQLite store.
-- `/api/v1/fleet/health`, `/api/v1/connections/top-talkers`, and
-  `/api/v1/connections` return `source=redis+sqlite` or `source=small-analytics`
-  with non-error envelopes.
+- `/api/v1/fleet/health`, `/api/v1/connections/top-talkers`,
+  `/api/v1/connections`, `/api/v1/events/query`, and
+  `/api/v1/timelines/build` return `source=redis+sqlite` or
+  `source=small-analytics` with non-error envelopes.
 - Browser validation shows the network, investigation, and dashboard routes
   loading without console errors, horizontal overflow, or misleading empty-state
   copy.
@@ -653,13 +670,16 @@ Before calling the demo architecture ready:
 
 ## Recommended First Implementation Slice
 
-Build the small analytics backend behind a feature flag and migrate only these
-paths first:
+Build the small analytics backend behind a feature flag and migrate these paths
+first:
 
 1. `/api/v1/fleet/health`
 2. `/api/v1/connections/top-talkers`
 3. `/api/v1/connections?tenant_id=...`
+4. `/api/v1/events/query` for cited connection-fact events
+5. `/api/v1/timelines/build` for cited connection-fact timelines
 
 That slice removes the current Doris dashboard pressure, proves the Redis/SQLite
-model under live browser use, and leaves the deeper investigation paths on Doris
-until the SQLite timeline/query implementation is ready.
+model under live browser use, and leaves only the deeper generic/file/db/web
+investigation coverage on Doris until the fuller SQLite event/FTS/timeline
+implementation is ready.
