@@ -954,6 +954,36 @@ Live audit evidence from 2026-06-06:
   warnings/errors, and no document-level horizontal overflow at 390x844
   (`scrollWidth=clientWidth=381`). No live command policy rule was created or
   deleted during final verification.
+- 2026-06-07 public workflow routing and Trust Center follow-up: live browser
+  verification found that root public workflow links were reaching the landing
+  site instead of the React public pages, and that `/console/trust/default`
+  could call the public trust API but crashed when empty trust-center tables
+  serialized as `null` collections. Commits `09bdeb02`, `5f77c990`, and
+  `dd208ea7` preserve the public features and fix the integration: system nginx
+  now redirects `/trust/*`, `/intake`, and `/intake-status` into the
+  `/console` app, the unauthenticated `GET /api/v1/trust/{tenant}` route allows
+  only the public single-tenant lookup while keeping trust admin collections
+  authenticated, Settings links the Trust Center by tenant name, and the public
+  trust API/UI now tolerate empty subprocessors, certifications, FAQ, and
+  incidents as empty arrays. Local checks passed focused server auth/trust
+  coverage, `go test ./controlplane/internal/server -run
+  'TestTrustCenterPublicEmptyCollectionsEncodeAsArrays|TestPublicTrustCenterPathBypassesAuth|TestAdminTrustCenterCollectionRequiresAuth'
+  -count=1`, `npm --prefix ui test -- TrustCenter.test.tsx`,
+  `npm --prefix ui test -- TrustCenter.test.tsx Settings.test.tsx`,
+  `npm --prefix ui run lint`, `npm --prefix ui run build`, and
+  `git diff --check` aside from normal LF/CRLF warnings. Deploy runs
+  `27083933801`, `27084212964`, and `27084735628` succeeded; CI runs
+  `27083933804`, `27083933809`, `27084212958`, `27084212969`,
+  `27084735620`, and `27084735622` succeeded. Post-deploy checks showed
+  `nginx -t` successful with the public redirect locations installed,
+  `/healthz=200`, root `/` and `/console/` still at HTTP 200, and
+  `/api/v1/trust/default` returning HTTP 200 with `[]` collections. Browser
+  verification showed `/intake`, `/intake-status`, and `/trust/default`
+  redirecting to their `/console/...` routes, rendering expected content at
+  desktop and 390x844 mobile widths, zero app console warnings/errors, and no
+  document-level horizontal overflow. Host checks after the final deploy showed
+  Redis healthy, no Doris FE/BE services running, controlplane about 42 MiB of
+  1 GiB, console about 5.4 MiB of 256 MiB, and Redis about 7.9 MiB of 192 MiB.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
