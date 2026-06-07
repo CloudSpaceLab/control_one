@@ -27,7 +27,16 @@ REPO_ROOT    = Path(__file__).resolve().parent.parent
 UI_DIR       = REPO_ROOT / "ui"
 REMOTE_ROOT  = "/opt/control-one"
 
-EXCLUDES = {"node_modules", ".vite", "dist", ".cache", "coverage"}
+EXCLUDED_DIRS = {"node_modules", ".vite", "dist", ".cache"}
+
+
+def should_exclude_ui_file(path: Path, local_dir: Path) -> bool:
+    rel_parts = path.relative_to(local_dir).parts
+    if not rel_parts:
+        return False
+    if rel_parts[0] == "coverage":
+        return True
+    return any(part in EXCLUDED_DIRS for part in rel_parts)
 
 
 def log(msg: str) -> None:
@@ -70,7 +79,7 @@ class Remote:
     def put_tar(self, local_dir: Path, remote_dest: str) -> None:
         files = [
             f for f in local_dir.rglob("*")
-            if f.is_file() and not any(ex in f.parts for ex in EXCLUDES)
+            if f.is_file() and not should_exclude_ui_file(f, local_dir)
         ]
         log(f"Uploading {len(files)} file(s) from {local_dir.name}/ ...")
         tmp = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)

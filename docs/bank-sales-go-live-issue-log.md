@@ -2154,6 +2154,22 @@ a 390x844 production browser check confirmed the Compliance tab strip now wraps
 all five tabs visibly on mobile, with Compliance API calls returning 200 and
 zero browser console errors.
 
+2026-06-07 mobile onboarding follow-up: a deeper 390x844 browser sweep across
+Access, Audit, Data Security, Finacle, Misconduct, Onboard, Investigation IP
+detail, Search, Sessions, Webservers, Patch, SIEM, and Offline Bundle returned
+HTTP 200 navigations, no failed app API responses, and no browser console
+errors. The sweep found one real mobile UX defect: `/console/onboard` allowed
+the `Hypervisor / cloud account` mode tab to extend past the viewport. Commit
+`8f72e15a` wraps the onboarding mode tabs using the same responsive grid pattern
+as the other corrected tab strips. Local production build passed, and a
+console-only live deploy was completed after fixing `deploy/deploy_console.py`
+so it no longer excludes source paths such as `ui/src/components/coverage` while
+skipping generated `ui/coverage` output. Production retest at
+`/console/onboard?verify=8f72e15a-live` returned HTTP 200 with all three tab
+strips in bounds, no document horizontal overflow, no failed app API responses,
+no browser console errors, no Doris/analytic-store unavailable copy, and live
+post-deploy `/healthz=ok`.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
