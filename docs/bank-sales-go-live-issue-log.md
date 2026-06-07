@@ -729,6 +729,33 @@ Live audit evidence from 2026-06-06:
   document horizontal overflow, and no Doris/analytic-store unavailable copy.
   The only failed network entries on the entity page were Cloudflare RUM aborts,
   not Control One API failures.
+- 2026-06-07 mobile/small-mode console sweep follow-up: an authenticated live
+  desktop sweep across 23 high-risk console routes found all Control One app
+  API requests at HTTP 200, zero console warnings/errors, zero page errors, no
+  document horizontal overflow, and no visible Doris, analytic-store
+  unavailable, or `small-analytics-pending` copy. The paired 390x844 mobile
+  sweep found real clipped controls in long tab strips and the patch deployment
+  table: Settings, Network, Compliance, and Patch Management could keep
+  useful dense operational data, but needed internal horizontal scroll rather
+  than being clipped by the shell. Commit `70d21172` preserves the existing
+  features and makes shared tab lists and patch-operation tables scroll inside
+  their own controls. Local checks passed `npm --prefix ui run build`,
+  `npm --prefix ui run lint`, `npm --prefix ui test`, and `git diff --check`;
+  the attempted `npm --prefix ui test -- PatchManagement --runInBand` was not
+  useful because there is no PatchManagement test file and npm warns
+  `--runInBand` is not a recognized config. Deploy run `27079554690` and CI
+  runs `27079554696` and `27079554691` succeeded after rerunning the initially
+  flaky frontend-test job. Post-deploy host checks showed `/healthz=ok`,
+  `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Redis healthy, no Doris
+  containers in the hot path, controlplane memory about 91 MiB, console about
+  4 MiB, and Redis about 11 MiB. Live browser validation on
+  `/console/settings`, `/console/infrastructure/patch`,
+  `/console/security/network`, and `/console/compliance` at 390x844 showed no
+  document horizontal overflow, no unscrollable controls extending beyond the
+  viewport, no app API failures, zero console warnings/errors, zero page
+  errors, and no Doris/analytic-store unavailable copy; intentionally wide
+  tables and tab buttons are now reachable through their local horizontal
+  scrollers.
 - 2026-06-07 Users/RBAC follow-up: live browser validation on
   `/console/users?verify=2773897d` found duplicated effective role labels for
   default local users (`viewer viewer`, `operator operator`, `ciso ciso`,
