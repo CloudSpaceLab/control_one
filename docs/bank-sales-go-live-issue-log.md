@@ -890,6 +890,16 @@ Live audit evidence from 2026-06-06:
   instead of deleted UI. Next small-fleet implementation work is Redis
   hot-counter acceleration, broader SQLite event/FTS/timeline projections,
   backend-neutral analytics health copy, and restart/replay acceptance tests.
+  Commit `92792ce8` deployed successfully via run `27082159708`; CI runs
+  `27082159681` and `27082159700` also succeeded. Production Compose now
+  renders Redis with command `--maxmemory 128mb` and a 192 MiB container limit,
+  while the controlplane env includes `CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`.
+  Because the existing Redis container predated the compose hash, it was
+  recreated manually after deploy; live verification then showed Redis healthy
+  with `maxmemory=134217728`, `appendonly=yes`, and `allkeys-lru`, Redis memory
+  about 6.4 MiB of 192 MiB, controlplane about 60.7 MiB of 1 GiB, console about
+  4.3 MiB of 256 MiB, public and local `/healthz=ok`, no fresh Redis/SQLite/
+  analytic-store error logs after the restart window, and Doris FE/BE stopped.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
