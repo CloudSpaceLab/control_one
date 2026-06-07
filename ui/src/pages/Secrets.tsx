@@ -7,6 +7,7 @@ import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { useTenant } from '../providers/TenantProvider';
 import { CreateSecretGroupPayload } from '../lib/api';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -52,6 +53,10 @@ function isFailedStatus(status: string): boolean {
   return s === 'failed' || s === 'error';
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 interface GroupRow {
   id: string;
   name: string;
@@ -78,7 +83,11 @@ export function Secrets(): JSX.Element {
   const selectedTenant = currentTenantId ?? undefined;
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncingGroupId, setSyncingGroupId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<GroupRow | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useTenants();
   const {
@@ -116,6 +125,8 @@ export function Secrets(): JSX.Element {
     endpoint: '',
     sync_interval_seconds: 900,
   });
+  const syncInterval = Number(formData.sync_interval_seconds);
+  const syncIntervalValid = Number.isFinite(syncInterval) && syncInterval >= 60;
 
   const handleCreate = () => {
     setIsCreating(true);
@@ -145,14 +156,24 @@ export function Secrets(): JSX.Element {
       showError('Name is required');
       return;
     }
+    if (!selectedTenant) {
+      showError('Tenant is required');
+      return;
+    }
+    if (!syncIntervalValid) {
+      showError('Sync interval must be at least 60 seconds');
+      return;
+    }
 
     setSaving(true);
     resetFeedback();
+    setActionError(null);
 
     try {
       const payload: CreateSecretGroupPayload = {
         ...formData,
         tenant_id: selectedTenant,
+        sync_interval_seconds: syncInterval,
       };
       await api.createSecretGroup(payload);
       showSuccess('Secret group created successfully');
@@ -167,26 +188,35 @@ export function Secrets(): JSX.Element {
     }
   };
 
-  const handleDelete = async (groupId: string) => {
-    if (!confirm('Are you sure you want to delete this secret group?')) {
+  const handleDelete = async () => {
+    if (!deleteTarget || deleting) {
       return;
     }
 
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await api.deleteSecretGroup(groupId);
+      await api.deleteSecretGroup(deleteTarget.id);
       showToast('Secret group deleted successfully', 'success');
+      setActionError(null);
       reloadGroups();
-      if (selectedGroupId === groupId) {
+      if (selectedGroupId === deleteTarget.id) {
         setSelectedGroupId(null);
       }
+      setDeleteTarget(null);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to delete secret group';
+      const message = errorMessage(error, 'Failed to delete secret group');
+      setDeleteError(message);
       showToast(message, 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
   const handleSync = async (groupId: string) => {
-    setIsSyncing(true);
+    if (syncingGroupId) return;
+    setSyncingGroupId(groupId);
+    setActionError(null);
     try {
       await api.syncSecretGroup(groupId);
       showToast('Secret sync triggered successfully', 'success');
@@ -195,10 +225,12 @@ export function Secrets(): JSX.Element {
         reloadSyncs();
       }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to sync secrets';
+      const message = errorMessage(error, 'Failed to sync secrets');
+      const groupName = groups.find((group) => group.id === groupId)?.name ?? 'secret group';
+      setActionError(`Sync failed for ${groupName}: ${message}`);
       showToast(message, 'error');
     } finally {
-      setIsSyncing(false);
+      setSyncingGroupId(null);
     }
   };
 
@@ -255,9 +287,10 @@ export function Secrets(): JSX.Element {
               e.stopPropagation();
               handleSync(row.original.id);
             }}
-            disabled={isSyncing}
+            disabled={syncingGroupId !== null}
+            aria-label={`Sync secret group ${row.original.name}`}
           >
-            Sync
+            {syncingGroupId === row.original.id ? 'Syncing...' : 'Sync'}
           </Button>
           <Button
             variant="ghost"
@@ -265,8 +298,11 @@ export function Secrets(): JSX.Element {
             className="text-state-critical hover:text-state-critical"
             onClick={(e) => {
               e.stopPropagation();
-              handleDelete(row.original.id);
+              setDeleteTarget(row.original);
+              setDeleteError(null);
             }}
+            disabled={deleting}
+            aria-label={`Delete secret group ${row.original.name}`}
           >
             Delete
           </Button>
@@ -274,7 +310,7 @@ export function Secrets(): JSX.Element {
       ),
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [isSyncing]);
+  ], [syncingGroupId, deleting, selectedGroupId, groups]);
 
   const syncColumns = useMemo<ColumnDef<SyncRow>[]>(() => [
     {
@@ -310,7 +346,7 @@ export function Secrets(): JSX.Element {
         title="Secrets vault"
         description="Encrypted credentials. Tracked rotations. Audit-ready access logs."
         actions={
-          <Button variant="primary" size="md" onClick={handleCreate}>
+          <Button variant="primary" size="md" onClick={handleCreate} disabled={!selectedTenant}>
             Create Secret Group
           </Button>
         }
@@ -321,6 +357,11 @@ export function Secrets(): JSX.Element {
           <p className="text-sm text-state-critical">{groupsError}</p>
         </Panel>
       )}
+      {actionError ? (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Secret operation failed">
+          <p className="text-sm text-state-critical" role="alert">{actionError}</p>
+        </Panel>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <KpiTile label="TOTAL GROUPS" value={pagination.total} tone="brand" />
@@ -338,17 +379,19 @@ export function Secrets(): JSX.Element {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr,1fr]">
         <Panel padding="sm" tone="inset" eyebrow={`SECRET GROUPS / ${groups.length} of ${pagination.total}`} title="Groups">
-          <DataTable
-            columns={groupColumns}
-            rows={groups as unknown as GroupRow[]}
-            rowKey={(r) => r.id}
-            loading={groupsLoading}
-            compact
-            onRowClick={(r) => setSelectedGroupId(r.id)}
-            empty={
-              <EmptyState icon={<KeyRound />} title="No secret groups found" />
-            }
-          />
+          {!groupsError || groups.length > 0 ? (
+            <DataTable
+              columns={groupColumns}
+              rows={groups as unknown as GroupRow[]}
+              rowKey={(r) => r.id}
+              loading={groupsLoading}
+              compact
+              onRowClick={(r) => setSelectedGroupId(r.id)}
+              empty={
+                <EmptyState icon={<KeyRound />} title="No secret groups found" />
+              }
+            />
+          ) : null}
           <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
             <Button
               variant="secondary"
@@ -425,20 +468,22 @@ export function Secrets(): JSX.Element {
       {isCreating && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={handleCancel}
         >
           <div
             className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-secret-group-title"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border-subtle p-4">
-              <h2 className="font-display text-base font-semibold">Create Secret Group</h2>
-              <Button variant="ghost" size="sm" onClick={handleCancel}>x</Button>
+              <h2 id="create-secret-group-title" className="font-display text-base font-semibold">Create Secret Group</h2>
+              <Button variant="ghost" size="sm" onClick={handleCancel} aria-label="Close create secret group dialog">x</Button>
             </div>
 
             <form onSubmit={handleSubmit}>
               <div className="flex flex-col gap-3 p-4">
-                {formError && <p className="text-xs text-state-critical">{formError}</p>}
+                {formError && <p className="text-xs text-state-critical" role="alert">{formError}</p>}
                 {formSuccess && <p className="text-xs text-state-healthy">{formSuccess}</p>}
 
                 <div className="flex flex-col gap-1.5">
@@ -478,15 +523,18 @@ export function Secrets(): JSX.Element {
                   <Input
                     id="sync_interval"
                     type="number"
-                    value={formData.sync_interval_seconds}
+                    value={formData.sync_interval_seconds ?? ''}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        sync_interval_seconds: parseInt(e.target.value, 10) || 900,
+                        sync_interval_seconds: e.target.value === '' ? undefined : Number(e.target.value),
                       })
                     }
                     min={60}
                   />
+                  {!syncIntervalValid ? (
+                    <p className="text-xs text-state-critical">Sync interval must be at least 60 seconds.</p>
+                  ) : null}
                 </div>
               </div>
 
@@ -494,7 +542,7 @@ export function Secrets(): JSX.Element {
                 <Button variant="secondary" size="md" type="button" onClick={handleCancel} disabled={saving}>
                   Cancel
                 </Button>
-                <Button variant="primary" size="md" type="submit" disabled={saving}>
+                <Button variant="primary" size="md" type="submit" disabled={saving || !syncIntervalValid}>
                   {saving ? 'Creating...' : 'Create'}
                 </Button>
               </div>
@@ -502,6 +550,33 @@ export function Secrets(): JSX.Element {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title="Delete secret group?"
+        body={
+          deleteTarget
+            ? `Delete "${deleteTarget.name}" from ${deleteTarget.backend}. Existing agent manifests will stop receiving this group after the list refreshes.`
+            : undefined
+        }
+        confirmLabel={deleting ? 'Deleting...' : 'Delete'}
+        confirmDisabled={deleting}
+        cancelDisabled={deleting}
+        variant="danger"
+        onConfirm={handleDelete}
+        onCancel={() => {
+          if (!deleting) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        {deleteError ? (
+          <p className="text-sm text-state-critical" role="alert">
+            Secret group delete failed: {deleteError}
+          </p>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }

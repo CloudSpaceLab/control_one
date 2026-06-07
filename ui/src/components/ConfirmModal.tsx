@@ -15,6 +15,8 @@ interface ConfirmModalProps {
   body?: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  confirmDisabled?: boolean;
+  cancelDisabled?: boolean;
   variant?: 'default' | 'danger';
   children?: ReactNode;
   onConfirm: () => void;
@@ -27,13 +29,15 @@ export function ConfirmModal({
   body,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  confirmDisabled = false,
+  cancelDisabled = false,
   variant = 'default',
   children,
   onConfirm,
   onCancel,
 }: ConfirmModalProps): JSX.Element {
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel(); }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !cancelDisabled) onCancel(); }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
@@ -41,13 +45,14 @@ export function ConfirmModal({
         </DialogHeader>
         {children}
         <DialogFooter>
-          <Button type="button" variant="secondary" onClick={onCancel}>
+          <Button type="button" variant="secondary" onClick={onCancel} disabled={cancelDisabled}>
             {cancelLabel}
           </Button>
           <Button
             type="button"
             variant={variant === 'danger' ? 'danger' : 'primary'}
             onClick={onConfirm}
+            disabled={confirmDisabled}
           >
             {confirmLabel}
           </Button>

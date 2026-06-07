@@ -3160,3 +3160,80 @@ Projection gaps should return source/guardrail metadata with analytics-neutral
 copy, not Doris-specific errors or hidden UI affordances. The detailed design
 and implementation proof plan are now captured in
 `docs/small-fleet-analytics-architecture.md`.
+
+2026-06-07 Secrets vault and Redis hot-state follow-up: source review found
+several operator-risk issues in the Secrets console. Secret group delete used a
+native browser confirmation and a generic row action, delete and sync failures
+could disappear after a toast, sync state disabled every row without naming the
+active group, create allowed invalid/blank sync intervals to be silently coerced
+to 900 seconds, the create overlay lacked dialog semantics and could be
+accidentally dismissed by clicking the backdrop, and a secret-group load failure
+could still render the false `No secret groups found` empty state.
+
+The fix preserves the Secrets workflow while making failure and destructive
+states explicit. Secret group delete now uses the shared in-app confirmation
+modal with group/backend-specific copy, disabled in-flight actions, and a
+durable modal error on failure. Row Sync/Delete controls now have group-specific
+accessible names, failed syncs render a persistent `Secret operation failed`
+alert, invalid sync intervals below 60 seconds disable submit and make no API
+call, the create modal exposes dialog semantics and a named close action, and
+load failures no longer show the empty state. `ConfirmModal` now supports
+optional disabled confirm/cancel states so shared destructive flows can prevent
+double submits while work is in flight.
+
+Regression coverage proves the in-app delete modal avoids native `confirm`,
+successful delete refreshes the list, failed delete stays visible in the modal,
+row actions are named for assistive technology, failed sync remains visible
+after the toast, load failures do not show a false empty state, and invalid
+sync intervals do not call create. Local validation passed:
+`npm --prefix ui run test -- src/pages/Secrets.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check` (only the existing ESLintRC deprecation and CRLF warnings
+appeared).
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; the refreshed `/console/` and
+`/console/secrets` assets returned HTTP 200 with `Last-Modified: Sun, 07 Jun
+2026 22:44:02 GMT`.
+
+Live desktop browser verification on `/console/secrets` used real login and
+real tenant/API reads, then safe Playwright route interception for mutating
+Secrets calls so no production secret group was created, synced, or deleted.
+The deployed page showed `Failed to load secret groups` without
+`No secret groups found` under an intercepted list outage, rendered a synthetic
+`prod-vault-safe` row with named Sync/Delete controls, kept
+`Sync failed for prod-vault-safe: Service Unavailable` visible after an
+intercepted sync failure, opened an in-app `Delete secret group?` modal with
+group/backend-specific copy, kept `Secret group delete failed: Service
+Unavailable` visible after an intercepted delete failure, and blocked a 30
+second create interval with no create POST. A clean real Secrets reload had no
+alerts, no horizontal overflow, zero browser console warnings/errors, and the
+tenant-scoped real `/api/v1/secrets/groups?limit=5` read returned HTTP 200 with
+`data: []`.
+
+Mobile verification at 390x844 reloaded the real Secrets page, found no alerts
+or horizontal overflow, opened the create dialog, confirmed the invalid interval
+message and disabled submit state, and recorded zero page errors, request
+failures, console warnings/errors, or same-origin 4xx/5xx responses.
+
+During host checks, live Redis was found running the stale `allkeys-lru`
+eviction policy even though the repository default had already moved to
+`volatile-lru`. That could evict protected queue/control keys under memory
+pressure, so the live `deploy/docker-compose.yaml` was synced from the repo and
+only Redis was recreated with the existing persisted volume. Redis came back
+healthy with `maxmemory=128mb`, container memory `192MiB`, and
+`maxmemory-policy=volatile-lru`, protecting non-TTL queue/control keys while
+still allowing TTL-bound hot analytics keys to evict.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/secrets`
+returned HTTP 200, authenticated tenants and secret-groups API reads returned
+HTTP 200, Redis answered `PONG`, no Doris FE/BE containers were running under
+the OLAP profile, the controlplane container reported
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, memory stayed light at about Redis
+10.5 MiB / 192 MiB, console 6.9 MiB / 256 MiB, controlplane 121.7 MiB / 1 GiB,
+and ipq 8.8 MiB / 128 MiB, and strict recent log scans showed no console
+4xx/5xx, controlplane 5xx, panic, fatal, permission, database-lock,
+analytics-unavailable, Doris-unavailable, small-analytics unavailable, or
+Secrets 4xx/5xx matches.
