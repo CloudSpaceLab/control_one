@@ -57,6 +57,31 @@ The product rule is equally important: small mode must preserve useful features.
 If a projection is not implemented yet, that is backlog for the projection
 layer, not a reason to remove the UI route, API contract, or operator workflow.
 
+## Executive Recommendation
+
+For the demo and small-fleet product tier, Control One should run a
+**Postgres + Redis + SQLite/WAL analytic stack** and keep Doris completely off
+the hot path:
+
+```text
+Postgres = durable acceptance, replay, audit, workflow truth
+Redis    = bounded hot counters, queues, live freshness, short streams
+SQLite   = recent local evidence, timelines, search, rollups
+Doris    = explicit OLAP tier for high-volume customers only
+```
+
+This is the right trade for small fleets because it keeps the operational
+memory profile predictable while preserving bank-grade accuracy. The system can
+answer the demo's recent investigation and dashboard questions from an embedded
+read model, and the same accepted events remain replayable into Doris later if a
+customer outgrows the small profile.
+
+The practical rule for implementation is: **replace Doris-specific plumbing,
+not product capability.** Console routes, API contracts, AI tools, exports,
+network drilldowns, timelines, and citations should stay present. If small mode
+does not yet have a typed projection for a particular fact family, it should
+return source/guardrail metadata and track that as a projection gap.
+
 ## Why Not Doris By Default
 
 The current demo host has limited shared memory. Even with tuned heap and BE
@@ -120,6 +145,43 @@ The repository is already aligned with the first version of this architecture:
 This means the design is not speculative. The immediate task is to finish the
 small profile as a complete product path, not to remove the Doris path.
 
+## Integration Gaps To Close
+
+The repo already starts and queries a small SQLite read model, but several
+server paths still bind capability to a Doris client or Doris-specific status
+wording. These should be treated as integration work, not as justification to
+remove UI workflows.
+
+| Area | Current Shape | Small-Fleet Target |
+| --- | --- | --- |
+| event ingest status | `eventIngestService` still reports `DorisStatus` and `pending_doris` even when the active backend is small | introduce backend-neutral `analytics_status` semantics while keeping the existing database field compatible during migration |
+| network block targeting | `resolveAffectedNodesForIP` only checks `s.dorisClient.ListConnectionsForIP` | query the selected analytics backend so IP-scoped enforcement can use SQLite connection facts in small mode |
+| node documentation | `buildNodeDocumentation` only fills top connections when Doris is present | read top connections through the selected analytics backend and preserve the documentation workflow |
+| event-capture flow deltas | `event_capture.go` still computes connection deltas from Doris only | route flow deltas through the same connection query capability used by network and documentation views |
+| AI investigation tool naming | `doris_ingest_health` and related copy are still platform-Doris specific | keep the tool capability but expose it as analytics ingest health, with source labels for small vs OLAP |
+| health and copy | logs/errors mention "small analytics sqlite store unavailable" and "Doris writer" separately | expose one analytics health envelope with mode, source, lag, queue depth, quick-check, and replay status |
+
+The safe implementation move is to add a small internal analytics facade and
+then migrate each route to that facade:
+
+```go
+type AnalyticsReader interface {
+    ListConnectionsForIP(ctx context.Context, tenantID, ip string, since, until time.Time, limit int) ([]doris.ConnectionRow, error)
+    ListConnectionsForNode(ctx context.Context, tenantID, nodeID string, since, until time.Time, limit int, openOnly, externalOnly bool) ([]doris.ConnectionRow, error)
+    ListConnectionsForTenant(ctx context.Context, tenantID string, since, until time.Time, limit int, externalOnly bool) ([]doris.ConnectionRow, error)
+    ConnectionLifetime(ctx context.Context, tenantID, connID string) (*doris.ConnectionRow, error)
+    TopTalkers(ctx context.Context, tenantID string, since time.Time, limit int) ([]doris.TopTalker, error)
+    QueryEvents(ctx context.Context, p doris.EventQueryParams) ([]doris.EventRow, int, error)
+    BuildTimeline(ctx context.Context, p doris.TimelineBuildParams) ([]doris.TimelineItem, error)
+    Health(ctx context.Context) AnalyticsHealth
+}
+```
+
+This can initially reuse the Doris row types to keep the patch small. A later
+cleanup can move common analytic contracts out of the `doris` package once the
+small path is complete. That sequencing protects useful features and avoids a
+large cross-repo rename in the middle of demo stabilization.
+
 ## Small-Mode Contract
 
 Small mode has to be boring in the right places. It should have fewer moving
@@ -140,6 +202,25 @@ The most important implementation habit is to route all analytic reads through
 backend-neutral capability methods. Handlers should not branch directly on
 "Doris page" versus "SQLite page"; they should ask for connections, events,
 timelines, top talkers, or health and let the selected backend answer.
+
+## Feature Preservation Checklist
+
+Small mode is acceptable only if the operator experience remains complete. Each
+feature should be reviewed with this checklist before any route, button, API, or
+tool is hidden:
+
+- Can the workflow be answered from Postgres canonical state, Redis hot state,
+  SQLite recent evidence, or a combination of those sources?
+- If a fact family is not projected yet, can the workflow still show a bounded
+  empty state with source and guardrail metadata?
+- Does the response preserve tenant scoping, RBAC, citations, redaction policy,
+  and export shape?
+- Is the limitation about retention, scale, or projection maturity rather than
+  about the user's entitlement to the feature?
+- Would a later OLAP upgrade use the same API contract and UI workflow?
+
+Only the underlying analytic source should change between small and OLAP mode.
+The console should not become a smaller product merely because Doris is absent.
 
 ## Component Responsibilities
 
@@ -602,14 +683,17 @@ Expected runtime:
    `DORIS_ENABLED=true`, and the Compose `olap` profile are all selected.
 3. Route fleet health, connection list/detail, top talkers, event query, and
    timeline build through backend-neutral helpers.
-4. Use SQLite `process_connections` for cited connection facts and bounded IP,
+4. Move IP-scoped network targeting, node documentation top connections, and
+   event-capture flow deltas from direct `dorisClient` calls to the selected
+   analytics backend.
+5. Use SQLite `process_connections` for cited connection facts and bounded IP,
    node, connection, and correlation pivots.
-5. Add Redis sorted-set/hash acceleration for dashboard freshness, top talkers,
+6. Add Redis sorted-set/hash acceleration for dashboard freshness, top talkers,
    node freshness, and writer lag, with SQLite/Postgres fallback.
-6. Rename user-facing and AI health copy from `doris_status` to
+7. Rename user-facing and AI health copy from `doris_status` to
    backend-neutral analytics health while preserving the database field until a
    deliberate migration.
-7. Run live browser validation against dashboard, network, investigation,
+8. Run live browser validation against dashboard, network, investigation,
    timeline, and export flows with `source=small-analytics`.
 
 ### P1: Bank-Grade Local Projection
