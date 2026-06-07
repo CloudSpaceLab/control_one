@@ -70,6 +70,10 @@ function fmtTTL(s: number): string {
   return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
 }
 
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
 // Inline decision panel shown below the row when an operator clicks Approve/Deny
 interface DecisionPanelProps {
   request: AccessRequest;
@@ -81,12 +85,16 @@ interface DecisionPanelProps {
 function DecisionPanel({ request, intent, onConfirm, onCancel }: DecisionPanelProps) {
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const isApprove = intent === 'approve';
 
   const handleConfirm = async () => {
     setLoading(true);
+    setError(null);
     try {
       await onConfirm(reason);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not save the access decision'));
     } finally {
       setLoading(false);
     }
@@ -114,8 +122,16 @@ function DecisionPanel({ request, intent, onConfirm, onCancel }: DecisionPanelPr
           placeholder={isApprove ? 'e.g. confirmed with team lead' : 'e.g. no active incident'}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !loading) handleConfirm();
+          }}
+          disabled={loading}
         />
+        {error ? (
+          <p role="alert" className="text-sm text-state-critical">
+            Decision failed: {error}
+          </p>
+        ) : null}
       </div>
       <div className="mt-3 flex gap-2">
         <Button
@@ -126,7 +142,7 @@ function DecisionPanel({ request, intent, onConfirm, onCancel }: DecisionPanelPr
         >
           {loading ? 'Saving…' : isApprove ? 'Confirm approve' : 'Confirm deny'}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
       </div>
@@ -148,8 +164,10 @@ export function Access(): JSX.Element {
   // Command ACL state
   const [acls, setAcls] = useState<CommandACL[]>([]);
   const [aclsLoading, setAclsLoading] = useState(false);
+  const [aclError, setAclError] = useState<string | null>(null);
   const [aclsReloadToken, setAclsReloadToken] = useState(0);
   const [deleteAclId, setDeleteAclId] = useState<string | null>(null);
+  const [deletingAcl, setDeletingAcl] = useState(false);
   const [showCreateAcl, setShowCreateAcl] = useState(false);
   const [aclName, setAclName] = useState('');
   const [aclRole, setAclRole] = useState('operator');
@@ -215,8 +233,18 @@ export function Access(): JSX.Element {
     setAclsLoading(true);
     client
       .listCommandACLs({ tenantId })
-      .then((r) => { if (!cancelled) setAcls(r.data ?? []); })
-      .catch(() => { if (!cancelled) setAcls([]); })
+      .then((r) => {
+        if (!cancelled) {
+          setAcls(r.data ?? []);
+          setAclError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setAcls([]);
+          setAclError(errorMessage(err, 'Could not load command policy rules'));
+        }
+      })
       .finally(() => { if (!cancelled) setAclsLoading(false); });
     return () => { cancelled = true; };
   }, [client, tenantId, aclsReloadToken]);
@@ -224,6 +252,7 @@ export function Access(): JSX.Element {
   const handleCreateAcl = async () => {
     if (!aclPattern.trim() || !aclName.trim() || !tenantId) return;
     setCreatingAcl(true);
+    setAclError(null);
     try {
       await client.createCommandACL({
         tenant_id: tenantId,
@@ -237,16 +266,26 @@ export function Access(): JSX.Element {
       setAclPattern('');
       setShowCreateAcl(false);
       setAclsReloadToken((n) => n + 1);
+    } catch (err) {
+      setAclError(errorMessage(err, 'Could not create command policy rule'));
     } finally {
       setCreatingAcl(false);
     }
   };
 
   const handleDeleteAcl = async () => {
-    if (!deleteAclId) return;
-    await client.deleteCommandACL(deleteAclId);
-    setDeleteAclId(null);
-    setAclsReloadToken((n) => n + 1);
+    if (!deleteAclId || deletingAcl) return;
+    setDeletingAcl(true);
+    setAclError(null);
+    try {
+      await client.deleteCommandACL(deleteAclId);
+      setDeleteAclId(null);
+      setAclsReloadToken((n) => n + 1);
+    } catch (err) {
+      setAclError(errorMessage(err, 'Could not delete command policy rule'));
+    } finally {
+      setDeletingAcl(false);
+    }
   };
 
   const columns: ColumnDef<AccessRequest>[] = [
@@ -620,19 +659,26 @@ export function Access(): JSX.Element {
                 </div>
               </div>
             )}
-            <DataTable
-              columns={aclColumns}
-              rows={acls}
-              rowKey={(r) => r.id}
-              loading={aclsLoading}
-              empty={
-                <EmptyState
-                  icon={<ShieldCheck />}
-                  title="No command policy rules"
-                  description="Create allow/deny rules to control which shell commands agents may execute."
-                />
-              }
-            />
+            {aclError ? (
+              <p role="alert" className="mb-3 text-sm text-state-critical">
+                Command policy unavailable: {aclError}
+              </p>
+            ) : null}
+            {!aclError || acls.length > 0 ? (
+              <DataTable
+                columns={aclColumns}
+                rows={acls}
+                rowKey={(r) => r.id}
+                loading={aclsLoading}
+                empty={
+                  <EmptyState
+                    icon={<ShieldCheck />}
+                    title="No command policy rules"
+                    description="Create allow/deny rules to control which shell commands agents may execute."
+                  />
+                }
+              />
+            ) : null}
           </Panel>
         </TabsContent>
       </Tabs>
@@ -641,11 +687,19 @@ export function Access(): JSX.Element {
         open={deleteAclId !== null}
         title="Delete command ACL rule?"
         body="This policy will stop being enforced immediately."
-        confirmLabel="Delete"
+        confirmLabel={deletingAcl ? 'Deleting...' : 'Delete'}
         variant="danger"
         onConfirm={handleDeleteAcl}
-        onCancel={() => setDeleteAclId(null)}
-      />
+        onCancel={() => {
+          if (!deletingAcl) setDeleteAclId(null);
+        }}
+      >
+        {aclError && deleteAclId ? (
+          <p role="alert" className="text-sm text-state-critical">
+            Command policy unavailable: {aclError}
+          </p>
+        ) : null}
+      </ConfirmModal>
 
       <Panel padding="md" eyebrow="HOW IT WORKS" title="JIT access workflow">
         <ol className="flex flex-col gap-2 text-sm text-text-secondary">
@@ -685,6 +739,7 @@ function RequestForm({
   const [customTTL, setCustomTTL] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     setForm((f) => ({ ...f, tenant_id: tenantId }));
@@ -693,24 +748,31 @@ function RequestForm({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const requestedAccess = form.requested_access.trim();
-    if (!tenantId || !requestedAccess) return;
+    const ttlSeconds = Number(form.ttl_seconds ?? 1800);
+    if (!tenantId || !requestedAccess || !Number.isFinite(ttlSeconds) || ttlSeconds < 60) return;
     setSubmitting(true);
+    setFormError(null);
     try {
       await client.createAccessRequest({
         ...form,
         tenant_id: tenantId,
         requested_access: requestedAccess,
         justification: form.justification?.trim() || undefined,
+        ttl_seconds: ttlSeconds,
       });
       setForm((f) => ({ ...f, tenant_id: tenantId, requested_access: '', justification: '' }));
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
       onCreated();
+    } catch (err) {
+      setFormError(errorMessage(err, 'Could not submit the access request'));
     } finally {
       setSubmitting(false);
     }
   };
-  const canRequestAccess = Boolean(tenantId && form.requested_access.trim() && !submitting);
+  const ttlSeconds = Number(form.ttl_seconds ?? 1800);
+  const ttlValid = Number.isFinite(ttlSeconds) && ttlSeconds >= 60;
+  const canRequestAccess = Boolean(tenantId && form.requested_access.trim() && ttlValid && !submitting);
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
@@ -789,9 +851,12 @@ function RequestForm({
             </div>
           )}
           <span className="text-xs text-text-muted">
-            Access expires after {fmtTTL(form.ttl_seconds ?? 1800)}
+            Access expires after {ttlValid ? fmtTTL(ttlSeconds) : 'a valid duration'}
           </span>
         </div>
+        {!ttlValid ? (
+          <p className="text-xs text-state-critical">Duration must be at least 60 seconds.</p>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-3">
@@ -808,6 +873,11 @@ function RequestForm({
           </span>
         )}
       </div>
+      {formError ? (
+        <p role="alert" className="text-sm text-state-critical">
+          Access request failed: {formError}
+        </p>
+      ) : null}
     </form>
   );
 }

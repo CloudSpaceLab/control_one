@@ -3080,3 +3080,65 @@ console 4.5 MiB / 256 MiB, controlplane 78.4 MiB / 1 GiB, Redis 5.6 MiB /
 192 MiB, and ipq 4.8 MiB / 128 MiB; and strict recent console/controlplane log
 scans showed no actual nginx 4xx/5xx, controlplane 4xx/5xx, panic, fatal,
 permission, database-lock, analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Access/JIT and command-policy follow-up: source review found
+operator-risk defects in the privileged-access console. JIT request creation
+failures could leave the form with no visible error, access approval/denial
+failures could disappear inside the inline decision panel, command ACL load
+failures were silently converted into the empty state, and command ACL
+create/delete failures were not reliably visible. Custom JIT TTL values below
+the server's 60-second minimum could also be entered before submit.
+
+The fix preserves the existing Access workflow while making failure modes
+explicit. JIT request failures now render `Access request failed: ...` while
+preserving the requested access fields. The approve/deny panel now catches
+decision failures, keeps the panel open, disables controls only during the
+in-flight request, and renders `Decision failed: ...`. Command policy load
+failures now render `Command policy unavailable: ...` instead of the false
+`No command policy rules` empty state; create/delete failures remain visible,
+and failed deletes keep the confirmation modal open. Custom TTL submit is
+disabled until the value is finite and at least 60 seconds.
+
+Regression coverage proves failed JIT request submission preserves the form,
+invalid custom TTLs do not call the API, failed approve decisions keep a visible
+error panel, command ACL load failures do not show a false empty state, command
+policy delete buttons are named for assistive technology, and command ACL
+creation still uses the canonical role API list. Local validation passed:
+`npm --prefix ui run test -- src/pages/Access.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check` (only existing ESLintRC and CRLF warnings appeared).
+
+The console-only production deploy initially exposed an operational reliability
+gap: Paramiko's fixed 20-second SSH banner/auth timeout failed on the live host,
+while OpenSSH succeeded after a slower handshake. `deploy/deploy_console.py`
+now uses 60-second SSH handshake/auth timeouts and three connection attempts;
+`python -m py_compile deploy/deploy_console.py` passed. The same deploy command
+then completed successfully and rebuilt/restarted only the console container:
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+
+Live browser verification on `/console/access` used safe Playwright route
+interception for mutating Access and command-policy calls, so no production JIT
+request or command ACL was created, approved, or deleted. The deployed page
+rendered a synthetic pending `root@prod-db-01` request; an intercepted failed
+JIT POST showed `Access request failed: Service Unavailable` and preserved the
+form; an intercepted failed approve kept the decision panel open with
+`Decision failed: Service Unavailable`; an intercepted command ACL load failure
+showed `Command policy unavailable: Service Unavailable` and did not show
+`No command policy rules`; a synthetic ACL row rendered with one accessible
+delete button; intercepted create/delete failures showed command-policy errors,
+and the failed delete kept the confirmation modal open. A final clean Access
+tab loaded with the heading and command-policy tab visible, no page alerts, and
+zero browser console warnings/errors.
+
+Real read-only API checks from the authenticated browser session returned HTTP
+200 for tenants, tenant-scoped `/api/v1/access-requests`, and tenant-scoped
+`/api/v1/command-acls`. Post-deploy host evidence stayed healthy: origin
+`/healthz=ok`, `/console/` returned HTTP 200 with the refreshed asset timestamp,
+no Doris FE/BE containers were running under the OLAP profile,
+`ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, memory stayed light at about
+console 7.1 MiB / 256 MiB, controlplane 199.7 MiB / 1 GiB, Redis 6.7 MiB /
+192 MiB, and ipq 4.8 MiB / 128 MiB, host memory had about 3.5 GiB available,
+and strict recent console/controlplane log scans showed no actual nginx 4xx/5xx,
+controlplane 5xx, panic, fatal, permission, database-lock,
+analytics-unavailable, or Doris-unavailable matches.
