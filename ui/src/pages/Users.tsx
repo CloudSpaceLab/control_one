@@ -36,7 +36,8 @@ export function Users(): JSX.Element {
   const [isEditingRoles, setIsEditingRoles] = useState(false);
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
-  const [isBulkAssigning, setIsBulkAssigning] = useState(false);
+  const [isBulkRoleModalOpen, setIsBulkRoleModalOpen] = useState(false);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkAssignRoles, setBulkAssignRoles] = useState<string[]>([]);
 
   const {
@@ -152,16 +153,17 @@ export function Users(): JSX.Element {
       return;
     }
 
-    setIsBulkAssigning(true);
+    setBulkAssigning(true);
     resetFeedback();
 
     try {
       const userIds = Array.from(selectedUserIds);
       const promises = userIds.map((userId) => api.updateUserRoles(userId, { roles: bulkAssignRoles }));
       await Promise.all(promises);
-      showSuccess(`Successfully assigned roles to ${userIds.length} user(s)`);
+      showSuccess(`Successfully replaced roles for ${userIds.length} user(s)`);
       setSelectedUserIds(new Set());
       setBulkAssignRoles([]);
+      setIsBulkRoleModalOpen(false);
       reloadUsers();
       reloadRoles();
     } catch (error: unknown) {
@@ -169,7 +171,7 @@ export function Users(): JSX.Element {
       showError(message);
       showToast(message, 'error');
     } finally {
-      setIsBulkAssigning(false);
+      setBulkAssigning(false);
     }
   };
 
@@ -264,10 +266,10 @@ export function Users(): JSX.Element {
                 <Button
                   variant="primary"
                   size="md"
-                  onClick={() => setIsBulkAssigning(true)}
-                  disabled={isBulkAssigning}
+                  onClick={() => setIsBulkRoleModalOpen(true)}
+                  disabled={bulkAssigning}
                 >
-                  Bulk Assign Roles
+                  Bulk Replace Roles
                 </Button>
               </>
             )}
@@ -286,6 +288,16 @@ export function Users(): JSX.Element {
       {rolesError && (
         <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load roles">
           <p className="text-sm text-state-critical">{rolesError}</p>
+        </Panel>
+      )}
+      {!isEditingRoles && formError && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Role update failed">
+          <p className="text-sm text-state-critical">{formError}</p>
+        </Panel>
+      )}
+      {!isEditingRoles && formSuccess && (
+        <Panel padding="md" tone="inset" toneAccent="healthy" eyebrow="STATUS" title="Role update complete">
+          <p className="text-sm text-state-healthy">{formSuccess}</p>
         </Panel>
       )}
 
@@ -411,13 +423,18 @@ export function Users(): JSX.Element {
                     </label>
                   ))}
                 </div>
+                {selectedRoles.length === 0 && (
+                  <p className="text-xs text-state-warning">
+                    At least one role is required for console access.
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">
                 <Button variant="secondary" size="md" type="button" onClick={handleCancelEdit} disabled={updating}>
                   Cancel
                 </Button>
-                <Button variant="primary" size="md" type="submit" disabled={updating}>
+                <Button variant="primary" size="md" type="submit" disabled={updating || selectedRoles.length === 0}>
                   {updating ? 'Saving...' : 'Save Changes'}
                 </Button>
               </div>
@@ -426,25 +443,27 @@ export function Users(): JSX.Element {
         </div>
       )}
 
-      {isBulkAssigning && (
+      {isBulkRoleModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setIsBulkAssigning(false)}
+          onClick={() => {
+            if (!bulkAssigning) setIsBulkRoleModalOpen(false);
+          }}
         >
           <div
             className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border-subtle p-4">
-              <h2 className="font-display text-base font-semibold">Bulk Assign Roles</h2>
-              <Button variant="ghost" size="sm" onClick={() => setIsBulkAssigning(false)}>
+              <h2 className="font-display text-base font-semibold">Bulk Replace Roles</h2>
+              <Button variant="ghost" size="sm" onClick={() => setIsBulkRoleModalOpen(false)} disabled={bulkAssigning}>
                 ×
               </Button>
             </div>
 
             <div className="flex flex-col gap-3 p-4">
               <p className="text-sm text-text-secondary">
-                Assign roles to {selectedUserIds.size} selected user(s):
+                This replaces existing roles for {selectedUserIds.size} selected user(s):
               </p>
               <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
                 {roles.map((role) => (
@@ -481,10 +500,10 @@ export function Users(): JSX.Element {
                 size="md"
                 type="button"
                 onClick={() => {
-                  setIsBulkAssigning(false);
+                  setIsBulkRoleModalOpen(false);
                   setBulkAssignRoles([]);
                 }}
-                disabled={isBulkAssigning}
+                disabled={bulkAssigning}
               >
                 Cancel
               </Button>
@@ -493,9 +512,9 @@ export function Users(): JSX.Element {
                 size="md"
                 type="button"
                 onClick={handleBulkAssignRoles}
-                disabled={isBulkAssigning || bulkAssignRoles.length === 0}
+                disabled={bulkAssigning || bulkAssignRoles.length === 0}
               >
-                {isBulkAssigning ? 'Assigning...' : `Assign to ${selectedUserIds.size} User(s)`}
+                {bulkAssigning ? 'Replacing...' : `Replace roles for ${selectedUserIds.size} User(s)`}
               </Button>
             </div>
           </div>

@@ -2973,3 +2973,54 @@ running under the OLAP profile, memory stayed light at about console
 ipq 4.8 MiB / 128 MiB, and a strict 20-minute console/controlplane log scan
 showed no actual nginx 4xx/5xx, controlplane 5xx, panic, fatal, permission,
 database-lock, analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Users/RBAC replacement-flow follow-up: source review found a real
+role-management UX and state bug in the Users console. The bulk action was
+labelled "Bulk Assign Roles", but the existing API/storage contract replaces
+the full role set for each selected user. The same boolean also controlled both
+modal visibility and the in-flight request, so the confirmation button was
+disabled as soon as the modal opened. The single-user editor also let operators
+uncheck every role and press Save, although the server rejects empty role sets.
+
+The fix preserves the feature and makes the contract explicit. The bulk action
+is now "Bulk Replace Roles"; modal-open state is separate from request-in-flight
+state; the success path clears selection, closes the modal, reloads users and
+roles, and shows page-level confirmation; and single-user role edits now warn
+that at least one role is required and disable Save until a role is selected.
+
+Regression coverage proves empty single-user role saves are blocked without an
+API call and bulk replacement calls `updateUserRoles(userId, { roles: [...] })`
+once per selected user. Local validation passed:
+`npm --prefix ui run test -- src/pages/Users.test.tsx`,
+`go test ./controlplane/internal/server -run 'TestUserAndRoleManagement|TestRequireTenantAccess' -count=1`,
+`go test ./controlplane/internal/storage -run 'TestIsBuiltInRoleName' -count=1`,
+`npm --prefix ui run build`, `npm --prefix ui run lint`, and
+`git diff --check` (only existing lint deprecation and CRLF warnings).
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+Post-deploy API integrity showed 6 users, 5 unique built-in roles, no duplicate
+user-role rows, 28 permissions, admin carrying all 28 permissions, and
+unauthenticated `/api/v1/users` returning HTTP 401.
+
+Live browser verification opened `/console/users` and `/console/roles` on the
+deployed site. Users rendered 6 users and 5 available roles; empty single-user
+role save was blocked; bulk replacement showed replacement copy, enabled only
+after a role was selected, sent one bearer-authenticated
+`PATCH /api/v1/users/{id}` with body `{"roles":["operator"]}`, closed the modal,
+and showed `Successfully replaced roles for 1 user(s)`. That PATCH was fulfilled
+by Playwright route interception, so no production user roles were changed. The
+Roles page rendered 5 total roles, 5 built-in roles, 0 custom roles, and no
+delete buttons for built-ins. Both pages had no document-level horizontal
+overflow, browser console warnings/errors, unexpected request failures, or
+same-origin app 4xx/5xx responses.
+
+Host evidence remained healthy: `/healthz=ok`, small analytics config still
+reports `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, no Doris FE/BE containers were
+running under the OLAP profile, memory stayed light at about console
+5.8 MiB / 256 MiB, controlplane 73.4 MiB / 1 GiB, Redis 5.6 MiB / 192 MiB, and
+ipq 4.8 MiB / 128 MiB, and strict recent console/controlplane log scans showed
+no actual nginx 4xx/5xx, controlplane 5xx, panic, fatal, permission,
+database-lock, analytics-unavailable, or Doris-unavailable matches.
