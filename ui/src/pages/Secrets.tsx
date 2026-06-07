@@ -24,7 +24,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 
 function formatDate(value?: string): string {
   if (!value) {
-    return '—';
+    return '-';
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -35,11 +35,21 @@ function formatDate(value?: string): string {
 
 function syncStatusTone(status: string): StateTone {
   const s = status.toLowerCase();
-  if (s === 'success' || s === 'succeeded' || s === 'ok') return 'healthy';
+  if (s === 'success' || s === 'succeeded' || s === 'synced' || s === 'ok') return 'healthy';
   if (s === 'failed' || s === 'error') return 'critical';
   if (s === 'pending' || s === 'queued') return 'warning';
   if (s === 'running' || s === 'syncing') return 'info';
   return 'unknown';
+}
+
+function isSyncedStatus(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === 'success' || s === 'succeeded' || s === 'synced' || s === 'ok';
+}
+
+function isFailedStatus(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === 'failed' || s === 'error';
 }
 
 interface GroupRow {
@@ -275,7 +285,7 @@ export function Secrets(): JSX.Element {
     {
       accessorKey: 'secret_version',
       header: 'Version',
-      cell: ({ getValue }) => <span className="font-mono text-xs">{(getValue() as string) || '—'}</span>,
+      cell: ({ getValue }) => <span className="font-mono text-xs">{(getValue() as string) || '-'}</span>,
     },
     {
       accessorKey: 'sync_status',
@@ -296,7 +306,7 @@ export function Secrets(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="POSTURE · SECRETS"
+        eyebrow="POSTURE / SECRETS"
         title="Secrets vault"
         description="Encrypted credentials. Tracked rotations. Audit-ready access logs."
         actions={
@@ -316,18 +326,18 @@ export function Secrets(): JSX.Element {
         <KpiTile label="TOTAL GROUPS" value={pagination.total} tone="brand" />
         <KpiTile
           label="SYNCED"
-          value={groups.filter((g) => g.sync_status === 'success').length}
+          value={groups.filter((g) => isSyncedStatus(g.sync_status)).length}
           tone="healthy"
         />
         <KpiTile
           label="FAILED"
-          value={groups.filter((g) => g.sync_status === 'failed').length}
+          value={groups.filter((g) => isFailedStatus(g.sync_status)).length}
           tone="critical"
         />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr,1fr]">
-        <Panel padding="sm" tone="inset" eyebrow={`SECRET GROUPS · ${groups.length} of ${pagination.total}`} title="Groups">
+        <Panel padding="sm" tone="inset" eyebrow={`SECRET GROUPS / ${groups.length} of ${pagination.total}`} title="Groups">
           <DataTable
             columns={groupColumns}
             rows={groups as unknown as GroupRow[]}
@@ -380,7 +390,7 @@ export function Secrets(): JSX.Element {
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Endpoint</dt>
-                <dd className="font-mono text-xs">{selectedGroup.endpoint || '—'}</dd>
+                <dd className="font-mono text-xs">{selectedGroup.endpoint || '-'}</dd>
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Sync Status</dt>
@@ -423,7 +433,7 @@ export function Secrets(): JSX.Element {
           >
             <div className="flex items-center justify-between border-b border-border-subtle p-4">
               <h2 className="font-display text-base font-semibold">Create Secret Group</h2>
-              <Button variant="ghost" size="sm" onClick={handleCancel}>×</Button>
+              <Button variant="ghost" size="sm" onClick={handleCancel}>x</Button>
             </div>
 
             <form onSubmit={handleSubmit}>

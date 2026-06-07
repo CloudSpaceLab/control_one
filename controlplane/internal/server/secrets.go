@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -223,8 +225,14 @@ func (s *Server) handleSecretGroupResource(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		s.handleGetSecretGroup(w, r, groupID, principal)
+	case http.MethodDelete:
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
+			return
+		}
+		s.handleDeleteSecretGroup(w, r, groupID, principal)
 	default:
-		w.Header().Set("Allow", http.MethodGet)
+		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodDelete}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
@@ -251,6 +259,43 @@ func (s *Server) handleGetSecretGroup(w http.ResponseWriter, r *http.Request, gr
 
 	resp := newSecretGroupResponse(*group)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleDeleteSecretGroup(w http.ResponseWriter, r *http.Request, groupID uuid.UUID, principal *auth.Principal) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	group, err := s.store.GetSecretGroup(r.Context(), groupID)
+	if err != nil {
+		s.logger.Error("get secret group for delete", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if group == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, group.TenantID, roleAdmin) {
+		return
+	}
+
+	if err := s.store.DeleteSecretGroup(r.Context(), groupID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Error("delete secret group", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	s.recordAudit(r.Context(), principal, group.TenantID, "secret_group.deleted", "secret_group", groupID.String(), map[string]any{
+		"name":    group.Name,
+		"backend": group.Backend,
+	})
 }
 
 func (s *Server) handleListSecretSyncs(w http.ResponseWriter, r *http.Request, groupID uuid.UUID) {

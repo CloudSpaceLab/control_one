@@ -982,6 +982,62 @@ func TestJobDetailIncludesComplianceResults(t *testing.T) {
 	}
 }
 
+func TestSecretGroupDeleteRouteRemovesGroupAndAudits(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "secrets-admin"),
+	}
+
+	tenantID := uuid.New()
+	groupID := uuid.New()
+	now := time.Unix(1700001100, 0).UTC()
+	store := &fakeStore{
+		secretGroups: map[uuid.UUID]*storage.SecretGroup{
+			groupID: {
+				ID:         groupID,
+				TenantID:   tenantID,
+				Name:       "prod-vault",
+				Backend:    "vault",
+				SyncStatus: "synced",
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			},
+		},
+	}
+	srv := New(logger, cfg, store, &stubQueue{})
+	srv.auditAsync = false
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/secrets/groups/"+groupID.String(), nil)
+	req.Header.Set("Authorization", "Bearer secrets-admin")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, ok := store.secretGroups[groupID]; ok {
+		t.Fatalf("secret group was not deleted")
+	}
+	if len(store.auditLogs) != 1 {
+		t.Fatalf("expected one audit log, got %d", len(store.auditLogs))
+	}
+	entry := store.auditLogs[0]
+	if entry.Action != "secret_group.deleted" || entry.ResourceType != "secret_group" {
+		t.Fatalf("unexpected audit log: %+v", entry)
+	}
+	if entry.TenantID != tenantID {
+		t.Fatalf("expected tenant %s got %s", tenantID, entry.TenantID)
+	}
+	if entry.ResourceID == nil || *entry.ResourceID != groupID.String() {
+		t.Fatalf("expected resource id %s got %+v", groupID, entry.ResourceID)
+	}
+	if entry.Metadata["name"] != "prod-vault" || entry.Metadata["backend"] != "vault" {
+		t.Fatalf("expected secret group metadata in audit log, got %+v", entry.Metadata)
+	}
+}
+
 func TestUserAndRoleEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
@@ -2405,6 +2461,7 @@ type fakeStore struct {
 	actionReceipts         map[uuid.UUID][]storage.ActionReceipt
 	actionPlanApprovals    map[uuid.UUID][]storage.ActionPlanApproval
 	patchApprovals         map[uuid.UUID]storage.PatchApproval
+	secretGroups           map[uuid.UUID]*storage.SecretGroup
 	circuitBreakers        map[string]storage.RemediationCircuitBreakerState // key = tenant|rule
 	remediationFailRates   map[string]storage.RemediationFailRate            // key = tenant|rule, test-seeded
 	nodeCertHistory        map[uuid.UUID][]storage.NodeCertHistory           // Worktree B cert rotation history
@@ -3569,15 +3626,88 @@ func (f *fakeStore) DeleteExpiredTelemetry(_ context.Context, tenantID uuid.UUID
 }
 
 func (f *fakeStore) ListSecretGroups(_ context.Context, tenantID uuid.UUID, limit, offset int) ([]storage.SecretGroup, int, error) {
-	return nil, 0, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var groups []storage.SecretGroup
+	for _, group := range f.secretGroups {
+		if tenantID != uuid.Nil && group.TenantID != tenantID {
+			continue
+		}
+		groups = append(groups, *group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return strings.Compare(groups[i].Name, groups[j].Name) < 0
+	})
+	total := len(groups)
+	if offset > len(groups) {
+		return []storage.SecretGroup{}, total, nil
+	}
+	if offset > 0 {
+		groups = groups[offset:]
+	}
+	if limit > 0 && len(groups) > limit {
+		groups = groups[:limit]
+	}
+	return groups, total, nil
 }
 
 func (f *fakeStore) GetSecretGroup(_ context.Context, id uuid.UUID) (*storage.SecretGroup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.secretGroups == nil {
+		return nil, nil
+	}
+	if group, ok := f.secretGroups[id]; ok {
+		copy := *group
+		return &copy, nil
+	}
 	return nil, nil
 }
 
 func (f *fakeStore) CreateSecretGroup(_ context.Context, params storage.CreateSecretGroupParams) (*storage.SecretGroup, error) {
-	return nil, errors.New("not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if strings.TrimSpace(params.Name) == "" {
+		return nil, errors.New("name is required")
+	}
+	if strings.TrimSpace(params.Backend) == "" {
+		return nil, errors.New("backend is required")
+	}
+	if f.secretGroups == nil {
+		f.secretGroups = map[uuid.UUID]*storage.SecretGroup{}
+	}
+	now := time.Now().UTC()
+	group := &storage.SecretGroup{
+		ID:         uuid.New(),
+		TenantID:   params.TenantID,
+		Name:       strings.TrimSpace(params.Name),
+		Backend:    strings.TrimSpace(params.Backend),
+		SyncStatus: "pending",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if params.Endpoint != nil {
+		group.Endpoint = sql.NullString{String: strings.TrimSpace(*params.Endpoint), Valid: true}
+	}
+	if params.SyncIntervalSeconds != nil {
+		group.SyncIntervalSeconds = sql.NullInt64{Int64: int64(*params.SyncIntervalSeconds), Valid: true}
+	}
+	f.secretGroups[group.ID] = group
+	copy := *group
+	return &copy, nil
+}
+
+func (f *fakeStore) DeleteSecretGroup(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.secretGroups == nil {
+		return sql.ErrNoRows
+	}
+	if _, ok := f.secretGroups[id]; !ok {
+		return sql.ErrNoRows
+	}
+	delete(f.secretGroups, id)
+	return nil
 }
 
 func (f *fakeStore) ListSecretSyncs(_ context.Context, groupID uuid.UUID, limit, offset int) ([]storage.SecretSync, int, error) {

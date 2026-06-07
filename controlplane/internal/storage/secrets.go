@@ -220,6 +220,29 @@ func (s *Store) CreateSecretGroup(ctx context.Context, params CreateSecretGroupP
 	return &group, nil
 }
 
+// DeleteSecretGroup removes a secret group and cascades its sync metadata.
+func (s *Store) DeleteSecretGroup(ctx context.Context, groupID uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if groupID == uuid.Nil {
+		return errors.New("group id is required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `DELETE FROM secret_groups WHERE id = $1`, groupID)
+	if err != nil {
+		return fmt.Errorf("delete secret group: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete secret group rows affected: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpdateSecretGroupSyncStatus updates the sync status and last synced time.
 func (s *Store) UpdateSecretGroupSyncStatus(ctx context.Context, groupID uuid.UUID, status string, syncErr error) error {
 	if s.db == nil {
