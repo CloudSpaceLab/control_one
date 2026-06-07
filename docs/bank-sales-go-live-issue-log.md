@@ -816,6 +816,31 @@ Live audit evidence from 2026-06-06:
   fields (`Scan ID`, `Node ID`, `Rule set`), all Control One app API requests
   at HTTP 200, and zero console warnings/errors. No state-changing live job was
   submitted during the final UI check.
+- 2026-06-07 Secrets vault follow-up: code review and live read-only
+  validation on `/console/secrets?verify=secrets-pre-delete-fix` found the
+  Secrets UI already exposed a `Delete` action, but the server only allowed
+  `GET /api/v1/secrets/groups/{id}`, so the existing feature would fail with
+  HTTP 405 when a live group existed. The same surface used backend
+  `synced`/`error` statuses while the UI counted only `success`/`failed`, so a
+  healthy synced group could appear unknown and keep the synced KPI at zero.
+  Commit `8e63da17` preserves the feature by adding tenant/admin-checked
+  `DELETE /api/v1/secrets/groups/{id}`, storage deletion with existing
+  `secret_syncs` cascade, and `secret_group.deleted` audit evidence; the UI now
+  treats `synced` as healthy and `error` as failed, and the touched Secrets copy
+  uses ASCII-safe separators/fallbacks. Local checks passed focused server
+  delete/audit tests, Go vet on the touched server/storage packages,
+  `npm --prefix ui test -- Secrets.test.tsx`, `npm --prefix ui run lint`,
+  `npm --prefix ui run build`, and
+  `git diff --check` aside from the repository's normal LF/CRLF notice. Deploy
+  run `27080898644` and CI runs `27080898659`/`27080898634` succeeded.
+  Post-deploy host checks showed console/controlplane recreated, Redis healthy,
+  controlplane about 60 MiB, console about 4.5 MiB, `/healthz=ok`, and no Doris
+  containers in the small profile. Authenticated browser verification on
+  `/console/secrets?verify=8e63da17` showed ASCII-safe Secrets headings, the
+  create modal with the ASCII `x` close control and expected fields,
+  `/api/v1/secrets/groups` returning HTTP 200, and zero console
+  warnings/errors. No live secret group was created or deleted during final
+  verification.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
