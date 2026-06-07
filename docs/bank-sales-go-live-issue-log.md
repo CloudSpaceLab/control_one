@@ -984,6 +984,35 @@ Live audit evidence from 2026-06-06:
   document-level horizontal overflow. Host checks after the final deploy showed
   Redis healthy, no Doris FE/BE services running, controlplane about 42 MiB of
   1 GiB, console about 5.4 MiB of 256 MiB, and Redis about 7.9 MiB of 192 MiB.
+- 2026-06-07 authenticated Control Room first-load follow-up: live browser
+  verification found an initial tenant-loading race after a cold login. The UI
+  briefly called `/api/v1/control-room/overview?period=24h` before
+  `TenantProvider` selected the default tenant, producing HTTP 400 and leaving
+  an `Overview data unavailable` panel even after the tenant-scoped overview
+  request succeeded. Commit `806ca2af` preserves Control Room and drilldown
+  behavior but waits for a tenant id before requesting overview data, clearing
+  stale first-load errors while tenant selection is still loading. Local checks
+  passed focused Control Room tests, full `npm --prefix ui test` with 28 files
+  and 105 tests passing, `npm --prefix ui run lint`,
+  `npm --prefix ui run build`, and `git diff --check` aside from normal
+  LF/CRLF warnings. Deploy run `27085214597` succeeded. CI runs `27085214593`
+  and `27085214595` succeeded, including tests, lint, security scan,
+  cross-platform builds, and image pushes. Live cold-login validation at
+  desktop 1440x1000 and mobile 390x844 showed `/api/v1/auth/login`,
+  `/api/v1/tenants`, `/api/v1/alerts`, `/api/v1/fleet/health`,
+  `/api/v1/control-room/overview?tenant_id=...&period=24h`, and
+  `/api/v1/nodes` all returning HTTP 200, with no tenantless overview request,
+  zero console warnings/errors, no visible unavailable/request-failed copy, and
+  no document-level horizontal overflow. A live authenticated sweep then loaded
+  `/console`, `/console/alerts`, `/console/cases`, `/console/investigate`,
+  `/console/ask`, `/console/nodes`, `/console/security/network`,
+  `/console/observability`, `/console/security/siem`,
+  `/console/infrastructure/patch`, `/console/coverage`, `/console/compliance`,
+  `/console/access`, `/console/audit`, `/console/onboard`,
+  `/console/settings`, and `/console/security/webservers` at both desktop and
+  mobile widths; every route stayed authenticated, rendered its main heading,
+  had no captured app HTTP failures, no page crashes, no warning/error console
+  entries, and no document-level horizontal overflow.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
