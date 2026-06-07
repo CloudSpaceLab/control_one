@@ -788,6 +788,34 @@ Live audit evidence from 2026-06-06:
   built-in labels on all role headers, zero delete buttons for built-ins, seven
   app API responses at HTTP 200, zero console warnings/errors, zero page
   errors, and no document horizontal overflow.
+- 2026-06-07 Jobs execution-mode transparency follow-up: live small-mode logs
+  exposed mock provisioning/compliance clients while the Jobs UI still presented
+  `provision.apply` and `compliance.scan` as ordinary dispatches. Commit
+  `a32ea0bd` preserves the existing job catalog but adds explicit integration
+  status to `/api/v1/worker/status`, queue evidence, and the Jobs submit UI:
+  provisioning now reports simulated/non-mutating execution when no external
+  provisioning API is configured, and compliance scans report the local policy
+  evaluator when no external scanner is configured. The same pass fixed
+  tenant-scoped built-in job forms so they require/default the selected tenant,
+  move provisioning `template_version` into metadata, generate missing per-node
+  `scan_id` values, route blank-node compliance scans through the batch scan
+  endpoint, and preserve optional rule-set/policy facts in generated scan jobs.
+  Local checks passed focused server RBAC/job/compliance tests,
+  `npm --prefix ui test -- Jobs.test.tsx`, `npm --prefix ui run lint`,
+  `npm --prefix ui run build`, and `git diff --check`; the full local
+  `go test ./controlplane/internal/server` sweep still requires the local
+  Postgres test database on `localhost:5432`, while GitHub service-backed CI
+  covered the broader server suite. Deploy run `27080356963` and CI runs
+  `27080356966`/`27080356962` succeeded. Post-deploy host checks showed
+  controlplane around 92 MiB, console around 4 MiB, Redis around 11 MiB,
+  `/healthz=ok`, Redis healthy, Doris absent in the small profile, and normal
+  control-plane logs. Authenticated browser verification on
+  `/console/jobs?verify=jobs-execution-mode-a32ea0bd` showed worker backend
+  `ASYNQ`, queue depth `0`, visible badges for `Local policy evaluator` and
+  `Simulated provisioning`, required tenant selection, correct compliance
+  fields (`Scan ID`, `Node ID`, `Rule set`), all Control One app API requests
+  at HTTP 200, and zero console warnings/errors. No state-changing live job was
+  submitted during the final UI check.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
