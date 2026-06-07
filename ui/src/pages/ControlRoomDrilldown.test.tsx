@@ -257,12 +257,14 @@ const appDBCoverageOverview: ControlRoomOverview = {
 };
 
 let mockedOverview: ControlRoomOverview;
+let getControlRoomOverviewMock: ReturnType<typeof vi.fn>;
 
 describe('ControlRoomDrilldown', () => {
   beforeEach(() => {
     mockedOverview = overview;
+    getControlRoomOverviewMock = vi.fn().mockImplementation(() => Promise.resolve(mockedOverview));
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({
-      getControlRoomOverview: vi.fn().mockImplementation(() => Promise.resolve(mockedOverview)),
+      getControlRoomOverview: getControlRoomOverviewMock,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
@@ -278,6 +280,29 @@ describe('ControlRoomDrilldown', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('waits for tenant selection before requesting drilldown data', () => {
+    vi.mocked(useTenantModule.useTenant).mockReturnValue({
+      currentTenantId: null,
+      currentTenant: null,
+      tenants: [],
+      loading: true,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/control-room/exposure']}>
+        <Routes>
+          <Route path="/control-room/:laneId" element={<ControlRoomDrilldown />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(getControlRoomOverviewMock).not.toHaveBeenCalled();
+    expect(screen.queryByText('Control Room data unavailable')).not.toBeInTheDocument();
   });
 
   it('shows firewall and isolation posture inside the exposure drilldown', async () => {

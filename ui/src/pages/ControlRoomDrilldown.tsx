@@ -65,13 +65,19 @@ export function ControlRoomDrilldown(): JSX.Element {
   const { laneId = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const api = useApiClient();
-  const { currentTenantId, currentTenant } = useTenant();
+  const { currentTenantId, currentTenant, loading: tenantLoading } = useTenant();
   const [period, setPeriod] = useState(params.get('period') || '24h');
   const [overview, setOverview] = useState<ControlRoomOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!currentTenantId) {
+      setOverview(null);
+      setError(null);
+      setLoading(tenantLoading);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -82,7 +88,7 @@ export function ControlRoomDrilldown(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [api, currentTenantId, period]);
+  }, [api, currentTenantId, period, tenantLoading]);
 
   useEffect(() => {
     const next = new URLSearchParams(params);

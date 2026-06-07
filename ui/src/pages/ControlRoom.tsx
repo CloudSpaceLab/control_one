@@ -72,7 +72,7 @@ const TONE_ACCENT: Record<ControlRoomTone, 'brand' | 'accent' | 'healthy' | 'war
 
 export function ControlRoom(): JSX.Element {
   const api = useApiClient();
-  const { currentTenantId, currentTenant } = useTenant();
+  const { currentTenantId, currentTenant, loading: tenantLoading } = useTenant();
   const [period, setPeriod] = useState('24h');
   const [overview, setOverview] = useState<ControlRoomOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,6 +82,12 @@ export function ControlRoom(): JSX.Element {
   const [isolationAction, setIsolationAction] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
+    if (!currentTenantId) {
+      setOverview(null);
+      setError(null);
+      setLoading(tenantLoading);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -92,7 +98,7 @@ export function ControlRoom(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [api, currentTenantId, period]);
+  }, [api, currentTenantId, period, tenantLoading]);
 
   useEffect(() => {
     void refresh();

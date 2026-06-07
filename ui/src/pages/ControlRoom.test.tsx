@@ -169,10 +169,13 @@ function lane(id: string, title: string, tone: ControlRoomOverview['lanes'][numb
   };
 }
 
+let getControlRoomOverviewMock: ReturnType<typeof vi.fn>;
+
 describe('ControlRoom', () => {
   beforeEach(() => {
+    getControlRoomOverviewMock = vi.fn().mockResolvedValue(overview);
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({
-      getControlRoomOverview: vi.fn().mockResolvedValue(overview),
+      getControlRoomOverview: getControlRoomOverviewMock,
       planWebserverConfig: vi.fn(),
       applyWebserverConfig: vi.fn(),
       rollbackWebserverConfig: vi.fn(),
@@ -192,6 +195,27 @@ describe('ControlRoom', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('waits for tenant selection before requesting overview data', () => {
+    vi.mocked(useTenantModule.useTenant).mockReturnValue({
+      currentTenantId: null,
+      currentTenant: null,
+      tenants: [],
+      loading: true,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter>
+        <ControlRoom />
+      </MemoryRouter>,
+    );
+
+    expect(getControlRoomOverviewMock).not.toHaveBeenCalled();
+    expect(screen.queryByText('Overview data unavailable')).not.toBeInTheDocument();
   });
 
   it('renders the six control room lanes and backend IP anomaly score', async () => {
