@@ -7,11 +7,15 @@ import { SearchResults } from './SearchResults';
 
 const mocks = vi.hoisted(() => ({
   investigateSearch: vi.fn(),
+  createSavedSearch: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock('@/hooks/useApiClient', () => ({
   useApiClient: () => ({
     investigateSearch: mocks.investigateSearch,
+    createSavedSearch: mocks.createSavedSearch,
   }),
 }));
 
@@ -19,6 +23,13 @@ vi.mock('@/providers/TenantProvider', () => ({
   useTenant: () => ({
     currentTenantId: 'tenant-1',
   }),
+}));
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: mocks.toastSuccess,
+    error: mocks.toastError,
+  },
 }));
 
 function renderSearch(initialEntry: string) {
@@ -39,6 +50,9 @@ function renderSearch(initialEntry: string) {
 
 afterEach(() => {
   mocks.investigateSearch.mockReset();
+  mocks.createSavedSearch.mockReset();
+  mocks.toastSuccess.mockReset();
+  mocks.toastError.mockReset();
 });
 
 describe('SearchResults', () => {
@@ -50,6 +64,7 @@ describe('SearchResults', () => {
     expect(screen.getByRole('button', { name: /save search/i })).toBeDisabled();
     expect(screen.queryByText(/empty query/i)).not.toBeInTheDocument();
     expect(mocks.investigateSearch).not.toHaveBeenCalled();
+    expect(mocks.createSavedSearch).not.toHaveBeenCalled();
   });
 
   it('keeps query context in the description and can clear back to the empty state', async () => {
@@ -73,5 +88,40 @@ describe('SearchResults', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'Search' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save search/i })).toBeDisabled();
+  });
+
+  it('saves the current query through the saved-search API', async () => {
+    mocks.investigateSearch.mockResolvedValue({ items: [], facets: [] });
+    mocks.createSavedSearch.mockResolvedValue({
+      id: 'saved-1',
+      tenant_id: 'tenant-1',
+      owner_user_id: 'user-1',
+      name: 'Search: nginx',
+      query: 'nginx',
+      shared: false,
+      created_at: '2026-06-07T12:00:00Z',
+      updated_at: '2026-06-07T12:00:00Z',
+    });
+    const user = userEvent.setup();
+    renderSearch('/search?q=nginx');
+
+    await waitFor(() => {
+      expect(screen.getByText('0 matches for "nginx"')).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /save search/i }));
+
+    await waitFor(() => {
+      expect(mocks.createSavedSearch).toHaveBeenCalledWith(
+        {
+          name: 'Search: nginx',
+          query: 'nginx',
+          entity_type: undefined,
+          filters: undefined,
+          shared: false,
+        },
+        { tenantId: 'tenant-1' },
+      );
+    });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Search saved');
   });
 });

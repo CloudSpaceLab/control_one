@@ -2409,6 +2409,31 @@ host checks remained clean: `/healthz=ok`, no Doris FE/BE, console about
 4.8 MiB / 256 MiB, controlplane about 115 MiB / 1 GiB, Redis about 4.8 MiB /
 192 MiB, and no severe controlplane or edge 5xx logs.
 
+2026-06-07 Saved Search workflow follow-up: continuing from the Search audit,
+live browser testing found that the now-polished `Save search` button was still
+only visual on production. On `/console/search?q=nginx`, the button was enabled,
+but clicking it emitted zero `/api/v1/saved-searches` requests, created no saved
+row, and showed no product feedback. The UI now integrates the existing
+role-gated saved-search API instead of adding a parallel feature: it creates a
+private saved search named from the current query, preserves any active entity
+type tab as metadata, disables while saving or without a tenant/query, invalidates
+saved-search consumers, and reports success/error via toast.
+
+Focused `SearchResults.test.tsx` coverage now includes the empty-query guard,
+query clearing, and the `createSavedSearch` payload. `npm run test --
+SearchResults.test.tsx --runInBand` and `npm run build` passed, with the same
+known npm/React Router future warnings only. The console-only production deploy
+completed. Live browser round trip then created a temporary query
+`codex-save-roundtrip-*` from Search, observed `POST /api/v1/saved-searches`
+returning 201, verified the saved row on `/console/investigate/saved`, deleted
+that exact temporary row with `DELETE /api/v1/saved-searches/{id}` returning 204,
+and confirmed the row was gone after reload. The live run had zero browser
+console/page errors, zero app request failures, and zero document overflow.
+Post-deploy host checks remained clean: `/healthz=ok`, console/controlplane/Redis
+up, no Doris FE/BE, console about 4.7 MiB / 256 MiB, controlplane about
+140.6 MiB / 1 GiB, Redis about 4.8 MiB / 192 MiB, and no severe controlplane or
+edge 5xx logs.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.

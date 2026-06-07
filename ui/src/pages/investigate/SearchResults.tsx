@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bookmark, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -21,10 +22,16 @@ const SEV_TO_TONE: Record<string, StateTone> = {
   unknown: 'unknown',
 };
 
+function savedSearchName(query: string): string {
+  const label = query.length > 72 ? `${query.slice(0, 72)}...` : query;
+  return `Search: ${label}`;
+}
+
 export function SearchResults(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const client = useApiClient();
+  const qc = useQueryClient();
   const { currentTenantId } = useTenant();
   const [tab, setTab] = useState('all');
   const [refineQuery, setRefineQuery] = useState(q);
@@ -48,6 +55,25 @@ export function SearchResults(): JSX.Element {
     queryKey: ['search', currentTenantId, q],
     queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q: normalizedQuery, limit: 200 }),
     enabled: hasQuery && !!currentTenantId,
+  });
+
+  const saveSearch = useMutation({
+    mutationFn: () =>
+      client.createSavedSearch(
+        {
+          name: savedSearchName(normalizedQuery),
+          query: normalizedQuery,
+          entity_type: tab === 'all' ? undefined : tab,
+          filters: tab === 'all' ? undefined : { type: tab },
+          shared: false,
+        },
+        { tenantId: currentTenantId },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['saved-searches', currentTenantId] });
+      toast.success('Search saved');
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Save failed'),
   });
 
   const items = searchQ.data?.items ?? [];
@@ -85,7 +111,13 @@ export function SearchResults(): JSX.Element {
               : 'Search events, alerts, audit entries, and tags across the selected tenant.'
         }
         actions={
-          <Button variant="secondary" size="md" disabled={!hasQuery}>
+          <Button
+            variant="secondary"
+            size="md"
+            disabled={!hasQuery || !currentTenantId || saveSearch.isPending}
+            loading={saveSearch.isPending}
+            onClick={() => saveSearch.mutate()}
+          >
             <Bookmark className="h-4 w-4" /> Save search
           </Button>
         }
