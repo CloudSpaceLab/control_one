@@ -4,6 +4,92 @@ Status: recommended small-fleet and demo architecture
 
 Date: 2026-06-07
 
+## Operator Blueprint
+
+Use **Control One Lite Analytics** for demos and small fleets:
+
+```text
+Postgres journal and product DB
+        ^
+        | replay / rebuild / audit truth
+        |
+controlplane ingest and projector
+        |
+        +--> SQLite/WAL recent evidence projection
+        +--> Redis bounded hot state, queues, freshness, and short streams
+        +--> Doris only in explicit OLAP mode
+```
+
+The practical choice is a Redis + SQLite combo backed by Postgres, not Redis +
+SQLite alone. Redis is too evictable to carry evidence, and SQLite is a local
+projection rather than the system of record. Postgres remains the durable
+acceptance point so the demo can stay memory-light without becoming
+non-replayable.
+
+Small mode should be the default runtime for the demo host:
+
+| Runtime Piece | Default Demo State | Why |
+| --- | --- | --- |
+| controlplane | on, one process | owns API, journal fan-out, SQLite writer, and analytics reads |
+| Postgres | on, existing product DB | canonical state, ingest journal, audit, cases, replay source |
+| Redis | on, capped at 128 MB hot memory | queues, freshness, top counters, short live streams |
+| SQLite/WAL | embedded, 16 MB cache default | recent cited evidence, timelines, bounded search, rollups |
+| Doris FE/BE | off | 0 MB unless `ANALYTICS_MODE=olap` and Compose `--profile olap` are selected |
+
+The feature promise is unchanged: dashboard, network security, investigation,
+timeline, search, citation, and export workflows stay present. Small mode is a
+different backend profile, not a reduced product tier.
+
+## Bank-Grade Boundaries
+
+These boundaries make the light profile safe:
+
+- accepted ingest is durable only after the Postgres journal commits;
+- Redis may accelerate UI heat, but Redis-only data is never evidence;
+- SQLite facts must include stable event IDs or raw references for citations;
+- every read is tenant-scoped, time-bounded, limit-bounded, and timeout-bounded;
+- projection gaps return source and guardrail metadata rather than hiding UI
+  workflows or showing Doris-specific failure copy;
+- deleting or corrupting the SQLite projection is recoverable from the
+  Postgres journal;
+- Doris remains an explicit OLAP upgrade path with the same API contracts.
+
+## First Implementation Cut
+
+The demo-safe implementation should prove this path before adding more
+projection families:
+
+| Capability | Small-Mode Source | Required Behavior |
+| --- | --- | --- |
+| ingest acceptance | Postgres journal | commit first, then project; mark retryable local lag if projection fails |
+| fleet health | Redis freshness + Postgres rollups | same health cards with analytics-neutral source labels |
+| connections | SQLite `process_connections` | same list, detail, IP, node, and connection drilldowns |
+| top talkers | Redis sorted sets, fallback SQLite | bounded hot read with rebuildable fallback |
+| event search | SQLite projected events/FTS, currently connection facts | cited rows plus guardrails for unprojected fact families |
+| timeline | SQLite timeline links, currently connection facts | same timeline contract and citations |
+| exports | SQLite/Postgres recent evidence | same export flow with source metadata in file/report details |
+| health | backend-neutral analytics health | mode, source, lag, backlog, quick-check, DB/WAL size, Redis evictions |
+
+Implementation should keep handlers behind an analytics capability facade. Code
+paths should ask for connections, events, timelines, rollups, or health; they
+should not decide product behavior by checking whether Doris is present.
+
+## Demo Proof Plan
+
+For the demo, acceptance evidence should show:
+
+1. Doris FE/BE containers are absent and consume 0 MB in the default profile.
+2. Redis stays within its memory cap while queue/control keys are protected from
+   hot-key eviction.
+3. SQLite survives controlplane restart and serves recent connection,
+   top-talker, event, and timeline reads.
+4. Removing the SQLite projection and replaying from the Postgres journal
+   rebuilds the same fixture counts and citations.
+5. Console routes load without Doris-only copy, dead-end buttons, or hidden
+   workflows.
+6. API envelopes expose source and guardrail metadata where small mode has a
+   bounded retention or projection limitation.
+
 ## Demo Architecture Chosen
 
 For the demo and other small fleets, use **Redis + SQLite/WAL + Postgres** as

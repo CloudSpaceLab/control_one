@@ -3142,3 +3142,21 @@ console 7.1 MiB / 256 MiB, controlplane 199.7 MiB / 1 GiB, Redis 6.7 MiB /
 and strict recent console/controlplane log scans showed no actual nginx 4xx/5xx,
 controlplane 5xx, panic, fatal, permission, database-lock,
 analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Small-fleet analytics architecture decision: the demo should not
+try to make Doris smaller as the default path. The selected architecture is
+Control One Lite Analytics: Postgres as durable ingest journal and product
+truth, SQLite/WAL as the embedded recent evidence projection, Redis as bounded
+hot state/queues/freshness, and Doris FE/BE at 0 MB unless an operator
+explicitly selects `ANALYTICS_MODE=olap`, `DORIS_ENABLED=true`, and the Compose
+`olap` profile.
+
+The decision preserves useful product capability instead of deleting routes or
+workflows. Dashboard, network security, investigation, timeline, search,
+citation, and export flows should keep the same API and UI contracts in small
+mode. Redis-only data is not evidence, SQLite projections must cite stable
+event IDs or raw references, and Postgres remains the replay/rebuild boundary.
+Projection gaps should return source/guardrail metadata with analytics-neutral
+copy, not Doris-specific errors or hidden UI affordances. The detailed design
+and implementation proof plan are now captured in
+`docs/small-fleet-analytics-architecture.md`.
