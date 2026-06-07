@@ -2354,6 +2354,35 @@ responses, and no fresh `/events/stream` log entries. Post-deploy
 `/healthz=ok`; Doris FE/BE remained stopped/absent; memory stayed light
 (controlplane about 88 MiB, console about 4.5 MiB, Redis about 7 MiB).
 
+2026-06-07 Control Room freshness/auth follow-up: a live auth and security
+matrix passed 30/30 checks. Invalid login returned 401, protected API reads
+returned 401 without a token and with an invalid bearer token, public
+misconduct/trust/health endpoints stayed reachable, authenticated reads
+succeeded, logout invalidated the session, HTTPS responses carried the expected
+security headers, HTTP requests redirected to HTTPS, and the slowest observed
+check was 914 ms.
+
+The same real-browser Control Room retest found one material freshness/UX issue:
+the 24h header said "8 incidents, 12 pending actions, 6 IP findings in 24h" even
+though the visible IP behavior findings were stale May 18 unresolved findings.
+The fix scopes unresolved IP behavior findings by the selected overview window
+in the backend, and changes the UI copy to distinguish persistent open
+incidents from recent IP findings. This preserves useful open incidents instead
+of deleting signal for the demo, while no longer implying stale findings landed
+inside the selected 24h window. After deploy, the live API returned
+`ip_findings=0`, `ip_requests=0`, `pending_actions=2`, `top_incidents=8`, and
+682 ms for the 24h overview; the browser header now reads "8 open incidents, 2
+pending actions, 0 recent IP findings (24h)", the IP behavior lane shows zero
+recent requests/findings, and browser console errors/warnings remained at zero.
+
+Post-deploy host evidence still matches the hyper-light design:
+`/healthz=ok`, controlplane/console/redis are up, Doris FE/BE are absent under
+the `olap` profile, `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, Redis data memory is about 1.78 MiB with a
+128 MiB cap, controlplane is about 65.6 MiB / 1 GiB, console about 4.6 MiB /
+256 MiB, Redis about 4.8 MiB / 192 MiB, and a 20-minute severe-log scan found no
+panic/fatal/SQLite lock/analytics unavailable/stream transport signatures.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.

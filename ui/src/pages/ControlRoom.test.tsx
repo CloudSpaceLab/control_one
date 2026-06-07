@@ -235,6 +235,8 @@ describe('ControlRoom', () => {
     expect(screen.getAllByText(/Security confidence/i).length).toBeGreaterThan(0);
     expect(screen.getByText('Connection/IP Behavior')).toBeInTheDocument();
     expect(screen.getByText('Patch Posture')).toBeInTheDocument();
+    expect(screen.getByText(/1 open incidents, 3 pending actions, 1 recent IP finding \(24h\)/i)).toBeInTheDocument();
+    expect(screen.getByText('Open incidents')).toBeInTheDocument();
     expect(screen.getByText('Health incidents')).toBeInTheDocument();
     expect(screen.queryByText('Broken')).not.toBeInTheDocument();
     expect(screen.getByText('Patch failures')).toBeInTheDocument();

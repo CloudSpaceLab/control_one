@@ -7568,6 +7568,9 @@ func (f *fakeStore) ListIPBehaviorFindings(_ context.Context, filter storage.IPB
 				continue
 			}
 		}
+		if !filter.Since.IsZero() && finding.LastSeenAt.Before(filter.Since) {
+			continue
+		}
 		out = append(out, finding)
 	}
 	total := len(out)

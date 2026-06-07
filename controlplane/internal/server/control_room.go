@@ -444,7 +444,7 @@ func (s *Server) controlRoomIPBehavior(ctx context.Context, tenantID uuid.UUID, 
 	findings := make([]storage.IPBehaviorFinding, 0)
 	if store, ok := s.store.(ipBehaviorFindingPageStore); ok {
 		resolved := false
-		rows, _, err := store.ListIPBehaviorFindings(ctx, storage.IPBehaviorFindingFilter{TenantID: tenantID, Resolved: &resolved}, 10, 0)
+		rows, _, err := store.ListIPBehaviorFindings(ctx, storage.IPBehaviorFindingFilter{TenantID: tenantID, Resolved: &resolved, Since: since}, 10, 0)
 		if err != nil {
 			s.logger.Warn("control room ip findings", zap.Error(err))
 		} else {

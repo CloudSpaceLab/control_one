@@ -114,7 +114,7 @@ export function ControlRoom(): JSX.Element {
     return overview?.pending_actions.reduce((sum, action) => sum + action.count, 0) ?? 0;
   }, [overview?.pending_actions]);
   const headerDescription = overview
-    ? `${currentTenant?.name ? `${currentTenant.name}: ` : ''}${overview.top_incidents.length} incidents, ${totalPending} pending actions, ${overview.ip_behavior.findings.length} IP findings in ${overview.period}.`
+    ? `${currentTenant?.name ? `${currentTenant.name}: ` : ''}${overview.top_incidents.length} open incidents, ${totalPending} pending actions, ${overview.ip_behavior.findings.length} recent IP ${overview.ip_behavior.findings.length === 1 ? 'finding' : 'findings'} (${overview.period}).`
     : `${currentTenant?.name ? `${currentTenant.name}: ` : ''}Loading fleet status.`;
 
   const runWebserverAction = async (instance: ControlRoomWebserver, action: 'plan' | 'apply' | 'rollback') => {
@@ -333,7 +333,7 @@ export function ControlRoom(): JSX.Element {
         <Panel
           className="xl:col-span-2"
           eyebrow="INCIDENTS"
-          title="Top incidents"
+          title="Open incidents"
           toneAccent="warning"
           actions={
             <Button asChild variant="ghost" size="sm">
@@ -353,7 +353,7 @@ export function ControlRoom(): JSX.Element {
               ))}
             </div>
           ) : (
-            <EmptyState tone="success" icon={<ShieldCheck />} title="No incidents in this window" />
+            <EmptyState tone="success" icon={<ShieldCheck />} title="No open incidents" />
           )}
         </Panel>
 
