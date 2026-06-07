@@ -237,10 +237,10 @@ export function NodeDetail(): JSX.Element {
   const tone = riskTone(health?.risk_level);
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+    <div className="flex min-w-0 flex-col gap-5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <Link
               to="/nodes"
               className="inline-flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-foreground"
@@ -248,14 +248,15 @@ export function NodeDetail(): JSX.Element {
               <ArrowLeft className="h-3.5 w-3.5" /> Nodes
             </Link>
             <span className="text-text-muted">/</span>
-            <span className="font-mono text-xs text-text-muted">{node.id}</span>
+            <span className="min-w-0 break-all font-mono text-xs text-text-muted">{node.id}</span>
           </div>
           <SectionHeader
+            className="min-w-0"
             eyebrow="FLEET · NODE DETAIL"
             title={node.hostname || 'Unnamed node'}
             description={`${node.os ?? '—'} · ${node.arch ?? '—'} · agent ${node.agent_version ?? '—'}`}
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <StatusTag tone={tone}>{riskLabel(health?.risk_level, health?.score ?? 0, calibratingSamples)}</StatusTag>
             <Button
               variant="ghost"
