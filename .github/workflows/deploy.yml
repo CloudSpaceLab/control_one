@@ -72,7 +72,7 @@ jobs:
         working-directory: ui
         env:
           # Same-origin: APIClient defaults to '' so '/api/...' resolves to
-          # the same host the UI was loaded from. nginx-edge proxies it to
+          # the same host the UI was loaded from. Host nginx proxies it to
           # the controlplane container. Setting VITE_API_URL here would
           # double-prefix '/api/api/...'.
           VITE_API_URL: ''
@@ -193,7 +193,8 @@ jobs:
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/"
           scp -P "${SSH_PORT:-22}" \
             deploy/nginx/console.conf \
-            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/nginx/console.conf"
+            deploy/nginx/control-one.host.conf \
+            "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/nginx/"
           scp -P "${SSH_PORT:-22}" \
             deploy/doris/be_custom.conf \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/doris/be_custom.conf"
@@ -239,6 +240,27 @@ jobs:
               docker compose --profile olap stop -t 30 doris-be doris-fe || true
             fi
             docker compose up -d --force-recreate --no-deps controlplane console
+          "
+
+      - name: Install host nginx config
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
+            set -e
+            if command -v nginx >/dev/null 2>&1 && [ -d /etc/nginx/conf.d ]; then
+              install -m 0644 '$DEPLOY_DIR/nginx/control-one.host.conf' /etc/nginx/conf.d/control-one.conf
+              nginx -t
+              if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx; then
+                systemctl reload nginx
+              else
+                nginx -s reload
+              fi
+            else
+              echo 'system nginx not present; skipping host nginx config install'
+            fi
           "
 
       - name: Smoke check (server-side, bypasses Cloudflare)
