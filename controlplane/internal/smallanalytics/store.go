@@ -156,6 +156,11 @@ func (s *Store) migrate(ctx context.Context, cacheMB int) error {
 		"CREATE INDEX IF NOT EXISTS process_connections_tenant_dst_started_idx ON process_connections(tenant_id, dst_ip, started_at_ms DESC)",
 		"CREATE INDEX IF NOT EXISTS process_connections_tenant_conn_idx ON process_connections(tenant_id, conn_id)",
 		"CREATE INDEX IF NOT EXISTS process_connections_tenant_corr_started_idx ON process_connections(tenant_id, correlation_id, started_at_ms DESC)",
+		"CREATE INDEX IF NOT EXISTS process_connections_tenant_ended_idx ON process_connections(tenant_id, ended_at_ms DESC) WHERE ended_at_ms IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS process_connections_tenant_node_ended_idx ON process_connections(tenant_id, node_id, ended_at_ms DESC) WHERE ended_at_ms IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS process_connections_tenant_src_ended_idx ON process_connections(tenant_id, src_ip, ended_at_ms DESC) WHERE ended_at_ms IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS process_connections_tenant_dst_ended_idx ON process_connections(tenant_id, dst_ip, ended_at_ms DESC) WHERE ended_at_ms IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS process_connections_tenant_corr_ended_idx ON process_connections(tenant_id, correlation_id, ended_at_ms DESC) WHERE ended_at_ms IS NOT NULL",
 		"INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (1, ?)",
 	}
 	for _, stmt := range stmts {

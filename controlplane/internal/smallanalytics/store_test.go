@@ -122,6 +122,49 @@ func TestStoreProjectsConnectionRowsToEventsAndTimeline(t *testing.T) {
 	}
 }
 
+func TestStoreIndexesClosedConnectionEventPivots(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	rows, err := store.db.QueryContext(ctx, "PRAGMA index_list('process_connections')")
+	if err != nil {
+		t.Fatalf("list process_connections indexes: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	indexes := map[string]bool{}
+	for rows.Next() {
+		var seq int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan index metadata: %v", err)
+		}
+		indexes[name] = partial == 1
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate index metadata: %v", err)
+	}
+
+	for _, name := range []string{
+		"process_connections_tenant_ended_idx",
+		"process_connections_tenant_node_ended_idx",
+		"process_connections_tenant_src_ended_idx",
+		"process_connections_tenant_dst_ended_idx",
+		"process_connections_tenant_corr_ended_idx",
+	} {
+		if !indexes[name] {
+			t.Fatalf("missing partial closed-event index %q; indexes=%v", name, indexes)
+		}
+	}
+}
+
 func TestStoreConfiguresPooledConnectionsForBusyTimeout(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, Config{Dir: t.TempDir(), QueryTimeout: 2500 * time.Millisecond})
