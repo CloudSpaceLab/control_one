@@ -2,7 +2,33 @@
 
 Status: recommended small-fleet and demo architecture
 
-Date: 2026-06-07
+Date: 2026-06-08 refined design; initial decision 2026-06-07
+
+## Decision Snapshot
+
+For demos and small fleets, Control One should run **Control One Lite
+Analytics**:
+
+```text
+Postgres = accepted ingest, audit truth, replay journal, workflow state
+SQLite   = embedded recent evidence projection and bounded analytic reads
+Redis    = capped hot state, queues, freshness, live counters, short streams
+Doris    = explicit OLAP upgrade only; 0 MB in the default demo profile
+```
+
+This is deliberately not "make Doris smaller." The safer architecture is to
+remove Doris from the default hot path and keep the same product surface behind
+a backend-neutral analytics facade. A demo operator should be able to say:
+
+> This branch-size deployment runs the full Control One investigation
+> experience on Postgres, Redis, and embedded SQLite. Doris is available for the
+> high-volume warehouse tier, but it is not required for this fleet size.
+
+The non-negotiable rule is feature preservation. Production-ready does not mean
+deleting dashboard, search, timeline, network, case, export, or AI workflows.
+If a small-mode projection is not implemented yet, the workflow returns a
+bounded result with source and guardrail metadata; it does not disappear behind
+a hidden route or a Doris-specific error.
 
 ## Operator Blueprint
 
@@ -556,6 +582,27 @@ the transition, but new code and admin copy should move toward
 - `pending_olap`;
 - `failed`;
 - `disabled`.
+
+## Failure Modes And Operator Behavior
+
+Small mode should fail in a way that is explicit, recoverable, and honest about
+the active backend. These are the required behaviors:
+
+| Condition | System Behavior | Operator UX | Recovery |
+| --- | --- | --- | --- |
+| Redis restart or hot-key eviction | Lose only TTL-bound heat such as live counters, streams, and acceleration keys | show colder live counters or fallback SQLite/Postgres summaries, never lost evidence | rebuild hot keys from SQLite/Postgres as fresh events arrive |
+| Redis protected-key pressure | Queue/control writes fail fast instead of silently evicting non-TTL state | show queue backpressure or degraded worker health | drain queues, raise cap, or reduce hot-key retention; Postgres journal remains truth |
+| SQLite writer lag | keep accepting only after Postgres journal commit, mark local projection lag | show analytics health as degraded with lag/backlog metadata | retry bounded batches from the journal until `local_completed` |
+| SQLite busy timeout | return bounded API errors or guardrails instead of hanging the UI | show "recent evidence projection is busy" style copy | retry with backoff; tune indexes, batch size, or query window |
+| SQLite corruption or schema mismatch | quarantine the projection and start rebuild from Postgres | keep routes present; show rebuilding/source metadata where possible | run tenant-scoped rebuild and quick-check before restoring healthy status |
+| Postgres unavailable | do not accept ingest as durable | show controlplane/data-store outage; do not pretend telemetry was accepted | restore Postgres and replay pending sender-side batches |
+| Query exceeds small-mode retention/window | avoid unbounded SQLite scans | return bounded results with guardrail such as "older history requires OLAP mode" | narrow time range, restore archived evidence, or enable OLAP |
+| Doris absent in small mode | no Doris health gate and no Doris-specific empty states | routes remain available from small-mode projections and Postgres workflows | enable `ANALYTICS_MODE=olap`, `DORIS_ENABLED=true`, and the Compose `olap` profile only when needed |
+
+This table is part of the product contract. A small-fleet deployment can be
+lighter than Doris while still being bank-grade because every accepted event is
+replayable, every citation is tied to stable SQLite/Postgres evidence, and
+every limitation is surfaced as source/guardrail metadata instead of hidden UI.
 
 ## Read Path Contract
 
