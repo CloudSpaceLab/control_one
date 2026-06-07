@@ -1124,6 +1124,27 @@ Live audit evidence from 2026-06-06:
   own scroller. Final live verification on 2026-06-06 showed desktop
   `docOverflowX=0`, mobile `docOverflowX=0`, zero app HTTP failures, and zero
   console warnings/errors on `/console/observability?verify=a9a84464-*`.
+- 2026-06-07 Observability/Compliance mobile polish follow-up: live desktop
+  validation found the Observability Knowledge Tree detail pane could extend
+  outside its fixed side column at 1440px when citation/vault chunk evidence
+  was selected. The UI now stacks that evidence detail inside the side column
+  with `min-w-0` constraints instead of widening the page. A paired 390x844
+  mobile sweep found two additional real clipping risks: Observability DBMS
+  onboarding step cards and Compliance control-posture evidence counters. Both
+  were fixed without removing fields or workflows by wrapping content inside
+  the existing controls. Local checks passed
+  `npm run test -- src/pages/Observability.test.tsx src/components/coverage/CoverageTruth.test.tsx`
+  and `npm run build` in `ui/`; the console-only deploy then completed. Final
+  production retest covered 36 authenticated console routes at 390x844 with
+  zero document-level horizontal overflow, zero unscrollable overflow
+  candidates, zero visible error states, zero failed Control One app API
+  responses, zero browser console/page errors, zero Doris/analytic-store copy,
+  and zero `/api/v1/events/stream` requests. Intentionally wide operational
+  tables remained available through their local horizontal scrollers. Host
+  checks after deploy showed `/healthz=ok`, Redis healthy, Doris FE/BE absent
+  in the small profile, controlplane about 147 MiB of 1 GiB, console about
+  4.6 MiB of 256 MiB, Redis about 7.8 MiB of 192 MiB, landing about 5.7 MiB of
+  128 MiB, and ipq about 4.8 MiB of 128 MiB.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -1156,6 +1177,8 @@ Exit criteria:
   sized infrastructure.
 - Met: live mobile sweep at 390px covered 26 authenticated routes with no
   document-level horizontal overflow.
+- Met: later live mobile sweep at 390px covered 36 authenticated routes with no
+  document-level horizontal overflow or unscrollable overflow candidates.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
   calling the whole product bank-grade clean.

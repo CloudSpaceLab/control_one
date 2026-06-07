@@ -594,13 +594,16 @@ export function Observability(): JSX.Element {
         <Panel padding="md" eyebrow="DBMS ONBOARDING" title="Least-privilege path">
           <div className="grid gap-3">
             {dbOnboardingSteps(dbService).map(([label, detail], index) => (
-              <div key={label} className="grid grid-cols-[auto_1fr] gap-3 rounded-md border border-border-subtle bg-surface p-3">
+              <div
+                key={label}
+                className="grid max-w-full min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md border border-border-subtle bg-surface p-3"
+              >
                 <span className="grid h-7 w-7 place-items-center rounded-md bg-brand-500/15 font-mono text-xs text-brand-400">
                   {index + 1}
                 </span>
-                <span>
+                <span className="min-w-0">
                   <span className="block text-sm font-medium text-foreground">{label}</span>
-                  <span className="block text-xs leading-5 text-text-secondary">{detail}</span>
+                  <span className="block break-words text-xs leading-5 text-text-secondary">{detail}</span>
                 </span>
               </div>
             ))}
@@ -634,15 +637,15 @@ export function Observability(): JSX.Element {
         </Panel>
 
         <Panel padding="md" eyebrow="KNOWLEDGE TREE" title="Citations and vault chunks">
-          <div className="grid gap-3 lg:grid-cols-[15rem_1fr]">
-            <div className="flex flex-col gap-2">
+          <div className="grid min-w-0 gap-3">
+            <div className="flex min-w-0 flex-col gap-2">
               {knowledgeChunks.map((chunk) => (
                 <button
                   key={chunk.id}
                   type="button"
                   onClick={() => setSelectedChunkId(chunk.id)}
                   className={cn(
-                    'rounded-md border border-border-subtle bg-surface p-3 text-left transition hover:border-border-strong hover:bg-hover',
+                    'min-w-0 rounded-md border border-border-subtle bg-surface p-3 text-left transition hover:border-border-strong hover:bg-hover',
                     selectedChunk.id === chunk.id && 'border-brand-500/60 bg-brand-500/10',
                   )}
                 >
@@ -654,7 +657,7 @@ export function Observability(): JSX.Element {
                 </button>
               ))}
             </div>
-            <div className="rounded-md border border-border-subtle bg-surface p-3">
+            <div className="min-w-0 rounded-md border border-border-subtle bg-surface p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <StatusTag tone={CHUNK_TONE[selectedChunk.state]}>{selectedChunk.state}</StatusTag>
                 {selectedChunk.openedFrom.map((source) => (

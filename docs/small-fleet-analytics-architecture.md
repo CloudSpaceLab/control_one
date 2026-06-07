@@ -27,6 +27,21 @@ routes and API contracts. The backend adapter changes under `analytics.mode`;
 the product surface should not ask demo users to know whether the answer came
 from Redis, SQLite, Postgres, or Doris.
 
+For the demo host and other branch-size installations, the recommended shape is
+not "smaller Doris." It is a different operating mode:
+
+```text
+one controlplane process
+  - owns the SQLite writer and query pool
+  - exposes the same analytics APIs as OLAP mode
+one Redis container
+  - bounded hot counters, queues, short streams, freshness
+existing Postgres
+  - ingest journal, replay truth, audit, workflow state
+zero Doris containers
+  - unless analytics.mode=olap is explicitly selected
+```
+
 Doris remains supported for larger installations, but it should consume zero
 memory in the default demo and small-fleet profile. It starts only through the
 explicit Compose `olap` profile and `analytics.mode=olap`.
@@ -37,6 +52,10 @@ The design rule is simple:
 - SQLite stores recent, cited evidence and timelines.
 - Postgres accepts, journals, audits, and rebuilds.
 - Doris is an explicit OLAP upgrade path, not the demo default.
+
+The product rule is equally important: small mode must preserve useful features.
+If a projection is not implemented yet, that is backlog for the projection
+layer, not a reason to remove the UI route, API contract, or operator workflow.
 
 ## Why Not Doris By Default
 
@@ -100,6 +119,27 @@ The repository is already aligned with the first version of this architecture:
 
 This means the design is not speculative. The immediate task is to finish the
 small profile as a complete product path, not to remove the Doris path.
+
+## Small-Mode Contract
+
+Small mode has to be boring in the right places. It should have fewer moving
+parts than Doris, but it must keep the same correctness boundaries:
+
+| Boundary | Contract |
+| --- | --- |
+| feature surface | routes, buttons, filters, exports, AI tools, and drilldowns remain available when their underlying facts exist |
+| write acceptance | Postgres journal commit is the durable acceptance point |
+| evidence | citations come from SQLite or Postgres records, never Redis-only state |
+| hot state | Redis may be restarted or evicted without losing evidence or auditability |
+| read limits | every query is tenant-scoped, time-bounded, limit-bounded, and timeout-bounded |
+| degradation | small-mode gaps return source/guardrail metadata, not Doris-specific failure copy |
+| rebuild | deleting the SQLite projection is recoverable from the Postgres journal |
+| upgrade | OLAP mode uses the same API contracts and adds scale, not a different product |
+
+The most important implementation habit is to route all analytic reads through
+backend-neutral capability methods. Handlers should not branch directly on
+"Doris page" versus "SQLite page"; they should ask for connections, events,
+timelines, top talkers, or health and let the selected backend answer.
 
 ## Component Responsibilities
 
@@ -555,23 +595,48 @@ Expected runtime:
 
 ## Implementation Roadmap
 
+### P0: Demo-Safe Small Mode
+
 1. Keep the current small profile as the default demo deployment.
-2. Add Redis hot-counter acceleration for fleet health, top talkers, dashboard
-   freshness, and writer lag.
-3. Expand SQLite from `process_connections` into `events`, FTS5,
-   `timeline_entities`, `rollups_hourly`, and enrichment facts.
-4. Introduce a backend-neutral `AnalyticsStore` interface so server handlers no
-   longer talk directly in Doris terms.
-5. Rename admin and AI health copy from `doris_status` to
+2. Keep Doris FE/BE stopped unless `ANALYTICS_MODE=olap`,
+   `DORIS_ENABLED=true`, and the Compose `olap` profile are all selected.
+3. Route fleet health, connection list/detail, top talkers, event query, and
+   timeline build through backend-neutral helpers.
+4. Use SQLite `process_connections` for cited connection facts and bounded IP,
+   node, connection, and correlation pivots.
+5. Add Redis sorted-set/hash acceleration for dashboard freshness, top talkers,
+   node freshness, and writer lag, with SQLite/Postgres fallback.
+6. Rename user-facing and AI health copy from `doris_status` to
    backend-neutral analytics health while preserving the database field until a
    deliberate migration.
-6. Add replay/restart acceptance tests: ingest, restart controlplane, confirm
+7. Run live browser validation against dashboard, network, investigation,
+   timeline, and export flows with `source=small-analytics`.
+
+### P1: Bank-Grade Local Projection
+
+1. Expand SQLite from `process_connections` into `events`, FTS5,
+   `timeline_entities`, `rollups_hourly`, and enrichment facts.
+2. Add replay/restart acceptance tests: ingest, restart controlplane, confirm
    small analytics results survive, delete a SQLite projection, rebuild from the
    Postgres journal, and compare counts/citations.
-7. Add dual-read fixture tests for small vs OLAP mode so larger customers can
+3. Add admin rebuild and checkpoint commands or jobs:
+   `analytics rebuild --tenant`, `analytics quick-check`,
+   `analytics checkpoint`, and `analytics retention`.
+4. Add source/guardrail metadata to every small-mode API envelope where a query
+   uses a partial projection or bounded retention.
+5. Track projection lag, queue depth, SQLite DB/WAL size, quick-check status,
+   last successful projection time, and Redis eviction count in metrics.
+
+### P2: OLAP Upgrade Compatibility
+
+1. Introduce or complete a backend-neutral `AnalyticsStore` interface so server
+   handlers no longer talk directly in Doris terms.
+2. Add dual-read fixture tests for small vs OLAP mode so larger customers can
    move to Doris without relearning the UI.
-8. Run live browser validation against the network, investigation, timeline,
-   dashboard, and export flows with `source=small-analytics`.
+3. Keep Doris migrations, stream loading, and HA runbooks available only for the
+   dedicated OLAP profile.
+4. Preserve the same UI copy and response envelopes across small and OLAP modes;
+   OLAP adds longer retention and higher concurrency, not different workflows.
 
 ## Demo Cut Plan
 
