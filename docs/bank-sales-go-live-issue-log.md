@@ -900,6 +900,33 @@ Live audit evidence from 2026-06-06:
   about 6.4 MiB of 192 MiB, controlplane about 60.7 MiB of 1 GiB, console about
   4.3 MiB of 256 MiB, public and local `/healthz=ok`, no fresh Redis/SQLite/
   analytic-store error logs after the restart window, and Doris FE/BE stopped.
+- 2026-06-07 Settings/MFA enrollment follow-up: code review found that TOTP
+  enrollment rendered its QR code through a third-party `api.qrserver.com`
+  image URL, leaking the provisioning URI/secret off-origin, and that WebAuthn
+  enrollment only logged the challenge rather than completing the browser
+  credential ceremony and finish API call. Commit `1713fe22` keeps both MFA
+  enrollment features, but moves TOTP QR generation fully local with the
+  `qrcode` package, removes the challenge console log, converts WebAuthn
+  creation options to browser-native `ArrayBuffer` fields, serializes the
+  attestation response back to base64url, and calls
+  `/api/v1/mfa/webauthn/finish` with `challenge_id`, label, and attestation.
+  Focused and full local checks passed: `npm --prefix ui test -- Settings.test.tsx`,
+  full `npm --prefix ui test`, `npm --prefix ui run lint`,
+  `npm --prefix ui run build`, `npm --prefix ui audit --omit=dev`, and
+  `git diff --check` aside from the normal LF/CRLF warnings. Production audit
+  now reports zero omitted-dev vulnerabilities; the separate dev audit still has
+  existing transitive findings for future cleanup. Deploy run `27082755716` and
+  CI runs `27082755718`/`27082755715` succeeded. Live host validation after
+  deploy showed console/controlplane/redis running, Redis healthy with
+  `maxmemory=134217728`, `appendonly=yes`, and `allkeys-lru`, controlplane about
+  60.8 MiB of 1 GiB, console about 4.3 MiB of 256 MiB, Redis about 6.5 MiB of
+  192 MiB, `/healthz=ok`, and Doris FE/BE stopped. Authenticated browser
+  validation on `/console/settings?verify=1713fe22` loaded Security/MFA at
+  mobile 390x844 and desktop 1440x900, showed zero console warnings/errors,
+  only HTTP 200 app API responses for Settings/MFA/fleet/tenant calls, no
+  `api.qrserver.com` request, clean desktop layout, and a deliberate scrollable
+  Settings tab strip on mobile. No live TOTP, WebAuthn, or backup-code factor
+  was created during final verification.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
