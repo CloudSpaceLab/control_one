@@ -21,24 +21,26 @@ import (
 )
 
 type webhookResponse struct {
-	ID              string         `json:"id"`
-	TenantID        *string        `json:"tenant_id,omitempty"`
-	Name            string         `json:"name"`
-	URL             string         `json:"url"`
-	Events          []string       `json:"events"`
-	Enabled         bool           `json:"enabled"`
-	VerifySSL       bool           `json:"verify_ssl"`
-	TimeoutSeconds  int            `json:"timeout_seconds"`
-	RetryCount      int            `json:"retry_count"`
-	Headers         map[string]any `json:"headers,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
-	LastTriggeredAt *string        `json:"last_triggered_at,omitempty"`
-	LastSuccessAt   *string        `json:"last_success_at,omitempty"`
-	LastFailureAt   *string        `json:"last_failure_at,omitempty"`
-	FailureCount    int            `json:"failure_count"`
-	CreatedAt       string         `json:"created_at"`
-	UpdatedAt       string         `json:"updated_at"`
-	CreatedBy       *string        `json:"created_by,omitempty"`
+	ID                string         `json:"id"`
+	TenantID          *string        `json:"tenant_id,omitempty"`
+	Name              string         `json:"name"`
+	URL               string         `json:"url"`
+	Events            []string       `json:"events"`
+	Enabled           bool           `json:"enabled"`
+	VerifySSL         bool           `json:"verify_ssl"`
+	TimeoutSeconds    int            `json:"timeout_seconds"`
+	RetryCount        int            `json:"retry_count"`
+	Headers           map[string]any `json:"headers,omitempty"`
+	HeadersConfigured bool           `json:"headers_configured"`
+	SecretConfigured  bool           `json:"secret_configured"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	LastTriggeredAt   *string        `json:"last_triggered_at,omitempty"`
+	LastSuccessAt     *string        `json:"last_success_at,omitempty"`
+	LastFailureAt     *string        `json:"last_failure_at,omitempty"`
+	FailureCount      int            `json:"failure_count"`
+	CreatedAt         string         `json:"created_at"`
+	UpdatedAt         string         `json:"updated_at"`
+	CreatedBy         *string        `json:"created_by,omitempty"`
 }
 
 type createWebhookRequest struct {
@@ -549,19 +551,21 @@ func (s *Server) requireWebhookTenantAccess(w http.ResponseWriter, r *http.Reque
 
 func webhookToResponse(w *storage.Webhook) webhookResponse {
 	resp := webhookResponse{
-		ID:             w.ID.String(),
-		Name:           w.Name,
-		URL:            w.URL,
-		Events:         w.Events,
-		Enabled:        w.Enabled,
-		VerifySSL:      w.VerifySSL,
-		TimeoutSeconds: w.TimeoutSeconds,
-		RetryCount:     w.RetryCount,
-		Headers:        w.Headers,
-		Metadata:       w.Metadata,
-		FailureCount:   w.FailureCount,
-		CreatedAt:      w.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:      w.UpdatedAt.Format(time.RFC3339),
+		ID:                w.ID.String(),
+		Name:              w.Name,
+		URL:               w.URL,
+		Events:            w.Events,
+		Enabled:           w.Enabled,
+		VerifySSL:         w.VerifySSL,
+		TimeoutSeconds:    w.TimeoutSeconds,
+		RetryCount:        w.RetryCount,
+		Headers:           redactedWebhookHeaders(w.Headers),
+		HeadersConfigured: len(w.Headers) > 0,
+		SecretConfigured:  w.Secret.Valid && strings.TrimSpace(w.Secret.String) != "",
+		Metadata:          w.Metadata,
+		FailureCount:      w.FailureCount,
+		CreatedAt:         w.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:         w.UpdatedAt.Format(time.RFC3339),
 	}
 
 	if w.TenantID.Valid {
@@ -586,6 +590,38 @@ func webhookToResponse(w *storage.Webhook) webhookResponse {
 	}
 
 	return resp
+}
+
+func redactedWebhookHeaders(headers map[string]any) map[string]any {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(headers))
+	for key, value := range headers {
+		if webhookHeaderIsSensitive(key) {
+			out[key] = "[redacted]"
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func webhookHeaderIsSensitive(name string) bool {
+	clean := strings.ToLower(strings.TrimSpace(name))
+	if clean == "" {
+		return false
+	}
+	switch clean {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key", "apikey", "x-auth-token", "x-webhook-secret":
+		return true
+	}
+	return strings.Contains(clean, "token") ||
+		strings.Contains(clean, "auth") ||
+		strings.Contains(clean, "secret") ||
+		strings.Contains(clean, "signature") ||
+		strings.Contains(clean, "credential") ||
+		strings.Contains(clean, "password")
 }
 
 func webhookDeliveryToResponse(d *storage.WebhookDelivery) webhookDeliveryResponse {

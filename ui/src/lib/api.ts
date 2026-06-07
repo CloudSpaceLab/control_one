@@ -1630,6 +1630,8 @@ export interface Webhook {
   timeout_seconds: number;
   retry_count: number;
   headers?: Record<string, unknown>;
+  headers_configured?: boolean;
+  secret_configured?: boolean;
   metadata?: Record<string, unknown>;
   last_triggered_at?: string;
   last_success_at?: string;

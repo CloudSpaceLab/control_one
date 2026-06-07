@@ -18,7 +18,7 @@ import { KeyRound, Shield, Trash2 } from 'lucide-react';
 
 function formatDate(value?: string): string {
   if (!value) {
-    return '—';
+    return '-';
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -40,6 +40,32 @@ const AVAILABLE_EVENTS = [
   'tenant.created',
   'tenant.updated',
 ];
+
+const newWebhookForm = (): CreateWebhookPayload => ({
+  name: '',
+  url: '',
+  events: [],
+  enabled: true,
+  verify_ssl: true,
+  timeout_seconds: 30,
+  retry_count: 3,
+});
+
+function parseWebhookHeaders(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Custom headers must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function webhookHasHeaders(webhook?: Webhook | null): boolean {
+  return Boolean(webhook?.headers_configured) || Object.keys(webhook?.headers ?? {}).length > 0;
+}
 
 export function Settings(): JSX.Element {
   const api = useApiClient();
@@ -125,6 +151,10 @@ export function Settings(): JSX.Element {
   const [selectedTenant, setSelectedTenant] = useState<string | undefined>(undefined);
   const [isCreatingWebhook, setIsCreatingWebhook] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<Webhook | null>(null);
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [clearWebhookSecret, setClearWebhookSecret] = useState(false);
+  const [webhookHeadersText, setWebhookHeadersText] = useState('');
+  const [clearWebhookHeaders, setClearWebhookHeaders] = useState(false);
 
   const { currentTenantId } = useTenant();
   const effectiveTenant = selectedTenant ?? currentTenantId ?? undefined;
@@ -169,28 +199,20 @@ export function Settings(): JSX.Element {
     }
   };
 
-  const [webhookForm, setWebhookForm] = useState<CreateWebhookPayload>({
-    name: '',
-    url: '',
-    events: [],
-    enabled: true,
-    verify_ssl: true,
-    timeout_seconds: 30,
-    retry_count: 3,
-  });
+  const [webhookForm, setWebhookForm] = useState<CreateWebhookPayload>(newWebhookForm);
+
+  const resetWebhookSensitiveForm = () => {
+    setWebhookSecret('');
+    setClearWebhookSecret(false);
+    setWebhookHeadersText('');
+    setClearWebhookHeaders(false);
+  };
 
   const handleCreateWebhook = () => {
     setIsCreatingWebhook(true);
     setEditingWebhook(null);
-    setWebhookForm({
-      name: '',
-      url: '',
-      events: [],
-      enabled: true,
-      verify_ssl: true,
-      timeout_seconds: 30,
-      retry_count: 3,
-    });
+    setWebhookForm(newWebhookForm());
+    resetWebhookSensitiveForm();
     resetFeedback();
   };
 
@@ -206,12 +228,14 @@ export function Settings(): JSX.Element {
       timeout_seconds: webhook.timeout_seconds,
       retry_count: webhook.retry_count,
     });
+    resetWebhookSensitiveForm();
     resetFeedback();
   };
 
   const handleCancelEdit = () => {
     setIsCreatingWebhook(false);
     setEditingWebhook(null);
+    resetWebhookSensitiveForm();
     resetFeedback();
   };
 
@@ -240,6 +264,14 @@ export function Settings(): JSX.Element {
     resetFeedback();
 
     try {
+      let parsedHeaders: Record<string, unknown> | undefined;
+      try {
+        parsedHeaders = parseWebhookHeaders(webhookHeadersText);
+      } catch (err) {
+        showError(err instanceof Error ? err.message : 'Custom headers must be valid JSON');
+        return;
+      }
+
       if (editingWebhook) {
         const payload: UpdateWebhookPayload = {
           name: webhookForm.name,
@@ -250,6 +282,17 @@ export function Settings(): JSX.Element {
           timeout_seconds: webhookForm.timeout_seconds,
           retry_count: webhookForm.retry_count,
         };
+        const trimmedSecret = webhookSecret.trim();
+        if (clearWebhookSecret) {
+          payload.secret = '';
+        } else if (trimmedSecret) {
+          payload.secret = trimmedSecret;
+        }
+        if (clearWebhookHeaders) {
+          payload.headers = {};
+        } else if (parsedHeaders) {
+          payload.headers = parsedHeaders;
+        }
         await api.updateWebhook(editingWebhook.id, payload);
         showSuccess('Webhook updated successfully');
       } else {
@@ -257,11 +300,19 @@ export function Settings(): JSX.Element {
           ...webhookForm,
           tenant_id: effectiveTenant,
         };
+        const trimmedSecret = webhookSecret.trim();
+        if (trimmedSecret) {
+          payload.secret = trimmedSecret;
+        }
+        if (parsedHeaders) {
+          payload.headers = parsedHeaders;
+        }
         await api.createWebhook(payload);
         showSuccess('Webhook created successfully');
       }
       setIsCreatingWebhook(false);
       setEditingWebhook(null);
+      resetWebhookSensitiveForm();
       reloadWebhooks();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to save webhook';
@@ -403,6 +454,61 @@ export function Settings(): JSX.Element {
                       }
                     />
                   </div>
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <Label htmlFor="wh-secret">Signing secret</Label>
+                    <Input
+                      id="wh-secret"
+                      type="password"
+                      autoComplete="off"
+                      value={webhookSecret}
+                      disabled={clearWebhookSecret}
+                      onChange={(e) => setWebhookSecret(e.target.value)}
+                      placeholder={editingWebhook?.secret_configured ? 'Configured; leave blank to keep' : 'Optional HMAC secret'}
+                    />
+                    {editingWebhook?.secret_configured && (
+                      <label className="inline-flex items-center gap-2 text-xs text-text-muted cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 rounded border-border-subtle accent-brand-500 cursor-pointer"
+                          checked={clearWebhookSecret}
+                          onChange={(e) => {
+                            setClearWebhookSecret(e.target.checked);
+                            if (e.target.checked) {
+                              setWebhookSecret('');
+                            }
+                          }}
+                        />
+                        Clear configured signing secret
+                      </label>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <Label htmlFor="wh-headers">Custom headers JSON</Label>
+                    <textarea
+                      id="wh-headers"
+                      className="min-h-24 rounded-lg border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      value={webhookHeadersText}
+                      disabled={clearWebhookHeaders}
+                      onChange={(e) => setWebhookHeadersText(e.target.value)}
+                      placeholder={webhookHasHeaders(editingWebhook) ? '{"Authorization":"Bearer ..."} leave blank to keep' : '{"X-Team":"secops"}'}
+                    />
+                    {editingWebhook && webhookHasHeaders(editingWebhook) && (
+                      <label className="inline-flex items-center gap-2 text-xs text-text-muted cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 rounded border-border-subtle accent-brand-500 cursor-pointer"
+                          checked={clearWebhookHeaders}
+                          onChange={(e) => {
+                            setClearWebhookHeaders(e.target.checked);
+                            if (e.target.checked) {
+                              setWebhookHeadersText('');
+                            }
+                          }}
+                        />
+                        Clear configured custom headers
+                      </label>
+                    )}
+                  </div>
                 </div>
 
                 {/* Events grid */}
@@ -477,7 +583,7 @@ export function Settings(): JSX.Element {
 
           {/* Webhook list */}
           {webhooksLoading && !webhooks.length ? (
-            <p className="text-sm text-text-muted">Loading webhooks…</p>
+            <p className="text-sm text-text-muted">Loading webhooks...</p>
           ) : webhooks.length === 0 ? (
             <EmptyState
               title="No webhooks configured"
@@ -495,6 +601,12 @@ export function Settings(): JSX.Element {
                       <StatusTag tone={wh.enabled ? 'healthy' : 'unknown'}>
                         {wh.enabled ? 'Enabled' : 'Disabled'}
                       </StatusTag>
+                      {wh.secret_configured && (
+                        <StatusTag tone="info">Signed</StatusTag>
+                      )}
+                      {webhookHasHeaders(wh) && (
+                        <StatusTag tone="info">Custom headers</StatusTag>
+                      )}
                       <Button variant="ghost" size="sm" onClick={() => handleTestWebhook(wh.id)}>
                         Test
                       </Button>
@@ -549,7 +661,7 @@ export function Settings(): JSX.Element {
         <TabsContent value="security" className="mt-4 flex flex-col gap-4">
           <Panel
             padding="md"
-            eyebrow="MFA · WEBAUTHN"
+            eyebrow="MFA / WEBAUTHN"
             title="Enrolled factors"
             actions={
               <div className="flex gap-2">
@@ -622,7 +734,7 @@ export function Settings(): JSX.Element {
             )}
 
             {mfaLoading ? (
-              <p className="text-sm text-text-muted">Loading factors…</p>
+              <p className="text-sm text-text-muted">Loading factors...</p>
             ) : mfaFactors.length === 0 ? (
               <EmptyState
                 icon={<Shield />}
@@ -637,7 +749,7 @@ export function Settings(): JSX.Element {
                       <KeyRound className="h-4 w-4 text-text-muted" />
                       <div>
                         <p className="text-sm font-medium text-foreground">{f.name}</p>
-                        <p className="text-xs text-text-muted capitalize">{f.type} · enrolled {new Date(f.created_at).toLocaleDateString()}</p>
+                        <p className="text-xs text-text-muted capitalize">{f.type} / enrolled {new Date(f.created_at).toLocaleDateString()}</p>
                       </div>
                     </div>
                     <Button
@@ -701,7 +813,7 @@ export function Settings(): JSX.Element {
         <TabsContent value="system" className="mt-4 flex flex-col gap-4">
           <Panel
             padding="md"
-            eyebrow="SYSTEM · WORKER POOL"
+            eyebrow="SYSTEM / WORKER POOL"
             title="Worker pool"
             actions={
               <Button type="button" variant="secondary" size="sm" onClick={refreshWorker} disabled={workerLoading}>
@@ -729,7 +841,7 @@ export function Settings(): JSX.Element {
                 </div>
               </div>
             ) : workerLoading ? (
-              <p className="text-sm text-text-muted">Loading worker pool status…</p>
+              <p className="text-sm text-text-muted">Loading worker pool status...</p>
             ) : (
               <EmptyState title="Worker status unavailable" description="The worker pool did not respond." />
             )}
@@ -746,7 +858,7 @@ export function Settings(): JSX.Element {
         <TabsContent value="trust-center" className="mt-4 flex flex-col gap-4">
           <Panel
             padding="md"
-            eyebrow="TRUST CENTER · ADMIN"
+            eyebrow="TRUST CENTER / ADMIN"
             title="Public Trust Center Management"
           >
             <p className="text-sm text-text-secondary mb-4">
