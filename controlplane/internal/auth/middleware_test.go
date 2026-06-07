@@ -198,6 +198,49 @@ func TestMiddlewareBypassesCollectorSelfServiceOnlyWithCollectorCredential(t *te
 	}
 }
 
+func TestMiddlewareAllowsPublicTrustCenterTenantLookup(t *testing.T) {
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, &fakeIdentityStore{})
+	called := false
+	handler := mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/trust/Tenant%20A", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || !called {
+		t.Fatalf("public trust lookup status=%d called=%v, want 204 and called", rec.Code, called)
+	}
+}
+
+func TestMiddlewareKeepsTrustCenterAdminCollectionsAuthenticated(t *testing.T) {
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, &fakeIdentityStore{})
+	called := false
+	handler := mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	adminPaths := []string{
+		"/api/v1/trust/subprocessors",
+		"/api/v1/trust/certifications",
+		"/api/v1/trust/faq",
+		"/api/v1/trust/incidents",
+	}
+	for _, path := range adminPaths {
+		t.Run(path, func(t *testing.T) {
+			called = false
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized || called {
+				t.Fatalf("admin trust path status=%d called=%v, want 401 and not called", rec.Code, called)
+			}
+		})
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

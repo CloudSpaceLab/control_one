@@ -88,7 +88,7 @@ export function TrustCenter(): JSX.Element {
     }
 
     setLoading(true);
-    fetch(`/api/v1/trust/${tenantSlug}`)
+    fetch(`/api/v1/trust/${encodeURIComponent(tenantSlug)}`)
       .then(async (res) => {
         if (!res.ok) {
           const text = await res.text();

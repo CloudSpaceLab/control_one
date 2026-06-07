@@ -182,6 +182,16 @@ describe('Settings webhooks', () => {
     expect(payload).not.toHaveProperty('secret');
     expect(payload).not.toHaveProperty('headers');
   });
+
+  it('links the public Trust Center by tenant name instead of tenant id', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(screen.getByRole('tab', { name: /trust center/i }));
+
+    const link = screen.getByRole('link', { name: /view public trust center/i });
+    expect(link).toHaveAttribute('href', '/trust/Tenant%20A');
+  });
 });
 
 describe('Settings MFA enrollment', () => {

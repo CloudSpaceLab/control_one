@@ -135,10 +135,27 @@ func (m *Middleware) publicRequest(r *http.Request) bool {
 	if _, ok := m.publicPaths[r.URL.Path]; ok {
 		return true
 	}
+	if r.Method == http.MethodGet && publicTrustCenterPath(r.URL.Path) {
+		return true
+	}
 	if contentPackCollectorSelfServicePath(r.URL.Path) && requestHasCollectorCredential(r) {
 		return true
 	}
 	return false
+}
+
+func publicTrustCenterPath(path string) bool {
+	const prefix = "/api/v1/trust/"
+	name, ok := strings.CutPrefix(path, prefix)
+	if !ok || strings.TrimSpace(name) == "" || strings.Contains(name, "/") {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "subprocessors", "certifications", "faq", "incidents":
+		return false
+	default:
+		return true
+	}
 }
 
 func contentPackCollectorSelfServicePath(path string) bool {

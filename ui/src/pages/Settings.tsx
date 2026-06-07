@@ -473,6 +473,9 @@ export function Settings(): JSX.Element {
   };
 
   const showForm = isCreatingWebhook || editingWebhook !== null;
+  const trustCenterTenant = tenants.find((tenant) => tenant.id === effectiveTenant);
+  const trustCenterTenantName = trustCenterTenant?.name ?? tenants[0]?.name ?? 'default';
+  const trustCenterHref = `/trust/${encodeURIComponent(trustCenterTenantName)}`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -995,11 +998,11 @@ export function Settings(): JSX.Element {
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                 <Button variant="secondary" asChild>
-                  <a href={`/trust/${effectiveTenant || 'default'}`} target="_blank" rel="noopener noreferrer">
+                  <a href={trustCenterHref} target="_blank" rel="noopener noreferrer">
                     View Public Trust Center
                   </a>
                 </Button>
-                <Button variant="secondary" onClick={() => window.location.href = '/settings'}>
+                <Button variant="secondary" onClick={() => { window.location.href = '/console/settings'; }}>
                   Manage via API
                 </Button>
               </div>

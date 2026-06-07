@@ -1,5 +1,5 @@
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useTenants } from '../hooks/useTenants';
 import { useTenant } from '../providers/TenantProvider';
 import { useApiClient } from '../hooks/useApiClient';
@@ -592,12 +592,12 @@ export function FleetEnroll(): JSX.Element {
                           </td>
                           <td className="px-3 py-2.5">
                             {result.node_id ? (
-                              <a
-                                href={`/nodes?id=${result.node_id}`}
+                              <Link
+                                to={`/nodes?id=${encodeURIComponent(result.node_id)}`}
                                 className="font-mono text-xs text-brand-400 hover:underline"
                               >
                                 {result.node_id.slice(0, 8)}…
-                              </a>
+                              </Link>
                             ) : (
                               <span className="text-text-muted text-xs">—</span>
                             )}
