@@ -2926,3 +2926,50 @@ matches, no Doris FE/BE containers were running, and memory remained within the
 small-fleet envelope: console about 4.5 MiB / 256 MiB, controlplane about
 87.5 MiB / 1 GiB, Redis about 6.7 MiB / 192 MiB, and ipq about 4.8 MiB /
 128 MiB.
+
+2026-06-07 SIEM source-health export follow-up: source inspection found one
+remaining export-path defect after the earlier evidence/report hardening. The
+SIEM source-health investigation panel and source-investigation rows rendered
+`export_url` as a plain new-tab link. SOC case export endpoints are bearer-token
+protected and the login flow does not set an auth cookie, so those links could
+open a 401 tab instead of delivering the audit packet. A live direct API check
+confirmed the risk on an existing SOC case: the raw export URL returned HTTP
+401 without a bearer token, while the same endpoint returned HTTP 200 with
+`export_version=soc-case-export-v1`, 6 evidence refs, and 5 guardrails when
+called with Authorization.
+
+The fix preserves the feature: both SIEM Export controls now call
+`api.exportSOCCase(...)` through the authenticated API client and save a
+pretty-printed JSON packet named `soc-case-{case_id}-{date}.json`; no export
+button or SOC packet capability was removed. Regression coverage proves the
+source-health export is a button rather than a raw link, calls
+`exportSOCCase(case_id, tenant_id)`, saves the packet through `saveBlob`, and
+keeps the existing source-health workflows intact.
+
+Local validation passed:
+`npm --prefix ui run test -- src/pages/SIEMCoverage.test.tsx`,
+`npm --prefix ui run build`, `npm --prefix ui run lint`, and
+`git diff --check` (lint only emitted the existing ESLintRC deprecation
+warning). The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+Production currently has four SIEM source-health rows, all `collecting`, and no
+live source-health SOC case row, so browser verification used Playwright route
+interception for only the source-health case list and export packet to avoid
+creating a synthetic production incident. The deployed `/console/security/siem`
+page rendered the intercepted source-investigation row, had zero raw
+`/api/v1/soc/cases/.../export` anchors, clicked the Export button, sent an
+authenticated bearer request to the export endpoint, and produced
+`soc-case-22222222-3333-4444-5555-666666666666-2026-06-07.json`. The page had
+no document-level horizontal overflow, no browser console warnings/errors, and
+no same-origin app 4xx/5xx responses; the only request failure observed was a
+Cloudflare RUM `net::ERR_ABORTED` beacon.
+
+Post-deploy host evidence remained healthy: `/healthz=ok`, Compose config still
+reports `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, no Doris FE/BE containers were
+running under the OLAP profile, memory stayed light at about console
+6.0 MiB / 256 MiB, controlplane 71.4 MiB / 1 GiB, Redis 6.7 MiB / 192 MiB, and
+ipq 4.8 MiB / 128 MiB, and a strict 20-minute console/controlplane log scan
+showed no actual nginx 4xx/5xx, controlplane 5xx, panic, fatal, permission,
+database-lock, analytics-unavailable, or Doris-unavailable matches.
