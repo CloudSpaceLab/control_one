@@ -2030,12 +2030,28 @@ async function safeErrorMessage(
   response: Response,
 ): Promise<string | undefined> {
   try {
-    const data = await response.json();
-    if (data && typeof data.message === "string") {
-      return data.message;
+    const text = (await response.text()).trim();
+    if (!text) return response.statusText;
+    try {
+      const data = JSON.parse(text);
+      if (data && typeof data === "object") {
+        const record = data as Record<string, unknown>;
+        for (const key of ["message", "error", "detail"]) {
+          const value = record[key];
+          if (typeof value === "string" && value.trim()) {
+            return value.trim();
+          }
+        }
+      }
+    } catch {
+      // Plain text http.Error bodies are common in the Go API.
+    }
+    const contentType = response.headers.get("Content-Type") ?? "";
+    if (!contentType.toLowerCase().includes("html")) {
+      return text.length > 500 ? `${text.slice(0, 500)}...` : text;
     }
   } catch {
-    // ignore json parse errors
+    // ignore body parse errors
   }
   return response.statusText;
 }

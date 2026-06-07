@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { APIClient } from './api';
+import { APIClient, APIError } from './api';
 
 describe('APIClient.normalizeBase', () => {
   it('returns DEFAULT for null/undefined (env unset)', () => {
@@ -49,6 +49,36 @@ describe('APIClient.normalizeBase', () => {
       expect(url).not.toMatch(/\/api\/api\//);
       expect(url.endsWith('/api/v1/auth/login')).toBe(true);
     }
+  });
+});
+
+describe('APIClient errors', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('surfaces plain-text backend error bodies', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('api_key required for otx\n', {
+        status: 400,
+        statusText: 'Bad Request',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    await expect(
+      client.createThreatFeed({
+        tenant_id: 'tenant-1',
+        name: 'OTX',
+        feed_type: 'otx',
+      }),
+    ).rejects.toMatchObject({
+      name: 'APIError',
+      message: 'api_key required for otx',
+      status: 400,
+    } satisfies Partial<APIError>);
   });
 });
 

@@ -116,16 +116,41 @@ function formatDateTime(value?: string): string {
   return date.toLocaleString();
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function validateForm(form: CreateThreatFeedPayload, meta: FeedTypeMeta): string | null {
+  if (meta.needsURL === 'required' && !(form.url ?? '').trim()) {
+    return 'URL is required for this feed type.';
+  }
+  if (meta.apiKeyMode === 'required' && !(form.api_key ?? '').trim()) {
+    return 'API key is required for this feed type.';
+  }
+  if (form.score_floor !== undefined && (!Number.isFinite(form.score_floor) || form.score_floor < 0 || form.score_floor > 100)) {
+    return 'Score floor must be between 0 and 100.';
+  }
+  if (form.refresh_seconds !== undefined && (!Number.isFinite(form.refresh_seconds) || form.refresh_seconds < 60)) {
+    return 'Refresh interval must be at least 60 seconds.';
+  }
+  return null;
+}
+
 export function ThreatFeeds(): JSX.Element {
   const client = useApiClient();
   const { data: tenants } = useTenants({ limit: 50, offset: 0 });
   const [tenantId, setTenantId] = useState('');
   const [feeds, setFeeds] = useState<ThreatFeed[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [feedsError, setFeedsError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [form, setForm] = useState<CreateThreatFeedPayload>(emptyForm(''));
   const [submitting, setSubmitting] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<ThreatIntelSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -137,10 +162,23 @@ export function ThreatFeeds(): JSX.Element {
 
   useEffect(() => {
     setForm((prev) => ({ ...prev, tenant_id: tenantId }));
+    setFeedsError(null);
+    setFormError(null);
+    setActionError(null);
+    setDeleteError(null);
+    setConfirmId(null);
   }, [tenantId]);
 
   const refresh = useCallback(async (lookupIP?: string) => {
-    if (!tenantId) return;
+    if (!tenantId) {
+      setFeeds([]);
+      setSummary(null);
+      setFeedsError(null);
+      setSummaryError(null);
+      setLoading(false);
+      setSummaryLoading(false);
+      return;
+    }
     setLoading(true);
     setSummaryLoading(true);
     const [feedsResp, summaryResp] = await Promise.allSettled([
@@ -149,15 +187,17 @@ export function ThreatFeeds(): JSX.Element {
     ]);
     if (feedsResp.status === 'fulfilled') {
       setFeeds(feedsResp.value.data);
-      setError(null);
+      setFeedsError(null);
     } else {
-      setError(feedsResp.reason instanceof Error ? feedsResp.reason.message : 'load failed');
+      setFeeds([]);
+      setFeedsError(errorMessage(feedsResp.reason, 'Threat feed list failed.'));
     }
     if (summaryResp.status === 'fulfilled') {
       setSummary(summaryResp.value);
       setSummaryError(null);
     } else {
-      setSummaryError(summaryResp.reason instanceof Error ? summaryResp.reason.message : 'blacklist summary failed');
+      setSummary(null);
+      setSummaryError(errorMessage(summaryResp.reason, 'Blacklist summary failed.'));
     }
     setLoading(false);
     setSummaryLoading(false);
@@ -169,30 +209,48 @@ export function ThreatFeeds(): JSX.Element {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tenantId) return;
+    if (!tenantId || formValidationError) return;
     setSubmitting(true);
-    setError(null);
+    setFormError(null);
+    setActionError(null);
     try {
       await client.createThreatFeed({ ...form, tenant_id: tenantId });
       setForm(emptyForm(tenantId));
-      refresh(summary?.lookup?.ip);
+      await refresh(summary?.lookup?.ip);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'create failed');
+      setFormError(errorMessage(err, 'Create failed.'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const toggleEnabled = async (feed: ThreatFeed) => {
-    await client.updateThreatFeed(feed.id, { enabled: !feed.enabled });
-    refresh(summary?.lookup?.ip);
-  };
+  const toggleEnabled = useCallback(async (feed: ThreatFeed) => {
+    if (updatingId || deleteLoading) return;
+    setUpdatingId(feed.id);
+    setActionError(null);
+    try {
+      await client.updateThreatFeed(feed.id, { enabled: !feed.enabled });
+      await refresh(summary?.lookup?.ip);
+    } catch (err) {
+      setActionError(`Threat feed update failed for ${feed.name}: ${errorMessage(err, 'Update failed.')}`);
+    } finally {
+      setUpdatingId(null);
+    }
+  }, [client, deleteLoading, refresh, summary?.lookup?.ip, updatingId]);
 
   const remove = async () => {
     if (!confirmId) return;
-    await client.deleteThreatFeed(confirmId);
-    setConfirmId(null);
-    refresh(summary?.lookup?.ip);
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await client.deleteThreatFeed(confirmId);
+      setConfirmId(null);
+      await refresh(summary?.lookup?.ip);
+    } catch (err) {
+      setDeleteError(errorMessage(err, 'Delete failed.'));
+    } finally {
+      setDeleteLoading(false);
+    }
   };
 
   const checkIP = async (e: React.FormEvent) => {
@@ -201,6 +259,8 @@ export function ThreatFeeds(): JSX.Element {
   };
 
   const meta = FEED_META[form.feed_type];
+  const confirmFeed = feeds.find((feed) => feed.id === confirmId) ?? null;
+  const formValidationError = validateForm(form, meta);
 
   const onTypeChange = (type: ThreatFeedType) => {
     const m = FEED_META[type];
@@ -284,6 +344,9 @@ export function ThreatFeeds(): JSX.Element {
             variant="ghost"
             size="sm"
             onClick={() => toggleEnabled(row.original)}
+            aria-label={`${row.original.enabled ? 'Disable' : 'Enable'} threat feed ${row.original.name}`}
+            loading={updatingId === row.original.id}
+            disabled={deleteLoading || (updatingId !== null && updatingId !== row.original.id)}
           >
             {row.original.enabled ? 'Enabled' : 'Disabled'}
           </Button>
@@ -296,15 +359,19 @@ export function ThreatFeeds(): JSX.Element {
           <Button
             variant="danger"
             size="sm"
-            onClick={() => setConfirmId(row.original.id)}
+            onClick={() => {
+              setDeleteError(null);
+              setConfirmId(row.original.id);
+            }}
+            aria-label={`Remove threat feed ${row.original.name}`}
+            disabled={deleteLoading || updatingId !== null}
           >
             Remove
           </Button>
         ),
       },
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [deleteLoading, toggleEnabled, updatingId],
   );
 
   return (
@@ -388,7 +455,7 @@ export function ThreatFeeds(): JSX.Element {
           )}
         </form>
 
-        {summaryError && <p className="mt-3 text-sm text-state-critical">{summaryError}</p>}
+        {summaryError && <p className="mt-3 text-sm text-state-critical" role="alert">{summaryError}</p>}
 
         {summary?.lookup && (
           <div className="mt-4 rounded-md border border-border-subtle bg-surface p-3">
@@ -484,10 +551,18 @@ export function ThreatFeeds(): JSX.Element {
           </div>
         ) : (
           <p className="mt-4 text-sm text-text-muted">
-            Blacklist cache is still warming up. It appears here after the next successful threat-intel refresh.
+            {summaryError
+              ? 'Blacklist cache could not be loaded. Resolve the error above and refresh.'
+              : 'Blacklist cache is still warming up. It appears here after the next successful threat-intel refresh.'}
           </p>
         )}
       </Panel>
+
+      {actionError ? (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Threat feed action failed">
+          <p className="text-sm text-state-critical" role="alert">{actionError}</p>
+        </Panel>
+      ) : null}
 
       <Panel padding="md" eyebrow="ADD SOURCE" title="Register a threat feed" toneAccent="brand">
         <form onSubmit={submit} className="flex flex-col gap-4">
@@ -561,8 +636,8 @@ export function ThreatFeeds(): JSX.Element {
                 type="number"
                 min={0}
                 max={100}
-                value={form.score_floor ?? 50}
-                onChange={(e) => setForm({ ...form, score_floor: Number(e.target.value) })}
+                value={form.score_floor ?? ''}
+                onChange={(e) => setForm({ ...form, score_floor: e.target.value === '' ? undefined : Number(e.target.value) })}
               />
             </div>
             <div className="flex flex-col gap-1.5">
@@ -571,21 +646,33 @@ export function ThreatFeeds(): JSX.Element {
                 id="feed-refresh"
                 type="number"
                 min={60}
-                value={form.refresh_seconds ?? 3600}
-                onChange={(e) => setForm({ ...form, refresh_seconds: Number(e.target.value) })}
+                value={form.refresh_seconds ?? ''}
+                onChange={(e) => setForm({ ...form, refresh_seconds: e.target.value === '' ? undefined : Number(e.target.value) })}
               />
             </div>
           </div>
 
-          {error && <p className="text-sm text-state-critical">{error}</p>}
+          {formValidationError ? <p className="text-sm text-state-critical" role="alert">{formValidationError}</p> : null}
+          {formError && <p className="text-sm text-state-critical" role="alert">{formError}</p>}
 
           <div className="flex items-center justify-end gap-2">
-            <Button type="submit" variant="primary" loading={submitting}>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={submitting}
+              disabled={!tenantId || !form.name.trim() || Boolean(formValidationError)}
+            >
               Add source
             </Button>
           </div>
         </form>
       </Panel>
+
+      {feedsError ? (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Threat feed data unavailable">
+          <p className="text-sm text-state-critical" role="alert">{feedsError}</p>
+        </Panel>
+      ) : null}
 
       <DataTable<ThreatFeed>
         columns={columns}
@@ -593,22 +680,40 @@ export function ThreatFeeds(): JSX.Element {
         rowKey={(row) => row.id}
         loading={loading && feeds.length === 0}
         empty={
-          <EmptyState
-            title="No threat feeds configured"
-            description="Add a source above to start enriching alerts with threat intelligence."
-          />
+          feedsError ? (
+            <EmptyState
+              title="Threat feeds could not be loaded"
+              description="Resolve the error above and refresh."
+            />
+          ) : (
+            <EmptyState
+              title="No threat feeds configured"
+              description="Add a source above to start enriching alerts with threat intelligence."
+            />
+          )
         }
       />
 
       <ConfirmModal
         open={confirmId !== null}
         title="Remove threat source?"
-        body="The platform will stop pulling from this feed on the next refresh tick. Existing indicators in cache stay until they age out."
+        body={`The platform will stop pulling from ${confirmFeed?.name ?? 'this feed'} on the next refresh tick. Existing indicators in cache stay until they age out.`}
         variant="danger"
-        confirmLabel="Remove"
+        confirmLabel={deleteLoading ? 'Removing...' : 'Remove'}
+        confirmDisabled={deleteLoading}
+        cancelDisabled={deleteLoading}
         onConfirm={remove}
-        onCancel={() => setConfirmId(null)}
-      />
+        onCancel={() => {
+          setDeleteError(null);
+          setConfirmId(null);
+        }}
+      >
+        {deleteError ? (
+          <p className="rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+            Threat feed delete failed: {deleteError}
+          </p>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }

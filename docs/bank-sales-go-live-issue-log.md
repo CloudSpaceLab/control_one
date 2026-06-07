@@ -3290,3 +3290,65 @@ Doris-unavailable, or small-analytics unavailable matches. The only recent
 Cases 4xx/5xx line was an expected unauthenticated HTTP 401 from the initial
 browser-side API probe before the bearer header was added; a shorter post-clean
 window showed no `/api/v1/soc/cases` 4xx/5xx matches.
+
+2026-06-08 Threat Feeds failure-mode hardening: source review found
+operator-risk gaps in threat-intelligence source management. Plain-text Go
+`http.Error` responses were flattened to generic status text, so important
+backend guidance like missing OTX API keys could become `Bad Request`. A
+threat-feed list outage could render the false `No threat feeds configured`
+empty state, blacklist-summary failures could look like a warming cache,
+enable/disable failures could disappear as unhandled actions, delete failures
+could close the confirmation path, and blank numeric inputs could be coerced
+into misleading values.
+
+The fix preserves the existing Threat Feeds workflow while making every
+operator decision recoverable. API errors now read JSON or plain-text response
+bodies and suppress HTML bodies. Feed-list, summary, form, row-action, and
+delete failures have separate durable states, tenant changes clear stale
+errors, failed feed loads clear stale rows and show recovery copy, failed
+summary loads no longer show warming-cache copy, OTX and URL-backed sources are
+validated before submit, score and refresh fields keep blank state instead of
+coercing to zero, row enable/disable controls are feed-specific and loading
+aware, and failed deletes remain inside the shared confirmation modal with the
+affected feed name visible.
+
+Regression coverage now proves plain-text backend errors are preserved, feed
+list failures avoid the false empty state, blacklist-summary failures avoid the
+warming-cache copy, failed enable toggles stay visible and name the row action,
+failed deletes remain in the confirmation modal, and invalid refresh intervals
+block create without making an API call. Local validation passed:
+`npm --prefix ui run test -- src/pages/ThreatFeeds.test.tsx
+src/lib/api.normalize.test.ts`, `npm --prefix ui run lint`,
+`npm --prefix ui run build`, and `git diff --check` for the touched files.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/security/network?tab=threats`
+returned HTTP 200 with no-store headers and `Last-Modified: Sun, 07 Jun 2026
+23:37:12 GMT`.
+
+Live browser verification on
+`/console/security/network?tab=threats` used the authenticated session and
+safe Playwright route interception for Threat Feeds only, so no production
+feed was created, toggled, or deleted. The deployed page showed a feed-list
+outage alert, avoided the false empty state, showed table recovery copy,
+surfaced a blacklist-summary outage without warming-cache copy, rendered a
+synthetic `FireHOL production` row, kept an intercepted toggle failure visible,
+kept an intercepted delete failure inside the modal, blocked missing OTX API
+keys before create, preserved a plain-text create error, and confirmed the
+intercepted create, toggle, and delete routes fired exactly once. A clean real
+production reload then had no Threat Feeds alerts, zero browser console
+warnings/errors, a healthy direct threat-feeds API read, and a healthy direct
+threat-summary API read. Mobile verification at 390x844 had no alerts and no
+horizontal overflow (`381/381`).
+
+Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/security/network?tab=threats` returned HTTP 200, no Doris FE/BE
+containers were running under the OLAP profile, Redis remained
+`maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory stayed light
+at about console 4.5 MiB / 256 MiB, Redis 10.5 MiB / 192 MiB, controlplane
+129.2 MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent
+console/controlplane log scans showed no console 4xx/5xx, no controlplane 5xx,
+panic, fatal, permission, deadline, database-lock, analytics-unavailable,
+Doris-unavailable, small-analytics unavailable, or Threat Feeds 4xx/5xx
+matches.
