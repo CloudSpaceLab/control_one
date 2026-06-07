@@ -526,10 +526,39 @@ func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker status unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	status := provider.Status()
+	status := workerStatusResponseFrom(provider.Status(), s.jobIntegrationStatuses())
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(status); err != nil {
 		s.logger.Warn("encode worker status", zap.Error(err))
+	}
+}
+
+type workerStatusResponse struct {
+	Backend         string                          `json:"backend"`
+	Started         bool                            `json:"started"`
+	QueueDepth      int                             `json:"queue_depth"`
+	Active          int                             `json:"active"`
+	LastError       string                          `json:"last_error,omitempty"`
+	JobIntegrations map[string]jobIntegrationStatus `json:"job_integrations,omitempty"`
+}
+
+type jobIntegrationStatus struct {
+	Mode                  string `json:"mode"`
+	Label                 string `json:"label"`
+	Detail                string `json:"detail,omitempty"`
+	External              bool   `json:"external"`
+	Simulated             bool   `json:"simulated"`
+	MutatesInfrastructure bool   `json:"mutates_infrastructure"`
+}
+
+func workerStatusResponseFrom(status worker.Status, integrations map[string]jobIntegrationStatus) workerStatusResponse {
+	return workerStatusResponse{
+		Backend:         status.Backend,
+		Started:         status.Started,
+		QueueDepth:      status.QueueDepth,
+		Active:          status.Active,
+		LastError:       status.LastError,
+		JobIntegrations: integrations,
 	}
 }
 

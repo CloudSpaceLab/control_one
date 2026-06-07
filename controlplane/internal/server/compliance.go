@@ -252,8 +252,9 @@ func (s *Server) handleFirstScanHook(ctx context.Context, nodeID uuid.UUID) {
 }
 
 type batchScanRequest struct {
-	TenantID *string  `json:"tenant_id"`
-	NodeIDs  []string `json:"node_ids"`
+	TenantID *string           `json:"tenant_id"`
+	NodeIDs  []string          `json:"node_ids"`
+	Policies map[string]string `json:"policies,omitempty"`
 }
 
 type batchScanResponse struct {
@@ -323,7 +324,7 @@ func (s *Server) handleComplianceBatchScan(w http.ResponseWriter, r *http.Reques
 		s.complianceScheduler = NewComplianceScheduler(s)
 	}
 
-	jobIDs, err := s.complianceScheduler.createScanJobs(r.Context(), tenantID, nodeIDs)
+	jobIDs, err := s.complianceScheduler.createScanJobsWithPolicies(r.Context(), tenantID, nodeIDs, req.Policies)
 	if err != nil {
 		s.logger.Error("batch compliance scan", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

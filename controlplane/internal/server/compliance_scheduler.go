@@ -64,6 +64,10 @@ func (cs *ComplianceScheduler) runScheduledScan() {
 // createScanJobs creates compliance.scan jobs for the given scope.
 // If tenantID is nil (uuid.Nil), scans all tenants. If nodeIDs is non-nil, scans only those nodes.
 func (cs *ComplianceScheduler) createScanJobs(ctx context.Context, tenantID uuid.UUID, nodeIDs []uuid.UUID) ([]uuid.UUID, error) {
+	return cs.createScanJobsWithPolicies(ctx, tenantID, nodeIDs, nil)
+}
+
+func (cs *ComplianceScheduler) createScanJobsWithPolicies(ctx context.Context, tenantID uuid.UUID, nodeIDs []uuid.UUID, policies map[string]string) ([]uuid.UUID, error) {
 	if cs.server.store == nil {
 		return nil, fmt.Errorf("store unavailable")
 	}
@@ -114,6 +118,12 @@ func (cs *ComplianceScheduler) createScanJobs(ctx context.Context, tenantID uuid
 			TenantID: target.tenantID.String(),
 			NodeID:   target.nodeID.String(),
 		}
+		if len(policies) > 0 {
+			payload.Policies = make(map[string]string, len(policies))
+			for key, value := range policies {
+				payload.Policies[key] = value
+			}
+		}
 		payloadBytes, err := json.Marshal(payload)
 		if err != nil {
 			cs.logger.Warn("marshal scan payload", zap.Error(err))
@@ -128,7 +138,7 @@ func (cs *ComplianceScheduler) createScanJobs(ctx context.Context, tenantID uuid
 		}
 		event := &storage.JobEvent{
 			Status:  storage.JobStatusQueued,
-			Message: "scheduled compliance scan",
+			Message: cs.server.jobInitialEventMessage(JobTypeComplianceScan, "scheduled compliance scan"),
 		}
 
 		created, err := cs.server.store.CreateJob(ctx, job, event)

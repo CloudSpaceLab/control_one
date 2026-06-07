@@ -1268,6 +1268,16 @@ export interface WorkerStatus {
   queue_depth: number;
   active: number;
   last_error?: string;
+  job_integrations?: Record<string, WorkerJobIntegrationStatus>;
+}
+
+export interface WorkerJobIntegrationStatus {
+  mode: string;
+  label: string;
+  detail?: string;
+  external: boolean;
+  simulated: boolean;
+  mutates_infrastructure: boolean;
 }
 
 export interface CreateJobRequest {
@@ -1275,6 +1285,17 @@ export interface CreateJobRequest {
   tenant_id?: string;
   payload?: unknown;
   max_retries?: number;
+}
+
+export interface CreateComplianceScanRequest {
+  tenant_id: string;
+  node_ids?: string[];
+  policies?: Record<string, string>;
+}
+
+export interface ComplianceScanResponse {
+  job_ids: string[];
+  count: number;
 }
 
 export interface ListJobsParams {
@@ -2251,6 +2272,13 @@ export class APIClient {
 
   async createJob(payload: CreateJobRequest): Promise<Job> {
     return this.request<Job>("/api/v1/jobs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async createComplianceScan(payload: CreateComplianceScanRequest): Promise<ComplianceScanResponse> {
+    return this.request<ComplianceScanResponse>("/api/v1/compliance/scan", {
       method: "POST",
       body: JSON.stringify(payload),
     });

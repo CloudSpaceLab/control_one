@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { SectionHeader, Panel, KpiTile, StatusTag, DataTable } from '../components/kit';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
@@ -6,7 +6,7 @@ import { Label } from '../components/ui/label';
 import { useJobs } from '../hooks/useJobs';
 import { useTenants } from '../hooks/useTenants';
 import { useTenant } from '../providers/TenantProvider';
-import type { Job, JobStatus } from '../lib/api';
+import type { Job, JobStatus, WorkerJobIntegrationStatus } from '../lib/api';
 import { useApiClient } from '../hooks/useApiClient';
 import { useToast } from '../providers/ToastProvider';
 import { useWorkerStatus } from '../hooks/useWorkerStatus';
@@ -31,6 +31,7 @@ interface JobTypeSpec {
   type: string;
   label: string;
   description: string;
+  requiresTenant?: boolean;
   fields: JobFieldSpec[];
 }
 
@@ -42,6 +43,7 @@ const JOB_CATALOG: JobTypeSpec[] = [
     type: 'provision.apply',
     label: 'Apply provisioning template',
     description: 'Render a template version against a target node.',
+    requiresTenant: true,
     fields: [
       { key: 'plan_id', label: 'Template ID', type: 'text', required: true,
         placeholder: 'uuid of the provisioning template' },
@@ -53,8 +55,11 @@ const JOB_CATALOG: JobTypeSpec[] = [
   {
     type: 'compliance.scan',
     label: 'Run compliance scan',
-    description: 'Trigger a fresh policy scan across one or more nodes.',
+    description: 'Trigger a fresh policy scan for one node, or the whole tenant when node ID is blank.',
+    requiresTenant: true,
     fields: [
+      { key: 'scan_id', label: 'Scan ID (optional)', type: 'text',
+        placeholder: 'generated for a per-node scan if blank' },
       { key: 'node_id', label: 'Node ID (blank = all nodes in tenant)', type: 'text' },
       { key: 'rule_set', label: 'Rule set (optional)', type: 'text',
         placeholder: 'e.g. cis-level-1' },
@@ -94,6 +99,98 @@ function defaultPayloadFields(jobType: string): Record<string, string> {
     out[f.key] = '';
   });
   return out;
+}
+
+interface NormalizedJobPayload {
+  payload?: unknown;
+  batchCompliance?: boolean;
+  batchNodeIds?: string[];
+  error?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function fieldString(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value).trim();
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const normalized = fieldString(raw);
+    if (normalized) {
+      out[key] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function generateScanId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return randomUUID();
+  }
+  return `scan-${Date.now().toString(36)}`;
+}
+
+function normalizeKnownJobPayload(type: string, payload: unknown, tenantId: string): NormalizedJobPayload {
+  const spec = JOB_SPECS[type];
+  if (!spec) {
+    return { payload };
+  }
+  if (!isRecord(payload)) {
+    return { error: 'Payload must be a JSON object for the selected job type.' };
+  }
+
+  const normalized: Record<string, unknown> = { ...payload };
+  if (spec.requiresTenant) {
+    normalized.tenant_id = tenantId;
+  }
+
+  if (type === 'provision.apply') {
+    const version = fieldString(normalized.template_version);
+    delete normalized.template_version;
+    if (version) {
+      const metadata = isRecord(normalized.metadata) ? { ...normalized.metadata } : {};
+      metadata.template_version = version;
+      normalized.metadata = metadata;
+    }
+  }
+
+  if (type === 'compliance.scan') {
+    const nodeId = fieldString(normalized.node_id);
+    const ruleSet = fieldString(normalized.rule_set);
+    delete normalized.rule_set;
+
+    if (ruleSet) {
+      const policies = isRecord(normalized.policies) ? { ...normalized.policies } : {};
+      policies.rule_set = ruleSet;
+      normalized.policies = policies;
+    }
+
+    if (!nodeId) {
+      delete normalized.node_id;
+      return { payload: normalized, batchCompliance: true, batchNodeIds: [] };
+    }
+
+    normalized.node_id = nodeId;
+    if (!fieldString(normalized.scan_id)) {
+      normalized.scan_id = generateScanId();
+    }
+  }
+
+  return { payload: normalized };
 }
 
 function formatDate(value?: string): string {
@@ -137,6 +234,14 @@ function jobStatusTone(status: string): StateTone {
   return 'info';
 }
 
+function jobIntegrationTone(status?: WorkerJobIntegrationStatus): StateTone {
+  if (!status) return 'unknown';
+  if (status.simulated) return 'warning';
+  if (status.external) return 'healthy';
+  if (status.mode === 'local_policy') return 'info';
+  return 'unknown';
+}
+
 export function Jobs(): JSX.Element {
   const api = useApiClient();
   const { showToast } = useToast();
@@ -148,7 +253,7 @@ export function Jobs(): JSX.Element {
   const [limit] = useState(20);
   const [offset, setOffset] = useState(0);
   const [jobTypeInput, setJobTypeInput] = useState('provision.apply');
-  const [jobTenantId, setJobTenantId] = useState('');
+  const [jobTenantId, setJobTenantId] = useState(currentTenantId ?? '');
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [payloadFields, setPayloadFields] = useState<Record<string, string>>(
     defaultPayloadFields('provision.apply'),
@@ -179,6 +284,12 @@ export function Jobs(): JSX.Element {
     useWorkerStatus({ pollIntervalMs: 8000 });
   const { cancelJob } = useCancelJob();
 
+  useEffect(() => {
+    if (!jobTenantId && currentTenantId) {
+      setJobTenantId(currentTenantId);
+    }
+  }, [currentTenantId, jobTenantId]);
+
   const tenantNames = useMemo(() => {
     const entries = new Map<string, string>();
     for (const tenant of tenants) {
@@ -198,6 +309,15 @@ export function Jobs(): JSX.Element {
   }, [jobs]);
 
   const statusSummary = useMemo(() => summarizeStatuses(jobs), [jobs]);
+  const selectedJobSpec = JOB_SPECS[jobTypeInput];
+  const selectedJobIntegration = workerStatus?.job_integrations?.[jobTypeInput];
+  const tenantRequiredForJob = Boolean(selectedJobSpec?.requiresTenant);
+
+  const resetPayloadEditor = (type: string) => {
+    const fields = defaultPayloadFields(type);
+    setPayloadFields(fields);
+    setJobPayload(JSON.stringify(fields, null, 2));
+  };
 
   const handleSubmitJob = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -208,8 +328,16 @@ export function Jobs(): JSX.Element {
       return;
     }
 
-    let parsedPayload: unknown;
-    if (jobPayload.trim()) {
+    const activeSpec = JOB_SPECS[type];
+    const tenantId = jobTenantId.trim();
+    if (activeSpec?.requiresTenant && !tenantId) {
+      setSubmitError('Tenant is required for this job type.');
+      setSubmitSuccess(null);
+      return;
+    }
+
+    let parsedPayload: unknown = activeSpec && !showRawPayload ? payloadFields : undefined;
+    if (!(activeSpec && !showRawPayload) && jobPayload.trim()) {
       try {
         parsedPayload = JSON.parse(jobPayload);
       } catch (err) {
@@ -226,26 +354,39 @@ export function Jobs(): JSX.Element {
       return;
     }
 
+    const normalized = normalizeKnownJobPayload(type, parsedPayload, tenantId);
+    if (normalized.error) {
+      setSubmitError(normalized.error);
+      setSubmitSuccess(null);
+      return;
+    }
+
     setSubmitting(true);
     setSubmitError(null);
     setSubmitSuccess(null);
     try {
-      await api.createJob({
-        type,
-        tenant_id: jobTenantId || undefined,
-        payload: parsedPayload,
-        max_retries: maxRetries.trim() ? retriesValue : undefined,
-      });
-      const successMessage = 'Job submitted successfully.';
+      let successMessage = 'Job submitted successfully.';
+      if (type === 'compliance.scan' && normalized.batchCompliance) {
+        const normalizedPayload = isRecord(normalized.payload) ? normalized.payload : {};
+        const response = await api.createComplianceScan({
+          tenant_id: tenantId,
+          node_ids: normalized.batchNodeIds,
+          policies: stringRecord(normalizedPayload.policies),
+        });
+        successMessage = response.count === 0
+          ? 'Compliance scan dispatched; no eligible nodes were found.'
+          : `Compliance scan dispatched for ${response.count} ${response.count === 1 ? 'node' : 'nodes'}.`;
+      } else {
+        await api.createJob({
+          type,
+          tenant_id: tenantId || undefined,
+          payload: normalized.payload,
+          max_retries: maxRetries.trim() ? retriesValue : undefined,
+        });
+      }
       setSubmitSuccess(successMessage);
       showToast(successMessage, 'success');
-      setJobPayload(`{
-  "plan_id": "",
-  "tenant_id": "",
-  "node_id": "",
-  "metadata": {}
-}`);
-      setJobTenantId('');
+      resetPayloadEditor(type);
       setMaxRetries('3');
       refresh();
     } catch (err) {
@@ -415,6 +556,19 @@ export function Jobs(): JSX.Element {
               className="flex-1"
             />
           </div>
+          {workerStatus?.job_integrations ? (
+            <div className="grid grid-cols-1 gap-2">
+              {Object.entries(workerStatus.job_integrations).map(([jobType, integration]) => (
+                <div
+                  key={jobType}
+                  className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2"
+                >
+                  <span className="font-mono text-xs text-text-secondary">{jobType}</span>
+                  <StatusTag tone={jobIntegrationTone(integration)}>{integration.label}</StatusTag>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {workerError ? <span className="text-sm text-state-critical">Status unavailable: {workerError}</span> : null}
         </Panel>
 
@@ -447,13 +601,13 @@ export function Jobs(): JSX.Element {
               onChange={(event) => {
                 const next = event.target.value;
                 if (next === '__custom__') {
+                  setJobTypeInput('');
+                  setJobPayload('{}');
                   setShowRawPayload(true);
                   return;
                 }
                 setJobTypeInput(next);
-                const fields = defaultPayloadFields(next);
-                setPayloadFields(fields);
-                setJobPayload(JSON.stringify(fields, null, 2));
+                resetPayloadEditor(next);
                 setShowRawPayload(false);
               }}
               disabled={submitting}
@@ -467,6 +621,14 @@ export function Jobs(): JSX.Element {
             </select>
             {JOB_SPECS[jobTypeInput] && !showRawPayload ? (
               <p className="text-xs text-text-muted">{JOB_SPECS[jobTypeInput].description}</p>
+            ) : null}
+            {selectedJobIntegration ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2">
+                <StatusTag tone={jobIntegrationTone(selectedJobIntegration)}>{selectedJobIntegration.label}</StatusTag>
+                {selectedJobIntegration.detail ? (
+                  <span className="min-w-0 flex-1 text-xs text-text-secondary">{selectedJobIntegration.detail}</span>
+                ) : null}
+              </div>
             ) : null}
           </div>
 
@@ -487,15 +649,16 @@ export function Jobs(): JSX.Element {
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="job-tenant">Tenant</Label>
+              <Label htmlFor="job-tenant">Tenant{tenantRequiredForJob ? ' *' : ''}</Label>
               <select
                 id="job-tenant"
                 className="h-9 w-full rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                 value={jobTenantId}
                 onChange={(event) => setJobTenantId(event.target.value)}
                 disabled={submitting}
+                required={tenantRequiredForJob}
               >
-                <option value="">— Optional —</option>
+                <option value="">{tenantRequiredForJob ? 'Select tenant' : 'Optional'}</option>
                 {tenants.map((tenant) => (
                   <option key={tenant.id} value={tenant.id}>
                     {tenant.name}

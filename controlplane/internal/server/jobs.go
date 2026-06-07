@@ -115,6 +115,118 @@ func defaultJobHandlers() map[string]jobHandler {
 	return map[string]jobHandler{}
 }
 
+func (s *Server) jobIntegrationStatuses() map[string]jobIntegrationStatus {
+	return map[string]jobIntegrationStatus{
+		JobTypeProvisionApply: s.provisioningJobIntegrationStatus(),
+		JobTypeComplianceScan: s.complianceJobIntegrationStatus(),
+	}
+}
+
+func (s *Server) provisioningJobIntegrationStatus() jobIntegrationStatus {
+	if s == nil || s.cfg == nil {
+		return jobIntegrationStatus{
+			Mode:      "simulated",
+			Label:     "Simulated provisioning",
+			Simulated: true,
+			Detail:    "No server configuration is loaded; provisioning jobs cannot change infrastructure.",
+		}
+	}
+
+	cfg := s.cfg.Jobs.Provisioning
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	if provider == "mock" || strings.TrimSpace(cfg.APIBaseURL) == "" {
+		return jobIntegrationStatus{
+			Mode:                  "simulated",
+			Label:                 "Simulated provisioning",
+			Simulated:             true,
+			MutatesInfrastructure: false,
+			Detail:                "No external provisioning API is configured; jobs record workflow evidence without changing infrastructure.",
+		}
+	}
+
+	label := "External provisioning API"
+	if provider != "" && provider != "auto" {
+		label = fmt.Sprintf("External %s provisioning", provider)
+	}
+	return jobIntegrationStatus{
+		Mode:                  "external",
+		Label:                 label,
+		External:              true,
+		MutatesInfrastructure: true,
+		Detail:                "Provisioning jobs forward to the configured service and may change infrastructure.",
+	}
+}
+
+func (s *Server) complianceJobIntegrationStatus() jobIntegrationStatus {
+	if s == nil || s.cfg == nil {
+		return jobIntegrationStatus{
+			Mode:      "local_policy",
+			Label:     "Local policy evaluator",
+			Detail:    "No server configuration is loaded; compliance jobs cannot call an external scanner.",
+			Simulated: false,
+		}
+	}
+
+	cfg := s.cfg.Jobs.Compliance
+	if strings.TrimSpace(cfg.APIBaseURL) != "" {
+		status := jobIntegrationStatus{
+			Mode:                  "external",
+			Label:                 "External compliance scanner",
+			External:              true,
+			MutatesInfrastructure: cfg.AutoApply,
+			Detail:                "Compliance jobs forward to the configured scanner.",
+		}
+		if cfg.AutoApply {
+			status.Detail = "Compliance jobs forward to the configured scanner; auto-apply remediation is enabled."
+		}
+		return status
+	}
+
+	status := jobIntegrationStatus{
+		Mode:                  "local_policy",
+		Label:                 "Local policy evaluator",
+		MutatesInfrastructure: cfg.AutoApply,
+		Detail:                "No external scanner is configured; jobs evaluate Control One policies against stored node evidence and return no fabricated results.",
+	}
+	if cfg.AutoApply {
+		status.Detail = "No external scanner is configured; jobs evaluate Control One policies locally and auto-apply remediation is enabled."
+	}
+	return status
+}
+
+func (s *Server) jobExecutionModeNote(jobType string) string {
+	status, ok := s.jobIntegrationStatuses()[jobType]
+	if !ok {
+		return ""
+	}
+	switch jobType {
+	case JobTypeProvisionApply:
+		if status.Simulated {
+			return "simulated provisioning backend; no external infrastructure changes"
+		}
+		if status.External {
+			return "external provisioning API"
+		}
+	case JobTypeComplianceScan:
+		if status.External {
+			return "external compliance scanner"
+		}
+		return "local policy evaluator; no external scanner"
+	}
+	return strings.TrimSpace(status.Label)
+}
+
+func (s *Server) jobInitialEventMessage(jobType, base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = fmt.Sprintf("job queued: %s", jobType)
+	}
+	if note := s.jobExecutionModeNote(jobType); note != "" {
+		return fmt.Sprintf("%s (%s)", base, note)
+	}
+	return base
+}
+
 func (s *Server) configureJobIntegrations() {
 	if s.jobHandlers == nil {
 		s.jobHandlers = defaultJobHandlers()
@@ -1218,7 +1330,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	initialEvent := &storage.JobEvent{
 		Status:  storage.JobStatusQueued,
-		Message: fmt.Sprintf("job queued: %s", job.Type),
+		Message: s.jobInitialEventMessage(job.Type, fmt.Sprintf("job queued: %s", job.Type)),
 	}
 
 	ctx := r.Context()

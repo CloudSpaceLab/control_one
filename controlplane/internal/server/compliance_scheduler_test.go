@@ -106,6 +106,30 @@ func TestComplianceSchedulerCreateScanJobs(t *testing.T) {
 		}
 	})
 
+	t.Run("copies policy facts into generated scan payloads", func(t *testing.T) {
+		queue.tasks = nil
+		jobIDs, err := cs.createScanJobsWithPolicies(context.Background(), tenantID, []uuid.UUID{node1}, map[string]string{
+			"rule_set": "cis-level-1",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(jobIDs) != 1 {
+			t.Fatalf("expected 1 job, got %d", len(jobIDs))
+		}
+		job := store.jobs[jobIDs[0]]
+		if job == nil {
+			t.Fatalf("generated job not stored")
+		}
+		var payload compliancePayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload.Policies["rule_set"] != "cis-level-1" {
+			t.Fatalf("expected policy facts in payload, got %#v", payload.Policies)
+		}
+	})
+
 	t.Run("no store returns error", func(t *testing.T) {
 		emptySrv := &Server{logger: logger, cfg: cfg, store: nil}
 		emptyCS := NewComplianceScheduler(emptySrv)

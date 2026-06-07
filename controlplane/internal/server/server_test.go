@@ -1953,6 +1953,14 @@ func TestRBACAuthorization(t *testing.T) {
 		if task.Job == nil {
 			t.Fatal("task should keep an in-process job for memory workers")
 		}
+		jobID, err := uuid.Parse(task.DurableJob.ID)
+		if err != nil {
+			t.Fatalf("parse durable job id: %v", err)
+		}
+		events := store.events[jobID]
+		if len(events) == 0 || !contains(events[0].Message, "simulated provisioning backend") {
+			t.Fatalf("expected queued event to disclose simulated provisioning, got %#v", events)
+		}
 	})
 
 	t.Run("POST /api/v1/jobs validates tenant existence", func(t *testing.T) {
@@ -1962,6 +1970,26 @@ func TestRBACAuthorization(t *testing.T) {
 		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodPost, "/api/v1/jobs", payload))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 got %d", rec.Code)
+		}
+	})
+
+	t.Run("GET /api/v1/worker/status includes job integration modes", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, bearerReq(http.MethodGet, "/api/v1/worker/status", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp workerStatusResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode worker status: %v", err)
+		}
+		provisioning := resp.JobIntegrations[JobTypeProvisionApply]
+		if !provisioning.Simulated || provisioning.MutatesInfrastructure {
+			t.Fatalf("expected simulated non-mutating provisioning status, got %+v", provisioning)
+		}
+		compliance := resp.JobIntegrations[JobTypeComplianceScan]
+		if compliance.Mode != "local_policy" || compliance.Simulated {
+			t.Fatalf("expected local policy compliance status, got %+v", compliance)
 		}
 	})
 
@@ -2440,6 +2468,14 @@ func (s *stubQueue) Enqueue(task worker.Task) error {
 
 func (s *stubQueue) EnqueueAt(task worker.Task, _ time.Time) error {
 	return s.Enqueue(task)
+}
+
+func (s *stubQueue) Status() worker.Status {
+	return worker.Status{
+		Backend:    "memory",
+		Started:    true,
+		QueueDepth: len(s.tasks),
+	}
 }
 
 func (f *fakeStore) CreateNode(_ context.Context, node *storage.Node) (*storage.Node, error) {
