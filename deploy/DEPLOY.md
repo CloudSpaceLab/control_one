@@ -83,7 +83,7 @@ The script:
 6. Swaps in the HTTPS edge config and reloads nginx.
 7. Starts the certbot renewal sidecar.
 
-Expect 5–10 minutes on the first run (image builds dominate).
+Expect 5-10 minutes on the first run (image builds dominate).
 
 Small-fleet analytics is the default. To run Doris for a dedicated OLAP
 deployment, set `ANALYTICS_MODE=olap` and `DORIS_ENABLED=true` in `.env`; the

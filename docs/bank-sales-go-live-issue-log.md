@@ -671,6 +671,15 @@ Live audit evidence from 2026-06-06:
   beyond connection facts and route entity enrichment, log-volume, Redis
   acceleration, and admin health copy away from Doris-specific assumptions
   without removing UI features.
+- 2026-06-07 small-fleet architecture refresh: `docs/small-fleet-analytics-architecture.md`
+  now records the compact Redis+SQLite blueprint explicitly. The demo target is
+  one lightweight analytic process inside the controlplane, Postgres as the
+  replayable source of truth, Redis for bounded hot state, SQLite/WAL for recent
+  cited evidence reads, and Doris at 0 MB in the default profile. The go/no-go
+  standard is not "can Doris be tuned enough for a demo"; it is whether the
+  console can show dashboards, connections, investigation timelines, recent
+  search, and exports from `source=small-analytics` with bounded latency,
+  restart survival, and journal replay.
 - 2026-06-07 small-analytics hardening follow-up: live control-plane logs
   exposed `SQLITE_BUSY` / `database is locked` during small-mode connection
   fanout. Commit `c4921f86` keeps the Redis+SQLite feature path and hardens the

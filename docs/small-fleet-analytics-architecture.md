@@ -79,6 +79,68 @@ focus on entity enrichment, log-volume buckets, Redis hot-counter acceleration,
 and admin health copy that still talks about `doris_status` even when the active
 backend is local analytics.
 
+## Compact Stack Blueprint
+
+The small-fleet stack should be intentionally plain:
+
+```text
+agents / collectors
+      |
+      v
+controlplane ingest
+      |
+      +--> Postgres replay journal, product state, audit, cases, rollups
+      |
+      +--> Redis hot state: queues, counters, short streams, freshness gauges
+      |
+      +--> SQLite/WAL read model: recent events, connections, timelines, FTS
+      |
+      +--> optional OLAP mirror only when analytics.mode=olap
+```
+
+This gives the demo one lightweight analytic process: the controlplane itself.
+Redis is already needed for workers and live coordination, SQLite is a local
+file-backed read model with no daemon, and Doris FE/BE are not part of the
+small profile.
+
+Component ownership:
+
+- Postgres decides truth: ingest acceptance, replay, cases, audit, RBAC,
+  workflows, long-lived rollups, and rebuild source records.
+- Redis decides freshness: "what is live right now" counters, queue depth,
+  writer lag, short event streams, and cacheable dashboard summaries.
+- SQLite decides recent evidence reads: connection drilldowns, top talkers,
+  event search, timeline pivots, citations, and bounded full-text search.
+- Doris decides warehouse scale only: high-EPS, large-retention, many-tenant,
+  ad hoc OLAP workloads on dedicated capacity.
+
+Feature preservation rule:
+
+- Keep every console route, API route, filter, citation, export, and
+  investigation affordance.
+- Swap the backend adapter selected by `analytics.mode`; do not hide useful UI
+  because Doris is disabled.
+- If a small-mode capability is incomplete, return a successful bounded
+  envelope with explicit source/guardrail copy where possible, then fill the
+  SQLite projection in the next slice.
+- Explicit OLAP mode should fail loudly when Doris is configured but unhealthy;
+  small mode should never require a Doris process to be present.
+
+Demo memory target:
+
+- Controlplane: 512 MB to 1 GB limit, normally tens of MiB to low hundreds.
+- Redis: 128 MB demo cap with `maxmemory` and bounded streams; 256-512 MB for
+  branch installs.
+- SQLite: 16-64 MB per active cache budget, file-backed WAL, capped writer
+  queue, no daemon.
+- Doris: 0 MB in the default small profile.
+
+The go/no-go threshold is simple: if the demo or small customer can show the
+dashboard, connections, investigation timelines, recent search, and export
+flows from `source=small-analytics` with bounded latency and replayability,
+Doris stays off. Move to OLAP only when the fleet needs sustained warehouse
+scale rather than product demo fidelity.
+
 ## Current Implementation State
 
 The repo is already partially aligned with this decision:

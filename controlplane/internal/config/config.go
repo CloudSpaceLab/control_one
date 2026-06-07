@@ -183,8 +183,8 @@ type DorisConfig struct {
 
 // AnalyticsConfig selects the analytic read/write backend used by dashboard
 // and investigation surfaces. "small" keeps the demo/small-fleet path on
-// Postgres rollups now and leaves room for the Redis+SQLite store; "olap"
-// enables the Doris-backed paths for larger installs.
+// Postgres, Redis, and the embedded SQLite read store; "olap" enables the
+// Doris-backed paths for larger installs.
 type AnalyticsConfig struct {
 	Mode      string `mapstructure:"mode"` // auto | small | olap | disabled
 	SQLiteDir string `mapstructure:"sqlite_dir"`
