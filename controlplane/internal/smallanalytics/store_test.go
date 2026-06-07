@@ -2,6 +2,9 @@ package smallanalytics
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -49,6 +52,84 @@ func TestStorePersistsConnectionRowsAndTopTalkers(t *testing.T) {
 	}
 	if detail == nil || detail.ConnID != "conn-1" || detail.BytesIn != 100 {
 		t.Fatalf("unexpected connection detail: %#v", detail)
+	}
+}
+
+func TestStoreConfiguresPooledConnectionsForBusyTimeout(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir(), QueryTimeout: 2500 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	openConns := make([]*sql.Conn, 0, 4)
+	defer func() {
+		for _, conn := range openConns {
+			_ = conn.Close()
+		}
+	}()
+	var timeouts [4]int
+	for i := range timeouts {
+		conn, err := store.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("conn %d: %v", i, err)
+		}
+		openConns = append(openConns, conn)
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeouts[i]); err != nil {
+			t.Fatalf("busy_timeout conn %d: %v", i, err)
+		}
+		if timeouts[i] < 2500 {
+			t.Fatalf("conn %d busy_timeout = %dms, want at least 2500ms", i, timeouts[i])
+		}
+	}
+}
+
+func TestStoreSerializesConcurrentConnectionAppends(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	const writers = 24
+	const rowsPerWriter = 20
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < rowsPerWriter; j++ {
+				connID := fmt.Sprintf("conn-%02d-%02d", i, j)
+				row := connRow("tenant-1", "node-1", connID, base.Add(time.Duration(j)*time.Second), time.Time{}, "outbound", "10.0.0.5", "8.8.8.8", int64(j), int64(i+j), "")
+				if err := store.AppendConnectionRows(ctx, []map[string]any{row}); err != nil {
+					errs <- fmt.Errorf("writer %d row %d: %w", i, j, err)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := store.ListConnectionsForTenant(ctx, "tenant-1", base.Add(-time.Hour), base.Add(time.Hour), writers*rowsPerWriter, false)
+	if err != nil {
+		t.Fatalf("list tenant: %v", err)
+	}
+	if len(list) != writers*rowsPerWriter {
+		t.Fatalf("connection rows = %d, want %d", len(list), writers*rowsPerWriter)
 	}
 }
 

@@ -7,11 +7,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
@@ -27,6 +29,7 @@ type Config struct {
 type Store struct {
 	db           *sql.DB
 	queryTimeout time.Duration
+	writeMu      sync.Mutex
 }
 
 func Open(ctx context.Context, cfg Config) (*Store, error) {
@@ -37,24 +40,44 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create small analytics dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "controlone-small-analytics.db"))
+	queryTimeout := cfg.QueryTimeout
+	if queryTimeout <= 0 {
+		queryTimeout = 5 * time.Second
+	}
+	db, err := sql.Open("sqlite", sqliteDSN(filepath.Join(dir, "controlone-small-analytics.db"), cfg.CacheMB, queryTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
 	store := &Store{
 		db:           db,
-		queryTimeout: cfg.QueryTimeout,
-	}
-	if store.queryTimeout <= 0 {
-		store.queryTimeout = 5 * time.Second
+		queryTimeout: queryTimeout,
 	}
 	if err := store.migrate(ctx, cfg.CacheMB); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+func sqliteDSN(path string, cacheMB int, busyTimeout time.Duration) string {
+	if cacheMB <= 0 {
+		cacheMB = 32
+	}
+	busyMillis := int(busyTimeout.Round(time.Millisecond) / time.Millisecond)
+	if busyMillis < 1000 {
+		busyMillis = 1000
+	}
+	q := url.Values{}
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyMillis))
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "synchronous(NORMAL)")
+	q.Add("_pragma", "foreign_keys(ON)")
+	q.Add("_pragma", "temp_store(FILE)")
+	q.Add("_pragma", fmt.Sprintf("cache_size(-%d)", cacheMB*1024))
+	q.Set("_txlock", "immediate")
+	return path + "?" + q.Encode()
 }
 
 func (s *Store) Close() error {
@@ -151,6 +174,9 @@ func (s *Store) AppendConnectionRows(ctx context.Context, rows []map[string]any)
 	if s == nil || s.db == nil || len(rows) == 0 {
 		return nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 	tx, err := s.db.BeginTx(qctx, nil)
