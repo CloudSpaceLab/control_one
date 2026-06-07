@@ -1013,6 +1013,34 @@ Live audit evidence from 2026-06-06:
   mobile widths; every route stayed authenticated, rendered its main heading,
   had no captured app HTTP failures, no page crashes, no warning/error console
   entries, and no document-level horizontal overflow.
+- 2026-06-07 authenticated deep-route/mobile shell follow-up: a broader live
+  authenticated link sweep collected 51 unique `/console` routes from the
+  current application surface and loaded all 51 at desktop 1440x1000 and mobile
+  390x844 with no anomalies: every route stayed authenticated, rendered, and
+  showed no warning/error console entries or document-level horizontal
+  overflow. The sweep then found a real mobile navigation accessibility and
+  clickability defect: the Radix sheet opened without a `DialogTitle`/
+  description, and the first close-control size fix (`463c1222`) still left the
+  close button behind the sheet sidebar's `z-40` content in the live browser.
+  Commits `3255d0a8`, `463c1222`, and `ebde2992` preserve the mobile shell
+  feature set while adding the hidden `Primary navigation` title/description,
+  a 32px close target, and `z-50` stacking above sheet contents. Local checks
+  passed focused `npm --prefix ui test -- NavigationScope.test.tsx`, full
+  `npm --prefix ui test` with 28 files and 106 tests passing,
+  `npm --prefix ui run lint`, `npm --prefix ui run build`, and
+  `git diff --check` aside from normal LF/CRLF warnings. Deploy runs
+  `27085813732`, `27086062791`, and `27086254930` succeeded; CI runs
+  `27085813731`, `27085813734`, `27086062779`, `27086062794`, `27086254925`,
+  `27086254934`, and artifact cleanup run `27086389342` succeeded. Final live
+  verification on
+  `/console/telemetry?verify=sheet-close-ebde2992` at 390x844 showed the mobile
+  navigation dialog named `Primary navigation`, described as `Main console
+  navigation links.`, a close button carrying `z-50 h-8 w-8`, successful close
+  click with the dialog removed, zero console warnings/errors, and no horizontal
+  overflow. Additional safe shell interactions opened, filtered, and closed
+  global search; opened and dismissed the tenant selector; and opened and
+  dismissed the profile menu, all with zero console warnings/errors, no leftover
+  expanded dialogs/menus, and no document-level horizontal overflow.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
