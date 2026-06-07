@@ -2383,6 +2383,32 @@ the `olap` profile, `CONTROLPLANE_ANALYTICS_MODE=small`,
 256 MiB, Redis about 4.8 MiB / 192 MiB, and a 20-minute severe-log scan found no
 panic/fatal/SQLite lock/analytics unavailable/stream transport signatures.
 
+2026-06-07 Search/investigation UX follow-up: a fresh production browser sweep
+covered 100 current-state route loads across desktop and 390px mobile. The
+authenticated chunks covered Control Room and drilldowns, Search, Investigation,
+Cases, Tenants, Nodes, Fleet Enroll, Hypervisors, Jobs, Observability,
+Templates, Coverage, Compliance, Rules, Alerts, Access, Network Security tabs,
+SIEM, Webservers, Patch, Sessions, Roles, Audit, Users, Telemetry, Secrets,
+Offline Bundle, Settings, Data Security, Misconduct, and Finacle. The public and
+redirect chunk covered `/`, intake, intake status, Trust Center, route aliases,
+and the console 404 path. Clean chunks showed zero app API 4xx/5xx failures,
+zero browser console/page errors, zero document-level horizontal overflow, and
+no Doris/analytic-store unavailable copy.
+
+The sweep found one real search-workflow polish issue: `/console/search` rendered
+the primary heading as a leading chevron plus `(empty query)` or the raw query
+(`› nginx`), and `Save search` stayed enabled with no query. The Search page now
+uses explicit headings (`Search` and `Search results`), keeps the query context
+in the description, disables Save Search until there is a real query, and lets a
+cleared refine box return to the empty-query state. Focused
+`SearchResults.test.tsx` coverage and `npm run build` passed. The console-only
+deploy completed, and live desktop/mobile retest confirmed the fixed headings,
+`0 matches for "nginx"` description, disabled empty Save Search button, zero
+document overflow, zero app failures, and zero console/page errors. Post-deploy
+host checks remained clean: `/healthz=ok`, no Doris FE/BE, console about
+4.8 MiB / 256 MiB, controlplane about 115 MiB / 1 GiB, Redis about 4.8 MiB /
+192 MiB, and no severe controlplane or edge 5xx logs.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.

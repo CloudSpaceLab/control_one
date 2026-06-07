@@ -28,6 +28,8 @@ export function SearchResults(): JSX.Element {
   const { currentTenantId } = useTenant();
   const [tab, setTab] = useState('all');
   const [refineQuery, setRefineQuery] = useState(q);
+  const normalizedQuery = q.trim();
+  const hasQuery = normalizedQuery.length > 0;
 
   // Keep refine input in sync when URL changes (e.g. browser back)
   useEffect(() => {
@@ -36,16 +38,16 @@ export function SearchResults(): JSX.Element {
 
   const handleRefine = () => {
     const trimmed = refineQuery.trim();
-    if (trimmed && trimmed !== q) {
-      setParams({ q: trimmed });
+    if (trimmed !== normalizedQuery) {
+      setParams(trimmed ? { q: trimmed } : {});
       setTab('all');
     }
   };
 
   const searchQ = useQuery<InvestigateSearchResult>({
     queryKey: ['search', currentTenantId, q],
-    queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q, limit: 200 }),
-    enabled: q.length > 0 && !!currentTenantId,
+    queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q: normalizedQuery, limit: 200 }),
+    enabled: hasQuery && !!currentTenantId,
   });
 
   const items = searchQ.data?.items ?? [];
@@ -64,7 +66,7 @@ export function SearchResults(): JSX.Element {
             value={refineQuery}
             onChange={(e) => setRefineQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleRefine()}
-            placeholder="Refine search…"
+            placeholder="Refine search..."
           />
         </div>
         <Button variant="secondary" onClick={handleRefine}>
@@ -74,25 +76,22 @@ export function SearchResults(): JSX.Element {
 
       <SectionHeader
         eyebrow="SEARCH RESULTS"
-        title={
-          <span className="inline-flex items-center gap-3">
-            <span className="font-mono text-text-muted">›</span>
-            <span className="break-all">{q || '(empty query)'}</span>
-          </span>
-        }
+        title={hasQuery ? 'Search results' : 'Search'}
         description={
           searchQ.isLoading
-            ? 'Searching across events, alerts, audit and tags…'
-            : `${items.length.toLocaleString()} match${items.length === 1 ? '' : 'es'}`
+            ? `Searching for "${normalizedQuery}" across events, alerts, audit, and tags...`
+            : hasQuery
+              ? `${items.length.toLocaleString()} match${items.length === 1 ? '' : 'es'} for "${normalizedQuery}"`
+              : 'Search events, alerts, audit entries, and tags across the selected tenant.'
         }
         actions={
-          <Button variant="secondary" size="md">
+          <Button variant="secondary" size="md" disabled={!hasQuery}>
             <Bookmark className="h-4 w-4" /> Save search
           </Button>
         }
       />
 
-      {q.length === 0 ? (
+      {!hasQuery ? (
         <EmptyState title="Enter a query" description="Type in the search bar above and press Enter or click Search." />
       ) : (
         <Tabs value={tab} onValueChange={setTab}>
