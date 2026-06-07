@@ -190,7 +190,10 @@ describe('navigation scope', () => {
     expect(dialog).toHaveAccessibleDescription('Main console navigation links.');
     expect(within(dialog).getByRole('complementary', { name: /primary navigation/i })).toBeInTheDocument();
 
-    await user.click(within(dialog).getByRole('button', { name: /close/i }));
+    const closeButton = within(dialog).getByRole('button', { name: /close/i });
+    expect(closeButton).toHaveClass('z-50', 'h-8', 'w-8');
+
+    await user.click(closeButton);
     expect(screen.queryByRole('dialog', { name: 'Primary navigation' })).not.toBeInTheDocument();
   });
 
