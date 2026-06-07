@@ -1560,6 +1560,7 @@ type roleResponse struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
+	BuiltIn     bool    `json:"built_in"`
 	CreatedAt   string  `json:"created_at"`
 }
 
@@ -1568,6 +1569,7 @@ func roleResponseFromModel(role storage.Role) roleResponse {
 		ID:          role.ID.String(),
 		Name:        role.Name,
 		Description: nullStringPtr(role.Description),
+		BuiltIn:     storage.IsBuiltInRoleName(role.Name),
 		CreatedAt:   role.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

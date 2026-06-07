@@ -1219,6 +1219,7 @@ export interface Role {
   id: string;
   name: string;
   description?: string;
+  built_in?: boolean;
   created_at: string;
 }
 
@@ -6705,6 +6706,7 @@ export interface RoleWithPermissions {
   name: string;
   description: string;
   permissions: string[];
+  built_in?: boolean;
 }
 
 export type WidgetType =

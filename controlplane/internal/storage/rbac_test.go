@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -70,6 +71,23 @@ func TestRBACAssignmentsWithPostgres(t *testing.T) {
 	roles, err = store.ListUserRoles(ctx, user.ID)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"Admin", "viewer", "operator"}, roles)
+
+	allRoles, err := store.ListRoles(ctx)
+	require.NoError(t, err)
+	var adminRoleID uuid.UUID
+	for _, role := range allRoles {
+		if role.Name == "Admin" {
+			adminRoleID = role.ID
+			break
+		}
+	}
+	require.NotEqual(t, uuid.Nil, adminRoleID)
+	require.ErrorContains(t, store.DeleteRoleByID(ctx, adminRoleID), "cannot delete built-in role")
+
+	customRole, err := store.CreateCustomRole(ctx, "soc-reviewer", "SOC reviewer", nil)
+	require.NoError(t, err)
+	require.False(t, customRole.BuiltIn)
+	require.NoError(t, store.DeleteRoleByID(ctx, customRole.ID))
 
 	// Fetch user by external ID and verify ID matches.
 	fetched, err := store.GetUserByExternalID(ctx, "external-user")

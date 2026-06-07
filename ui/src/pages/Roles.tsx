@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, Trash2 } from 'lucide-react';
 import { useApiClient } from '../hooks/useApiClient';
 import type { Permission, RoleWithPermissions } from '../lib/api';
@@ -20,14 +20,14 @@ import {
 //  - Toggling a checkbox writes through PUT /api/v1/roles/{id}/permissions
 //    immediately so the change is live for next-request.
 //  - Custom roles can be created (admin-only) at the top.
-//  - Built-in roles (admin/ciso/operator/viewer) cannot be deleted.
+//  - Built-in roles cannot be deleted.
 
-const BUILTIN_ROLE_IDS = new Set([
-  '00000000-0000-0000-0000-000000000001',
-  '00000000-0000-0000-0000-000000000002',
-  '00000000-0000-0000-0000-000000000003',
-  '00000000-0000-0000-0000-000000000004',
-]);
+const BUILTIN_ROLE_NAMES = new Set(['admin', 'ciso', 'investigator', 'operator', 'viewer']);
+
+function isBuiltInRole(role: Pick<RoleWithPermissions, 'name' | 'built_in'>): boolean {
+  if (typeof role.built_in === 'boolean') return role.built_in;
+  return BUILTIN_ROLE_NAMES.has(role.name.trim().toLowerCase());
+}
 
 export function Roles(): JSX.Element {
   const client = useApiClient();
@@ -77,7 +77,7 @@ export function Roles(): JSX.Element {
   };
 
   const handleDelete = async (role: RoleWithPermissions) => {
-    if (BUILTIN_ROLE_IDS.has(role.id)) return;
+    if (isBuiltInRole(role)) return;
     if (!confirm(`Delete role "${role.name}"?`)) return;
     try {
       await client.deleteRole(role.id);
@@ -87,7 +87,7 @@ export function Roles(): JSX.Element {
     }
   };
 
-  const builtinCount = roles.filter((r) => BUILTIN_ROLE_IDS.has(r.id)).length;
+  const builtinCount = roles.filter((r) => isBuiltInRole(r)).length;
   const customCount = roles.length - builtinCount;
 
   return (
@@ -145,10 +145,10 @@ export function Roles(): JSX.Element {
                     <th key={r.id} className="text-center px-3 py-2 font-medium">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-sm text-foreground">{r.name}</span>
-                        <StatusTag tone={BUILTIN_ROLE_IDS.has(r.id) ? 'info' : 'healthy'}>
-                          {BUILTIN_ROLE_IDS.has(r.id) ? 'built-in' : 'custom'}
+                        <StatusTag tone={isBuiltInRole(r) ? 'info' : 'healthy'}>
+                          {isBuiltInRole(r) ? 'built-in' : 'custom'}
                         </StatusTag>
-                        {!BUILTIN_ROLE_IDS.has(r.id) ? (
+                        {!isBuiltInRole(r) ? (
                           <Button
                             type="button"
                             variant="ghost"
@@ -166,7 +166,7 @@ export function Roles(): JSX.Element {
               </thead>
               <tbody>
                 {Object.entries(grouped).map(([cat, perms]) => (
-                  <>
+                  <Fragment key={cat}>
                     <tr key={`cat-${cat}`}>
                       <td
                         colSpan={roles.length + 1}
@@ -198,7 +198,7 @@ export function Roles(): JSX.Element {
                         })}
                       </tr>
                     ))}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

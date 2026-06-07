@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 
@@ -24,6 +25,20 @@ type RolePermissions struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	Permissions []string  `json:"permissions"`
+	BuiltIn     bool      `json:"built_in"`
+}
+
+var builtInRoleNames = map[string]struct{}{
+	"admin":        {},
+	"ciso":         {},
+	"investigator": {},
+	"operator":     {},
+	"viewer":       {},
+}
+
+func IsBuiltInRoleName(name string) bool {
+	_, ok := builtInRoleNames[strings.ToLower(strings.TrimSpace(name))]
+	return ok
 }
 
 // ListPermissions returns the canonical permission catalog. Sorted by
@@ -68,6 +83,7 @@ ORDER BY r.name`)
 			return nil, err
 		}
 		r.Permissions = []string(perms)
+		r.BuiltIn = IsBuiltInRoleName(r.Name)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -99,11 +115,14 @@ func (s *Store) SetRolePermissions(ctx context.Context, roleID uuid.UUID, perms 
 	return tx.Commit()
 }
 
-// CreateCustomRole adds a tenant-defined role beyond the four built-ins.
+// CreateCustomRole adds a tenant-defined role beyond the built-ins.
 func (s *Store) CreateCustomRole(ctx context.Context, name, description string, permissions []string) (*RolePermissions, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("role name required")
+	}
+	if IsBuiltInRoleName(name) {
+		return nil, errors.New("role name is reserved")
 	}
 	id := uuid.New()
 	if _, err := s.db.ExecContext(ctx,
@@ -116,17 +135,20 @@ func (s *Store) CreateCustomRole(ctx context.Context, name, description string, 
 			return nil, err
 		}
 	}
-	return &RolePermissions{ID: id, Name: name, Description: description, Permissions: permissions}, nil
+	return &RolePermissions{ID: id, Name: name, Description: description, Permissions: permissions, BuiltIn: false}, nil
 }
 
-// DeleteRoleByID removes a custom role. Refuses to delete the four
-// built-in role IDs so a careless DELETE doesn't lock everyone out.
+// DeleteRoleByID removes a custom role. Built-ins are identified by canonical
+// role name because older migrations intentionally kept legacy UUIDs.
 func (s *Store) DeleteRoleByID(ctx context.Context, roleID uuid.UUID) error {
-	switch roleID.String() {
-	case "00000000-0000-0000-0000-000000000001",
-		"00000000-0000-0000-0000-000000000002",
-		"00000000-0000-0000-0000-000000000003",
-		"00000000-0000-0000-0000-000000000004":
+	var name string
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM roles WHERE id = $1`, roleID).Scan(&name); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if IsBuiltInRoleName(name) {
 		return errors.New("cannot delete built-in role")
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM roles WHERE id = $1`, roleID)

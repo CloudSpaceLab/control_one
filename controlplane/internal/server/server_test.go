@@ -1127,6 +1127,11 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 		if len(resp) != len(store.rolesCatalog) {
 			t.Fatalf("expected %d roles, got %d", len(store.rolesCatalog), len(resp))
 		}
+		for _, role := range resp {
+			if !role.BuiltIn {
+				t.Fatalf("expected canonical role %q to be marked built_in despite random id", role.Name)
+			}
+		}
 	})
 }
 
