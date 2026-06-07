@@ -1,10 +1,12 @@
 import { lazy, Suspense } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Compass, Home, Search } from 'lucide-react';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MainLayout } from './components/MainLayout';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
 import { Skeleton } from './components/ui/skeleton';
+import { EmptyState, Panel, SectionHeader } from './components/kit';
 
 // Eager: every authenticated visit lands on the Control Room.
 import { ControlRoom } from './pages/ControlRoom';
@@ -65,6 +67,52 @@ function PageFallback(): JSX.Element {
         <Skeleton className="col-span-3 h-24" />
         <Skeleton className="col-span-12 h-64" />
       </div>
+    </div>
+  );
+}
+
+function ConsoleNotFound(): JSX.Element {
+  const location = useLocation();
+
+  return (
+    <div className="flex min-w-0 flex-col gap-5">
+      <SectionHeader
+        eyebrow="NOT FOUND"
+        title="Page not found"
+        description="This console path does not match a Control One workspace."
+      />
+      <Panel padding="lg" toneAccent="warning">
+        <EmptyState
+          icon={<Compass />}
+          title="Unknown console route"
+          description={
+            <span>
+              <code className="break-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem]">
+                {location.pathname}
+              </code>{' '}
+              is not available in this deployment.
+            </span>
+          }
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Link
+                to="/"
+                className="inline-flex items-center gap-2 rounded-md bg-brand-500 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-brand-400"
+              >
+                <Home className="h-4 w-4" />
+                Control Room
+              </Link>
+              <Link
+                to="/search"
+                className="inline-flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm font-medium text-foreground transition hover:bg-surface-2"
+              >
+                <Search className="h-4 w-4" />
+                Search
+              </Link>
+            </div>
+          }
+        />
+      </Panel>
     </div>
   );
 }
@@ -167,6 +215,7 @@ export function App(): JSX.Element {
                 <Route path="frameworks" element={<Navigate to="/compliance?tab=frameworks" replace />} />
                 <Route path="misconduct" element={<Misconduct />} />
                 <Route path="access/finacle" element={<FinacleProfiles />} />
+                <Route path="*" element={<ConsoleNotFound />} />
               </Routes>
             </Suspense>
           }

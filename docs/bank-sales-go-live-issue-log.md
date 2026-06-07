@@ -1202,6 +1202,30 @@ Live audit evidence from 2026-06-06:
   matches, console about 6.3 MiB of 256 MiB, controlplane about 234 MiB of
   1 GiB, Redis about 7.5 MiB of 192 MiB, landing about 4.4 MiB of 128 MiB, and
   ipq about 4.8 MiB of 128 MiB.
+- 2026-06-07 console route-fallback/operations follow-up: another live browser
+  pass found that invalid nested console paths such as `/console/settings/security`
+  and `/console/audit/reports` could render the authenticated shell with an
+  empty main panel because the inner console router had no wildcard fallback.
+  `ui/src/App.tsx` now renders an authenticated in-app not-found state with the
+  unmatched path plus Control Room and Search navigation instead of a blank
+  workspace. Local `npm run build` passed, the console-only deploy completed,
+  and mobile production retest at 390x844 confirmed `/console/settings/security`,
+  `/console/audit/reports`, and `/console/no-such-demo-route` all showed the
+  not-found panel with no document overflow. A desktop production sweep at
+  1440x900 then covered 16 valid operational routes across Fleet Enroll,
+  Hypervisors, Tenants, Telemetry, Data Security, Misconduct, Finacle, Coverage,
+  Observability, Compliance evidence/reports, Audit reports, SIEM coverage,
+  Webservers, Patch, and Network Security IP behavior with zero failed app API
+  responses, zero browser console/page errors, zero overflow offenders, zero
+  `/api/v1/events/stream` requests, and zero Doris/analytic-store copy. The
+  mobile admin/security route pass immediately before the fix covered 12 routes
+  with the same clean API/error/overflow result and exposed the invalid-route
+  blank-state risk. Post-deploy host checks showed `/healthz=ok`, Redis healthy,
+  no Doris FE/BE containers under the `olap` profile, no recent panic/fatal/
+  SQLite-lock/analytic-store/status-5/stream log matches, and memory still light:
+  controlplane about 118 MiB of 1 GiB, console about 5.4 MiB of 256 MiB, Redis
+  about 4 MiB of 192 MiB, landing about 4.5 MiB of 128 MiB, and ipq about
+  4.8 MiB of 128 MiB.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -1241,6 +1265,9 @@ Exit criteria:
   stream, or page-error failures after the evidence-chip polish fix.
 - Met: live timing/API sweep covered 53 authenticated routes plus 8 public
   routes, with the public landing copy/layout corrections deployed and retested.
+- Met: invalid nested console paths now render an explicit in-app not-found
+  fallback instead of a blank authenticated workspace, and 16 valid operational
+  desktop routes were retested clean after deploy.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
   calling the whole product bank-grade clean.
