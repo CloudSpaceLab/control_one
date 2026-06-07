@@ -2116,6 +2116,20 @@ raw connection-history/top-talker slices as it lands. Doris remains valuable for
 large retention windows and concurrent analytic queries, but only as an opt-in
 OLAP tier on dedicated analytics capacity.
 
+2026-06-07 demo architecture update: formalized this as Control One Lite
+Analytics in `docs/small-fleet-analytics-architecture.md`. The demo/small-fleet
+path keeps the full product surface while moving recent investigation reads,
+connection timelines, top-talkers, and future normalized event/FTS projections
+onto Postgres + bounded Redis + embedded SQLite/WAL. Doris is preserved as an
+explicit OLAP upgrade path and must not consume memory in the default demo
+deployment.
+
+2026-06-07 live footprint check: the demo host reports `ANALYTICS_MODE=small`
+and `DORIS_ENABLED=false`; `docker compose --profile olap ps doris-fe doris-be`
+shows no Doris containers. Current steady-state container memory is roughly
+controlplane 99 MiB / 1 GiB, Redis 7.9 MiB / 192 MiB, console 4.6 MiB / 256
+MiB, landing 5.9 MiB / 128 MiB, and ipq 4.8 MiB / 128 MiB.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
