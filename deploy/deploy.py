@@ -317,6 +317,7 @@ def render_env_file(secrets_obj: Secrets, tag: str = "latest") -> str:
         f"ANALYTICS_MODE=small\n"
         f"ANALYTICS_SQLITE_CACHE_MB=16\n"
         f"REDIS_MAXMEMORY=128mb\n"
+        f"REDIS_MAXMEMORY_POLICY=volatile-lru\n"
         f"REDIS_MEMORY_LIMIT=192m\n"
         f"DORIS_ENABLED=false\n"
         f"TAG={tag}\n"

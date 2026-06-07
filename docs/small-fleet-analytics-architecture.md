@@ -325,6 +325,19 @@ co:analytics:writer:{tenant}:degraded
 Redis can answer "what is happening right now?" but it must not be the only
 source for a bank-grade citation.
 
+Use two Redis key classes in the same small container:
+
+- queue and control keys are protected coordination state and should not be
+  silently evicted;
+- hot analytics keys are TTL-bound, rebuildable acceleration and may be
+  evicted under pressure.
+
+Default the demo profile to `maxmemory-policy volatile-lru` rather than
+`allkeys-lru`. That lets Redis evict TTL-bound hot keys while avoiding silent
+loss of non-TTL queue/control state. If protected Redis writes fail because the
+instance is genuinely full, surface queue backpressure and rely on the Postgres
+journal as the durable replay boundary.
+
 Use Redis data structures deliberately:
 
 | Need | Redis Shape | Example |
@@ -335,7 +348,7 @@ Use Redis data structures deliberately:
 | writer lag / health | string/hash with TTL | `co:analytics:writer:{tenant}:lag_ms` |
 | rate and cardinality hints | counters or HyperLogLog | `PFADD co:hot:seen_ips:{tenant}:{day} ip` |
 
-All keys must expire or be safe under Redis eviction. A Redis restart may make
+Hot keys must expire or be safe under Redis eviction. A Redis restart may make
 the UI momentarily less warm, but it must not lose evidence, citations,
 compliance state, audit rows, or replayability.
 
@@ -710,7 +723,7 @@ doris:
   enabled: false
 redis:
   maxmemory: 128mb
-  maxmemory_policy: allkeys-lru
+  maxmemory_policy: volatile-lru
 ```
 
 Expected runtime:

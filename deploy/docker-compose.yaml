@@ -9,7 +9,7 @@ services:
       - --maxmemory
       - "${REDIS_MAXMEMORY:-128mb}"
       - --maxmemory-policy
-      - allkeys-lru
+      - "${REDIS_MAXMEMORY_POLICY:-volatile-lru}"
     volumes:
       - redisdata:/data
     healthcheck:
