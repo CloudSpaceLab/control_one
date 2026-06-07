@@ -2124,6 +2124,14 @@ onto Postgres + bounded Redis + embedded SQLite/WAL. Doris is preserved as an
 explicit OLAP upgrade path and must not consume memory in the default demo
 deployment.
 
+2026-06-07 minimum-memory refinement: the Lite Analytics design now documents
+the smallest credible demo runtime as one controlplane-owned SQLite writer, one
+hard-capped Redis container, the existing Postgres journal, and zero Doris FE/BE
+processes unless the `olap` profile is explicitly selected. Redis is explicitly
+non-evidentiary and eviction-safe; SQLite/WAL is the recent cited evidence read
+model; Postgres remains the audit/replay truth; and Doris remains the dedicated
+warehouse tier for larger fleets rather than a default demo dependency.
+
 2026-06-07 live footprint check: the demo host reports
 `CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
 `CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; `docker compose --profile olap ps

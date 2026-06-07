@@ -430,6 +430,56 @@ Default demo target:
 
 The design goal is one analytic process in small mode: the controlplane itself.
 
+### Minimum-Memory Demo Profile
+
+For the demo host, optimize for deterministic product behavior before analytic
+depth. The smallest credible runtime shape is:
+
+- one controlplane process that owns the SQLite writer;
+- one Redis container with a hard memory cap and eviction-safe key design;
+- one Postgres database that journals every accepted ingest batch;
+- zero Doris FE/BE processes unless the `olap` profile is explicitly selected.
+
+The hot path should stay cheap:
+
+```text
+ingest accepted in Postgres
+        |
+        +--> SQLite append/upsert for cited recent evidence
+        +--> Redis TTL update for live counters and freshness
+        +--> UI reads through backend-neutral analytics APIs
+```
+
+Memory guardrails:
+
+- Redis keys are always TTL-bound or reconstructable.
+- SQLite cache is intentionally small; query performance comes from narrow
+  tenant/time indexes, not memory-heavy buffering.
+- The SQLite writer queue has a maximum depth; when saturated, the ingest
+  journal remains the durable retry boundary.
+- Dashboard widgets must prefer bounded summaries over unbounded scans.
+- Large lookback windows should degrade with an explicit guardrail such as
+  "older history requires OLAP mode" rather than trying to make SQLite behave
+  like a warehouse.
+
+Evidence guardrails:
+
+- Redis is never the citation source.
+- SQLite citations include stable `raw_ref` or event IDs that can be traced back
+  to the Postgres journal.
+- If SQLite is rebuilding, APIs return a successful envelope with source and
+  guardrail metadata where possible; they do not show Doris-specific failures
+  in small mode.
+
+Think of the tiers as:
+
+| Tier | Role | Memory Behavior | Evidence Role |
+| --- | --- | --- | --- |
+| Redis | seconds-to-hours live heat | capped, evictable | no citations |
+| SQLite/WAL | recent searchable facts | embedded, bounded cache | cited recent evidence |
+| Postgres | canonical journal/workflow state | existing product database | replay and audit truth |
+| Doris/OLAP | high-volume warehouse | dedicated profile only | long-window/ad hoc analytics |
+
 ## Security And Accuracy
 
 Bank-grade small mode means deterministic and replayable, not infinite scale.
