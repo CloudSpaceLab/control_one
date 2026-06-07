@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Panel, SectionHeader, EmptyState, KpiTile, StatusTag, type StateTone } from '@/components/kit';
+import { Alert, Panel, SectionHeader, EmptyState, KpiTile, StatusTag, type StateTone } from '@/components/kit';
 import { Button } from '@/components/ui/button';
 import { DashboardGrid, DashboardGridItem } from '@/components/shell';
 import {
@@ -27,6 +27,7 @@ import type {
   EntityLifecycle,
   EntityRelated,
   IpEnrichment,
+  InvestigationTimelineItem,
   IPBehaviorIPProfile,
   LifecycleItem,
 } from '@/lib/api';
@@ -45,6 +46,7 @@ export function EntityDetail(): JSX.Element {
   const [cursor, setCursor] = useState<string | undefined>();
   const [accumulated, setAccumulated] = useState<LifecycleItem[]>([]);
   const ipSince = useMemo(() => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), []);
+  const ipTimelineSince = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), []);
 
   const safeType = (VALID_TYPES.includes(type as EntityType) ? type : 'ip') as EntityType;
 
@@ -78,6 +80,20 @@ export function EntityDetail(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lifecycleQ.data]);
 
+  const ipTimelineQ = useQuery({
+    queryKey: ['entity.ip.timeline', currentTenantId, id, ipTimelineSince],
+    queryFn: () =>
+      client.buildInvestigationTimeline({
+        tenantId: currentTenantId,
+        entityType: 'ip',
+        entityId: id ?? '',
+        since: ipTimelineSince,
+        limit: 100,
+      }),
+    enabled: safeType === 'ip' && !!id && !!currentTenantId,
+    staleTime: 30_000,
+  });
+
   const relatedQ = useQuery<EntityRelated>({
     queryKey: ['entity.related', currentTenantId, safeType, id],
     queryFn: () => client.getEntityRelated(safeType, id ?? '', { tenantId: currentTenantId }),
@@ -102,9 +118,20 @@ export function EntityDetail(): JSX.Element {
     enabled: !!id && safeType === 'ip' && !!currentTenantId,
   });
   const ipBehaviorFindings = ipBehaviorFindingsQ.data?.data ?? [];
+  const smallTimelineItems = useMemo(
+    () => (ipTimelineQ.data?.items ?? []).map(investigationTimelineItemToLifecycle),
+    [ipTimelineQ.data?.items],
+  );
+  const lifecycleItems = useMemo(
+    () => mergeLifecycleItems(accumulated, smallTimelineItems),
+    [accumulated, smallTimelineItems],
+  );
+  const lifecycleLoading =
+    lifecycleQ.isLoading ||
+    (safeType === 'ip' && ipTimelineQ.isLoading && lifecycleItems.length === 0);
   const headerDetail = useMemo(
-    () => detailWithLifecycleEventCount(detailQ.data, accumulated),
-    [detailQ.data, accumulated],
+    () => detailWithLifecycleEventCount(detailQ.data, lifecycleItems),
+    [detailQ.data, lifecycleItems],
   );
 
   const onAction = async (action: 'block' | 'allow' | 'quarantine') => {
@@ -199,18 +226,28 @@ export function EntityDetail(): JSX.Element {
                 </TabsContent>
               )}
               <TabsContent value="timeline">
+                {safeType === 'ip' && ipTimelineQ.error ? (
+                  <Alert variant="warning" className="mb-3">
+                    {ipTimelineErrorMessage(ipTimelineQ.error)}
+                  </Alert>
+                ) : null}
                 <InvestigateTimeline
-                  items={accumulated}
-                  loading={lifecycleQ.isLoading}
+                  items={lifecycleItems}
+                  loading={lifecycleLoading}
                   hasMore={!!lifecycleQ.data?.next_cursor}
                   onLoadMore={() => setCursor(lifecycleQ.data?.next_cursor)}
                 />
               </TabsContent>
               <TabsContent value="raw">
-                {accumulated.length === 0 ? (
+                {safeType === 'ip' && ipTimelineQ.error ? (
+                  <Alert variant="warning" className="mb-3">
+                    {ipTimelineErrorMessage(ipTimelineQ.error)}
+                  </Alert>
+                ) : null}
+                {lifecycleItems.length === 0 ? (
                   <EmptyState title="No raw events" />
                 ) : (
-                  <RawEventsTable items={accumulated} />
+                  <RawEventsTable items={lifecycleItems} />
                 )}
               </TabsContent>
             </Tabs>
@@ -241,6 +278,66 @@ function detailWithLifecycleEventCount(detail: EntityDetailData | undefined, ite
       remediations: detail.counts?.remediations ?? 0,
     },
   };
+}
+
+export function investigationTimelineItemToLifecycle(item: InvestigationTimelineItem): LifecycleItem {
+  const peer = connectionPeerSummary(item);
+  return {
+    ts: item.ts,
+    source: item.source_table === 'process_connections' ? 'event' : item.collector || item.source_table || 'event',
+    severity: item.severity || 'info',
+    actor: item.user_name || item.process_name,
+    target: peer,
+    summary: item.message || [item.event_type, peer].filter(Boolean).join(' ') || item.event_id || 'Timeline event',
+    raw_id: item.source_record_id || item.event_id || item.raw_ref,
+    metadata: {
+      source_table: item.source_table,
+      event_type: item.event_type,
+      conn_id: item.conn_id,
+      node_id: item.node_id,
+      correlation_id: item.correlation_id,
+      collector: item.collector,
+      parser: item.parser,
+      src_ip: item.src_ip,
+      dst_ip: item.dst_ip,
+      dst_port: item.dst_port,
+      bytes_in: item.bytes_in,
+      bytes_out: item.bytes_out,
+      raw_ref: item.raw_ref,
+    },
+  };
+}
+
+export function mergeLifecycleItems(...groups: LifecycleItem[][]): LifecycleItem[] {
+  const byKey = new Map<string, LifecycleItem>();
+  for (const group of groups) {
+    for (const item of group) {
+      byKey.set(lifecycleItemKey(item), item);
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) => {
+    const delta = new Date(b.ts).getTime() - new Date(a.ts).getTime();
+    if (Number.isFinite(delta) && delta !== 0) return delta;
+    return (b.raw_id ?? b.summary).localeCompare(a.raw_id ?? a.summary);
+  });
+}
+
+function lifecycleItemKey(item: LifecycleItem): string {
+  if (item.raw_id) return `${item.raw_id}:${item.ts}`;
+  return `${item.source}:${item.ts}:${item.summary}`;
+}
+
+function connectionPeerSummary(item: InvestigationTimelineItem): string | undefined {
+  if (!item.src_ip && !item.dst_ip) return undefined;
+  const dst = item.dst_ip ? `${item.dst_ip}${item.dst_port ? `:${item.dst_port}` : ''}` : '';
+  return [item.src_ip, dst].filter(Boolean).join(' -> ');
+}
+
+function ipTimelineErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return `Connection timeline unavailable: ${error.message}`;
+  }
+  return 'Connection timeline unavailable.';
 }
 
 function RawEventsTable({ items }: { items: LifecycleItem[] }) {

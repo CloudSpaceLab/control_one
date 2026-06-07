@@ -690,6 +690,47 @@ export interface EntityLifecycle {
   next_cursor?: string;
 }
 
+export interface InvestigationTimelineItem {
+  source_table?: string;
+  source_record_id?: string;
+  citation_ids?: string[];
+  schema_version?: number;
+  event_id?: string;
+  raw_ref?: string;
+  collector?: string;
+  parser?: string;
+  parser_status?: string;
+  tenant_id: string;
+  ts: string;
+  node_id?: string;
+  event_type: string;
+  severity?: string;
+  message?: string;
+  correlation_id?: string;
+  conn_id?: string;
+  pid?: number;
+  process_name?: string;
+  user_name?: string;
+  src_ip?: string;
+  dst_ip?: string;
+  dst_port?: number;
+  path?: string;
+  bytes_in?: number;
+  bytes_out?: number;
+  details?: Record<string, unknown>;
+}
+
+export interface InvestigationTimelineResult {
+  source: string;
+  tenant_id: string;
+  since: string;
+  until: string;
+  scope: Record<string, string>;
+  items: InvestigationTimelineItem[];
+  citations?: Array<Record<string, unknown>>;
+  guardrails?: string[];
+}
+
 export interface RelatedEntity {
   type: string;
   id: string;
@@ -3498,6 +3539,33 @@ export class APIClient {
     return this.request<EntityLifecycle>(
       `/api/v1/entities/${type}/${encodeURIComponent(id)}/lifecycle${qs ? `?${qs}` : ""}`,
     );
+  }
+
+  async buildInvestigationTimeline(params: {
+    tenantId?: string | null;
+    correlationId?: string;
+    nodeId?: string;
+    connId?: string;
+    entityType?: string;
+    entityId?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+  }): Promise<InvestigationTimelineResult> {
+    return this.request<InvestigationTimelineResult>("/api/v1/timelines/build", {
+      method: "POST",
+      body: JSON.stringify({
+        tenant_id: params.tenantId,
+        correlation_id: params.correlationId,
+        node_id: params.nodeId,
+        conn_id: params.connId,
+        entity_type: params.entityType,
+        entity_id: params.entityId,
+        since: params.since,
+        until: params.until,
+        limit: params.limit,
+      }),
+    });
   }
 
   async getEntityRelated(

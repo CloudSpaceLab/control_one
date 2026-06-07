@@ -158,3 +158,58 @@ describe('APIClient.listConnectionsDetailed', () => {
     });
   });
 });
+
+describe('APIClient.buildInvestigationTimeline', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts entity scope to the investigation timeline endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          source: 'small-analytics',
+          tenant_id: 'tenant-1',
+          since: '2026-06-06T10:00:00Z',
+          until: '2026-06-07T10:00:00Z',
+          scope: { entity_type: 'ip', entity_id: '203.0.113.10' },
+          items: [
+            {
+              source_table: 'process_connections',
+              source_record_id: 'process_connections:conn-1',
+              ts: '2026-06-07T09:00:00Z',
+              event_type: 'conn.open',
+              message: 'nginx opened 10.0.0.5 -> 203.0.113.10:443',
+            },
+          ],
+          guardrails: ['window <= 30d'],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    const result = await client.buildInvestigationTimeline({
+      tenantId: 'tenant-1',
+      entityType: 'ip',
+      entityId: '203.0.113.10',
+      since: '2026-06-06T10:00:00Z',
+      limit: 100,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+
+    expect(url).toBe('https://cp.example.com/api/v1/timelines/build');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer session-token');
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      tenant_id: 'tenant-1',
+      entity_type: 'ip',
+      entity_id: '203.0.113.10',
+      since: '2026-06-06T10:00:00Z',
+      limit: 100,
+    });
+    expect(result.source).toBe('small-analytics');
+    expect(result.items[0].event_type).toBe('conn.open');
+  });
+});
