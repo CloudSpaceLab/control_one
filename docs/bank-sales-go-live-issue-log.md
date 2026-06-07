@@ -2781,3 +2781,33 @@ known AbuseIPDB 429 local-snapshot warning appeared. Host memory remained in the
 small-fleet envelope: controlplane about 62.6 MiB / 1 GiB, console about
 6.6 MiB / 256 MiB, Redis about 6.2 MiB / 192 MiB, ipq about 4.8 MiB / 128 MiB,
 and no Doris FE/BE containers under the OLAP profile.
+
+2026-06-07 fresh-login deep-link follow-up: a fresh isolated browser context
+opened
+`/console/security/network?tab=connections&verify=fresh-login-return-20260607`
+without a session. The console correctly redirected to `/console/login`, but
+after a successful `admin@local` password login it landed on `/console` instead
+of returning to the requested Network Connections page. This is a real demo and
+operator UX defect because alert, case, report, and investigation links must
+survive session establishment.
+
+The fix is small and preserves existing auth behavior: protected-route redirects
+now pass `{from: pathname + search + hash}` to `/login`, and the existing login
+return logic uses that state after password, token, or SSO sign-in. A focused
+React Router regression test proves an unauthenticated
+`/security/network?tab=connections#row-7` route carries the full return target
+into the login route.
+
+Local validation passed: `npx vitest run src/App.test.tsx`, `npm run build`,
+and `npm run lint` (only the existing ESLintRC deprecation warning). The console
+was rebuilt and redeployed. Live retest in a fresh isolated browser context
+showed the same protected Network deep link redirecting to `/console/login`, then
+returning after sign-in to
+`/console/security/network?tab=connections&verify=fresh-login-return-fixed-20260607`.
+The Network page rendered the expected tab surface with no visible error state,
+no same-origin failed requests, and zero browser console warnings/errors. Host
+evidence after redeploy: `/healthz=ok`, recent console/controlplane logs showed
+no actual 4xx/5xx/panic/database-lock/analytics-unavailable matches, no Doris
+FE/BE containers were running, and memory remained within the small profile:
+controlplane about 64.6 MiB / 1 GiB, console about 5.2 MiB / 256 MiB, Redis
+about 6.9 MiB / 192 MiB, and ipq about 4.8 MiB / 128 MiB.

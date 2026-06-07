@@ -117,8 +117,14 @@ function ConsoleNotFound(): JSX.Element {
   );
 }
 
+function loginReturnState(location: ReturnType<typeof useLocation>): { from: string } {
+  const from = `${location.pathname}${location.search}${location.hash}`;
+  return { from: from || '/' };
+}
+
 export function App(): JSX.Element {
   const { isAuthenticated } = useAuth();
+  const location = useLocation();
 
   return (
     <Routes>
@@ -154,7 +160,7 @@ export function App(): JSX.Element {
       />
       <Route
         path="/"
-        element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace />}
+        element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace state={loginReturnState(location)} />}
       >
         <Route index element={<ControlRoom />} />
         <Route
@@ -221,7 +227,16 @@ export function App(): JSX.Element {
           }
         />
       </Route>
-      <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />
+      <Route
+        path="*"
+        element={
+          <Navigate
+            to={isAuthenticated ? '/' : '/login'}
+            replace
+            state={isAuthenticated ? undefined : loginReturnState(location)}
+          />
+        }
+      />
     </Routes>
   );
 }
