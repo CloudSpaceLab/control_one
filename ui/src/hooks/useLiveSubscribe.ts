@@ -2,6 +2,7 @@ import { useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiClient } from './useApiClient';
 import type { LiveState } from '@/components/kit';
+import { liveEventsMode, liveEventsUseSSE } from '@/config/live';
 
 export interface LiveEvent {
   topic: string;
@@ -20,9 +21,10 @@ export interface SubscriptionConfig {
 const DEBOUNCE_MS = 500;
 
 /**
- * useLiveSubscribe — coalesced SSE subscription that drives react-query
- * invalidations. Each topic registers query keys to invalidate; bursts of
- * events within `DEBOUNCE_MS` cause a single invalidation per query key.
+ * useLiveSubscribe — coalesced live subscription that drives react-query
+ * invalidations when the deployment opts into SSE. Each topic registers query
+ * keys to invalidate; bursts of events within `DEBOUNCE_MS` cause a single
+ * invalidation per query key.
  *
  * Returns the connection state for a `<LiveBadge>`.
  */
@@ -67,6 +69,14 @@ export function useLiveSubscribe(
 
   useEffect(() => {
     if (!tenantId || topics.length === 0) {
+      setState('offline');
+      return undefined;
+    }
+    if (!liveEventsUseSSE()) {
+      setState(liveEventsMode === 'off' ? 'offline' : 'live');
+      return undefined;
+    }
+    if (!client?.streamEvents) {
       setState('offline');
       return undefined;
     }

@@ -693,7 +693,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         eyebrow="NETWORK"
         title="Connections"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center justify-start gap-2">
             <Button
               variant={listeningOnly ? 'primary' : 'ghost'}
               size="sm"

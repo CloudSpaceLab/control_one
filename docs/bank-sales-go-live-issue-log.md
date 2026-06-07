@@ -2191,6 +2191,35 @@ tabs in bounds, no failed app API responses, and no browser console errors.
 Post-deploy `/healthz=ok`, Redis remained healthy, Doris FE/BE remained absent,
 and container memory stayed light.
 
+2026-06-07 live interaction/transport follow-up: a post-deploy browser check
+found one production regression from the console-only build path: the live UI
+bundle had fallen back to the default SSE transport and Chromium reported
+`ERR_QUIC_PROTOCOL_ERROR` for `/api/v1/events/stream`. The fix keeps the SSE
+feature available for private/direct deployments but makes the small-fleet demo
+default polling mode in `ui/src/config/live.ts`; `useLiveSubscribe` now also
+honors the same transport switch before opening `streamEvents`. Local
+`npm run build` passed, the console-only deploy completed, and fresh production
+browser pages for Control Room, Alerts, and Rules made zero
+`/api/v1/events/stream` requests, produced zero stream failures, zero browser
+console/page errors, zero failed app API responses, no document-level
+horizontal overflow, and no Doris/analytic-store unavailable copy.
+
+The same live slice exercised read-only demo flows end to end: Ctrl+K command
+palette IP pivot opened `/console/investigate/ip/172.67.163.40`; Network
+Connections showed 500 live rows and opened the connection detail sheet; the
+real node detail page for `0d4893c0-867a-4bf1-8aa9-e247680280ab` showed 250
+connection rows, opened the same detail sheet, and loaded Packages plus
+Recommendations tabs. A 390x844 mobile pass across Control Room, Alerts,
+Rules, Network Connections, and Node Detail had zero app failures and zero
+stream traffic. The pass found one real mobile polish defect: the Node Detail
+Connections action row shifted the "Listening only" control partly off-screen.
+`ui/src/pages/NodeDetail.tsx` now wraps that action group; production retest
+showed all three controls inside the 390px viewport, the mobile connection
+detail sheet visible, no document overflow, no browser errors, no failed app
+responses, and no fresh `/events/stream` log entries. Post-deploy
+`/healthz=ok`; Doris FE/BE remained stopped/absent; memory stayed light
+(controlplane about 88 MiB, console about 4.5 MiB, Redis about 7 MiB).
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
