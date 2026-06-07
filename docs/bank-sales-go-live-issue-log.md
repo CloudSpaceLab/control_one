@@ -3237,3 +3237,56 @@ and ipq 8.8 MiB / 128 MiB, and strict recent log scans showed no console
 4xx/5xx, controlplane 5xx, panic, fatal, permission, database-lock,
 analytics-unavailable, Doris-unavailable, small-analytics unavailable, or
 Secrets 4xx/5xx matches.
+
+2026-06-08 SOC Cases failure-mode hardening: source review found operator-risk
+gaps in the incident-packet workflow. A case-list outage could collapse into a
+false empty queue, a failed detail fetch could leave stale evidence from the
+previous case on screen, export preview failures could become an unhandled
+dead-end, and note-write failures were not durable enough for an analyst to
+recover confidently.
+
+The fix preserves the existing SOC Cases workflow and makes the failure states
+explicit. Tenant changes and list failures now clear stale case/detail/export
+state, the selected case is preserved only if it still exists in the refreshed
+list, detail fetch failures clear stale evidence and show a `Case data
+unavailable` alert, list failures show queue-recovery copy instead of `No SOC
+cases yet`, export preview has disabled/loading/error states, and failed note
+writes keep the analyst draft visible with a persistent alert.
+
+Regression coverage now proves list failures do not show the false empty state,
+detail failures clear stale evidence, export failures surface without rendering
+an export version, and failed note submissions preserve the draft. Local
+validation passed: `npm --prefix ui run test -- src/pages/Cases.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check` for the touched files.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/cases` returned HTTP
+200 with `Last-Modified: Sun, 07 Jun 2026 23:12:01 GMT` and no-store headers.
+
+Live browser verification on `/console/cases` used Playwright route
+interception for SOC Cases only, so no production case note or export was
+created. A synthetic list outage rendered `Case data unavailable`, surfaced
+`Service Unavailable`, showed queue-recovery copy, and did not show `No SOC
+cases yet`. A synthetic evidence-backed case rendered the detail heading,
+facts, evidence drawer, timeline, and export packet. Intercepted export and
+note failures each fired exactly once, showed `Export preview failed: Service
+Unavailable` and `Note failed: Service Unavailable`, did not render a failed
+export version, and preserved the note draft. A clean real production reload
+then had no case alerts, zero new browser warnings/errors, and the
+tenant-scoped authenticated `/api/v1/soc/cases?limit=5` read returned HTTP 200
+with five rows. Mobile verification at 390x844 had no alerts and no horizontal
+overflow (`381/381`).
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/cases` returned
+HTTP 200, no Doris FE/BE containers were running under the OLAP profile, Redis
+remained `maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory
+stayed light at about console 5.6 MiB / 256 MiB, Redis 10.5 MiB / 192 MiB,
+controlplane 126.8 MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent
+console/controlplane log scans showed no console 4xx/5xx, no controlplane 5xx,
+panic, fatal, permission, deadline, database-lock, analytics-unavailable,
+Doris-unavailable, or small-analytics unavailable matches. The only recent
+Cases 4xx/5xx line was an expected unauthenticated HTTP 401 from the initial
+browser-side API probe before the bearer header was added; a shorter post-clean
+window showed no `/api/v1/soc/cases` 4xx/5xx matches.

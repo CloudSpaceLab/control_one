@@ -68,8 +68,55 @@ const exportRow: SOCCaseExport = {
   guardrails: ['tenant_scoped', 'source_row_citations', 'evidence_refs_only', 'no_enforcement_execution'],
 };
 
+const secondCase: SOCCase = {
+  ...caseRow,
+  case_id: '22222222-2222-2222-2222-222222222222',
+  title: 'Database audit gap',
+  status: 'investigating',
+  severity: 'high',
+  source: 'db_audit',
+  trigger_type: 'db',
+  trigger_event_type: 'db.audit.gap',
+  dedup_key: 'db-audit-gap',
+  summary: 'Database audit evidence is missing for the settlement schema.',
+  evidence: {
+    application_name: 'core-banking',
+    source_file: '/var/log/postgresql/audit.log',
+  },
+  evidence_refs: [],
+  timeline: [],
+  notes: [],
+  citations: [],
+  coverage_badges: [
+    { id: 'actions_proposal_only', label: 'Actions proposal-only', tone: 'info' },
+  ],
+  export_url: '',
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockApi: any;
+
 describe('Cases', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
+    mockApi = {
+      listSOCCases: vi.fn().mockResolvedValue({
+        data: [caseRow],
+        pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
+      }),
+      getSOCCase: vi.fn().mockResolvedValue(caseRow),
+      addSOCCaseNote: vi.fn().mockResolvedValue({
+        id: 'note-1',
+        tenant_id: 'tenant-1',
+        case_id: caseRow.case_id,
+        note: 'Confirmed scope.',
+        citations: [],
+        audit_id: 'audit-1',
+        created_at: '2026-05-21T10:05:00Z',
+        guardrails: ['tenant_scoped'],
+      }),
+      exportSOCCase: vi.fn().mockResolvedValue(exportRow),
+    };
     vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
       currentTenantId: 'tenant-1',
       currentTenant: { id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-05-21T00:00:00Z' },
@@ -79,16 +126,7 @@ describe('Cases', () => {
       setCurrentTenantId: vi.fn(),
       refresh: vi.fn(),
     });
-    vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({
-      listSOCCases: vi.fn().mockResolvedValue({
-        data: [caseRow],
-        pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
-      }),
-      getSOCCase: vi.fn().mockResolvedValue(caseRow),
-      addSOCCaseNote: vi.fn(),
-      exportSOCCase: vi.fn().mockResolvedValue(exportRow),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(mockApi);
   });
 
   it('renders cases as evidence-backed export packets', async () => {
@@ -127,5 +165,86 @@ describe('Cases', () => {
       trigger_event_type: 'anomaly.new_destination',
       dedup_key: 'anomaly.new_dst:tenant-1:20.169.85.72',
     })).toBe('anomaly.new_destination');
+  });
+
+  it('does not show a false empty state when the case list fails', async () => {
+    mockApi.listSOCCases.mockRejectedValueOnce(new Error('case store unavailable'));
+
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('case store unavailable');
+    expect(screen.getByText(/case queue could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByText('No SOC cases yet')).not.toBeInTheDocument();
+  });
+
+  it('clears stale case detail when the selected case detail fails', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValueOnce({
+      data: [caseRow, secondCase],
+      pagination: { total: 2, count: 2, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
+    });
+    mockApi.getSOCCase.mockImplementation((caseId: string) => {
+      if (caseId === secondCase.case_id) {
+        return Promise.reject(new Error('case detail unavailable'));
+      }
+      return Promise.resolve(caseRow);
+    });
+
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /database audit gap/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('case detail unavailable');
+    await waitFor(() => {
+      expect(screen.queryByText('Evidence drawer')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Select a case')).toBeInTheDocument();
+  });
+
+  it('surfaces export preview failures without an unhandled dead end', async () => {
+    const user = userEvent.setup();
+    mockApi.exportSOCCase.mockRejectedValueOnce(new Error('case export unavailable'));
+
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Export packet');
+    await user.click(screen.getByRole('button', { name: /preview export/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Export preview failed: case export unavailable',
+    );
+    expect(screen.queryByText('soc-case-export-v1')).not.toBeInTheDocument();
+  });
+
+  it('keeps note submission failures visible and preserves the draft', async () => {
+    const user = userEvent.setup();
+    mockApi.addSOCCaseNote.mockRejectedValueOnce(new Error('audit write unavailable'));
+
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    const noteBox = await screen.findByPlaceholderText(/add analyst decision/i);
+    await user.type(noteBox, 'Escalate to the SOC manager before closure.');
+    await user.click(screen.getByRole('button', { name: /add note/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Note failed: audit write unavailable');
+    expect(noteBox).toHaveValue('Escalate to the SOC manager before closure.');
   });
 });
