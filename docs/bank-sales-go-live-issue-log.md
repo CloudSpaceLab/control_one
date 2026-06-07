@@ -927,6 +927,33 @@ Live audit evidence from 2026-06-06:
   `api.qrserver.com` request, clean desktop layout, and a deliberate scrollable
   Settings tab strip on mobile. No live TOTP, WebAuthn, or backup-code factor
   was created during final verification.
+- 2026-06-07 Access/RBAC command-policy follow-up: live validation on
+  `/console/access?verify=access-rbac-role-source-before` found that the
+  Command policy `New rule` form hardcoded only `operator`, `admin`, and
+  `investigator`, so `ciso`, `viewer`, and custom roles from the real RBAC
+  catalog could not be selected even though the backend command ACL model
+  accepts role names. Commit `7d583dc0` preserves command policy creation and
+  deletion, but now sources the selector from the existing `/api/v1/roles` hook,
+  keeps canonical built-in ordering, dedupes role names, includes custom roles,
+  and falls back to built-in defaults only if the roles API is unavailable.
+  Local checks passed `npm --prefix ui test -- Access.test.tsx`, full
+  `npm --prefix ui test` with 27 files and 100 tests passing,
+  `npm --prefix ui run lint`, `npm --prefix ui run build`, and
+  `git diff --check` aside from normal LF/CRLF warnings. Deploy run
+  `27083180470` succeeded. CI run `27083180475` succeeded; CI run
+  `27083180473` initially failed only because Docker Hub timed out pulling
+  `postgres:16-alpine` for a storage integration test, then passed on failed-job
+  rerun with Ubuntu/macOS/Windows jobs green. Post-deploy host checks showed
+  console/controlplane recreated, Redis healthy, controlplane about 50.7 MiB,
+  console about 4.3 MiB, Redis about 6.6 MiB, `/healthz=ok`, and no panic,
+  fatal, SQLite lock, or analytic-store unavailable logs. Authenticated browser
+  validation on `/console/access?verify=7d583dc0-access-role-options` showed
+  `/api/v1/roles`, `/api/v1/command-acls`, and `/api/v1/access-requests`
+  returning HTTP 200, the command-policy role selector containing
+  `admin,ciso,investigator,operator,viewer` from the live role API, zero console
+  warnings/errors, and no document-level horizontal overflow at 390x844
+  (`scrollWidth=clientWidth=381`). No live command policy rule was created or
+  deleted during final verification.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
