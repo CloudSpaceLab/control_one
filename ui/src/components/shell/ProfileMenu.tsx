@@ -108,7 +108,7 @@ export function ProfileMenu() {
           </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={signOut} className="text-state-critical focus:text-state-critical">
+        <DropdownMenuItem onClick={() => { void signOut(); }} className="text-state-critical focus:text-state-critical">
           <LogOut className="h-4 w-4" />
           Sign out
         </DropdownMenuItem>

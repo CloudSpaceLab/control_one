@@ -28,7 +28,7 @@ interface AuthContextValue {
   error: string | null;
   apiClient: APIClient;
   signIn: (token: string) => Promise<void>;
-  signOut: () => void;
+  signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
@@ -142,8 +142,16 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         setProfile(null);
         setError(null);
       },
-      signOut: () => {
-        handleSessionEnded(null);
+      signOut: async () => {
+        try {
+          if (token && token.trim() !== '') {
+            await apiClient.logout();
+          }
+        } catch {
+          // A failed logout request must not trap the operator in the UI.
+        } finally {
+          handleSessionEnded(null);
+        }
       },
       refreshProfile,
     }),
