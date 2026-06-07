@@ -97,9 +97,9 @@ The repo is already partially aligned with this decision:
   `/api/v1/timelines/build` as cited `conn.open`/`conn.close` rows, while OLAP
   mode keeps the existing Doris-backed full timeline/search path.
 - The live demo host has verified this first slice post-deploy: connection
-  list, top talkers, and connection detail returned `source=small-analytics`
-  with Doris disabled, while recent control-plane logs showed no SQLite
-  busy/lock warnings after the concurrency hardening deploy.
+  list, top talkers, connection detail, event query, and timeline build returned
+  `source=small-analytics` with Doris disabled, while recent control-plane logs
+  showed no SQLite busy/lock warnings after the concurrency hardening deploy.
 - Redis-backed hot counters remain the next acceleration layer; SQLite is the
   evidence-grade local read model for this first slice.
 

@@ -709,6 +709,26 @@ Live audit evidence from 2026-06-06:
   reached unrelated integration tests that require a local Postgres test
   database on `localhost:5432`; the smallanalytics package passed, while the
   server integration subset was blocked by the missing local DB.
+- 2026-06-07 live closeout for commit `a2ed0672`: deploy run
+  `27078952592` succeeded and CI runs `27078952584`/`27078952587` succeeded.
+  Post-deploy host checks showed `ANALYTICS_MODE=small`,
+  `DORIS_ENABLED=false`, Redis healthy, no Doris containers in the running
+  stack, `/healthz=ok`, and controlplane memory around 92 MiB. Recent
+  control-plane logs showed the small SQLite store ready and no
+  `SQLITE_BUSY`, `database is locked`, panic, fatal, or analytic-store
+  unavailable errors; remaining warnings were the known mock provisioning/
+  compliance clients and an external TOR feed 403. Authenticated browser/API
+  validation on the live tenant showed `/api/v1/connections` returning HTTP 200
+  with `source=small-analytics`, `/api/v1/events/query` returning HTTP 200 with
+  `source=small-analytics`, one cited `conn.open` row in 490 ms, and
+  `/api/v1/timelines/build` returning HTTP 200 with `source=small-analytics`,
+  ten cited connection timeline rows in 662 ms. Browser validation on
+  `/console/investigate?verify=a2ed0672-ui-clean` and
+  `/console/investigate/ip/158.94.211.49?verify=a2ed0672-entity` showed all
+  Control One app API requests at HTTP 200, zero console warnings/errors, no
+  document horizontal overflow, and no Doris/analytic-store unavailable copy.
+  The only failed network entries on the entity page were Cloudflare RUM aborts,
+  not Control One API failures.
 - 2026-06-07 Users/RBAC follow-up: live browser validation on
   `/console/users?verify=2773897d` found duplicated effective role labels for
   default local users (`viewer viewer`, `operator operator`, `ciso ciso`,
