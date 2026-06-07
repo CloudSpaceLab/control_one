@@ -66,7 +66,11 @@ The practical integration shape is:
 
 Current code is already past the first slice: `controlplane/internal/smallanalytics`
 uses the pure-Go SQLite driver in WAL mode, writes `process_connections`, and
-serves connection list, connection detail, and top talkers in small mode. The
+serves connection list, connection detail, and top talkers in small mode. On
+2026-06-07 the live demo host was also hardened after a `SQLITE_BUSY` fanout
+warning: SQLite pragmas now apply through the driver DSN to every pooled
+connection, transactions start with immediate locking, and in-process writers
+are serialized while reads remain available through a small bounded pool. The
 next demo-hardening work should focus on the remaining Doris-named read paths:
 event query, timeline build, entity enrichment, log-volume buckets, and admin
 health copy that still talks about `doris_status` even when the active backend
@@ -86,6 +90,10 @@ The repo is already partially aligned with this decision:
   existing ingest fanout and serves connection list, connection detail, and top
   talker APIs with `source=small-analytics` when `analytics.sqlite_dir` is
   configured.
+- The live demo host has verified this first slice post-deploy: connection
+  list, top talkers, and connection detail returned `source=small-analytics`
+  with Doris disabled, while recent control-plane logs showed no SQLite
+  busy/lock warnings after the concurrency hardening deploy.
 - Redis-backed hot counters remain the next acceleration layer; SQLite is the
   evidence-grade local read model for this first slice.
 

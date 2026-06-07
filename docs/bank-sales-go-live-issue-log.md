@@ -670,6 +670,26 @@ Live audit evidence from 2026-06-06:
   larger fleets. Remaining small-mode work is to route event query, timeline,
   entity enrichment, log-volume, and admin health copy away from Doris-specific
   assumptions without removing UI features.
+- 2026-06-07 small-analytics hardening follow-up: live control-plane logs
+  exposed `SQLITE_BUSY` / `database is locked` during small-mode connection
+  fanout. Commit `c4921f86` keeps the Redis+SQLite feature path and hardens the
+  embedded SQLite store by applying WAL/busy-timeout/synchronous/temp/cache
+  pragmas through the driver DSN for every pooled connection, using immediate
+  transaction locking, reducing the pool to a small bounded set, and
+  serializing in-process writes. Local checks passed:
+  `go test ./controlplane/internal/smallanalytics -count=1`, focused server
+  coverage for `TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers`,
+  `go vet ./controlplane/internal/smallanalytics ./controlplane/internal/server`,
+  and `go test -short -p 1 ./...`; `go test -race` could not run on this
+  Windows workstation because `gcc` is not installed for CGO. Deploy run
+  `27078299083` and CI runs `27078299078`/`27078299097` succeeded. Post-deploy
+  live checks showed `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Redis
+  healthy, controlplane about 70 MiB, `/healthz=ok`, no recent
+  `SQLITE_BUSY`/lock warnings, and an authenticated browser/API pass through
+  `/console/security/network?verify=c4921f86-smallanalytics` where connection
+  list, top talkers, and connection detail all returned HTTP 200 with
+  `source=small-analytics`, zero app API failures, zero console warnings/errors,
+  zero page errors, and no document horizontal overflow.
 - 2026-06-07 Users/RBAC follow-up: live browser validation on
   `/console/users?verify=2773897d` found duplicated effective role labels for
   default local users (`viewer viewer`, `operator operator`, `ciso ciso`,
