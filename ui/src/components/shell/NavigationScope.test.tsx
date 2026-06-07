@@ -176,6 +176,21 @@ describe('navigation scope', () => {
     expect(screen.getByRole('link', { name: /open enrollment/i })).toHaveAttribute('href', '/onboard');
   });
 
+  it('names the mobile navigation sheet for assistive technology', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TopBar mobileNav={<Sidebar userRoles={['admin']} variant="sheet" />} />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /open navigation/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Primary navigation' });
+    expect(dialog).toHaveAccessibleDescription('Main console navigation links.');
+    expect(within(dialog).getByRole('complementary', { name: /primary navigation/i })).toBeInTheDocument();
+  });
+
   it('keeps deeper enrollment paths in the profile drilldown', async () => {
     const user = userEvent.setup();
     render(

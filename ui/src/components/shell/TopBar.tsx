@@ -1,7 +1,7 @@
 import { Menu, Rocket } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { LiveBadge, type LiveState } from '@/components/kit';
 import { GlobalSearch } from './GlobalSearch';
 import { ProfileMenu } from './ProfileMenu';
@@ -25,6 +25,10 @@ export function TopBar({ liveState = 'live', mobileNav }: TopBarProps) {
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="p-0 w-[280px]">
+            <SheetTitle className="sr-only">Primary navigation</SheetTitle>
+            <SheetDescription className="sr-only">
+              Main console navigation links.
+            </SheetDescription>
             {mobileNav}
           </SheetContent>
         </Sheet>
