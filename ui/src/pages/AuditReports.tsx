@@ -11,6 +11,7 @@ import {
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { saveBlob } from '../lib/download';
 import type { AuditReport } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -33,6 +34,12 @@ function formatDate(v?: string | null): string {
   return isNaN(d.getTime()) ? v : d.toLocaleDateString();
 }
 
+function fallbackReportFilename(report: AuditReport): string {
+  const framework = (report.framework || 'report').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const periodEnd = (report.period_end || new Date().toISOString()).slice(0, 10);
+  return `compliance-report-${framework}-${periodEnd}.txt`;
+}
+
 export function AuditReports(): JSX.Element {
   const client = useApiClient();
   const { data: tenantList } = useTenants();
@@ -42,6 +49,8 @@ export function AuditReports(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const [genForm, setGenForm] = useState({
     framework: FRAMEWORKS[0],
@@ -103,6 +112,20 @@ export function AuditReports(): JSX.Element {
     }
   };
 
+  const handleDownload = async (report: AuditReport) => {
+    if (!selectedTenant) return;
+    setDownloadingId(report.id);
+    setDownloadError(null);
+    try {
+      const file = await client.downloadAuditReport(report.id, selectedTenant);
+      saveBlob(file.blob, file.filename || fallbackReportFilename(report));
+    } catch (err: unknown) {
+      setDownloadError(err instanceof Error ? err.message : 'Failed to download report');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const columns: ColumnDef<AuditReport, unknown>[] = [
     { accessorKey: 'framework', header: 'Framework' },
     {
@@ -135,10 +158,8 @@ export function AuditReports(): JSX.Element {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => {
-            if (!selectedTenant) return;
-            window.open(client.buildReportDownloadUrl(row.original.id, selectedTenant), '_blank');
-          }}
+          onClick={() => void handleDownload(row.original)}
+          disabled={downloadingId === row.original.id}
           title="Download report"
         >
           <Download className="w-3.5 h-3.5" />
@@ -172,6 +193,7 @@ export function AuditReports(): JSX.Element {
           Refresh
         </Button>
       </div>
+      {downloadError && <p className="text-sm text-destructive">{downloadError}</p>}
 
       {loading ? (
         <div className="text-muted-foreground text-sm py-4">Loading report history.</div>

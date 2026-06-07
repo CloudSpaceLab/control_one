@@ -12,6 +12,7 @@ import {
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { saveBlob } from '../lib/download';
 import type { ComplianceEvidence as CEType, ComplianceReview } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -68,6 +69,14 @@ function formatDate(v?: string | null): string {
   return isNaN(d.getTime()) ? v : d.toLocaleDateString();
 }
 
+function fallbackEvidenceFilename(item: CEType): string {
+  const label = (item.title || item.evidence_type || item.id || 'evidence')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${label || 'evidence'}.bin`;
+}
+
 export function ComplianceEvidence(): JSX.Element {
   const client = useApiClient();
   const { data: tenantList } = useTenants();
@@ -78,6 +87,8 @@ export function ComplianceEvidence(): JSX.Element {
   const [items, setItems] = useState<CEType[]>([]);
   const [loading, setLoading] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   // Upload form state
   const [uploading, setUploading] = useState(false);
@@ -201,6 +212,20 @@ export function ComplianceEvidence(): JSX.Element {
     }
   };
 
+  const handleDownload = async (item: CEType) => {
+    if (!selectedTenant) return;
+    setDownloadingId(item.id);
+    setDownloadError(null);
+    try {
+      const file = await client.downloadComplianceEvidence(item.id, selectedTenant);
+      saveBlob(file.blob, file.filename || fallbackEvidenceFilename(item));
+    } catch (err: unknown) {
+      setDownloadError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const columns: ColumnDef<CEType, unknown>[] = [
     { accessorKey: 'title', header: 'Title' },
     {
@@ -243,10 +268,8 @@ export function ComplianceEvidence(): JSX.Element {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              if (!selectedTenant) return;
-              window.open(client.buildEvidenceDownloadUrl(row.original.id, selectedTenant), '_blank');
-            }}
+            onClick={() => void handleDownload(row.original)}
+            disabled={downloadingId === row.original.id}
           >
             <Download className="w-3.5 h-3.5" />
           </Button>
@@ -322,6 +345,10 @@ export function ComplianceEvidence(): JSX.Element {
 
       {activeTab !== 'Reviews' && (
         <>
+          {downloadError && (
+            <p className="text-sm text-destructive">{downloadError}</p>
+          )}
+
           {loading ? (
             <div className="text-muted-foreground text-sm py-4">Loading...</div>
           ) : items.length === 0 ? (

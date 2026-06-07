@@ -4,6 +4,52 @@ Status: recommended small-fleet and demo architecture
 
 Date: 2026-06-07
 
+## Demo Architecture Chosen
+
+For the demo and other small fleets, use **Redis + SQLite/WAL + Postgres** as
+the default analytic architecture and keep Doris at 0 MB unless an operator
+explicitly selects OLAP mode.
+
+This is the operating shape to optimize:
+
+```text
+node agents and collectors
+        |
+        v
+controlplane ingest API
+        |
+        +--> Postgres journal and canonical workflow tables
+        +--> SQLite/WAL recent analytic projection
+        +--> Redis bounded hot state and queues
+        +--> Doris only when ANALYTICS_MODE=olap and the olap profile is used
+```
+
+The intent is not to build a "Doris-lite" tier. The small-fleet tier should be
+a first-class mode with the same product routes and API contracts:
+
+- dashboard, network security, investigation, timeline, citation, and export
+  workflows stay present;
+- Redis may accelerate the experience, but it is never the evidence store;
+- SQLite supplies recent cited facts and bounded search/timeline reads;
+- Postgres remains the replayable source of truth for accepted ingest;
+- Doris adds scale and longer hot retention later, not a different product.
+
+The near-term implementation target for the demo host is deliberately modest:
+
+| Component | Demo Role | Memory Budget |
+| --- | --- | --- |
+| controlplane | API, projector, SQLite writer and reader pool | 512 MB preferred, 1 GB ceiling |
+| Redis | queues, live freshness, bounded top counters, short streams | 128 MB maxmemory, 192 MB container cap |
+| SQLite/WAL | embedded recent analytic read model | 16 MB cache default |
+| Postgres | canonical product state and replay journal | existing database |
+| Doris FE/BE | OLAP upgrade only | 0 MB in small mode |
+
+This gives the demo a smaller and more predictable memory profile while still
+keeping bank-grade correctness: accepted events are durable in Postgres, recent
+operator evidence is queryable from SQLite, hot UX state can be rebuilt after
+Redis eviction, and every small-mode limitation is exposed as a projection or
+retention guardrail rather than a missing feature.
+
 ## Decision
 
 Control One should use a hyper-light analytic profile for demos and small
@@ -164,6 +210,17 @@ remove UI workflows.
 | event-capture flow deltas | `event_capture.go` computes connection deltas through the selected analytics backend | keep file/db/web deltas on their best available small-mode projections as they land |
 | AI investigation tool naming | `doris_ingest_health` and related copy are still platform-Doris specific | keep the tool capability but expose it as analytics ingest health, with source labels for small vs OLAP |
 | health and copy | logs/errors mention "small analytics sqlite store unavailable" and "Doris writer" separately | expose one analytics health envelope with mode, source, lag, queue depth, quick-check, and replay status |
+
+Known code paths still needing backend-neutral migration:
+
+- `controlplane/internal/server/db_audit_discovery.go` still queries Doris
+  directly for database audit discovery facts.
+- `controlplane/internal/server/investigate.go` still calls Doris timeline
+  methods in some AI investigation branches.
+- `controlplane/internal/server/ai_ingest_health_tool.go`,
+  `dashboard_admin.go`, `events_ingest.go`, and `telemetry.go` still expose or
+  log `doris_status` wording that should become analytics-neutral copy while
+  preserving the existing response field during compatibility migration.
 
 A first connection-reader facade is now in place. The next safe implementation
 move is to grow that into a fuller internal analytics facade and migrate each

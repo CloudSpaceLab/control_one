@@ -80,6 +80,7 @@ services:
       - ./controlplane.yaml:/etc/control-one/controlplane.yaml:ro
       - ./agent-binaries:/var/lib/control-one/agent-binaries:ro
       - ./analytics:/var/lib/control-one/analytics
+      - ./reports:/var/lib/control-one/reports
       - ./threat-intel:/var/lib/control-one/threat-intel
     ports:
       - "127.0.0.1:8443:8443"

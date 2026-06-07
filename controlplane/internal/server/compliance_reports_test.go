@@ -140,6 +140,95 @@ func TestListComplianceEvidenceReturnsFreshnessAndHidesFilePath(t *testing.T) {
 	}
 }
 
+func TestEmptyComplianceReportAndReviewListsReturnArrays(t *testing.T) {
+	tenantID := uuid.New()
+	store := &fakeStore{tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}}}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("viewer", "list-viewer"),
+	}
+	srv := New(zap.NewNop(), cfg, store, &stubQueue{})
+
+	for _, path := range []string{
+		"/api/v1/compliance/reports?tenant_id=" + tenantID.String(),
+		"/api/v1/compliance/reviews?tenant_id=" + tenantID.String(),
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer list-viewer")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s returned %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %s response: %v", path, err)
+		}
+		if string(body.Data) != "[]" {
+			t.Fatalf("%s data must serialize as [], got %s in %s", path, string(body.Data), rec.Body.String())
+		}
+	}
+}
+
+func TestComplianceReportAndReviewResponsesUseAPIFieldNames(t *testing.T) {
+	tenantID := uuid.New()
+	store := &fakeStore{tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}}}
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("operator", "api-shape-operator"),
+	}
+	handler := New(zap.NewNop(), cfg, store, &stubQueue{}).Handler()
+
+	reportBody := strings.NewReader(`{"tenant_id":"` + tenantID.String() + `","framework":"SOC2","period_start":"2026-06-01","period_end":"2026-06-07"}`)
+	reportReq := httptest.NewRequest(http.MethodPost, "/api/v1/compliance/reports", reportBody)
+	reportReq.Header.Set("Authorization", "Bearer api-shape-operator")
+	reportReq.Header.Set("Content-Type", "application/json")
+	reportRec := httptest.NewRecorder()
+	handler.ServeHTTP(reportRec, reportReq)
+	if reportRec.Code != http.StatusCreated {
+		t.Fatalf("create report returned %d body=%s", reportRec.Code, reportRec.Body.String())
+	}
+	assertAPIFieldNames(t, "create report", reportRec.Body.String(), []string{`"id"`, `"tenant_id"`, `"period_start"`}, []string{`"ID"`, `"TenantID"`, `"CreatedAt"`})
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/compliance/reports?tenant_id="+tenantID.String(), nil)
+	listReq.Header.Set("Authorization", "Bearer api-shape-operator")
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list reports returned %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	assertAPIFieldNames(t, "list reports", listRec.Body.String(), []string{`"data":[{"id"`, `"tenant_id"`, `"period_start"`}, []string{`"ID"`, `"TenantID"`, `"CreatedAt"`})
+
+	reviewBody := strings.NewReader(`{"tenant_id":"` + tenantID.String() + `","review_type":"quarterly"}`)
+	reviewReq := httptest.NewRequest(http.MethodPost, "/api/v1/compliance/reviews", reviewBody)
+	reviewReq.Header.Set("Authorization", "Bearer api-shape-operator")
+	reviewReq.Header.Set("Content-Type", "application/json")
+	reviewRec := httptest.NewRecorder()
+	handler.ServeHTTP(reviewRec, reviewReq)
+	if reviewRec.Code != http.StatusCreated {
+		t.Fatalf("create review returned %d body=%s", reviewRec.Code, reviewRec.Body.String())
+	}
+	assertAPIFieldNames(t, "create review", reviewRec.Body.String(), []string{`"tenant_id"`, `"review_type"`, `"created_at"`}, []string{`"TenantID"`, `"ReviewType"`, `"CreatedAt"`})
+}
+
+func assertAPIFieldNames(t *testing.T, label, body string, wants, rejects []string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("%s response missing %s: %s", label, want, body)
+		}
+	}
+	for _, reject := range rejects {
+		if strings.Contains(body, reject) {
+			t.Fatalf("%s response contains non-API field %s: %s", label, reject, body)
+		}
+	}
+}
+
 func TestCreateComplianceEvidenceRejectsInvalidExpiration(t *testing.T) {
 	tenantID := uuid.New()
 	store := &fakeStore{tenants: []storage.Tenant{{ID: tenantID, Name: "Acme Security"}}}

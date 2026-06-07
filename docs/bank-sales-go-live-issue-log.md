@@ -2548,6 +2548,56 @@ the `olap` profile, console about 4.56 MiB / 256 MiB, controlplane about
 controlplane panic, fatal, SQLite lock, analytic-store unavailable, stream
 transport, or edge 5xx matches.
 
+2026-06-07 small-fleet analytics architecture decision: for the demo host and
+branch-size deployments, Control One should run the full operator experience on
+Postgres + Redis + embedded SQLite/WAL and keep Doris at 0 MB unless
+`ANALYTICS_MODE=olap`, `DORIS_ENABLED=true`, and the Compose `olap` profile are
+explicitly selected. This is a product-preserving architecture, not a feature
+cut: Postgres remains the durable ingest journal and audit/workflow truth,
+SQLite supplies recent cited analytic evidence, Redis supplies bounded hot
+state and queues, and Doris stays as the explicit high-volume OLAP upgrade
+path. The standalone design record is
+`docs/small-fleet-analytics-architecture.md`; it now calls out the remaining
+Doris-coupled server paths that need backend-neutral migration rather than UI
+removal. Focused validation for this decision passed with
+`go test ./controlplane/internal/smallanalytics -count=1` and targeted server
+tests covering small-mode fleet health, top talkers, and SQLite-backed
+connections.
+
+2026-06-07 compliance report artifact hardening and live browser fix:
+production checks found that empty generated-report/review API responses could
+serialize `data:null`, report/review rows leaked Go-style field names, generated
+report artifacts needed a writable nonroot reports mount, and the Reports UI
+opened protected artifact URLs in a new tab without the bearer token. The fix
+keeps the feature surface intact: report/review APIs now return arrays and
+snake_case fields, deploy mounts/chowns `/var/lib/control-one/reports`, and the
+Reports/Evidence buttons fetch protected artifacts with the authenticated API
+client before saving a browser download.
+
+Local validation passed: focused compliance/report server tests, storage tests,
+smallanalytics tests, `go vet ./controlplane/internal/server
+./controlplane/internal/storage ./controlplane/internal/smallanalytics`,
+`go test -short ./controlplane/internal/server -count=1`, `npm run build`, and
+`npm run lint` (lint emitted only the existing ESLintRC deprecation warning).
+The live controlplane and console were redeployed. Direct live API checks showed
+`/api/v1/compliance/reports` and `/api/v1/compliance/reviews` returning array
+`data`, created report `b811e3a3-7d03-47d5-8a28-d88c749d0341`, downloaded it
+with HTTP 200, and then listed it as `status=ready` with `pdf_path` present and
+no Go field names. Real-browser verification on
+`/console/compliance?tab=reports&verify=auth-download-fix-20260607` showed the
+Reports table with ready SOC2 rows; clicking a ready row's download control made
+an authenticated `/api/v1/compliance/reports/{id}/download` request with HTTP
+200 and saved `compliance-report-SOC2-2026-06-07.html` (8,156 bytes). The page
+had zero current console warnings/errors and no document-level horizontal
+overflow. Post-deploy host evidence remained healthy: `/healthz=ok`,
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`,
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, no Doris FE/BE containers under
+the OLAP profile, memory around controlplane 65.89 MiB / 1 GiB, Redis
+4.79 MiB / 192 MiB, console 7.03 MiB / 256 MiB, landing 4.49 MiB / 128 MiB,
+and ipq 4.81 MiB / 128 MiB. A 20-minute post-deploy log scan found no panic,
+fatal, permission denied, audit report artifact, SQLite lock, analytics
+unavailable, or edge 5xx matches.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.

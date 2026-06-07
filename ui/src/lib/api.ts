@@ -2040,6 +2040,28 @@ async function safeErrorMessage(
   return response.statusText;
 }
 
+function filenameFromContentDisposition(
+  disposition: string | null,
+): string | undefined {
+  if (!disposition) return undefined;
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1].replace(/^"|"$/g, ""));
+    } catch {
+      return utf8[1].replace(/^"|"$/g, "");
+    }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i);
+  return plain?.[1];
+}
+
+export interface DownloadedFile {
+  blob: Blob;
+  filename?: string;
+  contentType?: string;
+}
+
 export class APIError extends Error {
   public readonly status: number;
 
@@ -4653,6 +4675,36 @@ export class APIClient {
     return (await response.json()) as T;
   }
 
+  private async download(path: string): Promise<DownloadedFile> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      headers: {
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      },
+    });
+
+    if (!response.ok) {
+      if (
+        response.status === HTTP_STATUS_UNAUTHORIZED &&
+        this.unauthorizedHandler
+      ) {
+        this.unauthorizedHandler();
+      }
+      const message = await safeErrorMessage(response);
+      throw new APIError(
+        message || `Download failed with status ${response.status}`,
+        response.status,
+      );
+    }
+
+    return {
+      blob: await response.blob(),
+      filename: filenameFromContentDisposition(
+        response.headers.get("Content-Disposition"),
+      ),
+      contentType: response.headers.get("Content-Type") ?? undefined,
+    };
+  }
+
   // ---- Connections / forensics (Phase 7) -------------------------------
 
   async listConnections(
@@ -5608,10 +5660,32 @@ export class APIClient {
     return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download?${search.toString()}`;
   }
 
+  async downloadAuditReport(
+    id: string,
+    tenantId: string,
+  ): Promise<DownloadedFile> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", tenantId);
+    return this.download(
+      `/api/v1/compliance/reports/${encodeURIComponent(id)}/download?${search.toString()}`,
+    );
+  }
+
   buildEvidenceDownloadUrl(id: string, tenantId: string): string {
     const search = new URLSearchParams();
     search.set("tenant_id", tenantId);
     return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download?${search.toString()}`;
+  }
+
+  async downloadComplianceEvidence(
+    id: string,
+    tenantId: string,
+  ): Promise<DownloadedFile> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", tenantId);
+    return this.download(
+      `/api/v1/compliance/evidence/${encodeURIComponent(id)}/download?${search.toString()}`,
+    );
   }
 
   // ---- Compliance Reviews ----------------------------------------
