@@ -2124,11 +2124,27 @@ onto Postgres + bounded Redis + embedded SQLite/WAL. Doris is preserved as an
 explicit OLAP upgrade path and must not consume memory in the default demo
 deployment.
 
-2026-06-07 live footprint check: the demo host reports `ANALYTICS_MODE=small`
-and `DORIS_ENABLED=false`; `docker compose --profile olap ps doris-fe doris-be`
-shows no Doris containers. Current steady-state container memory is roughly
-controlplane 99 MiB / 1 GiB, Redis 7.9 MiB / 192 MiB, console 4.6 MiB / 256
-MiB, landing 5.9 MiB / 128 MiB, and ipq 4.8 MiB / 128 MiB.
+2026-06-07 live footprint check: the demo host reports
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; `docker compose --profile olap ps
+doris-fe doris-be` shows no Doris containers. Current post-deploy container
+memory is roughly controlplane 63.7 MiB / 1 GiB, Redis 7.9 MiB / 192 MiB,
+console 4.5 MiB / 256 MiB, landing 5.9 MiB / 128 MiB, and ipq 4.8 MiB /
+128 MiB.
+
+2026-06-07 production follow-up: deploy `27088445229` succeeded for
+`a06ef72d`, closing the live agent contract failures without removing policy,
+compliance, or mesh features. Post-deploy logs show
+`POST /api/v1/compliance/report` returning 202, `GET /api/v1/mesh/peers`
+returning 200, `POST /api/v1/mesh/rotate` returning 200, and agent
+`GET /api/v1/policies` returning 200. The remaining threat-feed warnings are
+external-source responses (`tor-exit` 403 and AbuseIPDB 429) with local snapshot
+fallback, not ingest/deploy failures. A real-browser route smoke across 15
+console routes returned HTTP 200 navigations, no failing app API responses, and
+no browser console errors. Deploy `27088747860` then succeeded for `86196ab8`;
+a 390x844 production browser check confirmed the Compliance tab strip now wraps
+all five tabs visibly on mobile, with Compliance API calls returning 200 and
+zero browser console errors.
 
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
