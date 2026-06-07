@@ -683,6 +683,25 @@ Live audit evidence from 2026-06-06:
   returning 6 users with `duplicate_role_count=0`, and the live Users page
   rendering single role chips with zero console warnings/errors and no document
   horizontal overflow at the checked desktop viewport.
+- 2026-06-07 Roles/RBAC follow-up: live validation on
+  `/console/roles?verify=a120fb03` found the canonical roles rendered as custom
+  because the UI and delete guard still depended on older fixed role UUIDs.
+  Commit `a120fb03` preserves custom-role creation/update/delete, but now marks
+  and protects built-in roles by canonical role name (`admin`, `ciso`,
+  `investigator`, `operator`, `viewer`) in storage, API serialization, and UI
+  fallback logic. Local checks passed:
+  `npm --prefix ui test -- Roles.test.tsx`, focused server/storage RBAC tests,
+  `go vet ./controlplane/internal/server ./controlplane/internal/storage`,
+  `npm --prefix ui run build`, and `go test -short -p 1 ./...`. Deploy run
+  `27077802393` and CI runs `27077802386`/`27077802384` succeeded. Post-deploy
+  live API verification showed 5 roles, every canonical role returning
+  `built_in=true` despite non-old IDs, no custom roles, and a safe attempted
+  `DELETE /api/v1/roles/{admin_id}` rejection with `400 cannot delete built-in
+  role`; the admin role remained present afterward. A fresh browser reload of
+  `/console/roles?verify=a120fb03-live-ui` showed `BUILT-IN 5`, `CUSTOM 0`,
+  built-in labels on all role headers, zero delete buttons for built-ins, seven
+  app API responses at HTTP 200, zero console warnings/errors, zero page
+  errors, and no document horizontal overflow.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
