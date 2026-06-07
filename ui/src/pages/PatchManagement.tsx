@@ -113,7 +113,7 @@ export function PatchManagement(): JSX.Element {
         <KpiTile label="Failed / partial" value={String(totals.failed)} tone={totals.failed > 0 ? 'critical' : 'unknown'} />
       </div>
 
-      <div className="flex items-center gap-1 border-b border-border">
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
         <TabButton active={tab === 'deployments'} onClick={() => setTab('deployments')} label="Deployments" />
         <TabButton active={tab === 'proxies'} onClick={() => setTab('proxies')} label={`Proxies (${proxies.length})`} />
         <TabButton active={tab === 'windows'} onClick={() => setTab('windows')} label={`Windows (${windows.length})`} />
@@ -202,7 +202,7 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
     <button
       type="button"
       onClick={onClick}
-      className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+      className={`shrink-0 px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
         active ? 'border-primary text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary'
       }`}
     >
@@ -246,7 +246,7 @@ function DeploymentsPanel({
           </Button>
         </div>
       )}
-      <div className="rounded border border-border">
+      <div className="overflow-x-auto rounded border border-border">
         <table className="w-full text-sm">
           <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
             <tr>
@@ -326,7 +326,7 @@ function ProxiesPanel({
           description="Install a Squid proxy on a designated bastion to relay package-manager traffic for proxy-mode patch deploys."
         />
       ) : (
-        <div className="rounded border border-border">
+        <div className="overflow-x-auto rounded border border-border">
           <table className="w-full text-sm">
             <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
               <tr>
@@ -440,7 +440,7 @@ function WindowsPanel({
           description="Schedule a window to open allow-repo firewall rules during a defined timespan for airgapped or proxy-mode patch deploys."
         />
       ) : (
-        <div className="rounded border border-border">
+        <div className="overflow-x-auto rounded border border-border">
           <table className="w-full text-sm">
             <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
               <tr>
@@ -833,7 +833,8 @@ function DeploymentNodeDetail({
       {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
       {!loading && rows.length === 0 && <EmptyState title="No nodes" description="No nodes received this deployment." />}
       {rows.length > 0 && (
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
           <thead className="text-left text-xs uppercase tracking-wider text-text-secondary">
             <tr>
               <th className="px-2 py-1">Node</th>
@@ -870,7 +871,8 @@ function DeploymentNodeDetail({
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       )}
       {editingNode && (
         <NodeConfigEditor
@@ -1144,7 +1146,7 @@ function DeployForm({
         ) : filteredNodes.length === 0 ? (
           <EmptyState title="No matching nodes" description={filter ? 'Adjust the filter.' : 'No enrolled nodes in this tenant.'} />
         ) : (
-          <div className="rounded border border-border">
+          <div className="overflow-x-auto rounded border border-border">
             <table className="w-full text-sm">
               <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
                 <tr>
@@ -1257,7 +1259,7 @@ function ApprovalQueue({
   }
 
   return (
-    <div className="rounded border border-border">
+    <div className="overflow-x-auto rounded border border-border">
       <table className="w-full text-sm">
         <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
           <tr>
