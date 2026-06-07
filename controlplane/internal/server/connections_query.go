@@ -17,9 +17,8 @@ import (
 //
 //	GET /api/v1/connections?tenant_id=...&ip=...&node_id=...&open_only=true&since=...&until=...&limit=...
 //
-// Backed by the Doris `process_connections` table. In small analytics mode
-// the raw connection row store is intentionally absent, so the endpoint
-// returns an empty, successful envelope and lets fleet rollups remain fast.
+// Backed by the selected analytics connection store. Small mode reads the
+// embedded SQLite/WAL projection; OLAP mode reads Doris.
 func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -42,17 +41,18 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	if !s.usesDorisAnalytics() {
 		if s.localAnalytics != nil {
 			var rows []doris.ConnectionRow
+			var source string
 			if nodeID != "" {
 				if _, err := uuid.Parse(nodeID); err != nil {
 					http.Error(w, "invalid node_id", http.StatusBadRequest)
 					return
 				}
 				openOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("open_only")), "true")
-				rows, err = s.localAnalytics.ListConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly, externalOnly)
+				rows, source, err = s.listAnalyticsConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly, externalOnly)
 			} else if ip != "" {
-				rows, err = s.localAnalytics.ListConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
+				rows, source, err = s.listAnalyticsConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
 			} else {
-				rows, err = s.localAnalytics.ListConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
+				rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 			}
 			if err != nil {
 				s.logger.Warn("small analytics list connections", zap.Error(err))
@@ -60,29 +60,30 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			rows = sanitizeConnectionThreatRows(rows)
-			writeJSON(w, http.StatusOK, map[string]any{"data": rows, "source": "small-analytics"})
+			writeJSON(w, http.StatusOK, map[string]any{"data": rows, "source": source})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data":       []doris.ConnectionRow{},
-			"source":     "small-analytics-pending",
+			"source":     analyticsSourceSmallPending,
 			"guardrails": []string{"raw connection rows require the Redis+SQLite small analytics store or OLAP mode"},
 		})
 		return
 	}
 
 	var rows []doris.ConnectionRow
+	var source string
 	if nodeID != "" {
 		if _, err := uuid.Parse(nodeID); err != nil {
 			http.Error(w, "invalid node_id", http.StatusBadRequest)
 			return
 		}
 		openOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("open_only")), "true")
-		rows, err = s.dorisClient.ListConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly, externalOnly)
+		rows, source, err = s.listAnalyticsConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly, externalOnly)
 	} else if ip != "" {
-		rows, err = s.dorisClient.ListConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
+		rows, source, err = s.listAnalyticsConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
 	} else {
-		rows, err = s.dorisClient.ListConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
+		rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 	}
 	if err != nil {
 		s.logger.Warn("doris list connections", zap.Error(err))
@@ -90,7 +91,11 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows = sanitizeConnectionThreatRows(rows)
-	writeJSON(w, http.StatusOK, map[string]any{"data": rows})
+	resp := map[string]any{"data": rows}
+	if source != analyticsSourceDoris {
+		resp["source"] = source
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleConnectionDetail returns the connection-level record + correlated
@@ -186,7 +191,7 @@ func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data":       []doris.TopTalker{},
-			"source":     "small-analytics-pending",
+			"source":     analyticsSourceSmallPending,
 			"guardrails": []string{"top talkers require the Redis+SQLite small analytics store or OLAP mode"},
 		})
 		return

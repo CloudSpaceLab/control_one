@@ -7,6 +7,7 @@ import { SearchResults } from './SearchResults';
 
 const mocks = vi.hoisted(() => ({
   investigateSearch: vi.fn(),
+  listSavedSearches: vi.fn(),
   createSavedSearch: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/hooks/useApiClient', () => ({
   useApiClient: () => ({
     investigateSearch: mocks.investigateSearch,
+    listSavedSearches: mocks.listSavedSearches,
     createSavedSearch: mocks.createSavedSearch,
   }),
 }));
@@ -50,6 +52,7 @@ function renderSearch(initialEntry: string) {
 
 afterEach(() => {
   mocks.investigateSearch.mockReset();
+  mocks.listSavedSearches.mockReset();
   mocks.createSavedSearch.mockReset();
   mocks.toastSuccess.mockReset();
   mocks.toastError.mockReset();
@@ -64,11 +67,13 @@ describe('SearchResults', () => {
     expect(screen.getByRole('button', { name: /save search/i })).toBeDisabled();
     expect(screen.queryByText(/empty query/i)).not.toBeInTheDocument();
     expect(mocks.investigateSearch).not.toHaveBeenCalled();
+    expect(mocks.listSavedSearches).not.toHaveBeenCalled();
     expect(mocks.createSavedSearch).not.toHaveBeenCalled();
   });
 
   it('keeps query context in the description and can clear back to the empty state', async () => {
     mocks.investigateSearch.mockResolvedValue({ items: [], facets: [] });
+    mocks.listSavedSearches.mockResolvedValue({ items: [] });
     const user = userEvent.setup();
     renderSearch('/search?q=nginx');
 
@@ -92,7 +97,7 @@ describe('SearchResults', () => {
 
   it('saves the current query through the saved-search API', async () => {
     mocks.investigateSearch.mockResolvedValue({ items: [], facets: [] });
-    mocks.createSavedSearch.mockResolvedValue({
+    const savedRow = {
       id: 'saved-1',
       tenant_id: 'tenant-1',
       owner_user_id: 'user-1',
@@ -101,7 +106,9 @@ describe('SearchResults', () => {
       shared: false,
       created_at: '2026-06-07T12:00:00Z',
       updated_at: '2026-06-07T12:00:00Z',
-    });
+    };
+    mocks.listSavedSearches.mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [savedRow] });
+    mocks.createSavedSearch.mockResolvedValue(savedRow);
     const user = userEvent.setup();
     renderSearch('/search?q=nginx');
 
@@ -123,5 +130,30 @@ describe('SearchResults', () => {
       );
     });
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Search saved');
+    expect(screen.getByRole('button', { name: /saved/i })).toBeDisabled();
+  });
+
+  it('disables saving when the same query is already saved', async () => {
+    mocks.investigateSearch.mockResolvedValue({ items: [], facets: [] });
+    mocks.listSavedSearches.mockResolvedValue({
+      items: [
+        {
+          id: 'saved-1',
+          tenant_id: 'tenant-1',
+          owner_user_id: 'user-1',
+          name: 'Search: nginx',
+          query: 'nginx',
+          shared: false,
+          created_at: '2026-06-07T12:00:00Z',
+          updated_at: '2026-06-07T12:00:00Z',
+        },
+      ],
+    });
+    renderSearch('/search?q=nginx');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /saved/i })).toBeDisabled();
+    });
+    expect(mocks.createSavedSearch).not.toHaveBeenCalled();
   });
 });

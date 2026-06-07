@@ -2266,6 +2266,46 @@ non-evidentiary and eviction-safe; SQLite/WAL is the recent cited evidence read
 model; Postgres remains the audit/replay truth; and Doris remains the dedicated
 warehouse tier for larger fleets rather than a default demo dependency.
 
+2026-06-07 small-analytics integration follow-up: the Redis+SQLite small-fleet
+path now has a server-side connection reader in
+`controlplane/internal/server/analytics_connections.go`. IP-scoped network
+targeting, node documentation top connections, and event-capture flow deltas
+now read through the selected analytics backend, so small mode can preserve
+those workflows from SQLite connection facts while OLAP mode keeps using Doris.
+This is additive and feature-preserving: Doris remains the warehouse upgrade
+path, but the demo profile keeps Doris at 0 MB. A fresh production footprint
+check showed `/healthz=ok`, `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`,
+`SQLITE_CACHE_MB=16`, no Doris FE/BE services under the `olap` profile,
+controlplane about 85.8 MiB / 1 GiB, Redis about 4.84 MiB / 192 MiB, and
+console about 4.28 MiB / 256 MiB.
+
+Post-deploy verification update: the controlplane was rebuilt from a prebuilt
+local binary and recreated successfully, then authenticated production API
+checks confirmed the selected small analytics backend on live data:
+`/api/v1/connections?...&node_id=0d4893c0-867a-4bf1-8aa9-e247680280ab`
+returned `source=small-analytics` with 5 sampled rows, node documentation for
+that node returned 10 top connections, and `/flow-delta` returned 16 rows.
+Host checks stayed clean: `/healthz=ok`, Redis healthy, no Doris FE/BE profile
+containers, no recent controlplane panic/fatal/SQLite/analytic-store errors,
+no edge 5xx entries, controlplane about 60.86 MiB / 1 GiB, Redis about
+4.83 MiB / 192 MiB, and console about 4.48 MiB / 256 MiB.
+
+Saved-search duplicate prevention was also deployed and retested in a real
+browser. Query `codex-duplicate-guard-1780843512220` produced exactly one
+`POST /api/v1/saved-searches` with 201, the button changed from `Save search`
+to disabled `Saved`, the saved-search list contained exactly one matching row,
+cleanup deleted that row with 204, and a follow-up list showed zero remaining
+rows. The same production browser check reported zero console errors, zero page
+errors, zero failed API responses, and zero document horizontal overflow on the
+search page.
+
+A 390x844 mobile browser smoke across Search, Saved Searches, Network
+Connections, and the live node detail route also showed zero console/page/API
+errors, zero Doris or analytic-store unavailable copy, and zero document-level
+horizontal overflow. The Saved and Network tables remain wider than the
+viewport inside their table containers, but the document itself does not
+overflow.
+
 2026-06-07 live footprint check: the demo host reports
 `CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
 `CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; `docker compose --profile olap ps

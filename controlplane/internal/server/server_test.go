@@ -619,6 +619,28 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	if detailResp.Source != "small-analytics" || detailResp.Connection == nil || detailResp.Connection.ConnID != "conn-1" {
 		t.Fatalf("unexpected detail response: %+v", detailResp)
 	}
+
+	affected, err := srv.resolveAffectedNodesForIP(context.Background(), tenantID.String(), "8.8.8.8")
+	if err != nil {
+		t.Fatalf("resolve affected nodes: %v", err)
+	}
+	if len(affected) != 1 || affected[0] != nodeID {
+		t.Fatalf("small analytics did not resolve affected node: %+v", affected)
+	}
+
+	flows, err := srv.listFlowDeltas(context.Background(), EventCaptureFilter{
+		TenantID: tenantID,
+		NodeID:   nodeID,
+		Since:    base.Add(-time.Minute),
+		Until:    base.Add(3 * time.Minute),
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list small analytics flow deltas: %v", err)
+	}
+	if len(flows) != 1 || flows[0].Process != "curl" || flows[0].Port != 443 || flows[0].BytesOut != 250 {
+		t.Fatalf("unexpected small analytics flow deltas: %+v", flows)
+	}
 }
 
 func smallAnalyticsConnRow(tenantID, nodeID uuid.UUID, connID string, startedAt, endedAt time.Time, direction, srcIP, dstIP string, bytesIn, bytesOut int64, threatFeed string) map[string]any {

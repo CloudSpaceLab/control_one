@@ -141,11 +141,15 @@ The repository is already aligned with the first version of this architecture:
   `/api/v1/connections/top-talkers`,
   `/api/v1/events/query` for cited connection-fact rows, and
   `/api/v1/timelines/build` for connection-fact timelines.
+- `controlplane/internal/server/analytics_connections.go` now centralizes
+  connection-history reads for small and OLAP modes. IP-scoped network
+  targeting, node documentation top connections, and event-capture flow deltas
+  use that selected backend instead of calling Doris directly.
 
 This means the design is not speculative. The immediate task is to finish the
 small profile as a complete product path, not to remove the Doris path.
 
-## Integration Gaps To Close
+## Integration Status And Gaps
 
 The repo already starts and queries a small SQLite read model, but several
 server paths still bind capability to a Doris client or Doris-specific status
@@ -155,14 +159,15 @@ remove UI workflows.
 | Area | Current Shape | Small-Fleet Target |
 | --- | --- | --- |
 | event ingest status | `eventIngestService` still reports `DorisStatus` and `pending_doris` even when the active backend is small | introduce backend-neutral `analytics_status` semantics while keeping the existing database field compatible during migration |
-| network block targeting | `resolveAffectedNodesForIP` only checks `s.dorisClient.ListConnectionsForIP` | query the selected analytics backend so IP-scoped enforcement can use SQLite connection facts in small mode |
-| node documentation | `buildNodeDocumentation` only fills top connections when Doris is present | read top connections through the selected analytics backend and preserve the documentation workflow |
-| event-capture flow deltas | `event_capture.go` still computes connection deltas from Doris only | route flow deltas through the same connection query capability used by network and documentation views |
+| network block targeting | `resolveAffectedNodesForIP` queries the selected analytics backend for recent IP connection facts | keep the same behavior as more fact families move into SQLite |
+| node documentation | `buildNodeDocumentation` fills top connections from the selected analytics backend | add broader recent event/process facts as SQLite projections grow |
+| event-capture flow deltas | `event_capture.go` computes connection deltas through the selected analytics backend | keep file/db/web deltas on their best available small-mode projections as they land |
 | AI investigation tool naming | `doris_ingest_health` and related copy are still platform-Doris specific | keep the tool capability but expose it as analytics ingest health, with source labels for small vs OLAP |
 | health and copy | logs/errors mention "small analytics sqlite store unavailable" and "Doris writer" separately | expose one analytics health envelope with mode, source, lag, queue depth, quick-check, and replay status |
 
-The safe implementation move is to add a small internal analytics facade and
-then migrate each route to that facade:
+A first connection-reader facade is now in place. The next safe implementation
+move is to grow that into a fuller internal analytics facade and migrate each
+route to backend-neutral capabilities:
 
 ```go
 type AnalyticsReader interface {
@@ -681,13 +686,13 @@ Expected runtime:
 1. Keep the current small profile as the default demo deployment.
 2. Keep Doris FE/BE stopped unless `ANALYTICS_MODE=olap`,
    `DORIS_ENABLED=true`, and the Compose `olap` profile are all selected.
-3. Route fleet health, connection list/detail, top talkers, event query, and
-   timeline build through backend-neutral helpers.
-4. Move IP-scoped network targeting, node documentation top connections, and
-   event-capture flow deltas from direct `dorisClient` calls to the selected
-   analytics backend.
-5. Use SQLite `process_connections` for cited connection facts and bounded IP,
-   node, connection, and correlation pivots.
+3. Keep fleet health, connection list/detail, top talkers, event query, and
+   timeline build on backend-neutral helpers.
+4. Keep IP-scoped network targeting, node documentation top connections, and
+   event-capture flow deltas on the selected analytics backend instead of
+   direct `dorisClient` calls.
+5. Continue using SQLite `process_connections` for cited connection facts and
+   bounded IP, node, connection, and correlation pivots.
 6. Add Redis sorted-set/hash acceleration for dashboard freshness, top talkers,
    node freshness, and writer lag, with SQLite/Postgres fallback.
 7. Rename user-facing and AI health copy from `doris_status` to

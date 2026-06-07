@@ -11,7 +11,7 @@ import { useApiClient } from '@/hooks/useApiClient';
 import { useTenant } from '@/providers/TenantProvider';
 import { entityRoute, ENTITY_TYPE_LABELS } from '@/lib/entity';
 import type { EntityType } from '@/components/kit';
-import type { ClassificationChip, InvestigateSearchResult } from '@/lib/api';
+import type { ClassificationChip, InvestigateSearchResult, SavedSearch } from '@/lib/api';
 
 const SEV_TO_TONE: Record<string, StateTone> = {
   critical: 'critical',
@@ -56,6 +56,15 @@ export function SearchResults(): JSX.Element {
     queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q: normalizedQuery, limit: 200 }),
     enabled: hasQuery && !!currentTenantId,
   });
+  const savedSearchesQ = useQuery({
+    queryKey: ['saved-searches', currentTenantId],
+    queryFn: () => client.listSavedSearches({ tenantId: currentTenantId }),
+    enabled: hasQuery && !!currentTenantId,
+  });
+  const entityTypeFilter = tab === 'all' ? '' : tab;
+  const matchingSavedSearch = (savedSearchesQ.data?.items ?? []).find(
+    (saved) => saved.query.trim() === normalizedQuery && (saved.entity_type ?? '') === entityTypeFilter,
+  );
 
   const saveSearch = useMutation({
     mutationFn: () =>
@@ -69,7 +78,11 @@ export function SearchResults(): JSX.Element {
         },
         { tenantId: currentTenantId },
       ),
-    onSuccess: () => {
+    onSuccess: (row) => {
+      qc.setQueryData<{ items: SavedSearch[] }>(['saved-searches', currentTenantId], (current) => {
+        const items = current?.items ?? [];
+        return items.some((item) => item.id === row.id) ? { items } : { items: [row, ...items] };
+      });
       qc.invalidateQueries({ queryKey: ['saved-searches', currentTenantId] });
       toast.success('Search saved');
     },
@@ -114,11 +127,17 @@ export function SearchResults(): JSX.Element {
           <Button
             variant="secondary"
             size="md"
-            disabled={!hasQuery || !currentTenantId || saveSearch.isPending}
+            disabled={
+              !hasQuery ||
+              !currentTenantId ||
+              saveSearch.isPending ||
+              savedSearchesQ.isLoading ||
+              Boolean(matchingSavedSearch)
+            }
             loading={saveSearch.isPending}
             onClick={() => saveSearch.mutate()}
           >
-            <Bookmark className="h-4 w-4" /> Save search
+            <Bookmark className="h-4 w-4" /> {matchingSavedSearch ? 'Saved' : 'Save search'}
           </Button>
         }
       />

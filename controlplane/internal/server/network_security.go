@@ -175,17 +175,13 @@ func (s *Server) dispatchFirewallRule(
 }
 
 // resolveAffectedNodesForIP finds the nodes that have actually seen traffic
-// to/from the given IP in the last 7 days (via Doris process_connections).
+// to/from the given IP in the last 7 days through the selected analytics
+// connection backend.
 // Used when scope != "fleet". Returns deduped list of node UUIDs.
 func (s *Server) resolveAffectedNodesForIP(ctx context.Context, tenantID, ip string) ([]uuid.UUID, error) {
-	if s.dorisClient == nil {
-		// No Doris configured — degrade silently (caller should fall back to
-		// fleet scope when no historical data is available).
-		return nil, nil
-	}
 	until := time.Now().UTC()
 	since := until.AddDate(0, 0, -7)
-	conns, err := s.dorisClient.ListConnectionsForIP(ctx, tenantID, ip, since, until, 1000)
+	conns, _, err := s.listAnalyticsConnectionsForIP(ctx, tenantID, ip, since, until, 1000)
 	if err != nil {
 		return nil, fmt.Errorf("list connections for ip: %w", err)
 	}
