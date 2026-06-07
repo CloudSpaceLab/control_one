@@ -1170,6 +1170,38 @@ Live audit evidence from 2026-06-06:
   under the `olap` profile, console about 6 MiB of 256 MiB, controlplane about
   194 MiB of 1 GiB, Redis about 7.5 MiB of 192 MiB, landing about 5.7 MiB of
   128 MiB, and ipq about 4.8 MiB of 128 MiB.
+- 2026-06-07 live performance/public-workflow follow-up: a chunked production
+  browser timing pass covered 53 authenticated console routes across Control
+  Room, Alerts, Cases, Search, Investigation, Ask AI, Nodes, Network Security,
+  SIEM, Webservers, Observability, Patch, Coverage, Compliance, Access, Audit,
+  Users/Roles, Telemetry, Secrets, Offline Bundle, Settings, Onboard, Data
+  Security, Misconduct, Finacle, Fleet Enroll, Hypervisors, Jobs, Templates,
+  Sessions, Tenants, Rules, and tenant detail. The sweep used real live tenant,
+  node, and IP data. Aside from browser-cancelled `ERR_ABORTED` requests caused
+  by intentionally navigating away quickly, the authenticated pass showed zero
+  app HTTP failures, zero console/page errors, zero document-level horizontal
+  overflow, zero misleading small-mode/Doris error copy, and zero
+  `/api/v1/events/stream` requests. The slowest normal app API response across
+  the chunks was about 657 ms; the one `/sessions` chunk navigation timeout was
+  isolated immediately afterward and loaded to `document.readyState=complete`
+  in about 327 ms with `GET /api/v1/sessions` returning 200 and no errors.
+  A separate unauthenticated/public mobile pass covered `/`, `/intake`,
+  `/intake-status`, `/trust/default`, their `/console/...` redirected routes,
+  and `/console/login`. It exposed two real landing-page defects: stale
+  default-Doris sales copy on the public root and a mobile overflow in the
+  dashboard metric mock caused by inline grid columns overriding responsive CSS.
+  The landing page now describes the default small-fleet stack as Postgres,
+  Redis, and embedded SQLite analytics, keeps the larger-estate OLAP warehouse
+  path as optional, and replaces inline dashboard metric grids with responsive
+  metric classes. The landing-only deploy completed, and post-deploy public
+  mobile retest across those 8 routes showed zero stale Doris-first copy, zero
+  overflow offenders, zero response failures, zero console/page errors, and
+  login still presenting one password field. Final host checks showed
+  `/healthz=ok`, small-profile services running, no Doris FE/BE under the
+  `olap` profile, no recent panic/fatal/SQLite/analytic-store/stream log
+  matches, console about 6.3 MiB of 256 MiB, controlplane about 234 MiB of
+  1 GiB, Redis about 7.5 MiB of 192 MiB, landing about 4.4 MiB of 128 MiB, and
+  ipq about 4.8 MiB of 128 MiB.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -1207,6 +1239,8 @@ Exit criteria:
 - Met: live safe-workflow interaction sweep covered 18 authenticated routes
   with non-mutating clicks/filters/dialog opens and no app API, console,
   stream, or page-error failures after the evidence-chip polish fix.
+- Met: live timing/API sweep covered 53 authenticated routes plus 8 public
+  routes, with the public landing copy/layout corrections deployed and retested.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
   calling the whole product bank-grade clean.
