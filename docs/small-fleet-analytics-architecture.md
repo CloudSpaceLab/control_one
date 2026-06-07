@@ -148,6 +148,37 @@ Redis plus SQLite alone is not enough because Redis is disposable hot state and
 SQLite is a projection. Postgres remains the acceptance source of truth and
 rebuild source.
 
+## Alternatives Evaluated
+
+The light profile should optimize for operational predictability before raw
+warehouse depth. The winning design is Redis + SQLite/WAL + Postgres because it
+keeps the analytics path inside services the demo already runs, preserves
+replayability, and does not introduce another memory-hungry daemon.
+
+| Option | Decision | Why |
+| --- | --- | --- |
+| smaller Doris | reject as default | still needs FE/BE processes, Java heap, BE bootstrap, host tuning, and operational headroom the demo host does not reliably have |
+| ClickHouse single node | reject for demo default | much lighter than a full warehouse cluster in some shapes, but still another server, volume, health model, and tuning surface |
+| DuckDB embedded | hold as future export/ad hoc helper | excellent embedded OLAP fit, but the primary app needs continuous transactional projection writes, FTS-style evidence lookup, and simple one-process ownership today |
+| Redis only | reject | fast but evictable; it cannot be the evidence or citation source for bank-grade investigation |
+| SQLite only | reject | durable enough for recent projections, but it should not carry queues, live freshness, rate state, or disposable UI heat |
+| Postgres only | possible but not preferred | simplest correctness model, but it pushes high-churn analytic reads and live counters into the product database and makes demo performance noisier |
+| Redis + SQLite/WAL + Postgres | choose | one bounded Redis container, one embedded read model, one canonical journal, no extra analytics daemon, and a clean OLAP upgrade path |
+
+DuckDB should not be dismissed; it can become useful later for offline exports,
+Parquet snapshots, admin analysis, or a read-only "investigation pack" opened
+from archived evidence. It should not be the first replacement for Doris in the
+running controlplane because the current product needs cheap incremental writes,
+point lookups, FTS-oriented search, and citation stability more than vectorized
+scan speed.
+
+The rule of thumb:
+
+- SQLite is the online recent-evidence projection.
+- Redis is the live heat and coordination layer.
+- DuckDB is a possible offline/ad hoc analytic reader.
+- Doris remains the dedicated high-volume OLAP backend.
+
 ## Fit Envelope
 
 Use this small profile for:
