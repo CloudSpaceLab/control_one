@@ -2509,6 +2509,45 @@ ipq 4.81 MiB / 128 MiB. A 30-minute log scan found no controlplane panic,
 fatal, SQLite lock, analytic-store unavailable, stream transport, or edge 5xx
 matches.
 
+2026-06-07 evidence/export workflow follow-up: the next production audit slice
+focused on bank-facing export paths rather than route loads. Direct authenticated
+API probes showed all static CSV report exports returning HTTP 200 with
+`text/csv` attachment headers: compliance (4,523 non-empty lines,
+`rule_id,node_id,passed,severity,checked_at`), audit (2,519 lines,
+`occurred_at,actor_id,action,resource_type,resource_id`), alerts (21 lines,
+`opened_at,severity,state,source,title,node_id`), and access (header-only,
+`requested_at,user_id,resource_type,requested_access,status,decided_at,decided_by,ttl_seconds`,
+which is correct for no access requests in the window). A SOC case export
+returned HTTP 200 JSON with `export_version=soc-case-export-v1`, 6 evidence
+references, 5 guardrails, and no `raw_evidence` field in the packet body.
+
+Real-browser export checks then validated the operator controls. On
+`/console/cases?verify=export-packet-browser`, clicking `Preview export`
+triggered `GET /api/v1/soc/cases/{id}/export` with HTTP 200, rendered packet
+evidence and guardrail copy, and did not expose raw evidence text. On
+`/console/audit?verify=client-csv-audit` and
+`/console/compliance?verify=client-csv-compliance`, the single enabled
+`Export CSV` button on each page produced real downloads named
+`audit-logs-2026-06-07.csv` and `compliance-results-2026-06-07.csv`. On
+`/console/investigate/knowledge-graph?verify=kg-md-export`, the `Download .md`
+button produced `knowledge_graph_00000000-0000-0000-0000-000000000001.md`.
+Those browser checks observed zero console warnings/errors, zero page errors,
+zero failed app API responses, zero request failures, no document-level
+horizontal overflow, no broken/mojibake rendered copy, and no Doris/
+analytic-store unavailable copy. The generated audit-report artifact list
+currently returned `data:null` with `total=0`, so there was no live generated
+report file to download in this slice; the UI's list normalizer treats that as
+an empty report list.
+
+Post-slice host checks remained clean: `/healthz=ok`,
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`,
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, Redis healthy, no Doris FE/BE under
+the `olap` profile, console about 4.56 MiB / 256 MiB, controlplane about
+63.86 MiB / 1 GiB, Redis about 4.84 MiB / 192 MiB, landing about 4.48 MiB /
+128 MiB, and ipq about 4.81 MiB / 128 MiB. A 30-minute log scan found no
+controlplane panic, fatal, SQLite lock, analytic-store unavailable, stream
+transport, or edge 5xx matches.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
