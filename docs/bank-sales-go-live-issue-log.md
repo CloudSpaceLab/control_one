@@ -1041,6 +1041,53 @@ Live audit evidence from 2026-06-06:
   global search; opened and dismissed the tenant selector; and opened and
   dismissed the profile menu, all with zero console warnings/errors, no leftover
   expanded dialogs/menus, and no document-level horizontal overflow.
+- 2026-06-07 small-analytics investigation follow-up: live small-mode API
+  timing found `/api/v1/events/query` returning correct SQLite-backed
+  connection evidence but taking several seconds on one run because close-event
+  reads had no `ended_at_ms` indexes. Commit `7b0a81cf` keeps the Redis+
+  SQLite+Postgres demo architecture and the Doris OLAP path, but adds partial
+  SQLite indexes for closed connection pivots by tenant, node, source IP,
+  destination IP, and correlation. Targeted local checks passed
+  `go test ./controlplane/internal/smallanalytics`,
+  `go test ./controlplane/internal/server -run
+  'TestEventsAndTimelineHandlersUseSmallAnalyticsSQLite|TestEventAndTimelineRowsExposeStableCitations|TestSmallAnalytics'`,
+  and `git diff --check`; full `go test ./controlplane/...` was blocked only
+  by the local `controlone_test` Postgres password/auth environment in four
+  existing server integration tests. Deploy run `27086787045` and CI runs
+  `27086787034`/`27086787056` succeeded. Post-deploy host verification showed
+  `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, Redis healthy, `/healthz=ok`,
+  and the new partial indexes present on the live SQLite DB. Read-only live
+  SQLite timing improved close-event count from about 530 ms before the fix to
+  11.65 ms after, and the projected open+close count from about 643 ms to
+  83.98 ms. Authenticated browser API sampling after deploy returned eight
+  consecutive `/api/v1/events/query` responses at about 710-828 ms with exact
+  totals over roughly 548k projected connection events, zero browser console
+  warnings/errors, and no SQLite lock or analytic-store unavailable logs.
+- The same follow-up found a UX integration gap: the IP investigation
+  Connections tab showed live small-analytics lifecycles, but Timeline and Raw
+  events still rendered empty legacy lifecycle states, making the demo read as
+  if connection evidence did not exist. Commit `28493272` preserves the
+  existing entity lifecycle API and Connections table, adds a typed
+  `/api/v1/timelines/build` client method, and merges small-analytics timeline
+  rows into the IP Timeline and Raw events tabs with stable dedupe. Local checks
+  passed `npm --prefix ui test -- api.normalize.test.ts EntityDetail.test.tsx`,
+  full `npm --prefix ui test` with 28 files and 109 tests passing,
+  `npm --prefix ui run lint`, `npm --prefix ui run build`, and
+  `git diff --check` aside from normal LF/CRLF notices. Deploy run
+  `27087172137` succeeded, and CI runs `27087172138`/`27087172143`
+  succeeded. Live browser verification on
+  `/console/investigate/ip/149.154.166.110?verify=timeline-ui-28493272` at
+  390x844 showed the Connections tab still rendering 250 lifecycle rows, the
+  header event count updated to 100, Timeline rendering connection open/close
+  events instead of the empty state, Raw events rendering 100 rows with
+  `source_table=process_connections`, `event_type=conn.*`, connection id, node,
+  and correlation evidence, and the timeline detail sheet showing JSON metadata
+  with stable `smallanalytics://...` raw refs. No console warnings/errors,
+  no `small-analytics-pending` or unavailable copy, no supplemental timeline
+  warning, and no document-level horizontal overflow were observed. Live
+  control-plane logs showed the new `/api/v1/timelines/build` request returning
+  HTTP 200 in about 45 ms server-side; only the known threat-feed 403/429 local
+  snapshot fallback warnings appeared.
 - Commits `c90298d0` and `41aca30e` hardened the small-fleet deploy contract:
   Doris FE/BE are behind the Compose `olap` profile, deploy/bootstrap/CI paths
   skip Doris unless OLAP is selected, `.env.example` defaults to small mode, and
