@@ -2170,6 +2170,27 @@ strips in bounds, no document horizontal overflow, no failed app API responses,
 no browser console errors, no Doris/analytic-store unavailable copy, and live
 post-deploy `/healthz=ok`.
 
+2026-06-07 node/detail live-data follow-up: authenticated production API probes
+confirmed the default tenant has two active nodes with fresh heartbeats and the
+small analytics fleet source remains `small-analytics-postgres`. A 390x844
+browser sweep then loaded real detail and investigation paths:
+`/nodes/0d4893c0-867a-4bf1-8aa9-e247680280ab`,
+`/nodes/1ab45ccc-3984-4315-bc17-641ad43f02c8`,
+`/investigate/ip/158.220.87.109`, `/investigate/ip/172.67.163.40`,
+`/security/network?tab=connections`, and Control Room drilldowns for exposure,
+app/db health, patch posture, and the overview. All navigations returned HTTP
+200 with no browser console errors, no failed app API responses, and no
+Doris/analytic-store unavailable copy. The sweep found one real polish issue on
+the long-hostname node detail page: the header/breadcrumb content rendered
+wider than the mobile viewport. Commit `8dcea4b7` fixes this by adding
+mobile-safe wrapping/breaking to Node Detail and the shared section header. The
+console-only deploy completed, and production retest at both 390x844 and
+1440x900 showed the real node detail page with header right edge inside the
+viewport, no overflow candidates, no horizontal document overflow, all seven
+tabs in bounds, no failed app API responses, and no browser console errors.
+Post-deploy `/healthz=ok`, Redis remained healthy, Doris FE/BE remained absent,
+and container memory stayed light.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
