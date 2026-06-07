@@ -13,6 +13,7 @@
 // AES-256-GCM and a bcrypt hash of the one-time token — there is no
 // "recover token" path and the user is told that explicitly on success.
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   fetchMisconductChallenge,
   submitWhistleblowerReport,
@@ -138,9 +139,9 @@ export function WhistleblowerIntake(): JSX.Element {
         </div>
         <p className="mt-3 text-xs text-text-secondary">{result.message}</p>
         <div className="mt-6 flex gap-3 text-sm">
-          <a href="/intake-status" className="text-brand-400 underline">
+          <Link to="/intake-status" className="text-brand-400 underline">
             Check status with your token
-          </a>
+          </Link>
         </div>
       </div>
     );

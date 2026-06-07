@@ -2855,3 +2855,40 @@ lock/analytics-unavailable/Doris-unavailable matches, no Doris FE/BE containers
 were running, and memory stayed inside the small-fleet envelope: console about
 6.8 MiB / 256 MiB, controlplane about 80.0 MiB / 1 GiB, Redis about 6.7 MiB /
 192 MiB, and ipq about 4.8 MiB / 128 MiB.
+
+2026-06-07 public route boundary and intake link follow-up: an isolated live
+browser sweep checked unauthenticated public pages and protected redirects at
+desktop and mobile sizes. `/console/trust/default`, `/console/intake`, and
+`/console/intake-status` rendered without a session token, root aliases such as
+`/intake` and `/intake-status` canonicalized to the `/console/...` routes,
+protected `/console/security/network?tab=connections` redirected to
+`/console/login`, and mobile login/intake/status views had no horizontal
+overflow. The sweep found one real public-flow defect in source: after an
+anonymous misconduct report is submitted, the success-page "Check status with
+your token" link used raw `href="/intake-status"`, which can escape the console
+basename in deployments where public routes are served under `/console`.
+
+The fix is additive and routing-safe: `WhistleblowerIntake` now uses React
+Router `Link to="/intake-status"`, letting the configured console basename
+render the correct `/console/intake-status` href. Regression coverage simulates
+a successful anonymous intake submission under `MemoryRouter basename="/console"`
+and proves the status link href is `/console/intake-status`.
+
+Local validation passed:
+`npx vitest run src/pages/WhistleblowerIntake.test.tsx src/pages/TrustCenter.test.tsx src/pages/Login.test.tsx`,
+`npm run build`, `npm run lint`, and `git diff --check`. The console was rebuilt
+and redeployed. Post-deploy browser evidence used Playwright route interception
+for `/api/v1/misconduct/challenge` and `/api/v1/misconduct/submit`, so no real
+production report was created; the submitted state rendered the audit token,
+showed "Check status with your token", and the link resolved to
+`https://control-one.cloudspacetechs.com/console/intake-status`. A fresh
+post-deploy public/protected sweep again showed Trust Center, root intake-status
+canonicalization, mobile login, mobile intake, and protected Network redirecting
+as expected, with no visible auth leak, no horizontal overflow, no same-origin
+failed requests, and zero browser console warnings/errors. Host evidence after
+deploy: `/healthz=ok`, strict recent console/controlplane log scans showed no
+actual nginx 4xx/5xx or controlplane 5xx/panic/database-lock/analytics-unavailable
+matches, no Doris FE/BE containers were running, and memory stayed within the
+small-fleet envelope: console about 4.5 MiB / 256 MiB, controlplane about
+83.7 MiB / 1 GiB, Redis about 6.7 MiB / 192 MiB, and ipq about 4.8 MiB /
+128 MiB.
