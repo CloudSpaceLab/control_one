@@ -16,6 +16,7 @@ import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { AISettingsTab } from '../components/settings/AISettingsTab';
 import { KeyRound, Shield, Trash2 } from 'lucide-react';
+import { useHref } from 'react-router-dom';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -166,8 +167,10 @@ export function Settings(): JSX.Element {
   // MFA state
   const [mfaFactors, setMfaFactors] = useState<MFAFactor[]>([]);
   const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaReloadToken, setMfaReloadToken] = useState(0);
   const [deleteMfaId, setDeleteMfaId] = useState<string | null>(null);
+  const [deletingMfa, setDeletingMfa] = useState(false);
   const [totpEnrollStep, setTotpEnrollStep] = useState<'idle' | 'scanning' | 'verifying'>('idle');
   const [totpEnrollData, setTotpEnrollData] = useState<{ factor_id: string; secret: string; provisioning_uri: string } | null>(null);
   const [totpQrDataUrl, setTotpQrDataUrl] = useState<string | null>(null);
@@ -185,17 +188,38 @@ export function Settings(): JSX.Element {
     setMfaLoading(true);
     api
       .listMFAFactors()
-      .then((r) => { if (!cancelled) setMfaFactors(r.factors ?? []); })
-      .catch(() => { if (!cancelled) setMfaFactors([]); })
+      .then((r) => {
+        if (!cancelled) {
+          setMfaFactors(r.factors ?? []);
+          setMfaError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setMfaFactors([]);
+          setMfaError(err instanceof Error ? err.message : 'Failed to load MFA factors');
+        }
+      })
       .finally(() => { if (!cancelled) setMfaLoading(false); });
     return () => { cancelled = true; };
   }, [api, mfaReloadToken]);
 
   const handleDeleteMFA = async () => {
-    if (!deleteMfaId) return;
-    await api.deleteMFAFactor(deleteMfaId);
-    setDeleteMfaId(null);
-    setMfaReloadToken((n) => n + 1);
+    if (!deleteMfaId || deletingMfa) return;
+    try {
+      setDeletingMfa(true);
+      setMfaError(null);
+      await api.deleteMFAFactor(deleteMfaId);
+      setDeleteMfaId(null);
+      setMfaReloadToken((n) => n + 1);
+      showToast('MFA factor revoked', 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not revoke the MFA factor';
+      setMfaError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeletingMfa(false);
+    }
   };
 
   const handleBeginTOTPEnroll = async () => {
@@ -475,7 +499,9 @@ export function Settings(): JSX.Element {
   const showForm = isCreatingWebhook || editingWebhook !== null;
   const trustCenterTenant = tenants.find((tenant) => tenant.id === effectiveTenant);
   const trustCenterTenantName = trustCenterTenant?.name ?? tenants[0]?.name ?? 'default';
-  const trustCenterHref = `/trust/${encodeURIComponent(trustCenterTenantName)}`;
+  const trustCenterPath = `/trust/${encodeURIComponent(trustCenterTenantName)}`;
+  const trustCenterHref = useHref(trustCenterPath);
+  const deletingMfaFactor = deleteMfaId ? mfaFactors.find((factor) => factor.id === deleteMfaId) : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -860,7 +886,11 @@ export function Settings(): JSX.Element {
               </div>
             )}
 
-            {mfaLoading ? (
+            {mfaError && !deleteMfaId ? (
+              <p role="alert" className="text-sm text-state-critical">
+                {mfaFactors.length > 0 ? 'MFA action failed' : 'MFA status unavailable'}: {mfaError}
+              </p>
+            ) : mfaLoading ? (
               <p className="text-sm text-text-muted">Loading factors...</p>
             ) : mfaFactors.length === 0 ? (
               <EmptyState
@@ -884,6 +914,8 @@ export function Settings(): JSX.Element {
                       variant="ghost"
                       size="sm"
                       onClick={() => setDeleteMfaId(f.id)}
+                      aria-label={`Revoke ${f.name} MFA factor`}
+                      title={`Revoke ${f.name} MFA factor`}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-state-critical" />
                     </Button>
@@ -896,12 +928,24 @@ export function Settings(): JSX.Element {
           <ConfirmModal
             open={deleteMfaId !== null}
             title="Revoke MFA factor?"
-            body="This factor will be removed immediately. You may be locked out if it is your only factor."
-            confirmLabel="Revoke"
+            body={
+              deletingMfaFactor
+                ? `${deletingMfaFactor.name} will be removed immediately. You may be locked out if it is your only factor.`
+                : 'This factor will be removed immediately. You may be locked out if it is your only factor.'
+            }
+            confirmLabel={deletingMfa ? 'Revoking...' : 'Revoke'}
             variant="danger"
             onConfirm={handleDeleteMFA}
-            onCancel={() => setDeleteMfaId(null)}
-          />
+            onCancel={() => {
+              if (!deletingMfa) setDeleteMfaId(null);
+            }}
+          >
+            {mfaError && deleteMfaId ? (
+              <p role="alert" className="text-sm text-state-critical">
+                MFA action failed: {mfaError}
+              </p>
+            ) : null}
+          </ConfirmModal>
 
           <Panel
             padding="md"
@@ -994,7 +1038,7 @@ export function Settings(): JSX.Element {
             <div className="flex flex-col gap-3">
               <p className="text-sm text-text-secondary">
                 The Trust Center displays subprocessors, certifications, security FAQ, and incident history to the public.
-                Access the public portal at <code className="text-brand-600">/trust/:tenant-name</code>.
+                Access the public portal at <code className="text-brand-600">/console/trust/:tenant-name</code>.
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                 <Button variant="secondary" asChild>

@@ -3024,3 +3024,59 @@ running under the OLAP profile, memory stayed light at about console
 ipq 4.8 MiB / 128 MiB, and strict recent console/controlplane log scans showed
 no actual nginx 4xx/5xx, controlplane 5xx, panic, fatal, permission,
 database-lock, analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Settings MFA and Trust Center follow-up: source review found two
+bank-grade UX defects in the Settings console. MFA factor load failures were
+silently converted into the empty state, so an operator could see "No MFA
+factors enrolled" when the security status request had actually failed. MFA
+factor revoke buttons also exposed only an icon with no explicit accessible
+name, and revoke failures could be missed instead of remaining visible in the
+confirmation modal. The Trust Center action used the root `/trust/:tenant`
+alias, which worked by nginx redirect but should resolve directly inside the
+console basename.
+
+The fix preserves the existing features and tightens their contracts. MFA load
+failures now render `MFA status unavailable: ...` and do not show the empty
+factor state. Revoke controls have factor-specific accessible names and titles,
+the confirmation copy names the selected factor, the modal stays open during
+revocation failure, and the inline error remains visible as
+`MFA action failed: ...`. The Trust Center link now uses React Router `useHref`
+so the public portal link resolves directly to `/console/trust/:tenant-name`.
+
+Regression coverage proves the Trust Center href is `/console/trust/Tenant%20A`,
+MFA load failures surface as an alert instead of an empty state, and failed
+revocation keeps a visible modal error while showing an error toast. Local
+validation passed: `npm --prefix ui run test -- src/pages/Settings.test.tsx`,
+`npm --prefix ui run build`, `npm --prefix ui run lint`, and `git diff --check`
+(only the existing React Router future-flag, ESLintRC deprecation, and CRLF
+warnings appeared).
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+The final live browser verification used isolated Playwright contexts and
+route interception for `/api/v1/mfa/factors` so no production MFA state changed.
+Desktop verification logged in through the real API, rendered an explicit
+simulated MFA outage, confirmed the empty-factor state was not shown, refreshed
+to a synthetic TOTP factor, verified one named `Revoke Authenticator app MFA
+factor` control, opened factor-specific revoke confirmation copy, intercepted
+one bearer-authenticated DELETE with a simulated 500, kept
+`MFA action failed: Internal Server Error` visible, and confirmed the Trust
+Center link resolved to `/console/trust/default`. The desktop page had no
+horizontal overflow, no unexpected same-origin app 4xx/5xx responses, no
+unexpected request failures, and only the expected simulated 503/500 console
+resource errors. A separate isolated mobile pass at 390x844 rendered the same
+synthetic MFA factor, verified the named revoke control, and had no horizontal
+overflow, request failures, page errors, or console warnings/errors.
+
+Real API and host checks after deploy remained clean: `GET /api/v1/mfa/factors`
+returned `{"data":[]}`, confirming the browser pass did not leave production
+MFA factors behind; `/console/settings` and `/console/trust/default` returned
+HTTP 200; root `/trust/default` returned HTTP 308 to
+`/console/trust/default`; `/healthz=ok`; no Doris FE/BE containers were running;
+small analytics config still reports `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; memory stayed light at about
+console 4.5 MiB / 256 MiB, controlplane 78.4 MiB / 1 GiB, Redis 5.6 MiB /
+192 MiB, and ipq 4.8 MiB / 128 MiB; and strict recent console/controlplane log
+scans showed no actual nginx 4xx/5xx, controlplane 4xx/5xx, panic, fatal,
+permission, database-lock, analytics-unavailable, or Doris-unavailable matches.

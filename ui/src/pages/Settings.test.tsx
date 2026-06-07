@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Webhook } from '../lib/api';
 import { Settings } from './Settings';
@@ -120,6 +121,14 @@ function configuredWebhook() {
   };
 }
 
+function renderSettings() {
+  return render(
+    <MemoryRouter basename="/console" initialEntries={['/console/settings']}>
+      <Settings />
+    </MemoryRouter>,
+  );
+}
+
 describe('Settings webhooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -132,7 +141,7 @@ describe('Settings webhooks', () => {
 
   it('creates a signed webhook with custom headers', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
 
     await user.click(screen.getByRole('button', { name: /new webhook/i }));
     await user.type(screen.getByLabelText(/^name$/i), 'SOC forwarder');
@@ -164,7 +173,7 @@ describe('Settings webhooks', () => {
     const user = userEvent.setup();
     mocks.webhooks = [configuredWebhook()];
 
-    const { container } = render(<Settings />);
+    const { container } = renderSettings();
 
     expect(screen.getByText('Signed')).toBeInTheDocument();
     expect(screen.getByText('Custom headers')).toBeInTheDocument();
@@ -185,12 +194,12 @@ describe('Settings webhooks', () => {
 
   it('links the public Trust Center by tenant name instead of tenant id', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
 
     await user.click(screen.getByRole('tab', { name: /trust center/i }));
 
     const link = screen.getByRole('link', { name: /view public trust center/i });
-    expect(link).toHaveAttribute('href', '/trust/Tenant%20A');
+    expect(link).toHaveAttribute('href', '/console/trust/Tenant%20A');
   });
 });
 
@@ -213,7 +222,7 @@ describe('Settings MFA enrollment', () => {
       provisioning_uri: 'otpauth://totp/Control%20One:admin@local?secret=ABC123&issuer=Control%20One',
     });
 
-    const { container } = render(<Settings />);
+    const { container } = renderSettings();
 
     await user.click(screen.getByRole('tab', { name: /security/i }));
     await user.click(screen.getByRole('button', { name: /add totp/i }));
@@ -263,7 +272,7 @@ describe('Settings MFA enrollment', () => {
       },
     });
 
-    render(<Settings />);
+    renderSettings();
 
     await user.click(screen.getByRole('tab', { name: /security/i }));
     await user.click(screen.getByRole('button', { name: /add security key/i }));
@@ -293,5 +302,46 @@ describe('Settings MFA enrollment', () => {
         }),
       );
     });
+  });
+
+  it('surfaces MFA load failures instead of showing an empty-factor state', async () => {
+    const user = userEvent.setup();
+    mocks.apiClient.listMFAFactors.mockRejectedValueOnce(new Error('mfa store unavailable'));
+
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'MFA status unavailable: mfa store unavailable',
+    );
+    expect(screen.queryByText(/no mfa factors enrolled/i)).not.toBeInTheDocument();
+  });
+
+  it('names MFA revoke controls and keeps a visible error if revocation fails', async () => {
+    const user = userEvent.setup();
+    mocks.apiClient.listMFAFactors.mockResolvedValueOnce({
+      factors: [
+        {
+          id: 'factor-1',
+          type: 'totp',
+          name: 'Authenticator app',
+          created_at: '2026-06-07T00:00:00Z',
+        },
+      ],
+    });
+    mocks.apiClient.deleteMFAFactor.mockRejectedValueOnce(new Error('revocation denied'));
+
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+    await screen.findByText('Authenticator app');
+    await user.click(screen.getByRole('button', { name: /revoke authenticator app mfa factor/i }));
+
+    expect(screen.getByText(/authenticator app will be removed immediately/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Revoke' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('MFA action failed: revocation denied');
+    expect(mocks.showToast).toHaveBeenCalledWith('revocation denied', 'error');
   });
 });
