@@ -2598,6 +2598,43 @@ and ipq 4.81 MiB / 128 MiB. A 20-minute post-deploy log scan found no panic,
 fatal, permission denied, audit report artifact, SQLite lock, analytics
 unavailable, or edge 5xx matches.
 
+2026-06-07 broad post-architecture live sweep: with the Browser Use Node bridge
+still unavailable, the audit used the Playwright MCP fallback for another
+authenticated production browser pass against the deployed small-mode console.
+The desktop pass covered 48 route loads at 1440x900 across core operations,
+investigation, fleet, compliance, detection rules, privileged access, network
+security, SIEM/webserver controls, patching, sessions, RBAC/users, audit,
+telemetry, secrets, offline bundle, settings, data-security, misconduct,
+Finacle, and compatibility aliases such as `/console/reports`,
+`/console/connections`, `/console/behavioral`, `/console/recommendations`,
+`/console/compliance-evidence`, `/console/audit-reports`, and
+`/console/frameworks`. The route batches found zero browser console errors,
+zero page errors, zero app API HTTP 4xx/5xx responses, and zero
+document-level horizontal overflow.
+
+Candidate findings were checked and classified: `/console/rules/builder` is an
+intentional alias to `/console/rules`; compliance `Failed` strings are policy
+result/status labels, not load failures; the webserver "approval required"
+message is the expected safety gate before applying a config plan; and isolated
+`net::ERR_ABORTED` entries were stale in-flight requests during route
+transition or Cloudflare RUM beacons, with no UI or HTTP failure. A 390x844
+mobile smoke pass covered 12 high-risk routes and found no body overflow, no
+runtime/API failures, and no bad Doris/analytics-unavailable copy. The mobile
+controls that initially appeared offscreen were verified to live inside
+`overflow-x:auto` table containers, with explicit scroll ancestors on Alerts,
+Users, Roles, Network Connections, and Compliance Reports.
+
+Fresh host evidence continues to match the minimum-memory small-fleet
+architecture: public `/healthz=ok`; the deployed controlplane environment shows
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; `docker ps` shows no Doris
+containers; and the current memory profile is approximately controlplane
+79.11 MiB / 1 GiB, console 7.10 MiB / 256 MiB, Redis 6.15 MiB / 192 MiB,
+landing 4.49 MiB / 128 MiB, and ipq 4.81 MiB / 128 MiB. A 30-minute
+controlplane/console/edge log scan found no panic, fatal, permission denied,
+audit report artifact, SQLite lock, database locked, analytics unavailable, or
+edge 5xx matches. No new code defect was confirmed in this sweep.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
