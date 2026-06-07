@@ -2478,6 +2478,7 @@ type fakeStore struct {
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	templateAssignments []storage.ProvisioningTemplateAssignment
 	policies            map[uuid.UUID]storage.Policy
+	effectivePolicies   []storage.PolicyWithVersion
 	policyAssignments   []storage.PolicyAssignment
 	auditLogs           []storage.AuditLog
 	clusters            map[uuid.UUID]*storage.Cluster
@@ -3982,7 +3983,17 @@ func (f *fakeStore) DeletePolicyAssignment(_ context.Context, id uuid.UUID) erro
 }
 
 func (f *fakeStore) GetEffectivePolicies(_ context.Context, tenantID, nodeID uuid.UUID) ([]storage.PolicyWithVersion, error) {
-	return nil, nil
+	if len(f.effectivePolicies) == 0 {
+		return nil, nil
+	}
+	out := make([]storage.PolicyWithVersion, 0, len(f.effectivePolicies))
+	for _, policy := range f.effectivePolicies {
+		if policy.TenantID != uuid.Nil && policy.TenantID != tenantID {
+			continue
+		}
+		out = append(out, policy)
+	}
+	return out, nil
 }
 
 func (f *fakeStore) GetLatestComplianceResultForRule(_ context.Context, nodeID uuid.UUID, ruleID string) (*storage.ComplianceResult, error) {

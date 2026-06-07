@@ -2,7 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +21,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	agentpolicy "github.com/CloudSpaceLab/control_one/internal/policy"
 )
 
 // emitPolicyUpdated publishes a policy.updated event so subscribed agents
@@ -133,8 +138,16 @@ type createPolicyVersionRequest struct {
 func (s *Server) handlePoliciesCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		principal, ok := s.authorize(w, r, roleViewer)
+		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		if principal.Type == "agent" {
+			s.handleAgentPolicySet(w, r, principal)
+			return
+		}
+		if _, ok := s.authorizePrincipal(w, principal, roleViewer); !ok {
 			return
 		}
 		s.handleListPolicies(w, r, principal)
@@ -148,6 +161,151 @@ func (s *Server) handlePoliciesCollection(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) authorizePrincipal(w http.ResponseWriter, principal *auth.Principal, allowedRoles ...string) (*auth.Principal, bool) {
+	if principal == nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return nil, false
+	}
+	if len(allowedRoles) == 0 {
+		return principal, true
+	}
+	for _, role := range principal.Roles {
+		for _, allowed := range allowedRoles {
+			if strings.EqualFold(strings.TrimSpace(role), strings.TrimSpace(allowed)) {
+				return principal, true
+			}
+		}
+	}
+	for _, role := range principal.Roles {
+		if strings.EqualFold(strings.TrimSpace(role), roleAdmin) {
+			return principal, true
+		}
+	}
+	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+	return nil, false
+}
+
+func (s *Server) handleAgentPolicySet(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	tenantID, nodeID, err := s.tenantNodeForAgent(r.Context(), principal)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if requested := strings.TrimSpace(r.URL.Query().Get("node_id")); requested != "" {
+		parsed, err := uuid.Parse(requested)
+		if err != nil {
+			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if parsed != nodeID {
+			http.Error(w, "agent cannot fetch policies for another node", http.StatusForbidden)
+			return
+		}
+	}
+
+	effective, err := s.store.GetEffectivePolicies(r.Context(), tenantID, nodeID)
+	if err != nil {
+		s.logger.Error("list agent effective policies", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	rules := make([]agentpolicy.Rule, 0, len(effective))
+	for _, p := range effective {
+		if rule, ok := agentRuleFromEffectivePolicy(p); ok {
+			rules = append(rules, rule)
+		}
+	}
+	version := agentPolicyVersion(rules)
+	resp := struct {
+		Policies  []agentpolicy.Rule `json:"policies"`
+		Signature string             `json:"signature,omitempty"`
+		Version   string             `json:"version,omitempty"`
+	}{
+		Policies: rules,
+		Version:  version,
+	}
+	resp.Signature = s.signAgentPolicySet(rules, version)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func agentRuleFromEffectivePolicy(p storage.PolicyWithVersion) (agentpolicy.Rule, bool) {
+	check, remediation, severity := agentPolicyCommand(p)
+	if strings.TrimSpace(check) == "" {
+		return agentpolicy.Rule{}, false
+	}
+	if strings.TrimSpace(severity) == "" {
+		severity = strings.TrimSpace(p.Labels["severity"])
+	}
+	if strings.TrimSpace(severity) == "" {
+		severity = "medium"
+	}
+	return agentpolicy.Rule{
+		ID:          p.ID.String(),
+		Version:     strconv.Itoa(p.Version),
+		Severity:    severity,
+		Check:       check,
+		Remediation: remediation,
+	}, true
+}
+
+func agentPolicyCommand(p storage.PolicyWithVersion) (check, remediation, severity string) {
+	definition := strings.TrimSpace(p.RuleDefinition)
+	if definition == "" {
+		return "", "", ""
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(definition), &body); err == nil {
+		for _, key := range []string{"agent_check", "check", "command", "script"} {
+			if value, ok := body[key].(string); ok && strings.TrimSpace(value) != "" {
+				check = strings.TrimSpace(value)
+				break
+			}
+		}
+		if value, ok := body["remediation"].(string); ok {
+			remediation = strings.TrimSpace(value)
+		}
+		if value, ok := body["severity"].(string); ok {
+			severity = strings.TrimSpace(value)
+		}
+		return check, remediation, severity
+	}
+	switch strings.ToLower(strings.TrimSpace(p.RuleType)) {
+	case "shell", "command", "script", "agent-command":
+		return definition, "", ""
+	default:
+		return "", "", ""
+	}
+}
+
+func agentPolicyVersion(rules []agentpolicy.Rule) string {
+	payload := struct {
+		Policies []agentpolicy.Rule `json:"policies"`
+	}{Policies: rules}
+	data, _ := json.Marshal(payload)
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (s *Server) signAgentPolicySet(rules []agentpolicy.Rule, version string) string {
+	mat := s.policySigningMaterial()
+	if mat == nil || !mat.haveSigningKey || len(mat.privateKey) != ed25519.PrivateKeySize {
+		return ""
+	}
+	payload := struct {
+		Policies []agentpolicy.Rule `json:"policies"`
+		Version  string             `json:"version,omitempty"`
+	}{Policies: rules, Version: version}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(mat.privateKey, data))
 }
 
 func (s *Server) handlePolicySubroutes(w http.ResponseWriter, r *http.Request) {
