@@ -486,13 +486,13 @@ export function Settings(): JSX.Element {
       />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai')}>
-        <TabsList>
-          <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
-          <TabsTrigger value="security">Security</TabsTrigger>
-          <TabsTrigger value="system">System health</TabsTrigger>
-          <TabsTrigger value="integrations">Integrations</TabsTrigger>
-          <TabsTrigger value="trust-center">Trust Center</TabsTrigger>
-          <TabsTrigger value="ai">AI</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="webhooks">Webhooks</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="security">Security</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="system">System health</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="trust-center">Trust Center</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="ai">AI</TabsTrigger>
         </TabsList>
 
         <TabsContent value="webhooks" className="mt-4 flex flex-col gap-4">

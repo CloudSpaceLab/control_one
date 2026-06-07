@@ -274,14 +274,14 @@ export function NodeDetail(): JSX.Element {
       <AgentRepairBanner node={node} onRepair={() => setTab('settings')} />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="activity">Activity</TabsTrigger>
-          <TabsTrigger value="connections">Connections</TabsTrigger>
-          <TabsTrigger value="kg">Knowledge graph</TabsTrigger>
-          <TabsTrigger value="packages">Packages</TabsTrigger>
-          <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="overview">Overview</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="activity">Activity</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="kg">Knowledge graph</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="packages">Packages</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="recommendations">Recommendations</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="pt-4">

@@ -145,17 +145,17 @@ export function Rules(): JSX.Element {
       )}
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <TabsList>
-          <TabsTrigger value="port">Port rules ({portRules.length})</TabsTrigger>
-          <TabsTrigger value="log">Log rules ({logRules.length})</TabsTrigger>
-          <TabsTrigger value="builder" title="Compose rules visually with drag-and-drop blocks">
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="port">Port rules ({portRules.length})</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="log">Log rules ({logRules.length})</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="builder" title="Compose rules visually with drag-and-drop blocks">
             Visual builder
           </TabsTrigger>
-          <TabsTrigger value="templates">
+          <TabsTrigger className="w-full sm:w-auto" value="templates">
             <Library className="h-3.5 w-3.5" />
             Templates
           </TabsTrigger>
-          <TabsTrigger value="drafts">
+          <TabsTrigger className="w-full sm:w-auto" value="drafts">
             AI Drafts
           </TabsTrigger>
         </TabsList>
