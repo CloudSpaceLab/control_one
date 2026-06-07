@@ -243,11 +243,11 @@ export function Onboard(): JSX.Element {
       <OnboardAIPanel />
 
       <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
-        <TabsList>
-          <TabsTrigger value="single">
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="min-h-10 w-full whitespace-normal px-2 text-center leading-tight sm:min-h-0 sm:w-auto sm:whitespace-nowrap sm:px-3" value="single">
             <Server className="h-4 w-4" /> Single server
           </TabsTrigger>
-          <TabsTrigger value="hypervisor">
+          <TabsTrigger className="min-h-10 w-full whitespace-normal px-2 text-center leading-tight sm:min-h-0 sm:w-auto sm:whitespace-nowrap sm:px-3" value="hypervisor">
             <Boxes className="h-4 w-4" /> Hypervisor / cloud account
           </TabsTrigger>
         </TabsList>
