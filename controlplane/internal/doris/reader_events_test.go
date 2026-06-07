@@ -422,6 +422,29 @@ func TestBuildTimelineSQLIncludesProcessLineageAndWebRequests(t *testing.T) {
 	}
 }
 
+func TestBuildTimelineSQLTreatsTenantPivotAsTenantScoped(t *testing.T) {
+	query, args, err := buildTimelineSQL(TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "tenant",
+		EntityID:   "tenant-1",
+		Since:      time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC),
+		Until:      time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("build tenant timeline query: %v", err)
+	}
+	if strings.Contains(query, "1 = 0") {
+		t.Fatalf("tenant timeline pivot should not guard out tenant-scoped rows:\n%s", query)
+	}
+	if got := strings.Count(query, "tenant_id = ?"); got != 6 {
+		t.Fatalf("tenant predicate count = %d, want 6:\n%s", got, query)
+	}
+	if len(args) == 0 {
+		t.Fatal("expected tenant-scoped bound args")
+	}
+}
+
 func TestBuildTimelineSQLAvoidsUnsupportedPivotBroadening(t *testing.T) {
 	query, _, err := buildTimelineSQL(TimelineBuildParams{
 		TenantID: "tenant-1",

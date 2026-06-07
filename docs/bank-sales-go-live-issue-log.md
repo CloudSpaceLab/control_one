@@ -2575,8 +2575,7 @@ Reports/Evidence buttons fetch protected artifacts with the authenticated API
 client before saving a browser download.
 
 Local validation passed: focused compliance/report server tests, storage tests,
-smallanalytics tests, `go vet ./controlplane/internal/server
-./controlplane/internal/storage ./controlplane/internal/smallanalytics`,
+smallanalytics tests, `go vet ./controlplane/internal/server ./controlplane/internal/storage ./controlplane/internal/smallanalytics`,
 `go test -short ./controlplane/internal/server -count=1`, `npm run build`, and
 `npm run lint` (lint emitted only the existing ESLintRC deprecation warning).
 The live controlplane and console were redeployed. Direct live API checks showed
@@ -2696,3 +2695,89 @@ External references:
 - NetBird architecture/access/routing docs: https://docs.netbird.io/about-netbird/how-netbird-works, https://docs.netbird.io/manage/access-control, https://docs.netbird.io/manage/networks/how-routing-peers-work
 - Headscale features/routes/ACLs: https://headscale.net/0.28.0/about/features/, https://headscale.net/0.26.0/ref/routes/, https://headscale.net/0.28.0/ref/acls/
 - OpenZiti network access/tunnelers: https://openziti.io/docs/learn/core-concepts/zero-trust-models/ztna/, https://openziti.io/docs/reference/tunnelers/, https://github.com/openziti/ziti
+
+2026-06-07 small-fleet analytics contract/performance follow-up: the live
+demo direction remains Redis+SQLite/WAL+Postgres, with Doris preserved as the
+explicit OLAP upgrade path rather than deleted. This pass found three real
+defects in the small-mode implementation: direct analytics API responses leaked
+Go struct keys such as `ConnID`, `ThreatHits`, and `NodeID`; unscoped
+small-mode `/api/v1/events/query` and connection-pivot
+`/api/v1/timelines/build` could exceed the 5s SQLite query timeout; and the
+network connection drawer still depended on legacy `detail.events`, so small
+mode could show "No correlated activity" even when the backend-neutral timeline
+API had cited connection facts.
+
+Implemented fixes are additive and feature-preserving. Shared connection,
+top-talker, and fleet structs now emit snake_case JSON. The UI top-talker
+normalizer accepts both snake_case and legacy Go-shaped rows. Small analytics
+event/timeline SQL now pushes tenant/time/node/correlation/connection filters
+inside the open/close union branches, and IP timelines split source-IP and
+destination-IP branches so existing SQLite indexes are usable. The connection
+detail drawer now fetches `/api/v1/timelines/build` in parallel with the
+connection metadata call, maps cited timeline rows into the existing
+`EventTimeline`, and falls back to legacy detail events when needed.
+
+Local validation passed: `go test ./controlplane/internal/smallanalytics -count=1`, focused server tests for small analytics events/timelines and
+connections, `go test ./controlplane/internal/doris -count=1`, `go vet ./controlplane/internal/server ./controlplane/internal/doris ./controlplane/internal/smallanalytics`, `npx vitest run src/lib/api.normalize.test.ts`, `npm run build`, `npm run lint`, and
+`git diff --check`. A broader `go test ./controlplane/internal/server` run
+was blocked by local Postgres test authentication for `controlone_test`, not
+by this change.
+
+The fixed controlplane and console were deployed to production. Live API
+evidence on tenant `00000000-0000-0000-0000-000000000001` showed
+`fleet_health`, `connections_external`, `top_talkers`, `connection_detail`,
+`connections_by_ip`, `timeline_by_ip_entity`, `events_query`, and
+`timeline_by_conn` all returning HTTP 200 with `go_style_keys=false`. Final
+server-side timings after the deploy settled were approximately: fleet health
+2-7 ms, connections list 3-15 ms, top talkers 19 ms, IP-filtered connections
+25 ms, event query 643 ms, IP timeline 906 ms, connection detail 2 ms, and
+connection timeline 780 ms. The SQLite projection held about 608k connection
+rows during the test, so this was not an empty-fixture check.
+
+Real-browser verification on
+`/console/security/network?tab=connections&verify=small-analytics-contract-20260607c`
+showed the Connections table populated with live rows and threat labels,
+opening a row made `/api/v1/connections/{id}` and `/api/v1/timelines/build`
+requests with HTTP 200, and the drawer rendered a cited `conn.open` forensic
+timeline row instead of the empty-state message. Browser console warnings/errors
+were zero on the final clean pass. Host evidence stayed aligned with the
+minimum-memory design: public `/healthz=ok`, no Doris FE/BE containers under
+the OLAP profile, controlplane about 63 MiB / 1 GiB, console about 6.5 MiB /
+256 MiB, Redis about 6.2 MiB / 192 MiB, and ipq about 4.8 MiB / 128 MiB.
+
+2026-06-07 tenant timeline follow-up: a broader live API smoke of the main
+console contracts found one real small-mode backend defect after the route
+sweep: `POST /api/v1/timelines/build` returned HTTP 500 for
+`entity_type=tenant` / `entity_id=<tenant_id>`, even though the tenant scope was
+already authorized and the request should mean "recent tenant-scoped timeline".
+This was a contract gap, not a resource issue: the failing request returned in
+about 761 ms before the fix, while the server log showed a fast 500.
+
+The fix is additive. Tenant timeline pivots are normalized at the HTTP and AI
+tool boundary, `tenant_id` is treated as the canonical `tenant` pivot alias, a
+mismatched tenant entity ID now returns HTTP 400, and both small analytics and
+Doris timeline predicate builders treat tenant pivots as the already-required
+tenant scope instead of unsupported entity filters. Regression coverage now
+includes small analytics tenant timelines, HTTP tenant timeline success and
+mismatch rejection, and the Doris timeline SQL tenant-pivot path.
+
+Local validation passed: `go test ./controlplane/internal/smallanalytics -count=1`,
+focused Doris timeline SQL tests, focused server investigation timeline tests,
+`go vet ./controlplane/internal/server ./controlplane/internal/doris ./controlplane/internal/smallanalytics`,
+and `git diff --check`. The new Linux/amd64 controlplane binary
+`eecf4a4688be2b3583b2c9ed07442f917b8e479930f8e56c9ac9172f0211d7f9` was deployed
+to production and the controlplane container was recreated.
+
+Post-deploy live evidence: public `/healthz=ok`; tenant timeline returned
+HTTP 200 in about 520 ms with 10 items, 10 citations, `source=small-analytics`,
+and scope `tenant/00000000-0000-0000-0000-000000000001`; a mismatched tenant
+timeline returned HTTP 400; and a corrected 29-endpoint authenticated API smoke
+returned zero failures. A post-deploy browser sweep of Control Room, Network,
+SIEM, Compliance, Reports, Alerts, Cases, Observability, Nodes, Coverage, Audit,
+and Telemetry showed no visible error states, no same-origin failed requests,
+and no console warnings/errors. Recent controlplane logs showed no 5xx, panic,
+database lock, analytics-unavailable, or Doris-unavailable matches; only the
+known AbuseIPDB 429 local-snapshot warning appeared. Host memory remained in the
+small-fleet envelope: controlplane about 62.6 MiB / 1 GiB, console about
+6.6 MiB / 256 MiB, Redis about 6.2 MiB / 192 MiB, ipq about 4.8 MiB / 128 MiB,
+and no Doris FE/BE containers under the OLAP profile.

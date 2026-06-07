@@ -13,30 +13,30 @@ import (
 // ConnectionLifetime. All bytes_in / bytes_out are cumulative for the
 // connection lifetime; per-emit deltas live on the events table.
 type ConnectionRow struct {
-	ConnID         string
-	CorrelationID  string
-	StartedAt      time.Time
-	EndedAt        time.Time
-	DurationMS     int64
-	Direction      string
-	PID            int64
-	ProcessName    string
-	Cmdline        string
-	UserName       string
-	SrcIP          string
-	SrcPort        int
-	DstIP          string
-	DstPort        int
-	Protocol       string
-	BytesIn        int64
-	BytesOut       int64
-	PacketsIn      int64
-	PacketsOut     int64
-	ThreatMatch    bool
-	ThreatFeed     string
-	ClosedReason   string
-	BastionSession string
-	NodeID         string
+	ConnID         string    `json:"conn_id"`
+	CorrelationID  string    `json:"correlation_id"`
+	StartedAt      time.Time `json:"started_at"`
+	EndedAt        time.Time `json:"ended_at"`
+	DurationMS     int64     `json:"duration_ms"`
+	Direction      string    `json:"direction"`
+	PID            int64     `json:"pid"`
+	ProcessName    string    `json:"process_name"`
+	Cmdline        string    `json:"cmdline"`
+	UserName       string    `json:"user_name"`
+	SrcIP          string    `json:"src_ip"`
+	SrcPort        int       `json:"src_port"`
+	DstIP          string    `json:"dst_ip"`
+	DstPort        int       `json:"dst_port"`
+	Protocol       string    `json:"protocol"`
+	BytesIn        int64     `json:"bytes_in"`
+	BytesOut       int64     `json:"bytes_out"`
+	PacketsIn      int64     `json:"packets_in"`
+	PacketsOut     int64     `json:"packets_out"`
+	ThreatMatch    bool      `json:"threat_match"`
+	ThreatFeed     string    `json:"threat_feed"`
+	ClosedReason   string    `json:"closed_reason"`
+	BastionSession string    `json:"bastion_session_id"`
+	NodeID         string    `json:"node_id"`
 }
 
 const connectionSelectColumns = `conn_id, correlation_id, started_at, ended_at, duration_ms, direction,
@@ -1185,6 +1185,8 @@ func appendEntityPredicate(where string, args []any, entityType, entityID string
 		return where, args
 	}
 	switch entityType {
+	case "tenant", "tenant_id":
+		return where, args
 	case "ip":
 		parts := []string{}
 		if cols.SrcIP != "" {
@@ -1335,11 +1337,11 @@ func (c *Client) ListEventsByCorrelation(ctx context.Context, tenantID, correlat
 
 // TopTalker is one row in the per-tenant Top Talkers card.
 type TopTalker struct {
-	IP          string
-	Connections int64
-	BytesIn     int64
-	BytesOut    int64
-	ThreatHits  int64
+	IP          string `json:"ip"`
+	Connections int64  `json:"conn_count"`
+	BytesIn     int64  `json:"bytes_in"`
+	BytesOut    int64  `json:"bytes_out"`
+	ThreatHits  int64  `json:"threat_hits"`
 }
 
 // TopTalkers returns the busiest external peers by connection count.
@@ -1382,14 +1384,14 @@ func (c *Client) TopTalkers(ctx context.Context, tenantID string, since time.Tim
 // FleetSnapshotRow rolls one node's hot vitals into a single row for the
 // dashboard topology grid.
 type FleetSnapshotRow struct {
-	NodeID        string
-	ConnsActive   int64
-	BytesOut24h   int64
-	BytesIn24h    int64
-	ThreatHits24h int64
-	OpenAlerts    int64
-	LastEventAt   time.Time
-	SeverityMax   string
+	NodeID        string    `json:"node_id"`
+	ConnsActive   int64     `json:"conns_active"`
+	BytesOut24h   int64     `json:"bytes_out_24h"`
+	BytesIn24h    int64     `json:"bytes_in_24h"`
+	ThreatHits24h int64     `json:"threat_hits_24h"`
+	OpenAlerts    int64     `json:"open_alerts"`
+	LastEventAt   time.Time `json:"last_event_at"`
+	SeverityMax   string    `json:"severity_max"`
 }
 
 // FleetHealthSnapshot returns one row per node summarising the last 24h.

@@ -401,14 +401,17 @@ func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); strings.Contains(body, `"NodeID"`) || !strings.Contains(body, `"node_id"`) {
+		t.Fatalf("fleet health response should use snake_case JSON keys: %s", body)
+	}
 	var resp struct {
 		Source string `json:"source"`
 		Data   []struct {
-			NodeID      string    `json:"NodeID"`
-			ConnsActive int64     `json:"ConnsActive"`
-			LastEventAt time.Time `json:"LastEventAt"`
-			BytesIn24h  int64     `json:"BytesIn24h"`
-			BytesOut24h int64     `json:"BytesOut24h"`
+			NodeID      string    `json:"node_id"`
+			ConnsActive int64     `json:"conns_active"`
+			LastEventAt time.Time `json:"last_event_at"`
+			BytesIn24h  int64     `json:"bytes_in_24h"`
+			BytesOut24h int64     `json:"bytes_out_24h"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -573,6 +576,9 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("connections status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); strings.Contains(body, `"ConnID"`) || !strings.Contains(body, `"conn_id"`) {
+		t.Fatalf("connections response should use snake_case JSON keys: %s", body)
+	}
 	var listResp struct {
 		Source string                `json:"source"`
 		Data   []doris.ConnectionRow `json:"data"`
@@ -591,6 +597,9 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("top talkers status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); strings.Contains(body, `"ThreatHits"`) || !strings.Contains(body, `"threat_hits"`) {
+		t.Fatalf("top talkers response should use snake_case JSON keys: %s", body)
+	}
 	var talkerResp struct {
 		Source string            `json:"source"`
 		Data   []doris.TopTalker `json:"data"`
@@ -608,6 +617,9 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("connection detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, `"ConnID"`) || !strings.Contains(body, `"conn_id"`) {
+		t.Fatalf("connection detail should use snake_case JSON keys: %s", body)
 	}
 	var detailResp struct {
 		Source     string               `json:"source"`

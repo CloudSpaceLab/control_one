@@ -813,6 +813,10 @@ func (s *Server) runTimelineBuildTool(ctx context.Context, tc aiToolContext, inp
 	if err != nil {
 		return aiToolExecution{}, err
 	}
+	entityType, entityID, err = normalizeTimelineEntityScope(tc.TenantID, entityType, entityID)
+	if err != nil {
+		return aiToolExecution{}, err
+	}
 	rows, source, backendGuardrails, err := s.buildInvestigationTimeline(ctx, doris.TimelineBuildParams{
 		TenantID:      tc.TenantID.String(),
 		CorrelationID: strings.TrimSpace(stringFromToolInput(input, "correlation_id")),

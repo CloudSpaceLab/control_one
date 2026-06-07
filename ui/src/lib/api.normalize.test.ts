@@ -109,7 +109,10 @@ describe('APIClient.listTopTalkers', () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          data: [{ ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false }],
+          data: [
+            { ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false },
+            { IP: '198.51.100.5', BytesOut: 40, BytesIn: 30, Connections: 4, ThreatHits: 1 },
+          ],
           source: 'small-analytics-pending',
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -124,6 +127,7 @@ describe('APIClient.listTopTalkers', () => {
     expect(url).toBe('https://cp.example.com/api/v1/connections/top-talkers?tenant_id=tenant-1&limit=5');
     expect(talkers).toEqual([
       { ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false },
+      { ip: '198.51.100.5', bytes_out: 40, bytes_in: 30, conn_count: 4, threat_match: true, threat_hits: 1 },
     ]);
   });
 });

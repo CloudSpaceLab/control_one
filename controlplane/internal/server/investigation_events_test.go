@@ -219,6 +219,47 @@ func TestEventsAndTimelineHandlersUseSmallAnalyticsSQLite(t *testing.T) {
 	if timelineResp.Items[0].SourceTable != "process_connections" || timelineResp.Items[0].EventType != "conn.close" {
 		t.Fatalf("timeline should use cited process connection facts: %+v", timelineResp.Items)
 	}
+
+	tenantTimelineBody := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"tenant",
+		"entity_id":"` + tenantID.String() + `",
+		"since":"` + base.Add(-time.Minute).Format(time.RFC3339) + `",
+		"until":"` + base.Add(3*time.Minute).Format(time.RFC3339) + `",
+		"limit":10
+	}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", tenantTimelineBody)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec = httptest.NewRecorder()
+	srv.handleTimelineBuild(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tenant timeline status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var tenantTimelineResp timelineBuildResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &tenantTimelineResp); err != nil {
+		t.Fatalf("decode tenant timeline: %v", err)
+	}
+	if tenantTimelineResp.Scope["entity_type"] != "tenant" || tenantTimelineResp.Scope["entity_id"] != tenantID.String() {
+		t.Fatalf("tenant timeline scope was not normalized: %+v", tenantTimelineResp.Scope)
+	}
+	if len(tenantTimelineResp.Items) != 2 || len(tenantTimelineResp.Citations) != 2 {
+		t.Fatalf("tenant timeline should return tenant-scoped facts: %+v", tenantTimelineResp)
+	}
+
+	wrongTenantID := uuid.New()
+	mismatchedTimelineBody := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"tenant",
+		"entity_id":"` + wrongTenantID.String() + `",
+		"limit":10
+	}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", mismatchedTimelineBody)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec = httptest.NewRecorder()
+	srv.handleTimelineBuild(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched tenant timeline status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestEventAndTimelineRowsExposeStableCitations(t *testing.T) {

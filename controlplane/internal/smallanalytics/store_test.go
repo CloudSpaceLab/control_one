@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,6 +120,89 @@ func TestStoreProjectsConnectionRowsToEventsAndTimeline(t *testing.T) {
 	}
 	if len(timeline) != 2 || timeline[0].SourceTable != "process_connections" || timeline[0].EventType != "conn.close" {
 		t.Fatalf("unexpected timeline: %+v", timeline)
+	}
+
+	connectionTimeline, err := store.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "connection",
+		EntityID:   "conn-1",
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build connection timeline: %v", err)
+	}
+	if len(connectionTimeline) != 2 || connectionTimeline[0].ConnID != "conn-1" || connectionTimeline[0].EventType != "conn.close" {
+		t.Fatalf("unexpected connection timeline: %+v", connectionTimeline)
+	}
+
+	tenantTimeline, err := store.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "tenant",
+		EntityID:   "tenant-1",
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build tenant timeline: %v", err)
+	}
+	if len(tenantTimeline) != 2 || tenantTimeline[0].TenantID != "tenant-1" || tenantTimeline[0].EventType != "conn.close" {
+		t.Fatalf("unexpected tenant timeline: %+v", tenantTimeline)
+	}
+}
+
+func TestBuildConnectionTimelineSQLPushesPivotsIntoBranches(t *testing.T) {
+	query, args, err := buildConnectionTimelineSQL(doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "connection",
+		EntityID:   "conn-1",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build connection timeline sql: %v", err)
+	}
+	if got := strings.Count(query, "conn_id = ?"); got < 2 {
+		t.Fatalf("connection pivot should be pushed into each branch, got %d occurrences in %s", got, query)
+	}
+	if len(args) < 5 {
+		t.Fatalf("connection pivot args should include branch and outer predicates, got %#v", args)
+	}
+
+	query, args, err = buildConnectionTimelineSQL(doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "ip",
+		EntityID:   "8.8.8.8",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build ip timeline sql: %v", err)
+	}
+	if got := strings.Count(query, "src_ip = ?"); got < 2 {
+		t.Fatalf("source-ip pivot should be pushed into open and close branches, got %d occurrences in %s", got, query)
+	}
+	if got := strings.Count(query, "dst_ip = ?"); got < 2 {
+		t.Fatalf("destination-ip pivot should be pushed into open and close branches, got %d occurrences in %s", got, query)
+	}
+	if len(args) < 11 {
+		t.Fatalf("ip pivot args should include branch and outer predicates, got %#v", args)
+	}
+
+	query, args, err = buildConnectionTimelineSQL(doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "tenant",
+		EntityID:   "tenant-1",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build tenant timeline sql: %v", err)
+	}
+	if strings.Contains(query, "1 = 0") {
+		t.Fatalf("tenant pivot should not guard out tenant-scoped rows:\n%s", query)
+	}
+	if strings.Count(query, "tenant_id = ?") != 2 {
+		t.Fatalf("tenant pivot should rely on branch tenant predicates, args=%#v query=%s", args, query)
 	}
 }
 

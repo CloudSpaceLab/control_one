@@ -4769,10 +4769,13 @@ export class APIClient {
     if (typeof params.limit === "number")
       search.set("limit", String(params.limit));
     const q = search.toString();
-    const resp = await this.request<TopTalker[] | { data?: TopTalker[] }>(
+    const resp = await this.request<
+      Array<TopTalker | RawTopTalker> | { data?: Array<TopTalker | RawTopTalker> }
+    >(
       `/api/v1/connections/top-talkers${q ? `?${q}` : ""}`,
     );
-    return Array.isArray(resp) ? resp : resp.data ?? [];
+    const rows = Array.isArray(resp) ? resp : resp.data ?? [];
+    return rows.map(normalizeTopTalker).filter((row) => Boolean(row.ip));
   }
 
   async fleetHealthSnapshot(
@@ -6526,6 +6529,20 @@ function normalizeConnectionRow(raw: ConnectionRow | RawConnectionRow): Connecti
   };
 }
 
+function normalizeTopTalker(raw: TopTalker | RawTopTalker): TopTalker {
+  const row = raw as RawTopTalker;
+  const threatHits = rawNumber(row, 'threat_hits', 'ThreatHits');
+  const normalized: TopTalker = {
+    ip: rawString(row, 'ip', 'IP') ?? '',
+    bytes_out: rawNumber(row, 'bytes_out', 'BytesOut') ?? 0,
+    bytes_in: rawNumber(row, 'bytes_in', 'BytesIn') ?? 0,
+    conn_count: rawNumber(row, 'conn_count', 'connections', 'Connections') ?? 0,
+    threat_match: rawBoolean(row, 'threat_match', 'ThreatMatch') ?? ((threatHits ?? 0) > 0),
+  };
+  if (threatHits !== undefined) normalized.threat_hits = threatHits;
+  return normalized;
+}
+
 export interface ForensicEvent {
   ts: string;
   source: "event" | "file" | "db" | "log" | "alert" | "process";
@@ -6554,7 +6571,10 @@ export interface TopTalker {
   bytes_in: number;
   conn_count: number;
   threat_match: boolean;
+  threat_hits?: number;
 }
+
+type RawTopTalker = Partial<TopTalker> & Record<string, unknown>;
 
 export interface NodeHealthSummary {
   node_id: string;

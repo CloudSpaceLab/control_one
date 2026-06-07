@@ -278,13 +278,18 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTenantAccess(w, r, principal, scope.TenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
+	entityType, entityID, err := normalizeTimelineEntityScope(scope.TenantID, req.EntityType, req.EntityID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	rows, source, backendGuardrails, err := s.buildInvestigationTimeline(r.Context(), doris.TimelineBuildParams{
 		TenantID:      scope.TenantID.String(),
 		CorrelationID: strings.TrimSpace(req.CorrelationID),
 		NodeID:        strings.TrimSpace(req.NodeID),
 		ConnID:        strings.TrimSpace(req.ConnID),
-		EntityType:    strings.TrimSpace(req.EntityType),
-		EntityID:      strings.TrimSpace(req.EntityID),
+		EntityType:    entityType,
+		EntityID:      entityID,
 		Since:         scope.Since,
 		Until:         scope.Until,
 		Limit:         scope.Limit,
@@ -316,8 +321,8 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		"correlation_id": strings.TrimSpace(req.CorrelationID),
 		"conn_id":        strings.TrimSpace(req.ConnID),
 		"node_id":        strings.TrimSpace(req.NodeID),
-		"entity_type":    strings.TrimSpace(req.EntityType),
-		"entity_id":      strings.TrimSpace(req.EntityID),
+		"entity_type":    entityType,
+		"entity_id":      entityID,
 	} {
 		if value != "" {
 			responseScope[key] = value
@@ -333,6 +338,25 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Citations:  citations,
 		Guardrails: guardrails,
 	})
+}
+
+func normalizeTimelineEntityScope(tenantID uuid.UUID, entityType, entityID string) (string, string, error) {
+	cleanType := strings.ToLower(strings.TrimSpace(entityType))
+	cleanID := strings.TrimSpace(entityID)
+	if cleanType == "tenant_id" {
+		cleanType = "tenant"
+	}
+	if cleanType != "tenant" {
+		return strings.TrimSpace(entityType), cleanID, nil
+	}
+	expected := tenantID.String()
+	if cleanID == "" {
+		cleanID = expected
+	}
+	if cleanID != expected {
+		return "", "", fmt.Errorf("tenant entity_id must match tenant_id")
+	}
+	return "tenant", cleanID, nil
 }
 
 func (s *Server) queryInvestigationEvents(ctx context.Context, p doris.EventQueryParams) ([]doris.EventRow, int, string, []string, error) {

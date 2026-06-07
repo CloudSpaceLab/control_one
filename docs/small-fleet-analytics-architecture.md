@@ -807,6 +807,60 @@ This lets the demo be fast and honest: "this branch-size deployment runs the
 full Control One investigation experience on Postgres, Redis, and embedded
 SQLite; Doris is for the high-volume warehouse tier."
 
+## 2026-06-07 Live Implementation Update
+
+The current live demo host now proves the intended small-fleet shape on a
+non-trivial SQLite projection:
+
+- live SQLite `process_connections` contained about 608k rows during the test;
+- Doris FE/BE remained absent in the default profile;
+- controlplane used about 41-63 MiB RSS after warmup, console about 6.5 MiB,
+  Redis about 6.2 MiB, and ipq about 4.8 MiB;
+- live API responses used the same product contracts with `source` metadata:
+  `fleet/health`, `connections`, `connections/top-talkers`, `events/query`,
+  and `timelines/build`;
+- JSON contracts now emit snake_case fields for small and OLAP shared structs,
+  avoiding Go field-name leakage such as `ConnID`, `ThreatHits`, or `NodeID`;
+- small-mode event and timeline SQL pushes tenant, time, node, correlation,
+  connection, and IP pivots into SQLite branches before the open/close union;
+- IP timelines split source-IP and destination-IP branches so existing
+  `tenant_src_*` and `tenant_dst_*` indexes are usable;
+- the network connection drawer now calls the backend-neutral timeline API and
+  renders cited small-mode `conn.open` / `conn.close` rows instead of showing an
+  empty forensic timeline when Doris is disabled.
+- tenant-level timeline pivots are supported as a tenant-scoped timeline
+  contract in both small and OLAP predicate builders; mismatched tenant entity
+  IDs are rejected before the backend query.
+
+Observed final live timings after the deployment settled:
+
+| Flow | Source | Server Duration |
+| --- | --- | ---: |
+| fleet health | `small-analytics-postgres` | ~2-7 ms |
+| connections list | `small-analytics` | ~3-15 ms |
+| top talkers | `small-analytics` | ~19 ms |
+| IP-filtered connections | `small-analytics` | ~25 ms |
+| event query, limit 10 | `small-analytics` | ~643 ms |
+| IP timeline, limit 25 | `small-analytics` | ~906 ms |
+| tenant timeline, limit 10 | `small-analytics` | ~460-520 ms |
+| connection drawer detail | `small-analytics` | ~2 ms |
+| connection timeline | `small-analytics` | ~780 ms |
+
+During console image rebuild, two timeline probes hit the 5s query timeout while
+the host was CPU-bound. After the rebuild completed, the same connection pivot
+returned HTTP 200 and rendered in the browser. For demo operations, avoid
+benchmarking API latency while the host is compiling/rebuilding the console
+image; for bank-scale production, move builds off the runtime host.
+
+A follow-up live sweep on 2026-06-07 found and fixed one contract gap:
+`/api/v1/timelines/build` returned HTTP 500 for `entity_type=tenant` even though
+the tenant scope was already authorized. Tenant pivots now normalize to the
+required tenant scope, `tenant_id` is accepted as an alias, cross-tenant entity
+IDs return HTTP 400, and live tenant timelines returned HTTP 200 with cited
+small-mode rows after redeploy. A corrected 29-endpoint API smoke and 12-route
+browser sweep then completed with zero failures and zero browser console
+warnings/errors.
+
 ## Demo Acceptance Criteria
 
 The small architecture is demo-ready when all of these are true:
