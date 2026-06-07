@@ -2474,6 +2474,41 @@ up, no Doris FE/BE, console about 4.7 MiB / 256 MiB, controlplane about
 140.6 MiB / 1 GiB, Redis about 4.8 MiB / 192 MiB, and no severe controlplane or
 edge 5xx logs.
 
+2026-06-07 post-`e490bbe5` broad live sweep: with the Browser Use Node bridge
+unavailable, the audit used the Playwright MCP fallback for a chunked
+authenticated browser pass. The pass covered 23 additional console routes at
+desktop 1440x1000 and mobile 390x844, for 46 route loads total:
+`/console/access`, `/console/sessions`, `/console/cases`, `/console/jobs`,
+`/console/templates`, `/console/fleet-enroll`, `/console/hypervisors`,
+`/console/compliance`, `/console/security/siem`,
+`/console/security/webservers`, `/console/infrastructure/patch`,
+`/console/roles`, `/console/users`, `/console/audit`, `/console/telemetry`,
+`/console/secrets`, `/console/offline-bundle`, `/console/settings`,
+`/console/data-security`, `/console/misconduct`, `/console/access/finacle`,
+`/console/investigate/knowledge-graph`, and `/console/observability`. Every
+navigation returned HTTP 200, and the sweep found zero browser console/page
+errors, zero app API failures, zero document-level horizontal overflow, zero
+uncontained off-viewport elements, and zero Doris/analytic-store unavailable
+copy. No new UI defect was found in this slice.
+
+The same live validation rechecked RBAC/list integrity after the saved-search
+and small-analytics hardening: `/api/v1/users?limit=100&offset=0` returned 6
+users with zero duplicate user-role rows, and `/api/v1/roles` returned 5 roles
+with 5 unique names and no duplicate role names. GitHub Actions did not expose a
+visible run for commit `e490bbe5` in the queried branch/run list, so this slice
+is recorded as local test plus manual live deployment/browser/API evidence.
+
+Fresh host evidence still matches the Redis+SQLite+Postgres small-fleet design:
+`/healthz=ok`, Compose and container env report `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, Redis is healthy, and
+`docker compose --profile olap ps doris-fe doris-be` shows no Doris containers.
+Memory stayed light at about console 4.55 MiB / 256 MiB, controlplane
+64.05 MiB / 1 GiB, Redis 4.84 MiB / 192 MiB, landing 4.48 MiB / 128 MiB, and
+ipq 4.81 MiB / 128 MiB. A 30-minute log scan found no controlplane panic,
+fatal, SQLite lock, analytic-store unavailable, stream transport, or edge 5xx
+matches.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
