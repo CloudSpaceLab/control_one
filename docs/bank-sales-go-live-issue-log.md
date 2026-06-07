@@ -1226,6 +1226,25 @@ Live audit evidence from 2026-06-06:
   controlplane about 118 MiB of 1 GiB, console about 5.4 MiB of 256 MiB, Redis
   about 4 MiB of 192 MiB, landing about 4.5 MiB of 128 MiB, and ipq about
   4.8 MiB of 128 MiB.
+- 2026-06-07 live mobile interaction follow-up: a corrected non-mutating
+  browser pass at 390x844 exercised 12 authenticated workflows through safe
+  operator interactions instead of only page loads. The pass covered Control
+  Room, Nodes, Network Connections, Alerts, Cases, Rules, Access, Compliance,
+  Settings, SIEM coverage, Observability, and Fleet Enroll. It opened the
+  command palette with `Ctrl+K`, searched for roles, clicked safe detail/
+  refresh/refine controls, switched visible tab strips across Network Security,
+  Rules, Access, Compliance, and Settings, and touched/cleared local text
+  inputs while explicitly rejecting any unexpected API write method as a
+  failure. The corrected run produced zero `POST`/`PUT`/`PATCH`/`DELETE`
+  requests, zero failed app API responses, zero browser console/page errors,
+  zero request failures, zero document overflow or unscrollable overflow
+  offenders, zero `/api/v1/events/stream` requests, and zero Doris/
+  analytic-store error copy. Host checks after the pass showed `/healthz=ok`,
+  Redis healthy, no Doris FE/BE containers under the `olap` profile, no recent
+  panic/fatal/SQLite-lock/analytic-store/status-5/stream log matches, and
+  memory still light: controlplane about 121 MiB of 1 GiB, console about
+  5.4 MiB of 256 MiB, Redis about 4 MiB of 192 MiB, landing about 4.5 MiB of
+  128 MiB, and ipq about 4.8 MiB of 128 MiB.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -1268,6 +1287,9 @@ Exit criteria:
 - Met: invalid nested console paths now render an explicit in-app not-found
   fallback instead of a blank authenticated workspace, and 16 valid operational
   desktop routes were retested clean after deploy.
+- Met: non-mutating mobile interaction audit covered 12 authenticated workflows
+  with zero unexpected write requests, app failures, console errors, stream
+  traffic, or overflow findings.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
   calling the whole product bank-grade clean.
