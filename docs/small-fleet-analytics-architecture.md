@@ -52,6 +52,24 @@ Expected runtime:
 | SQLite/WAL | embedded recent analytic read model | 16 MB cache default |
 | Doris FE/BE | disabled unless OLAP is explicitly selected | 0 MB |
 
+### Small-Fleet Sizing Tiers
+
+These tiers are planning defaults, not hard license gates. Validate them with a
+tenant replay fixture before each serious demo or customer pilot.
+
+| Tier | Fleet Shape | Redis Hot Budget | SQLite Cache | Recent Analytic Window | Decision |
+| --- | --- | ---: | ---: | --- | --- |
+| demo-light | up to 50 nodes, bursty demo ingest | 64 to 128 MB | 16 MB | 7 day events, 14 day connections | default profile |
+| branch / SMB | 50 to 250 nodes, a few operators | 128 to 256 MB | 32 to 64 MB | 14 to 30 day events/connections | still small mode if replay tests pass |
+| edge appliance | constrained host, local evidence first | 64 to 128 MB | 16 to 32 MB | short hot window plus compressed archives | small mode with stricter retention |
+| OLAP transition | sustained high event volume, many tenants, long ad hoc queries | Redis only for hot coordination | N/A | warehouse-managed | select `analytics.mode=olap` |
+
+Move a deployment to OLAP when single-writer projection lag cannot catch up
+inside the accepted recovery objective, when recent SQLite data grows beyond
+the host's checkpoint/backup comfort zone, or when many users need long-window
+ad hoc queries at the same time. The upgrade trigger is observed behavior,
+not fear that small mode is less legitimate.
+
 ### OLAP
 
 ```yaml
@@ -84,6 +102,32 @@ Small deployments need deterministic correctness more than warehouse depth:
 - operational memory must be predictable;
 - missing projection coverage must be visible as backlog, not hidden by
   removed routes.
+
+## External Design Anchors
+
+The small profile is intentionally built around the documented behavior of each
+component:
+
+- Redis officially treats `maxmemory` as a cache-data limit and evicts according
+  to `maxmemory-policy`; with AOF or replication, extra buffers are outside
+  that eviction comparison. Therefore Redis must hold only reconstructable hot
+  state, and container memory must leave headroom above `maxmemory`.
+- SQLite WAL lets readers and a writer run concurrently, but there is still
+  only one writer at a time and checkpoints are part of normal operation.
+  Therefore Control One should serialize projection writes, keep transactions
+  short, and expose checkpoint/lag health.
+- SQLite negative `cache_size` values are expressed in kibibytes and are an
+  upper bound, not eagerly allocated memory. This is why `sqlite_cache_mb=16`
+  is a useful cap rather than a guaranteed 16 MB allocation.
+- Doris BE memory limits are process-level and the Doris docs call out OOM risk
+  when BE is mixed with FE or other services on the same host. That is the exact
+  demo shape we are avoiding by keeping Doris behind the explicit OLAP profile.
+
+References: [Redis key eviction](https://redis.io/docs/latest/develop/reference/eviction/),
+[SQLite WAL](https://www.sqlite.org/wal.html),
+[SQLite PRAGMA cache_size](https://www.sqlite.org/pragma.html#pragma_cache_size),
+[Doris BE configuration](https://doris.apache.org/docs/3.x/admin-manual/config/be-config/),
+and [Doris spill/memory behavior](https://doris.apache.org/docs/dev/admin-manual/workload-management/spill-disk/).
 
 ## Component Responsibilities
 
@@ -126,6 +170,24 @@ Redis accelerates reconstructable state only:
 Redis keys used for analytics heat must be TTL-bound or rebuildable. Redis-only
 data is never used as the sole source for citations, audit, compliance, or
 customer evidence.
+
+Suggested hot key families:
+
+| Key Family | Structure | TTL / Bound | Rebuild Source | Allowed Uses |
+| --- | --- | --- | --- | --- |
+| `tenant:{tid}:node:freshness` | hash or string per node | 1 to 15 minutes | heartbeat/audit rows in Postgres | live online/stale badges |
+| `tenant:{tid}:talkers:{window}` | sorted set | 1 to 24 hours | SQLite `process_connections` and events | dashboard heat, top talkers |
+| `tenant:{tid}:eventstream:{window}` | stream with `MAXLEN` | minutes to hours | Postgres journal / SQLite projection | live tail affordances only |
+| `tenant:{tid}:projection:lag` | hash | overwrite, no evidence value | Postgres journal + SQLite cursor | health cards and alerts |
+| `tenant:{tid}:dashboard:heat` | hash/sorted set | minutes | SQLite rollups | fast cards with fallback |
+
+Forbidden Redis-only state:
+
+- citations, evidence exports, audit trails, compliance findings, case
+  attachments, durable job state, and tenant/RBAC decisions;
+- anything that would make an investigation false or incomplete after eviction;
+- keys without TTL unless they are queue/control-plane primitives that are
+  already durable or reconciled elsewhere.
 
 ### Doris: Optional OLAP Upgrade
 
@@ -188,6 +250,26 @@ bounded or incomplete. It should not hide routes, remove buttons, or show
 Doris-specific failure copy. Preferred copy is analytics-neutral, such as
 "recent evidence projection is rebuilding" or "older history requires OLAP
 mode."
+
+Every analytic response should preserve the same product envelope across modes:
+
+```json
+{
+  "source": "small-analytics",
+  "mode": "small",
+  "as_of": "2026-06-08T00:00:00Z",
+  "retention": {"from": "2026-06-01T00:00:00Z", "to": "2026-06-08T00:00:00Z"},
+  "lag": {"journal_backlog": 0, "projection_ms": 240},
+  "guardrails": [],
+  "data": []
+}
+```
+
+Existing compatibility fields such as `doris_status` can remain during the
+transition, but new handlers should also emit analytics-neutral state such as
+`warehouse_status`, `projection_status`, or `analytics_status`. UI copy should
+read from the neutral fields first and treat Doris naming as backwards
+compatibility only.
 
 ## Capability Matrix
 
@@ -302,6 +384,25 @@ CREATE TABLE projection_cursors (
   PRIMARY KEY (tenant_id, projector)
 );
 ```
+
+### SQLite Write Discipline
+
+To keep SQLite lightweight and predictable:
+
+- use one projection writer per controlplane instance, guarded by a process
+  mutex or queue, and keep upsert batches small enough to finish under the
+  ingest timeout budget;
+- set a bounded `busy_timeout`, short query contexts, and limit/tenant/time
+  predicates on every read path;
+- checkpoint WAL during idle moments and after retention sweeps, and report
+  database size, WAL size, checkpoint age, and failed checkpoint attempts;
+- store projector cursors in SQLite and checkpoint durable replay state in
+  Postgres, so deleting the SQLite file is a recovery drill rather than data
+  loss;
+- keep FTS optional per event family and never let broad text search skip the
+  tenant/time/limit guardrails;
+- back up with SQLite-aware mechanisms such as the online backup API or
+  `VACUUM INTO`, not by copying only the main `.db` file while WAL is active.
 
 ## Failure Modes
 

@@ -83,6 +83,31 @@ describe('Roles', () => {
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
   });
 
+  it('renders built-in role permissions as read-only baselines', async () => {
+    const user = userEvent.setup();
+
+    render(<Roles />);
+
+    const included = await screen.findByRole('checkbox', {
+      name: 'Built-in role admin includes roles.read',
+    });
+    const missing = screen.getByRole('checkbox', {
+      name: 'Built-in role admin does not include roles.write',
+    });
+    const custom = screen.getByRole('checkbox', { name: /grant roles.write for soc-reviewer/i });
+
+    expect(included).toBeChecked();
+    expect(included).toBeDisabled();
+    expect(missing).not.toBeChecked();
+    expect(missing).toBeDisabled();
+    expect(custom).toBeEnabled();
+
+    await user.click(included);
+    await user.click(missing);
+
+    expect(mocks.setRolePermissions).not.toHaveBeenCalled();
+  });
+
   it('does not show a false empty state when role data fails to load', async () => {
     mocks.listRolesWithPermissions.mockRejectedValueOnce(new Error('role catalog unavailable'));
 

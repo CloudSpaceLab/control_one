@@ -1266,6 +1266,37 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 	})
 }
 
+func TestRolePermissionEndpointRejectsBuiltInRoleMutation(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "role-admin-token"),
+	}
+	roleID := uuid.New()
+	store := &fakeStore{setRolePermsErr: storage.ErrBuiltInRoleImmutable}
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	body := bytes.NewReader([]byte(`{"permissions":["roles.read"]}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/roles/"+roleID.String()+"/permissions", body)
+	req.Header.Set("Authorization", "Bearer role-admin-token")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), storage.ErrBuiltInRoleImmutable.Error()) {
+		t.Fatalf("expected immutable role message, got %q", rec.Body.String())
+	}
+	if len(store.setRolePermsCalls) != 1 {
+		t.Fatalf("expected one role-permission call, got %d", len(store.setRolePermsCalls))
+	}
+	if store.setRolePermsCalls[0].RoleID != roleID {
+		t.Fatalf("expected role id %s, got %s", roleID, store.setRolePermsCalls[0].RoleID)
+	}
+}
+
 func TestTemplateEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
@@ -2503,6 +2534,9 @@ type fakeStore struct {
 	userList            []storage.User
 	userRoles           map[uuid.UUID][]string
 	rolesCatalog        []storage.Role
+	rolePermissions     []storage.RolePermissions
+	setRolePermsErr     error
+	setRolePermsCalls   []rolePermsCall
 	lastUserID          uuid.UUID
 	overrideRoles       map[uuid.UUID][]string
 	skipUserPersistence bool
@@ -2589,6 +2623,11 @@ type fakeStore struct {
 	// bridge in handleNodeServicesIngest. Tests assert this slice is non-empty
 	// after a recommendation cycle.
 	portObservations []storage.CreatePortObservationParams
+}
+
+type rolePermsCall struct {
+	RoleID      uuid.UUID
+	Permissions []string
 }
 
 type stubQueue struct {
@@ -4702,9 +4741,20 @@ func (f *fakeStore) ListPermissions(_ context.Context) ([]storage.Permission, er
 	return nil, nil
 }
 func (f *fakeStore) ListRolesWithPermissions(_ context.Context) ([]storage.RolePermissions, error) {
-	return nil, nil
+	out := make([]storage.RolePermissions, len(f.rolePermissions))
+	copy(out, f.rolePermissions)
+	return out, nil
 }
-func (f *fakeStore) SetRolePermissions(_ context.Context, _ uuid.UUID, _ []string) error { return nil }
+func (f *fakeStore) SetRolePermissions(_ context.Context, roleID uuid.UUID, perms []string) error {
+	f.setRolePermsCalls = append(f.setRolePermsCalls, rolePermsCall{
+		RoleID:      roleID,
+		Permissions: append([]string(nil), perms...),
+	})
+	if f.setRolePermsErr != nil {
+		return f.setRolePermsErr
+	}
+	return nil
+}
 func (f *fakeStore) CreateCustomRole(_ context.Context, name, desc string, perms []string) (*storage.RolePermissions, error) {
 	return &storage.RolePermissions{ID: uuid.New(), Name: name, Description: desc, Permissions: perms}, nil
 }

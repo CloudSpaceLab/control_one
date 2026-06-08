@@ -4147,3 +4147,82 @@ offline-bundle API lines were normal HTTP 200 GET reads, and a strict recent
 control-plane log scan returned `NO_REAL_OFFLINE_ROLLBACK_LOGS`. Unrelated
 recent warnings were limited to an unauthenticated `/api/.env` scan and an
 external threat-feed 429 that fell back to the local snapshot.
+
+2026-06-08 Built-in RBAC permission immutability and small-fleet analytics
+architecture hardening: source review found that the Roles page already
+protected built-in roles from deletion, but the permission matrix still rendered
+their grants as live toggles and the backend `SetRolePermissions` path would
+replace grants for any role id. That is a bank-grade governance risk because
+accidental or scripted mutation of canonical `admin`, `ciso`, `investigator`,
+`operator`, or `viewer` grants can silently change authorization semantics for
+every operator using those roles.
+
+The fix preserves useful functionality rather than removing it. Built-in roles
+remain visible as permission baselines in the matrix, but their checkboxes are
+disabled and labelled as read-only baselines. Custom roles keep the existing
+live permission toggle behavior. The backend now treats canonical built-in role
+names as immutable and returns HTTP 400 `cannot edit built-in role permissions`
+before deleting or inserting any permission rows. The small-fleet architecture
+doc was also strengthened to make the demo-light Doris alternative explicit:
+Postgres remains durable replay/audit truth, SQLite/WAL is the bounded recent
+analytic read model, Redis is capped reconstructable hot state only, and Doris
+stays behind the explicit `olap` profile. The doc now includes sizing tiers,
+Redis key boundaries, SQLite write/checkpoint discipline, neutral response
+envelopes, and OLAP transition triggers.
+
+Regression coverage now proves both halves of the RBAC contract: storage rejects
+built-in role mutation while preserving custom role updates, the HTTP endpoint
+maps that immutable-role error to 400, and the Roles UI renders built-in
+permissions as disabled read-only baselines while custom-role permissions remain
+editable. Local validation passed:
+
+- `go test ./controlplane/internal/storage -run "TestIsBuiltInRoleName|TestSetRolePermissionsRejectsBuiltInRoleName" -count=1`
+- `go test ./controlplane/internal/server -run TestRolePermissionEndpointRejectsBuiltInRoleMutation -count=1`
+- `npm --prefix ui test -- Roles.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `go vet ./controlplane/internal/server ./controlplane/internal/storage`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(|window\\.alert|\\balert\\(" ui/src -g "*.tsx" -g "*.ts"` returned no matches.
+
+The production controlplane image is `sha256:dde524608f92592ad7aae962fcdde32fc22a57260a382673cfe1eac860747280`
+started at `2026-06-08T07:16:44Z`, and the production console image is
+`sha256:7e630da2083052ef3b6dbf06761fcf95dc0dfe40d9c04234122c6521dba587d0`
+started at `2026-06-08T07:18:17Z`. `/console/roles?verify=rbac-host-20260608`
+returned HTTP 200 with `Last-Modified: Mon, 08 Jun 2026 07:18:14 GMT`, and the
+deployed page served `Roles-qVRbrNen.js`.
+
+Live API verification used the authenticated production API and attempted to
+replace the built-in admin role permissions with an empty set. Production
+returned HTTP 400 with `cannot edit built-in role permissions`, and a follow-up
+read proved the admin permission count stayed unchanged at 28 before and after
+the attempted mutation. Live browser verification on `/console/roles` showed
+the deployed Roles page with 140 built-in permission checkboxes and all 140
+disabled, zero mutable built-in checkboxes, zero built-in `Grant`/`Revoke`
+labels, the read-only baseline copy visible, no native dialogs, no browser
+console warnings/errors, no API errors, and no horizontal overflow. Because the
+live database currently has only the five built-in roles, a Playwright
+route-intercepted custom-role scenario verified the preserved custom workflow
+without mutating production data: `soc-reviewer` `roles.write` was enabled,
+clicking it sent exactly one intercepted PUT with `["roles.read","roles.write"]`,
+and the UI reflected the checked state with no operation error. Mobile
+verification at 390x844 repeated the real-data pass with all 140 built-in
+checkboxes disabled, no dialogs, no console/page/API errors, and no horizontal
+overflow.
+
+Post-fix host evidence stayed healthy: public `/healthz` returned HTTP 200 in
+about 0.55s, console/controlplane/Redis/landing/ipq were up, Redis was healthy
+with `used_memory_human:1.61M`, `maxmemory_human:128.00M`, and
+`maxmemory_policy:volatile-lru`, and no Doris FE/BE containers were running
+under the `olap` profile. The controlplane environment reported
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. Memory stayed light at about
+controlplane 64.24 MiB / 1 GiB, console 6.988 MiB / 256 MiB, Redis 4.945 MiB /
+192 MiB, landing 4.633 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. The small
+analytics files were present under `/opt/control-one/deploy/analytics`
+(`controlone-small-analytics.db` about 1.2 GiB and WAL about 9.5 MiB). Recent
+RBAC logs showed normal 200 reads plus the expected 400 rejected built-in PUT,
+and a strict recent scan returned no panic, fatal, `SQLITE_BUSY`, database lock,
+analytic-store, or built-in immutability error lines. The only unrelated recent
+warning remained the external AbuseIPDB 429 fallback to local threat-intel
+snapshot.

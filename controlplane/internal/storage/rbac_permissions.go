@@ -36,6 +36,8 @@ var builtInRoleNames = map[string]struct{}{
 	"viewer":       {},
 }
 
+var ErrBuiltInRoleImmutable = errors.New("cannot edit built-in role permissions")
+
 func IsBuiltInRoleName(name string) bool {
 	_, ok := builtInRoleNames[strings.ToLower(strings.TrimSpace(name))]
 	return ok
@@ -96,6 +98,17 @@ func (s *Store) SetRolePermissions(ctx context.Context, roleID uuid.UUID, perms 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	var roleName string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM roles WHERE id = $1`, roleID).Scan(&roleName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if IsBuiltInRoleName(roleName) {
+		return ErrBuiltInRoleImmutable
+	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM role_permissions WHERE role_id = $1`, roleID); err != nil {
 		return err
