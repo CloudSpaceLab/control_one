@@ -3421,3 +3421,65 @@ Redis 10.6 MiB / 192 MiB, controlplane 132.5 MiB / 1 GiB, and ipq 8.8 MiB /
 4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
 database-lock, analytics-unavailable, Doris-unavailable, small-analytics
 unavailable, or Users/Roles/Permissions 4xx/5xx matches.
+
+2026-06-08 Alerts SOC triage failure-mode hardening: source review found
+operator-risk gaps in the top-level alert triage surface. Alert-list failures
+could leave stale rows or collapse into false `All clear` / `No alerts` copy,
+failed acknowledgements were not visible as durable row-scoped action errors,
+failed dispositions wrote into generic page error state instead of the active
+evidence modal, correlation-rule list failures were swallowed as false empty
+state, rule create failures were not shown in the form, and rule delete
+failures could disappear from the confirmation path. The rule delete icon also
+lacked a rule-specific accessible name.
+
+The fix preserves the existing inbox, critical response center, evidence
+disposition modal, and correlation-rule workflow while making failures
+recoverable. Alert load, alert action, disposition, rules load, rule create,
+and rule delete errors now have separate durable states. Failed alert loads
+clear stale rows and show `Alerts could not be loaded`; failed ACKs name the
+affected alert and keep the row visible; failed dispositions stay inside the
+open modal; failed rule loads show `Correlation rules could not be loaded`;
+failed creates keep the entered rule name; failed deletes remain inside the
+confirmation modal with the rule name visible. ACK, review, and delete controls
+now expose row-specific accessible names and loading/disabled states.
+
+Regression coverage now proves alert-list failures avoid false empty/all-clear
+states, failed acknowledgements remain visible and row-specific, failed
+dispositions stay in the resolution modal, correlation-rule list failures avoid
+false empty state, failed rule creates preserve the draft, and failed rule
+deletes stay in the confirmation modal. Local validation passed:
+`npm --prefix ui run test -- src/pages/Alerts.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check -- ui/src/pages/Alerts.tsx ui/src/pages/Alerts.test.tsx`.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/alerts` returned HTTP
+200 with no-store headers and `Last-Modified: Mon, 08 Jun 2026 00:32:52 GMT`.
+
+Live browser verification on `/console/alerts` used the authenticated
+production session and safe Playwright route interception for Alerts and
+correlation-rule endpoints, so no production alert or rule was acknowledged,
+resolved, created, or deleted. Synthetic checks showed the alert-list outage
+error and recovery copy without `All clear` or `No alerts`, rendered a
+synthetic `Critical SSH burst` row, kept an intercepted ACK failure visible,
+kept an intercepted disposition failure inside the evidence modal, showed the
+correlation-rule outage without `No correlation rules`, preserved a failed
+rule-create draft, and kept an intercepted rule-delete failure inside the
+confirmation modal. Intercept counts were alert list 503 x2, ACK 503 x1,
+disposition 503 x1, rule list 503 x1, create 400 x1, and delete 503 x1. A
+clean real production reload then had the Alerts heading visible, zero
+role-alert errors, zero browser console warnings/errors, no desktop or mobile
+horizontal overflow, and direct authenticated API reads returned HTTP 200 for
+tenants, open alerts, and correlation rules for tenant
+`00000000-0000-0000-0000-000000000001`.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/alerts`
+returned HTTP 200, no Doris FE/BE containers were running under the OLAP
+profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 132.2 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, small-analytics
+unavailable, or Alerts/correlation-rules 4xx/5xx matches.

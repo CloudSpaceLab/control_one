@@ -202,6 +202,10 @@ function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export function Alerts(): JSX.Element {
   const client = useApiClient();
   const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
@@ -209,34 +213,45 @@ export function Alerts(): JSX.Element {
   const [state, setState] = useState<typeof STATE_FILTERS[number]>('open');
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+  const [alertActionError, setAlertActionError] = useState<string | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const [ackingId, setAckingId] = useState<string | null>(null);
   const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
   const [resolvingAlert, setResolvingAlert] = useState(false);
 
   // Correlation rules state
   const [rules, setRules] = useState<CorrelationRule[]>([]);
   const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
   const [rulesReloadToken, setRulesReloadToken] = useState(0);
   const [deleteRuleId, setDeleteRuleId] = useState<string | null>(null);
+  const [deleteRuleError, setDeleteRuleError] = useState<string | null>(null);
+  const [deletingRule, setDeletingRule] = useState(false);
   const [showCreateRule, setShowCreateRule] = useState(false);
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleSeverity, setNewRuleSeverity] = useState('medium');
   const [creatingRule, setCreatingRule] = useState(false);
+  const [createRuleError, setCreateRuleError] = useState<string | null>(null);
 
   const tenantId = currentTenantId ?? '';
 
   const refresh = useCallback(async () => {
     if (!tenantId) {
       setAlerts([]);
+      setLoading(false);
+      setAlertsError(null);
+      setAlertActionError(null);
       return;
     }
     setLoading(true);
     try {
       const resp = await client.listAlerts({ tenantId, state, limit: 100, offset: 0 });
       setAlerts(resp.data);
-      setError(null);
+      setAlertsError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'load failed');
+      setAlerts([]);
+      setAlertsError(errorMessage(err, 'Alert list failed.'));
     } finally {
       setLoading(false);
     }
@@ -252,19 +267,30 @@ export function Alerts(): JSX.Element {
 
   useEventStream(tenantId, ['alert.opened'], () => refresh());
 
-  const ack = async (id: string) => {
-    await client.ackAlert(id);
-    refresh();
-  };
+  const ack = useCallback(async (alert: Alert) => {
+    if (ackingId || resolvingAlert) return;
+    setAckingId(alert.id);
+    setAlertActionError(null);
+    try {
+      await client.ackAlert(alert.id);
+      await refresh();
+    } catch (err) {
+      setAlertActionError(`Ack failed for ${alert.title}: ${errorMessage(err, 'Ack failed.')}`);
+    } finally {
+      setAckingId(null);
+    }
+  }, [ackingId, client, refresh, resolvingAlert]);
+
   const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     setResolvingAlert(true);
+    setResolveError(null);
+    setAlertActionError(null);
     try {
       await client.updateAlertDisposition(id, payload);
       setResolveTargetId(null);
-      refresh();
-      setError(null);
+      await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'resolve failed');
+      setResolveError(errorMessage(err, 'Resolve failed.'));
     } finally {
       setResolvingAlert(false);
     }
@@ -276,13 +302,25 @@ export function Alerts(): JSX.Element {
     if (!tenantId) {
       setRules([]);
       setRulesLoading(false);
+      setRulesError(null);
       return () => { cancelled = true; };
     }
     setRulesLoading(true);
+    setRulesError(null);
     client
       .listCorrelationRules({ tenantId })
-      .then((r) => { if (!cancelled) setRules(r.data ?? []); })
-      .catch(() => { if (!cancelled) setRules([]); })
+      .then((r) => {
+        if (!cancelled) {
+          setRules(r.data ?? []);
+          setRulesError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setRules([]);
+          setRulesError(errorMessage(err, 'Correlation rules failed to load.'));
+        }
+      })
       .finally(() => { if (!cancelled) setRulesLoading(false); });
     return () => { cancelled = true; };
   }, [client, tenantId, rulesReloadToken]);
@@ -290,6 +328,7 @@ export function Alerts(): JSX.Element {
   const handleCreateRule = async () => {
     if (!newRuleName.trim() || !tenantId) return;
     setCreatingRule(true);
+    setCreateRuleError(null);
     try {
       await client.createCorrelationRule({
         tenant_id: tenantId,
@@ -301,6 +340,8 @@ export function Alerts(): JSX.Element {
       setNewRuleName('');
       setShowCreateRule(false);
       setRulesReloadToken((n) => n + 1);
+    } catch (err) {
+      setCreateRuleError(errorMessage(err, 'Create failed.'));
     } finally {
       setCreatingRule(false);
     }
@@ -308,9 +349,17 @@ export function Alerts(): JSX.Element {
 
   const handleDeleteRule = async () => {
     if (!deleteRuleId || !tenantId) return;
-    await client.deleteCorrelationRule(deleteRuleId, tenantId);
-    setDeleteRuleId(null);
-    setRulesReloadToken((n) => n + 1);
+    setDeletingRule(true);
+    setDeleteRuleError(null);
+    try {
+      await client.deleteCorrelationRule(deleteRuleId, tenantId);
+      setDeleteRuleId(null);
+      setRulesReloadToken((n) => n + 1);
+    } catch (err) {
+      setDeleteRuleError(errorMessage(err, 'Delete failed.'));
+    } finally {
+      setDeletingRule(false);
+    }
   };
 
   const counts = useMemo(() => {
@@ -325,6 +374,10 @@ export function Alerts(): JSX.Element {
   const resolveTarget = useMemo(
     () => alerts.find((alert) => alert.id === resolveTargetId) ?? null,
     [alerts, resolveTargetId],
+  );
+  const deleteRule = useMemo(
+    () => rules.find((rule) => rule.id === deleteRuleId) ?? null,
+    [deleteRuleId, rules],
   );
 
   const columns = useMemo<ColumnDef<Alert>[]>(() => [
@@ -403,21 +456,35 @@ export function Alerts(): JSX.Element {
       cell: ({ row }) => (
         <div className="flex items-center gap-2">
           {row.original.state === 'open' ? (
-            <Button variant="secondary" size="sm" onClick={() => ack(row.original.id)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => ack(row.original)}
+              aria-label={`Acknowledge alert ${row.original.title}`}
+              loading={ackingId === row.original.id}
+              disabled={resolvingAlert || (ackingId !== null && ackingId !== row.original.id)}
+            >
               Ack
             </Button>
           ) : null}
           {row.original.state !== 'resolved' ? (
-            <Button variant="primary" size="sm" onClick={() => setResolveTargetId(row.original.id)}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setResolveError(null);
+                setResolveTargetId(row.original.id);
+              }}
+              aria-label={`Review alert ${row.original.title}`}
+              disabled={ackingId !== null || resolvingAlert}
+            >
               Review
             </Button>
           ) : null}
         </div>
       ),
     },
-    // ack/resolve don't change identity - eslint-disable: dependencies stable via closure
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], []);
+  ], [ack, ackingId, resolvingAlert]);
 
   const ruleColumns: ColumnDef<CorrelationRule>[] = [
     {
@@ -457,7 +524,16 @@ export function Alerts(): JSX.Element {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <Button variant="ghost" size="sm" onClick={() => setDeleteRuleId(row.original.id)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setDeleteRuleError(null);
+            setDeleteRuleId(row.original.id);
+          }}
+          aria-label={`Delete correlation rule ${row.original.name}`}
+          disabled={deletingRule}
+        >
           <Trash2 className="h-3.5 w-3.5 text-state-critical" />
         </Button>
       ),
@@ -592,9 +668,15 @@ export function Alerts(): JSX.Element {
             </div>
           </Panel>
 
-          {error && (
-            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
-              <p className="text-sm text-state-critical">{error}</p>
+          {alertsError && (
+            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Alert data unavailable">
+              <p className="text-sm text-state-critical" role="alert">{alertsError}</p>
+            </Panel>
+          )}
+
+          {alertActionError && (
+            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Alert action failed">
+              <p className="text-sm text-state-critical" role="alert">{alertActionError}</p>
             </Panel>
           )}
 
@@ -606,7 +688,13 @@ export function Alerts(): JSX.Element {
               loading={loading}
               compact
               empty={
-                allClear ? (
+                alertsError ? (
+                  <EmptyState
+                    icon={<Bell />}
+                    title="Alerts could not be loaded"
+                    description="Resolve the error above and refresh."
+                  />
+                ) : allClear ? (
                   <EmptyState
                     tone="success"
                     icon={<ShieldCheck />}
@@ -632,7 +720,14 @@ export function Alerts(): JSX.Element {
           eyebrow="CORRELATION RULES"
           title="Detection rules"
           actions={
-            <Button variant="primary" size="sm" onClick={() => setShowCreateRule(true)}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setCreateRuleError(null);
+                setShowCreateRule(true);
+              }}
+            >
               <Plus className="h-3.5 w-3.5" /> New rule
             </Button>
           }
@@ -646,7 +741,10 @@ export function Alerts(): JSX.Element {
                   <Input
                     id="rule-name"
                     value={newRuleName}
-                    onChange={(e) => setNewRuleName(e.target.value)}
+                    onChange={(e) => {
+                      setNewRuleName(e.target.value);
+                      if (createRuleError) setCreateRuleError(null);
+                    }}
                     placeholder="Brute-force SSH"
                     className="h-8 w-56"
                   />
@@ -668,16 +766,35 @@ export function Alerts(): JSX.Element {
                   <Button variant="primary" size="sm" onClick={handleCreateRule} disabled={creatingRule || !newRuleName.trim() || !tenantId}>
                     {creatingRule ? 'Creating...' : 'Create'}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setShowCreateRule(false)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setShowCreateRule(false);
+                      setCreateRuleError(null);
+                    }}
+                    disabled={creatingRule}
+                  >
                     Cancel
                   </Button>
                 </div>
               </div>
+              {createRuleError ? (
+                <p className="mt-3 rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+                  Correlation rule create failed: {createRuleError}
+                </p>
+              ) : null}
               {!tenantId && (
                 <p className="mt-2 text-xs text-state-warning">Select a tenant in the Inbox tab first.</p>
               )}
             </div>
           )}
+
+          {rulesError ? (
+            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Correlation rules unavailable">
+              <p className="text-sm text-state-critical" role="alert">{rulesError}</p>
+            </Panel>
+          ) : null}
 
           <DataTable
             columns={ruleColumns}
@@ -685,11 +802,19 @@ export function Alerts(): JSX.Element {
             rowKey={(r) => r.id}
             loading={rulesLoading}
             empty={
-              <EmptyState
-                icon={<ShieldCheck />}
-                title="No correlation rules"
-                description="Create a rule to start correlating events into alerts."
-              />
+              rulesError ? (
+                <EmptyState
+                  icon={<ShieldCheck />}
+                  title="Correlation rules could not be loaded"
+                  description="Resolve the error above and refresh."
+                />
+              ) : (
+                <EmptyState
+                  icon={<ShieldCheck />}
+                  title="No correlation rules"
+                  description="Create a rule to start correlating events into alerts."
+                />
+              )
             }
           />
         </Panel>
@@ -698,19 +823,34 @@ export function Alerts(): JSX.Element {
       <ConfirmModal
         open={deleteRuleId !== null}
         title="Delete correlation rule?"
-        body="This rule will stop generating alerts immediately."
-        confirmLabel="Delete"
+        body={`This will stop ${deleteRule?.name ?? 'this rule'} from generating alerts immediately.`}
+        confirmLabel={deletingRule ? 'Deleting...' : 'Delete'}
+        confirmDisabled={deletingRule}
+        cancelDisabled={deletingRule}
         variant="danger"
         onConfirm={handleDeleteRule}
-        onCancel={() => setDeleteRuleId(null)}
-      />
+        onCancel={() => {
+          setDeleteRuleId(null);
+          setDeleteRuleError(null);
+        }}
+      >
+        {deleteRuleError ? (
+          <p className="rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+            Correlation rule delete failed: {deleteRuleError}
+          </p>
+        ) : null}
+      </ConfirmModal>
 
       <ResolveAlertModal
         alert={resolveTarget}
         open={resolveTargetId !== null && resolveTarget !== null}
         resolving={resolvingAlert}
+        error={resolveError}
         onConfirm={(payload) => { if (resolveTarget) void resolve(resolveTarget.id, payload); }}
-        onCancel={() => setResolveTargetId(null)}
+        onCancel={() => {
+          setResolveTargetId(null);
+          setResolveError(null);
+        }}
         onActionTaken={() => { void refresh(); }}
       />
     </div>
@@ -941,6 +1081,7 @@ function ResolveAlertModal({
   alert,
   open,
   resolving,
+  error,
   onConfirm,
   onCancel,
   onActionTaken,
@@ -948,6 +1089,7 @@ function ResolveAlertModal({
   alert: Alert | null;
   open: boolean;
   resolving: boolean;
+  error?: string | null;
   onConfirm: (payload: UpdateAlertDispositionPayload) => void;
   onCancel: () => void;
   onActionTaken: () => void;
@@ -984,7 +1126,7 @@ function ResolveAlertModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel(); }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !resolving) onCancel(); }}>
       <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Resolve alert with evidence</DialogTitle>
@@ -1158,7 +1300,12 @@ function ResolveAlertModal({
         ) : null}
 
         <DialogFooter>
-          <Button type="button" variant="secondary" onClick={onCancel}>
+          {error ? (
+            <p className="mr-auto rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+              Alert disposition failed: {error}
+            </p>
+          ) : null}
+          <Button type="button" variant="secondary" onClick={onCancel} disabled={resolving}>
             Cancel
           </Button>
           <Button type="button" variant="primary" onClick={handleConfirm} loading={resolving} disabled={confirmDisabled || resolving}>
