@@ -4488,3 +4488,31 @@ Local validation passed:
 - `npm --prefix ui run lint`
 - `npm --prefix ui run build`
 - `git diff --check`
+
+Live validation caught and closed an important performance/accuracy issue
+before this slice was considered done. The first deployed version ran a full
+SQLite `PRAGMA quick_check` inside `/api/v1/admin/capacity`; on the live
+projection, with the DB around 1.3 GB, that timed out with `context deadline
+exceeded` and made the projection appear degraded even though ordinary reads
+were healthy. The final implementation now uses a lightweight schema/read
+check for synchronous admin capacity and leaves deep quick-check/checkpoint
+evidence to scheduled or explicit admin work.
+
+After redeploying both controlplane and console, authenticated live API
+validation showed `/api/v1/admin/capacity` responding in about 293 ms with
+`analytics_mode=small`, `analytics_status=ok`, `warehouse_status=disabled`,
+`postgres_status=ok`, `projection.status=ok`, `projection.read_check=ok`,
+`projection.cache_mb=16`, about 1.33 GB total projection bytes, about 8.9 MB
+WAL bytes, and no projection last error. Host checks showed public `/healthz`
+HTTP 200 in about 0.05s, controlplane about 61 MiB / 1 GiB, console about
+6 MiB / 256 MiB, Redis about 5 MiB / 192 MiB, and no Doris containers running.
+Recent controlplane logs showed `small analytics sqlite store ready` with no
+`SQLITE_BUSY`, database lock, panic, fatal, context-deadline, or projection
+health errors after the final restart.
+
+Live browser validation covered `/console/settings` System health at 390x844
+and 1440x950. The panel rendered `Small`, `Projection OK`, `OLAP Off`,
+`Postgres OK`, `Read check OK`, `Projection size`, `WAL`, and `Cache cap 16 MB`
+with no visible Doris/warehouse/timeout/error copy, no document/body
+horizontal overflow, zero current console warnings/errors, and the relevant
+Control One app API requests returning HTTP 200.
