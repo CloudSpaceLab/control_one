@@ -3826,3 +3826,61 @@ unavailable matches. Recent control-room overview API log lines were normal
 HTTP 200 reads in about 13-21 ms, and no production node-isolation API line was
 emitted by the synthetic containment test because the POST was intercepted in
 the browser.
+
+2026-06-08 Hypervisor inventory failure-state and destructive-action
+hardening: source review found remaining operator-risk gaps in the dedicated
+hypervisor and provider-credential workflow. Inventory load failures could
+collapse the page into misleading tenant-empty states such as `No hypervisor
+hosts` and `No credentials`. Host and credential deletion still used native
+browser confirmation prompts, which gave operators less context than the rest
+of the app, and failed removal attempts were easy to lose after the prompt
+flow. Host scan, verify, and remove controls also lacked target-specific
+accessible names when multiple rows were present.
+
+The fix preserves the existing hypervisor registration, provider credential,
+scan, verify, delete, cluster-reference, job, and audit-history workflows while
+making degraded states explicit. Inventory failures now clear same-scope rows,
+render `Hypervisor inventory unavailable`, keep failed load details visible,
+and show `Hypervisor hosts unavailable` / `Provider credentials unavailable`
+instead of false tenant-empty copy. Host and credential removal now use the
+shared in-app confirmation modal, keep failed deletion evidence visible in the
+modal and row context, scope busy/error state by target, and expose action names
+such as `Remove hypervisor host lon-kvm-01` and `Delete provider credential
+kvm-root`.
+
+Regression coverage now proves inventory failures avoid false empty states,
+failed host removal uses the in-app modal without `window.confirm`, and failed
+credential deletion remains visible after confirmation. Local validation
+passed:
+
+- `npm --prefix ui test -- Hypervisors.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/hypervisors` returned HTTP 200 with no-store
+headers and `Last-Modified: Mon, 08 Jun 2026 04:12:48 GMT`.
+
+Live browser verification on `/console/hypervisors` used the authenticated
+production session and safe Playwright route interception for synthetic
+inventory and delete failures, so no production hypervisor host or provider
+credential was removed. Synthetic inventory outage checks showed `Hypervisor
+inventory unavailable`, `Hypervisor hosts unavailable`, and `Provider
+credentials unavailable`, with zero false `No hypervisor hosts` / `No
+credentials` empty states. Synthetic host removal and credential deletion
+checks showed the in-app confirmation dialog before any DELETE, had
+`deleteHitsBeforeConfirm=0`, `deleteHitsAfterConfirm=1`, `nativeDialogs=0`, and
+kept `Removal failed` plus the target-specific failure message visible in the
+dialog and row context.
+
+A clean real production reload then had the hypervisor page heading visible,
+zero role-alert errors, zero browser console warnings/errors, no stale Doris
+copy, and no document/body horizontal overflow. Post-fix host evidence stayed
+healthy: `/healthz=ok`, `/console/hypervisors` returned HTTP 200, no Doris
+FE/BE containers were running under the small OLAP profile, and memory stayed
+light at about console 4.5 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB,
+controlplane 370.8 MiB / 1 GiB, landing 4.7 MiB / 128 MiB, and ipq 8.8 MiB /
+128 MiB. Strict recent log scans showed no panic, fatal, SQLite lock,
+analytics, hypervisor, or provider-credential errors; recent hypervisor and
+provider-credential API lines were normal HTTP 200 reads in a few milliseconds.

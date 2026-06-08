@@ -101,7 +101,9 @@ describe('Hypervisors', () => {
     mocks.createHypervisorHost.mockResolvedValue(sampleHost);
     mocks.verifyHypervisorHost.mockReset();
     mocks.deleteHypervisorHost.mockReset();
+    mocks.deleteHypervisorHost.mockResolvedValue(undefined);
     mocks.deleteProviderCredential.mockReset();
+    mocks.deleteProviderCredential.mockResolvedValue(undefined);
     mocks.createJob.mockReset();
     mocks.showToast.mockReset();
   });
@@ -181,5 +183,70 @@ describe('Hypervisors', () => {
       endpoint_url: 'qemu+ssh://root@kvm-01/system',
       labels: { environment: 'prod', site: 'lon' },
     });
+  });
+
+  it('shows explicit unavailable states when inventory loading fails', async () => {
+    mocks.listProviderCredentials.mockRejectedValueOnce(new Error('provider store offline'));
+
+    render(<Hypervisors />);
+
+    expect(await screen.findByText('Hypervisor inventory unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('provider store offline');
+    expect(screen.getByText('Hypervisor hosts unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Provider credentials unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('No hypervisor hosts')).not.toBeInTheDocument();
+    expect(screen.queryByText('No credentials')).not.toBeInTheDocument();
+  });
+
+  it('requires modal confirmation before removing a host and keeps failed removal visible', async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mocks.listProviderCredentials.mockResolvedValue({ items: [sampleCredential], pagination: { total: 1 } });
+    mocks.listHypervisorHosts.mockResolvedValue({ items: [sampleHost], pagination: { total: 1 } });
+    mocks.deleteHypervisorHost.mockRejectedValueOnce(new Error('delete denied'));
+
+    render(<Hypervisors />);
+
+    await screen.findByText('lon-kvm-01');
+    await user.click(screen.getByRole('button', { name: 'Remove hypervisor host lon-kvm-01' }));
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(mocks.deleteHypervisorHost).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog', { name: /remove hypervisor host lon-kvm-01/i });
+    await user.click(within(dialog).getByRole('button', { name: 'Remove host' }));
+
+    await waitFor(() => expect(mocks.deleteHypervisorHost).toHaveBeenCalledWith('host-1'));
+    expect(screen.getByRole('dialog', { name: /remove hypervisor host lon-kvm-01/i })).toBeInTheDocument();
+    expect(screen.getByText('Removal failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Failed to remove host lon-kvm-01: delete denied').length).toBeGreaterThanOrEqual(2);
+
+    confirmSpy.mockRestore();
+  });
+
+  it('requires modal confirmation before deleting a provider credential and keeps failed deletion visible', async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mocks.listProviderCredentials.mockResolvedValue({ items: [sampleCredential], pagination: { total: 1 } });
+    mocks.listHypervisorHosts.mockResolvedValue({ items: [sampleHost], pagination: { total: 1 } });
+    mocks.deleteProviderCredential.mockRejectedValueOnce(new Error('credential in use'));
+
+    render(<Hypervisors />);
+
+    const deleteCredentialButton = await screen.findByRole('button', { name: 'Delete provider credential kvm-root' });
+    await user.click(deleteCredentialButton);
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(mocks.deleteProviderCredential).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog', { name: /delete provider credential kvm-root/i });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete credential' }));
+
+    await waitFor(() => expect(mocks.deleteProviderCredential).toHaveBeenCalledWith('cred-1'));
+    expect(screen.getByRole('dialog', { name: /delete provider credential kvm-root/i })).toBeInTheDocument();
+    expect(screen.getByText('Removal failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Failed to remove credential kvm-root: credential in use').length).toBeGreaterThanOrEqual(2);
+
+    confirmSpy.mockRestore();
   });
 });
