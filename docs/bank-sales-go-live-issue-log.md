@@ -4011,3 +4011,75 @@ MiB, Redis 3.7 MiB / 192 MiB, controlplane 426.5 MiB / 1 GiB, landing 4.8 MiB
 / 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent policy API lines were normal HTTP
 200 GET reads in a few milliseconds, and a strict recent log scan showed no
 real policy DELETE lines during the synthetic browser test window.
+
+2026-06-08 Small-fleet analytics architecture and tenant deletion hardening:
+the demo/small-fleet architecture decision was consolidated into a single
+operator-ready ADR in `docs/small-fleet-analytics-architecture.md`. The
+decision remains feature-preserving: Postgres is the durable ingest, replay,
+audit, and workflow source of truth; SQLite/WAL is the embedded recent evidence
+projection; Redis is capped hot state, queues, freshness, and short streams;
+and Doris remains an explicit OLAP upgrade path with 0 MB in the default demo
+profile. The cleaned document removes duplicated historical sections and keeps
+the anti-regression rule explicit: production-ready small mode must not delete
+dashboard, network, investigation, timeline, search, citation, export, AI, or
+admin health workflows because a projection is incomplete.
+
+Source review then found a remaining operator-risk gap in the tenant directory.
+Tenant deletion still used a native browser confirmation prompt, and tenant
+load failures could render an unavailable error beside a false `No tenants`
+empty state. This is too weak for a tenant isolation boundary because deleting
+a tenant can affect nodes, jobs, policies, reports, remediation settings, and
+audit interpretation.
+
+The fix preserves tenant listing, filtering, create, rename, delete, and
+remediation safety-gate workflows. Tenant load failures now render a single
+`Tenants unavailable` alert with retry action instead of a misleading empty
+table. Tenant deletion now uses the shared in-app confirmation modal with
+target-specific accessible action names such as `Delete tenant Bank Tenant`, a
+typed exact tenant-name confirmation gate, a disabled destructive action until
+the name matches, and retained modal evidence when the backend delete fails.
+
+Regression coverage now proves failed tenant loads avoid false empty states,
+tenant deletion does not call native `window.confirm`, no DELETE is sent before
+the in-app modal is confirmed, exact-name confirmation is required, and failed
+deletion remains visible in the modal. Local validation passed:
+
+- `npm --prefix ui test -- Tenants.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(" ui/src/pages/Tenants.tsx ui/src/pages/Tenants.test.tsx` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/tenants?verify=tenant-delete-modal-20260608`
+returned HTTP 200 with `Last-Modified: Mon, 08 Jun 2026 05:23:01 GMT`, and
+the deployed build served `Tenants-BesV59fP.js`.
+
+Live browser verification on `/console/tenants` used the authenticated
+production session and Playwright route interception for a synthetic tenant
+list/remediation/delete path, so no production tenant was deleted. The
+synthetic desktop delete check showed `nativeDialogs=0`,
+`hitsBeforeConfirm=0`, `deleteHits=1` only after exact-name confirmation,
+`disabledBefore=true`, `disabledPartial=true`, `enabledExact=true`, and
+`failureVisible=true` with the dialog still open on the intercepted backend
+failure. The expected synthetic console errors were limited to the fake tenant
+context and intercepted 503; a clean real production reload immediately after
+showed the Tenants page with one real row, no `Tenants unavailable` alert, no
+false `No tenants` state, no native dialogs, and zero browser console
+warnings/errors.
+
+Mobile live verification at 390x844 used real tenant data with a DELETE route
+guard and cancelled the modal before any mutation. It showed one `View` action,
+one target-specific tenant delete button, visible exact-name confirmation
+input, destructive confirm disabled before typing, `unexpectedDeleteHits=0`,
+`nativeDialogs=0`, no document/body horizontal overflow, and zero browser
+console warnings/errors.
+
+Post-fix host evidence stayed healthy: public `/healthz` returned HTTP 200 in
+about 0.54s, `/console/tenants` returned HTTP 200, console/controlplane/Redis
+were up, Redis was healthy, and no Doris FE/BE containers were running in the
+small profile. Memory stayed within the demo budget at about console 4.5 MiB /
+256 MiB, Redis 3.7 MiB / 192 MiB, controlplane 435.1 MiB / 1 GiB, landing 4.8
+MiB / 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent tenant API lines were normal
+HTTP 200 GET reads and remediation-config reads in about 1-4 ms, and a strict
+recent control-plane log scan returned `NO_REAL_TENANT_DELETE_LOGS`.
