@@ -3755,3 +3755,74 @@ unavailable matches. Recent webserver API log lines were normal HTTP 200 reads
 in a few milliseconds; one 401 line was from an intentional direct fetch without
 the bearer header during verification and the corrected bearer-token rerun
 returned HTTP 200.
+
+2026-06-08 Control Room drill-down exposure containment hardening: source
+review found a remaining operator-risk gap in the lane drill-down workflow.
+The exposure drill-down's whitelist and airgap containment controls still used
+native `window.confirm`, so a bank operator could not see consistent product
+context, queued scope, or retained failure evidence inside the app. Failed
+isolation updates were rendered only as small inline text. A same-scope refresh
+failure could keep prior detail data visible without clearly labelling it as
+last-known data, and a cross-period/tenant failed refresh could retain old-scope
+detail rows under the newly selected scope.
+
+The fix preserves the existing Control Room drill-down, source navigation,
+exposure posture, public-listener table, firewall table, app/DB coverage, period
+filtering, and node isolation workflows while making risky actions and stale
+state explicit. Exposure containment now uses the shared in-app confirmation
+modal, with action-specific names such as `Apply 24 hour whitelist to
+edge-web-02`. Failed containment stays visible in the modal and in the exposure
+panel context, with row-scoped busy/error state. Same-scope refresh failures now
+render `Detail refresh failed` and explicitly label the data below as
+last-known; cross-scope loads clear old detail data before fetching the selected
+scope.
+
+Regression coverage now proves the exposure drill-down still renders firewall
+and isolation posture, containment uses the in-app modal without
+`window.confirm`, failed containment remains visible, and the existing app/DB
+coverage filters still work. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/ControlRoomDrilldown.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/ControlRoomDrilldown.tsx ui/src/pages/ControlRoomDrilldown.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/control-room/exposure?period=24h` returned HTTP 200
+with no-store headers and `Last-Modified: Mon, 08 Jun 2026 03:04:35 GMT`.
+
+Live browser verification on `/console/control-room/exposure?period=24h` used
+the authenticated production session and safe Playwright route interception for
+overview and isolation failure paths, so no production node isolation state was
+changed. Synthetic initial overview outage checks showed `Detail data
+unavailable`, surfaced `overview store unavailable`, and avoided false `No
+evidence rows` / `No queued actions` detail empties. Synthetic same-scope
+refresh failure checks showed `Detail refresh failed`, `last-known detail data
+for 24h`, and kept the synthetic exposure lane visible. Synthetic containment
+failure checks showed the `Apply whitelist exposure containment?` modal before
+any POST, `postHitsBeforeConfirm=0`, `postHitsAfterConfirm=1`,
+`nativeDialogs=0`, visible `Exposure action failed`, and the failed message
+retained in the modal and page context.
+
+A clean real production reload then had the exposure posture panel visible,
+zero role-alert errors, zero browser console warnings/errors, and direct
+authenticated `/api/v1/control-room/overview?period=24h` returning HTTP 200 with
+six lanes and 49 exposure public-listener rows for tenant
+`00000000-0000-0000-0000-000000000001`. Desktop showed no document/body
+horizontal overflow. A 390x844 mobile reload also had zero role-alert errors and
+no document/body horizontal overflow; the public-listener table is wider than
+the viewport but is contained inside its intended table scroller, so the page
+itself does not scroll sideways.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/control-room/exposure?period=24h` returned HTTP 200, no Doris FE/BE
+containers were running under the OLAP profile, Redis remained
+`maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory stayed light
+at about console 6.5 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB, controlplane 289.8
+MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent log scans showed no
+console 4xx/5xx and no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
+unavailable matches. Recent control-room overview API log lines were normal
+HTTP 200 reads in about 13-21 ms, and no production node-isolation API line was
+emitted by the synthetic containment test because the POST was intercepted in
+the browser.
