@@ -173,7 +173,7 @@ describe('APIClient.listConnectionsDetailed', () => {
         JSON.stringify({
           data: [],
           source: 'small-analytics-pending',
-          guardrails: ['raw connection rows require the small analytics store or OLAP mode'],
+          guardrails: ['Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up.'],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -188,7 +188,7 @@ describe('APIClient.listConnectionsDetailed', () => {
     expect(result).toEqual({
       rows: [],
       source: 'small-analytics-pending',
-      guardrails: ['raw connection rows require the small analytics store or OLAP mode'],
+      guardrails: ['Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up.'],
     });
   });
 });

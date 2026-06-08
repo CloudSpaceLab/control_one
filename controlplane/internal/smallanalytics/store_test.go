@@ -153,6 +153,71 @@ func TestStoreProjectsConnectionRowsToEventsAndTimeline(t *testing.T) {
 	}
 }
 
+func TestStoreQueryEventsUsesBoundedLookaheadPagination(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
+	rows := make([]map[string]any, 0, 4)
+	for i := 0; i < 4; i++ {
+		rows = append(rows, connRow(
+			"tenant-1",
+			"node-1",
+			fmt.Sprintf("conn-%d", i+1),
+			base.Add(time.Duration(i)*time.Minute),
+			time.Time{},
+			"outbound",
+			"10.0.0.5",
+			fmt.Sprintf("8.8.8.%d", i+1),
+			0,
+			0,
+			"",
+		))
+	}
+	if err := store.AppendConnectionRows(ctx, rows); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+
+	firstPage, total, err := store.QueryEvents(ctx, doris.EventQueryParams{
+		TenantID:   "tenant-1",
+		EventTypes: []string{"conn.open"},
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(5 * time.Minute),
+		Limit:      2,
+	})
+	if err != nil {
+		t.Fatalf("query first page: %v", err)
+	}
+	if len(firstPage) != 2 || total != 3 {
+		t.Fatalf("first page should expose lookahead total, total=%d rows=%+v", total, firstPage)
+	}
+	if firstPage[0].ConnID != "conn-4" || firstPage[1].ConnID != "conn-3" {
+		t.Fatalf("first page should remain newest-first: %+v", firstPage)
+	}
+
+	secondPage, total, err := store.QueryEvents(ctx, doris.EventQueryParams{
+		TenantID:   "tenant-1",
+		EventTypes: []string{"conn.open"},
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(5 * time.Minute),
+		Limit:      2,
+		Offset:     2,
+	})
+	if err != nil {
+		t.Fatalf("query second page: %v", err)
+	}
+	if len(secondPage) != 2 || total != 4 {
+		t.Fatalf("last page should expose exact exhausted total, total=%d rows=%+v", total, secondPage)
+	}
+	if secondPage[0].ConnID != "conn-2" || secondPage[1].ConnID != "conn-1" {
+		t.Fatalf("second page should continue newest-first: %+v", secondPage)
+	}
+}
+
 func TestBuildConnectionTimelineSQLPushesPivotsIntoBranches(t *testing.T) {
 	query, args, err := buildConnectionTimelineSQL(doris.TimelineBuildParams{
 		TenantID:   "tenant-1",

@@ -66,7 +66,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data":       []doris.ConnectionRow{},
 			"source":     analyticsSourceSmallPending,
-			"guardrails": []string{"raw connection rows require the Redis+SQLite small analytics store or OLAP mode"},
+			"guardrails": []string{"Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up."},
 		})
 		return
 	}
@@ -192,7 +192,7 @@ func (s *Server) handleTopTalkers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data":       []doris.TopTalker{},
 			"source":     analyticsSourceSmallPending,
-			"guardrails": []string{"top talkers require the Redis+SQLite small analytics store or OLAP mode"},
+			"guardrails": []string{"Top talkers are waiting for recent connection evidence projection; fleet health and rollups remain available."},
 		})
 		return
 	}

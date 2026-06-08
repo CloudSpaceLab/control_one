@@ -4274,3 +4274,74 @@ controlplane 66.87 MiB / 1 GiB, console 7.066 MiB / 256 MiB, Redis 5.258 MiB /
 log scan showed normal 200/202 API lines for fleet, users, compliance,
 content-pack, telemetry, ingest, and alerts reads/writes, and no panic, fatal,
 `SQLITE_BUSY`, database lock, analytic-store, 500, or 502 lines.
+
+2026-06-08 Analytics-neutral projection copy and bounded small-mode event
+pagination: while hardening the demo-light Redis+SQLite architecture, review
+found that several small-mode guardrails and empty notices leaked backend
+implementation details to operators: `Redis+SQLite small analytics store`,
+`analytics.sqlite_dir`, and "small analytics currently..." copy. The fix keeps
+useful compatibility fields such as `source=small-analytics` and
+`source=small-analytics-pending`, but changes human-facing guardrails/notices to
+projection-oriented language such as "Recent evidence projection..." and
+"Recent connection evidence projection..." so product UX does not depend on
+knowing which backend is selected.
+
+The same live verification exposed a real small-fleet performance bug before
+the final fix: a 24-hour authenticated `/api/v1/events/query` in small mode
+returned `count small analytics events: context deadline exceeded` because the
+SQLite path performed an exact `COUNT(*)` over the event union before fetching a
+five-row page. This was corrected without removing event search or citations:
+`controlplane/internal/smallanalytics` now fetches `limit + 1` event rows and
+derives pagination from one-row lookahead. Pages that exhaust the result set
+still expose the exact total; oversized pages expose the minimal total needed to
+drive `next_offset`. `docs/small-fleet-analytics-architecture.md` now records
+that hot small-mode operator paths should use bounded lookahead or rollups
+instead of OLAP-style exact counts.
+
+Local validation passed:
+
+- `go test ./controlplane/internal/smallanalytics -count=1`
+- `go test ./controlplane/internal/server -run "TestEventsQuery|TestInvestigation|TestFleetHealth|TestConnections|TestTopTalkers|TestConnection" -count=1`
+- `npm --prefix ui test -- api.normalize.test.ts`
+- `go vet ./controlplane/internal/smallanalytics ./controlplane/internal/server`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After redeploying the controlplane, the same 24-hour live API probe returned
+successfully: `/api/v1/events/query` responded in about 414 ms with
+`source=small-analytics`, five rows, `pagination.total=6`, and
+`next_offset=5`; `/api/v1/timelines/build` responded in about 436 ms with
+`source=small-analytics` and five rows; `/api/v1/connections` responded in
+about 292 ms with five rows; and `/api/v1/connections/top-talkers` responded in
+about 296 ms with five rows. Event and timeline guardrails used the new
+projection language, and a strict guardrail scan found zero matches for the old
+implementation strings.
+
+Live browser verification covered `/console/security/network?tab=connections`
+at desktop and 390x844 mobile viewports. The page selected the Connections tab,
+rendered 500 live connection rows, showed zero browser console warnings/errors,
+zero `/api/v1` failures, no document/body horizontal overflow, and no visible
+matches for the old backend terms. A live node detail pass opened
+`/console/nodes/0d4893c0-867a-4bf1-8aa9-e247680280ab`, selected the Connections
+tab, rendered 250 live rows from the node-scoped connections API, and showed the
+same clean console/API/overflow/copy results.
+
+Post-deploy host evidence stayed hyper-light: public `/healthz` returned HTTP
+200 in about 0.048s; console, controlplane, Redis, landing, and ipq were up;
+Redis was healthy with `used_memory_human:1.78M`,
+`maxmemory_human:128.00M`, and `maxmemory_policy:volatile-lru`; and no Doris
+FE/BE containers were running in the default or `olap` profile output. The
+controlplane environment reported `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, `CONTROLPLANE_ANALYTICS_SQLITE_DIR` mounted,
+and `CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. Memory stayed light at about
+controlplane 62.04 MiB / 1 GiB, console 4.523 MiB / 256 MiB, Redis 5.023 MiB /
+192 MiB, landing 4.637 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. The live
+SQLite projection files were present under `/opt/control-one/deploy/analytics`
+with the main DB about 1.2 GiB and WAL about 13 MiB. The deployed controlplane
+image was `sha256:9009e6ac35ef77c9f2c1724f48bc54555967416e9fdc83da24984ad725be7198`
+started at `2026-06-08T08:33:35Z`; the console image remained
+`sha256:7352df3e2a921763975204eb0ebed3004f524105fa34ca00d3f5fdff97cf345d`
+started at `2026-06-08T08:13:42Z`. A recent controlplane log scan found no
+panic, fatal, `SQLITE_BUSY`, database lock, analytic-store, context-deadline,
+500, or 502 lines after the fix.

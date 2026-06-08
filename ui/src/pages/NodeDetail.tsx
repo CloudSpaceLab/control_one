@@ -546,7 +546,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
       setRows(resp.rows);
       setAnalyticsNotice(
         resp.source === 'small-analytics-pending'
-          ? 'Connection-level history is awaiting the small analytics store; fleet health and rollups remain live.'
+          ? 'Connection-level history is waiting for recent evidence projection; fleet health and rollups remain live.'
           : null,
       );
       setErr(null);

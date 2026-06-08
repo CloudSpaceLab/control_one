@@ -369,9 +369,9 @@ func (s *Server) queryInvestigationEvents(ctx context.Context, p doris.EventQuer
 	}
 	if s != nil && s.localAnalytics != nil {
 		rows, total, err := s.localAnalytics.QueryEvents(ctx, p)
-		return rows, total, "small-analytics", []string{"small analytics currently projects connection facts; OLAP mode is required for full generic/file/db/web event search"}, err
+		return rows, total, "small-analytics", []string{"Recent evidence projection currently includes connection facts; full generic, file, database, and web event search requires the OLAP profile."}, err
 	}
-	return nil, 0, "small-analytics-pending", []string{"small analytics event query requires analytics.sqlite_dir or OLAP mode"}, nil
+	return nil, 0, "small-analytics-pending", []string{"Recent evidence projection is not ready yet; fleet health and durable ingest remain available while projection catches up."}, nil
 }
 
 func (s *Server) buildInvestigationTimeline(ctx context.Context, p doris.TimelineBuildParams) ([]doris.TimelineItem, string, []string, error) {
@@ -384,9 +384,9 @@ func (s *Server) buildInvestigationTimeline(ctx context.Context, p doris.Timelin
 	}
 	if s != nil && s.localAnalytics != nil {
 		rows, err := s.localAnalytics.BuildTimeline(ctx, p)
-		return rows, "small-analytics", []string{"small analytics currently builds timelines from connection facts; OLAP mode is required for full generic/file/db/web timelines"}, err
+		return rows, "small-analytics", []string{"Recent timelines currently include connection facts; full generic, file, database, and web timelines require the OLAP profile."}, err
 	}
-	return nil, "small-analytics-pending", []string{"small analytics timeline requires analytics.sqlite_dir or OLAP mode"}, nil
+	return nil, "small-analytics-pending", []string{"Recent timeline projection is not ready yet; fleet health and durable ingest remain available while projection catches up."}, nil
 }
 
 func (s *Server) dbQueryTextCaptureAllowed(ctx context.Context, tenantID uuid.UUID) bool {

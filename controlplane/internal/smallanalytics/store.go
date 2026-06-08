@@ -312,32 +312,42 @@ func (s *Store) QueryEvents(ctx context.Context, p doris.EventQueryParams) ([]do
 	if s == nil || s.db == nil {
 		return nil, 0, fmt.Errorf("small analytics unavailable")
 	}
-	query, countQuery, args, err := buildConnectionEventQuerySQL(p)
+	query, args, err := buildConnectionEventQuerySQL(p)
 	if err != nil {
 		return nil, 0, err
 	}
 	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
-	var total int
-	if err := s.db.QueryRowContext(qctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count small analytics events: %w", err)
-	}
-	rows, err := s.db.QueryContext(qctx, query, append(args, clampSmallEventLimit(p.Limit), maxInt(p.Offset, 0))...)
+	limit := clampSmallEventLimit(p.Limit)
+	offset := maxInt(p.Offset, 0)
+	rows, err := s.db.QueryContext(qctx, query, append(args, limit+1, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query small analytics events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := make([]doris.EventRow, 0, clampSmallEventLimit(p.Limit))
+	out := make([]doris.EventRow, 0, limit)
+	hasNext := false
 	for rows.Next() {
 		ev, err := scanConnectionEvent(rows)
 		if err != nil {
 			return nil, 0, err
 		}
+		if len(out) == limit {
+			hasNext = true
+			continue
+		}
 		out = append(out, ev.eventRow())
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	total := offset + len(out)
+	if hasNext {
+		total = offset + limit + 1
+	}
+	return out, total, nil
 }
 
 // BuildTimeline returns a bounded connection timeline from the local SQLite
@@ -510,14 +520,14 @@ type connectionEvent struct {
 	Message        string
 }
 
-func buildConnectionEventQuerySQL(p doris.EventQueryParams) (string, string, []any, error) {
+func buildConnectionEventQuerySQL(p doris.EventQueryParams) (string, []any, error) {
 	base, baseArgs, err := connectionEventBaseSQL(p)
 	if err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
 	where, outerArgs, err := connectionEventOuterWhereClause(p)
 	if err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
 	args := append(baseArgs, outerArgs...)
 	selectSQL := selectConnectionEventColumns + `
@@ -525,8 +535,7 @@ func buildConnectionEventQuerySQL(p doris.EventQueryParams) (string, string, []a
 		WHERE ` + where + `
 		ORDER BY ts_ms DESC, event_id DESC
 		LIMIT ? OFFSET ?`
-	countSQL := `SELECT COUNT(*) FROM (` + base + `) connection_events WHERE ` + where
-	return selectSQL, countSQL, args, nil
+	return selectSQL, args, nil
 }
 
 func buildConnectionTimelineSQL(p doris.TimelineBuildParams) (string, []any, error) {

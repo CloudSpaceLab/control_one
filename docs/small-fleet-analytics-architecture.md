@@ -251,6 +251,14 @@ Doris-specific failure copy. Preferred copy is analytics-neutral, such as
 "recent evidence projection is rebuilding" or "older history requires OLAP
 mode."
 
+Small-mode event pagination should avoid exact warehouse-style counts on hot
+operator paths. When a query can match more rows than the current page, fetch
+`limit + 1`, return the requested page, and expose a minimal total that proves
+whether `next_offset` exists. Exact totals are acceptable only when the page
+exhausts the result set or a precomputed rollup can answer cheaply. This keeps
+the Redis+SQLite demo profile responsive on large local projections without
+removing event search, citations, or timeline pivots.
+
 Every analytic response should preserve the same product envelope across modes:
 
 ```json
@@ -299,6 +307,8 @@ The current implementation has the first slice in
 - connection list/detail, IP, node, tenant, connection, and correlation pivots;
 - top-talkers fallback;
 - event query and timeline projection from connection facts;
+- one-row lookahead pagination for small-mode event queries instead of exact
+  OLAP-style counts on every request;
 - `PRAGMA quick_check` health.
 
 The next target schema should add normalized events, FTS, timelines, rollups,
@@ -394,6 +404,9 @@ To keep SQLite lightweight and predictable:
   ingest timeout budget;
 - set a bounded `busy_timeout`, short query contexts, and limit/tenant/time
   predicates on every read path;
+- use bounded lookahead or rollups for pagination metadata on hot paths; avoid
+  request-time exact counts over broad unions unless the result is already
+  trivially exhausted;
 - checkpoint WAL during idle moments and after retention sweeps, and report
   database size, WAL size, checkpoint age, and failed checkpoint attempts;
 - store projector cursors in SQLite and checkpoint durable replay state in
