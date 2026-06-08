@@ -4226,3 +4226,51 @@ and a strict recent scan returned no panic, fatal, `SQLITE_BUSY`, database lock,
 analytic-store, or built-in immutability error lines. The only unrelated recent
 warning remained the external AbuseIPDB 429 fallback to local threat-intel
 snapshot.
+
+2026-06-08 Core console route sweep and Users role-chip audit: after the RBAC
+immutability deployment, a real-browser authenticated production sweep covered
+31 core console routes at 1440x950: `/`, `/control-room`, `/investigate`,
+`/cases`, `/tenants`, `/nodes`, `/fleet-enroll`, `/hypervisors`, `/jobs`,
+`/observability`, `/templates`, `/coverage`, `/compliance`, `/rules`,
+`/alerts`, `/access`, `/sessions`, `/security/network`, `/security/siem`,
+`/security/webservers`, `/infrastructure/patch`, `/roles`, `/audit`, `/users`,
+`/telemetry`, `/secrets`, `/offline-bundle`, `/settings`, `/data-security`,
+`/misconduct`, and `/access/finacle`. Every route returned HTTP 200, rendered
+its expected heading, produced zero browser console warnings/errors, zero page
+errors, zero native dialogs, zero `/api/v1` 4xx/5xx responses, and no document
+or body horizontal overflow.
+
+A mobile pass at 390x844 covered the densest routes: `/`, `/nodes`,
+`/security/network`, `/compliance`, `/rules`, `/alerts`, `/access`, `/roles`,
+`/users`, `/settings`, `/offline-bundle`, and `/access/finacle`. The initial
+combined sweep saw a navigation timeout on `/compliance`, so that route was
+isolated and loaded three times. All three isolated compliance attempts
+returned HTTP 200 in about 2.4-2.7s, rendered the page, and showed no
+console/API/page errors or overflow; the only automation complication was a
+strict-locator conflict because both the nav item and page heading expose the
+accessible text `Compliance`. Mobile table contents on several routes were
+wider than the viewport inside their intentional scroll containers, but the
+document/body did not horizontally overflow.
+
+The untracked historical `users-roles-duplicates.png` artifact was rechecked
+against the deployed Users page. Source review showed `Users.tsx` uses
+`uniqueRoleNames` for displayed role chips, role counts, edit initialization,
+and available-role counts, and `Users.test.tsx` already proves duplicate role
+assignments render once per role. A live DOM probe initially counted duplicate
+role strings because `StatusTag` renders a badge wrapper and inner text span
+for a single visible chip; the actual table-cell text for each live user showed
+one role value, not duplicated visible role chips. The page returned HTTP 200,
+loaded six users from `/api/v1/users`, and showed no console/page/API errors or
+horizontal overflow.
+
+Post-sweep host evidence stayed healthy: public `/healthz` returned HTTP 200
+in about 0.57s; console, controlplane, Redis, landing, and ipq were up; Redis
+was healthy; and no Doris FE/BE services were running under the `olap` profile.
+The controlplane environment still reported `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. Memory remained light at about
+controlplane 66.87 MiB / 1 GiB, console 7.066 MiB / 256 MiB, Redis 5.258 MiB /
+192 MiB, landing 4.637 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. A recent
+log scan showed normal 200/202 API lines for fleet, users, compliance,
+content-pack, telemetry, ingest, and alerts reads/writes, and no panic, fatal,
+`SQLITE_BUSY`, database lock, analytic-store, 500, or 502 lines.
