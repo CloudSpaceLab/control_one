@@ -45,6 +45,16 @@ const mocks = vi.hoisted(() => {
         doris_status: 'unconfigured',
         postgres_status: 'ok',
         retention_days_remaining: 0,
+        projection: {
+          status: 'ok',
+          read_check: 'ok',
+          db_bytes: 1024 * 1024 * 1024,
+          wal_bytes: 16 * 1024 * 1024,
+          shm_bytes: 1024 * 1024,
+          total_bytes: (1024 + 16 + 1) * 1024 * 1024,
+          cache_mb: 16,
+          checked_at: '2026-06-08T10:00:00Z',
+        },
       }),
     },
   };
@@ -372,6 +382,16 @@ describe('Settings system health', () => {
       doris_status: 'unconfigured',
       postgres_status: 'ok',
       retention_days_remaining: 0,
+      projection: {
+        status: 'ok',
+        read_check: 'ok',
+        db_bytes: 1024 * 1024 * 1024,
+        wal_bytes: 16 * 1024 * 1024,
+        shm_bytes: 1024 * 1024,
+        total_bytes: (1024 + 16 + 1) * 1024 * 1024,
+        cache_mb: 16,
+        checked_at: '2026-06-08T10:00:00Z',
+      },
     });
   });
 
@@ -394,6 +414,11 @@ describe('Settings system health', () => {
     expect(panel).toHaveTextContent('Postgres');
     expect(panel).toHaveTextContent('50%');
     expect(panel).toHaveTextContent('Current');
+    expect(panel).toHaveTextContent('Read check');
+    expect(panel).toHaveTextContent('Projection size');
+    expect(panel).toHaveTextContent('WAL');
+    expect(panel).toHaveTextContent('Cache cap');
+    expect(panel).toHaveTextContent('16 MB');
     expect(panel).not.toHaveTextContent(/Doris|warehouse/i);
     expect(mocks.apiClient.getAdminCapacity).toHaveBeenCalledTimes(1);
   });

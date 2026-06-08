@@ -489,15 +489,29 @@ func (s *Server) handleAdminSLO(w http.ResponseWriter, r *http.Request) {
 // ─── Capacity ────────────────────────────────────────────────────────────
 
 type capacityResponse struct {
-	DiskUsed               int64  `json:"disk_used"`
-	DiskTotal              int64  `json:"disk_total"`
-	AnalyticsMode          string `json:"analytics_mode"`
-	AnalyticsStatus        string `json:"analytics_status"`
-	WarehouseStatus        string `json:"warehouse_status"`
-	WarehouseConfigured    bool   `json:"warehouse_configured"`
-	DorisStatus            string `json:"doris_status"`
-	PostgresStatus         string `json:"postgres_status"`
-	RetentionDaysRemaining int    `json:"retention_days_remaining"`
+	DiskUsed               int64                       `json:"disk_used"`
+	DiskTotal              int64                       `json:"disk_total"`
+	AnalyticsMode          string                      `json:"analytics_mode"`
+	AnalyticsStatus        string                      `json:"analytics_status"`
+	WarehouseStatus        string                      `json:"warehouse_status"`
+	WarehouseConfigured    bool                        `json:"warehouse_configured"`
+	DorisStatus            string                      `json:"doris_status"`
+	PostgresStatus         string                      `json:"postgres_status"`
+	RetentionDaysRemaining int                         `json:"retention_days_remaining"`
+	Projection             *projectionCapacityResponse `json:"projection,omitempty"`
+}
+
+type projectionCapacityResponse struct {
+	Status     string `json:"status"`
+	ReadCheck  string `json:"read_check,omitempty"`
+	QuickCheck string `json:"quick_check,omitempty"`
+	DBBytes    int64  `json:"db_bytes"`
+	WALBytes   int64  `json:"wal_bytes"`
+	SHMBytes   int64  `json:"shm_bytes"`
+	TotalBytes int64  `json:"total_bytes"`
+	CacheMB    int    `json:"cache_mb"`
+	CheckedAt  string `json:"checked_at,omitempty"`
+	LastError  string `json:"last_error,omitempty"`
 }
 
 func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
@@ -539,6 +553,33 @@ func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var projection *projectionCapacityResponse
+	if analyticsMode == analyticsModeSmall {
+		projection = &projectionCapacityResponse{
+			Status: "pending",
+		}
+		if s.localAnalytics != nil {
+			stats, err := s.localAnalytics.Stats(r.Context())
+			projection = &projectionCapacityResponse{
+				Status:     stats.Status,
+				ReadCheck:  stats.ReadCheck,
+				QuickCheck: stats.QuickCheck,
+				DBBytes:    stats.DBBytes,
+				WALBytes:   stats.WALBytes,
+				SHMBytes:   stats.SHMBytes,
+				TotalBytes: stats.TotalBytes,
+				CacheMB:    stats.CacheMB,
+				CheckedAt:  formatTime(stats.CheckedAt),
+			}
+			if err != nil {
+				projection.Status = "degraded"
+				projection.LastError = err.Error()
+				analyticsStatus = "degraded"
+				s.logger.Warn("admin capacity local projection stats", zap.Error(err))
+			}
+		}
+	}
+
 	pgStatus := "ok"
 	if s.store == nil {
 		pgStatus = "down"
@@ -574,6 +615,7 @@ func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
 		DorisStatus:            dorisStatus,
 		PostgresStatus:         pgStatus,
 		RetentionDaysRemaining: retentionDays,
+		Projection:             projection,
 	})
 }
 

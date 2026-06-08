@@ -4442,3 +4442,49 @@ console 6.332 MiB / 256 MiB, Redis 5.023 MiB / 192 MiB, landing 4.641 MiB /
 `used_memory_human:1.80M`, `maxmemory_human:128.00M`, and
 `maxmemory_policy:volatile-lru`. No Doris FE/BE containers were running, and a
 five-minute console access-log scan found no 4xx/5xx responses.
+
+2026-06-08 Small-fleet analytics architecture clarification: reviewed the
+current small-mode implementation and refreshed
+`docs/small-fleet-analytics-architecture.md` to make the Redis+SQLite+Postgres
+alternative explicit as the demo/small-fleet design rather than a vague Doris
+tuning exercise. The design now calls out the principles that should govern the
+implementation: Postgres is durable ingest/replay truth, Redis is bounded
+hot-state acceleration only, SQLite/WAL is the local recent-evidence read
+model, Doris stays at 0 MB unless OLAP is explicitly selected, and useful UI/API
+features must stay present behind backend-neutral source/lag/guardrail
+metadata.
+
+The same update documents the reference topologies for the single demo host,
+small production/pilot active-passive projection shape, and OLAP upgrade path.
+It also adds a feature-preservation contract so future work treats missing
+small-mode projection coverage as backlog and test work, not a reason to delete
+routes, buttons, exports, timeline pivots, search, AI tools, or investigation
+drilldowns.
+
+2026-06-08 Small projection health visibility: continuing the Redis+SQLite
+small-fleet path, review found that `/api/v1/admin/capacity` could report
+neutral projection status but not the embedded projection's own operating
+evidence. A small-mode operator could not see local read-check status,
+projection DB/WAL/SHM size, total local projection footprint, cache cap, or the
+last projection health error from the console.
+
+The fix keeps the existing feature surface and adds observability rather than
+switching back to a heavier backend. `controlplane/internal/smallanalytics`
+now exposes lightweight projection stats without forcing a deep database scan
+or checkpoint from the admin page. Admin capacity includes a backend-neutral
+`projection` object, and Settings System health renders compact `Read check`,
+`Projection size`, `WAL`, and `Cache cap` tiles under the existing Analytics
+health panel. OLAP state remains visible separately, and the copy stays free of
+Doris/warehouse language in the small-mode UI. Deep SQLite quick-check and
+checkpoint evidence remain scheduled/admin-job work, not synchronous Settings
+page work.
+
+Local validation passed:
+
+- `go test ./controlplane/internal/smallanalytics -count=1`
+- `go test ./controlplane/internal/server -run "TestAdminCapacity|TestAdminIngestBacklogRoleGate" -count=1`
+- `npm --prefix ui test -- Settings.test.tsx`
+- `go vet ./controlplane/internal/smallanalytics ./controlplane/internal/server`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`

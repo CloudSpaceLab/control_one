@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -230,6 +231,45 @@ func TestAdminCapacityRoleGate(t *testing.T) {
 			t.Fatalf("expected 403 got %d", rec.Code)
 		}
 	})
+}
+
+func TestAdminCapacityIncludesSmallProjectionStats(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("admin", "admin-token"),
+		Analytics: config.AnalyticsConfig{Mode: "small", SQLiteDir: t.TempDir(), CacheMB: 16},
+	}
+	store := &fakeStore{
+		userRoles: map[uuid.UUID][]string{},
+		tenants: []storage.Tenant{
+			{ID: uuid.New(), Name: "Acme"},
+		},
+	}
+	srv := New(logger, cfg, store, &stubQueue{})
+	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
+	if srv.localAnalytics == nil {
+		t.Fatal("expected local analytics store to initialize")
+	}
+
+	rec := dashboardCall(t, srv, "admin-token", http.MethodGet, "/api/v1/admin/capacity")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp capacityResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Projection == nil {
+		t.Fatalf("expected projection stats in small mode: %+v", resp)
+	}
+	if resp.Projection.Status != "ok" || resp.Projection.ReadCheck != "ok" {
+		t.Fatalf("unexpected projection health: %+v", resp.Projection)
+	}
+	if resp.Projection.CacheMB != 16 || resp.Projection.DBBytes <= 0 || resp.Projection.TotalBytes < resp.Projection.DBBytes {
+		t.Fatalf("unexpected projection sizing: %+v", resp.Projection)
+	}
 }
 
 func TestRiskScoreHistoryRoleGate(t *testing.T) {

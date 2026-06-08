@@ -630,6 +630,18 @@ export interface AdminCapacity {
   doris_status: string;
   postgres_status: string;
   retention_days_remaining: number;
+  projection?: {
+    status?: string;
+    read_check?: string;
+    quick_check?: string;
+    db_bytes?: number;
+    wal_bytes?: number;
+    shm_bytes?: number;
+    total_bytes?: number;
+    cache_mb?: number;
+    checked_at?: string;
+    last_error?: string;
+  };
 }
 
 // Investigate / search

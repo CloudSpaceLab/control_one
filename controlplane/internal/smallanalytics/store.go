@@ -31,6 +31,20 @@ type Store struct {
 	db           *sql.DB
 	queryTimeout time.Duration
 	writeMu      sync.Mutex
+	dbPath       string
+	cacheMB      int
+}
+
+type Stats struct {
+	Status     string
+	ReadCheck  string
+	QuickCheck string
+	DBBytes    int64
+	WALBytes   int64
+	SHMBytes   int64
+	TotalBytes int64
+	CacheMB    int
+	CheckedAt  time.Time
 }
 
 func Open(ctx context.Context, cfg Config) (*Store, error) {
@@ -45,7 +59,12 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	if queryTimeout <= 0 {
 		queryTimeout = 5 * time.Second
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(filepath.Join(dir, "controlone-small-analytics.db"), cfg.CacheMB, queryTimeout))
+	cacheMB := cfg.CacheMB
+	if cacheMB <= 0 {
+		cacheMB = 32
+	}
+	dbPath := filepath.Join(dir, "controlone-small-analytics.db")
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath, cacheMB, queryTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -54,8 +73,10 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	store := &Store{
 		db:           db,
 		queryTimeout: queryTimeout,
+		dbPath:       dbPath,
+		cacheMB:      cacheMB,
 	}
-	if err := store.migrate(ctx, cfg.CacheMB); err != nil {
+	if err := store.migrate(ctx, cacheMB); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -92,16 +113,38 @@ func (s *Store) Healthy(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("small analytics unavailable")
 	}
+	_, err := s.Stats(ctx)
+	return err
+}
+
+func (s *Store) Stats(ctx context.Context) (Stats, error) {
+	stats := Stats{
+		Status:    "unavailable",
+		CacheMB:   32,
+		CheckedAt: time.Now().UTC(),
+	}
+	if s == nil || s.db == nil {
+		return stats, fmt.Errorf("small analytics unavailable")
+	}
+	stats.Status = "degraded"
+	stats.CacheMB = s.cacheMB
+	stats.DBBytes = fileSize(s.dbPath)
+	stats.WALBytes = fileSize(s.dbPath + "-wal")
+	stats.SHMBytes = fileSize(s.dbPath + "-shm")
+	stats.TotalBytes = stats.DBBytes + stats.WALBytes + stats.SHMBytes
+
 	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
-	var status string
-	if err := s.db.QueryRowContext(qctx, "PRAGMA quick_check").Scan(&status); err != nil {
-		return err
+	var tableCount int
+	if err := s.db.QueryRowContext(qctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'process_connections'").Scan(&tableCount); err != nil {
+		return stats, err
 	}
-	if !strings.EqualFold(status, "ok") {
-		return fmt.Errorf("sqlite quick_check: %s", status)
+	if tableCount == 0 {
+		return stats, fmt.Errorf("small analytics projection schema missing process_connections")
 	}
-	return nil
+	stats.ReadCheck = "ok"
+	stats.Status = "ok"
+	return stats, nil
 }
 
 func (s *Store) migrate(ctx context.Context, cacheMB int) error {
@@ -1279,6 +1322,17 @@ func nullableTimeMillis(t time.Time) any {
 		return nil
 	}
 	return t.UTC().UnixMilli()
+}
+
+func fileSize(path string) int64 {
+	if strings.TrimSpace(path) == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil || info == nil || info.IsDir() {
+		return 0
+	}
+	return info.Size()
 }
 
 func timeMillis(t time.Time) int64 {

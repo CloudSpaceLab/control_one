@@ -344,6 +344,39 @@ func TestStoreConfiguresPooledConnectionsForBusyTimeout(t *testing.T) {
 	}
 }
 
+func TestStoreStatsReportsProjectionHealthAndSize(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir(), CacheMB: 16})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	if err := store.AppendConnectionRows(ctx, []map[string]any{
+		connRow("tenant-1", "node-1", "conn-1", base, time.Time{}, "outbound", "10.0.0.5", "8.8.8.8", 100, 250, ""),
+	}); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Status != "ok" || stats.ReadCheck != "ok" {
+		t.Fatalf("unexpected stats health: %+v", stats)
+	}
+	if stats.CacheMB != 16 {
+		t.Fatalf("CacheMB = %d, want 16", stats.CacheMB)
+	}
+	if stats.DBBytes <= 0 || stats.TotalBytes < stats.DBBytes {
+		t.Fatalf("expected projection file sizes, got %+v", stats)
+	}
+	if stats.CheckedAt.IsZero() {
+		t.Fatalf("expected CheckedAt to be populated")
+	}
+}
+
 func TestStoreSerializesConcurrentConnectionAppends(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, Config{Dir: t.TempDir()})

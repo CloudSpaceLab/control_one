@@ -153,6 +153,34 @@ function diskTone(percent: number | null): StateTone {
   return 'healthy';
 }
 
+function projectionStatusLabel(capacity: AdminCapacity): string {
+  return titleCaseStatus(capacity.projection?.status ?? capacity.analytics_status ?? capacity.doris_status);
+}
+
+function projectionReadCheckLabel(capacity: AdminCapacity): string {
+  return titleCaseStatus(
+    capacity.projection?.read_check ?? capacity.projection?.quick_check ?? capacity.projection?.status,
+  );
+}
+
+function projectionTotalBytes(capacity: AdminCapacity): number {
+  const projection = capacity.projection;
+  if (!projection) {
+    return 0;
+  }
+  return projection.total_bytes ?? ((projection.db_bytes ?? 0) + (projection.wal_bytes ?? 0) + (projection.shm_bytes ?? 0));
+}
+
+function projectionSizeTone(bytes: number): StateTone {
+  if (bytes >= 25 * 1024 * 1024 * 1024) {
+    return 'critical';
+  }
+  if (bytes >= 10 * 1024 * 1024 * 1024) {
+    return 'warning';
+  }
+  return 'healthy';
+}
+
 function objectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -623,6 +651,9 @@ export function Settings(): JSX.Element {
   const capacityMode = titleCaseStatus(capacity?.analytics_mode);
   const capacityStatus = titleCaseStatus(capacity?.analytics_status ?? capacity?.doris_status);
   const capacityPostgresStatus = titleCaseStatus(capacity?.postgres_status);
+  const capacityProjectionTotal = capacity ? projectionTotalBytes(capacity) : 0;
+  const capacityProjectionStatus = capacity ? projectionStatusLabel(capacity) : 'Unknown';
+  const capacityProjectionReadCheck = capacity ? projectionReadCheckLabel(capacity) : 'Unknown';
 
   return (
     <div className="flex flex-col gap-5">
@@ -1161,14 +1192,57 @@ export function Settings(): JSX.Element {
                     size="sm"
                   />
                 </div>
+                {capacity.projection ? (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <KpiTile
+                      label="Read check"
+                      value={capacityProjectionReadCheck}
+                      tone={healthTone(
+                        capacity.projection.read_check ?? capacity.projection.quick_check ?? capacity.projection.status,
+                      )}
+                      hint={capacity.projection.checked_at ? `Checked ${formatDate(capacity.projection.checked_at)}` : undefined}
+                      size="sm"
+                    />
+                    <KpiTile
+                      label="Projection size"
+                      value={formatBytes(capacityProjectionTotal)}
+                      tone={projectionSizeTone(capacityProjectionTotal)}
+                      hint={`DB ${formatBytes(capacity.projection.db_bytes ?? 0)} / WAL ${formatBytes(capacity.projection.wal_bytes ?? 0)}`}
+                      size="sm"
+                    />
+                    <KpiTile
+                      label="WAL"
+                      value={formatBytes(capacity.projection.wal_bytes ?? 0)}
+                      tone={projectionSizeTone(capacity.projection.wal_bytes ?? 0)}
+                      hint={`Shared memory ${formatBytes(capacity.projection.shm_bytes ?? 0)}`}
+                      size="sm"
+                    />
+                    <KpiTile
+                      label="Cache cap"
+                      value={capacity.projection.cache_mb ? `${capacity.projection.cache_mb} MB` : 'Auto'}
+                      tone="info"
+                      size="sm"
+                    />
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusTag tone={healthTone(capacity.analytics_status ?? capacity.doris_status)}>
                     {capacityStatus}
                   </StatusTag>
+                  {capacity.projection ? (
+                    <StatusTag tone={healthTone(capacity.projection.status ?? capacity.analytics_status)}>
+                      Projection {capacityProjectionStatus}
+                    </StatusTag>
+                  ) : null}
                   <StatusTag tone={olapStatusTone(capacity)}>
                     OLAP {olapStatusLabel(capacity)}
                   </StatusTag>
                 </div>
+                {capacity.projection?.last_error ? (
+                  <p role="alert" className="text-sm text-state-critical">
+                    Projection health failed: {capacity.projection.last_error}
+                  </p>
+                ) : null}
               </div>
             ) : capacityLoading ? (
               <p className="text-sm text-text-muted">Loading analytics health...</p>
