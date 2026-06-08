@@ -3679,3 +3679,79 @@ console/controlplane log scans showed no console 4xx/5xx and no controlplane
 5xx, panic, fatal, permission, deadline, database-lock, analytics-unavailable,
 Doris-unavailable, or small-analytics unavailable matches; recent audit and
 report API log lines were normal HTTP 200 reads.
+
+2026-06-08 Webserver auto-control failure-state and action hardening: source
+review found several operator-risk gaps in the dedicated webserver
+capture/enforcement workflow. Inventory load failures surfaced an error but
+could still collapse the KPIs and inventory panel into misleading zero/empty
+states such as `No webserver inventory`. Config-action and receipt-history load
+failures were folded into a generic status string while the dependent panels
+still rendered `No config actions` and `No receipts`. Capture, enforcement, and
+rollback actions used native browser confirmation prompts, failed apply errors
+were easy to lose after the confirmation path closed, and repeated action
+buttons lacked target-specific accessible names.
+
+The fix preserves the existing webserver inventory, application-root context,
+plan, capture, enforcement, rollback, action history, receipt history, and
+Control Room navigation workflows while making degraded states explicit.
+Inventory failures now clear same-scope rows, show `Webserver inventory
+unavailable`, render `N/A` in dependent KPIs, and provide retry. History and
+receipt failures now show `Webserver action history unavailable`, `Config
+action history unavailable`, and `Receipts unavailable` instead of false
+empty-state copy. Capture/enforcement/rollback actions now use the shared
+in-app confirmation modal, keep failed action errors visible inside the modal
+and selected-instance context, keep busy/success/error state scoped by
+instance/action, and expose target-specific accessible names such as `Apply
+capture for nginx nginx`.
+
+Regression coverage now proves inventory failures avoid false empty states,
+failed capture apply actions use the in-app modal without `window.confirm` and
+remain visible, and history failures avoid false `No config actions` / `No
+receipts` copy. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/WebserverAutoControl.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/WebserverAutoControl.tsx ui/src/pages/WebserverAutoControl.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/security/webservers` returned HTTP 200 with
+no-store headers and `Last-Modified: Mon, 08 Jun 2026 02:41:22 GMT`.
+
+Live browser verification on `/console/security/webservers` used the
+authenticated production session and safe Playwright route interception for
+synthetic webserver reads/history/action failures, so no production webserver
+configuration was changed. Synthetic inventory outage checks returned
+`Webserver inventory unavailable` and four `N/A` KPI values, with zero `No
+webserver inventory` false-empty states and an inventory 503 intercept count of
+1. Synthetic history outage checks rendered `nginx nginx`, `Webserver action
+history unavailable`, `Config action history unavailable`, and `Receipts
+unavailable`, with zero `No config actions` or `No receipts` false-empty
+states; intercept counts were webserver list 200 x1 and history/receipt 503 x2.
+Synthetic capture failure checks showed the in-app `Apply capture webserver
+control?` modal before any POST, `applyHitsBeforeConfirm=0`,
+`applyHitsAfterConfirm=1`, `nativeDialogs=0`, visible `Webserver action
+failed`, and the failed message retained in the dialog and selected-instance
+context.
+
+A clean real production reload then had the `Capture and enforcement` heading
+visible, zero role-alert errors, zero browser console warnings/errors, no
+desktop document/body horizontal overflow, and direct authenticated
+`/api/v1/webservers` returning HTTP 200 with two webserver records for tenant
+`00000000-0000-0000-0000-000000000001`. A 390x844 mobile reload also had zero
+role-alert errors and no document/body horizontal overflow; the application-root
+table is wider than the viewport but is contained inside its intended
+horizontal table scroller, so the page itself does not scroll sideways.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/security/webservers` returned HTTP 200, no Doris FE/BE containers
+were running under the OLAP profile, Redis remained
+`maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory stayed light
+at about console 4.5 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB, controlplane 233.1
+MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent log scans showed no
+console 4xx/5xx and no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
+unavailable matches. Recent webserver API log lines were normal HTTP 200 reads
+in a few milliseconds; one 401 line was from an intentional direct fetch without
+the bearer header during verification and the corrected bearer-token rerun
+returned HTTP 200.

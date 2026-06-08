@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, RefreshCw, RotateCcw, ShieldAlert, ShieldCheck, Server, Settings2 } from 'lucide-react';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { EmptyState, KpiTile, Panel, SectionHeader, StatusTag, type StateTone } from '../components/kit';
+import { Alert, EmptyState, KpiTile, Panel, SectionHeader, StatusTag, type StateTone } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import type { WebserverConfigActionHistory, WebserverConfigReceipt, WebserverInstance } from '../lib/api';
+
+type WebserverActionMode = 'plan' | 'capture' | 'enforce' | 'rollback';
+
+interface InlineActionState {
+  busy?: boolean;
+  message?: string;
+  tone?: StateTone;
+}
+
+interface PendingWebserverAction {
+  mode: Exclude<WebserverActionMode, 'plan'>;
+  instance: WebserverInstance;
+  error?: string;
+}
 
 export function WebserverAutoControl(): JSX.Element {
   const api = useApiClient();
@@ -19,6 +34,9 @@ export function WebserverAutoControl(): JSX.Element {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [actionState, setActionState] = useState<Record<string, InlineActionState>>({});
+  const [pendingAction, setPendingAction] = useState<PendingWebserverAction | null>(null);
 
   const selected = useMemo(
     () => instances.find((instance) => instance.ID === selectedId) ?? instances[0] ?? null,
@@ -34,8 +52,11 @@ export function WebserverAutoControl(): JSX.Element {
       const rows = response.data ?? [];
       setInstances(rows);
       setSelectedId((current) => current || rows[0]?.ID || '');
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Webserver inventory unavailable');
+      setInstances([]);
+      setSelectedId('');
+      setError(errorMessage(err, 'Webserver inventory unavailable'));
     } finally {
       setLoading(false);
     }
@@ -55,8 +76,11 @@ export function WebserverAutoControl(): JSX.Element {
       ]);
       setActions(actionResp.data ?? []);
       setReceipts(receiptResp.data ?? []);
+      setHistoryError(null);
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'History unavailable');
+      setActions([]);
+      setReceipts([]);
+      setHistoryError(errorMessage(err, 'History unavailable'));
     } finally {
       setHistoryLoading(false);
     }
@@ -77,16 +101,22 @@ export function WebserverAutoControl(): JSX.Element {
     return { captureReady, enforceReady, gaps };
   }, [instances]);
 
-  const queueAction = async (mode: 'plan' | 'capture' | 'enforce' | 'rollback') => {
-    if (!currentTenantId || !selected) return;
-    if (mode !== 'plan') {
-      const confirmed = window.confirm(`${actionTitle(mode)} for ${selected.Kind} ${selected.ServiceName || selected.ID}?`);
-      if (!confirmed) return;
-    }
-    setStatus(`${actionTitle(mode)} queued...`);
+  const inventoryUnavailable = Boolean(error) && !loading;
+  const historyUnavailable = Boolean(historyError) && !historyLoading;
+
+  const runAction = async (instance: WebserverInstance, mode: WebserverActionMode) => {
+    if (!currentTenantId) return;
+    const key = webserverActionKey(instance, mode);
+    const label = webserverTargetLabel(instance);
+    const title = actionTitle(mode);
+    setStatus(`${title} queued for ${label}...`);
+    setActionState((prev) => ({
+      ...prev,
+      [key]: { busy: true, message: `${title} queued for ${label}...`, tone: 'warning' },
+    }));
     const payload = {
       tenant_id: currentTenantId,
-      node_id: selected.NodeID,
+      node_id: instance.NodeID,
       policy: {
         mode,
         requested_from: 'webserver_auto_control',
@@ -96,27 +126,64 @@ export function WebserverAutoControl(): JSX.Element {
     try {
       const response =
         mode === 'plan'
-          ? await api.planWebserverConfig(selected.ID, payload)
+          ? await api.planWebserverConfig(instance.ID, payload)
           : mode === 'rollback'
-            ? await api.rollbackWebserverConfig(selected.ID, payload)
-            : await api.applyWebserverConfig(selected.ID, payload);
-      setStatus(`${actionTitle(mode)} ${response.status || 'queued'} (${response.job_id.slice(0, 8)})`);
-      await refreshHistory(selected);
+            ? await api.rollbackWebserverConfig(instance.ID, payload)
+            : await api.applyWebserverConfig(instance.ID, payload);
+      const message = `${title} ${response.status || 'queued'} for ${label} (${response.job_id.slice(0, 8)})`;
+      setStatus(message);
+      setActionState((prev) => ({
+        ...prev,
+        [key]: { busy: false, message, tone: statusTone(response.status || 'queued') },
+      }));
+      setPendingAction(null);
+      await refreshHistory(instance);
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Action failed');
+      const message = `${title} failed for ${label}: ${errorMessage(err, 'Action failed')}`;
+      setStatus(message);
+      setActionState((prev) => ({
+        ...prev,
+        [key]: { busy: false, message, tone: 'critical' },
+      }));
+      setPendingAction((current) => (
+        current && current.instance.ID === instance.ID && current.mode === mode ? { ...current, error: message } : current
+      ));
     }
   };
+
+  const queueAction = (mode: WebserverActionMode) => {
+    if (!selected) return;
+    if (mode === 'plan') {
+      void runAction(selected, mode);
+      return;
+    }
+    setPendingAction({ mode, instance: selected });
+  };
+
+  const confirmPendingAction = () => {
+    if (!pendingAction) return;
+    void runAction(pendingAction.instance, pendingAction.mode);
+  };
+
+  const cancelPendingAction = () => setPendingAction(null);
 
   if (!currentTenantId) {
     return <EmptyState title="Select a tenant" description="Choose a tenant to view webserver auto-control." />;
   }
+
+  const pendingKey = pendingAction ? webserverActionKey(pendingAction.instance, pendingAction.mode) : '';
+  const pendingBusy = pendingKey ? Boolean(actionState[pendingKey]?.busy) : false;
 
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="WEBSERVER AUTO-CONTROL"
         title="Capture and enforcement"
-        description={`${currentTenant?.name ? `${currentTenant.name}: ` : ''}${instances.length} detected, ${totals.captureReady} capture ready, ${totals.enforceReady} enforcement ready.`}
+        description={
+          inventoryUnavailable
+            ? `${currentTenant?.name ? `${currentTenant.name}: ` : ''}webserver inventory unavailable.`
+            : `${currentTenant?.name ? `${currentTenant.name}: ` : ''}${instances.length} detected, ${totals.captureReady} capture ready, ${totals.enforceReady} enforcement ready.`
+        }
         actions={
           <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
             <RefreshCw />
@@ -126,22 +193,32 @@ export function WebserverAutoControl(): JSX.Element {
       />
 
       {error ? (
-        <Panel toneAccent="critical" title="Inventory data unavailable">
-          <p className="text-sm text-state-critical">{error}</p>
-        </Panel>
+        <Alert
+          variant="critical"
+          title="Webserver inventory unavailable"
+          actions={
+            <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <KpiTile label="Detected" value={instances.length} loading={loading} icon={<Server />} />
-        <KpiTile label="Capture ready" value={`${totals.captureReady}/${instances.length}`} tone={totals.captureReady === instances.length ? 'healthy' : 'warning'} loading={loading} icon={<ShieldCheck />} />
-        <KpiTile label="Enforcement ready" value={`${totals.enforceReady}/${instances.length}`} tone={totals.enforceReady === instances.length ? 'healthy' : 'warning'} loading={loading} icon={<ShieldAlert />} />
-        <KpiTile label="Config gaps" value={totals.gaps} tone={totals.gaps > 0 ? 'warning' : 'healthy'} loading={loading} icon={<Settings2 />} />
+        <KpiTile label="Detected" value={inventoryUnavailable ? 'N/A' : instances.length} loading={loading} icon={<Server />} />
+        <KpiTile label="Capture ready" value={inventoryUnavailable ? 'N/A' : `${totals.captureReady}/${instances.length}`} tone={totals.captureReady === instances.length ? 'healthy' : 'warning'} loading={loading} icon={<ShieldCheck />} />
+        <KpiTile label="Enforcement ready" value={inventoryUnavailable ? 'N/A' : `${totals.enforceReady}/${instances.length}`} tone={totals.enforceReady === instances.length ? 'healthy' : 'warning'} loading={loading} icon={<ShieldAlert />} />
+        <KpiTile label="Config gaps" value={inventoryUnavailable ? 'N/A' : totals.gaps} tone={totals.gaps > 0 || inventoryUnavailable ? 'warning' : 'healthy'} loading={loading} icon={<Settings2 />} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,420px)_1fr]">
         <Panel eyebrow="INVENTORY" title="Detected webservers" toneAccent={totals.gaps > 0 ? 'warning' : 'healthy'}>
           {loading ? (
             <Skeleton className="h-80 rounded-lg" />
+          ) : inventoryUnavailable ? (
+            <EmptyState icon={<Server />} title="Webserver inventory unavailable" description="Detected webservers could not be loaded for the selected tenant." />
           ) : instances.length === 0 ? (
             <EmptyState icon={<Server />} title="No webserver inventory" description="No nginx, Apache, lighttpd, Tomcat, or edge proxy instances reported." />
           ) : (
@@ -193,10 +270,25 @@ export function WebserverAutoControl(): JSX.Element {
                     <Fact label="Drift" value={capabilityBool(selected.Capabilities, 'drift_detected') ? 'detected' : 'not reported'} tone={capabilityBool(selected.Capabilities, 'drift_detected') ? 'warning' : 'unknown'} />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Button type="button" variant="outline" size="sm" onClick={() => void queueAction('plan')}>Plan</Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void queueAction('capture')}>Apply capture</Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void queueAction('enforce')}>Apply enforcement</Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void queueAction('rollback')}><RotateCcw />Rollback</Button>
+                    {(['plan', 'capture', 'enforce', 'rollback'] as const).map((mode) => {
+                      const key = webserverActionKey(selected, mode);
+                      const label = `${actionTitle(mode)} for ${webserverTargetLabel(selected)}`;
+                      return (
+                        <Button
+                          key={mode}
+                          type="button"
+                          variant={mode === 'plan' ? 'outline' : 'ghost'}
+                          size="sm"
+                          onClick={() => queueAction(mode)}
+                          loading={actionState[key]?.busy}
+                          disabled={actionState[key]?.busy}
+                          aria-label={label}
+                        >
+                          {mode === 'rollback' ? <RotateCcw /> : null}
+                          {actionTitle(mode)}
+                        </Button>
+                      );
+                    })}
                   </div>
                 </div>
                 <ApplicationContext instance={selected} />
@@ -205,14 +297,40 @@ export function WebserverAutoControl(): JSX.Element {
               <EmptyState title="No instance selected" description="Select a webserver instance from inventory." />
             )}
             {status ? <p className="mt-3 text-sm text-text-secondary">{status}</p> : null}
+            {selected ? (
+              <div className="mt-3 flex flex-col gap-2">
+                {(['plan', 'capture', 'enforce', 'rollback'] as const).map((mode) => {
+                  const state = actionState[webserverActionKey(selected, mode)];
+                  return state?.message ? (
+                    <p key={mode} className={`text-sm ${toneText(state.tone ?? 'unknown')}`}>
+                      {actionTitle(mode)}: {state.message}
+                    </p>
+                  ) : null;
+                })}
+              </div>
+            ) : null}
           </Panel>
+
+          {historyError ? (
+            <Alert
+              variant="warning"
+              title="Webserver action history unavailable"
+              actions={
+                <Button type="button" variant="outline" size="sm" onClick={() => void refreshHistory(selected)} disabled={historyLoading}>
+                  Retry
+                </Button>
+              }
+            >
+              {historyError}
+            </Alert>
+          ) : null}
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <Panel eyebrow="ACTIONS" title="Config action history" toneAccent={actions.some((action) => action.status === 'failed') ? 'critical' : 'brand'}>
-              {historyLoading ? <Skeleton className="h-56 rounded-lg" /> : <ActionHistory rows={actions} />}
+              {historyLoading ? <Skeleton className="h-56 rounded-lg" /> : <ActionHistory rows={actions} unavailable={historyUnavailable} />}
             </Panel>
             <Panel eyebrow="RECEIPTS" title="Validation and rollback receipts" toneAccent={receipts.some((receipt) => receipt.validation_status === 'failed' || receipt.reload_status === 'failed') ? 'critical' : 'brand'}>
-              {historyLoading ? <Skeleton className="h-56 rounded-lg" /> : <ReceiptHistory rows={receipts} />}
+              {historyLoading ? <Skeleton className="h-56 rounded-lg" /> : <ReceiptHistory rows={receipts} unavailable={historyUnavailable} />}
             </Panel>
           </div>
         </div>
@@ -224,6 +342,29 @@ export function WebserverAutoControl(): JSX.Element {
           <ArrowRight />
         </Link>
       </Button>
+
+      <ConfirmModal
+        open={Boolean(pendingAction)}
+        title={`${pendingAction ? actionTitle(pendingAction.mode) : 'Apply'} webserver control?`}
+        body={
+          pendingAction
+            ? `${actionTitle(pendingAction.mode)} for ${webserverTargetLabel(pendingAction.instance)}. This queues an agent-managed webserver configuration change and keeps rollback evidence attached.`
+            : undefined
+        }
+        confirmLabel={pendingAction ? actionTitle(pendingAction.mode) : 'Confirm'}
+        cancelLabel="Cancel"
+        confirmDisabled={pendingBusy}
+        cancelDisabled={pendingBusy}
+        variant={pendingAction?.mode === 'rollback' ? 'danger' : 'default'}
+        onConfirm={confirmPendingAction}
+        onCancel={cancelPendingAction}
+      >
+        {pendingAction?.error ? (
+          <Alert variant="critical" title="Webserver action failed">
+            {pendingAction.error}
+          </Alert>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }
@@ -315,7 +456,8 @@ function ApplicationContext({ instance }: { instance: WebserverInstance }) {
   );
 }
 
-function ActionHistory({ rows }: { rows: WebserverConfigActionHistory[] }) {
+function ActionHistory({ rows, unavailable }: { rows: WebserverConfigActionHistory[]; unavailable?: boolean }) {
+  if (unavailable) return <EmptyState title="Config action history unavailable" description="Action history could not be loaded for this webserver instance." />;
   if (rows.length === 0) return <EmptyState title="No config actions" description="No plan, apply, enforcement, or rollback actions recorded for this instance." />;
   return (
     <div className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
@@ -336,7 +478,8 @@ function ActionHistory({ rows }: { rows: WebserverConfigActionHistory[] }) {
   );
 }
 
-function ReceiptHistory({ rows }: { rows: WebserverConfigReceipt[] }) {
+function ReceiptHistory({ rows, unavailable }: { rows: WebserverConfigReceipt[]; unavailable?: boolean }) {
+  if (unavailable) return <EmptyState title="Receipts unavailable" description="Validation and rollback receipts could not be loaded for this webserver instance." />;
   if (rows.length === 0) return <EmptyState title="No receipts" description="No validation, reload, or rollback receipts recorded for this instance." />;
   return (
     <div className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
@@ -453,6 +596,18 @@ function purposeFromKind(kind: string): string {
 
 function compactList(values: string[], limit: number): string {
   return values.filter(Boolean).slice(0, limit).join(', ');
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
+function webserverTargetLabel(instance: WebserverInstance): string {
+  return `${instance.Kind} ${instance.ServiceName || instance.ID}`;
+}
+
+function webserverActionKey(instance: WebserverInstance, mode: WebserverActionMode): string {
+  return `${instance.ID}:${mode}`;
 }
 
 function actionTitle(mode: 'plan' | 'capture' | 'enforce' | 'rollback'): string {
