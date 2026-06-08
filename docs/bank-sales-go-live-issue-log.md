@@ -3545,3 +3545,66 @@ Redis 10.6 MiB / 192 MiB, controlplane 131.7 MiB / 1 GiB, and ipq 8.8 MiB /
 4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
 database-lock, analytics-unavailable, Doris-unavailable, small-analytics
 unavailable, or Control Room/webserver/isolation 4xx/5xx matches.
+
+2026-06-08 Nodes fleet failure-state and action hardening: source review found
+several production-readiness gaps in the Servers/Nodes workflow. The at-risk
+fleet request was not scoped to the active tenant, so a tenant-scoped page could
+ask for aggregate at-risk data. Nodes load failures could clear data while the
+page still rendered misleading healthy empty states such as `No nodes` and `No
+nodes online`. At-risk and node-health enrichment failures were swallowed, the
+table quick Airgap/Return actions executed without in-app confirmation, failed
+isolation changes were only toasted, failed agent-update queue requests closed
+their confirmation path, and repeated table/view buttons lacked target-specific
+accessible names.
+
+The fix preserves the existing fleet map, cards, table, rollout, health, and
+isolation workflows while making degraded states and risky actions explicit.
+At-risk requests now pass the active tenant ID. Initial nodes failures render
+`Fleet data unavailable`, `Fleet map unavailable`, and a fleet-list unavailable
+state instead of false empties. At-risk and health-score failures render alerts
+while keeping the rest of the page usable. Table isolation changes now use the
+shared confirmation modal, failed isolation errors remain visible in the modal
+and row, failed agent update queue requests stay inside the update modal, and
+node/action buttons now expose target-specific accessible names.
+
+Regression coverage now proves fleet and at-risk reads are scoped to the active
+tenant, nodes load failures avoid false empty states, at-risk lookup failures
+surface visibly, failed isolation changes require in-app confirmation and remain
+visible, and failed agent-update queue requests remain in the confirmation
+modal. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/Nodes.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/Nodes.tsx ui/src/pages/Nodes.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/nodes` returned HTTP 200 with no-store headers and
+`Last-Modified: Mon, 08 Jun 2026 01:49:01 GMT`.
+
+Live browser verification on `/console/nodes` used the authenticated production
+session and safe Playwright route interception for Nodes reads and mutations, so
+no production node isolation or agent-update state was changed. Synthetic outage
+checks showed the nodes-list outage state, the at-risk outage alert, no `No
+nodes` or `No nodes online` false empty copy, and intercept counts of nodes list
+503 x2 and at-risk 503 x1. A synthetic node then rendered in the table; failed
+Airgap and failed agent update requests stayed visible in the confirmation
+modal, with the isolation failure also retained on the row. Mutation intercept
+counts were isolation 503 x1 and agent update 503 x1. A clean real production
+reload then had the Nodes heading visible, zero role-alert errors, zero browser
+console warnings/errors, no desktop or mobile horizontal overflow, direct
+authenticated `/api/v1/nodes` returning HTTP 200 with two nodes, and direct
+authenticated `/api/v1/health/at-risk` returning HTTP 200 with zero current
+at-risk nodes.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/nodes`
+returned HTTP 200, no Doris FE/BE containers were running under the OLAP
+profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 132.6 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no actual console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
+unavailable matches. Two earlier Nodes API 401s came from an initial
+unauthenticated verification probe; the bearer-token rerun returned HTTP 200 for
+both Nodes and at-risk reads.
