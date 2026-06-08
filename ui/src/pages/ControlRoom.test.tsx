@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ControlRoom } from './ControlRoom';
 import * as useApiClientModule from '../hooks/useApiClient';
@@ -170,16 +171,36 @@ function lane(id: string, title: string, tone: ControlRoomOverview['lanes'][numb
 }
 
 let getControlRoomOverviewMock: ReturnType<typeof vi.fn>;
+let planWebserverConfigMock: ReturnType<typeof vi.fn>;
+let applyWebserverConfigMock: ReturnType<typeof vi.fn>;
+let rollbackWebserverConfigMock: ReturnType<typeof vi.fn>;
+let setNodeIsolationMock: ReturnType<typeof vi.fn>;
 
 describe('ControlRoom', () => {
   beforeEach(() => {
     getControlRoomOverviewMock = vi.fn().mockResolvedValue(overview);
+    planWebserverConfigMock = vi.fn().mockResolvedValue({
+      job_id: 'plan-job-12345678',
+      action_id: 'plan-action',
+      status: 'queued',
+    });
+    applyWebserverConfigMock = vi.fn().mockResolvedValue({
+      job_id: 'apply-job-12345678',
+      action_id: 'apply-action',
+      status: 'queued',
+    });
+    rollbackWebserverConfigMock = vi.fn().mockResolvedValue({
+      job_id: 'rollback-job-12345678',
+      action_id: 'rollback-action',
+      status: 'queued',
+    });
+    setNodeIsolationMock = vi.fn().mockResolvedValue({});
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({
       getControlRoomOverview: getControlRoomOverviewMock,
-      planWebserverConfig: vi.fn(),
-      applyWebserverConfig: vi.fn(),
-      rollbackWebserverConfig: vi.fn(),
-      setNodeIsolation: vi.fn(),
+      planWebserverConfig: planWebserverConfigMock,
+      applyWebserverConfig: applyWebserverConfigMock,
+      rollbackWebserverConfig: rollbackWebserverConfigMock,
+      setNodeIsolation: setNodeIsolationMock,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
@@ -251,5 +272,105 @@ describe('ControlRoom', () => {
     expect(screen.getByText('core-api-01')).toBeInTheDocument();
     expect(screen.getByText('vault-offline-01')).toBeInTheDocument();
     expect(screen.getAllByText(/Whitelist gaps/i).length).toBeGreaterThan(0);
+  });
+
+  it('does not show healthy empty states when the overview fails to load', async () => {
+    getControlRoomOverviewMock.mockRejectedValueOnce(new Error('overview store offline'));
+
+    render(
+      <MemoryRouter>
+        <ControlRoom />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('overview store offline');
+    expect(screen.getByText('Control Room data could not be loaded')).toBeInTheDocument();
+    expect(screen.getByText('Control lanes unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Operator queue unavailable')).toBeInTheDocument();
+    expect(screen.getByText('IP behavior unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Incidents unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Webserver inventory unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('No open incidents')).not.toBeInTheDocument();
+    expect(screen.queryByText('No approvals waiting')).not.toBeInTheDocument();
+    expect(screen.queryByText('No open IP behavior anomalies')).not.toBeInTheDocument();
+    expect(screen.queryByText('No webserver inventory yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('No lanes yet')).not.toBeInTheDocument();
+  });
+
+  it('marks last-known data stale when a refresh fails', async () => {
+    render(
+      <MemoryRouter>
+        <ControlRoom />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Server Health')).toBeInTheDocument());
+    getControlRoomOverviewMock.mockRejectedValueOnce(new Error('refresh unavailable'));
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Refresh failed. The data below is last known data for 24h: refresh unavailable',
+    );
+    expect(screen.getByText('Server Health')).toBeInTheDocument();
+    expect(screen.getByText(/Last known data: Bank Tenant:/)).toBeInTheDocument();
+  });
+
+  it('uses an in-app confirmation and keeps failed webserver apply visible', async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    applyWebserverConfigMock.mockRejectedValueOnce(new Error('webserver gate denied'));
+
+    render(
+      <MemoryRouter>
+        <ControlRoom />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /apply webserver control for nginx nginx/i }));
+    const dialog = screen.getByRole('dialog', { name: /apply webserver control/i });
+    expect(dialog).toHaveTextContent('Apply the managed Control One capture/enforcement policy to nginx nginx.');
+    expect(confirmSpy).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: /^apply$/i }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Apply failed for nginx nginx: webserver gate denied',
+    );
+    expect(screen.getByText('apply: Apply failed for nginx nginx: webserver gate denied')).toBeInTheDocument();
+    expect(applyWebserverConfigMock).toHaveBeenCalledWith('web-1', expect.objectContaining({
+      tenant_id: 'tenant-1',
+      node_id: 'node-1',
+    }));
+  });
+
+  it('uses an in-app confirmation and keeps failed isolation changes visible', async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    setNodeIsolationMock.mockRejectedValueOnce(new Error('isolation gate denied'));
+
+    render(
+      <MemoryRouter>
+        <ControlRoom />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByLabelText(/network isolation/i));
+    await user.click(screen.getByRole('button', { name: /airgap core-api-01 for 1 hour/i }));
+    const dialog = screen.getByRole('dialog', { name: /change network isolation/i });
+    expect(dialog).toHaveTextContent('Airgap core-api-01.');
+    expect(confirmSpy).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: /airgap node/i }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Airgap core-api-01 failed: isolation gate denied',
+    );
+    expect(screen.getAllByText('Airgap core-api-01 failed: isolation gate denied').length).toBeGreaterThanOrEqual(2);
+    expect(setNodeIsolationMock).toHaveBeenCalledWith('node-1', expect.objectContaining({
+      mode: 'airgapped',
+      duration_seconds: 3600,
+      reason: 'Isolation set from Control Room',
+    }));
   });
 });

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { cn } from '@/lib/utils';
 import {
   EmptyState,
@@ -70,6 +71,40 @@ const TONE_ACCENT: Record<ControlRoomTone, 'brand' | 'accent' | 'healthy' | 'war
   unknown: 'brand',
 };
 
+type WebserverControlAction = 'plan' | 'apply' | 'rollback';
+
+interface InlineActionState {
+  message: string;
+  tone: StateTone;
+  busy?: boolean;
+}
+
+type PendingControlRoomAction =
+  | {
+      kind: 'webserver';
+      instance: ControlRoomWebserver;
+      action: Exclude<WebserverControlAction, 'plan'>;
+      title: string;
+      body: string;
+      confirmLabel: string;
+      variant?: 'default' | 'danger';
+    }
+  | {
+      kind: 'isolation';
+      node: ControlRoomIsolationNode;
+      mode: NetworkIsolationMode;
+      durationSeconds?: number;
+      title: string;
+      body: string;
+      confirmLabel: string;
+      variant?: 'default' | 'danger';
+    };
+
+interface ActionResult {
+  ok: boolean;
+  message: string;
+}
+
 export function ControlRoom(): JSX.Element {
   const api = useApiClient();
   const { currentTenantId, currentTenant, loading: tenantLoading } = useTenant();
@@ -77,9 +112,12 @@ export function ControlRoom(): JSX.Element {
   const [overview, setOverview] = useState<ControlRoomOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [webserverAction, setWebserverAction] = useState<Record<string, string>>({});
+  const [webserverAction, setWebserverAction] = useState<Record<string, InlineActionState>>({});
   const [isolationOpen, setIsolationOpen] = useState(false);
-  const [isolationAction, setIsolationAction] = useState<Record<string, string>>({});
+  const [isolationAction, setIsolationAction] = useState<Record<string, InlineActionState>>({});
+  const [pendingAction, setPendingAction] = useState<PendingControlRoomAction | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState(false);
+  const [confirmActionError, setConfirmActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
@@ -94,7 +132,8 @@ export function ControlRoom(): JSX.Element {
       const next = await api.getControlRoomOverview(currentTenantId, period);
       setOverview(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load the Control Room.');
+      setError(errorMessage(err, 'Failed to load the Control Room.'));
+      setOverview((current) => (current?.tenant_id === currentTenantId && current.period === period ? current : null));
     } finally {
       setLoading(false);
     }
@@ -110,25 +149,30 @@ export function ControlRoom(): JSX.Element {
     return map;
   }, [overview?.lanes]);
 
+  const overviewUnavailable = !loading && !overview && Boolean(error);
+  const overviewStale = Boolean(error && overview);
+
   const totalPending = useMemo(() => {
     return overview?.pending_actions.reduce((sum, action) => sum + action.count, 0) ?? 0;
   }, [overview?.pending_actions]);
   const headerDescription = overview
-    ? `${currentTenant?.name ? `${currentTenant.name}: ` : ''}${overview.top_incidents.length} open incidents, ${totalPending} pending actions, ${overview.ip_behavior.findings.length} recent IP ${overview.ip_behavior.findings.length === 1 ? 'finding' : 'findings'} (${overview.period}).`
-    : `${currentTenant?.name ? `${currentTenant.name}: ` : ''}Loading fleet status.`;
+    ? `${overviewStale ? 'Last known data: ' : ''}${currentTenant?.name ? `${currentTenant.name}: ` : ''}${overview.top_incidents.length} open incidents, ${totalPending} pending actions, ${overview.ip_behavior.findings.length} recent IP ${overview.ip_behavior.findings.length === 1 ? 'finding' : 'findings'} (${overview.period}).`
+    : overviewUnavailable
+      ? `${currentTenant?.name ? `${currentTenant.name}: ` : ''}Control Room data unavailable.`
+      : `${currentTenant?.name ? `${currentTenant.name}: ` : ''}Loading fleet status.`;
 
-  const runWebserverAction = async (instance: ControlRoomWebserver, action: 'plan' | 'apply' | 'rollback') => {
-    if (!currentTenantId) return;
-    if (action !== 'plan') {
-      const confirmed = window.confirm(
-        action === 'apply'
-          ? `Apply the managed Control One capture/enforcement policy to ${instance.kind} ${instance.service || instance.id}?`
-          : `Queue rollback for ${instance.kind} ${instance.service || instance.id}?`,
-      );
-      if (!confirmed) return;
-    }
+  const executeWebserverAction = async (
+    instance: ControlRoomWebserver,
+    action: WebserverControlAction,
+  ): Promise<ActionResult> => {
+    if (!currentTenantId) return { ok: false, message: 'Select a tenant first.' };
+    const actionLabel = webserverActionLabel(action);
+    const targetLabel = webserverTargetLabel(instance);
     const key = `${instance.id}:${action}`;
-    setWebserverAction((current) => ({ ...current, [key]: 'Queuing...' }));
+    setWebserverAction((current) => ({
+      ...current,
+      [key]: { message: `${actionLabel} queued...`, tone: 'warning', busy: true },
+    }));
     try {
       const payload = {
         tenant_id: currentTenantId,
@@ -145,27 +189,56 @@ export function ControlRoom(): JSX.Element {
           : action === 'apply'
             ? await api.applyWebserverConfig(instance.id, payload)
             : await api.rollbackWebserverConfig(instance.id, payload);
+      const jobRef = response.job_id ? response.job_id.slice(0, 8) : 'no job';
+      const message = `${actionLabel} ${response.status || 'queued'} (${jobRef})`;
       setWebserverAction((current) => ({
         ...current,
-        [key]: `${response.status || 'queued'} (${response.job_id.slice(0, 8)})`,
+        [key]: { message, tone: webserverStatusTone(response.status || 'queued') },
       }));
+      return { ok: true, message };
     } catch (err) {
+      const message = errorMessage(err, `${actionLabel} failed.`);
+      const failure = `${actionLabel} failed for ${targetLabel}: ${message}`;
       setWebserverAction((current) => ({
         ...current,
-        [key]: err instanceof Error ? err.message : 'Action failed',
+        [key]: { message: failure, tone: 'critical' },
       }));
+      return { ok: false, message: failure };
     }
   };
 
-  const runIsolationAction = async (
+  const runWebserverAction = async (instance: ControlRoomWebserver, action: WebserverControlAction) => {
+    if (action === 'plan') {
+      await executeWebserverAction(instance, action);
+      return;
+    }
+    const target = webserverTargetLabel(instance);
+    setConfirmActionError(null);
+    setPendingAction({
+      kind: 'webserver',
+      instance,
+      action,
+      title: action === 'apply' ? 'Apply webserver control?' : 'Queue webserver rollback?',
+      body:
+        action === 'apply'
+          ? `Apply the managed Control One capture/enforcement policy to ${target}.`
+          : `Queue rollback for ${target}.`,
+      confirmLabel: action === 'apply' ? 'Apply' : 'Queue rollback',
+      variant: action === 'apply' ? 'danger' : 'default',
+    });
+  };
+
+  const executeIsolationAction = async (
     node: ControlRoomIsolationNode,
     mode: NetworkIsolationMode,
     durationSeconds?: number,
-  ) => {
-    const label = mode === 'online' ? 'return this node online' : `set ${node.hostname} to ${mode}`;
-    if (!window.confirm(`Confirm ${label}?`)) return;
+  ): Promise<ActionResult> => {
     const key = `${node.id}:${mode}`;
-    setIsolationAction((current) => ({ ...current, [key]: 'Updating...' }));
+    const label = isolationActionLabel(node, mode);
+    setIsolationAction((current) => ({
+      ...current,
+      [key]: { message: `${label} updating...`, tone: 'warning', busy: true },
+    }));
     try {
       await api.setNodeIsolation(node.id, {
         mode,
@@ -179,14 +252,59 @@ export function ControlRoom(): JSX.Element {
             : undefined,
         allowlist_cidrs: mode === 'whitelist' ? node.allowlist_cidrs : undefined,
       });
-      setIsolationAction((current) => ({ ...current, [key]: 'Updated' }));
+      const message = `${label} updated`;
+      setIsolationAction((current) => ({ ...current, [key]: { message, tone: 'healthy' } }));
       await refresh();
+      return { ok: true, message };
     } catch (err) {
+      const message = errorMessage(err, 'Update failed.');
+      const failure = `${label} failed: ${message}`;
       setIsolationAction((current) => ({
         ...current,
-        [key]: err instanceof Error ? err.message : 'Update failed',
+        [key]: { message: failure, tone: 'critical' },
       }));
+      return { ok: false, message: failure };
     }
+  };
+
+  const runIsolationAction = (
+    node: ControlRoomIsolationNode,
+    mode: NetworkIsolationMode,
+    durationSeconds?: number,
+  ) => {
+    const label = isolationActionLabel(node, mode);
+    setConfirmActionError(null);
+    setPendingAction({
+      kind: 'isolation',
+      node,
+      mode,
+      durationSeconds,
+      title: 'Change network isolation?',
+      body: `${label}. This updates the node isolation posture used by Control One response workflows.`,
+      confirmLabel: mode === 'online' ? 'Return online' : mode === 'airgapped' ? 'Airgap node' : 'Apply whitelist',
+      variant: mode === 'airgapped' ? 'danger' : 'default',
+    });
+  };
+
+  const handleConfirmAction = async () => {
+    if (!pendingAction || confirmingAction) return;
+    setConfirmingAction(true);
+    setConfirmActionError(null);
+    const result =
+      pendingAction.kind === 'webserver'
+        ? await executeWebserverAction(pendingAction.instance, pendingAction.action)
+        : await executeIsolationAction(pendingAction.node, pendingAction.mode, pendingAction.durationSeconds);
+    setConfirmingAction(false);
+    if (result.ok) {
+      setPendingAction(null);
+    } else {
+      setConfirmActionError(result.message);
+    }
+  };
+
+  const cancelPendingAction = () => {
+    setPendingAction(null);
+    setConfirmActionError(null);
   };
 
   const quickQuestions = overview ? buildQuickQuestions(overview, laneByID, totalPending) : [];
@@ -219,8 +337,10 @@ export function ControlRoom(): JSX.Element {
       />
 
       {error ? (
-        <Panel toneAccent="critical" title="Overview data unavailable">
-          <p className="text-sm text-state-critical">{error}</p>
+        <Panel toneAccent="critical" title={overview ? 'Control Room refresh failed' : 'Overview data unavailable'}>
+          <p className="text-sm text-state-critical" role="alert">
+            {overview ? `Refresh failed. The data below is last known data for ${overview.period}: ${error}` : error}
+          </p>
         </Panel>
       ) : null}
 
@@ -252,17 +372,20 @@ export function ControlRoom(): JSX.Element {
         <ExposureConfidencePanel
           lane={laneByID.get('exposure')}
           loading={loading && !overview}
+          unavailable={overviewUnavailable}
           className="xl:col-span-5"
         />
         <SignalMapPanel
           lanes={overview?.lanes ?? []}
           loading={loading && !overview}
+          unavailable={overviewUnavailable}
           className="xl:col-span-4"
         />
         <ActionQueuePanel
           overview={overview}
           totalPending={totalPending}
           loading={loading && !overview}
+          unavailable={overviewUnavailable}
           className="xl:col-span-3"
         />
       </div>
@@ -283,6 +406,12 @@ export function ControlRoom(): JSX.Element {
         >
           {loading && !overview ? (
             <Skeleton className="h-48 rounded-lg" />
+          ) : overviewUnavailable ? (
+            <EmptyState
+              icon={<ShieldQuestion />}
+              title="IP behavior unavailable"
+              description="Resolve the overview error above and refresh."
+            />
           ) : overview && overview.ip_behavior.findings.length > 0 ? (
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
               {overview.ip_behavior.findings.slice(0, 6).map((finding) => (
@@ -346,6 +475,12 @@ export function ControlRoom(): JSX.Element {
         >
           {loading && !overview ? (
             <Skeleton className="h-40 rounded-lg" />
+          ) : overviewUnavailable ? (
+            <EmptyState
+              icon={<ShieldQuestion />}
+              title="Incidents unavailable"
+              description="Resolve the overview error above and refresh."
+            />
           ) : overview && overview.top_incidents.length > 0 ? (
             <div className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
               {overview.top_incidents.slice(0, 6).map((incident) => (
@@ -372,6 +507,12 @@ export function ControlRoom(): JSX.Element {
         >
           {loading && !overview ? (
             <Skeleton className="h-48 rounded-lg" />
+          ) : overviewUnavailable ? (
+            <EmptyState
+              icon={<ShieldQuestion />}
+              title="Webserver inventory unavailable"
+              description="Resolve the overview error above and refresh."
+            />
           ) : overview && overview.webservers.instances.length > 0 ? (
             <div className="flex flex-col gap-3">
               <div className="grid grid-cols-3 gap-2 text-xs">
@@ -392,13 +533,34 @@ export function ControlRoom(): JSX.Element {
                       </StatusTag>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => void runWebserverAction(instance, 'plan')}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void runWebserverAction(instance, 'plan')}
+                        aria-label={`Plan webserver control for ${webserverTargetLabel(instance)}`}
+                        loading={webserverAction[`${instance.id}:plan`]?.busy}
+                      >
                         Plan
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => void runWebserverAction(instance, 'apply')}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void runWebserverAction(instance, 'apply')}
+                        aria-label={`Apply webserver control for ${webserverTargetLabel(instance)}`}
+                        disabled={webserverAction[`${instance.id}:apply`]?.busy}
+                      >
                         Apply
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => void runWebserverAction(instance, 'rollback')}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void runWebserverAction(instance, 'rollback')}
+                        aria-label={`Rollback webserver control for ${webserverTargetLabel(instance)}`}
+                        disabled={webserverAction[`${instance.id}:rollback`]?.busy}
+                      >
                         Rollback
                       </Button>
                     </div>
@@ -431,8 +593,12 @@ export function ControlRoom(): JSX.Element {
                     {['plan', 'apply', 'rollback'].map((action) => {
                       const status = webserverAction[`${instance.id}:${action}`];
                       return status ? (
-                        <p key={action} className="mt-2 text-xs text-text-muted">
-                          {action}: {status}
+                        <p
+                          key={action}
+                          className={cn('mt-2 text-xs', status.tone === 'critical' ? 'text-state-critical' : 'text-text-muted')}
+                          role={status.tone === 'critical' ? 'alert' : undefined}
+                        >
+                          {action}: {status.message}
                         </p>
                       ) : null;
                     })}
@@ -449,6 +615,24 @@ export function ControlRoom(): JSX.Element {
           )}
         </Panel>
       </div>
+
+      <ConfirmModal
+        open={pendingAction !== null}
+        title={pendingAction?.title ?? 'Confirm Control Room action'}
+        body={pendingAction?.body}
+        confirmLabel={confirmingAction ? 'Working...' : pendingAction?.confirmLabel}
+        confirmDisabled={confirmingAction}
+        cancelDisabled={confirmingAction}
+        variant={pendingAction?.variant}
+        onConfirm={() => { void handleConfirmAction(); }}
+        onCancel={cancelPendingAction}
+      >
+        {confirmActionError ? (
+          <p className="rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+            {confirmActionError}
+          </p>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }
@@ -491,7 +675,17 @@ function IPBehaviorFindingCard({ finding }: { finding: ControlRoomIPFinding }) {
   );
 }
 
-function ExposureConfidencePanel({ lane, loading, className }: { lane?: ControlRoomLane; loading: boolean; className?: string }) {
+function ExposureConfidencePanel({
+  lane,
+  loading,
+  unavailable = false,
+  className,
+}: {
+  lane?: ControlRoomLane;
+  loading: boolean;
+  unavailable?: boolean;
+  className?: string;
+}) {
   const confidence = lane?.score ?? 0;
   const publicListeners = lane ? metricByLabel(lane, 'Public listeners') : undefined;
   const protectedListeners = lane ? metricByLabel(lane, 'Protected listeners') : undefined;
@@ -529,6 +723,12 @@ function ExposureConfidencePanel({ lane, loading, className }: { lane?: ControlR
     >
       {loading ? (
         <Skeleton className="h-72 rounded-lg" />
+      ) : unavailable ? (
+        <EmptyState
+          icon={<ShieldQuestion />}
+          title="Control Room data could not be loaded"
+          description="Resolve the overview error above and refresh."
+        />
       ) : lane ? (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-[11rem_1fr]">
           <div className="flex items-center justify-center">
@@ -602,7 +802,17 @@ function ExposureConfidencePanel({ lane, loading, className }: { lane?: ControlR
   );
 }
 
-function SignalMapPanel({ lanes, loading, className }: { lanes: ControlRoomLane[]; loading: boolean; className?: string }) {
+function SignalMapPanel({
+  lanes,
+  loading,
+  unavailable = false,
+  className,
+}: {
+  lanes: ControlRoomLane[];
+  loading: boolean;
+  unavailable?: boolean;
+  className?: string;
+}) {
   const groups = [
     { label: 'Protect', ids: ['exposure', 'security', 'ip-behavior'] },
     { label: 'Operate', ids: ['server-health', 'app-db-health', 'patch-posture'] },
@@ -612,6 +822,12 @@ function SignalMapPanel({ lanes, loading, className }: { lanes: ControlRoomLane[
     <Panel className={className} eyebrow="SIGNAL MAP" title="Organized control lanes" toneAccent="accent">
       {loading ? (
         <Skeleton className="h-72 rounded-lg" />
+      ) : unavailable ? (
+        <EmptyState
+          icon={<ShieldQuestion />}
+          title="Control lanes unavailable"
+          description="Resolve the overview error above and refresh."
+        />
       ) : lanes.length > 0 ? (
         <div className="flex flex-col gap-4">
           {groups.map((group) => {
@@ -659,17 +875,25 @@ function ActionQueuePanel({
   overview,
   totalPending,
   loading,
+  unavailable = false,
   className,
 }: {
   overview: ControlRoomOverview | null;
   totalPending: number;
   loading: boolean;
+  unavailable?: boolean;
   className?: string;
 }) {
   return (
     <Panel className={className} eyebrow="ACTION QUEUE" title="Operator decisions" toneAccent={totalPending > 0 ? 'warning' : 'healthy'}>
       {loading ? (
         <Skeleton className="h-72 rounded-lg" />
+      ) : unavailable ? (
+        <EmptyState
+          icon={<ShieldQuestion />}
+          title="Operator queue unavailable"
+          description="Resolve the overview error above and refresh."
+        />
       ) : overview && overview.pending_actions.some((action) => action.count > 0) ? (
         <div className="flex flex-col gap-2">
           {overview.pending_actions.map((action) => (
@@ -840,7 +1064,7 @@ function IsolationPosturePanel({
   onAction,
 }: {
   overview: ControlRoomOverview;
-  actionState: Record<string, string>;
+  actionState: Record<string, InlineActionState>;
   onAction: (node: ControlRoomIsolationNode, mode: NetworkIsolationMode, durationSeconds?: number) => void;
 }) {
   const nodes = overview.isolation.nodes.slice(0, 10);
@@ -900,15 +1124,36 @@ function IsolationPosturePanel({
                   <td className="px-3 py-2 text-xs text-text-muted">{node.expires_at ? formatDateTime(node.expires_at) : 'no timer'}</td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => onAction(node, 'airgapped', 60 * 60)} disabled={node.active && node.mode === 'airgapped'}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onAction(node, 'airgapped', 60 * 60)}
+                        disabled={(node.active && node.mode === 'airgapped') || actionState[`${node.id}:airgapped`]?.busy}
+                        aria-label={`Airgap ${node.hostname} for 1 hour`}
+                      >
                         <WifiOff />
                         1h
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => onAction(node, 'whitelist', 24 * 60 * 60)} disabled={node.active && node.mode === 'whitelist' && isolationNodeHasCoverage(node)}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onAction(node, 'whitelist', 24 * 60 * 60)}
+                        disabled={(node.active && node.mode === 'whitelist' && isolationNodeHasCoverage(node)) || actionState[`${node.id}:whitelist`]?.busy}
+                        aria-label={`Whitelist ${node.hostname} for 24 hours`}
+                      >
                         <LockKeyhole />
                         24h
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => onAction(node, 'online')} disabled={!node.active && !node.expired}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onAction(node, 'online')}
+                        disabled={(!node.active && !node.expired) || actionState[`${node.id}:online`]?.busy}
+                        aria-label={`Return ${node.hostname} online`}
+                      >
                         <Wifi />
                         Online
                       </Button>
@@ -916,8 +1161,12 @@ function IsolationPosturePanel({
                     {(['airgapped', 'whitelist', 'online'] as const).map((mode) => {
                       const status = actionState[`${node.id}:${mode}`];
                       return status ? (
-                        <p key={mode} className="mt-1 text-right text-xs text-text-muted">
-                          {status}
+                        <p
+                          key={mode}
+                          className={cn('mt-1 text-right text-xs', status.tone === 'critical' ? 'text-state-critical' : 'text-text-muted')}
+                          role={status.tone === 'critical' ? 'alert' : undefined}
+                        >
+                          {status.message}
                         </p>
                       ) : null;
                     })}
@@ -1128,6 +1377,27 @@ function compactList(values?: Array<string | undefined | null>): string {
     .join(', ');
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function webserverTargetLabel(instance: ControlRoomWebserver): string {
+  return `${instance.kind} ${instance.service || instance.id}`.trim();
+}
+
+function isolationActionLabel(node: ControlRoomIsolationNode, mode: NetworkIsolationMode): string {
+  switch (mode) {
+    case 'online':
+      return `Return ${node.hostname} online`;
+    case 'airgapped':
+      return `Airgap ${node.hostname}`;
+    case 'whitelist':
+      return `Set ${node.hostname} to whitelist-only`;
+    default:
+      return `Update ${node.hostname}`;
+  }
+}
+
 function webserverStatusTone(status?: string): StateTone {
   switch ((status || '').toLowerCase()) {
     case 'succeeded':
@@ -1150,7 +1420,8 @@ function webserverStatusTone(status?: string): StateTone {
 function webserverActionLabel(action?: string): string {
   return (action || 'webserver action')
     .replace(/^webserver\./, '')
-    .replace(/_/g, ' ');
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function controlRoomLaneDetailPath(laneId: string, metric?: string): string {

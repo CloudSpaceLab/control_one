@@ -3483,3 +3483,65 @@ Redis 10.6 MiB / 192 MiB, controlplane 132.2 MiB / 1 GiB, and ipq 8.8 MiB /
 4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
 database-lock, analytics-unavailable, Doris-unavailable, small-analytics
 unavailable, or Alerts/correlation-rules 4xx/5xx matches.
+
+2026-06-08 Control Room action failure and stale-data hardening: source review
+found several operator-risk gaps in the main command surface. A failed overview
+refresh could leave previous data on screen without clearly marking it stale,
+or an initial load failure could collapse critical panels into false healthy
+states such as `No open incidents`, `No approvals waiting`, `No open IP
+behavior anomalies`, `No webserver inventory yet`, and `No lanes yet`.
+Webserver apply/rollback and network isolation actions used native browser
+confirmation prompts, failed action errors were not kept inside the active
+confirmation path, and repeated row buttons lacked action-specific accessible
+names.
+
+The fix preserves the existing Control Room, lane map, queue, IP behavior,
+incident, webserver, and isolation workflows while making degraded states
+explicit. Failed initial overview loads now clear same-scope data and show
+unavailable states for each dependent panel. Failed refreshes keep only
+same-tenant/same-period last-known data and label it `Last known data`.
+Overview failures render as alerts. Webserver apply/rollback and network
+isolation changes now use the shared in-app confirmation modal, failures stay
+visible in the modal and row, success and busy states are row scoped, and
+webserver/isolation buttons expose target-specific accessible names.
+
+Regression coverage now proves initial overview failures avoid false healthy
+empty states, failed refreshes mark last-known data stale, failed webserver
+apply actions use the in-app modal and remain visible, and failed isolation
+changes use the in-app modal and remain visible. Local validation passed:
+`npm --prefix ui run test -- src/pages/ControlRoom.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check -- ui/src/pages/ControlRoom.tsx
+ui/src/pages/ControlRoom.test.tsx`.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/control-room` returned
+HTTP 200 with no-store headers and `Last-Modified: Mon, 08 Jun 2026 00:58:14
+GMT`.
+
+Live browser verification on `/console/control-room` used the authenticated
+production session and safe Playwright route interception for Control Room
+reads and mutations, so no production webserver policy or node isolation state
+was changed. Synthetic checks showed an overview-store outage alert,
+unavailable states for confidence, lanes, queue, IP behavior, incidents, and
+webserver inventory, and none of the false healthy empty states. A synthetic
+overview then rendered `Server Health`, `nginx nginx`, and `core-api-01`; a
+failed refresh kept `Server Health` as last-known data with stale copy. Failed
+webserver apply and failed isolation changes stayed visible inside the
+confirmation modal and the affected row. Intercept counts were overview 503 x4,
+webserver apply 503 x1, and isolation 503 x1. A clean real production reload
+then had the Control Room heading visible, zero role-alert errors, zero browser
+console warnings/errors, no desktop or mobile horizontal overflow, and a direct
+authenticated overview API read returned HTTP 200 with six lanes for tenant
+`00000000-0000-0000-0000-000000000001`.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/control-room`
+returned HTTP 200, no Doris FE/BE containers were running under the OLAP
+profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 131.7 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, small-analytics
+unavailable, or Control Room/webserver/isolation 4xx/5xx matches.
