@@ -3884,3 +3884,71 @@ controlplane 370.8 MiB / 1 GiB, landing 4.7 MiB / 128 MiB, and ipq 8.8 MiB /
 128 MiB. Strict recent log scans showed no panic, fatal, SQLite lock,
 analytics, hypervisor, or provider-credential errors; recent hypervisor and
 provider-credential API lines were normal HTTP 200 reads in a few milliseconds.
+
+2026-06-08 Patch Management partial-load and fleet-action hardening: source
+review found several remaining operator-risk gaps in the fleet patching
+workflow. Secondary API failures for managed proxies, maintenance windows, and
+pending approvals were silently converted to empty lists, so an outage could
+look like `No managed proxies`, `No maintenance windows`, or `No pending
+approvals`. A deployment-list failure could also leave the KPI row looking like
+zero activity. Proxy removal, maintenance-window force-close, and approval
+denial still used native browser confirmation prompts, so operators did not get
+consistent Control One context, target scope, or retained failure evidence
+before queueing fleet-impacting actions.
+
+The fix preserves the existing deployment list, per-node deployment selector,
+proxy install/remove, maintenance-window schedule/open/close/force-close, and
+approval approve/deny workflows while making degraded states explicit. Patch
+loads now settle each data source independently, clear failed same-scope rows,
+show `Patch management data unavailable` or `Patch management data partially
+unavailable`, render deployment KPIs as `N/A` when deployments cannot load, and
+use `Patch deployments unavailable`, `Managed proxies unavailable`,
+`Maintenance windows unavailable`, and `Patch approvals unavailable` instead of
+false empty-state copy. Proxy removal, force-close, and approval denial now use
+the shared in-app confirmation modal, keep failed action evidence visible in
+the modal and table row, scope busy/error state by target, and expose
+target-specific accessible action names such as `Remove patch proxy
+patch-proxy.local:3128`, `Force-close maintenance window Emergency patch
+window`, and `Deny patch deployment for node node-synth-123456`.
+
+Regression coverage now proves partial load failures avoid false empty states,
+deployment failures render unavailable KPIs, and failed proxy removal,
+maintenance-window force-close, and approval denial use the in-app modal
+without native `confirm` while retaining failed action evidence. Local
+validation passed:
+
+- `npm --prefix ui test -- PatchManagement.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|confirm\\(" ui/src/pages/PatchManagement.tsx ui/src/pages/PatchManagement.test.tsx` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/infrastructure/patch` returned HTTP 200 with
+no-store headers and `Last-Modified: Mon, 08 Jun 2026 04:38:09 GMT`. The
+deployed build served `PatchManagement-DSL0STtn.js`.
+
+Live browser verification on `/console/infrastructure/patch` used the
+authenticated production session and safe Playwright route interception for
+synthetic patch API outages and action failures, so no production proxy,
+maintenance window, or patch approval was changed. Synthetic full patch-store
+outage checks showed `Patch management data unavailable`, `Patch deployments
+unavailable`, zero false `No deployments yet` copy, and unavailable KPI values.
+Synthetic action failure checks showed the in-app dialogs before any mutation
+request, with `deletesBeforeConfirm=0` and `postsBeforeConfirm=0`; after
+confirmation, each intercepted request count was exactly 1, `nativeDialogs=0`,
+and `Proxy removal failed`, `Window force-close failed`, and `Patch approval
+denial failed` remained visible with target-specific failure messages in both
+modal and table context.
+
+A clean real production reload then had the Patch Management heading visible,
+zero role-alert errors, zero browser console warnings/errors, no desktop
+document/body horizontal overflow, and no mobile document/body horizontal
+overflow at 390x844. Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/infrastructure/patch` returned HTTP 200, no Doris FE/BE containers
+were running, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, and memory stayed light at about console 6.3 MiB / 256
+MiB, Redis 3.7 MiB / 192 MiB, controlplane 383.2 MiB / 1 GiB, landing 4.7 MiB
+/ 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent controlplane patch API lines were
+normal HTTP 200 GET reads in about 2-4 ms, and a strict recent log scan showed
+no real patch POST/DELETE lines during the synthetic browser test window.
