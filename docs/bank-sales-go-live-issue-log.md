@@ -4516,3 +4516,48 @@ and 1440x950. The panel rendered `Small`, `Projection OK`, `OLAP Off`,
 with no visible Doris/warehouse/timeout/error copy, no document/body
 horizontal overflow, zero current console warnings/errors, and the relevant
 Control One app API requests returning HTTP 200.
+
+2026-06-08 Templates provisioning workflow hardening: continuing the live
+console audit, review found that the Templates page could turn unavailable data
+into misleading empty states. Assignment load failures rendered beside `No
+assignments`, template version load failures rendered beside `No versions
+published yet`, and rollout-wave load failures were swallowed as `No rollout
+waves`. Rollout pause/resume/abort failures had no persistent visible error,
+and assignment removal fired immediately without an in-app confirmation.
+
+The fix keeps the provisioning feature set intact. The Templates page now shows
+persistent `Template assignments unavailable`, `Template versions unavailable`,
+and `Rollout waves unavailable` states only when the relevant API actually
+fails, while successful empty responses still show normal empty states. Rollout
+actions are disabled while in flight and surface failures on the page. Template
+assignment removal now opens the shared confirmation modal, keeps failed remove
+attempts visible inside the modal, and leaves the assignment row intact when
+the API rejects the mutation. The page copy was also cleaned of non-ASCII
+punctuation that had rendered as mojibake in some environments.
+
+Local validation passed:
+
+- `npm --prefix ui test -- Templates.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After commit `6139ba19` was pushed and the console was redeployed, production
+served the new `Templates-CT00BBS6.js` asset from `/console/templates`.
+Authenticated live browser verification covered `/console/templates` at
+1440x950 and 390x844. Both the Templates and Rollouts tabs rendered with zero
+current browser console warnings/errors, zero `/api/v1` failures, no document
+or body horizontal overflow, no mojibake, and no false unavailable alerts. The
+live tenant currently has zero templates and zero rollout waves, so the page
+correctly showed `No templates` and `No rollout waves` backed by HTTP 200 API
+responses rather than swallowed errors.
+
+Post-deploy host evidence stayed healthy: public `/healthz` returned HTTP 200
+in about 0.56s; the console container image was
+`sha256:503fc8efac970de434dfa85c91145b583b215f11aa1e0a57eba04b3f7c75ec26`
+started at `2026-06-08T11:17:24Z`; console memory was about 4.49 MiB / 256 MiB,
+controlplane about 67.8 MiB / 1 GiB, and Redis about 5.03 MiB / 192 MiB.
+Recent console logs served the Templates route and chunk with HTTP 200, and
+recent controlplane logs showed `/api/v1/templates` and `/api/v1/rollout/waves`
+returning HTTP 200 with no panic, fatal, `SQLITE_BUSY`, database-lock, 500,
+502, or 503 lines in the checked window.
