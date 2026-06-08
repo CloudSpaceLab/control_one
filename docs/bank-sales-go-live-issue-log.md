@@ -4561,3 +4561,44 @@ Recent console logs served the Templates route and chunk with HTTP 200, and
 recent controlplane logs showed `/api/v1/templates` and `/api/v1/rollout/waves`
 returning HTTP 200 with no panic, fatal, `SQLITE_BUSY`, database-lock, 500,
 502, or 503 lines in the checked window.
+
+2026-06-08 Compliance nested policy workflow hardening: continuing the
+compliance audit, review found that expanded policy rows still had failure
+surfaces that could confuse operators. Assignment and version load failures
+could collapse into normal empty-state language, and assignment removal was a
+one-click destructive mutation. The fix keeps the policy inventory workflow
+intact while adding row-local unavailable states for assignments and versions,
+persistent delete-failure feedback inside the confirmation modal, and a
+non-mutating confirmation step before assignment removal. The row expand and
+assignment remove controls now also carry explicit accessible labels, and the
+remaining user-facing copy touched in this area was normalized to ASCII.
+
+Local validation passed:
+
+- `npm --prefix ui test -- Compliance.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After commit `523dc912` was pushed and the console was redeployed, production
+served the new `Compliance-CkGdTz6A.js` asset from
+`/console/compliance?tab=policies`. Authenticated live browser verification
+covered the Policies tab at 1440x950 and 390x844. In both viewports the page
+started from the explicit `Load policies` state, loaded real production policy
+data over HTTP 200, expanded `[Default] VNC port closed`, and rendered the
+real `Org-wide` assignment plus `v1`/`Rule definition` version evidence with
+no false `No assignments`, no false `No versions yet`, no unavailable alert,
+no mojibake, zero current browser console warnings/errors, and no document or
+body horizontal overflow. The assignment removal path was checked up to the
+confirmation boundary on desktop and mobile, then cancelled without sending a
+delete mutation or changing production data.
+
+Post-deploy host evidence stayed healthy: public `/healthz` returned HTTP 200
+in about 0.58s; the console container image was
+`sha256:7e6b976e83ea614487d3fa505327e15389789d4a88824e921f748fbfe0172635`
+started at `2026-06-08T11:37:54Z`; console memory was about 6.23 MiB / 256
+MiB, controlplane about 69.83 MiB / 1 GiB, and Redis about 5.03 MiB / 192
+MiB. Recent controlplane logs showed `/api/v1/policies`,
+`/api/v1/policies/.../versions`, and `/api/v1/policies/.../assignments`
+returning HTTP 200 with millisecond durations, and a recent controlplane plus
+console log scan found no 5xx, structured error-level, panic, or fatal entries.
