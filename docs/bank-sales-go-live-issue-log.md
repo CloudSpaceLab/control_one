@@ -4602,3 +4602,53 @@ MiB. Recent controlplane logs showed `/api/v1/policies`,
 `/api/v1/policies/.../versions`, and `/api/v1/policies/.../assignments`
 returning HTTP 200 with millisecond durations, and a recent controlplane plus
 console log scan found no 5xx, structured error-level, panic, or fatal entries.
+
+2026-06-08 Data Security failure-state and mobile table hardening: continuing
+the live production-readiness audit, source review found that the Data Security
+DLP page could still mislead operators. Findings, column-scan, and DLP rule
+load failures rendered next to normal empty tables, several visible fallbacks
+contained mojibake, and failed `Resolve finding` / `Delete rule` mutations
+closed their confirmation modals instead of preserving the failed action for
+review. The fix keeps the DLP workflow intact while adding explicit
+`PII findings unavailable`, `Column scans unavailable`, and `Classification
+rules unavailable` states; named resolve/delete controls; in-flight guards for
+seed/create/delete/resolve; and modal-local failure messages for destructive
+or irreversible actions.
+
+Local validation passed:
+
+- `npm --prefix ui test -- DataSecurity.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After commit `4ac93980` was pushed and the console was deployed, live mobile
+validation caught a second issue before sign-off: dense tables were clipped
+inside their framed container at 390px instead of scrolling inside the table
+frame. Commit `dc4852f0` fixed the shared `DataTable` wrapper to keep the
+bordered frame while allowing horizontal table scrolling on narrow screens.
+The final production deployment served `DataSecurity-kLo_emO0.js` and
+`DataTable-D6QAhXg9.js`.
+
+Authenticated live browser validation covered `/console/data-security` at
+1440x950 and 390x844 after the final deployment. Findings, Columns, and Rules
+all loaded successfully over HTTP 200: `/api/v1/dlp/findings`,
+`/api/v1/dlp/columns`, and `/api/v1/dlp/rules`. The live tenant currently has
+zero DLP findings, zero column scans, and zero classification rules, so the
+page correctly showed `No findings`, `No column scans`, and
+`No classification rules` backed by successful API responses, not swallowed
+errors. No seed, create, resolve, or delete mutation was sent during live
+validation. Both desktop and mobile checks showed zero current browser console
+warnings/errors, no document/body horizontal overflow, no mojibake, no false
+unavailable alerts, and the mobile table frame reported `overflowX=auto` with
+internal scroll available.
+
+Post-deploy host evidence stayed light: public `/healthz` returned HTTP 200
+in about 0.54s; the console image was
+`sha256:5e9f253596fe63e5c8f4cf3245bdd64dd470837ed690eea40d21b179c22c49d4`
+started at `2026-06-08T12:06:55Z`; console memory was about 4.51 MiB / 256
+MiB, controlplane about 78.86 MiB / 1 GiB, and Redis about 5.03 MiB / 192
+MiB. Recent controlplane logs showed the DLP findings, columns, and rules
+endpoints returning HTTP 200 with millisecond durations, and a recent
+controlplane plus console log scan found no 5xx, structured error-level,
+panic, or fatal entries.
