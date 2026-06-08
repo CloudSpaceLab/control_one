@@ -1,7 +1,8 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EnrollmentToken, OfflineContentBundle } from '../lib/api';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { useApiClient } from '../hooks/useApiClient';
-import { SectionHeader, Panel } from '../components/kit';
+import { Alert, SectionHeader, Panel } from '../components/kit';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -24,6 +25,8 @@ const ARCH_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'arm64', label: 'arm64 (aarch64)' },
 ];
 
+type PendingBundleActivation = { bundle: OfflineContentBundle; error?: string };
+
 export function OfflineBundle(): JSX.Element {
   const api = useApiClient();
   const { showToast } = useToast();
@@ -43,25 +46,47 @@ export function OfflineBundle(): JSX.Element {
   const [contentError, setContentError] = useState<string | null>(null);
   const [contentFile, setContentFile] = useState<File | null>(null);
   const [contentWorking, setContentWorking] = useState(false);
+  const [pendingActivation, setPendingActivation] = useState<PendingBundleActivation | null>(null);
+  const tokenLoadSequence = useRef(0);
 
   const loadTokens = useCallback(async () => {
+    const requestId = tokenLoadSequence.current + 1;
+    tokenLoadSequence.current = requestId;
+
+    if (!currentTenantId) {
+      setTokens([]);
+      setSelectedTokenId('');
+      setTokensError(null);
+      setTokensLoading(false);
+      return;
+    }
+
     setTokensLoading(true);
     setTokensError(null);
     try {
-      const response = await api.listEnrollmentTokens({ tenant_id: currentTenantId ?? undefined, limit: 50, offset: 0 });
+      const response = await api.listEnrollmentTokens({ tenant_id: currentTenantId, limit: 50, offset: 0 });
+      if (requestId !== tokenLoadSequence.current) return;
       setTokens(response.data);
       // Pre-select the first non-revoked token so the happy path is one-click.
       const firstUsable = response.data.find((token) => !token.revoked_at);
-      if (firstUsable) {
-        setSelectedTokenId((current) => current || firstUsable.id);
-      }
+      setSelectedTokenId((current) =>
+        current && response.data.some((token) => token.id === current && !token.revoked_at)
+          ? current
+          : firstUsable?.id ?? '',
+      );
     } catch (err) {
+      if (requestId !== tokenLoadSequence.current) return;
       const message = err instanceof Error ? err.message : 'Failed to load enrollment tokens.';
       setTokensError(message);
     } finally {
-      setTokensLoading(false);
+      if (requestId === tokenLoadSequence.current) setTokensLoading(false);
     }
   }, [api, currentTenantId]);
+
+  useEffect(() => {
+    setSelectedTokenId('');
+    setTokenOverride('');
+  }, [currentTenantId]);
 
   useEffect(() => {
     void loadTokens();
@@ -169,19 +194,37 @@ export function OfflineBundle(): JSX.Element {
     }
   };
 
-  const handleContentRollback = async (bundle: OfflineContentBundle) => {
-    if (!currentTenantId) return;
-    const confirmed = window.confirm(`Activate ${bundle.bundle_id} sequence ${bundle.sequence}?`);
-    if (!confirmed) return;
+  const handleContentRollback = (bundle: OfflineContentBundle) => {
+    if (!currentTenantId) {
+      showToast('Select a tenant before activating content.', 'error');
+      return;
+    }
+    setPendingActivation({ bundle });
+  };
+
+  const closeActivationModal = () => {
+    if (contentWorking) return;
+    setPendingActivation(null);
+  };
+
+  const confirmContentActivation = async () => {
+    if (!currentTenantId || !pendingActivation) return;
+    const bundle = pendingActivation.bundle;
     setContentWorking(true);
     setContentError(null);
     try {
       await api.rollbackOfflineContentBundle(currentTenantId, bundle.bundle_id, bundle.sequence);
       showToast('Offline content bundle activated.', 'success');
+      setPendingActivation(null);
       await loadContentBundles();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Rollback failed.';
       setContentError(message);
+      setPendingActivation((current) =>
+        current?.bundle.bundle_id === bundle.bundle_id && current.bundle.sequence === bundle.sequence
+          ? { ...current, error: message }
+          : current,
+      );
       showToast(message, 'error');
     } finally {
       setContentWorking(false);
@@ -398,6 +441,7 @@ export function OfflineBundle(): JSX.Element {
                         size="sm"
                         onClick={() => void handleContentRollback(bundle)}
                         disabled={contentWorking}
+                        aria-label={`Activate offline content bundle ${bundle.bundle_id} sequence ${bundle.sequence}`}
                       >
                         Activate
                       </Button>
@@ -409,6 +453,31 @@ export function OfflineBundle(): JSX.Element {
           </table>
         </div>
       </Panel>
+      <ConfirmModal
+        open={pendingActivation !== null}
+        title={
+          pendingActivation
+            ? `Activate ${pendingActivation.bundle.bundle_id} sequence ${pendingActivation.bundle.sequence}?`
+            : 'Activate offline content bundle?'
+        }
+        body={
+          pendingActivation
+            ? `This makes version ${pendingActivation.bundle.version} the active offline content sequence for this tenant. Air-gapped scoring, parsers, threat content, and adapters should be reviewed before switching.`
+            : undefined
+        }
+        variant="danger"
+        confirmLabel={contentWorking ? 'Activating...' : 'Activate bundle'}
+        confirmDisabled={contentWorking}
+        cancelDisabled={contentWorking}
+        onConfirm={confirmContentActivation}
+        onCancel={closeActivationModal}
+      >
+        {pendingActivation?.error ? (
+          <Alert variant="critical" title="Bundle activation failed">
+            {pendingActivation.error}
+          </Alert>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }

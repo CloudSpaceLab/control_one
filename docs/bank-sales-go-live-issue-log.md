@@ -4083,3 +4083,67 @@ small profile. Memory stayed within the demo budget at about console 4.5 MiB /
 MiB / 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent tenant API lines were normal
 HTTP 200 GET reads and remediation-config reads in about 1-4 ms, and a strict
 recent control-plane log scan returned `NO_REAL_TENANT_DELETE_LOGS`.
+
+2026-06-08 Offline bundle tenant scoping and content activation hardening:
+source review found the last remaining native browser confirmation under
+`ui/src` in the signed offline content activation workflow. Activating a
+signed geo/threat/parser/adapter content sequence can affect air-gapped
+scoring and adapter behavior, but the old path used `window.confirm` with
+minimal context and no retained backend failure evidence. Live production
+browser verification also exposed a first-load race in the same page:
+enrollment tokens were requested before the tenant provider had selected a
+tenant, causing production to return `tenant_id query parameter is required`
+on a fresh session.
+
+The fix preserves the existing offline agent download, raw token override,
+SCP command helper, signed content import, content inventory, and content
+activation workflows. Enrollment-token loading now waits for a concrete
+tenant id, always sends `tenant_id`, clears stale selected/raw token state on
+tenant changes, and ignores stale token-load responses. Signed content
+activation now uses the shared in-app confirmation modal with target-specific
+accessible names such as `Activate offline content bundle geo-threat-pack
+sequence 42`, review copy for air-gapped scoring/parsers/threat
+content/adapters, no mutation before confirmation, and retained modal evidence
+when activation fails.
+
+Regression coverage now proves tenant-scoped token loading, no-token request
+while the tenant is still unknown, in-app activation confirmation without
+native `window.confirm`, no rollback request before modal confirmation, and
+failed activation remaining visible in the modal. Local validation passed:
+
+- `npm --prefix ui test -- OfflineBundle.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(|window\\.alert|\\balert\\(" ui/src -g "*.tsx" -g "*.ts"` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/offline-bundle?verify=offline-host-20260608`
+returned HTTP 200 with no-store headers and `Last-Modified: Mon, 08 Jun 2026
+05:53:30 GMT`. The deployed build served `OfflineBundle-Calmcgz7.js`.
+
+Live browser verification on `/console/offline-bundle` used an authenticated
+production session plus Playwright route interception for synthetic offline
+content data, so no production offline content sequence was changed. The clean
+desktop reload showed the route heading and download action, zero alerts,
+zero browser console warnings/errors, no native dialogs, no horizontal
+overflow, and exactly one enrollment-token request:
+`/api/v1/enrollment-tokens?tenant_id=00000000-0000-0000-0000-000000000001&limit=50&offset=0`.
+The synthetic activation success path showed `rollbackBeforeConfirm=0`,
+`rollbackHits=1` only after confirming the in-app modal, the expected rollback
+payload `{"bundle_id":"geo-threat-pack","sequence":42}`, a visible success
+toast, `nativeDialogs=[]`, tenant-scoped token requests, no alerts, no
+horizontal overflow, and zero browser console warnings/errors. Mobile live
+verification at 390x844 showed the route and download action visible,
+tenant-scoped token loading, no alerts, no native dialogs, no horizontal
+overflow, and zero browser console warnings/errors.
+
+Post-fix host evidence stayed healthy: public `/healthz` returned HTTP 200 in
+about 0.54s, console/controlplane/Redis/landing/ipq were up, no Doris FE/BE
+containers were running in the small profile, and memory stayed light at about
+console 4.488 MiB / 256 MiB, Redis 3.68 MiB / 192 MiB, controlplane 132.9 MiB
+/ 1 GiB, landing 4.848 MiB / 128 MiB, and ipq 8.809 MiB / 128 MiB. Recent
+offline-bundle API lines were normal HTTP 200 GET reads, and a strict recent
+control-plane log scan returned `NO_REAL_OFFLINE_ROLLBACK_LOGS`. Unrelated
+recent warnings were limited to an unauthenticated `/api/.env` scan and an
+external threat-feed 429 that fell back to the local snapshot.
