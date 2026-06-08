@@ -116,8 +116,30 @@ func TestAdminIngestBacklogRoleGate(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if resp.Status != "down" || resp.PendingBatches != 2 || resp.PendingRows != 42 || resp.LastErrorMessage == "" {
+		if resp.Status != "degraded" || resp.AnalyticsStatus != "degraded" || resp.AnalyticsMode != analyticsModeSmall || resp.WarehouseStatus != "disabled" {
+			t.Fatalf("small-mode backlog should be degraded without requiring a warehouse: %+v", resp)
+		}
+		if resp.PendingBatches != 2 || resp.PendingRows != 42 || resp.LastErrorMessage == "" {
 			t.Fatalf("unexpected backlog response: %+v", resp)
+		}
+	})
+	t.Run("explicit OLAP without warehouse is down when replay is pending", func(t *testing.T) {
+		srv, store := dashboardAdminHarness(t, "admin", "admin-token")
+		srv.cfg.Analytics.Mode = analyticsModeOLAP
+		store.eventIngestBacklog = storage.EventIngestBacklogSummary{
+			PendingBatches: 1,
+			PendingRows:    7,
+		}
+		rec := dashboardCall(t, srv, "admin-token", http.MethodGet, "/api/v1/admin/ingest/backlog")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp ingestBacklogResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Status != "down" || resp.AnalyticsStatus != "down" || resp.AnalyticsMode != analyticsModeOLAP || resp.WarehouseStatus != "unconfigured" {
+			t.Fatalf("OLAP backlog without warehouse should be down: %+v", resp)
 		}
 	})
 	t.Run("viewer is denied", func(t *testing.T) {
@@ -193,6 +215,12 @@ func TestAdminCapacityRoleGate(t *testing.T) {
 		}
 		if resp.PostgresStatus == "" {
 			t.Fatalf("expected postgres_status populated")
+		}
+		if resp.AnalyticsMode == "" || resp.AnalyticsStatus == "" || resp.WarehouseStatus == "" {
+			t.Fatalf("expected analytics-neutral capacity status populated: %+v", resp)
+		}
+		if resp.WarehouseConfigured {
+			t.Fatalf("small-mode capacity should not require a configured warehouse: %+v", resp)
 		}
 	})
 	t.Run("viewer is denied", func(t *testing.T) {

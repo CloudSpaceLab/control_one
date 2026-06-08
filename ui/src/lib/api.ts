@@ -623,6 +623,10 @@ export interface AdminSLO {
 export interface AdminCapacity {
   disk_used: number;
   disk_total: number;
+  analytics_mode?: string;
+  analytics_status?: string;
+  warehouse_status?: string;
+  warehouse_configured?: boolean;
   doris_status: string;
   postgres_status: string;
   retention_days_remaining: number;

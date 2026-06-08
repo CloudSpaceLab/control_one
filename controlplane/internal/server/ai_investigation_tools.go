@@ -190,8 +190,15 @@ func (s *Server) aiInvestigationTools() map[string]aiInvestigationTool {
 			Run:         s.runEventsQueryTool,
 		},
 		{
+			Name:        "ingest_health",
+			Description: "Return admin-gated durable ingest backlog, replay health, and cited tenant event_ingest_batches rows for investigation completeness checks.",
+			MinRole:     roleAdmin,
+			Schema:      dorisIngestHealthToolSchema(),
+			Run:         s.runIngestHealthTool,
+		},
+		{
 			Name:        "doris_ingest_health",
-			Description: "Return admin-gated durable ingest backlog, Doris replay health, and cited tenant event_ingest_batches rows for investigation completeness checks.",
+			Description: "Compatibility alias for ingest_health; returns durable ingest backlog and replay health for cited tenant event_ingest_batches rows.",
 			MinRole:     roleAdmin,
 			Schema:      dorisIngestHealthToolSchema(),
 			Run:         s.runDorisIngestHealthTool,

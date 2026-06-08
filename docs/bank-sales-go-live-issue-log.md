@@ -3858,6 +3858,37 @@ passed:
 - `npm --prefix ui run build`
 - `git diff --check`
 
+After redeploying the controlplane, live admin API verification confirmed the
+new small-mode contract. `/api/v1/admin/ingest/backlog` returned in about 328
+ms with `status=ok`, `analytics_mode=small`, `analytics_status=ok`,
+`warehouse_status=disabled`, `warehouse_configured=false`,
+`doris_status=unconfigured`, `doris_configured=false`, and zero pending or
+failed batches. `/api/v1/admin/capacity` returned in about 277 ms with
+`analytics_mode=small`, `analytics_status=ok`,
+`warehouse_status=disabled`, `warehouse_configured=false`,
+`doris_status=unconfigured`, and `postgres_status=ok`.
+
+Live browser verification covered `/console/settings` at a 390x844 viewport,
+selected the System health tab, rendered the worker-pool status cards, showed
+zero current browser console warnings/errors, only 200 responses for relevant
+`/api/v1` calls, no document/body horizontal overflow, and no visible Doris or
+warehouse status copy. Public `/healthz` returned HTTP 200 in about 0.56s. The
+deployed controlplane image was
+`sha256:08784d03f49a260c8e9f0526828fbd4f6ee0c1d22e11dee6b908e847c83605f6`
+started at `2026-06-08T09:25:31Z`.
+
+Post-deploy host evidence stayed hyper-light: controlplane used about 58.73
+MiB / 1 GiB, console 4.531 MiB / 256 MiB, Redis 5.043 MiB / 192 MiB, landing
+4.641 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. Redis reported
+`used_memory_human:1.81M`, `maxmemory_human:128.00M`, and
+`maxmemory_policy:volatile-lru`; the deployed environment reported
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`,
+`CONTROLPLANE_ANALYTICS_SQLITE_DIR=/var/lib/control-one/analytics`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. No Doris FE/BE containers were
+running, and a recent controlplane log scan found no panic, fatal,
+`SQLITE_BUSY`, database lock, analytic-store, context-deadline, 500, or 502
+lines.
+
 The console-only production deploy completed successfully against
 `139.162.40.237`; `/console/hypervisors` returned HTTP 200 with no-store
 headers and `Last-Modified: Mon, 08 Jun 2026 04:12:48 GMT`.
@@ -4345,3 +4376,29 @@ started at `2026-06-08T08:33:35Z`; the console image remained
 started at `2026-06-08T08:13:42Z`. A recent controlplane log scan found no
 panic, fatal, `SQLITE_BUSY`, database lock, analytic-store, context-deadline,
 500, or 502 lines after the fix.
+
+2026-06-08 Admin ingest health backend-neutral small-mode status hardening:
+small-fleet architecture review found another Doris coupling in operational
+health. `/api/v1/admin/ingest/backlog`, `/api/v1/admin/capacity`, and the AI
+`doris_ingest_health` tool exposed warehouse-specific status as the primary
+contract, and small-mode pending replay could be interpreted as `down` simply
+because Doris is intentionally absent from the demo profile.
+
+The fix preserves useful compatibility instead of deleting features. Admin
+backlog and capacity now emit backend-neutral `analytics_mode`,
+`analytics_status`, `warehouse_status`, and `warehouse_configured` fields while
+retaining legacy `doris_status` and `doris_configured`. Small-mode pending or
+failed replay is reported as degraded local analytics health; explicit OLAP
+mode with pending replay and no configured warehouse still reports `down`. The
+AI health tool is now available as neutral `ingest_health`, with
+`doris_ingest_health` retained as a compatibility alias that preserves the
+legacy citation tool name. Tool guardrails now refer to ingest replay and
+analytic completeness instead of Doris writer internals.
+
+Local validation passed:
+
+- `go test ./controlplane/internal/server -run "TestAdminIngestBacklogRoleGate|TestAdminCapacityRoleGate|TestAIInvestigationToolsExposeEventAndTimelineTools|TestDorisIngestHealthAIToolReturnsTenantScopedEvidence" -count=1`
+- `go vet ./controlplane/internal/server`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`

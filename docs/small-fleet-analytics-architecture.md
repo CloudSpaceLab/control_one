@@ -279,6 +279,13 @@ transition, but new handlers should also emit analytics-neutral state such as
 read from the neutral fields first and treat Doris naming as backwards
 compatibility only.
 
+Admin health must also distinguish a disabled warehouse from a failed
+warehouse. In `analytics.mode=small`, pending journal replay means the local
+projection is degraded until replay drains; it must not be reported as a
+missing-Doris outage. In `analytics.mode=olap`, pending replay with no
+configured warehouse is still a loud `down` condition because the selected
+analytic backend cannot accept the work.
+
 ## Capability Matrix
 
 | Capability | Small-Fleet Source | OLAP Source | Required Behavior |
@@ -479,12 +486,17 @@ The repository already points toward this architecture:
   for connection facts and bounded timeline/event reads from those facts.
 - Several server paths already prefer `localAnalytics` in small mode before
   Doris.
+- Admin ingest backlog, capacity, and AI ingest-health responses now include
+  backend-neutral `analytics_mode`, `analytics_status`, `warehouse_status`, and
+  `warehouse_configured` fields while retaining legacy `doris_status` and
+  `doris_configured` compatibility fields. The AI tool is exposed as
+  `ingest_health`, with `doris_ingest_health` kept as a compatibility alias.
 
 Known gaps to close before calling the small profile fully bank-grade:
 
 | Gap | Required Work |
 | --- | --- |
-| direct Doris naming in code and copy | introduce backend-neutral names while preserving compatibility fields |
+| remaining direct Doris naming in code and copy | continue moving operator contracts to backend-neutral names while preserving compatibility fields |
 | Redis hot-counter acceleration | add sorted-set/hash update path with SQLite fallback |
 | normalized non-connection events | project log, web, process, file, DNS, DB audit, policy, and security events into SQLite |
 | FTS search | add `events_fts` and bounded query paths |
@@ -503,7 +515,8 @@ Known gaps to close before calling the small profile fully bank-grade:
 3. Add Redis acceleration for top talkers, node freshness, dashboard heat, and
    writer lag with SQLite/Postgres fallback.
 4. Replace user-facing `doris_status` and Doris-specific empty states with
-   analytics-neutral health language.
+   analytics-neutral health language, keeping compatibility fields and aliases
+   for existing clients.
 5. Live-test dashboard, network security, investigation, timelines, exports,
    and admin health with Doris absent.
 
@@ -537,6 +550,9 @@ The architecture is demo-ready when:
 - Redis remains within its configured memory cap under noisy ingest;
 - dashboard, network security, investigation, timelines, exports, and admin
   health load without console errors or Doris-only copy;
+- admin ingest backlog and capacity report small-mode replay lag through
+  `analytics_status` / `warehouse_status`, with disabled Doris treated as
+  normal for small mode and as failure only when OLAP is explicitly selected;
 - `/api/v1/fleet/health`, `/api/v1/connections`,
   `/api/v1/connections/top-talkers`, `/api/v1/events/query`, and
   `/api/v1/timelines/build` return successful small-mode envelopes wherever
