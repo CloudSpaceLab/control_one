@@ -12,6 +12,7 @@ import {
   SectionHeader,
   StatusTag,
 } from '../components/kit';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 // CISO admin's RBAC console.
 //
@@ -29,14 +30,26 @@ function isBuiltInRole(role: Pick<RoleWithPermissions, 'name' | 'built_in'>): bo
   return BUILTIN_ROLE_NAMES.has(role.name.trim().toLowerCase());
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export function Roles(): JSX.Element {
   const client = useApiClient();
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [roles, setRoles] = useState<RoleWithPermissions[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [updatingPermissionKey, setUpdatingPermissionKey] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RoleWithPermissions | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
     try {
       const [perms, rs] = await Promise.all([
         client.listPermissions(),
@@ -44,8 +57,13 @@ export function Roles(): JSX.Element {
       ]);
       setPermissions(perms);
       setRoles(rs);
+      setLoadError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'load failed');
+      setPermissions([]);
+      setRoles([]);
+      setLoadError(errorMessage(e, 'Failed to load roles.'));
+    } finally {
+      setLoading(false);
     }
   }, [client]);
 
@@ -64,26 +82,37 @@ export function Roles(): JSX.Element {
   }, [permissions]);
 
   const togglePermission = async (role: RoleWithPermissions, perm: string, checked: boolean) => {
+    if (updatingPermissionKey) return;
+    const permissionKey = `${role.id}:${perm}`;
     const next = checked
       ? Array.from(new Set([...role.permissions, perm]))
       : role.permissions.filter((p) => p !== perm);
+    setUpdatingPermissionKey(permissionKey);
+    setOperationError(null);
     setRoles((cur) => cur.map((r) => (r.id === role.id ? { ...r, permissions: next } : r)));
     try {
       await client.setRolePermissions(role.id, next);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'update failed');
-      refresh();
+      setOperationError(`Permission update failed for ${role.name}: ${errorMessage(e, 'Update failed.')}`);
+      setRoles((cur) => cur.map((r) => (r.id === role.id ? { ...r, permissions: role.permissions } : r)));
+    } finally {
+      setUpdatingPermissionKey(null);
     }
   };
 
-  const handleDelete = async (role: RoleWithPermissions) => {
-    if (isBuiltInRole(role)) return;
-    if (!confirm(`Delete role "${role.name}"?`)) return;
+  const confirmDelete = async () => {
+    if (!deleteTarget || isBuiltInRole(deleteTarget)) return;
+    setDeleting(true);
+    setDeleteError(null);
+    setOperationError(null);
     try {
-      await client.deleteRole(role.id);
-      refresh();
+      await client.deleteRole(deleteTarget.id);
+      setDeleteTarget(null);
+      await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'delete failed');
+      setDeleteError(errorMessage(e, 'Delete failed.'));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -97,7 +126,14 @@ export function Roles(): JSX.Element {
         title="Roles & permissions"
         description="CISO admins regulate exactly what each role can do. Toggle a checkbox to grant or revoke a permission live."
         actions={
-          <Button variant="primary" size="md" onClick={() => setCreating(true)}>
+          <Button
+            variant="primary"
+            size="md"
+            onClick={() => {
+              setCreating(true);
+              setOperationError(null);
+            }}
+          >
             New custom role
           </Button>
         }
@@ -109,9 +145,15 @@ export function Roles(): JSX.Element {
         <KpiTile label="CUSTOM" value={customCount} tone="healthy" />
       </div>
 
-      {error ? (
-        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Operation failed">
-          <p className="text-sm text-state-critical">{error}</p>
+      {loadError ? (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load RBAC data">
+          <p className="text-sm text-state-critical" role="alert">{loadError}</p>
+        </Panel>
+      ) : null}
+
+      {operationError ? (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Role operation failed">
+          <p className="text-sm text-state-critical" role="alert">{operationError}</p>
         </Panel>
       ) : null}
 
@@ -119,18 +161,22 @@ export function Roles(): JSX.Element {
         <NewRoleForm
           permissions={permissions}
           onCancel={() => setCreating(false)}
-          onCreated={() => {
+          onCreated={async () => {
             setCreating(false);
-            refresh();
+            await refresh();
           }}
         />
       ) : null}
 
-      {roles.length === 0 ? (
+      {loading && roles.length === 0 ? (
+        <Panel padding="md" tone="inset" eyebrow="LOADING" title="Loading role matrix">
+          <p className="text-sm text-text-muted">Loading roles and permissions...</p>
+        </Panel>
+      ) : roles.length === 0 ? (
         <EmptyState
           icon={<ShieldCheck />}
-          title="No roles yet"
-          description="Create one to start configuring access."
+          title={loadError ? 'Roles could not be loaded' : 'No roles yet'}
+          description={loadError ? 'Resolve the error above and refresh.' : 'Create one to start configuring access.'}
         />
       ) : (
         <Panel padding="sm" tone="inset" eyebrow="MATRIX" title="Role / permission grid">
@@ -153,7 +199,12 @@ export function Roles(): JSX.Element {
                             type="button"
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleDelete(r)}
+                            onClick={() => {
+                              setDeleteError(null);
+                              setDeleteTarget(r);
+                            }}
+                            aria-label={`Delete custom role ${r.name}`}
+                            disabled={deleting || updatingPermissionKey !== null}
                             className="text-state-critical hover:text-state-critical"
                           >
                             <Trash2 className="h-3 w-3" /> delete
@@ -185,13 +236,17 @@ export function Roles(): JSX.Element {
                         </td>
                         {roles.map((r) => {
                           const has = r.permissions.includes(p.name);
+                          const permissionKey = `${r.id}:${p.name}`;
                           return (
                             <td key={`${r.id}-${p.name}`} className="text-center px-3 py-2">
                               <input
                                 type="checkbox"
                                 className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
+                                aria-label={`${has ? 'Revoke' : 'Grant'} ${p.name} for ${r.name}`}
                                 checked={has}
+                                disabled={updatingPermissionKey !== null}
                                 onChange={(e) => togglePermission(r, p.name, e.target.checked)}
+                                title={updatingPermissionKey === permissionKey ? 'Saving permission change' : undefined}
                               />
                             </td>
                           );
@@ -205,6 +260,26 @@ export function Roles(): JSX.Element {
           </div>
         </Panel>
       )}
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title="Delete custom role?"
+        body={`This removes ${deleteTarget?.name ?? 'this role'} from the RBAC catalog. Users assigned to this role should be reviewed before deletion.`}
+        variant="danger"
+        confirmLabel={deleting ? 'Deleting...' : 'Delete role'}
+        confirmDisabled={deleting}
+        cancelDisabled={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => {
+          setDeleteTarget(null);
+          setDeleteError(null);
+        }}
+      >
+        {deleteError ? (
+          <p className="rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+            Role delete failed: {deleteError}
+          </p>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }
@@ -216,20 +291,31 @@ function NewRoleForm({
 }: {
   permissions: Permission[];
   onCancel: () => void;
-  onCreated: () => void;
+  onCreated: () => Promise<void> | void;
 }) {
   const client = useApiClient();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const roleName = name.trim();
+    if (!roleName) {
+      setError('Role name is required.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
     try {
-      await client.createCustomRole({ name: name.trim(), description: description.trim(), permissions: selected });
-      onCreated();
+      await client.createCustomRole({ name: roleName, description: description.trim(), permissions: selected });
+      await onCreated();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'create failed');
+      setError(errorMessage(err, 'Create failed.'));
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -242,7 +328,10 @@ function NewRoleForm({
             id="role-name"
             placeholder="e.g. incident-responder"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (error) setError(null);
+            }}
             required
           />
         </div>
@@ -280,9 +369,18 @@ function NewRoleForm({
             ))}
           </div>
         </details>
+        {error ? (
+          <p className="rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+            {error}
+          </p>
+        ) : null}
         <div className="flex gap-2">
-          <Button type="submit" variant="primary" size="md">Create role</Button>
-          <Button type="button" variant="secondary" size="md" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" variant="primary" size="md" loading={submitting} disabled={!name.trim()}>
+            Create role
+          </Button>
+          <Button type="button" variant="secondary" size="md" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </Button>
         </div>
       </form>
     </Panel>

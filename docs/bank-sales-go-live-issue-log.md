@@ -3352,3 +3352,72 @@ console/controlplane log scans showed no console 4xx/5xx, no controlplane 5xx,
 panic, fatal, permission, deadline, database-lock, analytics-unavailable,
 Doris-unavailable, small-analytics unavailable, or Threat Feeds 4xx/5xx
 matches.
+
+2026-06-08 Users and Roles RBAC hardening: source review and saved browser
+evidence found bank-grade access-administration risks. User rows could render
+duplicate role chips such as `VIEWER VIEWER` or `ADMIN ADMIN`, users and roles
+load failures could still collapse into false empty states, the single-user and
+bulk role editors lacked proper dialog semantics, bulk role failures were not
+visible inside the active modal, the Roles page used native browser
+`confirm`/`alert`, failed permission writes could feel accepted until a later
+refresh, and custom role create/delete errors were not recoverable enough for a
+CISO/admin workflow.
+
+The fix preserves the existing Users directory, bulk role replacement, and live
+Role / permission matrix. User role names are now normalized and deduplicated
+for display, KPI counting, side-panel role counts, and edit initialization.
+Selected users are pruned when the visible page changes. Users and roles load
+failures now show recovery empty states instead of `No users found` or `No
+roles yet`. The user role modals expose dialog semantics and named close
+actions, failed bulk replacements stay visible inside the modal, Roles uses the
+shared in-app confirmation modal for custom role deletion, custom role create
+failures render inline instead of using `alert`, destructive delete failures
+stay in the modal, permission checkboxes have role/permission-specific names,
+and failed permission writes rollback the optimistic checkbox state with a
+durable `Role operation failed` alert.
+
+Regression coverage now proves duplicate role assignments render once, user
+load failures avoid the false empty state, empty single-user role sets cannot be
+saved, bulk replacement copy and API behavior remain explicit, failed bulk role
+updates stay in the modal, built-in roles remain delete-protected even when IDs
+vary, older built-in payloads are still protected by name, role load failures
+avoid the false empty state, failed permission writes rollback, failed custom
+role deletes stay in the confirmation modal, and custom role create failures do
+not call browser `alert`. Local validation passed:
+`npm --prefix ui run test -- src/pages/Users.test.tsx
+src/pages/Roles.test.tsx`, `npm --prefix ui run lint`,
+`npm --prefix ui run build`, and `git diff --check` for the touched files.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/users` and
+`/console/roles` returned HTTP 200 with no-store headers and `Last-Modified:
+Mon, 08 Jun 2026 00:07:40 GMT`.
+
+Live browser verification used the authenticated production session and safe
+Playwright route interception for RBAC mutations, so no production user or role
+was changed. The deployed Users page showed a synthetic user-list outage alert
+without the false `No users found` state, rendered a duplicate-role synthetic
+`Ada Admin` row with one `viewer` and one `operator` chip, kept an intercepted
+bulk role replacement failure visible inside the modal, and confirmed the
+PATCH route fired exactly once. The deployed Roles page showed a synthetic role
+catalog outage alert without `No roles yet`, protected the built-in role, only
+exposed delete for the synthetic custom role, rolled back an intercepted
+permission-write failure, preserved a plain-text create error, kept an
+intercepted delete failure inside the confirmation modal, and confirmed the
+PUT, POST, and DELETE routes fired exactly once. A clean real production reload
+then had no Users or Roles alerts, zero browser console warnings/errors, direct
+authenticated API reads returned HTTP 200 for users, roles, permissions, and
+the role matrix, and live users had no duplicate-role API row at verification
+time. Mobile verification at 390x844 had no alerts and no body horizontal
+overflow on Users or Roles (`381/381`).
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/users` and
+`/console/roles` returned HTTP 200, no Doris FE/BE containers were running
+under the OLAP profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 132.5 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, small-analytics
+unavailable, or Users/Roles/Permissions 4xx/5xx matches.

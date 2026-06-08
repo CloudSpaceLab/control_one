@@ -1,5 +1,5 @@
-import { FormEvent, useMemo, useState } from 'react';
-import { RefreshCw, Users as UsersIcon } from 'lucide-react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { RefreshCw, Users as UsersIcon, X } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useRoles } from '../hooks/useRoles';
 import { useApiClient } from '../hooks/useApiClient';
@@ -28,6 +28,19 @@ function formatDate(value?: string): string {
   return parsed.toLocaleString();
 }
 
+function uniqueRoleNames(roleNames?: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  roleNames?.forEach((roleName) => {
+    const trimmed = roleName.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) return;
+    seen.add(key);
+    unique.push(trimmed);
+  });
+  return unique;
+}
+
 export function Users(): JSX.Element {
   const api = useApiClient();
   const [limit] = useState(50);
@@ -39,6 +52,7 @@ export function Users(): JSX.Element {
   const [isBulkRoleModalOpen, setIsBulkRoleModalOpen] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkAssignRoles, setBulkAssignRoles] = useState<string[]>([]);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const {
     data: users,
@@ -67,13 +81,18 @@ export function Users(): JSX.Element {
 
   const roleMap = useMemo(() => {
     const map = new Map<string, Role>();
-    roles.forEach((role) => map.set(role.name, role));
+    roles.forEach((role) => map.set(role.name.trim().toLowerCase(), role));
     return map;
   }, [roles]);
 
+  useEffect(() => {
+    const visibleUserIds = new Set(users.map((user) => user.id));
+    setSelectedUserIds((prev) => new Set(Array.from(prev).filter((id) => visibleUserIds.has(id))));
+  }, [users]);
+
   const handleEditRoles = (user: User) => {
     setSelectedUser(user);
-    setSelectedRoles([...user.roles]);
+    setSelectedRoles(uniqueRoleNames(user.roles));
     setIsEditingRoles(true);
     resetFeedback();
   };
@@ -155,6 +174,7 @@ export function Users(): JSX.Element {
 
     setBulkAssigning(true);
     resetFeedback();
+    setBulkError(null);
 
     try {
       const userIds = Array.from(selectedUserIds);
@@ -168,6 +188,7 @@ export function Users(): JSX.Element {
       reloadRoles();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to assign roles';
+      setBulkError(message);
       showError(message);
       showToast(message, 'error');
     } finally {
@@ -219,8 +240,8 @@ export function Users(): JSX.Element {
       cell: ({ row }) => (
         <div className="flex flex-wrap gap-1">
           {row.original.roles && row.original.roles.length > 0 ? (
-            row.original.roles.map((roleName) => {
-              const role = roleMap.get(roleName);
+            uniqueRoleNames(row.original.roles).map((roleName) => {
+              const role = roleMap.get(roleName.toLowerCase());
               return (
                 <StatusTag key={roleName} tone="info" {...(role?.description ? { title: role.description } : {})}>
                   {roleName}
@@ -266,7 +287,10 @@ export function Users(): JSX.Element {
                 <Button
                   variant="primary"
                   size="md"
-                  onClick={() => setIsBulkRoleModalOpen(true)}
+                  onClick={() => {
+                    setBulkError(null);
+                    setIsBulkRoleModalOpen(true);
+                  }}
                   disabled={bulkAssigning}
                 >
                   Bulk Replace Roles
@@ -282,17 +306,17 @@ export function Users(): JSX.Element {
 
       {usersError && (
         <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load users">
-          <p className="text-sm text-state-critical">{usersError}</p>
+          <p className="text-sm text-state-critical" role="alert">{usersError}</p>
         </Panel>
       )}
       {rolesError && (
         <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load roles">
-          <p className="text-sm text-state-critical">{rolesError}</p>
+          <p className="text-sm text-state-critical" role="alert">{rolesError}</p>
         </Panel>
       )}
       {!isEditingRoles && formError && (
         <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Role update failed">
-          <p className="text-sm text-state-critical">{formError}</p>
+          <p className="text-sm text-state-critical" role="alert">{formError}</p>
         </Panel>
       )}
       {!isEditingRoles && formSuccess && (
@@ -306,7 +330,7 @@ export function Users(): JSX.Element {
         <KpiTile label="AVAILABLE ROLES" value={roles.length} tone="info" />
         <KpiTile
           label="USERS WITH ROLES"
-          value={users.filter((u) => u.roles && u.roles.length > 0).length}
+          value={users.filter((u) => uniqueRoleNames(u.roles).length > 0).length}
           tone="healthy"
         />
       </div>
@@ -320,7 +344,15 @@ export function Users(): JSX.Element {
             loading={usersLoading}
             compact
             empty={
-              <EmptyState icon={<UsersIcon />} title="No users found" description="No users match the current filters." />
+              usersError ? (
+                <EmptyState
+                  icon={<UsersIcon />}
+                  title="Users could not be loaded"
+                  description="Resolve the error above and refresh."
+                />
+              ) : (
+                <EmptyState icon={<UsersIcon />} title="No users found" description="No users match the current filters." />
+              )
             }
           />
           <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
@@ -350,7 +382,10 @@ export function Users(): JSX.Element {
           {rolesLoading ? (
             <p className="text-sm text-text-muted">Loading roles...</p>
           ) : roles.length === 0 ? (
-            <EmptyState title="No roles found" />
+            <EmptyState
+              title={rolesError ? 'Roles could not be loaded' : 'No roles found'}
+              description={rolesError ? 'Resolve the error above and refresh.' : undefined}
+            />
           ) : (
             <div className="flex flex-col gap-2">
               {roles.map((role) => (
@@ -361,7 +396,7 @@ export function Users(): JSX.Element {
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="font-display text-sm font-semibold">{role.name}</h3>
                     <span className="text-[0.65rem] text-text-muted">
-                      {users.filter((u) => u.roles?.includes(role.name)).length} user(s)
+                      {users.filter((u) => uniqueRoleNames(u.roles).some((assigned) => assigned.toLowerCase() === role.name.toLowerCase())).length} user(s)
                     </span>
                   </div>
                   {role.description && (
@@ -377,25 +412,36 @@ export function Users(): JSX.Element {
       {isEditingRoles && selectedUser && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={handleCancelEdit}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-user-roles-title"
+          onClick={() => {
+            if (!updating) handleCancelEdit();
+          }}
         >
           <div
             className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border-subtle p-4">
-              <h2 className="font-display text-base font-semibold">
+              <h2 id="edit-user-roles-title" className="font-display text-base font-semibold">
                 Edit Roles for {selectedUser.display_name || selectedUser.external_id}
               </h2>
-              <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
-                ×
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleCancelEdit}
+                disabled={updating}
+                aria-label="Close role editor"
+              >
+                <X className="h-4 w-4 text-foreground" />
               </Button>
             </div>
 
             <form onSubmit={handleSaveRoles}>
               <div className="flex flex-col gap-3 p-4">
                 {formError && (
-                  <p className="text-xs text-state-critical">{formError}</p>
+                  <p className="text-xs text-state-critical" role="alert">{formError}</p>
                 )}
                 {formSuccess && (
                   <p className="text-xs text-state-healthy">{formSuccess}</p>
@@ -446,8 +492,14 @@ export function Users(): JSX.Element {
       {isBulkRoleModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-replace-roles-title"
           onClick={() => {
-            if (!bulkAssigning) setIsBulkRoleModalOpen(false);
+            if (!bulkAssigning) {
+              setIsBulkRoleModalOpen(false);
+              setBulkError(null);
+            }
           }}
         >
           <div
@@ -455,13 +507,27 @@ export function Users(): JSX.Element {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border-subtle p-4">
-              <h2 className="font-display text-base font-semibold">Bulk Replace Roles</h2>
-              <Button variant="ghost" size="sm" onClick={() => setIsBulkRoleModalOpen(false)} disabled={bulkAssigning}>
-                ×
+              <h2 id="bulk-replace-roles-title" className="font-display text-base font-semibold">Bulk Replace Roles</h2>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setIsBulkRoleModalOpen(false);
+                  setBulkError(null);
+                }}
+                disabled={bulkAssigning}
+                aria-label="Close bulk role editor"
+              >
+                <X className="h-4 w-4 text-foreground" />
               </Button>
             </div>
 
             <div className="flex flex-col gap-3 p-4">
+              {bulkError ? (
+                <p className="rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
+                  Bulk role update failed: {bulkError}
+                </p>
+              ) : null}
               <p className="text-sm text-text-secondary">
                 This replaces existing roles for {selectedUserIds.size} selected user(s):
               </p>
@@ -502,6 +568,7 @@ export function Users(): JSX.Element {
                 onClick={() => {
                   setIsBulkRoleModalOpen(false);
                   setBulkAssignRoles([]);
+                  setBulkError(null);
                 }}
                 disabled={bulkAssigning}
               >

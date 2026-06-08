@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => {
     showToast,
     roles,
     users,
+    usersError: null as string | null,
+    rolesError: null as string | null,
   };
 });
 
@@ -41,8 +43,8 @@ vi.mock('../hooks/useUsers', () => ({
   useUsers: () => ({
     data: mocks.users,
     loading: false,
-    error: null,
-    pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
+    error: mocks.usersError,
+    pagination: { total: mocks.users.length, count: mocks.users.length, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
     reload: mocks.reloadUsers,
   }),
 }));
@@ -51,7 +53,7 @@ vi.mock('../hooks/useRoles', () => ({
   useRoles: () => ({
     data: mocks.roles,
     loading: false,
-    error: null,
+    error: mocks.rolesError,
     reload: mocks.reloadRoles,
   }),
 }));
@@ -63,7 +65,39 @@ vi.mock('../providers/ToastProvider', () => ({
 describe('Users', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.users.splice(0, mocks.users.length, {
+      id: '11111111-1111-1111-1111-111111111111',
+      external_id: 'admin@local',
+      display_name: 'Ada Admin',
+      email: 'admin@local',
+      roles: ['viewer'],
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    mocks.usersError = null;
+    mocks.rolesError = null;
     mocks.updateUserRoles.mockResolvedValue({ ...mocks.users[0], roles: ['operator'] });
+  });
+
+  it('deduplicates repeated role assignments in the directory', async () => {
+    mocks.users[0].roles = ['viewer', 'viewer', 'operator', 'operator'];
+
+    render(<Users />);
+
+    const row = (await screen.findByText('Ada Admin')).closest('tr');
+    expect(row).toBeTruthy();
+    expect(within(row as HTMLElement).getAllByText('viewer')).toHaveLength(1);
+    expect(within(row as HTMLElement).getAllByText('operator')).toHaveLength(1);
+  });
+
+  it('does not show a false empty state when users fail to load', async () => {
+    mocks.users.splice(0, mocks.users.length);
+    mocks.usersError = 'directory unavailable';
+
+    render(<Users />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('directory unavailable');
+    expect(screen.getByText('Users could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByText('No users found')).not.toBeInTheDocument();
   });
 
   it('prevents saving an empty single-user role set', async () => {
@@ -71,8 +105,7 @@ describe('Users', () => {
     render(<Users />);
 
     await user.click(await screen.findByRole('button', { name: /edit roles/i }));
-    const dialog = screen.getByText(/edit roles for ada admin/i).closest('.fixed');
-    expect(dialog).toBeTruthy();
+    const dialog = screen.getByRole('dialog', { name: /edit roles for ada admin/i });
 
     const viewerCheckbox = within(dialog as HTMLElement).getByRole('checkbox', { name: /viewer/i });
     expect(viewerCheckbox).toBeChecked();
@@ -92,8 +125,7 @@ describe('Users', () => {
     await user.click(await screen.findByLabelText(/select ada admin/i));
     await user.click(screen.getByRole('button', { name: /bulk replace roles/i }));
 
-    const dialog = screen.getByRole('heading', { name: /bulk replace roles/i }).closest('.fixed');
-    expect(dialog).toBeTruthy();
+    const dialog = screen.getByRole('dialog', { name: /bulk replace roles/i });
     expect(
       within(dialog as HTMLElement).getByText(/this replaces existing roles for 1 selected user/i),
     ).toBeInTheDocument();
@@ -107,5 +139,23 @@ describe('Users', () => {
       { roles: ['operator'] },
     );
     await waitFor(() => expect(screen.getByText(/successfully replaced roles for 1 user/i)).toBeInTheDocument());
+  });
+
+  it('keeps failed bulk role updates visible in the modal', async () => {
+    const user = userEvent.setup();
+    mocks.updateUserRoles.mockRejectedValueOnce(new Error('rbac write denied'));
+
+    render(<Users />);
+
+    await user.click(await screen.findByLabelText(/select ada admin/i));
+    await user.click(screen.getByRole('button', { name: /bulk replace roles/i }));
+    const dialog = screen.getByRole('dialog', { name: /bulk replace roles/i });
+    await user.click(within(dialog).getByRole('checkbox', { name: /operator/i }));
+    await user.click(within(dialog).getByRole('button', { name: /replace roles for 1 user/i }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Bulk role update failed: rbac write denied',
+    );
+    expect(screen.getByRole('dialog', { name: /bulk replace roles/i })).toBeInTheDocument();
   });
 });
