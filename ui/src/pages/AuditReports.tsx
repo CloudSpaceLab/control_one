@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Download, RefreshCw, FileText } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import {
+  Alert,
   DataTable,
   EmptyState,
   Panel,
@@ -11,6 +12,7 @@ import {
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
 import { saveBlob } from '../lib/download';
 import type { AuditReport } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -29,7 +31,7 @@ function statusTone(status: string): StateTone {
 }
 
 function formatDate(v?: string | null): string {
-  if (!v) return '—';
+  if (!v) return 'N/A';
   const d = new Date(v);
   return isNaN(d.getTime()) ? v : d.toLocaleDateString();
 }
@@ -40,13 +42,23 @@ function fallbackReportFilename(report: AuditReport): string {
   return `compliance-report-${framework}-${periodEnd}.txt`;
 }
 
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
+function isReportReady(report: AuditReport): boolean {
+  return report.status.toLowerCase() === 'ready';
+}
+
 export function AuditReports(): JSX.Element {
   const client = useApiClient();
   const { data: tenantList } = useTenants();
+  const { currentTenantId } = useTenant();
 
   const [selectedTenant, setSelectedTenant] = useState<string>('');
   const [reports, setReports] = useState<AuditReport[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -64,8 +76,10 @@ export function AuditReports(): JSX.Element {
     try {
       const res = await client.listAuditReports({ tenantId: selectedTenant, limit: 50 });
       setReports(res.data);
-    } catch {
+      setLoadError(null);
+    } catch (err: unknown) {
       setReports([]);
+      setLoadError(errorMessage(err, 'Failed to load report history'));
     } finally {
       setLoading(false);
     }
@@ -75,10 +89,19 @@ export function AuditReports(): JSX.Element {
     void load();
   }, [load]);
 
-  // Auto-select first tenant
+  // Auto-select the active tenant when the shared tenant scope is available.
   useEffect(() => {
-    if (!selectedTenant && tenantList.length > 0) {
-      setSelectedTenant(tenantList[0].id);
+    if (selectedTenant || tenantList.length === 0) return;
+    const activeTenant = currentTenantId
+      ? tenantList.find((tenant) => tenant.id === currentTenantId)
+      : undefined;
+    setSelectedTenant((activeTenant ?? tenantList[0]).id);
+  }, [currentTenantId, tenantList, selectedTenant]);
+
+  useEffect(() => {
+    if (!selectedTenant || tenantList.length === 0) return;
+    if (!tenantList.some((tenant) => tenant.id === selectedTenant)) {
+      setSelectedTenant('');
     }
   }, [tenantList, selectedTenant]);
 
@@ -95,6 +118,10 @@ export function AuditReports(): JSX.Element {
       setGenError('All fields are required.');
       return;
     }
+    if (genForm.period_start > genForm.period_end) {
+      setGenError('Period start must be on or before period end.');
+      return;
+    }
     setGenerating(true);
     setGenError(null);
     try {
@@ -106,7 +133,7 @@ export function AuditReports(): JSX.Element {
       });
       void load();
     } catch (err: unknown) {
-      setGenError(err instanceof Error ? err.message : 'Failed to create report');
+      setGenError(errorMessage(err, 'Failed to create report'));
     } finally {
       setGenerating(false);
     }
@@ -120,7 +147,7 @@ export function AuditReports(): JSX.Element {
       const file = await client.downloadAuditReport(report.id, selectedTenant);
       saveBlob(file.blob, file.filename || fallbackReportFilename(report));
     } catch (err: unknown) {
-      setDownloadError(err instanceof Error ? err.message : 'Failed to download report');
+      setDownloadError(errorMessage(err, 'Failed to download report'));
     } finally {
       setDownloadingId(null);
     }
@@ -154,17 +181,24 @@ export function AuditReports(): JSX.Element {
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void handleDownload(row.original)}
-          disabled={downloadingId === row.original.id}
-          title="Download report"
-        >
-          <Download className="w-3.5 h-3.5" />
-        </Button>
-      ),
+      cell: ({ row }) => {
+        const ready = isReportReady(row.original);
+        const label = ready
+          ? `Download ${row.original.framework} report ending ${formatDate(row.original.period_end)}`
+          : `${row.original.framework} report is not ready`;
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void handleDownload(row.original)}
+            disabled={!ready || downloadingId === row.original.id}
+            title={label}
+            aria-label={label}
+          >
+            <Download className="w-3.5 h-3.5" />
+          </Button>
+        );
+      },
     },
   ];
 
@@ -177,6 +211,8 @@ export function AuditReports(): JSX.Element {
 
       <div className="flex flex-wrap gap-3 items-center">
         <select
+          id="audit-report-tenant"
+          aria-label="Report tenant"
           className="border rounded px-3 py-1.5 text-sm bg-background"
           value={selectedTenant}
           onChange={(e) => setSelectedTenant(e.target.value)}
@@ -188,15 +224,37 @@ export function AuditReports(): JSX.Element {
             </option>
           ))}
         </select>
-        <Button variant="outline" size="sm" onClick={() => void load()}>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={!selectedTenant || loading}>
           <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
           Refresh
         </Button>
       </div>
-      {downloadError && <p className="text-sm text-destructive">{downloadError}</p>}
+      {loadError && (
+        <Alert
+          variant="critical"
+          title="Report history unavailable"
+          actions={
+            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+              Retry
+            </Button>
+          }
+        >
+          {loadError}
+        </Alert>
+      )}
+      {downloadError && (
+        <Alert variant="critical" title="Report download failed">
+          {downloadError}
+        </Alert>
+      )}
 
       {loading ? (
         <div className="text-muted-foreground text-sm py-4">Loading report history.</div>
+      ) : loadError ? (
+        <EmptyState
+          title="Report history unavailable"
+          description="Compliance report history could not be loaded for the selected tenant."
+        />
       ) : reports.length === 0 ? (
         <EmptyState
           title="No generated reports"
@@ -217,8 +275,11 @@ export function AuditReports(): JSX.Element {
 
           <div className="grid grid-cols-3 gap-3">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium">Framework</label>
+              <label htmlFor="audit-report-framework" className="text-xs font-medium">
+                Framework
+              </label>
               <select
+                id="audit-report-framework"
                 className="border rounded px-3 py-1.5 text-sm bg-background"
                 value={genForm.framework}
                 onChange={(e) => setGenForm((p) => ({ ...p, framework: e.target.value }))}
@@ -231,8 +292,11 @@ export function AuditReports(): JSX.Element {
               </select>
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium">Period start</label>
+              <label htmlFor="audit-report-period-start" className="text-xs font-medium">
+                Period start
+              </label>
               <input
+                id="audit-report-period-start"
                 type="date"
                 className="border rounded px-3 py-1.5 text-sm bg-background"
                 value={genForm.period_start}
@@ -240,8 +304,11 @@ export function AuditReports(): JSX.Element {
               />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium">Period end</label>
+              <label htmlFor="audit-report-period-end" className="text-xs font-medium">
+                Period end
+              </label>
               <input
+                id="audit-report-period-end"
                 type="date"
                 className="border rounded px-3 py-1.5 text-sm bg-background"
                 value={genForm.period_end}

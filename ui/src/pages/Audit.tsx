@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Download, FileText, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import {
+  Alert,
   Chart,
   DataTable,
   EmptyState,
@@ -64,7 +65,7 @@ function actionTone(action: string): StateTone {
   return 'unknown';
 }
 
-function exportToCSV(logs: AuditLog[]): void {
+function exportToCSV(logs: AuditLog[], filename: string): void {
   const headers = ['Timestamp', 'Actor Type', 'Action', 'Resource Type', 'Resource ID', 'Tenant ID', 'Metadata'];
   const rows = logs.map((log) => [
     log.created_at,
@@ -80,7 +81,7 @@ function exportToCSV(logs: AuditLog[]): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -216,6 +217,12 @@ export function Audit(): JSX.Element {
 
   const userCount = logs.filter((l) => l.actor_type === 'user').length;
   const systemCount = logs.filter((l) => l.actor_type === 'system').length;
+  const auditUnavailable = Boolean(error) && !loading;
+  const currentPage = Math.floor(offset / limit) + 1;
+  const auditTableEyebrow = auditUnavailable
+    ? 'AUDIT LOG / unavailable'
+    : `AUDIT LOG / ${filtered.length} of ${pagination.total}`;
+  const exportFilename = `audit-logs-page-${currentPage}-${new Date().toISOString().split('T')[0]}.csv`;
 
   const actionBarData = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -243,8 +250,14 @@ export function Audit(): JSX.Element {
             <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
-            <Button variant="primary" size="md" onClick={() => exportToCSV(logs)} disabled={logs.length === 0}>
-              <Download className="h-4 w-4" /> Export CSV
+            <Button
+              variant="primary"
+              size="md"
+              onClick={() => exportToCSV(filtered, exportFilename)}
+              disabled={filtered.length === 0 || loading || auditUnavailable}
+              aria-label="Export current audit page as CSV"
+            >
+              <Download className="h-4 w-4" /> Export page CSV
             </Button>
           </>
         }
@@ -258,9 +271,9 @@ export function Audit(): JSX.Element {
 
         <TabsContent value="logs" className="mt-4 flex flex-col gap-5">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <KpiTile label="TOTAL EVENTS" value={pagination.total.toLocaleString()} tone="brand" />
-            <KpiTile label="USER ACTIONS" value={userCount} tone="healthy" />
-            <KpiTile label="SYSTEM EVENTS" value={systemCount} tone="info" />
+            <KpiTile label="TOTAL EVENTS" value={auditUnavailable ? 'N/A' : pagination.total.toLocaleString()} tone="brand" />
+            <KpiTile label="USER ACTIONS" value={auditUnavailable ? 'N/A' : userCount} tone="healthy" />
+            <KpiTile label="SYSTEM EVENTS" value={auditUnavailable ? 'N/A' : systemCount} tone="info" />
           </div>
 
           {logs.length > 0 && (
@@ -333,15 +346,23 @@ export function Audit(): JSX.Element {
           </Panel>
 
           {error && (
-            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load">
-              <p className="text-sm text-state-critical">{error}</p>
-            </Panel>
+            <Alert
+              variant="critical"
+              title="Audit trail unavailable"
+              actions={
+                <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
+                  Retry
+                </Button>
+              }
+            >
+              {error}
+            </Alert>
           )}
 
           <Panel
             padding="sm"
             tone="inset"
-            eyebrow={`AUDIT LOG / ${filtered.length} of ${pagination.total}`}
+            eyebrow={auditTableEyebrow}
             title="Entries"
           >
             <DataTable
@@ -351,34 +372,48 @@ export function Audit(): JSX.Element {
               loading={loading}
               compact
               empty={
-                <EmptyState
-                  icon={<FileText />}
-                  title="No audit entries"
-                  description="No events match the current filters."
-                />
+                auditUnavailable ? (
+                  <EmptyState
+                    icon={<FileText />}
+                    title="Audit trail unavailable"
+                    description="Audit entries could not be loaded for the selected tenant."
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<FileText />}
+                    title="No audit entries"
+                    description="No events match the current filters."
+                  />
+                )
               }
             />
-            <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setOffset(Math.max(0, offset - limit))}
-                disabled={offset === 0 || loading}
-              >
-                Previous
-              </Button>
-              <span className="font-mono text-xs text-text-muted">
-                Page {Math.floor(offset / limit) + 1} of {Math.ceil(pagination.total / limit) || 1}
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setOffset(offset + limit)}
-                disabled={offset + limit >= pagination.total || loading}
-              >
-                Next
-              </Button>
-            </div>
+            {!auditUnavailable ? (
+              <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-3">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setOffset(Math.max(0, offset - limit))}
+                  disabled={offset === 0 || loading}
+                >
+                  Previous
+                </Button>
+                <span className="font-mono text-xs text-text-muted">
+                  Page {currentPage} of {Math.ceil(pagination.total / limit) || 1}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setOffset(offset + limit)}
+                  disabled={offset + limit >= pagination.total || loading}
+                >
+                  Next
+                </Button>
+              </div>
+            ) : (
+              <div className="border-t border-border-subtle p-3 text-xs text-text-muted">
+                Pagination unavailable until audit entries reload.
+              </div>
+            )}
           </Panel>
         </TabsContent>
 

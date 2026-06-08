@@ -3608,3 +3608,74 @@ database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
 unavailable matches. Two earlier Nodes API 401s came from an initial
 unauthenticated verification probe; the bearer-token rerun returned HTTP 200 for
 both Nodes and at-risk reads.
+
+2026-06-08 Audit trail and compliance-reporting hardening: source review found
+several bank-demo correctness and UX gaps in the audit/reporting workflow.
+Audit log load failures already showed an error banner, but the dependent KPIs,
+table empty state, and pagination still collapsed into false zero/empty states
+such as `No audit entries` and `Page 1 of 1`. The `Export CSV` action exported
+only the currently loaded page and ignored the client-side search filter, while
+its label implied a broader audit export. Audit Reports defaulted to the first
+tenant in the tenant list instead of the active tenant, swallowed report-history
+load failures into `No generated reports`, allowed inverted reporting periods to
+reach the create endpoint, left form fields under-labelled, and presented failed
+or pending reports as downloadable.
+
+The fix preserves the existing audit log, filters, chart, pagination, report
+history, generate, and download workflows while making degraded states and
+export scope explicit. Audit-log failures now render `Audit trail unavailable`,
+show `N/A` in dependent KPIs, disable export, and replace pagination with an
+unavailable state instead of false empty results. The CSV action is now labelled
+`Export page CSV` and exports the visible filtered page. Audit Reports now
+defaults to the active tenant, surfaces `Report history unavailable` with retry,
+keeps download failures visible, validates period start/end before create,
+associates labels with report controls, and disables downloads for reports that
+are not ready.
+
+Regression coverage now proves audit failures avoid false empty states, audit
+CSV exports only visible filtered rows, report history loads for the active
+tenant, report-history failures avoid false `No generated reports` copy,
+inverted report periods do not call create, download failures stay visible, and
+failed reports cannot be downloaded. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/Audit.test.tsx src/pages/AuditReports.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/Audit.tsx ui/src/pages/AuditReports.tsx ui/src/pages/Audit.test.tsx ui/src/pages/AuditReports.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/audit` returned HTTP 200 with no-store headers and
+`Last-Modified: Mon, 08 Jun 2026 02:23:41 GMT`.
+
+Live browser verification on `/console/audit` used the authenticated production
+session and safe Playwright route interception for audit/report reads and the
+report download path, so no production report was created, downloaded, or
+mutated. Synthetic checks showed audit-log outage copy with two `Audit trail
+unavailable` states, three `N/A` KPI values, disabled export, pagination
+unavailable copy, and no `No audit entries`; the audit-read intercept count was
+503 x1. Report-history outage checks showed two `Report history unavailable`
+states and no `No generated reports`; the report-list intercept count was 503
+x1. A synthetic ready report then kept an intercepted download failure visible
+with `artifact missing`, a synthetic failed report rendered a disabled
+`PCI-DSS report is not ready` action, and inverted period dates showed the
+validation error without sending a create request. Intercept counts were
+synthetic report list 200 x1, download 503 x1, and create POST x0.
+
+A clean real production reload then had the Audit heading visible, zero
+role-alert errors, zero browser console warnings/errors, and direct
+authenticated API reads returning HTTP 200 for `/api/v1/audit` with five sampled
+rows out of 2,618 and `/api/v1/compliance/reports` with three reports. Desktop
+showed zero horizontal overflow. A 390x844 mobile reload had zero role-alert
+errors and no document/body horizontal overflow; the audit table is wider than
+the viewport but is contained inside its own `overflow-auto` table scroller, so
+the page itself does not scroll sideways.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/audit` returned
+HTTP 200, no Doris FE/BE containers were running under the OLAP profile, Redis
+remained `maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory
+stayed light at about console 7.1 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB,
+controlplane 197 MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent
+console/controlplane log scans showed no console 4xx/5xx and no controlplane
+5xx, panic, fatal, permission, deadline, database-lock, analytics-unavailable,
+Doris-unavailable, or small-analytics unavailable matches; recent audit and
+report API log lines were normal HTTP 200 reads.
