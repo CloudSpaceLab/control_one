@@ -4402,3 +4402,43 @@ Local validation passed:
 - `npm --prefix ui run lint`
 - `npm --prefix ui run build`
 - `git diff --check`
+
+2026-06-08 Settings System health analytics visibility: after the
+backend-neutral admin capacity work, review found that the live Settings
+System health tab still surfaced only worker-pool status. Operators could call
+`/api/v1/admin/capacity`, but the product UI did not show the small-fleet
+analytics mode, projection health, OLAP-off state, Postgres status, disk use,
+or retention posture in the existing system-health workflow.
+
+The fix is additive. The worker-pool panel remains unchanged, and the System
+health tab now renders an Analytics health panel backed by
+`/api/v1/admin/capacity`. In the small profile, `warehouse_status=disabled`
+renders as `OLAP Off` with a healthy tone, while projection/Postgres health use
+the neutral `analytics_status` and `postgres_status` fields. The panel avoids
+Doris/warehouse copy and keeps the useful OLAP signal visible for larger
+deployments.
+
+Local validation passed:
+
+- `npm --prefix ui test -- Settings.test.tsx`
+- `npm --prefix ui run build`
+- `npm --prefix ui run lint`
+- `git diff --check`
+
+After redeploying the console image, live browser verification covered
+`/console/settings` at 1440x950 and 390x844. The System health tab rendered the
+new Analytics health panel above the existing Worker pool panel, with visible
+`Small`, `Projection OK`, `OLAP Off`, `Postgres OK`, `Disk used`, and
+`Retention Current` states. `/api/v1/admin/capacity` returned HTTP 200 from the
+page. Both desktop and mobile checks showed zero current browser console
+warnings/errors, no document/body horizontal overflow, and no visible Doris or
+warehouse copy. Public `/healthz` returned HTTP 200 in about 0.63s.
+
+Post-deploy host evidence stayed light: the deployed console image was
+`sha256:c15831fa13b02090e3f6549119838214b9508694f48ac879515fd960ec7e2463`
+started at `2026-06-08T09:40:44Z`; controlplane used about 67.88 MiB / 1 GiB,
+console 6.332 MiB / 256 MiB, Redis 5.023 MiB / 192 MiB, landing 4.641 MiB /
+128 MiB, and ipq 4.809 MiB / 128 MiB. Redis reported
+`used_memory_human:1.80M`, `maxmemory_human:128.00M`, and
+`maxmemory_policy:volatile-lru`. No Doris FE/BE containers were running, and a
+five-minute console access-log scan found no 4xx/5xx responses.

@@ -7,9 +7,10 @@ import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { useTenant } from '../providers/TenantProvider';
 import { useWorkerStatus } from '../hooks/useWorkerStatus';
-import { Webhook, CreateWebhookPayload, UpdateWebhookPayload, MFAFactor } from '../lib/api';
+import { Webhook, CreateWebhookPayload, UpdateWebhookPayload, MFAFactor, AdminCapacity } from '../lib/api';
+import { formatBytes } from '../lib/format';
 import { ConfirmModal } from '../components/ConfirmModal';
-import { Panel, SectionHeader, StatusTag, EmptyState, SelectField, KpiTile } from '../components/kit';
+import { Panel, SectionHeader, StatusTag, EmptyState, SelectField, KpiTile, type StateTone } from '../components/kit';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -43,6 +44,8 @@ const AVAILABLE_EVENTS = [
   'tenant.updated',
 ];
 
+type SettingsTab = 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai';
+
 const newWebhookForm = (): CreateWebhookPayload => ({
   name: '',
   url: '',
@@ -67,6 +70,87 @@ function parseWebhookHeaders(value: string): Record<string, unknown> | undefined
 
 function webhookHasHeaders(webhook?: Webhook | null): boolean {
   return Boolean(webhook?.headers_configured) || Object.keys(webhook?.headers ?? {}).length > 0;
+}
+
+function titleCaseStatus(value?: string): string {
+  const normalized = (value || '').trim();
+  if (!normalized) {
+    return 'Unknown';
+  }
+  if (normalized.toLowerCase() === 'ok') {
+    return 'OK';
+  }
+  return normalized
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function healthTone(status?: string): StateTone {
+  switch ((status || '').toLowerCase()) {
+    case 'ok':
+    case 'ready':
+    case 'running':
+    case 'healthy':
+    case 'disabled':
+      return 'healthy';
+    case 'projection_pending':
+    case 'pending':
+      return 'warning';
+    case 'degraded':
+      return 'degraded';
+    case 'down':
+    case 'failed':
+    case 'critical':
+    case 'unconfigured':
+      return 'critical';
+    default:
+      return 'unknown';
+  }
+}
+
+function olapStatusLabel(capacity: AdminCapacity): string {
+  const status = (capacity.warehouse_status || capacity.doris_status || '').toLowerCase();
+  if (status === 'disabled') {
+    return 'Off';
+  }
+  if (status === 'ok') {
+    return 'Ready';
+  }
+  if (status === 'unconfigured') {
+    return 'Missing';
+  }
+  return titleCaseStatus(status);
+}
+
+function olapStatusTone(capacity: AdminCapacity): StateTone {
+  const status = (capacity.warehouse_status || capacity.doris_status || '').toLowerCase();
+  if (status === 'disabled' && capacity.analytics_mode === 'small') {
+    return 'healthy';
+  }
+  return healthTone(status);
+}
+
+function diskUsedPercent(capacity: AdminCapacity): number | null {
+  if (!capacity.disk_total || capacity.disk_total <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, (capacity.disk_used / capacity.disk_total) * 100));
+}
+
+function diskTone(percent: number | null): StateTone {
+  if (percent == null) {
+    return 'unknown';
+  }
+  if (percent >= 95) {
+    return 'critical';
+  }
+  if (percent >= 85) {
+    return 'warning';
+  }
+  return 'healthy';
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -162,7 +246,7 @@ function serializeWebAuthnAttestation(credential: PublicKeyCredential): Record<s
 
 export function Settings(): JSX.Element {
   const api = useApiClient();
-  const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai'>('webhooks');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('webhooks');
 
   // MFA state
   const [mfaFactors, setMfaFactors] = useState<MFAFactor[]>([]);
@@ -182,6 +266,38 @@ export function Settings(): JSX.Element {
 
   // Worker pool
   const { status: workerStatus, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus({ pollIntervalMs: 0 });
+  const [capacity, setCapacity] = useState<AdminCapacity | null>(null);
+  const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityError, setCapacityError] = useState<string | null>(null);
+  const [capacityReloadToken, setCapacityReloadToken] = useState(0);
+
+  useEffect(() => {
+    if (activeTab !== 'system') {
+      return;
+    }
+    let cancelled = false;
+    setCapacityLoading(true);
+    setCapacityError(null);
+    api
+      .getAdminCapacity()
+      .then((nextCapacity) => {
+        if (!cancelled) {
+          setCapacity(nextCapacity);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setCapacity(null);
+          setCapacityError(err instanceof Error ? err.message : 'Unable to fetch analytics health');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCapacityLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [activeTab, api, capacityReloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -502,6 +618,11 @@ export function Settings(): JSX.Element {
   const trustCenterPath = `/trust/${encodeURIComponent(trustCenterTenantName)}`;
   const trustCenterHref = useHref(trustCenterPath);
   const deletingMfaFactor = deleteMfaId ? mfaFactors.find((factor) => factor.id === deleteMfaId) : null;
+  const capacityDiskPercent = capacity ? diskUsedPercent(capacity) : null;
+  const capacityDiskLabel = capacityDiskPercent == null ? 'Unknown' : `${capacityDiskPercent.toFixed(0)}%`;
+  const capacityMode = titleCaseStatus(capacity?.analytics_mode);
+  const capacityStatus = titleCaseStatus(capacity?.analytics_status ?? capacity?.doris_status);
+  const capacityPostgresStatus = titleCaseStatus(capacity?.postgres_status);
 
   return (
     <div className="flex flex-col gap-5">
@@ -511,7 +632,7 @@ export function Settings(): JSX.Element {
         description="Webhook endpoints and platform integrations."
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai')}>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>
         <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
           <TabsTrigger className="w-full sm:w-auto" value="webhooks">Webhooks</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="security">Security</TabsTrigger>
@@ -982,6 +1103,83 @@ export function Settings(): JSX.Element {
         </TabsContent>
 
         <TabsContent value="system" className="mt-4 flex flex-col gap-4">
+          <Panel
+            padding="md"
+            eyebrow="SYSTEM / ANALYTICS"
+            title="Analytics health"
+            actions={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setCapacityReloadToken((token) => token + 1)}
+                disabled={capacityLoading}
+                aria-label="Refresh analytics health"
+              >
+                Refresh
+              </Button>
+            }
+          >
+            {capacity ? (
+              <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  <KpiTile
+                    label="Mode"
+                    value={capacityMode}
+                    tone={capacity.analytics_mode === 'small' ? 'healthy' : 'info'}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Projection"
+                    value={capacityStatus}
+                    tone={healthTone(capacity.analytics_status ?? capacity.doris_status)}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="OLAP"
+                    value={olapStatusLabel(capacity)}
+                    tone={olapStatusTone(capacity)}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Postgres"
+                    value={capacityPostgresStatus}
+                    tone={healthTone(capacity.postgres_status)}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Disk used"
+                    value={capacityDiskLabel}
+                    tone={diskTone(capacityDiskPercent)}
+                    hint={`${formatBytes(capacity.disk_used)} / ${formatBytes(capacity.disk_total)}`}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Retention"
+                    value={capacity.retention_days_remaining > 0 ? `${capacity.retention_days_remaining}d` : 'Current'}
+                    tone={capacity.retention_days_remaining > 0 ? 'info' : 'healthy'}
+                    size="sm"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusTag tone={healthTone(capacity.analytics_status ?? capacity.doris_status)}>
+                    {capacityStatus}
+                  </StatusTag>
+                  <StatusTag tone={olapStatusTone(capacity)}>
+                    OLAP {olapStatusLabel(capacity)}
+                  </StatusTag>
+                </div>
+              </div>
+            ) : capacityLoading ? (
+              <p className="text-sm text-text-muted">Loading analytics health...</p>
+            ) : (
+              <EmptyState
+                title="Analytics health unavailable"
+                description={capacityError ?? 'The analytics health check did not respond.'}
+              />
+            )}
+          </Panel>
+
           <Panel
             padding="md"
             eyebrow="SYSTEM / WORKER POOL"

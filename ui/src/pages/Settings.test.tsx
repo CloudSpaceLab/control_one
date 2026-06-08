@@ -35,6 +35,17 @@ const mocks = vi.hoisted(() => {
       beginWebAuthnEnroll: vi.fn(),
       finishWebAuthnEnroll: vi.fn(),
       generateMFARecoveryCodes: vi.fn().mockResolvedValue({ codes: [] }),
+      getAdminCapacity: vi.fn().mockResolvedValue({
+        disk_used: 64 * 1024 * 1024 * 1024,
+        disk_total: 128 * 1024 * 1024 * 1024,
+        analytics_mode: 'small',
+        analytics_status: 'ok',
+        warehouse_status: 'disabled',
+        warehouse_configured: false,
+        doris_status: 'unconfigured',
+        postgres_status: 'ok',
+        retention_days_remaining: 0,
+      }),
     },
   };
 });
@@ -343,5 +354,47 @@ describe('Settings MFA enrollment', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('MFA action failed: revocation denied');
     expect(mocks.showToast).toHaveBeenCalledWith('revocation denied', 'error');
+  });
+});
+
+describe('Settings system health', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.webhooks = [];
+    mocks.apiClient.listMFAFactors.mockResolvedValue({ factors: [] });
+    mocks.apiClient.getAdminCapacity.mockResolvedValue({
+      disk_used: 64 * 1024 * 1024 * 1024,
+      disk_total: 128 * 1024 * 1024 * 1024,
+      analytics_mode: 'small',
+      analytics_status: 'ok',
+      warehouse_status: 'disabled',
+      warehouse_configured: false,
+      doris_status: 'unconfigured',
+      postgres_status: 'ok',
+      retention_days_remaining: 0,
+    });
+  });
+
+  it('shows small-mode analytics health without treating OLAP off as an outage', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /system health/i }));
+
+    const title = await screen.findByText('Analytics health');
+    const panel = title.closest('section');
+    if (!panel) {
+      throw new Error('Analytics health panel not found');
+    }
+    expect(panel).toHaveTextContent('Small');
+    expect(panel).toHaveTextContent('Projection');
+    expect(panel).toHaveTextContent('OK');
+    expect(panel).toHaveTextContent('OLAP');
+    expect(panel).toHaveTextContent('Off');
+    expect(panel).toHaveTextContent('Postgres');
+    expect(panel).toHaveTextContent('50%');
+    expect(panel).toHaveTextContent('Current');
+    expect(panel).not.toHaveTextContent(/Doris|warehouse/i);
+    expect(mocks.apiClient.getAdminCapacity).toHaveBeenCalledTimes(1);
   });
 });
