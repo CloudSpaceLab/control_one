@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Download, FileText, Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronRight, Tag } from 'lucide-react';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import {
+  Alert,
   Chart,
   DataTable,
   EmptyState,
@@ -48,6 +50,14 @@ import { AuditReports } from './AuditReports';
 type Tab = 'posture' | 'policies' | 'evidence' | 'frameworks' | 'reports';
 
 const COMPLIANCE_TABS = ['posture', 'policies', 'evidence', 'frameworks', 'reports'] as const;
+
+interface InlineActionState {
+  busy?: boolean;
+  message?: string;
+  tone?: StateTone;
+}
+
+type PendingPolicyDelete = { policy: Policy; error?: string };
 
 function complianceTabFromParams(params: URLSearchParams): Tab {
   const value = params.get('tab');
@@ -505,6 +515,9 @@ function PoliciesTab(): JSX.Element {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [policiesLoading, setPoliciesLoading] = useState(false);
   const [policiesLoaded, setPoliciesLoaded] = useState(false);
+  const [policiesLoadError, setPoliciesLoadError] = useState<string | null>(null);
+  const [policyDeleteState, setPolicyDeleteState] = useState<Record<string, InlineActionState>>({});
+  const [pendingPolicyDelete, setPendingPolicyDelete] = useState<PendingPolicyDelete | null>(null);
   const [tenantFilter, setTenantFilter] = useState('');
 
   // Create policy form
@@ -532,6 +545,12 @@ function PoliciesTab(): JSX.Element {
     });
   }, [createTenantId]);
 
+  useEffect(() => {
+    setPolicies([]);
+    setPoliciesLoaded(false);
+    setPoliciesLoadError(null);
+  }, [currentTenantId, tenantFilter]);
+
   // Expanded policy (versions + create version)
   const [expandedPolicyId, setExpandedPolicyId] = useState<string | null>(null);
   const [versionsMap, setVersionsMap] = useState<Record<string, PolicyVersion[]>>({});
@@ -555,15 +574,22 @@ function PoliciesTab(): JSX.Element {
     if (!tenantForList) {
       setPolicies([]);
       setPoliciesLoaded(true);
+      setPoliciesLoadError(null);
       return;
     }
     setPoliciesLoading(true);
+    setPoliciesLoadError(null);
     try {
       const res = await api.listPolicies({ tenant_id: tenantForList, limit: 100 });
       setPolicies(res.data);
       setPoliciesLoaded(true);
+      setPoliciesLoadError(null);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to load policies', 'error');
+      const message = errorMessage(err, 'Failed to load policies');
+      setPolicies([]);
+      setPoliciesLoaded(true);
+      setPoliciesLoadError(message);
+      showToast(message, 'error');
     } finally {
       setPoliciesLoading(false);
     }
@@ -645,15 +671,40 @@ function PoliciesTab(): JSX.Element {
   };
 
   const handleDelete = async (policy: Policy) => {
-    if (!window.confirm(`Delete policy "${policy.name}"?`)) return;
+    setPendingPolicyDelete({ policy });
+  };
+
+  const runDeletePolicy = async (policy: Policy) => {
+    const key = policyActionKey(policy);
+    setPolicyDeleteState((state) => ({ ...state, [key]: { busy: true } }));
     try {
       await api.deletePolicy(policy.id);
+      setPolicyDeleteState((state) => {
+        const next = { ...state };
+        delete next[key];
+        return next;
+      });
+      setPendingPolicyDelete(null);
       showToast(`Policy "${policy.name}" deleted`, 'success');
       await loadPolicies();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to delete policy', 'error');
+      const message = `Failed to delete policy ${policy.name}: ${errorMessage(err, 'delete failed')}`;
+      setPolicyDeleteState((state) => ({ ...state, [key]: { busy: false, message, tone: 'critical' } }));
+      setPendingPolicyDelete((current) =>
+        current?.policy.id === policy.id ? { ...current, error: message } : current,
+      );
+      showToast(message, 'error');
     }
   };
+
+  const confirmPolicyDelete = async () => {
+    if (!pendingPolicyDelete) return;
+    await runDeletePolicy(pendingPolicyDelete.policy);
+  };
+
+  const pendingDeleteBusy = pendingPolicyDelete
+    ? Boolean(policyDeleteState[policyActionKey(pendingPolicyDelete.policy)]?.busy)
+    : false;
 
   const handleCreateVersion = async () => {
     if (!versionPolicyId || !versionDef.trim()) {
@@ -829,6 +880,20 @@ function PoliciesTab(): JSX.Element {
           </div>
         }
       >
+        {policiesLoadError ? (
+          <Alert
+            variant="critical"
+            title="Compliance policies unavailable"
+            actions={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void loadPolicies()} disabled={policiesLoading}>
+                Retry
+              </Button>
+            }
+          >
+            {policiesLoadError}
+          </Alert>
+        ) : null}
+
         {/* Create policy form */}
         {showCreate && (
           <div className="rounded-md border border-brand-500/30 bg-brand-500/5 p-4">
@@ -888,7 +953,15 @@ function PoliciesTab(): JSX.Element {
           <p className="py-4 text-center text-sm text-text-muted">Loading policies…</p>
         )}
 
-        {policiesLoaded && policies.length === 0 && (
+        {policiesLoaded && policiesLoadError && policies.length === 0 && (
+          <EmptyState
+            title="Compliance policies unavailable"
+            description="Retry after the policy inventory request succeeds."
+            icon={<FileText />}
+          />
+        )}
+
+        {policiesLoaded && !policiesLoadError && policies.length === 0 && (
           <EmptyState
             title="No policies"
             description="Create a policy to start defining compliance checks."
@@ -905,6 +978,7 @@ function PoliciesTab(): JSX.Element {
             expanded={expandedPolicyId === policy.id}
             versions={versionsMap[policy.id] ?? null}
             versionsLoading={versionsLoadingId === policy.id}
+            deleteStatus={policyDeleteState[policyActionKey(policy)]}
             versionPolicyId={versionPolicyId}
             versionDef={versionDef}
             creatingVersion={creatingVersion}
@@ -922,6 +996,29 @@ function PoliciesTab(): JSX.Element {
             onEvaluate={() => setEvalPolicyId(evalPolicyId === policy.id ? null : policy.id)}
           />
         ))}
+
+        <ConfirmModal
+          open={Boolean(pendingPolicyDelete)}
+          title={
+            pendingPolicyDelete
+              ? `Delete compliance policy ${pendingPolicyDelete.policy.name}?`
+              : 'Delete compliance policy?'
+          }
+          body="This removes the policy from future compliance evaluation and assignment workflows. Existing scan results, audit history, and reports remain available."
+          confirmLabel="Delete policy"
+          cancelLabel="Cancel"
+          confirmDisabled={pendingDeleteBusy}
+          cancelDisabled={pendingDeleteBusy}
+          variant="danger"
+          onConfirm={() => void confirmPolicyDelete()}
+          onCancel={() => setPendingPolicyDelete(null)}
+        >
+          {pendingPolicyDelete?.error ? (
+            <Alert variant="critical" title="Policy deletion failed">
+              {pendingPolicyDelete.error}
+            </Alert>
+          ) : null}
+        </ConfirmModal>
       </Panel>
     </div>
   );
@@ -933,6 +1030,7 @@ interface PolicyRowProps {
   expanded: boolean;
   versions: PolicyVersion[] | null;
   versionsLoading: boolean;
+  deleteStatus?: InlineActionState;
   versionPolicyId: string | null;
   versionDef: string;
   creatingVersion: boolean;
@@ -953,6 +1051,7 @@ function PolicyRow({
   expanded,
   versions,
   versionsLoading,
+  deleteStatus,
   versionPolicyId,
   versionDef,
   creatingVersion,
@@ -1045,13 +1144,36 @@ function PolicyRow({
             <p className="mt-0.5 text-xs text-text-secondary">{policy.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onToggleEnabled}>
-            {policy.enabled ? 'Disable' : 'Enable'}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-state-critical hover:text-state-critical" onClick={onDelete}>
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={onToggleEnabled}
+              disabled={deleteStatus?.busy}
+              aria-label={`${policy.enabled ? 'Disable' : 'Enable'} compliance policy ${policy.name}`}
+            >
+              {policy.enabled ? 'Disable' : 'Enable'}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-state-critical hover:text-state-critical"
+              loading={deleteStatus?.busy}
+              onClick={onDelete}
+              aria-label={`Delete compliance policy ${policy.name}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {deleteStatus?.message ? (
+            <p className={`max-w-[18rem] text-right text-xs ${toneText(deleteStatus.tone)}`}>
+              {deleteStatus.message}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -1205,4 +1327,27 @@ function FilterSelect({
       ))}
     </SelectField>
   );
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
+  if (typeof err === 'string' && err.trim()) return err;
+  return fallback;
+}
+
+function policyActionKey(policy: Policy): string {
+  return `policy:${policy.id}`;
+}
+
+function toneText(tone?: StateTone): string {
+  switch (tone) {
+    case 'critical':
+      return 'text-state-critical';
+    case 'warning':
+      return 'text-state-warning';
+    case 'healthy':
+      return 'text-state-healthy';
+    default:
+      return 'text-text-muted';
+  }
 }

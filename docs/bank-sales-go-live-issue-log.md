@@ -3952,3 +3952,62 @@ MiB, Redis 3.7 MiB / 192 MiB, controlplane 383.2 MiB / 1 GiB, landing 4.7 MiB
 / 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent controlplane patch API lines were
 normal HTTP 200 GET reads in about 2-4 ms, and a strict recent log scan showed
 no real patch POST/DELETE lines during the synthetic browser test window.
+
+2026-06-08 Compliance policy inventory and deletion hardening: source review
+found a remaining operator-risk gap in the compliance policy workflow. Policy
+inventory load failures only showed a toast and could leave the policy manager
+stuck at the load prompt or stale from the prior tenant/filter context.
+Deleting a policy still used a native browser confirmation prompt, so a bank
+operator did not see consistent Control One context, impact copy, target scope,
+or retained failure evidence before removing a policy that can affect future
+evaluations, assignments, reports, and audit posture.
+
+The fix preserves the existing compliance posture, policy creation, assignment,
+version, promotion, evaluation, evidence, framework, and report workflows while
+making the risky policy-manager states explicit. Policy loads now clear
+same-scope rows on failure, reset stale rows when tenant scope/filter changes,
+show `Compliance policies unavailable`, keep the backend load message visible,
+and render an unavailable empty state instead of false `No policies` copy.
+Policy deletion now uses the shared in-app confirmation modal, explains that
+existing scan results, audit history, and reports remain available, keeps failed
+deletion evidence visible in the modal and policy row, scopes busy/error state
+by policy, and exposes target-specific accessible names such as `Delete
+compliance policy SSH baseline`.
+
+Regression coverage now proves failed policy loads avoid false empty states and
+failed policy deletion uses the in-app modal without native `window.confirm`
+while retaining the failed backend message. Local validation passed:
+
+- `npm --prefix ui test -- Compliance.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(" ui/src/pages/Compliance.tsx ui/src/pages/Compliance.test.tsx` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/compliance?tab=policies` returned HTTP 200 with
+no-store headers and `Last-Modified: Mon, 08 Jun 2026 04:56:25 GMT`. The
+deployed build served `Compliance-CwpNYoFJ.js`.
+
+Live browser verification on `/console/compliance?tab=policies` used the
+authenticated production session and safe Playwright route interception for
+synthetic policy inventory and delete failures, so no production compliance
+policy was deleted. Synthetic policy-store outage checks showed two visible
+`Compliance policies unavailable` signals, surfaced `synthetic policy store
+offline`, and had zero false `No policies` states. Synthetic deletion checks
+showed the `Delete compliance policy SSH baseline?` in-app dialog before any
+DELETE, `deleteHitsBeforeConfirm=0`, `deleteHitsAfterConfirm=1`,
+`nativeDialogs=0`, visible `Policy deletion failed`, and the failed delete
+message retained in modal and row context.
+
+A clean real production reload then had the Compliance policies panel visible,
+zero role-alert errors, zero browser console warnings/errors, no desktop
+document/body horizontal overflow, and no mobile document/body horizontal
+overflow at 390x844. Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/compliance?tab=policies` returned HTTP 200, no Doris FE/BE containers
+were running, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, and memory stayed light at about console 4.5 MiB / 256
+MiB, Redis 3.7 MiB / 192 MiB, controlplane 426.5 MiB / 1 GiB, landing 4.8 MiB
+/ 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent policy API lines were normal HTTP
+200 GET reads in a few milliseconds, and a strict recent log scan showed no
+real policy DELETE lines during the synthetic browser test window.
