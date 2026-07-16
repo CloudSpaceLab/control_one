@@ -506,6 +506,75 @@ func TestHeartbeatRejectsNonAgentPrincipal(t *testing.T) {
 	}
 }
 
+func TestHeartbeatAllowsDevLabBearerOnlyWhenClientTLSDisabled(t *testing.T) {
+	t.Parallel()
+
+	nodeID := uuid.New()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			Hostname:  "lab-endpoint",
+			State:     storage.NodeStateEnrollmentPending,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Labels:    map[string]any{},
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{
+		Type:    "user",
+		Name:    "Dev Lab Agent",
+		Subject: "dev-lab-agent",
+		Roles:   []string{"viewer"},
+	}))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if store.nodes[0].LastSeenAt == nil {
+		t.Fatalf("last_seen_at was not stamped for dev lab heartbeat")
+	}
+}
+
+func TestHeartbeatRejectsDevLabBearerWhenClientTLSRequired(t *testing.T) {
+	t.Parallel()
+
+	nodeID := uuid.New()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			Hostname:  "lab-endpoint",
+			State:     storage.NodeStateEnrollmentPending,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Labels:    map[string]any{},
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+	srv.cfg.TLS.RequireClientTLS = true
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{
+		Type:    "user",
+		Name:    "Dev Lab Agent",
+		Subject: "dev-lab-agent",
+		Roles:   []string{"viewer"},
+	}))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if store.nodes[0].LastSeenAt != nil {
+		t.Fatalf("last_seen_at should not be stamped when client TLS is required")
+	}
+}
+
 // TestHeartbeatReturnsNotFoundForUnknownNode checks the ErrNoRows branch. The
 // agent middleware can't prevent this because an agent cert survives the
 // node row being deleted.

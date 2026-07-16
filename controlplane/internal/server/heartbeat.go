@@ -154,6 +154,12 @@ type heartbeatResponse struct {
 	FullInventoryRequested bool                                  `json:"full_inventory_requested,omitempty"`
 }
 
+func heartbeatPrincipalIsDevLabAgent(principal *auth.Principal) bool {
+	return principal != nil &&
+		principal.Type == "user" &&
+		strings.EqualFold(strings.TrimSpace(principal.Subject), "dev-lab-agent")
+}
+
 // handleNodeHeartbeat is the mTLS endpoint the agent hits every heartbeat
 // interval (default 60s). CN-vs-URL-id validation is enforced so a compromised
 // agent cert can only poke its own node. A successful call:
@@ -178,24 +184,30 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
 	}
-	if principal.Type != "agent" {
-		// Heartbeat MUST come from a mTLS-authenticated agent, never a
-		// bearer-token operator — even an admin can't forge heartbeats.
+	allowDevBearerHeartbeat := s.cfg != nil && !s.cfg.TLS.RequireClientTLS && heartbeatPrincipalIsDevLabAgent(principal)
+	if principal.Type != "agent" && !allowDevBearerHeartbeat {
+		// Production heartbeat MUST come from a mTLS-authenticated agent, never a
+		// bearer-token operator — even an admin can't forge heartbeats. The only
+		// exception is local/dev mode when client TLS is not required, which lets
+		// the Docker lab fleet exercise agent orchestration over outbound HTTP.
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
 
 	// The agent middleware stores the cert CN in principal.Name. Enforce
 	// that it matches the URL-scoped node id — otherwise node-A's cert
-	// can't be used to touch node-B.
-	cn := strings.TrimSpace(principal.Name)
-	if cn == "" || !strings.EqualFold(cn, nodeID.String()) {
-		s.logger.Warn("heartbeat CN mismatch",
-			zap.String("cn", cn),
-			zap.String("node_id", nodeID.String()),
-		)
-		http.Error(w, "client cert CN does not match node id", http.StatusForbidden)
-		return
+	// can't be used to touch node-B. Dev bearer-token lab heartbeats skip this
+	// check because there is no client certificate.
+	if !allowDevBearerHeartbeat {
+		cn := strings.TrimSpace(principal.Name)
+		if cn == "" || !strings.EqualFold(cn, nodeID.String()) {
+			s.logger.Warn("heartbeat CN mismatch",
+				zap.String("cn", cn),
+				zap.String("node_id", nodeID.String()),
+			)
+			http.Error(w, "client cert CN does not match node id", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Body is optional but if provided must decode. We deliberately do NOT

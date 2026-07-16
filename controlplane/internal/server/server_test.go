@@ -1912,6 +1912,85 @@ func authWithTokens(defaultRole string, tokens ...string) config.AuthConfig {
 	}
 }
 
+func TestNodeRegistrationAcceptsFingerprintAndDefaultTenant(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "Lab Tenant", CreatedAt: time.Now()}},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		Registration: config.RegistrationConfig{
+			BootstrapTokens: []string{"lab-token"},
+			DefaultTenantID: tenantID.String(),
+		},
+	}, store, &stubQueue{})
+	t.Cleanup(func() { srv.stopEnrollmentReaper() })
+
+	body := []byte(`{"bootstrap_token":"lab-token","hostname":"roaming-laptop-01","os":"debian 12","arch":"amd64","public_ip":"172.22.0.3","fingerprint":"fp-123"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.nodes) != 1 {
+		t.Fatalf("nodes = %d, want 1", len(store.nodes))
+	}
+	got := store.nodes[0]
+	if got.TenantID != tenantID || got.Hostname != "roaming-laptop-01" || got.PublicIP.String != "172.22.0.3" {
+		t.Fatalf("unexpected registered node: %#v", got)
+	}
+}
+
+func TestNodeRegistrationRefreshesExistingHostnameMetadata(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "Lab Tenant", CreatedAt: time.Now()}},
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "roaming-laptop-01",
+			OS:        sql.NullString{String: "debian 11", Valid: true},
+			Arch:      sql.NullString{String: "amd64", Valid: true},
+			PublicIP:  sql.NullString{String: "172.22.0.3", Valid: true},
+			State:     storage.NodeStateActive,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Labels:    map[string]any{},
+		}},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		Registration: config.RegistrationConfig{
+			BootstrapTokens: []string{"lab-token"},
+			DefaultTenantID: tenantID.String(),
+		},
+	}, store, &stubQueue{})
+	t.Cleanup(func() { srv.stopEnrollmentReaper() })
+
+	body := []byte(`{"bootstrap_token":"lab-token","hostname":"roaming-laptop-01","os":"debian 12","arch":"arm64","public_ip":"172.22.0.99","fingerprint":"fp-456"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.nodes) != 1 {
+		t.Fatalf("nodes = %d, want existing row reused", len(store.nodes))
+	}
+	got := store.nodes[0]
+	if got.ID != nodeID || got.PublicIP.String != "172.22.0.99" || got.OS.String != "debian 12" || got.Arch.String != "arm64" {
+		t.Fatalf("metadata not refreshed on duplicate hostname: %#v", got)
+	}
+}
+
 func TestRBACAuthorization(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{

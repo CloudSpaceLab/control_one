@@ -1,0 +1,134 @@
+# Lightweight container-lab node-agent profile.
+#
+# These agents model non-server / non-static-IP endpoints:
+# - no host ports are published
+# - no static Docker IPs are assigned
+# - each agent initiates outbound HTTPS/HTTP to the control plane
+# - deleting/recreating containers gives them new Docker bridge IPs and fresh state
+
+api_url: http://host.docker.internal:8444
+bootstrap_token: dev-bootstrap-token
+node_name: ""
+node_token: ""
+
+state_file: /var/lib/control-one/nodeagent/state.json
+policy_dir: /var/lib/control-one/nodeagent/policies
+log_dir: /var/log/control-one/nodeagent
+plugin_dir: /opt/control-one/nodeagent/plugins
+
+wizard:
+  enabled: false
+
+agent_runtime:
+  profile: lightweight
+
+scanner:
+  enabled: false
+  use_real_scan: false
+  timeout: 10s
+  shell: ""
+  max_concurrent: 1
+  preferred: []
+  fallback: builtin
+
+mesh:
+  # Disabled for the lab because mesh coordination is not implemented server-side yet
+  # (/api/v1/mesh/peers and /api/v1/mesh/rotate are absent today).
+  enabled: false
+  coordinator_url: ""
+  auth_token: ""
+  namespace: lab-roaming
+  private_cidr: 10.77.0.0/16
+  relay_nodes: []
+  state_file: /var/lib/control-one/nodeagent/mesh/state.json
+  poll_interval: 10m
+  key_rotation: 168h
+
+provisioning:
+  template: ""
+  provider: container-lab
+  metadata:
+    endpoint_class: roaming-container
+    static_ip: "false"
+    server_role: "none"
+  baselines: []
+  auto_remediation: false
+
+compliance:
+  region: lab
+  rule_sets: []
+  certifications: []
+  auto_apply_templates: false
+
+access:
+  provider: local
+  sync_interval: 0s
+  default_role: viewer
+  api_endpoint: ""
+
+secrets:
+  backend: memory
+  endpoint: ""
+  groups: []
+  sync_interval: 0s
+
+hardening:
+  profiles: []
+  allow_overrides: true
+
+telemetry_prefs:
+  collect_logs: false
+  auto_discover_log_sources: false
+  log_namespaces: []
+  log_sources: []
+  file_integrity: false
+  metrics_interval: 30s
+  activity_interval: 2m
+  health_probe_targets: []
+  health_probe_count: 1
+  health_probe_timeout: 1s
+  disk_health_devices: []
+
+app_dependencies:
+  enabled: false
+  scan_roots: []
+  include_dev_dependencies: false
+  scan_interval: 6h
+  max_depth: 2
+  max_manifests: 32
+  max_file_bytes: 1048576
+
+content_pack_collector:
+  enabled: false
+
+network_policy:
+  # Keep lab agents safe: they report desired state, but do not mutate container firewall rules.
+  enforcement_mode: report
+
+session_recording:
+  enabled: false
+
+dlp:
+  enabled: false
+  scan_paths: []
+  max_file_size_mb: 16
+
+tls:
+  # Throwaway certs are baked into the lab image because current config defaults
+  # backfill empty tls.* values before api.NewClient initializes.
+  cert_file: /etc/control-one/lab-certs/client.crt
+  key_file: /etc/control-one/lab-certs/client.key
+  ca_cert_file: /etc/control-one/lab-certs/ca.crt
+
+policy:
+  public_key_file: /var/lib/control-one/nodeagent/keys/policy_pub.pem
+  metadata_file: /var/lib/control-one/nodeagent/policies/policies.meta.json
+
+intervals:
+  heartbeat: 10s
+  policy_sync: 0s
+  scan: 0s
+  telemetry: 30s
+  provisioning: 0s
+  dlp: 0s
+  services: 0s

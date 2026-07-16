@@ -1,0 +1,75 @@
+name: controlone-lab-fleet
+
+x-lab-labels: &lab-labels
+  com.controlone.lab: "true"
+  com.controlone.lab.endpoint_class: roaming-container
+  com.controlone.lab.static_ip: "false"
+  com.controlone.lab.server: "false"
+
+x-nodeagent-lab: &nodeagent-lab
+  image: controlone/nodeagent-lab:local
+  build:
+    context: .
+    dockerfile: deploy/lab/Dockerfile.nodeagent
+  restart: unless-stopped
+  init: true
+  # Lab agents are endpoint-style clients: outbound-only, no published ports,
+  # no static IPAM assignments. Recreate a container to simulate IP churn.
+  volumes:
+    - ./configs/lab-nodeagent.yaml:/etc/control-one/nodeagent.yaml:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks:
+    - roaming-endpoints
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  roaming-laptop-01:
+    <<: *nodeagent-lab
+    hostname: roaming-laptop-01
+    labels:
+      <<: *lab-labels
+      com.controlone.lab.persona: laptop
+      com.controlone.lab.mobility: roaming
+
+  roaming-laptop-02:
+    <<: *nodeagent-lab
+    hostname: roaming-laptop-02
+    labels:
+      <<: *lab-labels
+      com.controlone.lab.persona: laptop
+      com.controlone.lab.mobility: roaming
+
+  field-tablet-01:
+    <<: *nodeagent-lab
+    hostname: field-tablet-01
+    labels:
+      <<: *lab-labels
+      com.controlone.lab.persona: tablet
+      com.controlone.lab.mobility: field
+
+  branch-kiosk-01:
+    <<: *nodeagent-lab
+    hostname: branch-kiosk-01
+    labels:
+      <<: *lab-labels
+      com.controlone.lab.persona: kiosk
+      com.controlone.lab.mobility: branch
+
+  contractor-device-01:
+    <<: *nodeagent-lab
+    hostname: contractor-device-01
+    labels:
+      <<: *lab-labels
+      com.controlone.lab.persona: contractor-device
+      com.controlone.lab.mobility: third-party
+
+networks:
+  roaming-endpoints:
+    driver: bridge
+    labels:
+      com.controlone.lab: "true"
+      com.controlone.lab.static_ipam: "false"

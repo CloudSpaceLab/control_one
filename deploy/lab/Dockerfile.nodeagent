@@ -1,0 +1,21 @@
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/nodeagent ./cmd/nodeagent
+
+# The current node-agent config layer applies default TLS file paths even when
+# the lab config asks for empty strings. Generate a throwaway self-signed lab
+# client cert/key so api.NewClient can initialize. The lab talks to the dev
+# control plane over HTTP, so this cert is not trusted by or presented to TLS.
+RUN go run ./deploy/lab/lab-certgen.go
+
+FROM gcr.io/distroless/base-debian12
+
+COPY --from=builder /out/nodeagent /usr/local/bin/nodeagent
+COPY --from=builder /out/lab-certs /etc/control-one/lab-certs
+COPY configs/lab-nodeagent.yaml /etc/control-one/nodeagent.yaml
+
+ENTRYPOINT ["/usr/local/bin/nodeagent", "-config", "/etc/control-one/nodeagent.yaml"]

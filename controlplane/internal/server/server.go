@@ -599,6 +599,7 @@ type registerNodeRequest struct {
 	OS             *string   `json:"os"`
 	Arch           *string   `json:"arch"`
 	PublicIP       *string   `json:"public_ip"`
+	Fingerprint    string    `json:"fingerprint"`
 	BootstrapToken string    `json:"bootstrap_token"`
 }
 
@@ -609,9 +610,8 @@ func (r registerNodeRequest) validate() error {
 	if strings.TrimSpace(r.BootstrapToken) == "" {
 		return fmt.Errorf("bootstrap_token is required")
 	}
-	if r.TenantID == uuid.Nil && strings.TrimSpace(r.TenantName) == "" {
-		return fmt.Errorf("tenant_name is required when tenant_id is not provided")
-	}
+	// Tenant selection may come from registration.default_tenant_id after this
+	// payload validation step, so do not require tenant_id/tenant_name here.
 	return nil
 }
 
@@ -706,13 +706,23 @@ func (s *Server) handleNodeRegistration(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	} else if existing != nil {
+		existing.OS = toNullString(req.OS)
+		existing.Arch = toNullString(req.Arch)
+		existing.PublicIP = toNullString(req.PublicIP)
+		updated, err := s.store.UpdateNode(r.Context(), existing)
+		if err != nil {
+			s.logger.Error("refresh registered node metadata", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 		s.logger.Info("node already registered",
 			zap.String("tenant_id", tenant.ID.String()),
-			zap.String("node_id", existing.ID.String()),
+			zap.String("node_id", updated.ID.String()),
 			zap.String("hostname", hostname),
+			zap.String("public_ip", updated.PublicIP.String),
 		)
 		respondRegistration(w, s.logger, registerNodeResponse{
-			NodeID:            existing.ID.String(),
+			NodeID:            updated.ID.String(),
 			TenantID:          tenant.ID.String(),
 			Intervals:         defaultNodeIntervals(),
 			ProvisioningHints: tenant.Name,

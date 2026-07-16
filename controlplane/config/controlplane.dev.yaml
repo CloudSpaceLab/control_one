@@ -72,6 +72,12 @@ auth:
         name: "Dev Admin"
         roles: ["admin"]
         groups: ["platform-admins"]
+      dev-bootstrap-token:
+        subject: "dev-lab-agent"
+        email: "agent@controlone.dev"
+        name: "Dev Lab Agent"
+        roles: ["viewer"]
+        groups: []
   rbac:
     default_role: viewer
     role_mappings: {}

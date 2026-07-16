@@ -1,0 +1,23 @@
+# Local VCS / agent state
+.git
+.gitignore
+.claude
+
+# Dependencies and build outputs
+**/node_modules
+ui/dist
+ui/coverage
+dist
+builds
+coverage
+
+# Runtime data / generated binaries
+/data
+/tmp
+nodeagent
+*.log
+*.pid
+
+# Local-only screenshots and OS metadata
+.DS_Store
+docs/screenshots
