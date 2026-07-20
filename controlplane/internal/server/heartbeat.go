@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"context"
@@ -69,6 +69,15 @@ type heartbeatRequest struct {
 	// NetworkPolicyReceipts reports agent-side evaluation/enforcement status
 	// for desired network_policy states delivered on prior heartbeats.
 	NetworkPolicyReceipts []heartbeatNetworkPolicyReceipt `json:"network_policy_receipts,omitempty"`
+
+	// Target metadata fields. Agents report these so the server can update
+	// classification, reachability, and network observations.
+	TargetType                       string                         `json:"target_type,omitempty"`
+	ReachabilityMode                  string                         `json:"reachability_mode,omitempty"`
+	InstallContext                    string                         `json:"install_context,omitempty"`
+	NetworkObservations               []heartbeatNetworkObservation  `json:"network_observations,omitempty"`
+	TargetClassificationEvidence      []string                       `json:"target_classification_evidence,omitempty"`
+	TargetClassificationConfidence    int                            `json:"target_classification_confidence,omitempty"`
 }
 
 type heartbeatAgentSelfMetrics struct {
@@ -114,6 +123,15 @@ type heartbeatNetworkPolicyReceipt struct {
 	SignatureKeyID    string   `json:"signature_key_id,omitempty"`
 	ObservedAt        string   `json:"observed_at"`
 	RollbackAvailable bool     `json:"rollback_available"`
+}
+
+// heartbeatNetworkObservation is a single network observation the agent
+// reports during its heartbeat cycle.
+type heartbeatNetworkObservation struct {
+	Kind       string `json:"kind"`
+	Value      string `json:"value"`
+	Source     string `json:"source"`
+	Confidence int    `json:"confidence,omitempty"`
 }
 
 // heartbeatPackage is the per-package payload entry the agent sends.
@@ -241,6 +259,12 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		} else if updated != nil {
 			node = updated
 		}
+	}
+
+	if updated, terr := s.updateNodeTargetMetadataFromHeartbeat(r.Context(), node, body); terr != nil {
+		s.logger.Warn("update target metadata", zap.Error(terr))
+	} else if updated != nil {
+		node = updated
 	}
 
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
@@ -514,6 +538,74 @@ func sanitizeStringSlice(values []string, limit int) []string {
 	}
 	return out
 }
+
+
+
+func (s *Server) updateNodeTargetMetadataFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) (*storage.Node, error) {
+	if s == nil || s.store == nil || node == nil {
+		return node, nil
+	}
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	labels["target.management_mode"] = "agent_managed"
+	if targetType := normalizeTargetType(body.TargetType); targetType != "" {
+		labels["target.type"] = targetType
+		labels["target.type_source"] = "heuristic"
+	}
+	if mode := normalizeReachabilityMode(body.ReachabilityMode); mode != "" {
+		labels["target.reachability_mode"] = mode
+	}
+	if ctx := normalizeInstallContext(body.InstallContext); ctx != "" {
+		labels["target.install_context"] = ctx
+	}
+	if body.TargetClassificationConfidence > 0 {
+		labels["target.classification_confidence"] = clampInt(body.TargetClassificationConfidence, 0, 100)
+	}
+	if len(body.TargetClassificationEvidence) > 0 {
+		labels["target.classification_evidence"] = sanitizeStringSlice(body.TargetClassificationEvidence, 32)
+	}
+	if len(body.NetworkObservations) > 0 {
+		labels["target.network_observations"] = normalizeHeartbeatNetworkObservations(body.NetworkObservations, time.Now().UTC())
+	}
+	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
+		return node, err
+	}
+	updated := *node
+	updated.Labels = labels
+	return &updated, nil
+}
+
+func normalizeReachabilityMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "outbound_only", "direct_private", "direct_public", "overlay", "offline_periodic", "unknown":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeHeartbeatNetworkObservations(items []heartbeatNetworkObservation, observedAt time.Time) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	stamp := observedAt.UTC().Format(time.RFC3339)
+	for _, item := range items {
+		kind := strings.ToLower(strings.TrimSpace(item.Kind))
+		value := strings.TrimSpace(item.Value)
+		if kind == "" || value == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"kind":         kind,
+			"value":        value,
+			"source":       strings.TrimSpace(item.Source),
+			"last_seen_at": stamp,
+			"confidence":   clampInt(item.Confidence, 0, 100),
+		})
+	}
+	return out
+}
+
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
 // dispatched on previous heartbeats.

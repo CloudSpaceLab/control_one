@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -1015,5 +1016,46 @@ func TestHeartbeatCompletedActionsAcceptAllPatchModes(t *testing.T) {
 				t.Fatalf("job status = %s for mode %s, want succeeded", got, mode)
 			}
 		})
+	}
+}
+
+func TestHeartbeatPersistsTargetMetadataObservations(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "endpoint-1",
+			State:     storage.NodeStateActive,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Labels:    map[string]any{},
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	body := `{"agent_version":"1.2.3","target_type":"workstation","reachability_mode":"outbound_only","install_context":"local_interactive","network_observations":[{"kind":"private_ip","value":"10.0.0.25","source":"agent_interface","confidence":80}],"target_classification_evidence":["desktop OS edition","battery present"],"target_classification_confidence":75}`
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	node, err := srv.store.GetNode(context.Background(), nodeID)
+	if err != nil || node == nil {
+		t.Fatalf("node: %v", err)
+	}
+	if node.Labels["target.type"] != "workstation" {
+		t.Fatalf("labels=%+v", node.Labels)
+	}
+	if node.Labels["target.reachability_mode"] != "outbound_only" {
+		t.Fatalf("labels=%+v", node.Labels)
 	}
 }
