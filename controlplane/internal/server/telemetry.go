@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
@@ -191,6 +193,8 @@ func (s *Server) handleTelemetryIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.evaluateMetricThresholds(r.Context(), tenantID, nodeID, rows)
+
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -334,6 +338,8 @@ func (s *Server) handleLogIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.persistContentPackSourceRuntimeStateFromAgentLogs(r.Context(), tenantID, nodeID, body)
+	s.evaluateLogMonitoringRules(r.Context(), tenantID, nodeID, body)
+	s.publishLogIngested(tenantID, nodeID, len(logRows))
 	if !eventBatch.Duplicate {
 		eventBatch.DorisStatus, eventBatch.Status, err = ingest.complete(r.Context(), eventBatch.ID, tenantID, nodeID, events)
 		if err != nil {
@@ -1459,5 +1465,213 @@ func severityFromHTTPStatusCode(status int) string {
 		return "notice"
 	default:
 		return "info"
+	}
+}
+
+func (s *Server) evaluateLogMonitoringRules(ctx context.Context, tenantID, nodeID uuid.UUID, body agentLogIngestRequest) {
+	if s == nil || s.store == nil {
+		return
+	}
+	enabled := true
+	rules, _, err := s.store.ListLogRules(ctx, storage.LogRuleFilter{
+		TenantID: tenantID,
+		Enabled:  &enabled,
+	}, 100, 0)
+	if err != nil || len(rules) == 0 {
+		return
+	}
+
+	type compiledRule struct {
+		rule     storage.LogMonitoringRule
+		compiled *regexp.Regexp
+	}
+	var compiled []compiledRule
+	for _, r := range rules {
+		re, err := regexp.Compile(r.Pattern)
+		if err != nil {
+			continue
+		}
+		compiled = append(compiled, compiledRule{rule: r, compiled: re})
+	}
+	if len(compiled) == 0 {
+		return
+	}
+
+	hitCounts := make(map[uuid.UUID]int)
+	hitEvidence := make(map[uuid.UUID][]string)
+
+	for i := range body.Entries {
+		entry := &body.Entries[i]
+		source := firstNonEmpty(entry.Source, firstString(body.Paths), firstString(body.JournalUnits), firstString(body.EventChannels), body.CollectorType)
+		line := entry.Message
+		for _, cr := range compiled {
+			if cr.rule.LogSource != "" && cr.rule.LogSource != source {
+				continue
+			}
+			if !cr.compiled.MatchString(line) {
+				continue
+			}
+			hitCounts[cr.rule.ID]++
+			if len(hitEvidence[cr.rule.ID]) < 5 {
+				hitEvidence[cr.rule.ID] = append(hitEvidence[cr.rule.ID], line)
+			}
+		}
+	}
+
+	for _, cr := range compiled {
+		hits := hitCounts[cr.rule.ID]
+		if hits < cr.rule.Threshold {
+			continue
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"rule_id":   cr.rule.ID.String(),
+			"rule_name": cr.rule.Name,
+			"severity":  cr.rule.Severity,
+			"hits":      hits,
+			"threshold": cr.rule.Threshold,
+			"window":    cr.rule.WindowSeconds,
+			"evidence":  hitEvidence[cr.rule.ID],
+			"node_id":   nodeID.String(),
+		})
+		if s.eventBus != nil {
+			s.eventBus.Publish(eventbus.Event{
+				Topic:    eventbus.TopicRuleTriggered,
+				TenantID: tenantID,
+				NodeID:   &nodeID,
+				Payload:  payload,
+			})
+			s.eventBus.Publish(eventbus.Event{
+				Topic:    eventbus.TopicAlertOpened,
+				TenantID: tenantID,
+				NodeID:   &nodeID,
+				Payload:  payload,
+			})
+		}
+	}
+}
+
+func (s *Server) publishLogIngested(tenantID, nodeID uuid.UUID, rowCount int) {
+	if s == nil || s.eventBus == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"node_id": nodeID.String(),
+		"rows":    rowCount,
+	})
+	s.eventBus.Publish(eventbus.Event{
+		Topic:    eventbus.TopicLogIngested,
+		TenantID: tenantID,
+		NodeID:   &nodeID,
+		Payload:  payload,
+	})
+}
+
+// metricAlertCooldown is the minimum time between re-alerting for the same rule+node.
+const metricAlertCooldown = 15 * time.Minute
+
+// evaluateMetricThresholds checks ingested metrics against configured threshold
+// rules and fires alerts when thresholds are exceeded.
+func (s *Server) evaluateMetricThresholds(ctx context.Context, tenantID, nodeID uuid.UUID, metrics []storage.CreateTelemetryMetricParams) {
+	if s == nil || s.store == nil {
+		return
+	}
+	rules, err := s.store.ListEnabledMetricThresholdRules(ctx, tenantID)
+	if err != nil || len(rules) == 0 {
+		return
+	}
+
+	// Build a set of ingested metric names for quick lookup.
+	ingested := make(map[string]float64, len(metrics))
+	for _, m := range metrics {
+		ingested[m.MetricName] = m.MetricValue
+	}
+
+	now := time.Now().UTC()
+	for _, rule := range rules {
+		// Skip rules targeting a different node.
+		if rule.TargetNodeID != nil && *rule.TargetNodeID != nodeID {
+			continue
+		}
+
+		// Check if the current ingested value alone exceeds the threshold.
+		val, ok := ingested[rule.MetricName]
+		if !ok {
+			continue
+		}
+		if !thresholdExceeded(val, rule.Operator, rule.Threshold) {
+			continue
+		}
+
+		// Use sliding window to count how many recent data points exceed.
+		windowSec := float64(rule.WindowSeconds)
+		if windowSec <= 0 {
+			windowSec = 300
+		}
+		count, err := s.store.CountMetricValueInWindow(ctx, tenantID, nodeID, rule.MetricName, rule.Operator, rule.Threshold, windowSec)
+		if err != nil {
+			s.logger.Warn("count metric values in window", zap.Error(err), zap.String("rule_id", rule.ID.String()))
+			continue
+		}
+		if count < 1 {
+			continue
+		}
+
+		// Cooldown check to prevent alert storms.
+		cooldownKey := rule.ID.String() + ":" + nodeID.String()
+		s.metricAlertCooldownsMu.Lock()
+		if s.metricAlertCooldowns == nil {
+			s.metricAlertCooldowns = make(map[string]time.Time)
+		}
+		if lastAlert, ok := s.metricAlertCooldowns[cooldownKey]; ok && now.Sub(lastAlert) < metricAlertCooldown {
+			s.metricAlertCooldownsMu.Unlock()
+			continue
+		}
+		s.metricAlertCooldowns[cooldownKey] = now
+		s.metricAlertCooldownsMu.Unlock()
+
+		payload, _ := json.Marshal(map[string]any{
+			"rule_id":      rule.ID.String(),
+			"rule_name":    rule.Name,
+			"metric_name":  rule.MetricName,
+			"operator":     rule.Operator,
+			"threshold":    rule.Threshold,
+			"window":       rule.WindowSeconds,
+			"severity":     rule.Severity,
+			"count":        count,
+			"current_value": val,
+			"node_id":      nodeID.String(),
+		})
+		if s.eventBus != nil {
+			s.eventBus.Publish(eventbus.Event{
+				Topic:    eventbus.TopicRuleTriggered,
+				TenantID: tenantID,
+				NodeID:   &nodeID,
+				Payload:  payload,
+			})
+			s.eventBus.Publish(eventbus.Event{
+				Topic:    eventbus.TopicAlertOpened,
+				TenantID: tenantID,
+				NodeID:   &nodeID,
+				Payload:  payload,
+			})
+		}
+	}
+}
+
+// thresholdExceeded checks if value satisfies the operator against the threshold.
+func thresholdExceeded(value float64, operator string, threshold float64) bool {
+	switch operator {
+	case "gt":
+		return value > threshold
+	case "gte":
+		return value >= threshold
+	case "lt":
+		return value < threshold
+	case "lte":
+		return value <= threshold
+	case "eq":
+		return value == threshold
+	default:
+		return false
 	}
 }

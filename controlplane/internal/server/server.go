@@ -239,6 +239,15 @@ type Store interface {
 	ListLogRules(context.Context, storage.LogRuleFilter, int, int) ([]storage.LogMonitoringRule, int, error)
 	UpdateLogRule(context.Context, uuid.UUID, storage.UpdateLogRuleParams) (*storage.LogMonitoringRule, error)
 	DeleteLogRule(context.Context, uuid.UUID) error
+	ListEnabledRulesForNode(context.Context, uuid.UUID, map[string]any) ([]storage.PortMonitoringRule, []storage.LogMonitoringRule, error)
+	// Metric threshold rules.
+	CreateMetricThresholdRule(context.Context, storage.CreateMetricThresholdRuleParams) (*storage.MetricThresholdRule, error)
+	GetMetricThresholdRule(context.Context, uuid.UUID) (*storage.MetricThresholdRule, error)
+	ListMetricThresholdRules(context.Context, storage.MetricThresholdRuleFilter, int, int) ([]storage.MetricThresholdRule, int, error)
+	ListEnabledMetricThresholdRules(context.Context, uuid.UUID) ([]storage.MetricThresholdRule, error)
+	UpdateMetricThresholdRule(context.Context, uuid.UUID, storage.UpdateMetricThresholdRuleParams) (*storage.MetricThresholdRule, error)
+	DeleteMetricThresholdRule(context.Context, uuid.UUID) error
+	CountMetricValueInWindow(context.Context, uuid.UUID, uuid.UUID, string, string, float64, float64) (int, error)
 	// Dashboard events.
 	CreateSecurityEvent(context.Context, storage.CreateSecurityEventParams) (*storage.SecurityEvent, error)
 	ListSecurityEvents(context.Context, storage.SecurityEventFilter, int, int) ([]storage.SecurityEvent, int, error)
@@ -507,6 +516,13 @@ type Store interface {
 	ListFinacleProfilesByShift(context.Context, uuid.UUID) ([]storage.FinacleProfile, error)
 	MarkFinacleProfileRotated(context.Context, uuid.UUID, string) error
 	DeleteFinacleProfile(context.Context, uuid.UUID) error
+	// Connectivity tests (pending action lifecycle).
+	CreateNodeConnectivityTest(context.Context, storage.NodeConnectivityTest) (*storage.NodeConnectivityTest, error)
+	ListPendingNodeConnectivityTests(context.Context, uuid.UUID) ([]storage.NodeConnectivityTest, error)
+	MarkNodeConnectivityTestRunning(context.Context, uuid.UUID) error
+	MarkNodeConnectivityTestCompleted(context.Context, uuid.UUID, bool, string) error
+	MarkNodeConnectivityTestFailed(context.Context, uuid.UUID, string) error
+	MarkNodeConnectivityTestByJobCompleted(context.Context, uuid.UUID, bool, string) error
 }
 
 func (s *Server) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
@@ -867,6 +883,9 @@ type Server struct {
 	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
 	// to SSE subscribers and internal correlators. nil means events are a no-op.
 	eventBus        *eventbus.Bus
+	// webhookBridge subscribes to the event bus and dispatches webhooks
+	// for events that have matching webhook subscribers.
+	webhookBridge *WebhookBridge
 	correlationCtx  context.Context
 	correlationStop context.CancelFunc
 	correlationEng  *correlation.Engine
@@ -926,6 +945,11 @@ type Server struct {
 	// Production builds the provider client from the tenant AI config.
 	aiClientFactory func(storage.AIConfig) (llm.Client, error)
 	aiClock         func() time.Time
+
+	// metricAlertCooldowns tracks the last alert time per rule+node to prevent
+	// alert storms. Keyed by "ruleID:nodeID".
+	metricAlertCooldowns   map[string]time.Time
+	metricAlertCooldownsMu sync.Mutex
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -1114,6 +1138,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/agent/binary", s.handleAgentBinary)
 	s.baseRouter.HandleFunc("/api/v1/agent/binary/manifest", s.handleAgentBinaryManifest)
 	s.baseRouter.HandleFunc("/api/v1/agent/public-key", s.handleAgentPublicKey)
+	s.baseRouter.HandleFunc("/api/v1/agent/rules", s.handleAgentRules)
 	s.baseRouter.HandleFunc("/api/v1/agent-rollout", s.handleAgentRollout)
 	s.baseRouter.HandleFunc("/api/v1/agent/bundle", s.handleAgentBundle)
 	s.baseRouter.HandleFunc("/api/v1/fleet/enroll", s.handleFleetEnroll)
@@ -1132,6 +1157,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/rules/port/", s.handlePortRuleSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/rules/log", s.handleLogRulesCollection)
 	s.baseRouter.HandleFunc("/api/v1/rules/log/", s.handleLogRuleSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/rules/metric", s.handleMetricThresholdRulesCollection)
+	s.baseRouter.HandleFunc("/api/v1/rules/metric/", s.handleMetricThresholdRuleSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/security-events", s.handleSecurityEventsCollection)
 	s.baseRouter.HandleFunc("/api/v1/health-incidents", s.handleHealthIncidentsCollection)
 	// Predictive server downtime — Use Case 5 (PR 31).
@@ -2132,8 +2159,16 @@ func (s *Server) handleNodeResource(w http.ResponseWriter, r *http.Request) {
 		s.handleNodeRepair(w, r, nodeID)
 		return
 	}
+	if len(segments) == 2 && segments[1] == "connectivity-test" {
+		s.handleConnectivityTest(w, r, nodeID)
+		return
+	}
 	if len(segments) == 2 && segments[1] == "isolation" {
 		s.handleNodeIsolation(w, r, nodeID)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "target" {
+		s.handleNodeTargetOverride(w, r, nodeID)
 		return
 	}
 
@@ -2279,6 +2314,103 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 	})
 }
 
+var allowedTargetTypes = map[string]bool{
+	"personal_pc":       true,
+	"workstation":       true,
+	"laptop":            true,
+	"server":            true,
+	"vm":                true,
+	"cloud_instance":    true,
+	"domain_controller": true,
+	"kiosk":             true,
+	"unknown":           true,
+}
+
+type nodeTargetOverrideRequest struct {
+	TargetType       string `json:"target_type"`
+	OperatorOverride bool   `json:"operator_override"`
+}
+
+func (r nodeTargetOverrideRequest) validate() error {
+	if strings.TrimSpace(r.TargetType) == "" {
+		return fmt.Errorf("target_type is required")
+	}
+	if !allowedTargetTypes[r.TargetType] {
+		return fmt.Errorf("invalid target_type: %q", r.TargetType)
+	}
+	return nil
+}
+
+func (s *Server) handleNodeTargetOverride(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
+	if r.Method != http.MethodPatch {
+		w.Header().Set("Allow", http.MethodPatch)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+
+	var req nodeTargetOverrideRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := req.validate(); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		s.logger.Error("get node", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	labels["target.type"] = req.TargetType
+	labels["target.type_source"] = "operator_override"
+	labels["target.classification_confidence"] = 100
+	labels["target.operator_override_at"] = time.Now().UTC().Format(time.RFC3339)
+
+	if err := s.store.UpdateNodeLabels(r.Context(), nodeID, labels); err != nil {
+		s.logger.Error("update node labels", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	refreshed, gerr := s.store.GetNode(r.Context(), nodeID)
+	if gerr != nil {
+		s.logger.Error("get node after target override", zap.Error(gerr))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if refreshed == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*refreshed)); err != nil {
+		s.logger.Warn("encode node response", zap.Error(err))
+	}
+	s.recordAudit(r.Context(), principal, refreshed.TenantID, "node.target_override", "node", nodeID.String(), map[string]any{
+		"target_type":       req.TargetType,
+		"operator_override": req.OperatorOverride,
+	})
+}
+
 func (s *Server) handleNodeIsolation(w http.ResponseWriter, r *http.Request, nodeID uuid.UUID) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -2393,38 +2525,94 @@ func (r createNodeRequest) validate() error {
 	return nil
 }
 
+type targetClassificationResponse struct {
+	Source     string   `json:"source"`
+	Confidence int      `json:"confidence"`
+	Evidence   []string `json:"evidence"`
+}
+
+type networkObservationResponse struct {
+	Kind        string `json:"kind"`
+	Value       string `json:"value"`
+	Source      string `json:"source"`
+	FirstSeenAt string `json:"first_seen_at,omitempty"`
+	LastSeenAt  string `json:"last_seen_at,omitempty"`
+	Confidence  int    `json:"confidence"`
+}
+
 type nodeResponse struct {
-	ID           string         `json:"id"`
-	TenantID     string         `json:"tenant_id"`
-	Hostname     string         `json:"hostname"`
-	OS           *string        `json:"os,omitempty"`
-	Arch         *string        `json:"arch,omitempty"`
-	PublicIP     *string        `json:"public_ip,omitempty"`
-	State        string         `json:"state"`
-	LastSeenAt   *string        `json:"last_seen_at,omitempty"`
-	FirstScanAt  *string        `json:"first_scan_at,omitempty"`
-	Labels       map[string]any `json:"labels"`
-	AgentVersion *string        `json:"agent_version,omitempty"`
-	CreatedAt    string         `json:"created_at"`
-	UpdatedAt    string         `json:"updated_at"`
+	ID                  string                         `json:"id"`
+	TenantID            string                         `json:"tenant_id"`
+	Hostname            string                         `json:"hostname"`
+	OS                  *string                        `json:"os,omitempty"`
+	Arch                *string                        `json:"arch,omitempty"`
+	PublicIP            *string                        `json:"public_ip,omitempty"`
+	State               string                         `json:"state"`
+	LastSeenAt          *string                        `json:"last_seen_at,omitempty"`
+	FirstScanAt         *string                        `json:"first_scan_at,omitempty"`
+	Labels              map[string]any                 `json:"labels"`
+	AgentVersion        *string                        `json:"agent_version,omitempty"`
+	CreatedAt           string                         `json:"created_at"`
+	UpdatedAt           string                         `json:"updated_at"`
+	ManagementMode      string                         `json:"management_mode"`
+	TargetType          string                         `json:"target_type"`
+	ReachabilityMode    string                         `json:"reachability_mode"`
+	InstallContext      string                         `json:"install_context,omitempty"`
+	MachineID           string                         `json:"machine_id,omitempty"`
+	Classification      *targetClassificationResponse `json:"classification,omitempty"`
+	NetworkObservations []networkObservationResponse  `json:"network_observations,omitempty"`
 }
 
 func nodeResponseFromModel(n storage.Node) nodeResponse {
+	meta := n.TargetMetadata()
+
 	resp := nodeResponse{
-		ID:           n.ID.String(),
-		TenantID:     n.TenantID.String(),
-		Hostname:     n.Hostname,
-		OS:           nullStringPtr(n.OS),
-		Arch:         nullStringPtr(n.Arch),
-		PublicIP:     nullStringPtr(n.PublicIP),
-		State:        n.State,
-		AgentVersion: nullStringPtr(n.AgentVersion),
-		Labels:       n.Labels,
-		CreatedAt:    n.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:    n.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:               n.ID.String(),
+		TenantID:         n.TenantID.String(),
+		Hostname:         n.Hostname,
+		OS:               nullStringPtr(n.OS),
+		Arch:             nullStringPtr(n.Arch),
+		PublicIP:         nullStringPtr(n.PublicIP),
+		State:            n.State,
+		AgentVersion:     nullStringPtr(n.AgentVersion),
+		Labels:           n.Labels,
+		CreatedAt:        n.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:        n.UpdatedAt.UTC().Format(time.RFC3339),
+		ManagementMode:   meta.ManagementMode,
+		TargetType:       meta.TargetType,
+		ReachabilityMode: meta.ReachabilityMode,
+		InstallContext:   meta.InstallContext,
 	}
 	if resp.Labels == nil {
 		resp.Labels = map[string]any{}
+	}
+	if v, ok := resp.Labels["target.machine_id"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			resp.MachineID = s
+		}
+	} else if v, ok := resp.Labels["machine_id"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			resp.MachineID = s
+		}
+	}
+	resp.Classification = &targetClassificationResponse{
+		Source:     meta.Classification.Source,
+		Confidence: meta.Classification.Confidence,
+		Evidence:   meta.Classification.Evidence,
+	}
+	if len(meta.NetworkObservations) > 0 {
+		obs := make([]networkObservationResponse, 0, len(meta.NetworkObservations))
+		for _, o := range meta.NetworkObservations {
+			obs = append(obs, networkObservationResponse{
+				Kind:        o.Kind,
+				Value:       o.Value,
+				Source:      o.Source,
+				FirstSeenAt: o.FirstSeenAt,
+				LastSeenAt:  o.LastSeenAt,
+				Confidence:  o.Confidence,
+			})
+		}
+		resp.NetworkObservations = obs
 	}
 	if n.LastSeenAt != nil {
 		ts := n.LastSeenAt.UTC().Format(time.RFC3339)
@@ -2702,6 +2890,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 	}
 
 	s := &Server{logger: logger, cfg: cfg, http: httpServer, store: store, worker: worker, authMW: authMW, baseRouter: mux, auditAsync: true, eventBus: eventbus.New(64)}
+	s.webhookBridge = NewWebhookBridge(store, s.eventBus, logger, s.deliverWebhook)
 	serverRef = s
 	if cfg.OfflineContent.Enabled {
 		if _, err := offlinebundle.LoadPublicKeyFile(cfg.OfflineContent.PublicKeyFile); err != nil {
@@ -2931,6 +3120,7 @@ func (s *Server) Start() error {
 	s.startCorrelationEngine()
 	s.startBehavioralRollup()
 	s.startThreatIntelManager()
+	s.webhookBridge.Start(context.Background())
 
 	if !s.cfg.TLS.Enabled {
 		return s.http.ListenAndServe()
@@ -2947,6 +3137,9 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.webhookBridge != nil {
+		s.webhookBridge.Stop()
+	}
 	if s.complianceScheduler != nil {
 		s.complianceScheduler.Stop()
 	}

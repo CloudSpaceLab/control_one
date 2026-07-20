@@ -407,6 +407,25 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 	s.appendPendingAILogFixerActions(r.Context(), nodeID, node, &resp)
 	s.appendPendingWebserverActions(r.Context(), nodeID, node, &resp)
+	// Append pending connectivity test actions. Each is encoded as
+	// "connectivity_test:<job_id>" so the agent dispatches correctly.
+	if pendingTests, cerr := s.store.ListPendingNodeConnectivityTests(r.Context(), nodeID); cerr == nil {
+		for _, pt := range pendingTests {
+			if pt.JobID == nil {
+				continue
+			}
+			resp.PendingActions = append(resp.PendingActions, JobTypeConnectivityTest+":"+pt.JobID.String())
+			if uerr := s.store.UpdateJobStatus(r.Context(), *pt.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
+				s.logger.Warn("mark connectivity_test job running",
+					zap.String("job_id", pt.JobID.String()), zap.Error(uerr))
+			}
+			if merr := s.store.MarkNodeConnectivityTestRunning(r.Context(), pt.ID); merr != nil {
+				s.logger.Warn("mark connectivity test running", zap.Error(merr))
+			}
+		}
+	} else if !errors.Is(cerr, sql.ErrNoRows) {
+		s.logger.Warn("list pending connectivity tests", zap.Error(cerr))
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -569,6 +588,34 @@ func (s *Server) updateNodeTargetMetadataFromHeartbeat(ctx context.Context, node
 	if len(body.NetworkObservations) > 0 {
 		labels["target.network_observations"] = normalizeHeartbeatNetworkObservations(body.NetworkObservations, time.Now().UTC())
 	}
+
+	// Server-side heuristic classification: if the agent didn't classify
+	// (confidence < 30) or sent "unknown", run the server heuristic.
+	agentConf := labelInt(labels, "target.classification_confidence", 0)
+	agentType := labelString(labels, "target.type", "")
+	if agentConf < 30 || agentType == "" || agentType == "unknown" {
+		os := ""
+		if node.OS.Valid {
+			os = node.OS.String
+		}
+		arch := ""
+		if node.Arch.Valid {
+			arch = node.Arch.String
+		}
+		publicIP := ""
+		if node.PublicIP.Valid {
+			publicIP = node.PublicIP.String
+		}
+		if derivedType, derivedConf, evidence := ClassifyTarget(labels, os, arch, publicIP); derivedType != "unknown" {
+			labels["target.type"] = derivedType
+			labels["target.type_source"] = "server_heuristic"
+			labels["target.classification_confidence"] = derivedConf
+			if len(evidence) > 0 {
+				labels["target.classification_evidence"] = evidence
+			}
+		}
+	}
+
 	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
 		return node, err
 	}
@@ -760,6 +807,8 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			s.processWebserverCompletedAction(ctx, jobID, c)
 		case JobTypeAILogFixerPlan, JobTypeAILogFixerApply, JobTypeAILogFixerRollback:
 			s.processAILogFixerCompletedAction(ctx, jobID, c)
+		case JobTypeConnectivityTest:
+			s.processConnectivityTestCompletedAction(ctx, jobID, c)
 		default:
 			// Ignore unknown actions (forward-compat with future action types).
 			continue

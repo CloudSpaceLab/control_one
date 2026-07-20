@@ -3725,6 +3725,25 @@ func (f *fakeStore) ListWebhookDeliveries(_ context.Context, webhookID uuid.UUID
 	return nil, 0, nil
 }
 
+func (f *fakeStore) CreateNodeConnectivityTest(_ context.Context, _ storage.NodeConnectivityTest) (*storage.NodeConnectivityTest, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListPendingNodeConnectivityTests(_ context.Context, _ uuid.UUID) ([]storage.NodeConnectivityTest, error) {
+	return nil, nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestRunning(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestCompleted(_ context.Context, _ uuid.UUID, _ bool, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestFailed(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestByJobCompleted(_ context.Context, _ uuid.UUID, _ bool, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) GetRetentionPolicy(_ context.Context, tenantID uuid.UUID, dataType string) (*storage.TelemetryRetentionPolicy, error) {
 	return nil, nil
 }
@@ -5578,6 +5597,9 @@ func (f *fakeStore) UpdatePortRule(_ context.Context, _ uuid.UUID, _ storage.Upd
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) DeletePortRule(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) ListEnabledRulesForNode(_ context.Context, _ uuid.UUID, _ map[string]any) ([]storage.PortMonitoringRule, []storage.LogMonitoringRule, error) {
+	return nil, nil, nil
+}
 
 func (f *fakeStore) CreateLogRule(_ context.Context, _ storage.CreateLogRuleParams) (*storage.LogMonitoringRule, error) {
 	return nil, errors.New("log rules not implemented in fakeStore")
@@ -5592,6 +5614,40 @@ func (f *fakeStore) UpdateLogRule(_ context.Context, _ uuid.UUID, _ storage.Upda
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) DeleteLogRule(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) CreateMetricThresholdRule(_ context.Context, p storage.CreateMetricThresholdRuleParams) (*storage.MetricThresholdRule, error) {
+	return &storage.MetricThresholdRule{
+		ID:            uuid.New(),
+		TenantID:      p.TenantID,
+		Name:          p.Name,
+		MetricName:    p.MetricName,
+		Operator:      p.Operator,
+		Threshold:     p.Threshold,
+		WindowSeconds: p.WindowSeconds,
+		Severity:      p.Severity,
+		Action:        p.Action,
+		TargetNodeID:  p.TargetNodeID,
+		Enabled:       p.Enabled,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}, nil
+}
+func (f *fakeStore) GetMetricThresholdRule(_ context.Context, _ uuid.UUID) (*storage.MetricThresholdRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListMetricThresholdRules(_ context.Context, _ storage.MetricThresholdRuleFilter, _, _ int) ([]storage.MetricThresholdRule, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) ListEnabledMetricThresholdRules(_ context.Context, _ uuid.UUID) ([]storage.MetricThresholdRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateMetricThresholdRule(_ context.Context, _ uuid.UUID, _ storage.UpdateMetricThresholdRuleParams) (*storage.MetricThresholdRule, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) DeleteMetricThresholdRule(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CountMetricValueInWindow(_ context.Context, _, _ uuid.UUID, _, _ string, _, _ float64) (int, error) {
+	return 0, nil
+}
 
 func (f *fakeStore) CreateSecurityEvent(_ context.Context, _ storage.CreateSecurityEventParams) (*storage.SecurityEvent, error) {
 	return nil, errors.New("not implemented")

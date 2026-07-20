@@ -79,6 +79,7 @@ export function Telemetry(): JSX.Element {
     node_id: selectedNode,
     log_level: logLevelFilter || undefined,
     log_source: logSourceFilter || undefined,
+    search: search || undefined,
     limit,
     offset: viewMode === 'logs' ? offset : 0,
   });
@@ -233,17 +234,6 @@ export function Telemetry(): JSX.Element {
       ),
     },
   ], [nodes]);
-
-  const filteredLogs = useMemo(() => {
-    if (!search.trim()) return logs;
-    const q = search.toLowerCase();
-    return logs.filter(
-      (l) =>
-        l.log_message.toLowerCase().includes(q) ||
-        (l.log_source ?? '').toLowerCase().includes(q) ||
-        (l.log_program ?? '').toLowerCase().includes(q),
-    );
-  }, [logs, search]);
 
   const filteredMetrics = useMemo(() => {
     if (!search.trim()) return metrics;
@@ -423,12 +413,12 @@ export function Telemetry(): JSX.Element {
         <Panel
           padding="sm"
           tone="inset"
-          eyebrow={`LOGS · ${filteredLogs.length} of ${logsPagination.total}`}
+          eyebrow={`LOGS · ${logs.length} of ${logsPagination.total}`}
           title="Entries"
         >
           <DataTable
             columns={logColumns}
-            rows={filteredLogs}
+            rows={logs}
             rowKey={(r) => r.id}
             loading={currentLoading}
             compact

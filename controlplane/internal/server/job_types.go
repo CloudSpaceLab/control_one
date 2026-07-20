@@ -158,4 +158,8 @@ func init() {
 			return decodePrivateAccessImportPayload(payload)
 		},
 	})
+	registerJobDefinition(JobTypeConnectivityTest, jobDefinition{
+		RequiresTenant: true,
+		Validate:       nil,
+	})
 }

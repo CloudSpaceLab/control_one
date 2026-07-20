@@ -390,12 +390,26 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
           <Vital label="State" value={String(node.state)} />
           <Vital label="First scan" value={formatTs(node.first_scan_at)} />
           <Vital label="Last seen" value={formatTs(node.last_seen_at)} />
+          <Vital label="Target type" value={node.target_type?.replace(/_/g, ' ') ?? '—'} />
+          <Vital label="Reachability" value={node.reachability_mode?.replace(/_/g, ' ') ?? '—'} />
+          <Vital label="Management" value={node.management_mode?.replace(/_/g, ' ') ?? '—'} />
           <Vital label="CPU cores" value={cpuCount != null ? String(Math.round(cpuCount)) : '—'} />
           <Vital label="Total RAM" value={memTotal != null ? fmtBytes(memTotal) : '—'} />
           <Vital label="Disk size" value={diskTotal != null ? fmtBytes(diskTotal) : '—'} />
           <Vital label="Disk free" value={diskFree != null ? fmtBytes(diskFree) : '—'} />
           <Vital label="Disk used" value={diskUsed != null ? fmtBytes(diskUsed) : '—'} />
         </dl>
+        {node.classification && node.classification.evidence.length > 0 && (
+          <div className="mt-3 border-t border-border-subtle pt-3">
+            <p className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted mb-1">Classification evidence</p>
+            <div className="flex flex-wrap gap-1">
+              {node.classification.evidence.map((e, i) => (
+                <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 text-[0.6rem] text-text-muted">{e}</span>
+              ))}
+            </div>
+            <p className="text-[0.6rem] text-text-muted mt-1">Source: {node.classification.source} · Confidence: {node.classification.confidence}</p>
+          </div>
+        )}
       </Panel>
 
       <Panel padding="md" eyebrow="CPU" title="Last 24h" className="lg:col-span-1">

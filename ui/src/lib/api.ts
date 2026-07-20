@@ -1142,6 +1142,21 @@ export type NodeState =
   | "enrollment_failed"
   | "retired";
 
+export interface TargetClassificationResponse {
+  source: string;
+  confidence: number;
+  evidence: string[];
+}
+
+export interface NetworkObservationResponse {
+  kind: string;
+  value: string;
+  source: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+  confidence: number;
+}
+
 export interface NodeSummary {
   id: string;
   tenant_id: string;
@@ -1156,6 +1171,13 @@ export interface NodeSummary {
   labels?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  machine_id?: string;
+  management_mode?: string;
+  target_type?: string;
+  reachability_mode?: string;
+  install_context?: string;
+  classification?: TargetClassificationResponse;
+  network_observations?: NetworkObservationResponse[];
 }
 
 export interface FleetEnrollTarget {
@@ -1670,6 +1692,7 @@ export interface ListTelemetryLogsParams {
   node_id?: string;
   log_level?: string;
   log_source?: string;
+  search?: string;
   since?: string;
   until?: string;
   limit?: number;
@@ -3011,6 +3034,7 @@ export class APIClient {
     if (params.node_id) search.set("node_id", params.node_id);
     if (params.log_level) search.set("log_level", params.log_level);
     if (params.log_source) search.set("log_source", params.log_source);
+    if (params.search) search.set("search", params.search);
     if (params.since) search.set("since", params.since);
     if (params.until) search.set("until", params.until);
     if (typeof params.limit === "number")

@@ -343,7 +343,7 @@ export function FleetEnroll(): JSX.Element {
     resetFeedback();
 
     if (parsedTargets.length === 0) {
-      showError('Add at least one host');
+      showError('Add at least one machine');
       return;
     }
     if (!tenantId) {
@@ -480,8 +480,8 @@ export function FleetEnroll(): JSX.Element {
     <div className="flex flex-col gap-5" aria-labelledby="fleet-enroll-heading">
       <SectionHeader
         eyebrow="INFRASTRUCTURE · ONBOARDING"
-        title="Bulk enrol hosts"
-        description="Onboard many hosts over SSH at once. Live progress per target."
+        title="Bulk enrol machines"
+        description="Onboard many machines over SSH at once. Live progress per target."
       />
 
       {/* ── Job progress panel — shown first when a job is active ── */}
@@ -652,7 +652,7 @@ export function FleetEnroll(): JSX.Element {
           ) : (
             <EmptyState
               title="Awaiting results"
-              description="Waiting for first host results…"
+              description="Waiting for first machine results…"
               icon={<Terminal />}
             />
           )}

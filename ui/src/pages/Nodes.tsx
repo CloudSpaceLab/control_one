@@ -26,6 +26,7 @@ import type {
   NodeHealthScore,
   NodeSummary,
 } from '../lib/api';
+import type { NodeState as LifecycleState } from '../lib/api';
 import {
   agentUpdateStatusLabel,
   agentUpdateStatusTone,
@@ -712,15 +713,39 @@ function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps
               {node.arch}
             </span>
           )}
+          {node.target_type && node.target_type !== 'unknown' && (
+            <span className="rounded bg-accent-400/15 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wider text-accent-300">
+              {node.target_type.replace(/_/g, ' ')}
+            </span>
+          )}
+          {node.reachability_mode && node.reachability_mode !== 'unknown' && (
+            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[0.6rem] font-medium tracking-wider text-text-muted">
+              {node.reachability_mode.replace(/_/g, ' ')}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Footer */}
       <div className="flex items-center justify-between gap-2">
         <span className="text-[0.6rem] text-text-muted truncate">{tenantName}</span>
-        <StatusTag tone={STATE_TONE[state]}>
-          {health ? (health.risk_level === 'calibrating' ? 'calibrating' : `${health.risk_level} · ${health.score}`) : state}
-        </StatusTag>
+        <div className="flex items-center gap-1.5">
+          {(() => {
+            const lifecycleState = node.state as LifecycleState;
+            const lifecycleTone: StateTone = lifecycleState === 'active' ? 'healthy'
+              : lifecycleState === 'enrollment_pending' ? 'warning'
+              : lifecycleState === 'enrollment_failed' ? 'critical'
+              : 'unknown';
+            return (
+              <StatusTag tone={lifecycleTone}>
+                {String(lifecycleState).replace(/_/g, ' ')}
+              </StatusTag>
+            );
+          })()}
+          <StatusTag tone={STATE_TONE[state]}>
+            {health ? (health.risk_level === 'calibrating' ? 'calibrating' : `${health.risk_level} · ${health.score}`) : state}
+          </StatusTag>
+        </div>
       </div>
 
       {/* Last seen */}
@@ -1246,9 +1271,40 @@ export function Nodes(): JSX.Element {
       },
     },
     {
+      header: 'Lifecycle',
+      id: 'lifecycle',
+      cell: ({ row }) => {
+        const state = row.original.state as LifecycleState;
+        const tone: StateTone = state === 'active' ? 'healthy'
+          : state === 'enrollment_pending' ? 'warning'
+          : state === 'enrollment_failed' ? 'critical'
+          : state === 'retired' ? 'unknown'
+          : 'unknown';
+        return <StatusTag tone={tone}>{String(state).replace(/_/g, ' ')}</StatusTag>;
+      },
+    },
+    {
       header: 'Hostname',
       accessorKey: 'hostname',
       cell: ({ row }) => <span className="font-medium text-foreground">{row.original.hostname}</span>,
+    },
+    {
+      header: 'Type',
+      id: 'target_type',
+      cell: ({ row }) => {
+        const tt = row.original.target_type;
+        if (!tt || tt === 'unknown') return <span className="text-text-muted">—</span>;
+        return <span className="text-xs text-accent-300 capitalize">{tt.replace(/_/g, ' ')}</span>;
+      },
+    },
+    {
+      header: 'Reachability',
+      id: 'reachability',
+      cell: ({ row }) => {
+        const rm = row.original.reachability_mode;
+        if (!rm || rm === 'unknown') return <span className="text-text-muted">—</span>;
+        return <span className="text-xs text-text-secondary capitalize">{rm.replace(/_/g, ' ')}</span>;
+      },
     },
     {
       header: 'Tenant',
