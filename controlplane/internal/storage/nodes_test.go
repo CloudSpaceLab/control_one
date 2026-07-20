@@ -428,3 +428,57 @@ func TestRotateNodeCertificateRequiresSerial(t *testing.T) {
 	_, err = store.RotateNodeCertificate(ctx, node.ID, "   ")
 	require.Error(t, err)
 }
+
+func TestNodeTargetMetadataDefaultsToAgentManagedUnknown(t *testing.T) {
+	node := Node{Labels: map[string]any{}}
+	meta := node.TargetMetadata()
+
+	if meta.ManagementMode != "agent_managed" {
+		t.Fatalf("management mode = %q", meta.ManagementMode)
+	}
+	if meta.TargetType != "unknown" {
+		t.Fatalf("target type = %q", meta.TargetType)
+	}
+	if meta.ReachabilityMode != "unknown" {
+		t.Fatalf("reachability = %q", meta.ReachabilityMode)
+	}
+	if meta.Classification.Source != "default" {
+		t.Fatalf("source = %q", meta.Classification.Source)
+	}
+}
+
+func TestNodeTargetMetadataReadsLabelsAndPublicIPObservation(t *testing.T) {
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	node := Node{
+		PublicIP: sql.NullString{String: "203.0.113.10", Valid: true},
+		Labels: map[string]any{
+			"target.type":                      "server",
+			"target.type_source":               "heuristic",
+			"target.classification_confidence": float64(85),
+			"target.classification_evidence":   []any{"server OS edition", "webserver listener"},
+			"target.reachability_mode":         "direct_public",
+			"target.install_context":           "fleet_enroll",
+			"target.network_observations": []any{
+				map[string]any{
+					"kind":          "public_ip",
+					"value":         "198.51.100.5",
+					"source":        "heartbeat",
+					"first_seen_at":  now.Format(time.RFC3339),
+					"last_seen_at":   now.Format(time.RFC3339),
+					"confidence":    float64(95),
+				},
+			},
+		},
+	}
+
+	meta := node.TargetMetadata()
+	if meta.TargetType != "server" || meta.Classification.Confidence != 85 {
+		t.Fatalf("unexpected metadata: %+v", meta)
+	}
+	if len(meta.NetworkObservations) != 2 {
+		t.Fatalf("expected label observation plus public_ip observation, got %+v", meta.NetworkObservations)
+	}
+	if meta.NetworkObservations[1].Value != "203.0.113.10" || meta.NetworkObservations[1].Source != "node.public_ip" {
+		t.Fatalf("public_ip observation missing: %+v", meta.NetworkObservations)
+	}
+}

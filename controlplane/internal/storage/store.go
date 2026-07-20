@@ -1,4 +1,4 @@
-package storage
+﻿package storage
 
 import (
 	"context"
@@ -1115,6 +1115,149 @@ type Node struct {
 	AuthToken     sql.NullString
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+// TargetClassification captures how a target was classified.
+type TargetClassification struct {
+	Source     string   `json:"source"`
+	Confidence int      `json:"confidence"`
+	Evidence   []string `json:"evidence"`
+}
+
+// NetworkObservation records a single observed network address for a target.
+type NetworkObservation struct {
+	Kind        string `json:"kind"`
+	Value       string `json:"value"`
+	Source      string `json:"source"`
+	FirstSeenAt string `json:"first_seen_at,omitempty"`
+	LastSeenAt  string `json:"last_seen_at,omitempty"`
+	Confidence  int    `json:"confidence"`
+}
+
+// TargetMetadata aggregates target identity and reachability information
+// derived from the node's labels and public_ip column. It provides a
+// typed view over the label-based target contract.
+type TargetMetadata struct {
+	ManagementMode      string               `json:"management_mode"`
+	TargetType          string               `json:"target_type"`
+	ReachabilityMode    string               `json:"reachability_mode"`
+	InstallContext      string               `json:"install_context,omitempty"`
+	Classification      TargetClassification `json:"classification"`
+	NetworkObservations []NetworkObservation `json:"network_observations"`
+}
+
+// TargetMetadata extracts a typed TargetMetadata view from the node's labels
+// and public_ip. This is the canonical source for target semantics -- callers
+// should prefer this over raw label lookups.
+func (n Node) TargetMetadata() TargetMetadata {
+	labels := n.Labels
+	if labels == nil {
+		labels = map[string]any{}
+	}
+	meta := TargetMetadata{
+		ManagementMode:   labelString(labels, "target.management_mode", "agent_managed"),
+		TargetType:       labelString(labels, "target.type", "unknown"),
+		ReachabilityMode: labelString(labels, "target.reachability_mode", "unknown"),
+		InstallContext:   labelString(labels, "target.install_context", ""),
+		Classification: TargetClassification{
+			Source:     labelString(labels, "target.type_source", "default"),
+			Confidence: labelInt(labels, "target.classification_confidence", 0),
+			Evidence:   labelStringSlice(labels, "target.classification_evidence"),
+		},
+		NetworkObservations: labelNetworkObservations(labels),
+	}
+	if n.PublicIP.Valid && strings.TrimSpace(n.PublicIP.String) != "" {
+		meta.NetworkObservations = append(meta.NetworkObservations, NetworkObservation{
+			Kind:       "public_ip",
+			Value:      strings.TrimSpace(n.PublicIP.String),
+			Source:     "node.public_ip",
+			Confidence: 60,
+		})
+	}
+	return meta
+}
+
+func labelString(labels map[string]any, key, fallback string) string {
+	if raw, ok := labels[key]; ok {
+		if value, ok := raw.(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return fallback
+}
+
+func labelInt(labels map[string]any, key string, fallback int) int {
+	raw, ok := labels[key]
+	if !ok {
+		return fallback
+	}
+	switch v := raw.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil {
+			return int(i)
+		}
+	}
+	return fallback
+}
+
+func labelStringSlice(labels map[string]any, key string) []string {
+	raw, ok := labels[key]
+	if !ok {
+		return []string{}
+	}
+	out := []string{}
+	switch values := raw.(type) {
+	case []string:
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				out = append(out, strings.TrimSpace(value))
+			}
+		}
+	case []any:
+		for _, rawValue := range values {
+			if value, ok := rawValue.(string); ok && strings.TrimSpace(value) != "" {
+				out = append(out, strings.TrimSpace(value))
+			}
+		}
+	}
+	return out
+}
+
+func labelNetworkObservations(labels map[string]any) []NetworkObservation {
+	raw, ok := labels["target.network_observations"]
+	if !ok {
+		return []NetworkObservation{}
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return []NetworkObservation{}
+	}
+	out := make([]NetworkObservation, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		obs := NetworkObservation{
+			Kind:        labelString(m, "kind", ""),
+			Value:       labelString(m, "value", ""),
+			Source:      labelString(m, "source", ""),
+			FirstSeenAt: labelString(m, "first_seen_at", ""),
+			LastSeenAt:  labelString(m, "last_seen_at", ""),
+			Confidence:  labelInt(m, "confidence", 0),
+		}
+		if obs.Kind != "" && obs.Value != "" {
+			out = append(out, obs)
+		}
+	}
+	return out
 }
 
 // NodeCertHistory tracks the lineage of client certificates issued to a node.
