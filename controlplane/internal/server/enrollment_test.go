@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"bytes"
@@ -412,5 +412,50 @@ func TestEnrollReaperFlipsStalePending(t *testing.T) {
 	defer store.mu.Unlock()
 	if store.nodes[0].State != storage.NodeStateEnrollmentFailed {
 		t.Fatalf("state = %q, want enrollment_failed", store.nodes[0].State)
+	}
+}
+
+
+func TestEnrollStampsAgentManagedTargetLabels(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, tenantID := setupEnrollmentServer(t)
+
+	rec := enroll(t, srv, map[string]any{
+		"token":           rawToken,
+		"hostname":        "laptop-01",
+		"os":              "windows",
+		"arch":            "amd64",
+		"public_ip":       "203.0.113.99",
+		"machine_id":      "machine-123",
+		"install_context": "local_interactive",
+		"target_hint":     "laptop",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp enrollResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	nodeID, _ := uuid.Parse(resp.NodeID)
+	node, err := srv.store.GetNode(context.Background(), nodeID)
+	if err != nil || node == nil {
+		t.Fatalf("node: %v", err)
+	}
+	if node.TenantID != tenantID {
+		t.Fatalf("tenant mismatch")
+	}
+	if node.Labels["target.management_mode"] != "agent_managed" {
+		t.Fatalf("labels=%+v", node.Labels)
+	}
+	if node.Labels["target.type"] != "laptop" {
+		t.Fatalf("target type labels=%+v", node.Labels)
+	}
+	if node.Labels["target.install_context"] != "local_interactive" {
+		t.Fatalf("install context labels=%+v", node.Labels)
+	}
+	if node.Labels["target.reachability_mode"] != "direct_public" {
+		t.Fatalf("reachability labels=%+v", node.Labels)
 	}
 }
