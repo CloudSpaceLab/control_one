@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to deploy (defaults to main)'
+        description: 'Branch to deploy (defaults to the branch this workflow is triggered from)'
         required: false
-        default: 'main'
+        default: ''
 
 concurrency:
   group: deploy-prod
