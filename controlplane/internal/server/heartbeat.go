@@ -591,7 +591,7 @@ func (s *Server) updateNodeTargetMetadataFromHeartbeat(ctx context.Context, node
 			labels["target.classification_evidence"] = sanitizeStringSlice(body.TargetClassificationEvidence, 32)
 		}
 		if len(body.NetworkObservations) > 0 {
-			labels["target.network_observations"] = normalizeHeartbeatNetworkObservations(body.NetworkObservations, time.Now().UTC())
+			labels["target.network_observations"] = mergeHeartbeatNetworkObservations(labels["target.network_observations"], body.NetworkObservations, time.Now().UTC())
 		}
 	}
 
@@ -669,6 +669,117 @@ func normalizeHeartbeatNetworkObservations(items []heartbeatNetworkObservation, 
 		})
 	}
 	return out
+}
+
+const maxHeartbeatNetworkObservations = 64
+
+func mergeHeartbeatNetworkObservations(existingRaw any, items []heartbeatNetworkObservation, observedAt time.Time) []map[string]any {
+	existing := storage.Node{
+		Labels: map[string]any{"target.network_observations": existingRaw},
+	}.TargetMetadata().NetworkObservations
+	capHint := len(existing) + len(items)
+	if capHint > maxHeartbeatNetworkObservations {
+		capHint = maxHeartbeatNetworkObservations
+	}
+	out := make([]map[string]any, 0, capHint)
+	index := map[string]int{}
+	for _, obs := range existing {
+		kind := strings.ToLower(strings.TrimSpace(obs.Kind))
+		value := strings.TrimSpace(obs.Value)
+		if kind == "" || value == "" {
+			continue
+		}
+		entry := map[string]any{
+			"kind":       kind,
+			"value":      value,
+			"source":     strings.TrimSpace(obs.Source),
+			"confidence": clampInt(obs.Confidence, 0, 100),
+		}
+		if obs.FirstSeenAt != "" {
+			entry["first_seen_at"] = obs.FirstSeenAt
+		}
+		if obs.LastSeenAt != "" {
+			entry["last_seen_at"] = obs.LastSeenAt
+		}
+		out = appendNetworkObservation(out, index, networkObservationKey(kind, value), entry)
+	}
+
+	stamp := observedAt.UTC().Format(time.RFC3339)
+	for _, item := range items {
+		kind := strings.ToLower(strings.TrimSpace(item.Kind))
+		value := strings.TrimSpace(item.Value)
+		if kind == "" || value == "" {
+			continue
+		}
+		key := networkObservationKey(kind, value)
+		source := strings.TrimSpace(item.Source)
+		confidence := clampInt(item.Confidence, 0, 100)
+		if idx, ok := index[key]; ok {
+			entry := out[idx]
+			firstSeen, _ := entry["first_seen_at"].(string)
+			lastSeen, _ := entry["last_seen_at"].(string)
+			if entry["source"] == source && labelInt(entry, "confidence", 0) == confidence && firstSeen != "" && lastSeen != "" {
+				continue
+			}
+			if firstSeen == "" {
+				if lastSeen != "" {
+					entry["first_seen_at"] = lastSeen
+				} else {
+					entry["first_seen_at"] = stamp
+				}
+			}
+			entry["last_seen_at"] = stamp
+			entry["source"] = source
+			entry["confidence"] = confidence
+			continue
+		}
+		out = appendNetworkObservation(out, index, key, map[string]any{
+			"kind":          kind,
+			"value":         value,
+			"source":        source,
+			"first_seen_at": stamp,
+			"last_seen_at":  stamp,
+			"confidence":    confidence,
+		})
+	}
+	return out
+}
+
+func appendNetworkObservation(out []map[string]any, index map[string]int, key string, entry map[string]any) []map[string]any {
+	if idx, ok := index[key]; ok {
+		out[idx] = entry
+		return out
+	}
+	if len(out) >= maxHeartbeatNetworkObservations {
+		out = dropOldestNetworkObservation(out, index)
+	}
+	index[key] = len(out)
+	return append(out, entry)
+}
+
+func dropOldestNetworkObservation(out []map[string]any, index map[string]int) []map[string]any {
+	if len(out) == 0 {
+		return out
+	}
+	delete(index, networkObservationEntryKey(out[0]))
+	copy(out, out[1:])
+	out = out[:len(out)-1]
+	for key, idx := range index {
+		if idx > 0 {
+			index[key] = idx - 1
+		}
+	}
+	return out
+}
+
+func networkObservationEntryKey(entry map[string]any) string {
+	kind, _ := entry["kind"].(string)
+	value, _ := entry["value"].(string)
+	return networkObservationKey(kind, value)
+}
+
+func networkObservationKey(kind, value string) string {
+	return kind + "\x00" + value
 }
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions

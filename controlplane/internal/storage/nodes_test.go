@@ -463,8 +463,8 @@ func TestNodeTargetMetadataReadsLabelsAndPublicIPObservation(t *testing.T) {
 					"kind":          "public_ip",
 					"value":         "198.51.100.5",
 					"source":        "heartbeat",
-					"first_seen_at":  now.Format(time.RFC3339),
-					"last_seen_at":   now.Format(time.RFC3339),
+					"first_seen_at": now.Format(time.RFC3339),
+					"last_seen_at":  now.Format(time.RFC3339),
 					"confidence":    float64(95),
 				},
 			},
@@ -480,5 +480,55 @@ func TestNodeTargetMetadataReadsLabelsAndPublicIPObservation(t *testing.T) {
 	}
 	if meta.NetworkObservations[1].Value != "203.0.113.10" || meta.NetworkObservations[1].Source != "node.public_ip" {
 		t.Fatalf("public_ip observation missing: %+v", meta.NetworkObservations)
+	}
+}
+
+func TestNodeTargetMetadataReadsInMemoryObservationMaps(t *testing.T) {
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	node := Node{
+		Labels: map[string]any{
+			"target.network_observations": []map[string]any{
+				{
+					"kind":          "private_ip",
+					"value":         "10.0.0.25",
+					"source":        "agent_interface",
+					"first_seen_at": now.Format(time.RFC3339),
+					"last_seen_at":  now.Format(time.RFC3339),
+					"confidence":    80,
+				},
+			},
+		},
+	}
+
+	meta := node.TargetMetadata()
+	if len(meta.NetworkObservations) != 1 {
+		t.Fatalf("network observations = %+v, want one in-memory observation", meta.NetworkObservations)
+	}
+	if meta.NetworkObservations[0].Value != "10.0.0.25" {
+		t.Fatalf("network observation = %+v", meta.NetworkObservations[0])
+	}
+}
+
+func TestNodeTargetMetadataDeduplicatesPublicIPObservation(t *testing.T) {
+	node := Node{
+		PublicIP: sql.NullString{String: "203.0.113.10", Valid: true},
+		Labels: map[string]any{
+			"target.network_observations": []any{
+				map[string]any{
+					"kind":       "public_ip",
+					"value":      "203.0.113.10",
+					"source":     "enrollment",
+					"confidence": float64(90),
+				},
+			},
+		},
+	}
+
+	meta := node.TargetMetadata()
+	if len(meta.NetworkObservations) != 1 {
+		t.Fatalf("network observations = %+v, want deduplicated public IP", meta.NetworkObservations)
+	}
+	if meta.NetworkObservations[0].Source != "enrollment" {
+		t.Fatalf("network observation source = %q, want enrollment", meta.NetworkObservations[0].Source)
 	}
 }

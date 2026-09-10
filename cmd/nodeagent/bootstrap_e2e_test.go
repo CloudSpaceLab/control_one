@@ -197,7 +197,8 @@ func TestJoinYAMLContainsPolicySection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read join.go: %v", err)
 	}
-	if !strings.Contains(string(src), "policy:\n  public_key_file:") {
+	normalized := strings.ReplaceAll(string(src), "\r\n", "\n")
+	if !strings.Contains(normalized, "policy:\n  public_key_file:") {
 		t.Error("join.go template no longer emits an explicit policy.public_key_file line")
 	}
 }

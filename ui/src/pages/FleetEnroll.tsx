@@ -233,7 +233,7 @@ export function FleetEnroll(): JSX.Element {
     };
   }, [api, jobId, tenantId]);
 
-  // When the fleet job reports per-host results, ensure we start tracking
+  // When the fleet job reports per-target results, ensure we start tracking
   // node-gate state for every successful enrollment.
   useEffect(() => {
     if (!jobStatus) {
@@ -352,7 +352,7 @@ export function FleetEnroll(): JSX.Element {
     }
     const hasPerTargetUsers = parsedTargets.every((t) => !!t.user?.trim());
     if (!sshUser.trim() && !hasPerTargetUsers) {
-      showError('SSH user is required (or include user@host in each target line)');
+      showError('SSH user is required (or include user@address in each target line)');
       return;
     }
     if (!sshKey.trim() && !sshPassword.trim()) {
@@ -398,7 +398,7 @@ export function FleetEnroll(): JSX.Element {
       setExpandedHosts(new Set());
       setFormCollapsed(true);
       showSuccess(`Fleet job ${response.job_id} queued for ${parsedTargets.length} target(s)`);
-      showToast(`Fleet enrollment started — ${parsedTargets.length} hosts`, 'success');
+      showToast(`Fleet enrollment started — ${parsedTargets.length} target${parsedTargets.length === 1 ? '' : 's'}`, 'success');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Fleet enrollment failed';
       showError(message);
@@ -481,7 +481,7 @@ export function FleetEnroll(): JSX.Element {
       <SectionHeader
         eyebrow="INFRASTRUCTURE · ONBOARDING"
         title="Bulk enrol machines"
-        description="Onboard many machines over SSH at once. Live progress per target."
+        description="SSH push enrollment for many agent-managed machines."
       />
 
       {/* ── Job progress panel — shown first when a job is active ── */}
@@ -538,11 +538,11 @@ export function FleetEnroll(): JSX.Element {
           {/* Results table with expandable ssh_output rows */}
           {results.length > 0 ? (
             <div className="overflow-x-auto rounded-md border border-border-subtle">
-              <table className="w-full text-sm" role="table" aria-label="Per-host enrollment progress">
+              <table className="w-full text-sm" role="table" aria-label="Per-target enrollment progress">
                 <thead>
                   <tr className="border-b border-border-subtle bg-surface/60">
                     <th className="px-3 py-2 text-left font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-                      Host
+                      Target
                     </th>
                     <th className="px-3 py-2 text-left font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
                       Port
@@ -660,7 +660,7 @@ export function FleetEnroll(): JSX.Element {
           {showReadyNotice ? (
             <div className="flex items-center gap-2 rounded-md border border-state-healthy/30 bg-state-healthy/10 px-4 py-3 text-sm text-state-healthy">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
-              All hosts passed the enrollment gate and are now active.
+              All targets passed the enrollment gate and are now active.
             </div>
           ) : null}
         </Panel>
@@ -681,7 +681,7 @@ export function FleetEnroll(): JSX.Element {
             ) : (
               <ChevronDown className="h-4 w-4 shrink-0 text-text-muted" />
             )}
-            <span>{jobId ? 'Start another enrollment' : 'Configure hosts'}</span>
+            <span>{jobId ? 'Start another enrollment' : 'Configure targets'}</span>
           </button>
         }
         toneAccent={jobId ? undefined : 'brand'}
@@ -690,10 +690,10 @@ export function FleetEnroll(): JSX.Element {
           <form onSubmit={handleSubmit} aria-label="fleet enrollment form" className="flex flex-col gap-3 pt-1">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="targets">
-                Hosts (one per line —{' '}
-                <code className="font-mono text-xs">host</code>,{' '}
-                <code className="font-mono text-xs">host:port</code>, or{' '}
-                <code className="font-mono text-xs">user@host:port</code>)
+                Targets (one per line —{' '}
+                <code className="font-mono text-xs">address</code>,{' '}
+                <code className="font-mono text-xs">address:port</code>, or{' '}
+                <code className="font-mono text-xs">user@address:port</code>)
               </Label>
               <textarea
                 id="targets"

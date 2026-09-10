@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 import (
 	"context"
@@ -662,8 +662,18 @@ func enrollmentNodeLabels(existing map[string]any, token *storage.EnrollmentToke
 		labels["target.type"] = "unknown"
 		labels["target.type_source"] = "default"
 	}
-	if strings.TrimSpace(req.PublicIP) != "" {
+	if publicIP := strings.TrimSpace(req.PublicIP); publicIP != "" {
 		labels["target.reachability_mode"] = "direct_public"
+		labels["target.network_observations"] = mergeHeartbeatNetworkObservations(
+			labels["target.network_observations"],
+			[]heartbeatNetworkObservation{{
+				Kind:       "public_ip",
+				Value:      publicIP,
+				Source:     "enrollment",
+				Confidence: 90,
+			}},
+			time.Now().UTC(),
+		)
 	}
 	return labels
 }

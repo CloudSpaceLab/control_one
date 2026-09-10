@@ -1,4 +1,4 @@
-﻿package storage
+package storage
 
 import (
 	"context"
@@ -1167,12 +1167,22 @@ func (n Node) TargetMetadata() TargetMetadata {
 		NetworkObservations: labelNetworkObservations(labels),
 	}
 	if n.PublicIP.Valid && strings.TrimSpace(n.PublicIP.String) != "" {
-		meta.NetworkObservations = append(meta.NetworkObservations, NetworkObservation{
-			Kind:       "public_ip",
-			Value:      strings.TrimSpace(n.PublicIP.String),
-			Source:     "node.public_ip",
-			Confidence: 60,
-		})
+		publicIP := strings.TrimSpace(n.PublicIP.String)
+		found := false
+		for _, obs := range meta.NetworkObservations {
+			if strings.EqualFold(strings.TrimSpace(obs.Kind), "public_ip") && strings.TrimSpace(obs.Value) == publicIP {
+				found = true
+				break
+			}
+		}
+		if !found {
+			meta.NetworkObservations = append(meta.NetworkObservations, NetworkObservation{
+				Kind:       "public_ip",
+				Value:      publicIP,
+				Source:     "node.public_ip",
+				Confidence: 60,
+			})
+		}
 	}
 	return meta
 }
@@ -1235,26 +1245,36 @@ func labelNetworkObservations(labels map[string]any) []NetworkObservation {
 	if !ok {
 		return []NetworkObservation{}
 	}
-	items, ok := raw.([]any)
-	if !ok {
-		return []NetworkObservation{}
-	}
-	out := make([]NetworkObservation, 0, len(items))
-	for _, item := range items {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
+	out := []NetworkObservation{}
+	appendObs := func(obs NetworkObservation) {
+		if obs.Kind != "" && obs.Value != "" {
+			out = append(out, obs)
 		}
-		obs := NetworkObservation{
+	}
+	appendMap := func(m map[string]any) {
+		appendObs(NetworkObservation{
 			Kind:        labelString(m, "kind", ""),
 			Value:       labelString(m, "value", ""),
 			Source:      labelString(m, "source", ""),
 			FirstSeenAt: labelString(m, "first_seen_at", ""),
 			LastSeenAt:  labelString(m, "last_seen_at", ""),
 			Confidence:  labelInt(m, "confidence", 0),
+		})
+	}
+	switch items := raw.(type) {
+	case []any:
+		for _, item := range items {
+			if m, ok := item.(map[string]any); ok {
+				appendMap(m)
+			}
 		}
-		if obs.Kind != "" && obs.Value != "" {
-			out = append(out, obs)
+	case []map[string]any:
+		for _, item := range items {
+			appendMap(item)
+		}
+	case []NetworkObservation:
+		for _, item := range items {
+			appendObs(item)
 		}
 	}
 	return out

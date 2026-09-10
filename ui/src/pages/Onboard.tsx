@@ -49,8 +49,8 @@ import type {
 } from '../lib/api';
 
 const PROTO_HINT: Record<OnboardingProtocol, string> = {
-  ssh: 'Linux, macOS, or any host with sshd. Default port 22.',
-  winrm: 'Windows Server with WinRM enabled. Default port 5985 (HTTP) / 5986 (HTTPS).',
+  ssh: 'Linux or macOS with SSH enabled. Default port 22.',
+  winrm: 'Windows machine with WinRM enabled. Default port 5985 (HTTP) / 5986 (HTTPS).',
   rdp: 'TCP reachability check only. Pair with a WinRM credential to enrol the machine.',
 };
 
@@ -167,7 +167,7 @@ export function Onboard(): JSX.Element {
       if (!token.token) throw new Error('controlplane returned no raw enrolment token');
 
       // Step 2: dispatch the existing fleet enroller. Reuses the same
-      // queued-job + per-host result tracking the bulk enrol page already
+      // queued-job + per-target result tracking the bulk enrol page already
       // has, so the wizard never duplicates that machinery.
       const payload = {
         targets: [
@@ -272,7 +272,7 @@ export function Onboard(): JSX.Element {
         <ScenarioCard
           icon={<Layers className="h-5 w-5" />}
           title="Bulk enroll"
-          description="CSV, pasted host list, or API-driven enrollment."
+          description="CSV, pasted target list, or API-driven enrollment."
           outcome="Many machines, one tracked job."
           active={false}
           onClick={() => {}}
@@ -362,9 +362,9 @@ export function Onboard(): JSX.Element {
 
           <form onSubmit={submitTest} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Panel padding="md" eyebrow="TARGET" title="Current network address">
-              <Field label="Host" icon={<Globe className="h-3.5 w-3.5" />}>
+              <Field label="Address" icon={<Globe className="h-3.5 w-3.5" />}>
                 <Input
-                  placeholder="10.0.0.42 or server.example.com"
+                  placeholder="10.0.0.42 or machine.example.com"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
                   required
@@ -685,7 +685,7 @@ export function Onboard(): JSX.Element {
             One-shot token. Fresh binary. Existing node history preserved.
           </p>
           <ul className="mt-2 list-disc pl-5 text-xs text-text-muted">
-            <li>The agent's node key and historical data are preserved.</li>
+            <li>Agent node key and historical data are preserved.</li>
             <li>A fresh agent binary is deployed via SSH or WinRM.</li>
             <li>No manual re-enrollment is needed after the repair completes.</li>
           </ul>

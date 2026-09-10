@@ -549,7 +549,7 @@ func TestConnectionsListSmallAnalyticsDegradesGracefully(t *testing.T) {
 func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	tenantID := uuid.New()
 	nodeID := uuid.New()
-	base := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	base := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
 	store := &fakeStore{}
 	cfg := &config.Config{
 		HTTP:      config.HTTPConfig{Address: ":0"},

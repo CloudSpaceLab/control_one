@@ -1148,6 +1148,27 @@ export interface TargetClassificationResponse {
   evidence: string[];
 }
 
+export type TargetType =
+  | "personal_pc"
+  | "workstation"
+  | "laptop"
+  | "server"
+  | "vm"
+  | "cloud_instance"
+  | "domain_controller"
+  | "kiosk"
+  | "unknown"
+  | (string & {});
+
+export type ReachabilityMode =
+  | "outbound_only"
+  | "direct_private"
+  | "direct_public"
+  | "overlay"
+  | "offline_periodic"
+  | "unknown"
+  | (string & {});
+
 export interface NetworkObservationResponse {
   kind: string;
   value: string;
@@ -1173,8 +1194,8 @@ export interface NodeSummary {
   updated_at: string;
   machine_id?: string;
   management_mode?: string;
-  target_type?: string;
-  reachability_mode?: string;
+  target_type?: TargetType;
+  reachability_mode?: ReachabilityMode;
   install_context?: string;
   classification?: TargetClassificationResponse;
   network_observations?: NetworkObservationResponse[];
