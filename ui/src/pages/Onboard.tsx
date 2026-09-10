@@ -55,8 +55,9 @@ const PROTO_HINT: Record<OnboardingProtocol, string> = {
 };
 
 type Scenario = 'local' | 'remote' | 'bulk' | 'offline' | 'repair';
+type InstallOS = 'windows' | 'macos' | 'linux';
 
-function detectOS(): 'windows' | 'macos' | 'linux' {
+function detectOS(): InstallOS {
   const ua = navigator.userAgent.toLowerCase();
   const plat = navigator.platform.toLowerCase();
   if (ua.includes('win') || plat.includes('win')) return 'windows';
@@ -91,9 +92,10 @@ export function Onboard(): JSX.Element {
   const [creatingTenant, setCreatingTenant] = useState(false);
   const [newTenantName, setNewTenantName] = useState('');
 
-  // Local install copy state
+  // Command install copy state
   const [copied, setCopied] = useState(false);
   const detectedOS = detectOS();
+  const [installOS, setInstallOS] = useState<InstallOS>(detectedOS);
   const installCommands = {
     windows: `irm ${window.location.origin}/install.ps1 | iex`,
     macos: `curl -fsSL ${window.location.origin}/install.sh | sh`,
@@ -109,7 +111,7 @@ export function Onboard(): JSX.Element {
     setJobId(null);
   }, [scenario]);
 
-  // Auto country lookup once we know the host is reachable. Uses the
+  // Auto country lookup once we know the address is reachable. Uses the
   // existing ipintel pipeline (akyriako/ipquery + AbuseIPDB fallback).
   const enrichQ = useQuery<IpEnrichment | null>({
     queryKey: ['onboard.enrich', host, result?.ok, enrolTenantId ?? currentTenantId],
@@ -255,8 +257,8 @@ export function Onboard(): JSX.Element {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <ScenarioCard
           icon={<Monitor className="h-5 w-5" />}
-          title="Install on this machine"
-          description="Local terminal install."
+          title="Command install"
+          description="No inbound access required."
           outcome="First heartbeat activates the machine."
           active={scenario === 'local'}
           onClick={() => setScenario(scenario === 'local' ? null : 'local')}
@@ -298,20 +300,33 @@ export function Onboard(): JSX.Element {
         />
       </div>
 
-      {/* ── "Install on this machine" panel ───────────────────────────── */}
+      {/* ── Command install panel ─────────────────────────────────────── */}
       {scenario === 'local' && (
-        <Panel padding="md" eyebrow="LOCAL INSTALL" title={`Install local agent for ${detectedOS === 'windows' ? 'Windows' : detectedOS === 'macos' ? 'macOS' : 'Linux'}`} toneAccent="brand">
+        <Panel padding="md" eyebrow="COMMAND INSTALL" title="Run install command" toneAccent="brand">
           <p className="text-sm text-text-secondary mb-3">
-            Run from an elevated terminal. First heartbeat activates the machine.
+            Run from an elevated terminal on the machine being enrolled.
           </p>
+          <Tabs value={installOS} onValueChange={(v) => setInstallOS(v as InstallOS)} className="mb-3">
+            <TabsList>
+              <TabsTrigger value="linux">
+                <Terminal className="h-4 w-4" /> Linux
+              </TabsTrigger>
+              <TabsTrigger value="macos">
+                <Monitor className="h-4 w-4" /> macOS
+              </TabsTrigger>
+              <TabsTrigger value="windows">
+                <Monitor className="h-4 w-4" /> Windows
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground">
-            <code className="flex-1 break-all">{installCommands[detectedOS]}</code>
+            <code className="flex-1 break-all">{installCommands[installOS]}</code>
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={() => {
-                navigator.clipboard.writeText(installCommands[detectedOS]);
+                navigator.clipboard.writeText(installCommands[installOS]);
                 setCopied(true);
                 toast.success('Copied to clipboard');
                 setTimeout(() => setCopied(false), 2000);
@@ -322,7 +337,7 @@ export function Onboard(): JSX.Element {
             </Button>
           </div>
           <div className="mt-3 rounded-md border border-accent-400/20 bg-accent-400/5 px-3 py-2 text-xs text-text-secondary">
-            First heartbeat activates the machine. Inbound access is not required. IP changes remain network observations.
+            First heartbeat activates the machine. Static IP and inbound access are not required.
           </div>
         </Panel>
       )}
@@ -362,16 +377,18 @@ export function Onboard(): JSX.Element {
 
           <form onSubmit={submitTest} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Panel padding="md" eyebrow="TARGET" title="Current network address">
-              <Field label="Address" icon={<Globe className="h-3.5 w-3.5" />}>
+              <Field label="Address" htmlFor="onboard-address" icon={<Globe className="h-3.5 w-3.5" />}>
                 <Input
+                  id="onboard-address"
                   placeholder="10.0.0.42 or machine.example.com"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
                   required
                 />
               </Field>
-              <Field label="Port (optional)">
+              <Field label="Port (optional)" htmlFor="onboard-port">
                 <Input
+                  id="onboard-port"
                   type="number"
                   placeholder={
                     protocol === 'ssh' ? '22' : protocol === 'winrm' ? (https ? '5986' : '5985') : '3389'
@@ -406,8 +423,9 @@ export function Onboard(): JSX.Element {
 
             {protocol !== 'rdp' && (
               <Panel padding="md" eyebrow="CREDENTIALS" title="Authentication" toneAccent="accent">
-                <Field label="Username" icon={<ShieldCheck className="h-3.5 w-3.5" />}>
+                <Field label="Username" htmlFor="onboard-username" icon={<ShieldCheck className="h-3.5 w-3.5" />}>
                   <Input
+                    id="onboard-username"
                     placeholder={protocol === 'ssh' ? 'ubuntu' : 'Administrator'}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -426,8 +444,9 @@ export function Onboard(): JSX.Element {
                       </TabsTrigger>
                     </TabsList>
                     <TabsContent value="password">
-                      <Field label="Password">
+                      <Field label="Password" htmlFor="onboard-ssh-password">
                         <Input
+                          id="onboard-ssh-password"
                           type="password"
                           placeholder="••••••••"
                           value={password}
@@ -456,8 +475,9 @@ export function Onboard(): JSX.Element {
                           autoComplete="off"
                         />
                       </div>
-                      <Field label="Passphrase (optional)">
+                      <Field label="Passphrase (optional)" htmlFor="onboard-private-key-passphrase">
                         <Input
+                          id="onboard-private-key-passphrase"
                           type="password"
                           placeholder="leave blank if key is unencrypted"
                           value={passphrase}
@@ -468,8 +488,9 @@ export function Onboard(): JSX.Element {
                     </TabsContent>
                   </Tabs>
                 ) : (
-                  <Field label="Password">
+                  <Field label="Password" htmlFor="onboard-winrm-password">
                     <Input
+                      id="onboard-winrm-password"
                       type="password"
                       placeholder="••••••••"
                       value={password}
@@ -520,10 +541,41 @@ export function Onboard(): JSX.Element {
               {result.ok && result.probe ? (
                 <ProbeSummary probe={result.probe} />
               ) : (
-                <p className="text-sm text-state-critical">
-                  {result.error || 'Connection failed for an unknown reason.'}
-                </p>
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm text-state-critical">
+                    {result.error || 'Connection failed for an unknown reason.'}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setScenario('local')}>
+                      Command install
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" asChild>
+                      <Link to="/offline-bundle">Offline bundle</Link>
+                    </Button>
+                  </div>
+                </div>
               )}
+            </Panel>
+          )}
+
+          {result?.ok && protocol === 'rdp' && (
+            <Panel
+              padding="md"
+              eyebrow="ENROLLMENT PATH"
+              title="WinRM or command install required"
+              toneAccent="accent"
+            >
+              <p className="text-sm text-text-secondary">
+                RDP confirms reachability only. Agent enrollment needs WinRM, SSH, command install, or an offline bundle.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => setProtocol('winrm')}>
+                  Switch to WinRM
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setScenario('local')}>
+                  Command install
+                </Button>
+              </div>
             </Panel>
           )}
 
@@ -537,9 +589,11 @@ export function Onboard(): JSX.Element {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field
                   label="Machine group"
+                  htmlFor="onboard-machine-group"
                   icon={<Sparkles className="h-3.5 w-3.5 text-accent-400" />}
                 >
                   <Input
+                    id="onboard-machine-group"
                     placeholder="Group US"
                     value={groupName}
                     onChange={(e) => {
@@ -752,10 +806,10 @@ function ScenarioCard({
   );
 }
 
-function Field({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) {
+function Field({ label, htmlFor, icon, children }: { label: string; htmlFor?: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className="inline-flex items-center gap-1.5">
+      <Label htmlFor={htmlFor} className="inline-flex items-center gap-1.5">
         {icon}
         {label}
       </Label>
