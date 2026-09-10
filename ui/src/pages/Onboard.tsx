@@ -46,6 +46,7 @@ import type {
   OnboardingProtocol,
   TestConnectionPayload,
   TestConnectionResult,
+  EnrollmentToken,
 } from '../lib/api';
 
 const PROTO_HINT: Record<OnboardingProtocol, string> = {
@@ -65,7 +66,25 @@ function detectOS(): InstallOS {
   return 'linux';
 }
 
+function installPlatform(os: InstallOS): string {
+  return os === 'macos' ? 'darwin' : os;
+}
 
+function buildInstallScriptUrl(origin: string, token: string, os: InstallOS): string {
+  const search = new URLSearchParams({
+    token,
+    platform: installPlatform(os),
+  });
+  return `${origin}/api/v1/agent/install-script?${search.toString()}`;
+}
+
+function buildInstallCommand(origin: string, token: string, os: InstallOS): string {
+  const url = buildInstallScriptUrl(origin, token, os);
+  if (os === 'windows') {
+    return `irm '${url}' | iex`;
+  }
+  return `curl -fsSL '${url}' | sudo bash`;
+}
 
 export function Onboard(): JSX.Element {
   const client = useApiClient();
@@ -96,10 +115,22 @@ export function Onboard(): JSX.Element {
   const [copied, setCopied] = useState(false);
   const detectedOS = detectOS();
   const [installOS, setInstallOS] = useState<InstallOS>(detectedOS);
-  const installCommands = {
-    windows: `irm ${window.location.origin}/install.ps1 | iex`,
-    macos: `curl -fsSL ${window.location.origin}/install.sh | sh`,
-    linux: `curl -fsSL ${window.location.origin}/install.sh | sh`,
+  const [installToken, setInstallToken] = useState<EnrollmentToken | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const installOrigin = window.location.origin;
+  const installCommand = installToken?.token
+    ? buildInstallCommand(installOrigin, installToken.token, installOS)
+    : buildInstallCommand(installOrigin, '<generate-token>', installOS);
+
+  const resetInstallCommand = () => {
+    setInstallToken(null);
+    setInstallError(null);
+    setCopied(false);
+  };
+
+  const selectEnrollmentTenant = (tenantId: string | null) => {
+    if (tenantId !== enrolTenantId) resetInstallCommand();
+    setEnrolTenantId(tenantId);
   };
 
   useEffect(() => {
@@ -197,11 +228,39 @@ export function Onboard(): JSX.Element {
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Enrolment failed'),
   });
 
+  const generateInstallToken = useMutation({
+    mutationFn: async () => {
+      const tenantIdForToken = enrolTenantId ?? currentTenantId;
+      if (!tenantIdForToken) throw new Error('Select a tenant before generating a token');
+      const issued = await client.createEnrollmentToken({
+        name: `command-install-${installOS}-${Date.now()}`,
+        tenant_id: tenantIdForToken,
+        max_nodes: 1,
+        ttl: '24h',
+        labels: { onboard_source: 'command-install', platform: installPlatform(installOS) },
+        capabilities: ['agent.run'],
+      });
+      if (!issued.token) throw new Error('controlplane returned no raw enrollment token');
+      return issued;
+    },
+    onSuccess: (issued) => {
+      setInstallToken(issued);
+      setInstallError(null);
+      setCopied(false);
+      toast.success('Token generated');
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : 'Token generation failed';
+      setInstallError(msg);
+      toast.error(msg);
+    },
+  });
+
   const createTenant = useMutation({
     mutationFn: () => client.createTenant({ name: newTenantName.trim() }),
     onSuccess: async (t) => {
       await refreshTenants();
-      setEnrolTenantId(t.id);
+      selectEnrollmentTenant(t.id);
       setNewTenantName('');
       setCreatingTenant(false);
       toast.success(`Tenant "${t.name}" created`);
@@ -306,7 +365,14 @@ export function Onboard(): JSX.Element {
           <p className="text-sm text-text-secondary mb-3">
             Run from an elevated terminal on the machine being enrolled.
           </p>
-          <Tabs value={installOS} onValueChange={(v) => setInstallOS(v as InstallOS)} className="mb-3">
+          <Tabs
+            value={installOS}
+            onValueChange={(v) => {
+              setInstallOS(v as InstallOS);
+              resetInstallCommand();
+            }}
+            className="mb-3"
+          >
             <TabsList>
               <TabsTrigger value="linux">
                 <Terminal className="h-4 w-4" /> Linux
@@ -319,14 +385,30 @@ export function Onboard(): JSX.Element {
               </TabsTrigger>
             </TabsList>
           </Tabs>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-text-secondary">One machine, 24h token.</p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={generateInstallToken.isPending}
+              disabled={generateInstallToken.isPending || !(enrolTenantId ?? currentTenantId)}
+              onClick={() => generateInstallToken.mutate()}
+            >
+              <Key className="h-4 w-4" />
+              {installToken?.token ? 'Regenerate token' : 'Generate token'}
+            </Button>
+          </div>
           <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground">
-            <code className="flex-1 break-all">{installCommands[installOS]}</code>
+            <code className="flex-1 break-all">{installCommand}</code>
             <Button
               type="button"
               variant="ghost"
               size="sm"
+              disabled={!installToken?.token}
               onClick={() => {
-                navigator.clipboard.writeText(installCommands[installOS]);
+                if (!installToken?.token) return;
+                navigator.clipboard.writeText(installCommand);
                 setCopied(true);
                 toast.success('Copied to clipboard');
                 setTimeout(() => setCopied(false), 2000);
@@ -336,6 +418,9 @@ export function Onboard(): JSX.Element {
               {copied ? 'Copied' : 'Copy'}
             </Button>
           </div>
+          {installError ? (
+            <p className="mt-2 text-xs text-state-critical">{installError}</p>
+          ) : null}
           <div className="mt-3 rounded-md border border-accent-400/20 bg-accent-400/5 px-3 py-2 text-xs text-text-secondary">
             First heartbeat activates the machine. Static IP and inbound access are not required.
           </div>
@@ -663,7 +748,7 @@ export function Onboard(): JSX.Element {
                       <SelectField
                         label="Tenant"
                         value={enrolTenantId ?? ''}
-                        onChange={(e) => setEnrolTenantId(e.target.value || null)}
+                        onChange={(e) => selectEnrollmentTenant(e.target.value || null)}
                         wrapperClassName="flex-1"
                       >
                         <option value="">Select tenant…</option>

@@ -73,11 +73,60 @@ describe('Onboard', () => {
     await user.click(screen.getByRole('button', { name: /Command install/i }));
     expect(screen.getByText(/Static IP and inbound access are not required/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('tab', { name: /Windows/i }));
-    expect(screen.getByText(/install\.ps1/)).toBeInTheDocument();
-
     await user.click(screen.getByRole('tab', { name: /Linux/i }));
-    expect(screen.getByText(/install\.sh/)).toBeInTheDocument();
+    expect(screen.getByText(/platform=linux/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /macOS/i }));
+    expect(screen.getByText(/platform=darwin/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /Windows/i }));
+    expect(screen.getByText(/platform=windows/)).toBeInTheDocument();
+  });
+
+  it('generates a tokenized command for machines without inbound access', async () => {
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextMock },
+    });
+    mocks.createEnrollmentToken.mockResolvedValueOnce({
+      id: 'token-1',
+      tenant_id: 'tenant-1',
+      name: 'command-install-linux',
+      token: 'cot_dd38fd89714ab5948dd92afd2e51e501',
+      max_nodes: 1,
+      nodes_enrolled: 0,
+      labels: { onboard_source: 'command-install', platform: 'linux' },
+      capabilities: ['agent.run'],
+      created_at: '2026-09-10T00:00:00Z',
+      expires_at: '2026-09-11T00:00:00Z',
+    });
+    renderOnboard();
+
+    await user.click(screen.getByRole('button', { name: /Command install/i }));
+    await user.click(screen.getByRole('tab', { name: /Linux/i }));
+    await user.click(screen.getByRole('button', { name: /Generate token/i }));
+
+    expect(mocks.createEnrollmentToken).toHaveBeenCalledWith({
+      name: expect.stringMatching(/^command-install-linux-/),
+      tenant_id: 'tenant-1',
+      max_nodes: 1,
+      ttl: '24h',
+      labels: { onboard_source: 'command-install', platform: 'linux' },
+      capabilities: ['agent.run'],
+    });
+    expect(
+      await screen.findByText(
+        /\/api\/v1\/agent\/install-script\?token=cot_dd38fd89714ab5948dd92afd2e51e501&platform=linux/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/\| sudo bash/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(writeTextMock).toHaveBeenCalledWith(
+      "curl -fsSL 'http://localhost:3000/api/v1/agent/install-script?token=cot_dd38fd89714ab5948dd92afd2e51e501&platform=linux' | sudo bash",
+    );
   });
 
   it('keeps remote install hints target-neutral', async () => {

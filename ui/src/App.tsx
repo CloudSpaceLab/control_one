@@ -1,11 +1,12 @@
-import { lazy, Suspense } from 'react';
-import { Compass, Home, Search } from 'lucide-react';
+import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react';
+import { AlertTriangle, Compass, Home, Search } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MainLayout } from './components/MainLayout';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
 import { Skeleton } from './components/ui/skeleton';
+import { Button } from './components/ui/button';
 import { EmptyState, Panel, SectionHeader } from './components/kit';
 
 // Eager: every authenticated visit lands on the Control Room.
@@ -69,6 +70,67 @@ function PageFallback(): JSX.Element {
       </div>
     </div>
   );
+}
+
+interface RouteErrorBoundaryProps {
+  children: ReactNode;
+  resetKey: string;
+}
+
+interface RouteErrorBoundaryState {
+  error: Error | null;
+}
+
+class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBoundaryState> {
+  state: RouteErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidUpdate(prevProps: RouteErrorBoundaryProps): void {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('Console route failed', error, info);
+  }
+
+  render(): ReactNode {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <div className="flex min-w-0 flex-col gap-5">
+        <SectionHeader
+          eyebrow="RECOVERY"
+          title="Console module failed"
+          description="Refresh required after deployment."
+        />
+        <Panel padding="lg" toneAccent="critical">
+          <EmptyState
+            icon={<AlertIcon />}
+            title="Module unavailable"
+            description="Latest assets may still be loading."
+            action={
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => window.location.reload()}
+              >
+                Reload console
+              </Button>
+            }
+          />
+        </Panel>
+      </div>
+    );
+  }
+}
+
+function AlertIcon(): JSX.Element {
+  return <AlertTriangle />;
 }
 
 function ConsoleNotFound(): JSX.Element {
@@ -166,7 +228,8 @@ export function App(): JSX.Element {
         <Route
           path="*"
           element={
-            <Suspense fallback={<PageFallback />}>
+            <RouteErrorBoundary resetKey={location.pathname}>
+              <Suspense fallback={<PageFallback />}>
               <Routes>
                 <Route path="onboard" element={<Onboard />} />
                 <Route path="control-room" element={<ControlRoom />} />
@@ -202,7 +265,7 @@ export function App(): JSX.Element {
                 {/* Patch Management (PR 4) */}
                 <Route path="infrastructure/patch" element={<PatchManagement />} />
                 {/* Legacy routes redirect to the consolidated page, mapping their
-                    landing tab. Query params from the old URL drop here. */}
+                    landing tab. Query params from the old URL are ignored. */}
                 <Route path="threat-feeds" element={<Navigate to="/security/network?tab=threats" replace />} />
                 <Route path="connections" element={<Navigate to="/security/network?tab=connections" replace />} />
                 <Route path="sessions" element={<Sessions />} />
@@ -223,7 +286,8 @@ export function App(): JSX.Element {
                 <Route path="access/finacle" element={<FinacleProfiles />} />
                 <Route path="*" element={<ConsoleNotFound />} />
               </Routes>
-            </Suspense>
+              </Suspense>
+            </RouteErrorBoundary>
           }
         />
       </Route>

@@ -346,11 +346,11 @@ export function Observability(): JSX.Element {
 
       const errors: string[] = [];
       const webservers =
-        webserverResult.status === 'fulfilled'
+        webserverResult.status === 'fulfilled' && Array.isArray(webserverResult.value.data)
           ? webserverResult.value.data
           : [];
       const sourceHealth =
-        sourceHealthResult.status === 'fulfilled'
+        sourceHealthResult.status === 'fulfilled' && Array.isArray(sourceHealthResult.value.items)
           ? sourceHealthResult.value.items
           : [];
 
@@ -704,17 +704,21 @@ function buildLiveObservabilityServices({
   coverageRows: CoverageMatrixRow[];
 }): ObservabilityService[] {
   const services: ObservabilityService[] = [];
+  const safeWebservers = Array.isArray(webservers) ? webservers : [];
+  const safeSourceHealth = Array.isArray(sourceHealth) ? sourceHealth : [];
+  const safeCoverageRows = Array.isArray(coverageRows) ? coverageRows : [];
+  const safeNodes = Array.isArray(nodes) ? nodes : [];
 
-  services.push(...webservers.slice(0, 8).map(serviceFromWebserver));
-  services.push(...sourceHealth.slice(0, 10).map(serviceFromSourceHealth));
+  services.push(...safeWebservers.slice(0, 8).map(serviceFromWebserver));
+  services.push(...safeSourceHealth.slice(0, 10).map(serviceFromSourceHealth));
 
-  const attentionRows = coverageRows
+  const attentionRows = safeCoverageRows
     .filter((row) => isAttentionCoverageState(row.coverage_state ?? row.state))
     .slice(0, 8)
     .map(serviceFromCoverageRow);
   services.push(...attentionRows);
 
-  const nodeRows = nodes
+  const nodeRows = safeNodes
     .slice(0, 6)
     .map(serviceFromNode)
     .filter((service) => !services.some((candidate) => candidate.id === service.id));
