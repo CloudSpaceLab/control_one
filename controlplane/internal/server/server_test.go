@@ -2559,6 +2559,7 @@ type fakeStore struct {
 	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
 	// assert label propagation without depending on A's merge. Keyed by node id.
 	nodeLabels             map[uuid.UUID]map[string]any
+	updateNodeLabelsCalls  int
 	leases                 map[uuid.UUID]storage.RemediationLease
 	enrollmentTokens       map[string]storage.EnrollmentToken // keyed by token hash
 	remediationConfigs     map[uuid.UUID]storage.TenantRemediationConfig
@@ -5496,6 +5497,7 @@ func (f *fakeStore) UpdateNodeLabels(_ context.Context, id uuid.UUID, labels map
 	defer f.mu.Unlock()
 	for i, node := range f.nodes {
 		if node.ID == id {
+			f.updateNodeLabelsCalls++
 			if labels == nil {
 				labels = map[string]any{}
 			}

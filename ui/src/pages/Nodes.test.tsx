@@ -73,6 +73,10 @@ const node: NodeSummary = {
   last_seen_at: new Date().toISOString(),
   agent_version: '1.2.3',
   labels: {},
+  network_observations: [
+    { kind: 'public_ip', value: '198.51.100.44', source: 'agent_heartbeat', confidence: 95 },
+    { kind: 'private_ip', value: '10.0.0.44', source: 'agent_interface', confidence: 80 },
+  ],
   created_at: '2026-06-08T00:00:00Z',
   updated_at: '2026-06-08T00:00:00Z',
 };
@@ -147,6 +151,17 @@ describe('Nodes page production hardening', () => {
     expect(await screen.findByText('At-risk fleet unavailable')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('risk model unavailable');
     expect(mocks.listAtRiskNodes).toHaveBeenCalledWith('tenant-1');
+  });
+
+  it('shows the primary observed IP instead of relying on the stored public IP', async () => {
+    renderNodes();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /show node table/i }));
+
+    expect(await screen.findByText('Observed IP')).toBeInTheDocument();
+    expect(screen.getByText('198.51.100.44')).toBeInTheDocument();
+    expect(screen.queryByText('203.0.113.10')).not.toBeInTheDocument();
   });
 
   it('uses an in-app confirmation and keeps failed isolation changes visible', async () => {

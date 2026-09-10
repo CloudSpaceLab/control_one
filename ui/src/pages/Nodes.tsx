@@ -198,6 +198,13 @@ function coordinatesFromIP(node: NodeSummary): { lat: number; lon: number; label
   return null;
 }
 
+function primaryObservedIP(node: NodeSummary): string | null {
+  const observations = node.network_observations ?? [];
+  const preferred = observations.find((obs) => obs.kind === 'public_ip' && obs.value)
+    ?? observations.find((obs) => obs.kind === 'private_ip' && obs.value);
+  return preferred?.value ?? node.public_ip ?? null;
+}
+
 interface IPGeoPoint {
   lat: number;
   lon: number;
@@ -677,6 +684,7 @@ function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps
     : isOnline(node)
     ? 'healthy'
     : 'unknown';
+  const observedIP = primaryObservedIP(node);
 
   return (
     <motion.button
@@ -699,8 +707,11 @@ function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps
 
       {/* Meta */}
       <div className="flex flex-col gap-1">
-        {node.public_ip && (
-          <code className="font-mono text-[0.65rem] text-text-muted">{node.public_ip}</code>
+        {observedIP && (
+          <div className="flex items-center gap-1.5 text-[0.65rem] text-text-muted">
+            <span className="font-medium uppercase tracking-wider">Observed IP</span>
+            <code className="font-mono">{observedIP}</code>
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5">
           {node.os && (
@@ -1325,9 +1336,9 @@ export function Nodes(): JSX.Element {
       cell: ({ row }) => <span className="text-text-secondary">{row.original.os ?? '—'}</span>,
     },
     {
-      header: 'Public IP',
-      accessorKey: 'public_ip',
-      cell: ({ row }) => <code className="font-mono text-xs text-text-secondary">{row.original.public_ip ?? '—'}</code>,
+      header: 'Observed IP',
+      id: 'observed_ip',
+      cell: ({ row }) => <code className="font-mono text-xs text-text-secondary">{primaryObservedIP(row.original) ?? '—'}</code>,
     },
     {
       header: 'Health',

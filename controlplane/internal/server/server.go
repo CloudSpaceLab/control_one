@@ -882,10 +882,10 @@ type Server struct {
 	sealer *secretbox.Sealer
 	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
 	// to SSE subscribers and internal correlators. nil means events are a no-op.
-	eventBus        *eventbus.Bus
+	eventBus *eventbus.Bus
 	// webhookBridge subscribes to the event bus and dispatches webhooks
 	// for events that have matching webhook subscribers.
-	webhookBridge *WebhookBridge
+	webhookBridge   *WebhookBridge
 	correlationCtx  context.Context
 	correlationStop context.CancelFunc
 	correlationEng  *correlation.Engine
@@ -2541,24 +2541,24 @@ type networkObservationResponse struct {
 }
 
 type nodeResponse struct {
-	ID                  string                         `json:"id"`
-	TenantID            string                         `json:"tenant_id"`
-	Hostname            string                         `json:"hostname"`
-	OS                  *string                        `json:"os,omitempty"`
-	Arch                *string                        `json:"arch,omitempty"`
-	PublicIP            *string                        `json:"public_ip,omitempty"`
-	State               string                         `json:"state"`
-	LastSeenAt          *string                        `json:"last_seen_at,omitempty"`
-	FirstScanAt         *string                        `json:"first_scan_at,omitempty"`
-	Labels              map[string]any                 `json:"labels"`
-	AgentVersion        *string                        `json:"agent_version,omitempty"`
-	CreatedAt           string                         `json:"created_at"`
-	UpdatedAt           string                         `json:"updated_at"`
-	ManagementMode      string                         `json:"management_mode"`
-	TargetType          string                         `json:"target_type"`
-	ReachabilityMode    string                         `json:"reachability_mode"`
-	InstallContext      string                         `json:"install_context,omitempty"`
-	MachineID           string                         `json:"machine_id,omitempty"`
+	ID                  string                        `json:"id"`
+	TenantID            string                        `json:"tenant_id"`
+	Hostname            string                        `json:"hostname"`
+	OS                  *string                       `json:"os,omitempty"`
+	Arch                *string                       `json:"arch,omitempty"`
+	PublicIP            *string                       `json:"public_ip,omitempty"`
+	State               string                        `json:"state"`
+	LastSeenAt          *string                       `json:"last_seen_at,omitempty"`
+	FirstScanAt         *string                       `json:"first_scan_at,omitempty"`
+	Labels              map[string]any                `json:"labels"`
+	AgentVersion        *string                       `json:"agent_version,omitempty"`
+	CreatedAt           string                        `json:"created_at"`
+	UpdatedAt           string                        `json:"updated_at"`
+	ManagementMode      string                        `json:"management_mode"`
+	TargetType          string                        `json:"target_type"`
+	ReachabilityMode    string                        `json:"reachability_mode"`
+	InstallContext      string                        `json:"install_context,omitempty"`
+	MachineID           string                        `json:"machine_id,omitempty"`
 	Classification      *targetClassificationResponse `json:"classification,omitempty"`
 	NetworkObservations []networkObservationResponse  `json:"network_observations,omitempty"`
 }
@@ -2586,7 +2586,9 @@ func nodeResponseFromModel(n storage.Node) nodeResponse {
 	if resp.Labels == nil {
 		resp.Labels = map[string]any{}
 	}
-	if v, ok := resp.Labels["target.machine_id"]; ok {
+	if n.MachineID.Valid && strings.TrimSpace(n.MachineID.String) != "" {
+		resp.MachineID = strings.TrimSpace(n.MachineID.String)
+	} else if v, ok := resp.Labels["target.machine_id"]; ok {
 		if s, ok := v.(string); ok && s != "" {
 			resp.MachineID = s
 		}

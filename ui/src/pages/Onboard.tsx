@@ -246,7 +246,7 @@ export function Onboard(): JSX.Element {
       <SectionHeader
         eyebrow="ONBOARDING"
         title="Add machines to Control One"
-        description="Choose a scenario below to get started. All paths use the same node labels, tenant scope, and job tracking."
+        description="Agent identity survives hostname and IP changes."
       />
 
       <OnboardAIPanel />
@@ -256,24 +256,24 @@ export function Onboard(): JSX.Element {
         <ScenarioCard
           icon={<Monitor className="h-5 w-5" />}
           title="Install on this machine"
-          description="Run a one-liner on the machine you're using right now."
-          outcome="The agent installs and connects automatically."
+          description="Local terminal install."
+          outcome="First heartbeat activates the machine."
           active={scenario === 'local'}
           onClick={() => setScenario(scenario === 'local' ? null : 'local')}
         />
         <ScenarioCard
           icon={<Globe className="h-5 w-5" />}
           title="Install on another machine"
-          description="Push the agent remotely via SSH or WinRM."
-          outcome="You'll test the connection, then enrol."
+          description="SSH or WinRM push install."
+          outcome="Credential probe required before enrollment."
           active={scenario === 'remote'}
           onClick={() => setScenario(scenario === 'remote' ? null : 'remote')}
         />
         <ScenarioCard
           icon={<Layers className="h-5 w-5" />}
           title="Bulk enroll"
-          description="Enroll many machines at once with a CSV or API integration."
-          outcome="Opens the bulk enrollment page."
+          description="CSV, pasted host list, or API-driven enrollment."
+          outcome="Many machines, one tracked job."
           active={false}
           onClick={() => {}}
           link="/fleet-enroll"
@@ -281,8 +281,8 @@ export function Onboard(): JSX.Element {
         <ScenarioCard
           icon={<Package className="h-5 w-5" />}
           title="Offline or restricted network"
-          description="Generate an offline bundle for air-gapped environments."
-          outcome="Opens the offline bundle page."
+          description="Signed bundle for restricted networks."
+          outcome="No internet fetch during install."
           active={false}
           onClick={() => {}}
           link="/offline-bundle"
@@ -290,8 +290,8 @@ export function Onboard(): JSX.Element {
         <ScenarioCard
           icon={<Wrench className="h-5 w-5" />}
           title="Repair existing agent"
-          description="Select a node from the fleet to repair its agent."
-          outcome="Opens the repair / reinstall flow."
+          description="One-shot reinstall token."
+          outcome="Identity and history preserved."
           active={false}
           onClick={() => {}}
           link="/nodes"
@@ -300,9 +300,9 @@ export function Onboard(): JSX.Element {
 
       {/* ── "Install on this machine" panel ───────────────────────────── */}
       {scenario === 'local' && (
-        <Panel padding="md" eyebrow="LOCAL INSTALL" title={`Install the agent on this ${detectedOS === 'windows' ? 'Windows' : detectedOS === 'macos' ? 'macOS' : 'Linux'} machine`} toneAccent="brand">
+        <Panel padding="md" eyebrow="LOCAL INSTALL" title={`Install local agent for ${detectedOS === 'windows' ? 'Windows' : detectedOS === 'macos' ? 'macOS' : 'Linux'}`} toneAccent="brand">
           <p className="text-sm text-text-secondary mb-3">
-            Copy and run the command below in a terminal on this machine. The agent will register itself automatically.
+            Run from an elevated terminal. First heartbeat activates the machine.
           </p>
           <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground">
             <code className="flex-1 break-all">{installCommands[detectedOS]}</code>
@@ -322,8 +322,7 @@ export function Onboard(): JSX.Element {
             </Button>
           </div>
           <div className="mt-3 rounded-md border border-accent-400/20 bg-accent-400/5 px-3 py-2 text-xs text-text-secondary">
-            The machine will appear after its first heartbeat. No inbound access is required.
-            IP addresses may change — Control One tracks the machine by agent identity.
+            First heartbeat activates the machine. Inbound access is not required. IP changes remain network observations.
           </div>
         </Panel>
       )}
@@ -332,11 +331,10 @@ export function Onboard(): JSX.Element {
       {scenario === 'remote' && (
         <>
           <div className="rounded-md border border-accent-400/20 bg-accent-400/5 px-3 py-2 text-xs text-text-secondary">
-            The machine will appear after its first heartbeat. No inbound access is required after the agent is installed.
-            IP addresses may change — Control One tracks the machine by agent identity.
+            First heartbeat activates the machine. Inbound access is not required after install. IP changes remain network observations.
           </div>
 
-          <Panel padding="md" eyebrow="STEP 1 · PROTOCOL" title="Pick how to reach the machine" toneAccent="brand">
+          <Panel padding="md" eyebrow="STEP 1 · PROTOCOL" title="Remote install method" toneAccent="brand">
             <Tabs
               value={protocol}
               onValueChange={(v) => {
@@ -363,7 +361,7 @@ export function Onboard(): JSX.Element {
           </Panel>
 
           <form onSubmit={submitTest} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Panel padding="md" eyebrow="TARGET" title="Where is the machine?">
+            <Panel padding="md" eyebrow="TARGET" title="Current network address">
               <Field label="Host" icon={<Globe className="h-3.5 w-3.5" />}>
                 <Input
                   placeholder="10.0.0.42 or server.example.com"
@@ -407,7 +405,7 @@ export function Onboard(): JSX.Element {
             </Panel>
 
             {protocol !== 'rdp' && (
-              <Panel padding="md" eyebrow="CREDENTIALS" title="How should we authenticate?" toneAccent="accent">
+              <Panel padding="md" eyebrow="CREDENTIALS" title="Authentication" toneAccent="accent">
                 <Field label="Username" icon={<ShieldCheck className="h-3.5 w-3.5" />}>
                   <Input
                     placeholder={protocol === 'ssh' ? 'ubuntu' : 'Administrator'}
@@ -554,7 +552,7 @@ export function Onboard(): JSX.Element {
                     {enrichQ.isLoading ? 'IP intelligence…' : enrichQ.data?.geo?.country_code
                       ? `IP origin (${enrichQ.data.geo.country_code}${enrichQ.data.geo?.country ? ' · ' + enrichQ.data.geo.country : ''})`
                       : 'a generic default'}{' '}
-                    — override anytime. Group is stored as a label so existing nodes pages, rules and dashboards filter by it automatically.
+                    for rule and dashboard scoping.
                   </p>
                 </Field>
                 <div className="flex flex-col gap-1.5">
@@ -630,7 +628,7 @@ export function Onboard(): JSX.Element {
                     </div>
                   )}
                   <p className="text-[0.65rem] text-text-muted">
-                    Defaults to the active tenant. Single-machine enrolment scopes the new node here.
+                    Active tenant selected by default. Enrollment is tenant-scoped.
                   </p>
                 </div>
               </div>
@@ -672,8 +670,8 @@ export function Onboard(): JSX.Element {
 
           {!result && !test.isPending && (
             <EmptyState
-              title="Run a test"
-              description="Fill the form above and click Test connection. Successful probes unlock enrollment."
+              title="Connection test required"
+              description="Successful probes unlock enrollment."
               icon={<Terminal />}
             />
           )}
@@ -682,11 +680,9 @@ export function Onboard(): JSX.Element {
 
       {/* ── Repair existing agent ─────────────────────────────────────── */}
       {scenario === 'repair' && (
-        <Panel padding="md" eyebrow="REPAIR AGENT" title="Reinstall an agent preserving its identity" toneAccent="accent">
+        <Panel padding="md" eyebrow="REPAIR AGENT" title="Preserve identity during reinstall" toneAccent="accent">
           <p className="text-sm text-text-secondary">
-            Use this when an existing agent is misbehaving or needs a reinstall. A one-shot token is
-            generated for the target machine and the agent is reinstalled without losing its identity
-            or node record in Control One.
+            One-shot token. Fresh binary. Existing node history preserved.
           </p>
           <ul className="mt-2 list-disc pl-5 text-xs text-text-muted">
             <li>The agent's node key and historical data are preserved.</li>
@@ -696,7 +692,7 @@ export function Onboard(): JSX.Element {
           <div className="mt-3 flex justify-end">
             <Button asChild variant="primary" size="md" shimmer>
               <Link to="/repair-agent">
-                Open repair flow <ArrowRight className="h-4 w-4" />
+                Repair agent <ArrowRight className="h-4 w-4" />
               </Link>
             </Button>
           </div>

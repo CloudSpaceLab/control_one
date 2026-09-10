@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 import (
 	"bytes"
@@ -1057,5 +1057,40 @@ func TestHeartbeatPersistsTargetMetadataObservations(t *testing.T) {
 	}
 	if node.Labels["target.reachability_mode"] != "outbound_only" {
 		t.Fatalf("labels=%+v", node.Labels)
+	}
+}
+
+func TestHeartbeatSkipsTargetMetadataWriteWhenLabelsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	node := storage.Node{
+		ID:        nodeID,
+		TenantID:  tenantID,
+		Hostname:  "stable-workstation",
+		OS:        sql.NullString{String: "windows", Valid: true},
+		State:     storage.NodeStateActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Labels: map[string]any{
+			"target.type":                      "workstation",
+			"target.type_source":               "heuristic",
+			"target.classification_confidence": 70,
+		},
+	}
+	store := &fakeStore{nodes: []storage.Node{node}}
+	srv := buildHeartbeatServer(t, store)
+
+	updated, err := srv.updateNodeTargetMetadataFromHeartbeat(context.Background(), &node, heartbeatRequest{})
+	if err != nil {
+		t.Fatalf("update target metadata: %v", err)
+	}
+	if updated != &node {
+		t.Fatalf("unchanged metadata should return the original node pointer")
+	}
+	if store.updateNodeLabelsCalls != 0 {
+		t.Fatalf("UpdateNodeLabels calls = %d, want 0", store.updateNodeLabelsCalls)
 	}
 }

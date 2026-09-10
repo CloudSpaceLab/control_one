@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 import (
 	"context"
@@ -72,12 +72,12 @@ type heartbeatRequest struct {
 
 	// Target metadata fields. Agents report these so the server can update
 	// classification, reachability, and network observations.
-	TargetType                       string                         `json:"target_type,omitempty"`
-	ReachabilityMode                  string                         `json:"reachability_mode,omitempty"`
-	InstallContext                    string                         `json:"install_context,omitempty"`
-	NetworkObservations               []heartbeatNetworkObservation  `json:"network_observations,omitempty"`
-	TargetClassificationEvidence      []string                       `json:"target_classification_evidence,omitempty"`
-	TargetClassificationConfidence    int                            `json:"target_classification_confidence,omitempty"`
+	TargetType                     string                        `json:"target_type,omitempty"`
+	ReachabilityMode               string                        `json:"reachability_mode,omitempty"`
+	InstallContext                 string                        `json:"install_context,omitempty"`
+	NetworkObservations            []heartbeatNetworkObservation `json:"network_observations,omitempty"`
+	TargetClassificationEvidence   []string                      `json:"target_classification_evidence,omitempty"`
+	TargetClassificationConfidence int                           `json:"target_classification_confidence,omitempty"`
 }
 
 type heartbeatAgentSelfMetrics struct {
@@ -558,35 +558,41 @@ func sanitizeStringSlice(values []string, limit int) []string {
 	return out
 }
 
-
-
 func (s *Server) updateNodeTargetMetadataFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) (*storage.Node, error) {
 	if s == nil || s.store == nil || node == nil {
 		return node, nil
 	}
+	hasTargetSignal := strings.TrimSpace(body.TargetType) != "" ||
+		strings.TrimSpace(body.ReachabilityMode) != "" ||
+		strings.TrimSpace(body.InstallContext) != "" ||
+		len(body.NetworkObservations) > 0 ||
+		len(body.TargetClassificationEvidence) > 0 ||
+		body.TargetClassificationConfidence > 0
 	labels := map[string]any{}
 	for k, v := range node.Labels {
 		labels[k] = v
 	}
-	labels["target.management_mode"] = "agent_managed"
-	if targetType := normalizeTargetType(body.TargetType); targetType != "" {
-		labels["target.type"] = targetType
-		labels["target.type_source"] = "heuristic"
-	}
-	if mode := normalizeReachabilityMode(body.ReachabilityMode); mode != "" {
-		labels["target.reachability_mode"] = mode
-	}
-	if ctx := normalizeInstallContext(body.InstallContext); ctx != "" {
-		labels["target.install_context"] = ctx
-	}
-	if body.TargetClassificationConfidence > 0 {
-		labels["target.classification_confidence"] = clampInt(body.TargetClassificationConfidence, 0, 100)
-	}
-	if len(body.TargetClassificationEvidence) > 0 {
-		labels["target.classification_evidence"] = sanitizeStringSlice(body.TargetClassificationEvidence, 32)
-	}
-	if len(body.NetworkObservations) > 0 {
-		labels["target.network_observations"] = normalizeHeartbeatNetworkObservations(body.NetworkObservations, time.Now().UTC())
+	if hasTargetSignal {
+		labels["target.management_mode"] = "agent_managed"
+		if targetType := normalizeTargetType(body.TargetType); targetType != "" {
+			labels["target.type"] = targetType
+			labels["target.type_source"] = "heuristic"
+		}
+		if mode := normalizeReachabilityMode(body.ReachabilityMode); mode != "" {
+			labels["target.reachability_mode"] = mode
+		}
+		if installContext := normalizeInstallContext(body.InstallContext); installContext != "" {
+			labels["target.install_context"] = installContext
+		}
+		if body.TargetClassificationConfidence > 0 {
+			labels["target.classification_confidence"] = clampInt(body.TargetClassificationConfidence, 0, 100)
+		}
+		if len(body.TargetClassificationEvidence) > 0 {
+			labels["target.classification_evidence"] = sanitizeStringSlice(body.TargetClassificationEvidence, 32)
+		}
+		if len(body.NetworkObservations) > 0 {
+			labels["target.network_observations"] = normalizeHeartbeatNetworkObservations(body.NetworkObservations, time.Now().UTC())
+		}
 	}
 
 	// Server-side heuristic classification: if the agent didn't classify
@@ -616,12 +622,24 @@ func (s *Server) updateNodeTargetMetadataFromHeartbeat(ctx context.Context, node
 		}
 	}
 
+	if labelMapsEqual(labels, node.Labels) {
+		return node, nil
+	}
 	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
 		return node, err
 	}
 	updated := *node
 	updated.Labels = labels
 	return &updated, nil
+}
+
+func labelMapsEqual(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aJSON, aErr := json.Marshal(a)
+	bJSON, bErr := json.Marshal(b)
+	return aErr == nil && bErr == nil && string(aJSON) == string(bJSON)
 }
 
 func normalizeReachabilityMode(value string) string {
@@ -652,7 +670,6 @@ func normalizeHeartbeatNetworkObservations(items []heartbeatNetworkObservation, 
 	}
 	return out
 }
-
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
 // dispatched on previous heartbeats.

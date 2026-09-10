@@ -188,11 +188,11 @@ func TestNodeResponseBackwardCompatibilityNoTargetLabels(t *testing.T) {
 
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	node := storage.Node{
-		ID:       uuid.New(),
-		TenantID: uuid.New(),
-		Hostname: "legacy-node",
-		State:    storage.NodeStateActive,
-		Labels:   map[string]any{"env": "prod"},
+		ID:        uuid.New(),
+		TenantID:  uuid.New(),
+		Hostname:  "legacy-node",
+		State:     storage.NodeStateActive,
+		Labels:    map[string]any{"env": "prod"},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -249,5 +249,29 @@ func TestNodeResponseMachineIDFromLegacyLabel(t *testing.T) {
 
 	if resp.MachineID != "legacy-machine-id" {
 		t.Errorf("machine_id = %q, want %q", resp.MachineID, "legacy-machine-id")
+	}
+}
+
+func TestNodeResponseMachineIDPrefersColumn(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	node := storage.Node{
+		ID:        uuid.New(),
+		TenantID:  uuid.New(),
+		Hostname:  "stable-node",
+		MachineID: sql.NullString{String: "column-machine-id", Valid: true},
+		State:     storage.NodeStateActive,
+		Labels: map[string]any{
+			"target.machine_id": "stale-label-machine-id",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	resp := nodeResponseFromModel(node)
+
+	if resp.MachineID != "column-machine-id" {
+		t.Errorf("machine_id = %q, want %q", resp.MachineID, "column-machine-id")
 	}
 }
