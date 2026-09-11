@@ -49,16 +49,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Cross-compile Go binaries (linux/amd64)
-        env:
-          GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: '0'
+      - name: Cross-compile Go binaries
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags='-s -w' -o dist/controlplane    ./controlplane/cmd/controlplane
-          go build -trimpath -ldflags='-s -w' -o dist/bootstrap-admin ./controlplane/cmd/bootstrap-admin
-          go build -trimpath -ldflags='-s -w' -o dist/controlone-agent-linux-amd64 ./cmd/nodeagent
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o dist/controlplane ./controlplane/cmd/controlplane
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o dist/bootstrap-admin ./controlplane/cmd/bootstrap-admin
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "dist/controlone-agent-$os-$arch" ./cmd/nodeagent
+          done
           ls -lh dist/
 
       - name: Setup Node
@@ -170,10 +170,10 @@ jobs:
             dist/bootstrap-admin \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_PREBUILT_DIR/"
           scp -P "${SSH_PORT:-22}" \
-            dist/controlone-agent-linux-amd64 \
+            dist/controlone-agent-* \
             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_AGENT_DIR/"
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
-            chmod +x '$DEPLOY_PREBUILT_DIR/controlplane' '$DEPLOY_PREBUILT_DIR/bootstrap-admin' '$DEPLOY_AGENT_DIR/controlone-agent-linux-amd64'
+            chmod +x '$DEPLOY_PREBUILT_DIR/controlplane' '$DEPLOY_PREBUILT_DIR/bootstrap-admin' '$DEPLOY_AGENT_DIR'/controlone-agent-*
           "
 
       - name: Upload UI dist + Dockerfiles + nginx config
@@ -293,6 +293,12 @@ jobs:
                 docker logs deploy-controlplane-1 --tail 30 || true
                 exit 1
               fi
+            done
+            for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+              os=${target%/*}
+              arch=${target#*/}
+              curl -fsS --max-time 5 "http://127.0.0.1:8443/api/v1/agent/binary/manifest?os=$os&arch=$arch" >/dev/null
+              echo "agent manifest $os/$arch OK"
             done
             analytics_mode=$({ grep "^ANALYTICS_MODE=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
             doris_enabled=$({ grep "^DORIS_ENABLED=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)

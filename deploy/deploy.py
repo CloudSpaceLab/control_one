@@ -36,6 +36,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY_ROOT = Path(__file__).resolve().parent
 REMOTE_ROOT = "/opt/control-one"
 
+# Agent artifact names are resolved by controlplane/internal/server/agent_download.go.
+# Keep this matrix aligned with every OS and CPU architecture offered by onboarding.
+AGENT_BINARY_TARGETS = (
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+    ("darwin", "amd64"),
+    ("darwin", "arm64"),
+    ("windows", "amd64"),
+    ("windows", "arm64"),
+)
+
 # Files / directories we never push to the server.
 EXCLUDES = {
     ".git",
@@ -528,21 +539,24 @@ def deploy(remote: Remote, domain: str, email: str, secrets_obj: Secrets) -> Non
 
 
 def build_agent_binaries(remote: Remote) -> None:
-    """Cross-compile the agent for linux/amd64 + linux/arm64 ON the remote
-    host (saves us needing a Go toolchain on Windows). Writes binaries
+    """Cross-compile agent binaries ON the remote host (saves us needing a
+    Go toolchain on Windows). Writes binaries
     under {REMOTE_ROOT}/deploy/agent-binaries/ which the controlplane
     container mounts read-only at /var/lib/control-one/agent-binaries.
 
     Naming matches agent_download.go's resolveBinaryPath:
         controlone-agent-linux-amd64
         controlone-agent-linux-arm64
+        controlone-agent-darwin-amd64
+        controlone-agent-darwin-arm64
+        controlone-agent-windows-amd64
+        controlone-agent-windows-arm64
     """
-    targets = [("linux", "amd64"), ("linux", "arm64")]
     bindir = f"{REMOTE_ROOT}/deploy/agent-binaries"
     remote.run(f"mkdir -p {bindir}")
     # Use the official golang image so we don't need Go installed on the
     # box. Mount the repo, build into a tmp dir, then move into place.
-    for goos, goarch in targets:
+    for goos, goarch in AGENT_BINARY_TARGETS:
         out_name = f"controlone-agent-{goos}-{goarch}"
         cmd = (
             f"docker run --rm -v {REMOTE_ROOT}:/src -w /src "

@@ -129,6 +129,38 @@ describe('Onboard', () => {
     );
   });
 
+  it('copies a cmd.exe-compatible Windows installer command', async () => {
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextMock },
+    });
+    mocks.createEnrollmentToken.mockResolvedValueOnce({
+      id: 'token-2',
+      tenant_id: 'tenant-1',
+      name: 'command-install-windows',
+      token: 'cot_windows_token',
+      max_nodes: 1,
+      nodes_enrolled: 0,
+      labels: { onboard_source: 'command-install', platform: 'windows' },
+      capabilities: ['agent.run'],
+      created_at: '2026-09-10T00:00:00Z',
+      expires_at: '2026-09-11T00:00:00Z',
+    });
+    renderOnboard();
+
+    await user.click(screen.getByRole('button', { name: /Command install/i }));
+    await user.click(screen.getByRole('tab', { name: /Windows/i }));
+    await user.click(screen.getByRole('button', { name: /Generate token/i }));
+
+    expect(await screen.findByText(/powershell\.exe -NoProfile -ExecutionPolicy Bypass -Command/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(writeTextMock).toHaveBeenCalledWith(
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-RestMethod -Uri 'http://localhost:3000/api/v1/agent/install-script?token=cot_windows_token&platform=windows' | Invoke-Expression\"",
+    );
+  });
+
   it('keeps remote install hints target-neutral', async () => {
     const user = userEvent.setup();
     renderOnboard();

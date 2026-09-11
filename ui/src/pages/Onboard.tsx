@@ -81,7 +81,7 @@ function buildInstallScriptUrl(origin: string, token: string, os: InstallOS): st
 function buildInstallCommand(origin: string, token: string, os: InstallOS): string {
   const url = buildInstallScriptUrl(origin, token, os);
   if (os === 'windows') {
-    return `irm '${url}' | iex`;
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod -Uri '${url}' | Invoke-Expression"`;
   }
   return `curl -fsSL '${url}' | sudo bash`;
 }
