@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -118,6 +119,53 @@ func TestNodeDocumentationEndpointsComposeNodeState(t *testing.T) {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}
+	}
+}
+
+func TestNodeDocumentationUsesSmallAnalyticsConnections(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	store := &fakeStore{
+		tenants: []storage.Tenant{{ID: tenantID, Name: "Bank Ops"}},
+		nodes: []storage.Node{{
+			ID:       nodeID,
+			TenantID: tenantID,
+			Hostname: "core-api-01",
+			State:    storage.NodeStateActive,
+		}},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		Auth:      authWithTokens("viewer", "viewer-token"),
+		Analytics: config.AnalyticsConfig{Mode: "small", SQLiteDir: t.TempDir()},
+	}, store, &stubQueue{})
+	defer func() { _ = srv.Stop(context.Background()) }()
+	if srv.localAnalytics == nil {
+		t.Fatal("localAnalytics was not initialized")
+	}
+	base := time.Now().UTC().Add(-10 * time.Minute)
+	if err := srv.localAnalytics.AppendConnectionRows(context.Background(), []map[string]any{
+		smallAnalyticsConnRow(tenantID, nodeID, "doc-conn-1", base, base.Add(30*time.Second), "outbound", "10.0.0.5", "8.8.4.4", 20, 40, ""),
+	}); err != nil {
+		t.Fatalf("append connection row: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+nodeID.String()+"/documentation", nil)
+	req.Header.Set("Authorization", "Bearer viewer-token")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET documentation status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body nodeDocumentationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode documentation response: %v", err)
+	}
+	if len(body.TopConnections) != 1 || body.TopConnections[0].ProcessName != "curl" || body.TopConnections[0].DstIP != "8.8.4.4" {
+		t.Fatalf("small analytics top connections missing: %+v", body.TopConnections)
 	}
 }
 

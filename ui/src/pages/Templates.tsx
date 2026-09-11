@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Template, ClusterRolloutWave, TemplateAssignment } from '../lib/api';
 import { SectionHeader, Panel, KpiTile, EmptyState, StatusTag, DataTable, SelectField } from '../components/kit';
 import { Button } from '@/components/ui/button';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import {
@@ -32,7 +33,7 @@ import {
 
 function formatDate(value?: string): string {
   if (!value) {
-    return '—';
+    return '-';
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -124,9 +125,13 @@ export function Templates(): JSX.Element {
 
   const [templateAssignments, setTemplateAssignments] = useState<TemplateAssignment[]>([]);
   const [templateAssignmentsLoading, setTemplateAssignmentsLoading] = useState(false);
+  const [templateAssignmentsError, setTemplateAssignmentsError] = useState<string | null>(null);
   const [templateAssignmentTenantId, setTemplateAssignmentTenantId] = useState('');
   const [templateAssignmentScope, setTemplateAssignmentScope] = useState<ScopePickerValue>({ scope_type: 'tenant' });
   const [creatingTemplateAssignment, setCreatingTemplateAssignment] = useState(false);
+  const [pendingDeleteAssignment, setPendingDeleteAssignment] = useState<TemplateAssignment | null>(null);
+  const [deletingTemplateAssignment, setDeletingTemplateAssignment] = useState(false);
+  const [templateAssignmentActionError, setTemplateAssignmentActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!templateTenantId && currentTenantId) {
@@ -139,10 +144,16 @@ export function Templates(): JSX.Element {
   const [rolloutTenantId, setRolloutTenantId] = useState('');
   const [waves, setWaves] = useState<ClusterRolloutWave[]>([]);
   const [wavesLoading, setWavesLoading] = useState(false);
+  const [wavesError, setWavesError] = useState<string | null>(null);
+  const [waveActionId, setWaveActionId] = useState<string | null>(null);
   const [wavesReloadToken, setWavesReloadToken] = useState(0);
+  const [promotingVersion, setPromotingVersion] = useState<number | null>(null);
 
   useEffect(() => {
     setTemplateAssignments([]);
+    setTemplateAssignmentsError(null);
+    setTemplateAssignmentActionError(null);
+    setPendingDeleteAssignment(null);
     setTemplateAssignmentScope({ scope_type: 'tenant' });
     setTemplateAssignmentTenantId(selectedTemplate?.tenant_id ?? currentTenantId ?? '');
   }, [currentTenantId, selectedTemplate?.id, selectedTemplate?.tenant_id]);
@@ -150,14 +161,19 @@ export function Templates(): JSX.Element {
   const loadTemplateAssignments = useCallback(async () => {
     if (!selectedTemplate) {
       setTemplateAssignments([]);
+      setTemplateAssignmentsError(null);
       return;
     }
     setTemplateAssignmentsLoading(true);
+    setTemplateAssignmentsError(null);
     try {
       const response = await api.listTemplateAssignments(selectedTemplate.id);
       setTemplateAssignments(response.items ?? []);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to load template assignments', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to load template assignments';
+      setTemplateAssignments([]);
+      setTemplateAssignmentsError(message);
+      showToast(message, 'error');
     } finally {
       setTemplateAssignmentsLoading(false);
     }
@@ -170,17 +186,40 @@ export function Templates(): JSX.Element {
   useEffect(() => {
     let cancelled = false;
     setWavesLoading(true);
+    setWavesError(null);
     api
       .listClusterRolloutWaves({ tenantId: rolloutTenantId || undefined })
-      .then((r) => { if (!cancelled) setWaves(r.data ?? []); })
-      .catch(() => { if (!cancelled) setWaves([]); })
+      .then((r) => {
+        if (!cancelled) {
+          setWaves(r.data ?? []);
+          setWavesError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setWaves([]);
+          setWavesError(err instanceof Error ? err.message : 'Failed to load rollout waves');
+        }
+      })
       .finally(() => { if (!cancelled) setWavesLoading(false); });
     return () => { cancelled = true; };
   }, [api, rolloutTenantId, wavesReloadToken]);
 
   const handleWaveAction = async (id: string, action: 'paused' | 'running' | 'aborted') => {
-    await api.updateClusterRolloutWave(id, { status: action });
-    setWavesReloadToken((n) => n + 1);
+    const actionLabel = action === 'running' ? 'resumed' : action;
+    setWaveActionId(id);
+    setWavesError(null);
+    try {
+      await api.updateClusterRolloutWave(id, { status: action });
+      setWavesReloadToken((n) => n + 1);
+      showToast(`Rollout wave ${actionLabel}`, 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to ${actionLabel} rollout wave`;
+      setWavesError(message);
+      showToast(message, 'error');
+    } finally {
+      setWaveActionId(null);
+    }
   };
 
   const handleCreateTemplate = async (event: FormEvent<HTMLFormElement>) => {
@@ -267,6 +306,7 @@ export function Templates(): JSX.Element {
       return;
     }
     try {
+      setPromotingVersion(versionNumber);
       await api.promoteTemplateVersion(selectedTemplate.id, versionNumber);
       reloadVersions();
       reload();
@@ -274,6 +314,8 @@ export function Templates(): JSX.Element {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to promote version';
       showToast(message, 'error');
+    } finally {
+      setPromotingVersion(null);
     }
   };
 
@@ -317,6 +359,7 @@ export function Templates(): JSX.Element {
       await api.createTemplateAssignment(selectedTemplate.id, scopedAssignment.payload);
       setTemplateAssignmentScope({ scope_type: 'tenant' });
       await loadTemplateAssignments();
+      setTemplateAssignmentsError(null);
       showToast(`Template assigned to ${describeAssignmentScope(scopedAssignment.payload)}`, 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to assign template', 'error');
@@ -325,16 +368,23 @@ export function Templates(): JSX.Element {
     }
   };
 
-  const handleDeleteTemplateAssignment = async (assignmentId: string) => {
-    if (!selectedTemplate) {
+  const handleConfirmDeleteTemplateAssignment = async () => {
+    if (!selectedTemplate || !pendingDeleteAssignment) {
       return;
     }
+    setDeletingTemplateAssignment(true);
+    setTemplateAssignmentActionError(null);
     try {
-      await api.deleteTemplateAssignment(selectedTemplate.id, assignmentId);
-      setTemplateAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
+      await api.deleteTemplateAssignment(selectedTemplate.id, pendingDeleteAssignment.id);
+      setTemplateAssignments((current) => current.filter((assignment) => assignment.id !== pendingDeleteAssignment.id));
+      setPendingDeleteAssignment(null);
       showToast('Template assignment removed', 'success');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to remove template assignment', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to remove template assignment';
+      setTemplateAssignmentActionError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeletingTemplateAssignment(false);
     }
   };
 
@@ -347,7 +397,7 @@ export function Templates(): JSX.Element {
     {
       header: 'Provider',
       accessorKey: 'provider',
-      cell: ({ row }) => <span className="text-text-secondary">{row.original.provider || '—'}</span>,
+      cell: ({ row }) => <span className="text-text-secondary">{row.original.provider || '-'}</span>,
     },
     {
       header: 'Status',
@@ -438,17 +488,32 @@ export function Templates(): JSX.Element {
         return (
           <div className="flex items-center gap-1">
             {s === 'running' && (
-              <Button variant="secondary" size="sm" onClick={() => handleWaveAction(row.original.id, 'paused')}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleWaveAction(row.original.id, 'paused')}
+                disabled={waveActionId !== null}
+              >
                 Pause
               </Button>
             )}
             {s === 'paused' && (
-              <Button variant="primary" size="sm" onClick={() => handleWaveAction(row.original.id, 'running')}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => handleWaveAction(row.original.id, 'running')}
+                disabled={waveActionId !== null}
+              >
                 Resume
               </Button>
             )}
             {(s === 'running' || s === 'paused') && (
-              <Button variant="ghost" size="sm" onClick={() => handleWaveAction(row.original.id, 'aborted')}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleWaveAction(row.original.id, 'aborted')}
+                disabled={waveActionId !== null}
+              >
                 Abort
               </Button>
             )}
@@ -468,7 +533,7 @@ export function Templates(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="INFRASTRUCTURE · TEMPLATES"
+        eyebrow="INFRASTRUCTURE / TEMPLATES"
         title="Infrastructure templates"
         description="Version, test, and safely roll out infrastructure changes. Each template is reusable across tenants."
       />
@@ -505,18 +570,31 @@ export function Templates(): JSX.Element {
               Refresh
             </Button>
           </div>
-          <Panel padding="md" eyebrow="ROLLOUT · WAVES" title="Cluster rollout waves">
+          <Panel padding="md" eyebrow="ROLLOUT / WAVES" title="Cluster rollout waves">
+            {wavesError ? (
+              <p className="mb-3 text-sm text-state-critical" role="alert">
+                Rollout waves unavailable: {wavesError}
+              </p>
+            ) : null}
             <DataTable
               columns={waveColumns}
               rows={waves}
               rowKey={(r) => r.id}
               loading={wavesLoading}
               empty={
-                <EmptyState
-                  icon={<Layers />}
-                  title="No rollout waves"
-                  description="Cluster rollout waves appear here when a deployment is in progress."
-                />
+                wavesError ? (
+                  <EmptyState
+                    icon={<Layers />}
+                    title="Rollout waves unavailable"
+                    description="Resolve the service error or refresh to retry loading rollout progress."
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<Layers />}
+                    title="No rollout waves"
+                    description="Cluster rollout waves appear here when a deployment is in progress."
+                  />
+                )
               }
             />
           </Panel>
@@ -603,7 +681,7 @@ export function Templates(): JSX.Element {
 
           <div className="flex items-center gap-2 pt-2">
             <Button type="submit" variant="primary" disabled={creatingTemplate || !templateTenantId}>
-              {creatingTemplate ? 'Saving…' : 'Create template'}
+              {creatingTemplate ? 'Saving...' : 'Create template'}
             </Button>
           </div>
         </form>
@@ -654,7 +732,7 @@ export function Templates(): JSX.Element {
         </div>
       </Panel>
 
-      {loading ? <p className="text-text-muted">Loading templates…</p> : null}
+      {loading ? <p className="text-text-muted">Loading templates...</p> : null}
       {error ? <p className="text-sm text-state-critical" role="alert">Failed to load templates: {error}</p> : null}
 
       {!loading && !error && templates.length === 0 ? (
@@ -682,7 +760,7 @@ export function Templates(): JSX.Element {
                 disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
                 onClick={() => setOffset(pagination.prevOffset ?? 0)}
               >
-                ← Previous
+                Previous
               </Button>
               <span>Showing {templates.length} of {pagination.total} templates</span>
               <Button
@@ -692,7 +770,7 @@ export function Templates(): JSX.Element {
                 disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
                 onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
               >
-                Next →
+                Next
               </Button>
             </div>
           </div>
@@ -712,7 +790,7 @@ export function Templates(): JSX.Element {
                   disabled={updatingTemplate}
                 >
                   {updatingTemplate
-                    ? 'Updating…'
+                    ? 'Updating...'
                     : selectedTemplate.archived_at
                       ? 'Restore'
                       : 'Archive'}
@@ -745,7 +823,7 @@ export function Templates(): JSX.Element {
                 <div className="flex flex-col gap-0.5">
                   <dt className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">Archived</dt>
                   <dd className="text-foreground">
-                    {selectedTemplate.archived_at ? formatDate(selectedTemplate.archived_at) : '—'}
+                    {selectedTemplate.archived_at ? formatDate(selectedTemplate.archived_at) : '-'}
                   </dd>
                 </div>
               </dl>
@@ -789,7 +867,12 @@ export function Templates(): JSX.Element {
                 </div>
 
                 {templateAssignmentsLoading ? <p className="text-sm text-text-muted">Loading assignments...</p> : null}
-                {!templateAssignmentsLoading && templateAssignments.length === 0 ? (
+                {templateAssignmentsError ? (
+                  <p className="text-sm text-state-critical" role="alert">
+                    Template assignments unavailable: {templateAssignmentsError}
+                  </p>
+                ) : null}
+                {!templateAssignmentsLoading && !templateAssignmentsError && templateAssignments.length === 0 ? (
                   <p className="text-sm text-text-muted">No assignments.</p>
                 ) : null}
                 {!templateAssignmentsLoading && templateAssignments.length > 0 ? (
@@ -812,7 +895,10 @@ export function Templates(): JSX.Element {
                           variant="ghost"
                           size="sm"
                           className="text-state-critical hover:text-state-critical"
-                          onClick={() => void handleDeleteTemplateAssignment(assignment.id)}
+                          onClick={() => {
+                            setTemplateAssignmentActionError(null);
+                            setPendingDeleteAssignment(assignment);
+                          }}
                         >
                           Remove
                         </Button>
@@ -866,9 +952,13 @@ export function Templates(): JSX.Element {
 
               <div className="flex flex-col gap-3">
                 <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Versions</p>
-                {versionsLoading ? <p className="text-sm text-text-muted">Loading versions…</p> : null}
-                {versionsError ? <p className="text-sm text-state-critical">{versionsError}</p> : null}
-                {!versionsLoading && versions.length === 0 ? (
+                {versionsLoading ? <p className="text-sm text-text-muted">Loading versions...</p> : null}
+                {versionsError ? (
+                  <p className="text-sm text-state-critical" role="alert">
+                    Template versions unavailable: {versionsError}
+                  </p>
+                ) : null}
+                {!versionsLoading && !versionsError && versions.length === 0 ? (
                   <p className="text-sm text-text-muted">No versions published yet.</p>
                 ) : null}
                 {!versionsLoading && versions.length > 0 ? (
@@ -895,8 +985,9 @@ export function Templates(): JSX.Element {
                             variant="primary"
                             size="sm"
                             onClick={() => handlePromoteVersion(version.version)}
+                            disabled={promotingVersion !== null}
                           >
-                            Promote
+                            {promotingVersion === version.version ? 'Promoting...' : 'Promote'}
                           </Button>
                         </div>
                         {version.rollout_notes ? (
@@ -915,7 +1006,7 @@ export function Templates(): JSX.Element {
                     disabled={versionPagination.prevOffset === null || versionPagination.prevOffset === undefined}
                     onClick={() => setVersionOffset(versionPagination.prevOffset ?? 0)}
                   >
-                    ← Previous
+                    Previous
                   </Button>
                   <span>Showing {versions.length} of {versionPagination.total}</span>
                   <Button
@@ -925,7 +1016,7 @@ export function Templates(): JSX.Element {
                     disabled={versionPagination.nextOffset === null || versionPagination.nextOffset === undefined}
                     onClick={() => setVersionOffset(versionPagination.nextOffset ?? versionOffset + versionLimit)}
                   >
-                    Next →
+                    Next
                   </Button>
                 </div>
               </div>
@@ -992,7 +1083,7 @@ export function Templates(): JSX.Element {
 
                   <div className="flex items-center gap-2 pt-2">
                     <Button type="submit" variant="primary" disabled={creatingVersion}>
-                      {creatingVersion ? 'Publishing…' : 'Create version'}
+                      {creatingVersion ? 'Publishing...' : 'Create version'}
                     </Button>
                   </div>
                 </form>
@@ -1003,6 +1094,32 @@ export function Templates(): JSX.Element {
       ) : null}
         </>
       )}
+      <ConfirmModal
+        open={Boolean(pendingDeleteAssignment)}
+        title="Remove template assignment"
+        body={
+          pendingDeleteAssignment
+            ? `Remove ${describeAssignmentScope(pendingDeleteAssignment)} from this template? The template and versions remain available.`
+            : undefined
+        }
+        confirmLabel={deletingTemplateAssignment ? 'Removing...' : 'Remove assignment'}
+        cancelDisabled={deletingTemplateAssignment}
+        confirmDisabled={deletingTemplateAssignment}
+        variant="danger"
+        onConfirm={() => void handleConfirmDeleteTemplateAssignment()}
+        onCancel={() => {
+          if (!deletingTemplateAssignment) {
+            setPendingDeleteAssignment(null);
+            setTemplateAssignmentActionError(null);
+          }
+        }}
+      >
+        {templateAssignmentActionError ? (
+          <p className="text-sm text-state-critical" role="alert">
+            {templateAssignmentActionError}
+          </p>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }

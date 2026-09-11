@@ -89,9 +89,11 @@ Small-fleet analytics is the default. To run Doris for a dedicated OLAP
 deployment, set `ANALYTICS_MODE=olap` and `DORIS_ENABLED=true` in `.env`; the
 compose file keeps `doris-fe` and `doris-be` behind the `olap` profile. In the
 default small-fleet profile, Redis stays enabled for bounded hot coordination
-with `REDIS_MAXMEMORY=128mb`, and the controlplane persists its embedded SQLite
-analytic read model under `/opt/control-one/deploy/analytics` with
-`ANALYTICS_SQLITE_CACHE_MB=16`.
+with `REDIS_MAXMEMORY=128mb` and `REDIS_MAXMEMORY_POLICY=volatile-lru`, and the
+controlplane persists its embedded SQLite analytic read model under
+`/opt/control-one/deploy/analytics` with `ANALYTICS_SQLITE_CACHE_MB=16`. Keep
+hot Redis analytics keys TTL-bound; durable evidence and replay truth belong in
+SQLite/Postgres, not Redis.
 
 ## 6. Verify
 

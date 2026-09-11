@@ -219,6 +219,47 @@ func TestEventsAndTimelineHandlersUseSmallAnalyticsSQLite(t *testing.T) {
 	if timelineResp.Items[0].SourceTable != "process_connections" || timelineResp.Items[0].EventType != "conn.close" {
 		t.Fatalf("timeline should use cited process connection facts: %+v", timelineResp.Items)
 	}
+
+	tenantTimelineBody := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"tenant",
+		"entity_id":"` + tenantID.String() + `",
+		"since":"` + base.Add(-time.Minute).Format(time.RFC3339) + `",
+		"until":"` + base.Add(3*time.Minute).Format(time.RFC3339) + `",
+		"limit":10
+	}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", tenantTimelineBody)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec = httptest.NewRecorder()
+	srv.handleTimelineBuild(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tenant timeline status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var tenantTimelineResp timelineBuildResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &tenantTimelineResp); err != nil {
+		t.Fatalf("decode tenant timeline: %v", err)
+	}
+	if tenantTimelineResp.Scope["entity_type"] != "tenant" || tenantTimelineResp.Scope["entity_id"] != tenantID.String() {
+		t.Fatalf("tenant timeline scope was not normalized: %+v", tenantTimelineResp.Scope)
+	}
+	if len(tenantTimelineResp.Items) != 2 || len(tenantTimelineResp.Citations) != 2 {
+		t.Fatalf("tenant timeline should return tenant-scoped facts: %+v", tenantTimelineResp)
+	}
+
+	wrongTenantID := uuid.New()
+	mismatchedTimelineBody := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"tenant",
+		"entity_id":"` + wrongTenantID.String() + `",
+		"limit":10
+	}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", mismatchedTimelineBody)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec = httptest.NewRecorder()
+	srv.handleTimelineBuild(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched tenant timeline status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestEventAndTimelineRowsExposeStableCitations(t *testing.T) {
@@ -291,6 +332,7 @@ func TestAIInvestigationToolsExposeEventAndTimelineTools(t *testing.T) {
 	tools := (&Server{}).aiInvestigationTools()
 	expectedRoles := map[string]string{
 		"events_query":              roleViewer,
+		"ingest_health":             roleAdmin,
 		"doris_ingest_health":       roleAdmin,
 		"timeline_build":            roleViewer,
 		"entity_lifecycle":          roleViewer,
@@ -364,19 +406,19 @@ func TestDorisIngestHealthAIToolReturnsTenantScopedEvidence(t *testing.T) {
 		context.Background(),
 		&auth.Principal{Type: "user", Subject: "admin", Roles: []string{roleAdmin}},
 		tenantID,
-		llm.ToolCall{Name: "doris_ingest_health", Input: map[string]any{"limit": 5}},
+		llm.ToolCall{Name: "ingest_health", Input: map[string]any{"limit": 5}},
 	)
 	if err != nil {
-		t.Fatalf("execute doris_ingest_health: %v", err)
+		t.Fatalf("execute ingest_health: %v", err)
 	}
 	resp, ok := exec.Payload.(dorisIngestHealthToolResponse)
 	if !ok {
 		t.Fatalf("payload type = %T", exec.Payload)
 	}
-	if exec.Citation.Tool != "doris_ingest_health" || !strings.Contains(exec.Citation.Detail, "1 pending") {
+	if exec.Citation.Tool != "ingest_health" || !strings.Contains(exec.Citation.Detail, "1 pending") {
 		t.Fatalf("unexpected citation: %+v", exec.Citation)
 	}
-	if resp.TenantID != tenantID.String() || resp.Status != "down" || resp.PendingRows != 7 {
+	if resp.TenantID != tenantID.String() || resp.Status != "degraded" || resp.AnalyticsStatus != "degraded" || resp.WarehouseStatus != "disabled" || resp.PendingRows != 7 {
 		t.Fatalf("unexpected response summary: %+v", resp)
 	}
 	if len(resp.Evidence) != 1 || resp.Evidence[0].BatchID != batchID.String() {
@@ -385,8 +427,20 @@ func TestDorisIngestHealthAIToolReturnsTenantScopedEvidence(t *testing.T) {
 	if len(resp.Citations) != 1 || resp.Citations[0].SourceRecordID != "event_ingest_batches:"+batchID.String() {
 		t.Fatalf("expected event_ingest_batches citation, got %+v", resp.Citations)
 	}
-	if !containsString(resp.Guardrails, "admin-gated because Doris writer status is operational platform health") {
+	if !containsString(resp.Guardrails, "admin-gated because ingest replay status is operational platform health") {
 		t.Fatalf("expected admin guardrail, got %+v", resp.Guardrails)
+	}
+	legacyExec, err := srv.executeAITool(
+		context.Background(),
+		&auth.Principal{Type: "user", Subject: "admin", Roles: []string{roleAdmin}},
+		tenantID,
+		llm.ToolCall{Name: "doris_ingest_health", Input: map[string]any{"limit": 1}},
+	)
+	if err != nil {
+		t.Fatalf("execute doris_ingest_health compatibility alias: %v", err)
+	}
+	if legacyExec.Citation.Tool != "doris_ingest_health" {
+		t.Fatalf("legacy alias should preserve citation tool name: %+v", legacyExec.Citation)
 	}
 }
 

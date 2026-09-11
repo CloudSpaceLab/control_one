@@ -69,6 +69,15 @@ type heartbeatRequest struct {
 	// NetworkPolicyReceipts reports agent-side evaluation/enforcement status
 	// for desired network_policy states delivered on prior heartbeats.
 	NetworkPolicyReceipts []heartbeatNetworkPolicyReceipt `json:"network_policy_receipts,omitempty"`
+
+	// Target metadata fields. Agents report these so the server can update
+	// classification, reachability, and network observations.
+	TargetType                     string                        `json:"target_type,omitempty"`
+	ReachabilityMode               string                        `json:"reachability_mode,omitempty"`
+	InstallContext                 string                        `json:"install_context,omitempty"`
+	NetworkObservations            []heartbeatNetworkObservation `json:"network_observations,omitempty"`
+	TargetClassificationEvidence   []string                      `json:"target_classification_evidence,omitempty"`
+	TargetClassificationConfidence int                           `json:"target_classification_confidence,omitempty"`
 }
 
 type heartbeatAgentSelfMetrics struct {
@@ -114,6 +123,15 @@ type heartbeatNetworkPolicyReceipt struct {
 	SignatureKeyID    string   `json:"signature_key_id,omitempty"`
 	ObservedAt        string   `json:"observed_at"`
 	RollbackAvailable bool     `json:"rollback_available"`
+}
+
+// heartbeatNetworkObservation is a single network observation the agent
+// reports during its heartbeat cycle.
+type heartbeatNetworkObservation struct {
+	Kind       string `json:"kind"`
+	Value      string `json:"value"`
+	Source     string `json:"source"`
+	Confidence int    `json:"confidence,omitempty"`
 }
 
 // heartbeatPackage is the per-package payload entry the agent sends.
@@ -241,6 +259,12 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		} else if updated != nil {
 			node = updated
 		}
+	}
+
+	if updated, terr := s.updateNodeTargetMetadataFromHeartbeat(r.Context(), node, body); terr != nil {
+		s.logger.Warn("update target metadata", zap.Error(terr))
+	} else if updated != nil {
+		node = updated
 	}
 
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
@@ -383,6 +407,25 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 	s.appendPendingAILogFixerActions(r.Context(), nodeID, node, &resp)
 	s.appendPendingWebserverActions(r.Context(), nodeID, node, &resp)
+	// Append pending connectivity test actions. Each is encoded as
+	// "connectivity_test:<job_id>" so the agent dispatches correctly.
+	if pendingTests, cerr := s.store.ListPendingNodeConnectivityTests(r.Context(), nodeID); cerr == nil {
+		for _, pt := range pendingTests {
+			if pt.JobID == nil {
+				continue
+			}
+			resp.PendingActions = append(resp.PendingActions, JobTypeConnectivityTest+":"+pt.JobID.String())
+			if uerr := s.store.UpdateJobStatus(r.Context(), *pt.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
+				s.logger.Warn("mark connectivity_test job running",
+					zap.String("job_id", pt.JobID.String()), zap.Error(uerr))
+			}
+			if merr := s.store.MarkNodeConnectivityTestRunning(r.Context(), pt.ID); merr != nil {
+				s.logger.Warn("mark connectivity test running", zap.Error(merr))
+			}
+		}
+	} else if !errors.Is(cerr, sql.ErrNoRows) {
+		s.logger.Warn("list pending connectivity tests", zap.Error(cerr))
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -513,6 +556,230 @@ func sanitizeStringSlice(values []string, limit int) []string {
 		}
 	}
 	return out
+}
+
+func (s *Server) updateNodeTargetMetadataFromHeartbeat(ctx context.Context, node *storage.Node, body heartbeatRequest) (*storage.Node, error) {
+	if s == nil || s.store == nil || node == nil {
+		return node, nil
+	}
+	hasTargetSignal := strings.TrimSpace(body.TargetType) != "" ||
+		strings.TrimSpace(body.ReachabilityMode) != "" ||
+		strings.TrimSpace(body.InstallContext) != "" ||
+		len(body.NetworkObservations) > 0 ||
+		len(body.TargetClassificationEvidence) > 0 ||
+		body.TargetClassificationConfidence > 0
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	if hasTargetSignal {
+		labels["target.management_mode"] = "agent_managed"
+		if targetType := normalizeTargetType(body.TargetType); targetType != "" {
+			labels["target.type"] = targetType
+			labels["target.type_source"] = "heuristic"
+		}
+		if mode := normalizeReachabilityMode(body.ReachabilityMode); mode != "" {
+			labels["target.reachability_mode"] = mode
+		}
+		if installContext := normalizeInstallContext(body.InstallContext); installContext != "" {
+			labels["target.install_context"] = installContext
+		}
+		if body.TargetClassificationConfidence > 0 {
+			labels["target.classification_confidence"] = clampInt(body.TargetClassificationConfidence, 0, 100)
+		}
+		if len(body.TargetClassificationEvidence) > 0 {
+			labels["target.classification_evidence"] = sanitizeStringSlice(body.TargetClassificationEvidence, 32)
+		}
+		if len(body.NetworkObservations) > 0 {
+			labels["target.network_observations"] = mergeHeartbeatNetworkObservations(labels["target.network_observations"], body.NetworkObservations, time.Now().UTC())
+		}
+	}
+
+	// Server-side heuristic classification: if the agent didn't classify
+	// (confidence < 30) or sent "unknown", run the server heuristic.
+	agentConf := labelInt(labels, "target.classification_confidence", 0)
+	agentType := labelString(labels, "target.type", "")
+	if agentConf < 30 || agentType == "" || agentType == "unknown" {
+		os := ""
+		if node.OS.Valid {
+			os = node.OS.String
+		}
+		arch := ""
+		if node.Arch.Valid {
+			arch = node.Arch.String
+		}
+		publicIP := ""
+		if node.PublicIP.Valid {
+			publicIP = node.PublicIP.String
+		}
+		if derivedType, derivedConf, evidence := ClassifyTarget(labels, os, arch, publicIP); derivedType != "unknown" {
+			labels["target.type"] = derivedType
+			labels["target.type_source"] = "server_heuristic"
+			labels["target.classification_confidence"] = derivedConf
+			if len(evidence) > 0 {
+				labels["target.classification_evidence"] = evidence
+			}
+		}
+	}
+
+	if labelMapsEqual(labels, node.Labels) {
+		return node, nil
+	}
+	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
+		return node, err
+	}
+	updated := *node
+	updated.Labels = labels
+	return &updated, nil
+}
+
+func labelMapsEqual(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aJSON, aErr := json.Marshal(a)
+	bJSON, bErr := json.Marshal(b)
+	return aErr == nil && bErr == nil && string(aJSON) == string(bJSON)
+}
+
+func normalizeReachabilityMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "outbound_only", "direct_private", "direct_public", "overlay", "offline_periodic", "unknown":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeHeartbeatNetworkObservations(items []heartbeatNetworkObservation, observedAt time.Time) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	stamp := observedAt.UTC().Format(time.RFC3339)
+	for _, item := range items {
+		kind := strings.ToLower(strings.TrimSpace(item.Kind))
+		value := strings.TrimSpace(item.Value)
+		if kind == "" || value == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"kind":         kind,
+			"value":        value,
+			"source":       strings.TrimSpace(item.Source),
+			"last_seen_at": stamp,
+			"confidence":   clampInt(item.Confidence, 0, 100),
+		})
+	}
+	return out
+}
+
+const maxHeartbeatNetworkObservations = 64
+
+func mergeHeartbeatNetworkObservations(existingRaw any, items []heartbeatNetworkObservation, observedAt time.Time) []map[string]any {
+	existing := storage.Node{
+		Labels: map[string]any{"target.network_observations": existingRaw},
+	}.TargetMetadata().NetworkObservations
+	capHint := len(existing) + len(items)
+	if capHint > maxHeartbeatNetworkObservations {
+		capHint = maxHeartbeatNetworkObservations
+	}
+	out := make([]map[string]any, 0, capHint)
+	index := map[string]int{}
+	for _, obs := range existing {
+		kind := strings.ToLower(strings.TrimSpace(obs.Kind))
+		value := strings.TrimSpace(obs.Value)
+		if kind == "" || value == "" {
+			continue
+		}
+		entry := map[string]any{
+			"kind":       kind,
+			"value":      value,
+			"source":     strings.TrimSpace(obs.Source),
+			"confidence": clampInt(obs.Confidence, 0, 100),
+		}
+		if obs.FirstSeenAt != "" {
+			entry["first_seen_at"] = obs.FirstSeenAt
+		}
+		if obs.LastSeenAt != "" {
+			entry["last_seen_at"] = obs.LastSeenAt
+		}
+		out = appendNetworkObservation(out, index, networkObservationKey(kind, value), entry)
+	}
+
+	stamp := observedAt.UTC().Format(time.RFC3339)
+	for _, item := range items {
+		kind := strings.ToLower(strings.TrimSpace(item.Kind))
+		value := strings.TrimSpace(item.Value)
+		if kind == "" || value == "" {
+			continue
+		}
+		key := networkObservationKey(kind, value)
+		source := strings.TrimSpace(item.Source)
+		confidence := clampInt(item.Confidence, 0, 100)
+		if idx, ok := index[key]; ok {
+			entry := out[idx]
+			firstSeen, _ := entry["first_seen_at"].(string)
+			lastSeen, _ := entry["last_seen_at"].(string)
+			if entry["source"] == source && labelInt(entry, "confidence", 0) == confidence && firstSeen != "" && lastSeen != "" {
+				continue
+			}
+			if firstSeen == "" {
+				if lastSeen != "" {
+					entry["first_seen_at"] = lastSeen
+				} else {
+					entry["first_seen_at"] = stamp
+				}
+			}
+			entry["last_seen_at"] = stamp
+			entry["source"] = source
+			entry["confidence"] = confidence
+			continue
+		}
+		out = appendNetworkObservation(out, index, key, map[string]any{
+			"kind":          kind,
+			"value":         value,
+			"source":        source,
+			"first_seen_at": stamp,
+			"last_seen_at":  stamp,
+			"confidence":    confidence,
+		})
+	}
+	return out
+}
+
+func appendNetworkObservation(out []map[string]any, index map[string]int, key string, entry map[string]any) []map[string]any {
+	if idx, ok := index[key]; ok {
+		out[idx] = entry
+		return out
+	}
+	if len(out) >= maxHeartbeatNetworkObservations {
+		out = dropOldestNetworkObservation(out, index)
+	}
+	index[key] = len(out)
+	return append(out, entry)
+}
+
+func dropOldestNetworkObservation(out []map[string]any, index map[string]int) []map[string]any {
+	if len(out) == 0 {
+		return out
+	}
+	delete(index, networkObservationEntryKey(out[0]))
+	copy(out, out[1:])
+	out = out[:len(out)-1]
+	for key, idx := range index {
+		if idx > 0 {
+			index[key] = idx - 1
+		}
+	}
+	return out
+}
+
+func networkObservationEntryKey(entry map[string]any) string {
+	kind, _ := entry["kind"].(string)
+	value, _ := entry["value"].(string)
+	return networkObservationKey(kind, value)
+}
+
+func networkObservationKey(kind, value string) string {
+	return kind + "\x00" + value
 }
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
@@ -668,6 +935,8 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			s.processWebserverCompletedAction(ctx, jobID, c)
 		case JobTypeAILogFixerPlan, JobTypeAILogFixerApply, JobTypeAILogFixerRollback:
 			s.processAILogFixerCompletedAction(ctx, jobID, c)
+		case JobTypeConnectivityTest:
+			s.processConnectivityTestCompletedAction(ctx, jobID, c)
 		default:
 			// Ignore unknown actions (forward-compat with future action types).
 			continue

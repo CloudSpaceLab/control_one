@@ -414,3 +414,98 @@ func TestEnrollReaperFlipsStalePending(t *testing.T) {
 		t.Fatalf("state = %q, want enrollment_failed", store.nodes[0].State)
 	}
 }
+
+func TestEnrollStampsAgentManagedTargetLabels(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, tenantID := setupEnrollmentServer(t)
+
+	rec := enroll(t, srv, map[string]any{
+		"token":           rawToken,
+		"hostname":        "laptop-01",
+		"os":              "windows",
+		"arch":            "amd64",
+		"public_ip":       "203.0.113.99",
+		"machine_id":      "machine-123",
+		"install_context": "local_interactive",
+		"target_hint":     "laptop",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp enrollResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	nodeID, _ := uuid.Parse(resp.NodeID)
+	node, err := srv.store.GetNode(context.Background(), nodeID)
+	if err != nil || node == nil {
+		t.Fatalf("node: %v", err)
+	}
+	if node.TenantID != tenantID {
+		t.Fatalf("tenant mismatch")
+	}
+	if node.Labels["target.management_mode"] != "agent_managed" {
+		t.Fatalf("labels=%+v", node.Labels)
+	}
+	if node.Labels["target.type"] != "laptop" {
+		t.Fatalf("target type labels=%+v", node.Labels)
+	}
+	if node.Labels["target.install_context"] != "local_interactive" {
+		t.Fatalf("install context labels=%+v", node.Labels)
+	}
+	if node.Labels["target.reachability_mode"] != "direct_public" {
+		t.Fatalf("reachability labels=%+v", node.Labels)
+	}
+	observations, ok := node.Labels["target.network_observations"].([]map[string]any)
+	if !ok || len(observations) != 1 {
+		t.Fatalf("network observations labels=%+v", node.Labels)
+	}
+	if observations[0]["kind"] != "public_ip" || observations[0]["value"] != "203.0.113.99" {
+		t.Fatalf("network observations=%+v", observations)
+	}
+}
+
+func TestEnrollReenrollmentPreservesNetworkObservationHistory(t *testing.T) {
+	t.Parallel()
+
+	srv, rawToken, _ := setupEnrollmentServer(t)
+
+	first := enroll(t, srv, map[string]any{
+		"token":      rawToken,
+		"hostname":   "roaming-laptop",
+		"os":         "windows",
+		"arch":       "amd64",
+		"public_ip":  "203.0.113.99",
+		"machine_id": "machine-roaming",
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first enrollment status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	second := enroll(t, srv, map[string]any{
+		"token":      rawToken,
+		"hostname":   "roaming-laptop-renamed",
+		"os":         "windows",
+		"arch":       "amd64",
+		"public_ip":  "198.51.100.24",
+		"machine_id": "machine-roaming",
+	})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second enrollment status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	store := srv.store.(*fakeStore)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	observations, ok := store.nodes[0].Labels["target.network_observations"].([]map[string]any)
+	if !ok {
+		t.Fatalf("network observations labels=%#v", store.nodes[0].Labels["target.network_observations"])
+	}
+	if len(observations) != 2 {
+		t.Fatalf("network observations=%+v, want both enrollment public IPs", observations)
+	}
+	if observations[0]["value"] != "203.0.113.99" || observations[1]["value"] != "198.51.100.24" {
+		t.Fatalf("network observations=%+v", observations)
+	}
+}

@@ -2,11 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
 // RBAC + permissions endpoints. CISO-admin-grade UI uses these to
@@ -113,6 +116,10 @@ func (s *Server) handleRoleSubroutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.SetRolePermissions(r.Context(), roleID, body.Permissions); err != nil {
+			if errors.Is(err, storage.ErrBuiltInRoleImmutable) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			s.logger.Error("set role permissions", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return

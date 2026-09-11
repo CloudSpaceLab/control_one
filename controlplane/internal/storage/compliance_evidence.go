@@ -41,30 +41,30 @@ type ComplianceEvidenceFilter struct {
 
 // ComplianceReview represents a scheduled or completed compliance review.
 type ComplianceReview struct {
-	ID           uuid.UUID
-	TenantID     uuid.UUID
-	ReviewType   string
-	ScheduledFor *time.Time
-	CompletedAt  *time.Time
-	ReviewedBy   *uuid.UUID
-	Status       string
-	Notes        *string
-	Recurrence   *string
-	CreatedAt    time.Time
+	ID           uuid.UUID  `json:"id"`
+	TenantID     uuid.UUID  `json:"tenant_id"`
+	ReviewType   string     `json:"review_type"`
+	ScheduledFor *time.Time `json:"scheduled_for,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	ReviewedBy   *uuid.UUID `json:"reviewed_by,omitempty"`
+	Status       string     `json:"status"`
+	Notes        *string    `json:"notes,omitempty"`
+	Recurrence   *string    `json:"recurrence,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 // AuditReport represents a generated (or in-progress) compliance audit report.
 type AuditReport struct {
-	ID          uuid.UUID
-	TenantID    uuid.UUID
-	Framework   string
-	PeriodStart time.Time
-	PeriodEnd   time.Time
-	Status      string
-	PDFPath     *string
-	GeneratedBy *uuid.UUID
-	GeneratedAt *time.Time
-	CreatedAt   time.Time
+	ID          uuid.UUID  `json:"id"`
+	TenantID    uuid.UUID  `json:"tenant_id"`
+	Framework   string     `json:"framework"`
+	PeriodStart time.Time  `json:"period_start"`
+	PeriodEnd   time.Time  `json:"period_end"`
+	Status      string     `json:"status"`
+	PDFPath     *string    `json:"pdf_path,omitempty"`
+	GeneratedBy *uuid.UUID `json:"generated_by,omitempty"`
+	GeneratedAt *time.Time `json:"generated_at,omitempty"`
+	CreatedAt   time.Time  `json:"-"`
 }
 
 // CreateComplianceEvidence inserts a new evidence record.
@@ -271,7 +271,7 @@ func (s *Store) ListAuditReports(ctx context.Context, tenantID uuid.UUID, limit,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []AuditReport
+	out := make([]AuditReport, 0)
 	for rows.Next() {
 		var r AuditReport
 		var metadata []byte
@@ -346,7 +346,7 @@ func (s *Store) ListComplianceReviews(ctx context.Context, tenantID uuid.UUID, l
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []ComplianceReview
+	out := make([]ComplianceReview, 0)
 	for rows.Next() {
 		var r ComplianceReview
 		if err := rows.Scan(

@@ -3,7 +3,8 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
 import { useTenant } from '../providers/TenantProvider';
 import { useToast } from '../providers/ToastProvider';
-import { SectionHeader, Panel, EmptyState, StatusTag, DataTable, SelectField, FileUploadButton } from '../components/kit';
+import { ConfirmModal } from '@/components/ConfirmModal';
+import { Alert, SectionHeader, Panel, EmptyState, StatusTag, DataTable, SelectField, FileUploadButton } from '../components/kit';
 import { Button } from '@/components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -135,6 +136,16 @@ const HOST_FORM_DEFAULT: HostFormState = {
   labelsText: '',
 };
 
+interface InlineActionState {
+  busy?: boolean;
+  message?: string;
+  tone?: StateTone;
+}
+
+type PendingDelete =
+  | { type: 'host'; host: HypervisorHost; error?: string }
+  | { type: 'credential'; credential: ProviderCredential; error?: string };
+
 export function Hypervisors(): JSX.Element {
   const api = useApiClient();
   const { data: tenants } = useTenants();
@@ -144,8 +155,11 @@ export function Hypervisors(): JSX.Element {
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [hosts, setHosts] = useState<HypervisorHost[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState<string | null>(null);
   const [scanning, setScanning] = useState<string | null>(null);
+  const [deleteState, setDeleteState] = useState<Record<string, InlineActionState>>({});
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(CREDENTIAL_FORM_DEFAULT);
   const [hostForm, setHostForm] = useState<HostFormState>(HOST_FORM_DEFAULT);
   const [submittingCred, setSubmittingCred] = useState(false);
@@ -165,10 +179,12 @@ export function Hypervisors(): JSX.Element {
     if (!currentTenantId) {
       setCredentials([]);
       setHosts([]);
+      setLoadError(null);
       setLoading(false);
       return;
     }
     setLoading(true);
+    setLoadError(null);
     try {
       const [credResp, hostResp] = await Promise.all([
         api.listProviderCredentials({ tenantId: currentTenantId, limit: 200 }),
@@ -176,8 +192,13 @@ export function Hypervisors(): JSX.Element {
       ]);
       setCredentials(credResp.items ?? []);
       setHosts(hostResp.items ?? []);
+      setLoadError(null);
     } catch (err) {
-      showToast(`Failed to load hypervisors: ${String(err)}`, 'error');
+      const message = errorMessage(err, 'Hypervisor inventory could not be loaded.');
+      setCredentials([]);
+      setHosts([]);
+      setLoadError(message);
+      showToast(`Failed to load hypervisors: ${message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -300,13 +321,29 @@ export function Hypervisors(): JSX.Element {
   }
 
   async function handleDeleteHost(host: HypervisorHost): Promise<void> {
-    if (!window.confirm(`Remove hypervisor host "${host.name}"? Clusters referencing it will be detached.`)) return;
+    setPendingDelete({ type: 'host', host });
+  }
+
+  async function runDeleteHost(host: HypervisorHost): Promise<void> {
+    const key = hostDeleteKey(host);
+    setDeleteState((state) => ({ ...state, [key]: { busy: true } }));
     try {
       await api.deleteHypervisorHost(host.id);
+      setDeleteState((state) => {
+        const next = { ...state };
+        delete next[key];
+        return next;
+      });
+      setPendingDelete(null);
       showToast(`Host removed: ${host.name}`, 'success');
       await refresh();
     } catch (err) {
-      showToast(`Failed to remove host: ${String(err)}`, 'error');
+      const message = `Failed to remove host ${host.name}: ${errorMessage(err, 'delete failed')}`;
+      setDeleteState((state) => ({ ...state, [key]: { busy: false, message, tone: 'critical' } }));
+      setPendingDelete((current) =>
+        current?.type === 'host' && current.host.id === host.id ? { ...current, error: message } : current,
+      );
+      showToast(message, 'error');
     }
   }
 
@@ -327,15 +364,49 @@ export function Hypervisors(): JSX.Element {
   }
 
   async function handleDeleteCredential(cred: ProviderCredential): Promise<void> {
-    if (!window.confirm(`Delete credential "${cred.name}"? Hosts referencing it will lose their credential_id.`)) return;
+    setPendingDelete({ type: 'credential', credential: cred });
+  }
+
+  async function runDeleteCredential(credential: ProviderCredential): Promise<void> {
+    const key = credentialDeleteKey(credential);
+    setDeleteState((state) => ({ ...state, [key]: { busy: true } }));
     try {
-      await api.deleteProviderCredential(cred.id);
-      showToast(`Credential removed: ${cred.name}`, 'success');
+      await api.deleteProviderCredential(credential.id);
+      setDeleteState((state) => {
+        const next = { ...state };
+        delete next[key];
+        return next;
+      });
+      setPendingDelete(null);
+      showToast(`Credential removed: ${credential.name}`, 'success');
       await refresh();
     } catch (err) {
-      showToast(`Failed to remove credential: ${String(err)}`, 'error');
+      const message = `Failed to remove credential ${credential.name}: ${errorMessage(err, 'delete failed')}`;
+      setDeleteState((state) => ({ ...state, [key]: { busy: false, message, tone: 'critical' } }));
+      setPendingDelete((current) =>
+        current?.type === 'credential' && current.credential.id === credential.id
+          ? { ...current, error: message }
+          : current,
+      );
+      showToast(message, 'error');
     }
   }
+
+  async function confirmPendingDelete(): Promise<void> {
+    if (!pendingDelete) return;
+    if (pendingDelete.type === 'host') {
+      await runDeleteHost(pendingDelete.host);
+      return;
+    }
+    await runDeleteCredential(pendingDelete.credential);
+  }
+
+  const pendingDeleteKey = pendingDelete
+    ? pendingDelete.type === 'host'
+      ? hostDeleteKey(pendingDelete.host)
+      : credentialDeleteKey(pendingDelete.credential)
+    : '';
+  const pendingDeleteBusy = pendingDeleteKey ? Boolean(deleteState[pendingDeleteKey]?.busy) : false;
 
   const hostColumns: ColumnDef<HypervisorHost>[] = [
     {
@@ -384,36 +455,51 @@ export function Hypervisors(): JSX.Element {
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => (
-        <div className="flex items-center gap-1.5">
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            onClick={() => handleScan(row.original)}
-            disabled={scanning === row.original.id || verifying === row.original.id}
-          >
-            {scanning === row.original.id ? 'Scanning…' : 'Scan'}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => handleVerify(row.original)}
-            disabled={verifying === row.original.id || scanning === row.original.id}
-          >
-            {verifying === row.original.id ? 'Verifying…' : 'Verify'}
-          </Button>
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            onClick={() => handleDeleteHost(row.original)}
-          >
-            Remove
-          </Button>
-        </div>
-      ),
+      cell: ({ row }) => {
+        const host = row.original;
+        const deleteStatus = deleteState[hostDeleteKey(host)];
+        return (
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={() => handleScan(host)}
+                disabled={scanning === host.id || verifying === host.id || deleteStatus?.busy}
+                aria-label={`Scan hypervisor host ${host.name}`}
+              >
+                {scanning === host.id ? 'Scanning…' : 'Scan'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => handleVerify(host)}
+                disabled={verifying === host.id || scanning === host.id || deleteStatus?.busy}
+                aria-label={`Verify hypervisor host ${host.name}`}
+              >
+                {verifying === host.id ? 'Verifying…' : 'Verify'}
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                loading={deleteStatus?.busy}
+                onClick={() => handleDeleteHost(host)}
+                aria-label={`Remove hypervisor host ${host.name}`}
+              >
+                Remove
+              </Button>
+            </div>
+            {deleteStatus?.message ? (
+              <p className={`max-w-[18rem] text-right text-xs ${toneText(deleteStatus.tone)}`}>
+                {deleteStatus.message}
+              </p>
+            ) : null}
+          </div>
+        );
+      },
     },
   ];
 
@@ -445,16 +531,29 @@ export function Hypervisors(): JSX.Element {
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => (
-        <Button
-          type="button"
-          variant="danger"
-          size="sm"
-          onClick={() => handleDeleteCredential(row.original)}
-        >
-          Delete
-        </Button>
-      ),
+      cell: ({ row }) => {
+        const credential = row.original;
+        const deleteStatus = deleteState[credentialDeleteKey(credential)];
+        return (
+          <div className="flex flex-col items-end gap-1.5">
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              loading={deleteStatus?.busy}
+              onClick={() => handleDeleteCredential(credential)}
+              aria-label={`Delete provider credential ${credential.name}`}
+            >
+              Delete
+            </Button>
+            {deleteStatus?.message ? (
+              <p className={`max-w-[18rem] text-right text-xs ${toneText(deleteStatus.tone)}`}>
+                {deleteStatus.message}
+              </p>
+            ) : null}
+          </div>
+        );
+      },
     },
   ];
 
@@ -465,6 +564,20 @@ export function Hypervisors(): JSX.Element {
         title="Hypervisors & provider credentials"
         description="Register the virtualization hosts and cloud accounts Control One provisions against. Multiple hosts per tenant across datacenters are supported."
       />
+
+      {loadError ? (
+        <Alert
+          variant="critical"
+          title="Hypervisor inventory unavailable"
+          actions={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void refresh()}>
+              Retry
+            </Button>
+          }
+        >
+          {loadError}
+        </Alert>
+      ) : null}
 
       {/* Forms row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -723,8 +836,8 @@ export function Hypervisors(): JSX.Element {
           rowKey={(row) => row.id}
           empty={
             <EmptyState
-              title="No hypervisor hosts"
-              description="No hypervisor hosts configured yet."
+              title={loadError ? 'Hypervisor hosts unavailable' : 'No hypervisor hosts'}
+              description={loadError ? 'Retry after the inventory request succeeds.' : 'No hypervisor hosts configured yet.'}
               icon={<Server />}
             />
           }
@@ -739,12 +852,70 @@ export function Hypervisors(): JSX.Element {
           rowKey={(row) => row.id}
           empty={
             <EmptyState
-              title="No credentials"
-              description="No provider credentials configured yet."
+              title={loadError ? 'Provider credentials unavailable' : 'No credentials'}
+              description={loadError ? 'Retry after the credential request succeeds.' : 'No provider credentials configured yet.'}
             />
           }
         />
       </Panel>
+
+      <ConfirmModal
+        open={Boolean(pendingDelete)}
+        title={pendingDelete ? pendingDeleteTitle(pendingDelete) : 'Confirm removal'}
+        body={pendingDelete ? pendingDeleteBody(pendingDelete) : undefined}
+        confirmLabel={pendingDelete?.type === 'credential' ? 'Delete credential' : 'Remove host'}
+        cancelLabel="Cancel"
+        confirmDisabled={pendingDeleteBusy}
+        cancelDisabled={pendingDeleteBusy}
+        variant="danger"
+        onConfirm={() => void confirmPendingDelete()}
+        onCancel={() => setPendingDelete(null)}
+      >
+        {pendingDelete?.error ? (
+          <Alert variant="critical" title="Removal failed">
+            {pendingDelete.error}
+          </Alert>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
+  if (typeof err === 'string' && err.trim()) return err;
+  return fallback;
+}
+
+function hostDeleteKey(host: HypervisorHost): string {
+  return `host:${host.id}`;
+}
+
+function credentialDeleteKey(credential: ProviderCredential): string {
+  return `credential:${credential.id}`;
+}
+
+function pendingDeleteTitle(pending: PendingDelete): string {
+  if (pending.type === 'host') return `Remove hypervisor host ${pending.host.name}?`;
+  return `Delete provider credential ${pending.credential.name}?`;
+}
+
+function pendingDeleteBody(pending: PendingDelete): string {
+  if (pending.type === 'host') {
+    return 'Clusters referencing this host will be detached. Existing jobs and audit history remain available.';
+  }
+  return 'Hosts referencing this credential will lose their credential link. Existing jobs and audit history remain available.';
+}
+
+function toneText(tone?: StateTone): string {
+  switch (tone) {
+    case 'critical':
+      return 'text-state-critical';
+    case 'warning':
+      return 'text-state-warning';
+    case 'healthy':
+      return 'text-state-healthy';
+    default:
+      return 'text-text-muted';
+  }
 }

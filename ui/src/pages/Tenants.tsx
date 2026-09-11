@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Building2, RefreshCw } from 'lucide-react';
+import { Building2, RefreshCw, Trash2 } from 'lucide-react';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { useTenants } from '../hooks/useTenants';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
@@ -8,6 +9,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import {
+  Alert,
   DataTable,
   EmptyState,
   EntityChip,
@@ -17,6 +19,8 @@ import {
 } from '../components/kit';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { Tenant, TenantRemediationConfig } from '../lib/api';
+
+type PendingTenantDelete = { tenant: Tenant; error?: string };
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -44,6 +48,8 @@ export function Tenants(): JSX.Element {
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<PendingTenantDelete | null>(null);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
 
   // Remediation config state
   const [remediationCfg, setRemediationCfg] = useState<TenantRemediationConfig | null>(null);
@@ -155,29 +161,49 @@ export function Tenants(): JSX.Element {
     }
   };
 
-  const handleDeleteTenant = async () => {
+  const handleDeleteTenant = () => {
     if (!selectedTenant) {
       return;
     }
-    const confirmed = window.confirm(
-      `Delete tenant “${selectedTenant.name}”? Nodes and jobs referencing this tenant may become orphaned.`,
-    );
-    if (!confirmed) {
+    setDeleteConfirmationText('');
+    setPendingDelete({ tenant: selectedTenant });
+  };
+
+  const closeDeleteModal = () => {
+    if (deleting) {
       return;
     }
+    setPendingDelete(null);
+    setDeleteConfirmationText('');
+  };
+
+  const confirmDeleteTenant = async () => {
+    if (!pendingDelete) {
+      return;
+    }
+    const tenant = pendingDelete.tenant;
     setDeleting(true);
     try {
-      await api.deleteTenant(selectedTenant.id);
-      showToast('Tenant deleted.', 'success');
+      await api.deleteTenant(tenant.id);
+      showToast(`Tenant "${tenant.name}" deleted.`, 'success');
+      setPendingDelete(null);
+      setDeleteConfirmationText('');
       setSelectedTenantId(null);
       reload();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete tenant.';
+      const detail = error instanceof Error ? error.message : 'Failed to delete tenant.';
+      const message = `Failed to delete tenant ${tenant.name}: ${detail}`;
+      setPendingDelete((current) =>
+        current?.tenant.id === tenant.id ? { ...current, error: message } : current,
+      );
       showToast(message, 'error');
     } finally {
       setDeleting(false);
     }
   };
+
+  const deleteConfirmationMatches =
+    pendingDelete !== null && deleteConfirmationText.trim() === pendingDelete.tenant.name;
 
   const columns = useMemo<ColumnDef<Tenant>[]>(() => [
     {
@@ -274,46 +300,56 @@ export function Tenants(): JSX.Element {
             </div>
 
             {error ? (
-              <Panel padding="sm" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Failed to load tenants">
-                <p className="text-sm text-state-critical">{error}</p>
-              </Panel>
-            ) : null}
-
-            <DataTable
-              columns={columns}
-              rows={rows}
-              rowKey={(r) => r.id}
-              loading={loading}
-              compact
-              empty={
-                <EmptyState
-                  icon={<Building2 />}
-                  title="No tenants"
-                  description="No tenants match the current filters."
+              <Alert
+                variant="critical"
+                title="Tenants unavailable"
+                actions={
+                  <Button variant="secondary" size="sm" onClick={reload} disabled={loading}>
+                    Retry
+                  </Button>
+                }
+              >
+                {error}
+              </Alert>
+            ) : (
+              <>
+                <DataTable
+                  columns={columns}
+                  rows={rows}
+                  rowKey={(r) => r.id}
+                  loading={loading}
+                  compact
+                  empty={
+                    <EmptyState
+                      icon={<Building2 />}
+                      title="No tenants"
+                      description="No tenants match the current filters."
+                    />
+                  }
                 />
-              }
-            />
-            <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
-                onClick={() => setOffset(pagination.prevOffset ?? 0)}
-              >
-                Previous
-              </Button>
-              <span className="font-mono text-xs text-text-muted">
-                Showing {rows.length} of {pagination.total} tenants
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
-                onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
-              >
-                Next
-              </Button>
-            </div>
+                <div className="flex items-center justify-between gap-2 border-t border-border-subtle p-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={pagination.prevOffset === null || pagination.prevOffset === undefined}
+                    onClick={() => setOffset(pagination.prevOffset ?? 0)}
+                  >
+                    Previous
+                  </Button>
+                  <span className="font-mono text-xs text-text-muted">
+                    Showing {rows.length} of {pagination.total} tenants
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={pagination.nextOffset === null || pagination.nextOffset === undefined}
+                    onClick={() => setOffset(pagination.nextOffset ?? offset + limit)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </Panel>
 
@@ -344,7 +380,14 @@ export function Tenants(): JSX.Element {
                 <Button variant="primary" size="sm" onClick={handleRenameTenant} disabled={renaming}>
                   {renaming ? 'Saving…' : 'Save changes'}
                 </Button>
-                <Button variant="danger" size="sm" onClick={handleDeleteTenant} disabled={deleting}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={handleDeleteTenant}
+                  disabled={deleting}
+                  aria-label={`Delete tenant ${selectedTenant.name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
                   {deleting ? 'Deleting…' : 'Delete tenant'}
                 </Button>
               </div>
@@ -428,6 +471,39 @@ export function Tenants(): JSX.Element {
           </Panel>
         ) : null}
       </div>
+      <ConfirmModal
+        open={pendingDelete !== null}
+        title={pendingDelete ? `Delete tenant ${pendingDelete.tenant.name}?` : 'Delete tenant?'}
+        body={
+          pendingDelete
+            ? `This permanently deletes the tenant isolation boundary "${pendingDelete.tenant.name}". Nodes, jobs, policies, reports, and remediation settings that reference it should be reviewed before deletion.`
+            : undefined
+        }
+        variant="danger"
+        confirmLabel={deleting ? 'Deleting...' : 'Delete tenant'}
+        confirmDisabled={deleting || !deleteConfirmationMatches}
+        cancelDisabled={deleting}
+        onConfirm={confirmDeleteTenant}
+        onCancel={closeDeleteModal}
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="tenant-delete-confirm">Type tenant name to confirm</Label>
+            <Input
+              id="tenant-delete-confirm"
+              value={deleteConfirmationText}
+              onChange={(event) => setDeleteConfirmationText(event.target.value)}
+              disabled={deleting}
+              autoComplete="off"
+            />
+          </div>
+          {pendingDelete?.error ? (
+            <Alert variant="critical" title="Tenant deletion failed">
+              {pendingDelete.error}
+            </Alert>
+          ) : null}
+        </div>
+      </ConfirmModal>
     </div>
   );
 }

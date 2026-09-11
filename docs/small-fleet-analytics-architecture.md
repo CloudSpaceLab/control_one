@@ -1,216 +1,303 @@
 # Small-Fleet Analytics Architecture
 
-Status: recommended small-fleet and demo architecture
+Status: recommended demo and small-fleet architecture
 
-Date: 2026-06-07
+Date: 2026-06-08
 
 ## Decision
 
-Control One should use a hyper-light analytic profile for demos and small
+Control One should run a hyper-light analytic profile for demos and small
 fleets:
 
 ```text
-agents / collectors
-        |
-        v
-controlplane ingest
-        |
-        +--> Postgres: canonical product state, ingest journal, audit, cases
-        +--> Redis: bounded hot counters, queues, streams, freshness cache
-        +--> SQLite/WAL: embedded recent analytic read model
-        +--> Doris: optional OLAP backend only when analytics.mode=olap
+Postgres = durable ingest acceptance, replay journal, audit, workflow truth
+SQLite   = embedded recent evidence projection and bounded analytic reads
+Redis    = capped hot state, queues, freshness, live counters, short streams
+Doris    = explicit OLAP upgrade only; 0 MB in the default demo profile
 ```
 
-This is not a feature reduction. Dashboard, network security, investigation,
-timeline, search, citation, and export workflows should keep their existing UI
-routes and API contracts. The backend adapter changes under `analytics.mode`.
+The practical replacement for Doris is not Redis plus SQLite alone. Redis is
+evictable and must never be the evidence store. SQLite is a local projection and
+must be rebuildable. Postgres remains the durable source of truth so the small
+profile can stay memory-light without becoming non-replayable.
 
-Doris remains supported for larger installations, but it should consume zero
-memory in the default demo and small-fleet profile. It starts only through the
-explicit Compose `olap` profile and `analytics.mode=olap`.
+The product promise does not change. Dashboard, network security,
+investigation, timeline, search, citation, export, AI tooling, and admin health
+workflows stay present. The selected analytics backend changes under
+`analytics.mode`; useful features are not deleted for the demo.
+
+## Design Principles
+
+1. Durable acceptance happens before acceleration. An event is accepted only
+   after the Postgres journal/idempotency boundary is safe.
+2. Redis is speed, not truth. It may hold counters, leases, queues, freshness,
+   and short live streams, but every Redis analytic value must be TTL-bound or
+   rebuildable from Postgres/SQLite.
+3. SQLite is a local read model. WAL, bounded cache, short transactions,
+   tenant/time/limit predicates, and replay cursors make it predictable on
+   small hosts.
+4. Feature parity beats feature removal. If OLAP mode has a workflow, small
+   mode should either answer from its projection or return analytics-neutral
+   guardrails that explain bounded retention or missing projection coverage.
+5. Doris remains an upgrade path. The small profile keeps Doris at 0 MB by
+   default, but the code path, migrations, and API envelopes stay compatible
+   with dedicated OLAP deployments.
+
+## Operating Modes
+
+### Demo / Small
+
+```yaml
+analytics:
+  mode: small
+  sqlite_dir: /var/lib/control-one/analytics
+  sqlite_cache_mb: 16
+doris:
+  enabled: false
+redis:
+  maxmemory: 128mb
+  maxmemory_policy: volatile-lru
+```
+
+Expected runtime:
+
+| Component | Role | Default Budget |
+| --- | --- | ---: |
+| controlplane | API, ingest fan-out, SQLite writer, query facade | 512 MB target, 1 GB ceiling |
+| Postgres | canonical product DB, journal, audit, cases, replay truth | existing deployment |
+| Redis | queues, live freshness, hot counters, short streams | 128 MB maxmemory, 192 MB container limit |
+| SQLite/WAL | embedded recent analytic read model | 16 MB cache default |
+| Doris FE/BE | disabled unless OLAP is explicitly selected | 0 MB |
+
+### Small-Fleet Sizing Tiers
+
+These tiers are planning defaults, not hard license gates. Validate them with a
+tenant replay fixture before each serious demo or customer pilot.
+
+| Tier | Fleet Shape | Redis Hot Budget | SQLite Cache | Recent Analytic Window | Decision |
+| --- | --- | ---: | ---: | --- | --- |
+| demo-light | up to 50 nodes, bursty demo ingest | 64 to 128 MB | 16 MB | 7 day events, 14 day connections | default profile |
+| branch / SMB | 50 to 250 nodes, a few operators | 128 to 256 MB | 32 to 64 MB | 14 to 30 day events/connections | still small mode if replay tests pass |
+| edge appliance | constrained host, local evidence first | 64 to 128 MB | 16 to 32 MB | short hot window plus compressed archives | small mode with stricter retention |
+| OLAP transition | sustained high event volume, many tenants, long ad hoc queries | Redis only for hot coordination | N/A | warehouse-managed | select `analytics.mode=olap` |
+
+Move a deployment to OLAP when single-writer projection lag cannot catch up
+inside the accepted recovery objective, when recent SQLite data grows beyond
+the host's checkpoint/backup comfort zone, or when many users need long-window
+ad hoc queries at the same time. The upgrade trigger is observed behavior,
+not fear that small mode is less legitimate.
+
+### OLAP
+
+```yaml
+analytics:
+  mode: olap
+doris:
+  enabled: true
+```
+
+Expected runtime:
+
+- Doris, or another warehouse, runs on dedicated analytic capacity.
+- OLAP migrations and writer health checks are required.
+- The UI/API contract remains the same; OLAP adds retention, concurrency, and
+  ad hoc analytic depth, not a different product surface.
+
+## Reference Topologies
+
+### Demo Host
+
+Use one controlplane, one Redis, the existing Postgres service, and an embedded
+SQLite projection directory mounted into the controlplane container:
+
+```text
+console -> controlplane -> Postgres journal
+                       -> SQLite/WAL recent projection
+                       -> Redis hot state and queues
+```
+
+This is the target for the sales/demo VPS. It should boot with no Doris
+containers, no Doris host prerequisites, and no route removal. Its success
+metric is that the console can demonstrate the product end to end from
+`source=small-analytics` with bounded latency and clear health metadata.
+
+### Small Production / Pilot
+
+Keep Postgres as the HA/backup boundary. Run one active projection writer per
+tenant or deployment, protected by a lease. Standby controlplane instances may
+either warm their own SQLite projection from the Postgres journal or rebuild on
+promotion. Do not put the same SQLite database file on a shared network
+filesystem with concurrent writers.
+
+```text
+active controlplane   -> local SQLite/WAL projection
+standby controlplane  -> warm projection or rebuild-on-promote
+Postgres HA/backup    -> canonical journal and replay truth
+Redis                 -> bounded queues, leases, freshness, counters
+```
+
+For active-active APIs, route analytic reads to the instance that owns the
+fresh projection, or make each instance run a read projection from the shared
+Postgres journal with independent cursors. The simple, safe small-fleet default
+is active/passive for the projection layer.
+
+### OLAP Upgrade
+
+When the observed workload needs long-window ad hoc search, high concurrency,
+or storage beyond the local projection comfort zone, switch to:
+
+```text
+analytics.mode=olap
+DORIS_ENABLED=true
+docker compose --profile olap ...
+```
+
+That should be a capacity upgrade, not a UI rewrite. The same routes should
+keep working with `source=doris` or another future warehouse source.
 
 ## Why Not Doris By Default
 
-The current demo host has limited shared memory. Even with tuned heap and BE
-limits, Doris introduces a frontend JVM, backend process, cluster bootstrap
-requirements, host sysctl requirements, and operational variance that are out
-of proportion for a small fleet.
+The demo host is a shared, memory-constrained environment. Even with tuned heap
+and BE limits, Doris introduces a frontend JVM, backend process, cluster
+bootstrap, host sysctl requirements, storage compaction behavior, and memory
+variance that are out of proportion for small fleets.
 
-For demos and branch-size deployments, the goal is bank-grade correctness within
-a bounded footprint:
+Small deployments need deterministic correctness more than warehouse depth:
 
-- deterministic ingest acceptance;
-- replayable analytic projections;
-- visible health and freshness;
-- no unbounded memory growth;
-- no deleted product workflows.
+- accepted ingest must commit durably;
+- recent evidence must be searchable and cited;
+- live UI heat must stay responsive;
+- projection failures must be replayable;
+- operational memory must be predictable;
+- missing projection coverage must be visible as backlog, not hidden by
+  removed routes.
 
-Redis plus SQLite alone is not enough because Redis is disposable hot state and
-SQLite is a projection. Postgres remains the acceptance source of truth and
-rebuild source.
+## External Design Anchors
 
-## Fit Envelope
+The small profile is intentionally built around the documented behavior of each
+component:
 
-Use this small profile for:
+- Redis officially treats `maxmemory` as a cache-data limit and evicts according
+  to `maxmemory-policy`; with AOF or replication, extra buffers are outside
+  that eviction comparison. Therefore Redis must hold only reconstructable hot
+  state, and container memory must leave headroom above `maxmemory`.
+- SQLite WAL lets readers and a writer run concurrently, but there is still
+  only one writer at a time and checkpoints are part of normal operation.
+  Therefore Control One should serialize projection writes, keep transactions
+  short, and expose checkpoint/lag health.
+- SQLite negative `cache_size` values are expressed in kibibytes and are an
+  upper bound, not eagerly allocated memory. This is why `sqlite_cache_mb=16`
+  is a useful cap rather than a guaranteed 16 MB allocation.
+- Doris BE memory limits are process-level and the Doris docs call out OOM risk
+  when BE is mixed with FE or other services on the same host. That is the exact
+  demo shape we are avoiding by keeping Doris behind the explicit OLAP profile.
 
-- demos, proofs of value, branch installs, and low-EPS small fleets;
-- roughly 1 to 50 monitored nodes;
-- recent investigation windows measured in days or weeks;
-- one controlplane instance with an existing Postgres database;
-- sustained ingest that can be handled by serialized SQLite writes, roughly
-  250 EPS before tuning and up to about 500 EPS with short retention and fast
-  disk.
-
-Move to Doris or another dedicated warehouse when the deployment needs sustained
-high EPS, many concurrent tenants, long hot retention, multi-GB ad hoc search,
-or bank-scale OLAP concurrency.
-
-## Current Repo State
-
-The repository is already aligned with the first version of this architecture:
-
-- `deploy/docker-compose.yaml` defaults to `ANALYTICS_MODE=small` and
-  `DORIS_ENABLED=false`.
-- Doris FE and BE live behind the explicit Compose `olap` profile.
-- Redis is already required and bounded with `REDIS_MAXMEMORY`, defaulting to
-  `128mb`.
-- The controlplane mounts `/var/lib/control-one/analytics` for local SQLite
-  files and defaults `CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB` to `16` in deploy.
-- `controlplane/internal/server/analytics_mode.go` selects `small`, `olap`, or
-  `disabled`; `auto` resolves to OLAP only when Doris is enabled and configured.
-- `controlplane/internal/smallanalytics` already uses the pure-Go SQLite driver,
-  WAL mode, busy timeouts, an immediate transaction lock, and serialized
-  in-process writes.
-- Small analytics currently persists `process_connections` and serves:
-  `/api/v1/fleet/health` through Postgres rollups,
-  `/api/v1/connections`,
-  `/api/v1/connections/{conn_id}`,
-  `/api/v1/connections/top-talkers`,
-  `/api/v1/events/query` for cited connection-fact rows, and
-  `/api/v1/timelines/build` for connection-fact timelines.
-
-This means the design is not speculative. The immediate task is to finish the
-small profile as a complete product path, not to remove the Doris path.
+References: [Redis key eviction](https://redis.io/docs/latest/develop/reference/eviction/),
+[SQLite WAL](https://www.sqlite.org/wal.html),
+[SQLite PRAGMA cache_size](https://www.sqlite.org/pragma.html#pragma_cache_size),
+[Doris BE configuration](https://doris.apache.org/docs/3.x/admin-manual/config/be-config/),
+and [Doris spill/memory behavior](https://doris.apache.org/docs/dev/admin-manual/workload-management/spill-disk/).
 
 ## Component Responsibilities
 
 ### Postgres: System Of Record
 
-Postgres remains canonical for:
+Postgres owns durable product state:
 
-- tenants, users, RBAC, MFA, policies, jobs, alerts, cases, audit, and
-  workflow state;
-- ingest replay journals and idempotency keys;
-- durable hourly rollups and fallback dashboard summaries;
-- evidence metadata and rebuild coordination.
+- tenants, users, roles, audit, cases, jobs, policies, and workflow state;
+- accepted event ingest batches and idempotency state;
+- replay source for local SQLite rebuilds and future OLAP backfill;
+- terminal evidence references when SQLite has aged out hot projection data.
 
-An ingest batch is accepted only after the Postgres journal write commits.
-SQLite and Redis may lag, but they must be reconstructable from Postgres.
+An ingest request is accepted only after the Postgres journal boundary is safe.
+This keeps bank-grade replayability even when Redis or SQLite is unavailable.
 
-### Redis: Hot State
+### SQLite/WAL: Recent Evidence Projection
 
-Redis should be fast, bounded, and non-evidentiary. It is appropriate for:
+SQLite runs embedded inside the controlplane process. It provides recent,
+tenant-scoped analytic reads without another daemon:
 
-- worker and Asynq queues;
-- live node freshness and status counters;
-- short UI streams;
-- top-talker acceleration;
-- dashboard caches;
-- writer lag and degradation gauges.
+- connection list/detail and IP/node/connection pivots;
+- cited event query rows for projected fact families;
+- timelines and raw-event tabs for recent investigations;
+- small dashboard rollups and export slices;
+- local read checks, WAL checkpointing, retention, and rebuild state.
 
-Redis keys must be tenant-scoped, TTL-bound, and safe under eviction. Suggested
-key families:
+SQLite is not a canonical database. It is a bounded read model that can be
+deleted and rebuilt from Postgres.
 
-```text
-co:hot:fleet:{tenant}:nodes
-co:hot:fleet:{tenant}:node:{node}:counters
-co:hot:toptalkers:{tenant}:{yyyyMMddHH}
-co:stream:events:{tenant}
-co:analytics:writer:{tenant}:lag
-co:analytics:writer:{tenant}:degraded
-```
+### Redis: Bounded Hot State
 
-Redis can answer "what is happening right now?" but it must not be the only
-source for a bank-grade citation.
+Redis accelerates reconstructable state only:
 
-### SQLite/WAL: Local Analytic Read Model
+- Asynq queues and worker coordination;
+- node freshness and live status;
+- top-talkers sorted sets and short dashboard heat;
+- short event streams for live UI affordances;
+- writer lag, projection lag, and health counters.
 
-SQLite is the embedded analytic projection for recent evidence reads. It should
-store indexed, queryable facts that the UI needs without starting another
-daemon:
+Redis keys used for analytics heat must be TTL-bound or rebuildable. Redis-only
+data is never used as the sole source for citations, audit, compliance, or
+customer evidence.
 
-- connection rows and top talker facts;
-- normalized events;
-- timeline entity links;
-- full-text-search content through FTS5;
-- hourly rollups;
-- enrichment snapshots that need recent investigation pivots.
+Suggested hot key families:
 
-Current implementation uses one SQLite file under the configured analytics
-directory. The target architecture can evolve to one tenant file per active
-tenant if lock isolation becomes necessary:
+| Key Family | Structure | TTL / Bound | Rebuild Source | Allowed Uses |
+| --- | --- | --- | --- | --- |
+| `tenant:{tid}:node:freshness` | hash or string per node | 1 to 15 minutes | heartbeat/audit rows in Postgres | live online/stale badges |
+| `tenant:{tid}:talkers:{window}` | sorted set | 1 to 24 hours | SQLite `process_connections` and events | dashboard heat, top talkers |
+| `tenant:{tid}:eventstream:{window}` | stream with `MAXLEN` | minutes to hours | Postgres journal / SQLite projection | live tail affordances only |
+| `tenant:{tid}:projection:lag` | hash | overwrite, no evidence value | Postgres journal + SQLite cursor | health cards and alerts |
+| `tenant:{tid}:dashboard:heat` | hash/sorted set | minutes | SQLite rollups | fast cards with fallback |
 
-```text
-/var/lib/control-one/analytics/controlone-small-analytics.db
-/var/lib/control-one/analytics/tenants/{tenant_id}.db   # future isolation option
-```
+Forbidden Redis-only state:
 
-Required runtime behavior:
+- citations, evidence exports, audit trails, compliance findings, case
+  attachments, durable job state, and tenant/RBAC decisions;
+- anything that would make an investigation false or incomplete after eviction;
+- keys without TTL unless they are queue/control-plane primitives that are
+  already durable or reconciled elsewhere.
 
-- WAL mode;
-- `busy_timeout` at least 5 seconds;
-- `synchronous=NORMAL` for demo, with `FULL` as a future production option;
-- bounded read pool and one serialized writer path per database;
-- capped write queue and batch size;
-- query timeouts, limits, and maximum windows;
-- startup migrations and `PRAGMA quick_check`;
-- online backup or `VACUUM INTO` after WAL checkpoint for snapshots.
+### Doris: Optional OLAP Upgrade
 
-SQLite is durable on disk, but the operating model is replay-first: if a file is
-lost or corrupt, rebuild it from the Postgres journal.
+Doris remains supported for deployments that need:
 
-### Doris: Optional OLAP
-
-Doris stays valuable for:
-
-- high-EPS analytic ingest;
-- many tenants with concurrent ad hoc investigations;
+- sustained high event volume;
 - long hot retention;
-- warehouse-grade aggregation and large searchable history.
+- many tenants with concurrent analytic queries;
+- warehouse-style aggregation and text search at larger scale.
 
-It should not be part of the default demo path. In small mode, Doris health
-must not gate `/healthz`, browser UX, ingest, dashboard rendering, or
-investigation flows that the local projection can answer.
+Doris must stay behind the explicit Compose `olap` profile and
+`analytics.mode=olap`. It is not part of the default demo memory budget.
 
 ## Data Flow
 
-Ingest should behave the same whether the active analytic backend is small or
-OLAP:
+```text
+agents / collectors
+        |
+        v
+controlplane ingest API
+        |
+        +--> validate tenant, node, schema, capture policy, RBAC, limits
+        +--> commit Postgres journal and idempotency state
+        +--> fan out detectors, audit, alerts, cases, subscriptions
+        +--> project recent analytic facts into SQLite/WAL
+        +--> update Redis hot state after durable acceptance
+        +--> enqueue or stream to Doris only in OLAP mode
+```
 
-1. Validate tenant, node, schema, RBAC, rate limits, and capture policy.
-2. Write the Postgres replay journal and idempotency state.
-3. Fan out local events to detectors, audit, subscriptions, and product
-   workflows.
-4. Update Redis hot counters and short streams with TTLs.
-5. Append normalized analytic facts to SQLite in bounded transactions.
-6. Mark the batch complete for the active local analytics projection.
-7. Optionally mirror or drain to Doris only when OLAP mode is selected.
+Projection failures do not make accepted ingest disappear:
 
-The existing `doris_status` storage field can remain for compatibility during
-the transition, but new code and admin copy should move toward
-`analytics_status` semantics. A compatible status model is:
+- SQLite failure marks local projection lag and retries from Postgres.
+- Redis failure degrades freshness/hot counters but does not block evidence.
+- Doris failure in OLAP mode marks warehouse writer lag and retries.
 
-- `accepted`;
-- `local_completed`;
-- `pending_local`;
-- `pending_olap`;
-- `failed`;
-- `disabled`.
+The journal is the replay boundary in every mode.
 
 ## Read Path Contract
 
-API handlers should select the backend behind a common analytic capability
-contract:
+Product handlers should call backend-neutral capability methods instead of
+deciding UI behavior based on whether Doris exists:
 
 ```go
 type AnalyticsStore interface {
@@ -227,29 +314,103 @@ type AnalyticsStore interface {
 }
 ```
 
-Endpoint behavior:
+Small mode may return source and guardrail metadata when a projection is
+bounded or incomplete. It should not hide routes, remove buttons, or show
+Doris-specific failure copy. Preferred copy is analytics-neutral, such as
+"recent evidence projection is rebuilding" or "older history requires OLAP
+mode."
 
-- Fleet health reads Redis freshness first, then SQLite or Postgres rollups.
-- Top talkers read Redis sorted sets first, then SQLite connection rows.
-- Connection list/detail reads SQLite in small mode and Doris in OLAP mode.
-- Events query reads SQLite `events` and FTS once that projection exists; until
-  then, it can return cited `conn.open` and `conn.close` rows from
-  `process_connections`.
-- Timeline build reads SQLite `timeline_entities` once implemented; until then,
-  it returns bounded connection timelines.
-- Investigation enrichment combines SQLite recent facts with Postgres cases,
-  alerts, audit, compliance, and entity metadata.
-- Exports should preserve the same user workflow and include the active source
-  label, for example `source=small-analytics` or `source=doris`.
+Small-mode event pagination should avoid exact warehouse-style counts on hot
+operator paths. When a query can match more rows than the current page, fetch
+`limit + 1`, return the requested page, and expose a minimal total that proves
+whether `next_offset` exists. Exact totals are acceptable only when the page
+exhausts the result set or a precomputed rollup can answer cheaply. This keeps
+the Redis+SQLite demo profile responsive on large local projections without
+removing event search, citations, or timeline pivots.
 
-Small mode may return guardrails when a projection is genuinely incomplete, but
-it should not hide the route, remove the UI affordance, or convert a working
-workflow into a dead end.
+Every analytic response should preserve the same product envelope across modes:
 
-## SQLite Target Schema
+```json
+{
+  "source": "small-analytics",
+  "mode": "small",
+  "as_of": "2026-06-08T00:00:00Z",
+  "retention": {"from": "2026-06-01T00:00:00Z", "to": "2026-06-08T00:00:00Z"},
+  "lag": {"journal_backlog": 0, "projection_ms": 240},
+  "guardrails": [],
+  "data": []
+}
+```
 
-The current `process_connections` table is the first slice. The next target
-schema should add normalized events, timeline links, FTS, and rollups:
+Existing compatibility fields such as `doris_status` can remain during the
+transition, but new handlers should also emit analytics-neutral state such as
+`warehouse_status`, `projection_status`, or `analytics_status`. UI copy should
+read from the neutral fields first and treat Doris naming as backwards
+compatibility only.
+
+Admin health must also distinguish a disabled warehouse from a failed
+warehouse. In `analytics.mode=small`, pending journal replay means the local
+projection is degraded until replay drains; it must not be reported as a
+missing-Doris outage. In `analytics.mode=olap`, pending replay with no
+configured warehouse is still a loud `down` condition because the selected
+analytic backend cannot accept the work.
+
+## Capability Matrix
+
+| Capability | Small-Fleet Source | OLAP Source | Required Behavior |
+| --- | --- | --- | --- |
+| fleet health | Redis freshness plus Postgres/SQLite rollups | Doris plus Postgres fallback | same cards, optional source metadata |
+| connections list/detail | SQLite `process_connections` | Doris `process_connections` | same filters, drilldowns, citations |
+| top talkers | Redis sorted sets, fallback SQLite | Doris aggregation | same response envelope |
+| event query | SQLite `events`/FTS as projected; connection facts today | Doris `events` | same citations, guardrails for gaps |
+| timeline build | SQLite `timeline_entities` as projected; connection facts today | Doris timeline views | same timeline and raw tabs |
+| exports | SQLite/Postgres recent evidence | Doris long-window evidence | same export flow with source metadata |
+| analytics health | journal, local read/deep-check status, Redis evictions | journal and warehouse writer health | analytics-neutral copy |
+
+This matrix is the anti-regression contract. If a workflow works in OLAP mode,
+small mode should either answer from its read model or explain the bounded
+limitation without removing the workflow.
+
+## Feature-Preservation Contract
+
+Small mode is an implementation choice, not a reduced edition. The UI and API
+should follow these rules:
+
+- keep navigation, buttons, exports, timeline pivots, AI tools, and drilldowns
+  visible when the user is allowed to use them;
+- show source, retention, lag, and guardrail metadata when the small projection
+  is bounded;
+- use copy such as "recent evidence projection is rebuilding" or "older
+  history requires OLAP mode" instead of Doris-specific outage copy;
+- keep OLAP-only depth behind explicit guardrails, not hidden route removal;
+- preserve compatibility fields for existing clients while preferring neutral
+  fields such as `analytics_mode`, `analytics_status`, `projection_status`,
+  `warehouse_status`, and `source`;
+- test each high-value route with Doris absent so missing projections become
+  backlog items with clear operator behavior.
+
+This rule is especially important for demos: a light backend is acceptable;
+a light product surface is not.
+
+## SQLite Projection Model
+
+The current implementation has the first slice in
+`controlplane/internal/smallanalytics`:
+
+- WAL mode and `busy_timeout`;
+- small configurable cache;
+- serialized writes;
+- indexed `process_connections`;
+- connection list/detail, IP, node, tenant, connection, and correlation pivots;
+- top-talkers fallback;
+- event query and timeline projection from connection facts;
+- one-row lookahead pagination for small-mode event queries instead of exact
+  OLAP-style counts on every request;
+- lightweight read health; deep `PRAGMA quick_check` should run from a
+  scheduled or explicit admin job, not from ordinary page-load health checks.
+
+The next target schema should add normalized events, FTS, timelines, rollups,
+and replay cursors:
 
 ```sql
 CREATE TABLE events (
@@ -319,139 +480,190 @@ CREATE TABLE rollups_hourly (
   severity_max TEXT,
   PRIMARY KEY (tenant_id, hour_ts_ms, node_id, event_type)
 );
+
+CREATE TABLE projection_cursors (
+  tenant_id TEXT NOT NULL,
+  projector TEXT NOT NULL,
+  source_batch_id TEXT,
+  source_ts_ms INTEGER NOT NULL DEFAULT 0,
+  last_success_ms INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  rebuild_state TEXT NOT NULL DEFAULT 'ready',
+  PRIMARY KEY (tenant_id, projector)
+);
 ```
 
-This keeps queryable evidence local and cheap while preserving a clean migration
-path to Doris for warehouse scale.
+### SQLite Write Discipline
 
-## Resource Budget
+To keep SQLite lightweight and predictable:
 
-Default demo target:
+- use one projection writer per controlplane instance, guarded by a process
+  mutex or queue, and keep upsert batches small enough to finish under the
+  ingest timeout budget;
+- set a bounded `busy_timeout`, short query contexts, and limit/tenant/time
+  predicates on every read path;
+- use bounded lookahead or rollups for pagination metadata on hot paths; avoid
+  request-time exact counts over broad unions unless the result is already
+  trivially exhausted;
+- checkpoint WAL during idle moments and after retention sweeps, and report
+  database size, WAL size, checkpoint age, and failed checkpoint attempts;
+- store projector cursors in SQLite and checkpoint durable replay state in
+  Postgres, so deleting the SQLite file is a recovery drill rather than data
+  loss;
+- keep FTS optional per event family and never let broad text search skip the
+  tenant/time/limit guardrails;
+- back up with SQLite-aware mechanisms such as the online backup API or
+  `VACUUM INTO`, not by copying only the main `.db` file while WAL is active.
 
-- controlplane: 512 MB to 1 GB container limit;
-- Redis: `REDIS_MAXMEMORY=128mb`, container limit around 192 MB;
-- SQLite: no daemon, 16 to 64 MB cache budget;
-- console: 256 MB;
-- landing and edge services: 128 MB each;
-- Doris: 0 MB unless OLAP profile is explicitly selected.
+## Failure Modes
 
-The design goal is one analytic process in small mode: the controlplane itself.
+| Failure | Small-Mode Behavior |
+| --- | --- |
+| Redis unavailable | queues/live heat degrade; evidence queries continue from SQLite/Postgres where possible |
+| Redis eviction | hot counters may rebuild; citations/audit are unaffected |
+| SQLite locked or slow | bounded timeout, visible local projection lag, retry from journal |
+| SQLite corrupt | quarantine file, create fresh projection, rebuild from Postgres journal |
+| SQLite deleted | rebuild from Postgres journal; recent analytics unavailable until replay catches up |
+| controlplane restart | WAL-backed facts remain; writer resumes from journal cursor |
+| Postgres unavailable | no new accepted ingest; existing SQLite reads may continue with stale-source metadata |
+| OLAP selected but Doris unavailable | fail loudly as OLAP health failure; do not silently behave like warehouse mode |
 
 ## Security And Accuracy
 
-Bank-grade small mode means deterministic and replayable, not infinite scale.
-Required properties:
+Small mode is bank-grade when it is deterministic and replayable:
 
-- every event has a stable ID or dedup key;
 - tenant and RBAC checks are identical in small and OLAP modes;
 - capture-policy redaction happens before sensitive fields enter SQLite;
-- Redis-only data is never the sole evidence source;
-- citations point to stable SQLite/Postgres records;
+- every projected fact has a stable event ID, connection ID, dedup key, or raw
+  reference;
+- citations point to SQLite/Postgres records, never Redis-only state;
+- reads are tenant-scoped, time-bounded, limit-bounded, and timeout-bounded;
 - retention deletion is explicit and auditable;
-- corrupted SQLite projections are quarantined and rebuilt from Postgres;
-- health APIs expose mode, source, writer lag, backlog, quick-check status, and
-  last successful projection time.
+- health exposes mode, source, lag, backlog, read/deep-check status, DB/WAL size,
+  Redis eviction count, and last successful projection time.
 
-For encryption at rest, prefer encrypted disks or application-level field
-encryption for sensitive event bodies. Avoid making SQLCipher a default
-dependency unless the build and deployment model deliberately accepts cgo.
+For encryption at rest, prefer encrypted volumes or field-level encryption for
+sensitive event bodies. Avoid making SQLCipher a default dependency unless the
+build and deployment model deliberately accepts cgo.
 
 ## Retention Defaults
 
 Recommended small-fleet defaults:
 
-- Redis streams/counters: 1 to 24 hours, depending on key family;
-- SQLite normalized events: 7 days by default, configurable to 30 days;
-- SQLite connection and timeline facts: 14 to 30 days;
-- SQLite hourly rollups: 90 days;
-- Postgres ingest journal: retain pending and failed rows until repaired;
-  archive terminal rows after the configured replay window;
-- optional object storage: compressed daily evidence archives for retention
-  beyond the SQLite hot window.
+| Data | Default Retention |
+| --- | --- |
+| Redis streams/counters | 1 to 24 hours, depending on key family |
+| SQLite normalized events | 7 days by default, configurable to 30 days |
+| SQLite connection and timeline facts | 14 to 30 days |
+| SQLite hourly rollups | 90 days |
+| Postgres ingest journal | pending/failed until repaired; terminal rows archived after replay window |
+| optional object storage | compressed daily evidence archives beyond SQLite hot window |
 
-Retention jobs must checkpoint WAL files and report DB/WAL sizes.
+Retention jobs should checkpoint WAL files and report DB/WAL sizes.
 
-## Deployment Modes
+## Current Repo State
 
-### Demo / Small
+The repository already points toward this architecture:
 
-```yaml
-analytics:
-  mode: small
-  sqlite_dir: /var/lib/control-one/analytics
-  sqlite_cache_mb: 16
-doris:
-  enabled: false
-```
+- `deploy/.env.example` defaults to `ANALYTICS_MODE=small`,
+  `ANALYTICS_SQLITE_CACHE_MB=16`, `REDIS_MAXMEMORY=128mb`,
+  `REDIS_MAXMEMORY_POLICY=volatile-lru`, and `DORIS_ENABLED=false`.
+- `deploy/docker-compose.yaml` caps Redis hot memory, mounts
+  `/var/lib/control-one/analytics`, and keeps Doris FE/BE behind the `olap`
+  profile.
+- `deploy/bootstrap.sh` and `deploy/deploy.py` skip Doris unless OLAP is
+  explicitly selected.
+- `controlplane/internal/smallanalytics` implements the embedded SQLite store
+  for connection facts and bounded timeline/event reads from those facts.
+- Several server paths already prefer `localAnalytics` in small mode before
+  Doris.
+- Admin ingest backlog, capacity, and AI ingest-health responses now include
+  backend-neutral `analytics_mode`, `analytics_status`, `warehouse_status`, and
+  `warehouse_configured` fields while retaining legacy `doris_status` and
+  `doris_configured` compatibility fields. The AI tool is exposed as
+  `ingest_health`, with `doris_ingest_health` kept as a compatibility alias.
+- The embedded SQLite projection exposes admin capacity health stats for
+  lightweight read-check status, DB/WAL/SHM bytes, total projection bytes, configured
+  cache cap, checked-at time, and last health error. The Settings System health
+  panel renders those stats without Doris-specific copy.
 
-Expected runtime:
+Known gaps to close before calling the small profile fully bank-grade:
 
-- Postgres on the host or managed database;
-- Redis container;
-- controlplane container with embedded SQLite;
-- console, landing, nginx edge, certbot, and IP enrichment;
-- no Doris FE/BE containers.
-
-### OLAP
-
-```yaml
-analytics:
-  mode: olap
-doris:
-  enabled: true
-```
-
-Expected runtime:
-
-- Doris or another warehouse on dedicated capacity;
-- OLAP migrations and health checks are required;
-- optional dual-read tests compare small fixtures with warehouse results.
+| Gap | Required Work |
+| --- | --- |
+| remaining direct Doris naming in code and copy | continue moving operator contracts to backend-neutral names while preserving compatibility fields |
+| Redis hot-counter acceleration | add sorted-set/hash update path with SQLite fallback |
+| normalized non-connection events | project log, web, process, file, DNS, DB audit, policy, and security events into SQLite |
+| FTS search | add `events_fts` and bounded query paths |
+| projection cursors/rebuild | add admin job or command to rebuild tenant projections from Postgres |
+| health surfaces | expose projection lag, checkpoint age, rebuild state, deep quick-check results, Redis evictions, and source metadata beyond the current read-check and DB/WAL size stats |
+| restart/replay tests | ingest fixture, restart, delete SQLite, rebuild, compare counts/citations/timelines |
+| UI copy | remove Doris-only empty/error language from small-mode routes |
 
 ## Implementation Roadmap
 
-1. Keep the current small profile as the default demo deployment.
-2. Add Redis hot-counter acceleration for fleet health, top talkers, dashboard
-   freshness, and writer lag.
-3. Expand SQLite from `process_connections` into `events`, FTS5,
-   `timeline_entities`, `rollups_hourly`, and enrichment facts.
-4. Introduce a backend-neutral `AnalyticsStore` interface so server handlers no
-   longer talk directly in Doris terms.
-5. Rename admin and AI health copy from `doris_status` to
-   backend-neutral analytics health while preserving the database field until a
-   deliberate migration.
-6. Add replay/restart acceptance tests: ingest, restart controlplane, confirm
-   small analytics results survive, delete a SQLite projection, rebuild from the
-   Postgres journal, and compare counts/citations.
-7. Add dual-read fixture tests for small vs OLAP mode so larger customers can
-   move to Doris without relearning the UI.
-8. Run live browser validation against the network, investigation, timeline,
-   dashboard, and export flows with `source=small-analytics`.
+### P0: Demo-Safe
+
+1. Keep the default deploy at `analytics.mode=small` with Doris stopped.
+2. Keep current SQLite connection facts powering network, investigation, event
+   query, and timeline flows.
+3. Add Redis acceleration for top talkers, node freshness, dashboard heat, and
+   writer lag with SQLite/Postgres fallback.
+4. Replace user-facing `doris_status` and Doris-specific empty states with
+   analytics-neutral health language, keeping compatibility fields and aliases
+   for existing clients.
+5. Live-test dashboard, network security, investigation, timelines, exports,
+   and admin health with Doris absent.
+
+### P1: Bank-Grade Local Projection
+
+1. Add SQLite `events`, `events_fts`, `timeline_entities`, `rollups_hourly`,
+   and `projection_cursors`.
+2. Project log/web/process/file/DNS/DB/policy/security facts from the existing
+   ingest journal.
+3. Add tenant-scoped rebuild, quick-check, checkpoint, retention, and lag jobs.
+4. Add source/guardrail metadata wherever a small-mode query is bounded by
+   projection coverage or retention.
+5. Add restart and rebuild acceptance tests with fixture counts, citations, and
+   timeline pivots.
+
+### P2: OLAP Compatibility
+
+1. Complete a backend-neutral `AnalyticsStore` facade for all analytic reads.
+2. Keep Doris stream loading, migrations, and HA runbooks available only in the
+   dedicated OLAP profile.
+3. Add dual-read fixture tests comparing small and OLAP contracts.
+4. Preserve the same UI copy and response envelopes across modes.
 
 ## Demo Acceptance Criteria
 
-The small architecture is demo-ready when all of these are true:
+The architecture is demo-ready when:
 
 - `docker compose up -d` starts no Doris containers unless `--profile olap` is
-  passed.
-- `/healthz` is healthy with `analytics.mode=small` and a healthy SQLite store.
-- Redis remains within its configured memory cap under noisy ingest.
-- The console routes for dashboard, network security, investigation, timelines,
-  and exports load without console errors or misleading Doris-only empty states.
+  passed;
+- `/healthz` is healthy with `analytics.mode=small` and local projection read checks OK;
+- Redis remains within its configured memory cap under noisy ingest;
+- dashboard, network security, investigation, timelines, exports, and admin
+  health load without console errors or Doris-only copy;
+- admin ingest backlog and capacity report small-mode replay lag through
+  `analytics_status` / `warehouse_status`, with disabled Doris treated as
+  normal for small mode and as failure only when OLAP is explicitly selected;
 - `/api/v1/fleet/health`, `/api/v1/connections`,
   `/api/v1/connections/top-talkers`, `/api/v1/events/query`, and
   `/api/v1/timelines/build` return successful small-mode envelopes wherever
-  projected facts exist.
-- Restarting the controlplane does not lose recent analytic results.
-- Rebuilding SQLite from the Postgres journal reproduces the same fixture
-  counts, citations, connection facts, and timeline pivots.
-- OLAP mode remains available and explicit for larger deployments.
+  projected facts exist;
+- restarting controlplane does not lose recent analytic results;
+- deleting and rebuilding SQLite from Postgres reproduces fixture counts,
+  citations, connection facts, and timeline pivots;
+- OLAP remains available and explicit for larger deployments.
 
 ## Non-Goals
 
 - Do not remove Doris from the codebase.
 - Do not remove investigation, timeline, search, top-talkers, connection
-  drilldown, dashboard, or export features.
+  drilldown, dashboard, export, or AI workflows.
 - Do not make Redis the evidence store.
 - Do not position small mode as a replacement for high-volume bank SIEM
-  warehousing. It is the right default for demos, branch installs, and small
-  fleets.
+  warehousing.
+- Do not make the UI depend on knowing whether the selected backend is SQLite
+  or Doris.

@@ -155,4 +155,5 @@ const (
 	TopicHealthIncident     = "health.incident"
 	TopicDashboardTick      = "dashboard.tick"
 	TopicEventsAnomaly      = "events.anomaly"
+	TopicLogIngested        = "log.ingested"
 )

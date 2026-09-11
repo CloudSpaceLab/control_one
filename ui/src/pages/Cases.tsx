@@ -45,11 +45,18 @@ export function Cases(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
       setCases([]);
+      setSelectedId(null);
       setSelectedCase(null);
+      setExportPreview(null);
+      setError(null);
+      setNoteStatus(null);
       setLoading(false);
       return;
     }
@@ -58,9 +65,18 @@ export function Cases(): JSX.Element {
     try {
       const response = await api.listSOCCases({ tenantId: currentTenantId, limit: 50 });
       setCases(response.data);
-      setSelectedId((current) => current ?? response.data[0]?.case_id ?? null);
+      setSelectedId((current) => (
+        current && response.data.some((row) => row.case_id === current)
+          ? current
+          : response.data[0]?.case_id ?? null
+      ));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load SOC cases.');
+      setError(errorMessage(err, 'Failed to load SOC cases.'));
+      setCases([]);
+      setSelectedId(null);
+      setSelectedCase(null);
+      setExportPreview(null);
+      setNoteStatus(null);
     } finally {
       setLoading(false);
     }
@@ -78,14 +94,22 @@ export function Cases(): JSX.Element {
     }
     let cancelled = false;
     setDetailLoading(true);
+    setSelectedCase(null);
+    setError(null);
     setExportPreview(null);
+    setExportError(null);
+    setNoteDraft('');
+    setNoteStatus(null);
     api
       .getSOCCase(selectedId, currentTenantId)
       .then((row) => {
         if (!cancelled) setSelectedCase(row);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load case detail.');
+        if (!cancelled) {
+          setSelectedCase(null);
+          setError(errorMessage(err, 'Failed to load case detail.'));
+        }
       })
       .finally(() => {
         if (!cancelled) setDetailLoading(false);
@@ -98,8 +122,9 @@ export function Cases(): JSX.Element {
   const statusCounts = useMemo(() => summarizeCases(cases), [cases]);
 
   const addNote = async () => {
-    if (!selectedCase || !currentTenantId || !noteDraft.trim()) return;
+    if (!selectedCase || !currentTenantId || !noteDraft.trim() || noteSaving) return;
     setNoteStatus('Saving note...');
+    setNoteSaving(true);
     try {
       const citations = selectedCase.evidence_refs?.map((ref) => ref.id).slice(0, 5);
       await api.addSOCCaseNote(selectedCase.case_id, currentTenantId, {
@@ -110,13 +135,24 @@ export function Cases(): JSX.Element {
       setNoteStatus('Note added with audit guardrails.');
       setSelectedCase(await api.getSOCCase(selectedCase.case_id, currentTenantId));
     } catch (err) {
-      setNoteStatus(err instanceof Error ? err.message : 'Note failed.');
+      setNoteStatus(`Note failed: ${errorMessage(err, 'Unable to add note.')}`);
+    } finally {
+      setNoteSaving(false);
     }
   };
 
   const previewExport = async () => {
-    if (!selectedCase || !currentTenantId) return;
-    setExportPreview(await api.exportSOCCase(selectedCase.case_id, currentTenantId));
+    if (!selectedCase || !currentTenantId || exportLoading) return;
+    setExportLoading(true);
+    setExportError(null);
+    try {
+      setExportPreview(await api.exportSOCCase(selectedCase.case_id, currentTenantId));
+    } catch (err) {
+      setExportPreview(null);
+      setExportError(`Export preview failed: ${errorMessage(err, 'Unable to generate export preview.')}`);
+    } finally {
+      setExportLoading(false);
+    }
   };
 
   return (
@@ -150,7 +186,7 @@ export function Cases(): JSX.Element {
 
       {error ? (
         <Panel padding="md" toneAccent="critical" title="Case data unavailable">
-          <p className="text-sm text-state-critical">{error}</p>
+          <p className="text-sm text-state-critical" role="alert">{error}</p>
         </Panel>
       ) : null}
 
@@ -169,6 +205,10 @@ export function Cases(): JSX.Element {
                 />
               ))}
             </div>
+          ) : error ? (
+            <p className="text-sm text-text-muted">
+              Case queue could not be loaded. Resolve the error above and refresh.
+            </p>
           ) : (
             <EmptyState
               icon={<ShieldCheck />}
@@ -221,12 +261,15 @@ export function Cases(): JSX.Element {
                   notes={selectedCase.notes ?? []}
                   draft={noteDraft}
                   status={noteStatus}
+                  saving={noteSaving}
                   onDraftChange={setNoteDraft}
                   onSubmit={() => void addNote()}
                 />
                 <ExportPanel
                   row={selectedCase}
                   preview={exportPreview}
+                  loading={exportLoading}
+                  error={exportError}
                   onPreview={() => void previewExport()}
                 />
               </div>
@@ -242,6 +285,10 @@ export function Cases(): JSX.Element {
       </div>
     </div>
   );
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function CaseMetric({ label, value, tone }: { label: string; value: number; tone: StateTone }): JSX.Element {
@@ -487,15 +534,18 @@ function NotesPanel({
   notes,
   draft,
   status,
+  saving,
   onDraftChange,
   onSubmit,
 }: {
   notes: SOCCase['notes'];
   draft: string;
   status: string | null;
+  saving: boolean;
   onDraftChange: (value: string) => void;
   onSubmit: () => void;
 }): JSX.Element {
+  const statusIsError = status?.toLowerCase().startsWith('note failed');
   return (
     <div className="rounded-md border border-border-subtle bg-surface p-3">
       <p className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
@@ -521,11 +571,18 @@ function NotesPanel({
           placeholder="Add analyst decision, owner, or closure note"
           className="rounded-md border border-border-subtle bg-elevated px-3 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
         />
-        <Button type="button" variant="secondary" size="sm" onClick={onSubmit} disabled={!draft.trim()}>
+        <Button type="button" variant="secondary" size="sm" onClick={onSubmit} disabled={!draft.trim() || saving} loading={saving}>
           <MessageSquarePlus />
-          Add note
+          {saving ? 'Adding note...' : 'Add note'}
         </Button>
-        {status ? <p className="text-xs text-text-muted">{status}</p> : null}
+        {status ? (
+          <p
+            className={cn('text-xs', statusIsError ? 'text-state-critical' : 'text-text-muted')}
+            role={statusIsError ? 'alert' : undefined}
+          >
+            {status}
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -534,10 +591,14 @@ function NotesPanel({
 function ExportPanel({
   row,
   preview,
+  loading,
+  error,
   onPreview,
 }: {
   row: SOCCase;
   preview: SOCCaseExport | null;
+  loading: boolean;
+  error: string | null;
   onPreview: () => void;
 }): JSX.Element {
   return (
@@ -553,10 +614,19 @@ function ExportPanel({
         <Guardrail label="Proposal-only actions" ok={row.coverage_badges.some((badge) => badge.id === 'actions_proposal_only')} />
         <Guardrail label="Audit export URL" ok={Boolean(row.export_url)} />
       </div>
-      <Button type="button" variant="outline" size="sm" className="mt-3 w-full justify-between" onClick={onPreview}>
-        Preview export
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="mt-3 w-full justify-between"
+        onClick={onPreview}
+        loading={loading}
+        disabled={loading}
+      >
+        {loading ? 'Previewing export...' : 'Preview export'}
         <ArrowRight />
       </Button>
+      {error ? <p className="mt-2 text-xs text-state-critical" role="alert">{error}</p> : null}
       {preview ? (
         <div className="mt-3 rounded-md border border-border-subtle bg-elevated p-3">
           <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">{preview.export_version}</p>

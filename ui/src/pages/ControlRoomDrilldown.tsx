@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ClipboardList, FileText, History, ListChecks, LockKeyhole, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  Alert,
   EmptyState,
   KpiTile,
   Panel,
@@ -61,6 +63,25 @@ const TONE_ACCENT: Record<ControlRoomTone, 'brand' | 'accent' | 'healthy' | 'war
   unknown: 'brand',
 };
 
+type ExposureContainmentMode = Extract<NetworkIsolationMode, 'whitelist' | 'airgapped'>;
+
+interface ExposureActionRequest {
+  nodeIds: string[];
+  mode: ExposureContainmentMode;
+  durationSeconds: number;
+  label: string;
+}
+
+interface ExposureActionState {
+  busy?: boolean;
+  message?: string;
+  tone?: StateTone;
+}
+
+interface PendingExposureAction extends ExposureActionRequest {
+  error?: string;
+}
+
 export function ControlRoomDrilldown(): JSX.Element {
   const { laneId = '' } = useParams();
   const [params, setParams] = useSearchParams();
@@ -80,6 +101,9 @@ export function ControlRoomDrilldown(): JSX.Element {
     }
     setLoading(true);
     setError(null);
+    setOverview((current) => (
+      current && current.tenant_id === currentTenantId && current.period === period ? current : null
+    ));
     try {
       const next = await api.getControlRoomOverview(currentTenantId, period);
       setOverview(next);
@@ -131,9 +155,9 @@ export function ControlRoomDrilldown(): JSX.Element {
       />
 
       {error ? (
-        <Panel toneAccent="critical" title="Detail data unavailable">
-          <p className="text-sm text-state-critical">{error}</p>
-        </Panel>
+        <Alert variant={overview ? 'warning' : 'critical'} title={overview ? 'Detail refresh failed' : 'Detail data unavailable'}>
+          {overview ? `The data below is last-known detail data for ${overview.period}: ${error}` : error}
+        </Alert>
       ) : null}
 
       {loading && !lane ? (
@@ -366,53 +390,76 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
   const publicListeners = overview.exposure?.public_listeners ?? [];
   const exposureGaps = publicListeners.filter((row) => publicListenerIsGap(row));
   const gapNodeIds = uniqueStrings(exposureGaps.map((row) => row.node_id));
-  const [actionState, setActionState] = useState<Record<string, string>>({});
+  const [actionState, setActionState] = useState<Record<string, ExposureActionState>>({});
+  const [pendingAction, setPendingAction] = useState<PendingExposureAction | null>(null);
 
-  const runIsolationAction = async (
+  const queueIsolationAction = (
     nodeIds: string[],
-    mode: NetworkIsolationMode,
+    mode: ExposureContainmentMode,
     durationSeconds: number,
     label: string,
   ) => {
     if (nodeIds.length === 0) return;
-    const verb = mode === 'airgapped' ? 'airgap' : 'put in whitelist-only mode';
-    if (!window.confirm(`Confirm ${verb} for ${nodeIds.length} node${nodeIds.length === 1 ? '' : 's'} (${label})?`)) return;
-    const key = `${mode}:${nodeIds.join(',')}`;
-    setActionState((current) => ({ ...current, [key]: 'Updating...' }));
+    setPendingAction({ nodeIds, mode, durationSeconds, label });
+  };
+
+  const runIsolationAction = async (action: ExposureActionRequest) => {
+    const key = exposureActionKey(action.mode, action.nodeIds);
+    const title = exposureActionTitle(action.mode, action.durationSeconds);
+    const target = exposureTargetLabel(action.nodeIds, action.label);
+    setActionState((current) => ({
+      ...current,
+      [key]: { busy: true, message: `${title} queued for ${target}...`, tone: 'warning' },
+    }));
     try {
-      for (const nodeId of nodeIds) {
+      for (const nodeId of action.nodeIds) {
         await api.setNodeIsolation(nodeId, {
-          mode,
-          duration_seconds: durationSeconds,
-          reason: mode === 'airgapped'
+          mode: action.mode,
+          duration_seconds: action.durationSeconds,
+          reason: action.mode === 'airgapped'
             ? 'Emergency exposure containment from Control Room'
             : 'Exposure remediation from Control Room',
-          allowed_applications: mode === 'whitelist' ? ['control-one-agent', 'patch'] : undefined,
+          allowed_applications: action.mode === 'whitelist' ? ['control-one-agent', 'patch'] : undefined,
         });
       }
-      setActionState((current) => ({ ...current, [key]: 'Updated' }));
+      const message = `${title} updated ${target}`;
+      setActionState((current) => ({ ...current, [key]: { busy: false, message, tone: 'healthy' } }));
+      setPendingAction(null);
       await onRefresh();
     } catch (err) {
+      const message = `${title} failed for ${target}: ${errorMessage(err, 'Update failed')}`;
       setActionState((current) => ({
         ...current,
-        [key]: err instanceof Error ? err.message : 'Update failed',
+        [key]: { busy: false, message, tone: 'critical' },
       }));
+      setPendingAction((current) => (
+        current && exposureActionKey(current.mode, current.nodeIds) === key ? { ...current, error: message } : current
+      ));
     }
   };
 
+  const confirmPendingAction = () => {
+    if (!pendingAction) return;
+    void runIsolationAction(pendingAction);
+  };
+
+  const pendingKey = pendingAction ? exposureActionKey(pendingAction.mode, pendingAction.nodeIds) : '';
+  const pendingBusy = pendingKey ? Boolean(actionState[pendingKey]?.busy) : false;
+
   return (
-    <Panel eyebrow="FIREWALL AND ISOLATION" title="Exposure protection posture" toneAccent={hasGaps ? 'warning' : 'healthy'}>
-      <p className="max-w-4xl text-sm text-text-secondary">
-        Public services stay in exposure until Control One sees an active isolation mode or a default-deny host firewall protecting the node.
-      </p>
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <KpiTile size="sm" label="Firewall active" value={formatNumber(firewall.enabled)} tone={firewall.enabled > 0 ? 'healthy' : 'unknown'} />
-        <KpiTile size="sm" label="Default deny" value={formatNumber(firewall.default_deny)} tone={firewall.default_deny > 0 ? 'healthy' : 'warning'} />
-        <KpiTile size="sm" label="Unknown/off" value={formatNumber(firewallGaps)} tone={firewallGaps > 0 ? 'warning' : 'healthy'} />
-        <KpiTile size="sm" label="Stale firewall" value={formatNumber(firewall.stale)} tone={firewall.stale > 0 ? 'warning' : 'healthy'} />
-        <KpiTile size="sm" label="Isolation protected" value={formatNumber(isolation.protected)} tone={isolation.protected > 0 ? 'healthy' : 'unknown'} />
-        <KpiTile size="sm" label="Whitelist gaps" value={formatNumber(isolation.whitelist_gaps)} tone={isolation.whitelist_gaps > 0 ? 'warning' : 'healthy'} />
-      </div>
+    <>
+      <Panel eyebrow="FIREWALL AND ISOLATION" title="Exposure protection posture" toneAccent={hasGaps ? 'warning' : 'healthy'}>
+        <p className="max-w-4xl text-sm text-text-secondary">
+          Public services stay in exposure until Control One sees an active isolation mode or a default-deny host firewall protecting the node.
+        </p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <KpiTile size="sm" label="Firewall active" value={formatNumber(firewall.enabled)} tone={firewall.enabled > 0 ? 'healthy' : 'unknown'} />
+          <KpiTile size="sm" label="Default deny" value={formatNumber(firewall.default_deny)} tone={firewall.default_deny > 0 ? 'healthy' : 'warning'} />
+          <KpiTile size="sm" label="Unknown/off" value={formatNumber(firewallGaps)} tone={firewallGaps > 0 ? 'warning' : 'healthy'} />
+          <KpiTile size="sm" label="Stale firewall" value={formatNumber(firewall.stale)} tone={firewall.stale > 0 ? 'warning' : 'healthy'} />
+          <KpiTile size="sm" label="Isolation protected" value={formatNumber(isolation.protected)} tone={isolation.protected > 0 ? 'healthy' : 'unknown'} />
+          <KpiTile size="sm" label="Whitelist gaps" value={formatNumber(isolation.whitelist_gaps)} tone={isolation.whitelist_gaps > 0 ? 'warning' : 'healthy'} />
+        </div>
 
       <div className="grid gap-3 xl:grid-cols-[1fr_22rem]">
         <div className="rounded-lg border border-border-subtle bg-surface p-4">
@@ -432,33 +479,47 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="primary"
-                disabled={gapNodeIds.length === 0}
-                onClick={() => void runIsolationAction(gapNodeIds, 'whitelist', 24 * 60 * 60, 'all exposure gaps')}
-              >
-                <LockKeyhole />
-                Apply whitelist
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={gapNodeIds.length === 0}
-                onClick={() => void runIsolationAction(gapNodeIds, 'airgapped', 60 * 60, 'all exposure gaps')}
-              >
-                <WifiOff />
-                Airgap 1h
-              </Button>
+              {(() => {
+                const key = exposureActionKey('whitelist', gapNodeIds);
+                return (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="primary"
+                    disabled={gapNodeIds.length === 0 || actionState[key]?.busy}
+                    loading={actionState[key]?.busy}
+                    aria-label={`Apply whitelist to ${gapNodeIds.length} exposure gap node${gapNodeIds.length === 1 ? '' : 's'}`}
+                    onClick={() => queueIsolationAction(gapNodeIds, 'whitelist', 24 * 60 * 60, 'all exposure gaps')}
+                  >
+                    <LockKeyhole />
+                    Apply whitelist
+                  </Button>
+                );
+              })()}
+              {(() => {
+                const key = exposureActionKey('airgapped', gapNodeIds);
+                return (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={gapNodeIds.length === 0 || actionState[key]?.busy}
+                    loading={actionState[key]?.busy}
+                    aria-label={`Airgap ${gapNodeIds.length} exposure gap node${gapNodeIds.length === 1 ? '' : 's'} for 1 hour`}
+                    onClick={() => queueIsolationAction(gapNodeIds, 'airgapped', 60 * 60, 'all exposure gaps')}
+                  >
+                    <WifiOff />
+                    Airgap 1h
+                  </Button>
+                );
+              })()}
             </div>
           </div>
           {(['whitelist', 'airgapped'] as const).map((mode) => {
-            const status = actionState[`${mode}:${gapNodeIds.join(',')}`];
-            return status ? (
-              <p key={mode} className="mt-2 text-xs text-text-muted">
-                {mode === 'whitelist' ? 'Apply whitelist' : 'Airgap 1h'}: {status}
+            const state = actionState[exposureActionKey(mode, gapNodeIds)];
+            return state?.message ? (
+              <p key={mode} className={`mt-2 text-xs ${toneText(state.tone)}`}>
+                {state.message}
               </p>
             ) : null;
           })}
@@ -498,8 +559,9 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
               </tr>
             ) : publicListeners.slice(0, 50).map((listener) => {
               const rowGap = publicListenerIsGap(listener);
-              const whitelistKey = `whitelist:${listener.node_id}`;
-              const airgapKey = `airgapped:${listener.node_id}`;
+              const listenerLabel = listener.hostname || listener.node_id;
+              const whitelistKey = exposureActionKey('whitelist', [listener.node_id]);
+              const airgapKey = exposureActionKey('airgapped', [listener.node_id]);
               return (
                 <tr key={`${listener.node_id}:${listener.listen_addr}:${listener.port}:${listener.process}`} className="border-t border-border-subtle">
                   <td className="px-3 py-2">
@@ -521,8 +583,10 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={!rowGap}
-                        onClick={() => void runIsolationAction([listener.node_id], 'whitelist', 24 * 60 * 60, listener.hostname)}
+                        disabled={!rowGap || actionState[whitelistKey]?.busy}
+                        loading={actionState[whitelistKey]?.busy}
+                        aria-label={`Apply 24 hour whitelist to ${listenerLabel}`}
+                        onClick={() => queueIsolationAction([listener.node_id], 'whitelist', 24 * 60 * 60, listenerLabel)}
                       >
                         <LockKeyhole />
                         24h
@@ -531,8 +595,10 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
                         type="button"
                         size="sm"
                         variant="ghost"
-                        disabled={!rowGap}
-                        onClick={() => void runIsolationAction([listener.node_id], 'airgapped', 60 * 60, listener.hostname)}
+                        disabled={!rowGap || actionState[airgapKey]?.busy}
+                        loading={actionState[airgapKey]?.busy}
+                        aria-label={`Airgap ${listenerLabel} for 1 hour`}
+                        onClick={() => queueIsolationAction([listener.node_id], 'airgapped', 60 * 60, listenerLabel)}
                       >
                         <WifiOff />
                         1h
@@ -542,7 +608,7 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
                       ['whitelist', actionState[whitelistKey]],
                       ['airgapped', actionState[airgapKey]],
                     ] as const).map(([mode, status]) => (
-                      status ? <p key={mode} className="mt-1 text-right text-xs text-text-muted">{status}</p> : null
+                      status?.message ? <p key={mode} className={`mt-1 text-right text-xs ${toneText(status.tone)}`}>{status.message}</p> : null
                     ))}
                   </td>
                 </tr>
@@ -590,7 +656,31 @@ function ExposurePosturePanel({ overview, onRefresh }: { overview: ControlRoomOv
           description="Node agents have not reported host firewall state in this period."
         />
       )}
-    </Panel>
+      </Panel>
+
+      <ConfirmModal
+        open={Boolean(pendingAction)}
+        title={`${pendingAction ? exposureActionTitle(pendingAction.mode, pendingAction.durationSeconds) : 'Apply'} exposure containment?`}
+        body={
+          pendingAction
+            ? `${exposureActionTitle(pendingAction.mode, pendingAction.durationSeconds)} for ${exposureTargetLabel(pendingAction.nodeIds, pendingAction.label)}. This queues a temporary node-isolation change from the exposure drill-down and should be backed by ticketed remediation.`
+            : undefined
+        }
+        confirmLabel={pendingAction ? exposureActionTitle(pendingAction.mode, pendingAction.durationSeconds) : 'Confirm'}
+        cancelLabel="Cancel"
+        confirmDisabled={pendingBusy}
+        cancelDisabled={pendingBusy}
+        variant={pendingAction?.mode === 'airgapped' ? 'danger' : 'default'}
+        onConfirm={confirmPendingAction}
+        onCancel={() => setPendingAction(null)}
+      >
+        {pendingAction?.error ? (
+          <Alert variant="critical" title="Exposure action failed">
+            {pendingAction.error}
+          </Alert>
+        ) : null}
+      </ConfirmModal>
+    </>
   );
 }
 
@@ -788,6 +878,20 @@ function publicListenerIsGap(listener: ControlRoomPublicListener): boolean {
 function publicListenerName(listener: ControlRoomPublicListener): string {
   const service = listener.service_kind || listener.process || 'listener';
   return `${service} on ${formatListenAddress(listener.listen_addr, listener.port)}`;
+}
+
+function exposureActionKey(mode: ExposureContainmentMode, nodeIds: string[]): string {
+  return `${mode}:${nodeIds.join(',')}`;
+}
+
+function exposureActionTitle(mode: ExposureContainmentMode, durationSeconds: number): string {
+  if (mode === 'airgapped') return durationSeconds <= 60 * 60 ? 'Airgap 1h' : 'Airgap';
+  return 'Apply whitelist';
+}
+
+function exposureTargetLabel(nodeIds: string[], label: string): string {
+  if (nodeIds.length === 1) return label || nodeIds[0] || 'node';
+  return `${nodeIds.length} nodes (${label || 'selected exposure gaps'})`;
 }
 
 function formatListenAddress(addr: string, port: number): string {
@@ -999,6 +1103,10 @@ function compactList(values?: Array<string | undefined | null>, limit = 4): stri
     .filter((value): value is string => Boolean(value))
     .slice(0, limit)
     .join(', ');
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export default ControlRoomDrilldown;

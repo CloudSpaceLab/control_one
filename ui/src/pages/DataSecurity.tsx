@@ -59,20 +59,31 @@ interface FindingsTabProps {
   tenantId: string;
 }
 
+type PendingFindingResolve = {
+  finding: PIIFinding;
+  error?: string;
+};
+
 function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
   const client = useApiClient();
   const [findings, setFindings] = useState<PIIFinding[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [resolveTarget, setResolveTarget] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [pendingResolve, setPendingResolve] = useState<PendingFindingResolve | null>(null);
+  const [resolving, setResolving] = useState(false);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
+    setLoading(true);
+    setError(null);
     try {
       const res = await client.listPIIFindings({ tenantId, limit: 100, offset: 0 });
       setFindings(res.data ?? []);
-      setError(null);
     } catch (err) {
+      setFindings([]);
       setError(err instanceof Error ? err.message : 'Failed to load findings');
+    } finally {
+      setLoading(false);
     }
   }, [client, tenantId]);
 
@@ -81,14 +92,19 @@ function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
   }, [load]);
 
   const handleResolve = async () => {
-    if (!resolveTarget) return;
+    if (!pendingResolve || resolving) return;
+    setResolving(true);
     try {
-      await client.resolvePIIFinding(resolveTarget);
-      setResolveTarget(null);
-      load();
+      await client.resolvePIIFinding(pendingResolve.finding.id);
+      setPendingResolve(null);
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Resolve failed');
-      setResolveTarget(null);
+      setPendingResolve({
+        finding: pendingResolve.finding,
+        error: `PII finding resolve failed: ${err instanceof Error ? err.message : 'Resolve failed'}`,
+      });
+    } finally {
+      setResolving(false);
     }
   };
 
@@ -105,7 +121,7 @@ function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
     {
       accessorKey: 'details',
       header: 'Details',
-      cell: ({ row }) => row.original.details ?? '—',
+      cell: ({ row }) => row.original.details ?? '-',
     },
     {
       accessorKey: 'created_at',
@@ -118,7 +134,7 @@ function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
       cell: ({ row }) =>
         row.original.resolved_at
           ? new Date(row.original.resolved_at).toLocaleString()
-          : '—',
+          : '-',
     },
     {
       id: 'actions',
@@ -128,7 +144,8 @@ function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => setResolveTarget(row.original.id)}
+            onClick={() => setPendingResolve({ finding: row.original })}
+            aria-label={`Resolve PII finding ${row.original.details ?? row.original.id}`}
           >
             Resolve
           </Button>
@@ -139,32 +156,43 @@ function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
   return (
     <>
       {error && (
-        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Load failed">
-          <p>{error}</p>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="PII findings unavailable">
+          <p role="alert">{error}</p>
         </Panel>
       )}
-      <Panel padding="md">
-        <DataTable
-          columns={columns}
-          rows={findings}
-          rowKey={(r) => r.id}
-          empty={
-            <EmptyState
-              title="No findings"
-              description="No PII findings have been recorded yet."
-            />
-          }
-        />
-      </Panel>
+      {!error && (
+        <Panel padding="md">
+          <DataTable
+            columns={columns}
+            rows={findings}
+            rowKey={(r) => r.id}
+            loading={loading}
+            empty={
+              <EmptyState
+                title="No findings"
+                description="No PII findings have been recorded yet."
+              />
+            }
+          />
+        </Panel>
+      )}
 
       <ConfirmModal
-        open={resolveTarget !== null}
+        open={pendingResolve !== null}
         title="Resolve finding"
-        body="Mark this PII finding as resolved? This cannot be undone."
-        confirmLabel="Resolve"
+        body={`Mark ${pendingResolve?.finding.details ?? 'this PII finding'} as resolved? This cannot be undone.`}
+        confirmLabel={resolving ? 'Resolving...' : 'Resolve'}
+        confirmDisabled={resolving}
+        cancelDisabled={resolving}
         onConfirm={handleResolve}
-        onCancel={() => setResolveTarget(null)}
-      />
+        onCancel={() => setPendingResolve(null)}
+      >
+        {pendingResolve?.error ? (
+          <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {pendingResolve.error}
+          </div>
+        ) : null}
+      </ConfirmModal>
     </>
   );
 }
@@ -179,15 +207,20 @@ function ColumnsTab({ tenantId }: ColumnsTabProps): JSX.Element {
   const client = useApiClient();
   const [cols, setCols] = useState<ColumnClassification[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
+    setLoading(true);
+    setError(null);
     try {
       const res = await client.listColumnClassifications({ tenantId, limit: 100, offset: 0 });
       setCols(res.data ?? []);
-      setError(null);
     } catch (err) {
+      setCols([]);
       setError(err instanceof Error ? err.message : 'Failed to load columns');
+    } finally {
+      setLoading(false);
     }
   }, [client, tenantId]);
 
@@ -206,7 +239,7 @@ function ColumnsTab({ tenantId }: ColumnsTabProps): JSX.Element {
         row.original.pii_type ? (
           <StatusTag tone="degraded">{row.original.pii_type}</StatusTag>
         ) : (
-          <span>—</span>
+          <span>-</span>
         ),
     },
     {
@@ -227,30 +260,33 @@ function ColumnsTab({ tenantId }: ColumnsTabProps): JSX.Element {
       cell: ({ row }) =>
         row.original.last_scanned_at
           ? new Date(row.original.last_scanned_at).toLocaleString()
-          : '—',
+          : '-',
     },
   ], []);
 
   return (
     <>
       {error && (
-        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Load failed">
-          <p>{error}</p>
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Column scans unavailable">
+          <p role="alert">{error}</p>
         </Panel>
       )}
-      <Panel padding="md">
-        <DataTable
-          columns={columns}
-          rows={cols}
-          rowKey={(r) => r.id}
-          empty={
-            <EmptyState
-              title="No column scans"
-              description="No columns have been scanned for PII yet."
-            />
-          }
-        />
-      </Panel>
+      {!error && (
+        <Panel padding="md">
+          <DataTable
+            columns={columns}
+            rows={cols}
+            rowKey={(r) => r.id}
+            loading={loading}
+            empty={
+              <EmptyState
+                title="No column scans"
+                description="No columns have been scanned for PII yet."
+              />
+            }
+          />
+        </Panel>
+      )}
     </>
   );
 }
@@ -261,12 +297,22 @@ interface RulesTabProps {
   tenantId: string;
 }
 
+type PendingRuleDelete = {
+  rule: DataClassificationRule;
+  error?: string;
+};
+
 function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
   const client = useApiClient();
   const [rules, setRules] = useState<DataClassificationRule[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingRuleDelete | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   // New rule form state
   const [newName, setNewName] = useState('');
@@ -277,12 +323,16 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
 
   const load = useCallback(async () => {
     if (!tenantId) return;
+    setLoading(true);
+    setLoadError(null);
     try {
       const res = await client.listDLPRules(tenantId);
       setRules(res.data ?? []);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load rules');
+      setRules([]);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load rules');
+    } finally {
+      setLoading(false);
     }
   }, [client, tenantId]);
 
@@ -291,13 +341,18 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
   }, [load]);
 
   const handleSeedDefaults = async () => {
+    if (seeding) return;
+    setSeeding(true);
+    setActionError(null);
     try {
       const { seeded } = await client.seedDLPRules(tenantId);
       setNotice(`Seeded ${seeded} default rule${seeded === 1 ? '' : 's'}.`);
       window.setTimeout(() => setNotice(null), 4000);
-      load();
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Seed failed');
+      setActionError(`Seed default DLP rules failed: ${err instanceof Error ? err.message : 'Seed failed'}`);
+    } finally {
+      setSeeding(false);
     }
   };
 
@@ -314,27 +369,36 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
       regex: newRegex.trim(),
       severity: newSeverity,
     };
+    setCreating(true);
     try {
       await client.createDLPRule(payload);
       setNewName('');
       setNewPIIType('');
       setNewRegex('');
       setNewSeverity('medium');
-      load();
+      setActionError(null);
+      await load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Create failed');
+    } finally {
+      setCreating(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
     try {
-      await client.deleteDLPRule(deleteTarget);
-      setDeleteTarget(null);
-      load();
+      await client.deleteDLPRule(pendingDelete.rule.id);
+      setPendingDelete(null);
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed');
-      setDeleteTarget(null);
+      setPendingDelete({
+        rule: pendingDelete.rule,
+        error: `DLP rule delete failed: ${err instanceof Error ? err.message : 'Delete failed'}`,
+      });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -362,7 +426,8 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setDeleteTarget(row.original.id)}
+          onClick={() => setPendingDelete({ rule: row.original })}
+          aria-label={`Delete classification rule ${row.original.name}`}
         >
           <Trash2 className="h-4 w-4" />
         </Button>
@@ -372,9 +437,14 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
 
   return (
     <>
-      {error && (
-        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Load failed">
-          <p>{error}</p>
+      {loadError && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Classification rules unavailable">
+          <p role="alert">{loadError}</p>
+        </Panel>
+      )}
+      {actionError && (
+        <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="DLP rule action failed">
+          <p role="alert">{actionError}</p>
         </Panel>
       )}
       {notice && (
@@ -382,14 +452,14 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
       )}
 
       <Panel padding="md" eyebrow="ACTIONS" title="Default rules">
-        <Button variant="outline" onClick={handleSeedDefaults}>
-          Seed default rules
+        <Button variant="outline" onClick={handleSeedDefaults} disabled={seeding}>
+          {seeding ? 'Seeding...' : 'Seed default rules'}
         </Button>
       </Panel>
 
       <Panel padding="md" eyebrow="NEW RULE" title="Add classification rule">
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="flex flex-col gap-1">
               <Label htmlFor="dlp-name">Name</Label>
               <Input
@@ -433,34 +503,47 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
               <option value="critical">Critical</option>
             </select>
           </div>
-          {formError && <p className="text-sm text-destructive">{formError}</p>}
-          <Button onClick={handleCreateRule}>Add rule</Button>
+          {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+          <Button onClick={handleCreateRule} disabled={creating}>
+            {creating ? 'Adding...' : 'Add rule'}
+          </Button>
         </div>
       </Panel>
 
-      <Panel padding="md">
-        <DataTable
-          columns={columns}
-          rows={rules}
-          rowKey={(r) => r.id}
-          empty={
-            <EmptyState
-              title="No classification rules"
-              description='No rules yet. Click "Seed default rules" to add built-in PII patterns.'
-            />
-          }
-        />
-      </Panel>
+      {!loadError && (
+        <Panel padding="md">
+          <DataTable
+            columns={columns}
+            rows={rules}
+            rowKey={(r) => r.id}
+            loading={loading}
+            empty={
+              <EmptyState
+                title="No classification rules"
+                description='No rules yet. Click "Seed default rules" to add built-in PII patterns.'
+              />
+            }
+          />
+        </Panel>
+      )}
 
       <ConfirmModal
-        open={deleteTarget !== null}
+        open={pendingDelete !== null}
         title="Delete rule"
-        body="Permanently delete this classification rule?"
-        confirmLabel="Delete"
+        body={`Permanently delete ${pendingDelete?.rule.name ?? 'this classification rule'}?`}
+        confirmLabel={deleting ? 'Deleting...' : 'Delete'}
+        confirmDisabled={deleting}
+        cancelDisabled={deleting}
         variant="danger"
         onConfirm={handleDelete}
-        onCancel={() => setDeleteTarget(null)}
-      />
+        onCancel={() => setPendingDelete(null)}
+      >
+        {pendingDelete?.error ? (
+          <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {pendingDelete.error}
+          </div>
+        ) : null}
+      </ConfirmModal>
     </>
   );
 }
@@ -478,7 +561,7 @@ export function DataSecurity(): JSX.Element {
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        eyebrow="DETECT & RESPOND · DATA SECURITY"
+        eyebrow="DETECT & RESPOND / DATA SECURITY"
         title="Data security"
         description="Classify columns, detect PII exposure, and manage DLP rules."
       />
@@ -492,7 +575,7 @@ export function DataSecurity(): JSX.Element {
             onChange={(e) => setTenantId(e.target.value)}
             className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
           >
-            <option value="">— select —</option>
+            <option value="">- select -</option>
             {tenants.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}

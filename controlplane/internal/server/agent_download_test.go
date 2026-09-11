@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -161,6 +163,103 @@ func TestInstallScriptCarriesCompliancePolicy(t *testing.T) {
 	}
 	if !strings.Contains(body, `--compliance-policy" "$COMPLIANCE_POLICY_ID"`) {
 		t.Fatalf("install script does not pass compliance policy to join")
+	}
+}
+
+func TestInstallScriptDoesNotPassUnsupportedInitSystemFlag(t *testing.T) {
+	t.Parallel()
+
+	srv := newAgentTestServer(t, t.TempDir(), "", "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/install-script?token=cot_test&platform=darwin", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `ENROLL_ARGS+=("--init-system"`) {
+		t.Fatal("install script passes unsupported --init-system argument")
+	}
+}
+
+func TestInstallScriptWindowsHandlesHostAndPowerShellVariants(t *testing.T) {
+	t.Parallel()
+
+	srv := newAgentTestServer(t, t.TempDir(), "", "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/install-script?token=cot_test&platform=windows", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"$env:PROCESSOR_ARCHITEW6432",
+		"Invoke-ControlOneDownload",
+		"$PSVersionTable.PSVersion.Major -lt 6",
+		"SecurityProtocolType]::Tls12",
+		"WindowsPrincipal",
+		"Run the installer from an elevated Windows terminal.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows install script missing %q", want)
+		}
+	}
+}
+
+func TestInstallScriptWindowsParsesInWindowsPowerShell(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell parser is only available on Windows")
+	}
+
+	srv := newAgentTestServer(t, t.TempDir(), "", "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/install-script?token=cot_test&platform=windows", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentInstallScript(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	scriptPath := filepath.Join(t.TempDir(), "install-agent.ps1")
+	if err := os.WriteFile(scriptPath, rec.Body.Bytes(), 0o600); err != nil {
+		t.Fatalf("write installer: %v", err)
+	}
+	parser := "$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile($env:CONTROLONE_INSTALLER_TEST_PATH, [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | ForEach-Object { $_.ToString() }; exit 1 }"
+	parsers := []string{"powershell.exe"}
+	if pwsh, err := exec.LookPath("pwsh"); err == nil {
+		parsers = append(parsers, pwsh)
+	}
+	for _, shell := range parsers {
+		shell := shell
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			cmd := exec.Command(shell, "-NoProfile", "-Command", parser)
+			cmd.Env = append(os.Environ(), "CONTROLONE_INSTALLER_TEST_PATH="+scriptPath)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s rejected generated installer: %v\n%s", shell, err, output)
+			}
+		})
+	}
+}
+
+func TestInstallScriptDarwinReportsLaunchdAndKeepsEnrollmentPortable(t *testing.T) {
+	t.Parallel()
+
+	srv := newAgentTestServer(t, t.TempDir(), "", "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/install-script?token=cot_test&platform=darwin", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "launchd") {
+		t.Fatal("darwin install script does not identify launchd")
+	}
+	if strings.Contains(body, "--init-system") {
+		t.Fatal("darwin install script passes an unsupported init-system flag")
 	}
 }
 

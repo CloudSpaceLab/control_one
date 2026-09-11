@@ -128,17 +128,15 @@ func (s *Server) buildNodeDocumentation(ctx context.Context, nodeID uuid.UUID) (
 		out.RecentAlerts = append(out.RecentAlerts, newAlertResponse(alert))
 	}
 
-	if s.dorisClient != nil {
-		until := time.Now().UTC()
-		since := until.Add(-24 * time.Hour)
-		rows, err := s.dorisClient.ListConnectionsForNode(ctx, node.TenantID.String(), nodeID.String(), since, until, 10, false, false)
-		if err != nil {
-			s.logger.Warn("list node documentation connections", zap.Error(err), zap.String("node_id", nodeID.String()))
-		} else {
-			out.TopConnections = make([]connectionDocumentationRow, 0, len(rows))
-			for _, row := range rows {
-				out.TopConnections = append(out.TopConnections, newConnectionDocumentationRow(row))
-			}
+	until := time.Now().UTC()
+	since := until.Add(-24 * time.Hour)
+	rows, source, err := s.listAnalyticsConnectionsForNode(ctx, node.TenantID.String(), nodeID.String(), since, until, 10, false, false)
+	if err != nil {
+		s.logger.Warn("list node documentation connections", zap.Error(err), zap.String("node_id", nodeID.String()), zap.String("source", source))
+	} else {
+		out.TopConnections = make([]connectionDocumentationRow, 0, len(rows))
+		for _, row := range rows {
+			out.TopConnections = append(out.TopConnections, newConnectionDocumentationRow(row))
 		}
 	}
 

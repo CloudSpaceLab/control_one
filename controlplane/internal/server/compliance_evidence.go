@@ -527,6 +527,9 @@ func (s *Server) handleListAuditReports(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	if reports == nil {
+		reports = []storage.AuditReport{}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": reports,
@@ -749,6 +752,9 @@ func (s *Server) handleListComplianceReviews(w http.ResponseWriter, r *http.Requ
 		s.logger.Sugar().Errorw("list compliance reviews", "error", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+	if reviews == nil {
+		reviews = []storage.ComplianceReview{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

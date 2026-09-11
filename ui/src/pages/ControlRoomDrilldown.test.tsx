@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ControlRoomDrilldown } from './ControlRoomDrilldown';
 import * as useApiClientModule from '../hooks/useApiClient';
@@ -86,6 +86,22 @@ const overview: ControlRoomOverview = {
         default_deny: false,
         stale: false,
         observed_at: '2026-05-18T09:54:00Z',
+      },
+    ],
+  },
+  exposure: {
+    public_listeners: [
+      {
+        node_id: 'node-2',
+        hostname: 'edge-web-02',
+        process: 'nginx',
+        service_kind: 'nginx',
+        listen_addr: '0.0.0.0',
+        port: 443,
+        protection: 'firewall off',
+        exposure_state: 'public_unprotected',
+        tone: 'warning',
+        recommended_action: 'Apply whitelist-only containment while firewall rules are remediated.',
       },
     ],
   },
@@ -258,13 +274,16 @@ const appDBCoverageOverview: ControlRoomOverview = {
 
 let mockedOverview: ControlRoomOverview;
 let getControlRoomOverviewMock: ReturnType<typeof vi.fn>;
+let setNodeIsolationMock: ReturnType<typeof vi.fn>;
 
 describe('ControlRoomDrilldown', () => {
   beforeEach(() => {
     mockedOverview = overview;
     getControlRoomOverviewMock = vi.fn().mockImplementation(() => Promise.resolve(mockedOverview));
+    setNodeIsolationMock = vi.fn().mockResolvedValue({ id: 'node-2' });
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({
       getControlRoomOverview: getControlRoomOverviewMock,
+      setNodeIsolation: setNodeIsolationMock,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
@@ -326,6 +345,40 @@ describe('ControlRoomDrilldown', () => {
     expect(screen.getByText('not reducing exposure')).toBeInTheDocument();
     expect(screen.getByText('Isolation posture review')).toBeInTheDocument();
     expect(screen.getByText(/lack airgap, whitelist mode, or default-deny firewall protection/i)).toBeInTheDocument();
+  });
+
+  it('uses an in-app confirmation and keeps failed exposure containment visible', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    setNodeIsolationMock.mockRejectedValueOnce(new Error('isolation gate denied'));
+
+    render(
+      <MemoryRouter initialEntries={['/control-room/exposure']}>
+        <Routes>
+          <Route path="/control-room/:laneId" element={<ControlRoomDrilldown />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Exposure protection posture');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 24 hour whitelist to edge-web-02' }));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(setNodeIsolationMock).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole('dialog', { name: /apply whitelist exposure containment/i });
+    expect(dialog).toHaveTextContent('Apply whitelist for edge-web-02');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply whitelist' }));
+
+    const message = 'Apply whitelist failed for edge-web-02: isolation gate denied';
+    await waitFor(() => expect(setNodeIsolationMock).toHaveBeenCalledTimes(1));
+    expect(setNodeIsolationMock).toHaveBeenCalledWith('node-2', expect.objectContaining({
+      mode: 'whitelist',
+      duration_seconds: 24 * 60 * 60,
+      reason: 'Exposure remediation from Control Room',
+      allowed_applications: ['control-one-agent', 'patch'],
+    }));
+    expect(screen.getByRole('dialog', { name: /apply whitelist exposure containment/i })).toBeInTheDocument();
+    expect(screen.getByText('Exposure action failed')).toBeInTheDocument();
+    expect(screen.getAllByText(message).length).toBeGreaterThanOrEqual(2);
   });
 
   it('shows app roots, inferred purposes, and webserver control from the app/db drilldown', async () => {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -116,8 +117,30 @@ func TestAdminIngestBacklogRoleGate(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if resp.Status != "down" || resp.PendingBatches != 2 || resp.PendingRows != 42 || resp.LastErrorMessage == "" {
+		if resp.Status != "degraded" || resp.AnalyticsStatus != "degraded" || resp.AnalyticsMode != analyticsModeSmall || resp.WarehouseStatus != "disabled" {
+			t.Fatalf("small-mode backlog should be degraded without requiring a warehouse: %+v", resp)
+		}
+		if resp.PendingBatches != 2 || resp.PendingRows != 42 || resp.LastErrorMessage == "" {
 			t.Fatalf("unexpected backlog response: %+v", resp)
+		}
+	})
+	t.Run("explicit OLAP without warehouse is down when replay is pending", func(t *testing.T) {
+		srv, store := dashboardAdminHarness(t, "admin", "admin-token")
+		srv.cfg.Analytics.Mode = analyticsModeOLAP
+		store.eventIngestBacklog = storage.EventIngestBacklogSummary{
+			PendingBatches: 1,
+			PendingRows:    7,
+		}
+		rec := dashboardCall(t, srv, "admin-token", http.MethodGet, "/api/v1/admin/ingest/backlog")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp ingestBacklogResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Status != "down" || resp.AnalyticsStatus != "down" || resp.AnalyticsMode != analyticsModeOLAP || resp.WarehouseStatus != "unconfigured" {
+			t.Fatalf("OLAP backlog without warehouse should be down: %+v", resp)
 		}
 	})
 	t.Run("viewer is denied", func(t *testing.T) {
@@ -194,6 +217,12 @@ func TestAdminCapacityRoleGate(t *testing.T) {
 		if resp.PostgresStatus == "" {
 			t.Fatalf("expected postgres_status populated")
 		}
+		if resp.AnalyticsMode == "" || resp.AnalyticsStatus == "" || resp.WarehouseStatus == "" {
+			t.Fatalf("expected analytics-neutral capacity status populated: %+v", resp)
+		}
+		if resp.WarehouseConfigured {
+			t.Fatalf("small-mode capacity should not require a configured warehouse: %+v", resp)
+		}
 	})
 	t.Run("viewer is denied", func(t *testing.T) {
 		srv, _ := dashboardAdminHarness(t, "viewer", "viewer-token")
@@ -202,6 +231,45 @@ func TestAdminCapacityRoleGate(t *testing.T) {
 			t.Fatalf("expected 403 got %d", rec.Code)
 		}
 	})
+}
+
+func TestAdminCapacityIncludesSmallProjectionStats(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP:      config.HTTPConfig{Address: ":0"},
+		TLS:       config.TLSConfig{RequireClientTLS: false},
+		Auth:      authWithTokens("admin", "admin-token"),
+		Analytics: config.AnalyticsConfig{Mode: "small", SQLiteDir: t.TempDir(), CacheMB: 16},
+	}
+	store := &fakeStore{
+		userRoles: map[uuid.UUID][]string{},
+		tenants: []storage.Tenant{
+			{ID: uuid.New(), Name: "Acme"},
+		},
+	}
+	srv := New(logger, cfg, store, &stubQueue{})
+	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
+	if srv.localAnalytics == nil {
+		t.Fatal("expected local analytics store to initialize")
+	}
+
+	rec := dashboardCall(t, srv, "admin-token", http.MethodGet, "/api/v1/admin/capacity")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp capacityResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Projection == nil {
+		t.Fatalf("expected projection stats in small mode: %+v", resp)
+	}
+	if resp.Projection.Status != "ok" || resp.Projection.ReadCheck != "ok" {
+		t.Fatalf("unexpected projection health: %+v", resp.Projection)
+	}
+	if resp.Projection.CacheMB != 16 || resp.Projection.DBBytes <= 0 || resp.Projection.TotalBytes < resp.Projection.DBBytes {
+		t.Fatalf("unexpected projection sizing: %+v", resp.Projection)
+	}
 }
 
 func TestRiskScoreHistoryRoleGate(t *testing.T) {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -249,6 +250,57 @@ func TestControlRoomIPBehaviorDedupesSameSourceCategory(t *testing.T) {
 	}
 	if got.Findings[1].Category != "scanner_probe" || got.Findings[1].Score != 85 {
 		t.Fatalf("expected duplicate scanner probes to keep highest confidence row, got %#v", got.Findings)
+	}
+}
+
+func TestControlRoomIPBehaviorFindingsRespectOverviewPeriod(t *testing.T) {
+	srv, store := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := store.tenants[0].ID
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-2 * time.Hour)
+	stale := now.Add(-20 * 24 * time.Hour)
+	store.ipBehaviorFindings = []storage.IPBehaviorFinding{
+		{
+			ID:          uuid.New(),
+			TenantID:    tenantID,
+			SourceIP:    sql.NullString{String: "198.51.100.44", Valid: true},
+			CountryCode: "GB",
+			Category:    "scanner_probe",
+			Severity:    "critical",
+			Score:       100,
+			Status:      "open",
+			LastSeenAt:  stale,
+			FirstSeenAt: stale,
+			CreatedAt:   stale,
+			UpdatedAt:   stale,
+		},
+		{
+			ID:          uuid.New(),
+			TenantID:    tenantID,
+			SourceIP:    sql.NullString{String: "203.0.113.20", Valid: true},
+			CountryCode: "NG",
+			Category:    "credential_attack",
+			Severity:    "high",
+			Score:       88,
+			Status:      "open",
+			LastSeenAt:  fresh,
+			FirstSeenAt: fresh,
+			CreatedAt:   fresh,
+			UpdatedAt:   fresh,
+		},
+	}
+
+	resp := srv.buildControlRoomOverview(context.Background(), tenantID, "24h", now.Add(-24*time.Hour), now)
+	if len(resp.IPBehavior.Findings) != 1 {
+		t.Fatalf("expected only fresh 24h finding, got %#v", resp.IPBehavior.Findings)
+	}
+	if got := resp.IPBehavior.Findings[0].SourceIP; got != "203.0.113.20" {
+		t.Fatalf("expected fresh finding to remain, got %q in %#v", got, resp.IPBehavior.Findings)
+	}
+	for _, incident := range resp.TopIncidents {
+		if strings.Contains(incident.Drilldown, "198.51.100.44") {
+			t.Fatalf("stale IP finding leaked into top incidents: %#v", incident)
+		}
 	}
 }
 

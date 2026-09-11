@@ -5,7 +5,7 @@
 //   - Spamhaus DROP        (well-known hijacked / malicious netblocks)
 //   - Spamhaus EDROP       (extended DROP list)
 //   - FireHOL Level 1      (curated aggregate of community blocklists)
-//   - Tor exit nodes       (dan.me.uk public list)
+//   - Tor exit nodes       (Tor Project exit-addresses)
 //   - DShield top-attackers (https://www.dshield.org/feeds/)
 //
 // Optional with API key:
@@ -522,8 +522,8 @@ func (f FireHOLLevel1) Fetch(ctx context.Context, client *http.Client) ([]Indica
 	return parseLineList(body, "firehol-level1", "aggregate", 80), nil
 }
 
-// TorExitNodes — Tor exit node list. Useful as a separate signal (not always
-// "bad", but always worth flagging for sensitive endpoints).
+// TorExitNodes is the Tor exit-node list. It is useful as a separate signal
+// (not always "bad", but always worth flagging for sensitive endpoints).
 type TorExitNodes struct{ URL string }
 
 func (t TorExitNodes) Name() string { return "tor-exit" }
@@ -531,11 +531,14 @@ func (t TorExitNodes) Name() string { return "tor-exit" }
 func (t TorExitNodes) Fetch(ctx context.Context, client *http.Client) ([]Indicator, error) {
 	url := t.URL
 	if url == "" {
-		url = "https://www.dan.me.uk/torlist/?exit"
+		url = "https://check.torproject.org/exit-addresses"
 	}
 	body, err := fetchBody(ctx, client, url)
 	if err != nil {
 		return nil, err
+	}
+	if strings.Contains(string(body), "ExitAddress ") {
+		return parseTorExitAddresses(body), nil
 	}
 	return parseLineList(body, "tor-exit", "tor", 50), nil
 }
@@ -641,6 +644,7 @@ func fetchBody(ctx context.Context, client *http.Client, url string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "ControlOneThreatIntel/1.0 (+https://control-one.cloudspacetechs.com)")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -650,6 +654,32 @@ func fetchBody(ctx context.Context, client *http.Client, url string) ([]byte, er
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// parseTorExitAddresses accepts the Tor Project exit-addresses format:
+// "ExitAddress <ip> <yyyy-mm-dd hh:mm:ss>". Other record lines are ignored.
+func parseTorExitAddresses(body []byte) []Indicator {
+	out := []Indicator{}
+	now := time.Now().UTC()
+	scanner := bufio.NewScanner(strings.NewReader(string(body)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "ExitAddress ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || net.ParseIP(fields[1]) == nil {
+			continue
+		}
+		out = append(out, Indicator{
+			IP:        fields[1],
+			Feed:      "tor-exit",
+			Category:  "tor",
+			Score:     50,
+			FirstSeen: now,
+		})
+	}
+	return out
 }
 
 // parseSpamhaus accepts the textual DROP/EDROP formats: "<cidr> ; SBL12345".

@@ -401,14 +401,17 @@ func TestFleetHealthPostgresFallbackKeepsConnectionCountsHonest(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); strings.Contains(body, `"NodeID"`) || !strings.Contains(body, `"node_id"`) {
+		t.Fatalf("fleet health response should use snake_case JSON keys: %s", body)
+	}
 	var resp struct {
 		Source string `json:"source"`
 		Data   []struct {
-			NodeID      string    `json:"NodeID"`
-			ConnsActive int64     `json:"ConnsActive"`
-			LastEventAt time.Time `json:"LastEventAt"`
-			BytesIn24h  int64     `json:"BytesIn24h"`
-			BytesOut24h int64     `json:"BytesOut24h"`
+			NodeID      string    `json:"node_id"`
+			ConnsActive int64     `json:"conns_active"`
+			LastEventAt time.Time `json:"last_event_at"`
+			BytesIn24h  int64     `json:"bytes_in_24h"`
+			BytesOut24h int64     `json:"bytes_out_24h"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -546,7 +549,7 @@ func TestConnectionsListSmallAnalyticsDegradesGracefully(t *testing.T) {
 func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	tenantID := uuid.New()
 	nodeID := uuid.New()
-	base := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	base := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
 	store := &fakeStore{}
 	cfg := &config.Config{
 		HTTP:      config.HTTPConfig{Address: ":0"},
@@ -573,6 +576,9 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("connections status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); strings.Contains(body, `"ConnID"`) || !strings.Contains(body, `"conn_id"`) {
+		t.Fatalf("connections response should use snake_case JSON keys: %s", body)
+	}
 	var listResp struct {
 		Source string                `json:"source"`
 		Data   []doris.ConnectionRow `json:"data"`
@@ -590,6 +596,9 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("top talkers status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, `"ThreatHits"`) || !strings.Contains(body, `"threat_hits"`) {
+		t.Fatalf("top talkers response should use snake_case JSON keys: %s", body)
 	}
 	var talkerResp struct {
 		Source string            `json:"source"`
@@ -609,6 +618,9 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("connection detail status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); strings.Contains(body, `"ConnID"`) || !strings.Contains(body, `"conn_id"`) {
+		t.Fatalf("connection detail should use snake_case JSON keys: %s", body)
+	}
 	var detailResp struct {
 		Source     string               `json:"source"`
 		Connection *doris.ConnectionRow `json:"connection"`
@@ -618,6 +630,28 @@ func TestSmallAnalyticsSQLiteServesConnectionsAndTopTalkers(t *testing.T) {
 	}
 	if detailResp.Source != "small-analytics" || detailResp.Connection == nil || detailResp.Connection.ConnID != "conn-1" {
 		t.Fatalf("unexpected detail response: %+v", detailResp)
+	}
+
+	affected, err := srv.resolveAffectedNodesForIP(context.Background(), tenantID.String(), "8.8.8.8")
+	if err != nil {
+		t.Fatalf("resolve affected nodes: %v", err)
+	}
+	if len(affected) != 1 || affected[0] != nodeID {
+		t.Fatalf("small analytics did not resolve affected node: %+v", affected)
+	}
+
+	flows, err := srv.listFlowDeltas(context.Background(), EventCaptureFilter{
+		TenantID: tenantID,
+		NodeID:   nodeID,
+		Since:    base.Add(-time.Minute),
+		Until:    base.Add(3 * time.Minute),
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list small analytics flow deltas: %v", err)
+	}
+	if len(flows) != 1 || flows[0].Process != "curl" || flows[0].Port != 443 || flows[0].BytesOut != 250 {
+		t.Fatalf("unexpected small analytics flow deltas: %+v", flows)
 	}
 }
 
@@ -1230,6 +1264,37 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestRolePermissionEndpointRejectsBuiltInRoleMutation(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens("admin", "role-admin-token"),
+	}
+	roleID := uuid.New()
+	store := &fakeStore{setRolePermsErr: storage.ErrBuiltInRoleImmutable}
+	srv := New(logger, cfg, store, &stubQueue{})
+
+	body := bytes.NewReader([]byte(`{"permissions":["roles.read"]}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/roles/"+roleID.String()+"/permissions", body)
+	req.Header.Set("Authorization", "Bearer role-admin-token")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), storage.ErrBuiltInRoleImmutable.Error()) {
+		t.Fatalf("expected immutable role message, got %q", rec.Body.String())
+	}
+	if len(store.setRolePermsCalls) != 1 {
+		t.Fatalf("expected one role-permission call, got %d", len(store.setRolePermsCalls))
+	}
+	if store.setRolePermsCalls[0].RoleID != roleID {
+		t.Fatalf("expected role id %s, got %s", roleID, store.setRolePermsCalls[0].RoleID)
+	}
 }
 
 func TestTemplateEndpoints(t *testing.T) {
@@ -2469,6 +2534,9 @@ type fakeStore struct {
 	userList            []storage.User
 	userRoles           map[uuid.UUID][]string
 	rolesCatalog        []storage.Role
+	rolePermissions     []storage.RolePermissions
+	setRolePermsErr     error
+	setRolePermsCalls   []rolePermsCall
 	lastUserID          uuid.UUID
 	overrideRoles       map[uuid.UUID][]string
 	skipUserPersistence bool
@@ -2478,6 +2546,7 @@ type fakeStore struct {
 	templateVersions    map[uuid.UUID][]storage.ProvisioningTemplateVersion
 	templateAssignments []storage.ProvisioningTemplateAssignment
 	policies            map[uuid.UUID]storage.Policy
+	effectivePolicies   []storage.PolicyWithVersion
 	policyAssignments   []storage.PolicyAssignment
 	auditLogs           []storage.AuditLog
 	clusters            map[uuid.UUID]*storage.Cluster
@@ -2490,6 +2559,7 @@ type fakeStore struct {
 	// migration 0028 (Worktree A). Storing it here lets Worktree E's tests
 	// assert label propagation without depending on A's merge. Keyed by node id.
 	nodeLabels             map[uuid.UUID]map[string]any
+	updateNodeLabelsCalls  int
 	leases                 map[uuid.UUID]storage.RemediationLease
 	enrollmentTokens       map[string]storage.EnrollmentToken // keyed by token hash
 	remediationConfigs     map[uuid.UUID]storage.TenantRemediationConfig
@@ -2554,6 +2624,11 @@ type fakeStore struct {
 	// bridge in handleNodeServicesIngest. Tests assert this slice is non-empty
 	// after a recommendation cycle.
 	portObservations []storage.CreatePortObservationParams
+}
+
+type rolePermsCall struct {
+	RoleID      uuid.UUID
+	Permissions []string
 }
 
 type stubQueue struct {
@@ -3651,6 +3726,25 @@ func (f *fakeStore) ListWebhookDeliveries(_ context.Context, webhookID uuid.UUID
 	return nil, 0, nil
 }
 
+func (f *fakeStore) CreateNodeConnectivityTest(_ context.Context, _ storage.NodeConnectivityTest) (*storage.NodeConnectivityTest, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListPendingNodeConnectivityTests(_ context.Context, _ uuid.UUID) ([]storage.NodeConnectivityTest, error) {
+	return nil, nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestRunning(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestCompleted(_ context.Context, _ uuid.UUID, _ bool, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestFailed(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeStore) MarkNodeConnectivityTestByJobCompleted(_ context.Context, _ uuid.UUID, _ bool, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) GetRetentionPolicy(_ context.Context, tenantID uuid.UUID, dataType string) (*storage.TelemetryRetentionPolicy, error) {
 	return nil, nil
 }
@@ -3982,7 +4076,17 @@ func (f *fakeStore) DeletePolicyAssignment(_ context.Context, id uuid.UUID) erro
 }
 
 func (f *fakeStore) GetEffectivePolicies(_ context.Context, tenantID, nodeID uuid.UUID) ([]storage.PolicyWithVersion, error) {
-	return nil, nil
+	if len(f.effectivePolicies) == 0 {
+		return nil, nil
+	}
+	out := make([]storage.PolicyWithVersion, 0, len(f.effectivePolicies))
+	for _, policy := range f.effectivePolicies {
+		if policy.TenantID != uuid.Nil && policy.TenantID != tenantID {
+			continue
+		}
+		out = append(out, policy)
+	}
+	return out, nil
 }
 
 func (f *fakeStore) GetLatestComplianceResultForRule(_ context.Context, nodeID uuid.UUID, ruleID string) (*storage.ComplianceResult, error) {
@@ -4657,9 +4761,20 @@ func (f *fakeStore) ListPermissions(_ context.Context) ([]storage.Permission, er
 	return nil, nil
 }
 func (f *fakeStore) ListRolesWithPermissions(_ context.Context) ([]storage.RolePermissions, error) {
-	return nil, nil
+	out := make([]storage.RolePermissions, len(f.rolePermissions))
+	copy(out, f.rolePermissions)
+	return out, nil
 }
-func (f *fakeStore) SetRolePermissions(_ context.Context, _ uuid.UUID, _ []string) error { return nil }
+func (f *fakeStore) SetRolePermissions(_ context.Context, roleID uuid.UUID, perms []string) error {
+	f.setRolePermsCalls = append(f.setRolePermsCalls, rolePermsCall{
+		RoleID:      roleID,
+		Permissions: append([]string(nil), perms...),
+	})
+	if f.setRolePermsErr != nil {
+		return f.setRolePermsErr
+	}
+	return nil
+}
 func (f *fakeStore) CreateCustomRole(_ context.Context, name, desc string, perms []string) (*storage.RolePermissions, error) {
 	return &storage.RolePermissions{ID: uuid.New(), Name: name, Description: desc, Permissions: perms}, nil
 }
@@ -5382,6 +5497,7 @@ func (f *fakeStore) UpdateNodeLabels(_ context.Context, id uuid.UUID, labels map
 	defer f.mu.Unlock()
 	for i, node := range f.nodes {
 		if node.ID == id {
+			f.updateNodeLabelsCalls++
 			if labels == nil {
 				labels = map[string]any{}
 			}
@@ -5483,6 +5599,9 @@ func (f *fakeStore) UpdatePortRule(_ context.Context, _ uuid.UUID, _ storage.Upd
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) DeletePortRule(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) ListEnabledRulesForNode(_ context.Context, _ uuid.UUID, _ map[string]any) ([]storage.PortMonitoringRule, []storage.LogMonitoringRule, error) {
+	return nil, nil, nil
+}
 
 func (f *fakeStore) CreateLogRule(_ context.Context, _ storage.CreateLogRuleParams) (*storage.LogMonitoringRule, error) {
 	return nil, errors.New("log rules not implemented in fakeStore")
@@ -5497,6 +5616,40 @@ func (f *fakeStore) UpdateLogRule(_ context.Context, _ uuid.UUID, _ storage.Upda
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) DeleteLogRule(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *fakeStore) CreateMetricThresholdRule(_ context.Context, p storage.CreateMetricThresholdRuleParams) (*storage.MetricThresholdRule, error) {
+	return &storage.MetricThresholdRule{
+		ID:            uuid.New(),
+		TenantID:      p.TenantID,
+		Name:          p.Name,
+		MetricName:    p.MetricName,
+		Operator:      p.Operator,
+		Threshold:     p.Threshold,
+		WindowSeconds: p.WindowSeconds,
+		Severity:      p.Severity,
+		Action:        p.Action,
+		TargetNodeID:  p.TargetNodeID,
+		Enabled:       p.Enabled,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}, nil
+}
+func (f *fakeStore) GetMetricThresholdRule(_ context.Context, _ uuid.UUID) (*storage.MetricThresholdRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListMetricThresholdRules(_ context.Context, _ storage.MetricThresholdRuleFilter, _, _ int) ([]storage.MetricThresholdRule, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeStore) ListEnabledMetricThresholdRules(_ context.Context, _ uuid.UUID) ([]storage.MetricThresholdRule, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateMetricThresholdRule(_ context.Context, _ uuid.UUID, _ storage.UpdateMetricThresholdRuleParams) (*storage.MetricThresholdRule, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStore) DeleteMetricThresholdRule(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeStore) CountMetricValueInWindow(_ context.Context, _, _ uuid.UUID, _, _ string, _, _ float64) (int, error) {
+	return 0, nil
+}
 
 func (f *fakeStore) CreateSecurityEvent(_ context.Context, _ storage.CreateSecurityEventParams) (*storage.SecurityEvent, error) {
 	return nil, errors.New("not implemented")
@@ -7556,6 +7709,9 @@ func (f *fakeStore) ListIPBehaviorFindings(_ context.Context, filter storage.IPB
 			if resolved != *filter.Resolved {
 				continue
 			}
+		}
+		if !filter.Since.IsZero() && finding.LastSeenAt.Before(filter.Since) {
+			continue
 		}
 		out = append(out, finding)
 	}

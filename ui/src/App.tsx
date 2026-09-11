@@ -1,10 +1,13 @@
-import { lazy, Suspense } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react';
+import { AlertTriangle, Compass, Home, Search } from 'lucide-react';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MainLayout } from './components/MainLayout';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './providers/AuthProvider';
 import { Skeleton } from './components/ui/skeleton';
+import { Button } from './components/ui/button';
+import { EmptyState, Panel, SectionHeader } from './components/kit';
 
 // Eager: every authenticated visit lands on the Control Room.
 import { ControlRoom } from './pages/ControlRoom';
@@ -69,8 +72,121 @@ function PageFallback(): JSX.Element {
   );
 }
 
+interface RouteErrorBoundaryProps {
+  children: ReactNode;
+  resetKey: string;
+}
+
+interface RouteErrorBoundaryState {
+  error: Error | null;
+}
+
+class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBoundaryState> {
+  state: RouteErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidUpdate(prevProps: RouteErrorBoundaryProps): void {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('Console route failed', error, info);
+  }
+
+  render(): ReactNode {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <div className="flex min-w-0 flex-col gap-5">
+        <SectionHeader
+          eyebrow="RECOVERY"
+          title="Console module failed"
+          description="Refresh required after deployment."
+        />
+        <Panel padding="lg" toneAccent="critical">
+          <EmptyState
+            icon={<AlertIcon />}
+            title="Module unavailable"
+            description="Latest assets may still be loading."
+            action={
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => window.location.reload()}
+              >
+                Reload console
+              </Button>
+            }
+          />
+        </Panel>
+      </div>
+    );
+  }
+}
+
+function AlertIcon(): JSX.Element {
+  return <AlertTriangle />;
+}
+
+function ConsoleNotFound(): JSX.Element {
+  const location = useLocation();
+
+  return (
+    <div className="flex min-w-0 flex-col gap-5">
+      <SectionHeader
+        eyebrow="NOT FOUND"
+        title="Page not found"
+        description="This console path does not match a Control One workspace."
+      />
+      <Panel padding="lg" toneAccent="warning">
+        <EmptyState
+          icon={<Compass />}
+          title="Unknown console route"
+          description={
+            <span>
+              <code className="break-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem]">
+                {location.pathname}
+              </code>{' '}
+              is not available in this deployment.
+            </span>
+          }
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Link
+                to="/"
+                className="inline-flex items-center gap-2 rounded-md bg-brand-500 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-brand-400"
+              >
+                <Home className="h-4 w-4" />
+                Control Room
+              </Link>
+              <Link
+                to="/search"
+                className="inline-flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm font-medium text-foreground transition hover:bg-surface-2"
+              >
+                <Search className="h-4 w-4" />
+                Search
+              </Link>
+            </div>
+          }
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function loginReturnState(location: ReturnType<typeof useLocation>): { from: string } {
+  const from = `${location.pathname}${location.search}${location.hash}`;
+  return { from: from || '/' };
+}
+
 export function App(): JSX.Element {
   const { isAuthenticated } = useAuth();
+  const location = useLocation();
 
   return (
     <Routes>
@@ -106,13 +222,14 @@ export function App(): JSX.Element {
       />
       <Route
         path="/"
-        element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace />}
+        element={isAuthenticated ? <MainLayout /> : <Navigate to="/login" replace state={loginReturnState(location)} />}
       >
         <Route index element={<ControlRoom />} />
         <Route
           path="*"
           element={
-            <Suspense fallback={<PageFallback />}>
+            <RouteErrorBoundary resetKey={location.pathname}>
+              <Suspense fallback={<PageFallback />}>
               <Routes>
                 <Route path="onboard" element={<Onboard />} />
                 <Route path="control-room" element={<ControlRoom />} />
@@ -148,7 +265,7 @@ export function App(): JSX.Element {
                 {/* Patch Management (PR 4) */}
                 <Route path="infrastructure/patch" element={<PatchManagement />} />
                 {/* Legacy routes redirect to the consolidated page, mapping their
-                    landing tab. Query params from the old URL drop here. */}
+                    landing tab. Query params from the old URL are ignored. */}
                 <Route path="threat-feeds" element={<Navigate to="/security/network?tab=threats" replace />} />
                 <Route path="connections" element={<Navigate to="/security/network?tab=connections" replace />} />
                 <Route path="sessions" element={<Sessions />} />
@@ -167,12 +284,23 @@ export function App(): JSX.Element {
                 <Route path="frameworks" element={<Navigate to="/compliance?tab=frameworks" replace />} />
                 <Route path="misconduct" element={<Misconduct />} />
                 <Route path="access/finacle" element={<FinacleProfiles />} />
+                <Route path="*" element={<ConsoleNotFound />} />
               </Routes>
-            </Suspense>
+              </Suspense>
+            </RouteErrorBoundary>
           }
         />
       </Route>
-      <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />
+      <Route
+        path="*"
+        element={
+          <Navigate
+            to={isAuthenticated ? '/' : '/login'}
+            replace
+            state={isAuthenticated ? undefined : loginReturnState(location)}
+          />
+        }
+      />
     </Routes>
   );
 }

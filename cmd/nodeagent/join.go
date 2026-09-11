@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -23,6 +23,8 @@ type enrollRequest struct {
 	Fingerprint        string `json:"fingerprint"`
 	MachineID          string `json:"machine_id,omitempty"`
 	CompliancePolicyID string `json:"compliance_policy_id,omitempty"`
+	InstallContext     string `json:"install_context,omitempty"`
+	TargetHint         string `json:"target_hint,omitempty"`
 }
 
 type enrollResponse struct {
@@ -67,6 +69,7 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir, compliancePolicyID st
 		Fingerprint:        sysInfo.Fingerprint,
 		MachineID:          machineID,
 		CompliancePolicyID: strings.TrimSpace(compliancePolicyID),
+		InstallContext:     installContextForJoin(installService),
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -102,7 +105,10 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir, compliancePolicyID st
 	policyDir := filepath.Join(dataDir, "policies")
 	keyDir := filepath.Join(dataDir, "keys")
 	logDir := filepath.Join(dataDir, "logs")
-	if installService && runtime.GOOS != "windows" {
+	// System services use the shared log directory. A non-root macOS
+	// LaunchAgent must keep logs in its own data directory because it cannot
+	// create or write /var/log/control-one.
+	if installService && (runtime.GOOS == "linux" || (runtime.GOOS == "darwin" && os.Geteuid() == 0)) {
 		logDir = "/var/log/control-one/nodeagent"
 	}
 
@@ -280,3 +286,10 @@ func getInterval(intervals map[string]int64, key string, defaultVal int64) int64
 // provided per-platform in service_{linux,darwin,windows}.go (with a fallback
 // in service.go).
 var installServiceFn = installService
+
+func installContextForJoin(installService bool) string {
+	if installService {
+	 return `local_interactive`
+	}
+	return `local_interactive`
+}

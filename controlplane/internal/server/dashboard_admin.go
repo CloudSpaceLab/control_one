@@ -221,21 +221,25 @@ func (s *Server) handleAdminIngestThroughput(w http.ResponseWriter, r *http.Requ
 }
 
 type ingestBacklogResponse struct {
-	Status           string  `json:"status"`
-	DorisStatus      string  `json:"doris_status"`
-	DorisConfigured  bool    `json:"doris_configured"`
-	WriterHealthy    bool    `json:"writer_healthy"`
-	PendingBatches   int64   `json:"pending_batches"`
-	PendingRows      int64   `json:"pending_rows"`
-	DueBatches       int64   `json:"due_batches"`
-	RetryingBatches  int64   `json:"retrying_batches"`
-	FailedBatches    int64   `json:"failed_batches"`
-	MaxRetryCount    int     `json:"max_retry_count"`
-	OldestPendingAt  *string `json:"oldest_pending_at,omitempty"`
-	NextAttemptAt    *string `json:"next_attempt_at,omitempty"`
-	LastErrorAt      *string `json:"last_error_at,omitempty"`
-	LastErrorMessage string  `json:"last_error_message,omitempty"`
-	GeneratedAt      string  `json:"generated_at"`
+	Status              string  `json:"status"`
+	AnalyticsMode       string  `json:"analytics_mode"`
+	AnalyticsStatus     string  `json:"analytics_status"`
+	WarehouseStatus     string  `json:"warehouse_status"`
+	WarehouseConfigured bool    `json:"warehouse_configured"`
+	DorisStatus         string  `json:"doris_status"`
+	DorisConfigured     bool    `json:"doris_configured"`
+	WriterHealthy       bool    `json:"writer_healthy"`
+	PendingBatches      int64   `json:"pending_batches"`
+	PendingRows         int64   `json:"pending_rows"`
+	DueBatches          int64   `json:"due_batches"`
+	RetryingBatches     int64   `json:"retrying_batches"`
+	FailedBatches       int64   `json:"failed_batches"`
+	MaxRetryCount       int     `json:"max_retry_count"`
+	OldestPendingAt     *string `json:"oldest_pending_at,omitempty"`
+	NextAttemptAt       *string `json:"next_attempt_at,omitempty"`
+	LastErrorAt         *string `json:"last_error_at,omitempty"`
+	LastErrorMessage    string  `json:"last_error_message,omitempty"`
+	GeneratedAt         string  `json:"generated_at"`
 }
 
 func (s *Server) handleAdminIngestBacklog(w http.ResponseWriter, r *http.Request) {
@@ -263,46 +267,58 @@ func (s *Server) handleAdminIngestBacklog(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	analyticsMode := effectiveAnalyticsMode(s.cfg)
 	dorisConfigured := s.dorisClient != nil || s.dorisWriter != nil
 	writerHealthy := s.dorisWriter == nil || s.dorisWriter.Healthy()
 	dorisStatus := "unconfigured"
+	warehouseStatus := "disabled"
+	if analyticsMode == analyticsModeOLAP {
+		warehouseStatus = "unconfigured"
+	}
 	if dorisConfigured {
 		dorisStatus = "ok"
+		warehouseStatus = "ok"
 		if !writerHealthy {
 			dorisStatus = "degraded"
+			warehouseStatus = "degraded"
 		}
 		if s.dorisClient != nil {
 			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 			if err := s.dorisClient.Ping(ctx); err != nil {
 				dorisStatus = "degraded"
+				warehouseStatus = "degraded"
 			}
 			cancel()
 		}
 	}
 
 	status := "ok"
-	if summary.PendingBatches > 0 || summary.FailedBatches > 0 || dorisStatus == "degraded" {
+	if summary.PendingBatches > 0 || summary.FailedBatches > 0 || warehouseStatus == "degraded" {
 		status = "degraded"
 	}
-	if !dorisConfigured && summary.PendingBatches > 0 {
+	if analyticsMode == analyticsModeOLAP && !dorisConfigured && summary.PendingBatches > 0 {
 		status = "down"
 	}
 
 	resp := ingestBacklogResponse{
-		Status:          status,
-		DorisStatus:     dorisStatus,
-		DorisConfigured: dorisConfigured,
-		WriterHealthy:   writerHealthy,
-		PendingBatches:  summary.PendingBatches,
-		PendingRows:     summary.PendingRows,
-		DueBatches:      summary.DueBatches,
-		RetryingBatches: summary.RetryingBatches,
-		FailedBatches:   summary.FailedBatches,
-		MaxRetryCount:   summary.MaxRetryCount,
-		OldestPendingAt: formatNullTimePtr(summary.OldestPendingAt),
-		NextAttemptAt:   formatNullTimePtr(summary.NextAttemptAt),
-		LastErrorAt:     formatNullTimePtr(summary.LastErrorAt),
-		GeneratedAt:     formatTime(time.Now().UTC()),
+		Status:              status,
+		AnalyticsMode:       analyticsMode,
+		AnalyticsStatus:     status,
+		WarehouseStatus:     warehouseStatus,
+		WarehouseConfigured: dorisConfigured,
+		DorisStatus:         dorisStatus,
+		DorisConfigured:     dorisConfigured,
+		WriterHealthy:       writerHealthy,
+		PendingBatches:      summary.PendingBatches,
+		PendingRows:         summary.PendingRows,
+		DueBatches:          summary.DueBatches,
+		RetryingBatches:     summary.RetryingBatches,
+		FailedBatches:       summary.FailedBatches,
+		MaxRetryCount:       summary.MaxRetryCount,
+		OldestPendingAt:     formatNullTimePtr(summary.OldestPendingAt),
+		NextAttemptAt:       formatNullTimePtr(summary.NextAttemptAt),
+		LastErrorAt:         formatNullTimePtr(summary.LastErrorAt),
+		GeneratedAt:         formatTime(time.Now().UTC()),
 	}
 	if summary.LastErrorMessage.Valid {
 		resp.LastErrorMessage = summary.LastErrorMessage.String
@@ -473,11 +489,29 @@ func (s *Server) handleAdminSLO(w http.ResponseWriter, r *http.Request) {
 // ─── Capacity ────────────────────────────────────────────────────────────
 
 type capacityResponse struct {
-	DiskUsed               int64  `json:"disk_used"`
-	DiskTotal              int64  `json:"disk_total"`
-	DorisStatus            string `json:"doris_status"`
-	PostgresStatus         string `json:"postgres_status"`
-	RetentionDaysRemaining int    `json:"retention_days_remaining"`
+	DiskUsed               int64                       `json:"disk_used"`
+	DiskTotal              int64                       `json:"disk_total"`
+	AnalyticsMode          string                      `json:"analytics_mode"`
+	AnalyticsStatus        string                      `json:"analytics_status"`
+	WarehouseStatus        string                      `json:"warehouse_status"`
+	WarehouseConfigured    bool                        `json:"warehouse_configured"`
+	DorisStatus            string                      `json:"doris_status"`
+	PostgresStatus         string                      `json:"postgres_status"`
+	RetentionDaysRemaining int                         `json:"retention_days_remaining"`
+	Projection             *projectionCapacityResponse `json:"projection,omitempty"`
+}
+
+type projectionCapacityResponse struct {
+	Status     string `json:"status"`
+	ReadCheck  string `json:"read_check,omitempty"`
+	QuickCheck string `json:"quick_check,omitempty"`
+	DBBytes    int64  `json:"db_bytes"`
+	WALBytes   int64  `json:"wal_bytes"`
+	SHMBytes   int64  `json:"shm_bytes"`
+	TotalBytes int64  `json:"total_bytes"`
+	CacheMB    int    `json:"cache_mb"`
+	CheckedAt  string `json:"checked_at,omitempty"`
+	LastError  string `json:"last_error,omitempty"`
 }
 
 func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
@@ -492,13 +526,57 @@ func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
 
 	diskUsed, diskTotal := diskUsage("/var/lib/control-one")
 
+	analyticsMode := effectiveAnalyticsMode(s.cfg)
+	analyticsStatus := "ok"
 	dorisStatus := "unconfigured"
+	warehouseStatus := "disabled"
+	warehouseConfigured := s.dorisClient != nil || s.dorisWriter != nil
+	if analyticsMode == analyticsModeOLAP {
+		warehouseStatus = "unconfigured"
+		analyticsStatus = "degraded"
+	}
+	if analyticsMode == analyticsModeSmall && strings.TrimSpace(s.cfg.Analytics.SQLiteDir) != "" && s.localAnalytics == nil {
+		analyticsStatus = "projection_pending"
+	}
 	if s.dorisClient != nil {
 		if err := s.dorisClient.Ping(r.Context()); err != nil {
 			dorisStatus = "degraded"
+			warehouseStatus = "degraded"
+			analyticsStatus = "degraded"
 			s.logger.Warn("admin capacity doris ping", zap.Error(err))
 		} else {
 			dorisStatus = "ok"
+			warehouseStatus = "ok"
+			if analyticsMode == analyticsModeOLAP {
+				analyticsStatus = "ok"
+			}
+		}
+	}
+
+	var projection *projectionCapacityResponse
+	if analyticsMode == analyticsModeSmall {
+		projection = &projectionCapacityResponse{
+			Status: "pending",
+		}
+		if s.localAnalytics != nil {
+			stats, err := s.localAnalytics.Stats(r.Context())
+			projection = &projectionCapacityResponse{
+				Status:     stats.Status,
+				ReadCheck:  stats.ReadCheck,
+				QuickCheck: stats.QuickCheck,
+				DBBytes:    stats.DBBytes,
+				WALBytes:   stats.WALBytes,
+				SHMBytes:   stats.SHMBytes,
+				TotalBytes: stats.TotalBytes,
+				CacheMB:    stats.CacheMB,
+				CheckedAt:  formatTime(stats.CheckedAt),
+			}
+			if err != nil {
+				projection.Status = "degraded"
+				projection.LastError = err.Error()
+				analyticsStatus = "degraded"
+				s.logger.Warn("admin capacity local projection stats", zap.Error(err))
+			}
 		}
 	}
 
@@ -530,9 +608,14 @@ func (s *Server) handleAdminCapacity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, capacityResponse{
 		DiskUsed:               diskUsed,
 		DiskTotal:              diskTotal,
+		AnalyticsMode:          analyticsMode,
+		AnalyticsStatus:        analyticsStatus,
+		WarehouseStatus:        warehouseStatus,
+		WarehouseConfigured:    warehouseConfigured,
 		DorisStatus:            dorisStatus,
 		PostgresStatus:         pgStatus,
 		RetentionDaysRemaining: retentionDays,
+		Projection:             projection,
 	})
 }
 
