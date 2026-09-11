@@ -122,6 +122,9 @@ detect_distro() {
 
 # detect_init echoes the active init system: systemd|openrc|sysv|unknown.
 detect_init() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "launchd"; return
+    fi
     if [[ -d /run/systemd/system ]] || command -v systemctl >/dev/null 2>&1; then
         echo "systemd"; return
     fi
@@ -365,15 +368,52 @@ if ([string]::IsNullOrWhiteSpace($Token))           { throw 'TOKEN is required.'
 
 $ControlPlaneURL = $ControlPlaneURL.TrimEnd('/')
 
-# Detect architecture
-$Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-    'AMD64' { 'amd64' }
-    'ARM64' { 'arm64' }
-    default { throw "Unsupported arch: $($env:PROCESSOR_ARCHITECTURE)" }
+# Windows PowerShell 5.1 on a 64-bit host can itself be a 32-bit process. In
+# that case PROCESSOR_ARCHITEW6432 carries the native architecture, which is
+# the architecture the service binary must use.
+$NativeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} elseif ($env:PROCESSOR_ARCHITECTURE) {
+    $env:PROCESSOR_ARCHITECTURE
+} else {
+    'unknown'
+}
+$Arch = switch ($NativeArchitecture.ToUpperInvariant()) {
+    'AMD64'  { 'amd64' }
+    'X86_64' { 'amd64' }
+    'ARM64'  { 'arm64' }
+    default  { throw "Unsupported Windows architecture: $NativeArchitecture. 64-bit AMD64 and ARM64 hosts are supported." }
 }
 Write-Host "[INFO] Platform: windows/$Arch"
 
-$TmpDir      = Join-Path $env:TEMP ("controlone-" + [Guid]::NewGuid().ToString('N'))
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+    throw "TLS 1.2 is required to download the Control One agent: $($_.Exception.Message)"
+}
+
+$CurrentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Run the installer from an elevated Windows terminal.'
+}
+
+function Invoke-ControlOneDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile
+    )
+
+    $Request = @{ Uri = $Uri; OutFile = $OutFile; ErrorAction = 'Stop' }
+    # -UseBasicParsing is required by Windows PowerShell 5.1, but is not a
+    # valid parameter in all PowerShell 7 versions.
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        $Request.UseBasicParsing = $true
+    }
+    Invoke-WebRequest @Request
+}
+
+$TempRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+$TmpDir      = Join-Path $TempRoot ("controlone-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $TmpDir | Out-Null
 $BinaryPath  = Join-Path $TmpDir 'controlone-agent.exe'
 $ManifestPath = Join-Path $TmpDir 'manifest.json'
@@ -384,14 +424,17 @@ try {
 
     Write-Host '[INFO] Fetching binary manifest...'
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri $ManifestURL -OutFile $ManifestPath
+        Invoke-ControlOneDownload -Uri $ManifestURL -OutFile $ManifestPath
     } catch {
         Write-Host '[WARN] Manifest unavailable; proceeding without integrity check.'
         $ManifestPath = $null
     }
 
     Write-Host '[INFO] Downloading agent binary...'
-    Invoke-WebRequest -UseBasicParsing -Uri $BinaryURL -OutFile $BinaryPath
+    Invoke-ControlOneDownload -Uri $BinaryURL -OutFile $BinaryPath
+    if (-not (Test-Path $BinaryPath) -or (Get-Item $BinaryPath).Length -eq 0) {
+        throw 'Agent binary download was empty.'
+    }
 
     if ($ManifestPath -and (Test-Path $ManifestPath)) {
         $Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json

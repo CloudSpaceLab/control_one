@@ -105,7 +105,10 @@ func runJoin(joinURL, token, nodeName, configDir, dataDir, compliancePolicyID st
 	policyDir := filepath.Join(dataDir, "policies")
 	keyDir := filepath.Join(dataDir, "keys")
 	logDir := filepath.Join(dataDir, "logs")
-	if installService && runtime.GOOS != "windows" {
+	// System services use the shared log directory. A non-root macOS
+	// LaunchAgent must keep logs in its own data directory because it cannot
+	// create or write /var/log/control-one.
+	if installService && (runtime.GOOS == "linux" || (runtime.GOOS == "darwin" && os.Geteuid() == 0)) {
 		logDir = "/var/log/control-one/nodeagent"
 	}
 

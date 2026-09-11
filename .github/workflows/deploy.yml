@@ -300,6 +300,16 @@ jobs:
               curl -fsS --max-time 5 "http://127.0.0.1:8443/api/v1/agent/binary/manifest?os=$os&arch=$arch" >/dev/null
               echo "agent manifest $os/$arch OK"
             done
+            darwin_installer=$(curl -fsS --max-time 5 "http://127.0.0.1:8443/api/v1/agent/install-script?platform=darwin")
+            if printf "%s" "$darwin_installer" | grep -q -- "--init-system"; then
+              echo "darwin installer passes an unsupported init-system flag"
+              exit 1
+            fi
+            printf "%s" "$darwin_installer" | grep -q "launchd"
+            windows_installer=$(curl -fsS --max-time 5 "http://127.0.0.1:8443/api/v1/agent/install-script?platform=windows")
+            printf "%s" "$windows_installer" | grep -q "PROCESSOR_ARCHITEW6432"
+            printf "%s" "$windows_installer" | grep -q "Invoke-ControlOneDownload"
+            echo "cross-platform installer contracts OK"
             analytics_mode=$({ grep "^ANALYTICS_MODE=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
             doris_enabled=$({ grep "^DORIS_ENABLED=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2-)
             analytics_mode=$(printf "%s" "${analytics_mode:-small}" | tr "[:upper:]" "[:lower:]")
