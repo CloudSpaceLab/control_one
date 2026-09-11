@@ -305,7 +305,6 @@ ENROLL_ARGS=("--join" "$CONTROL_PLANE_URL" "--token" "$TOKEN")
 [[ -n "$COMPLIANCE_POLICY_ID" ]] && ENROLL_ARGS+=("--compliance-policy" "$COMPLIANCE_POLICY_ID") || true
 [[ -n "$CA_CERT_FILE" ]] && ENROLL_ARGS+=("--ca-cert" "$CA_CERT_FILE") || true
 [[ "$NO_SERVICE" != "true" ]] && ENROLL_ARGS+=("--install-service") || true
-[[ -n "$INIT_SYSTEM" && "$INIT_SYSTEM" != "systemd" ]] && ENROLL_ARGS+=("--init-system" "$INIT_SYSTEM") || true
 
 info "Enrolling agent..."
 $SUDO "${INSTALL_DIR}/controlone-agent" "${ENROLL_ARGS[@]}" || fatal "Enrollment failed."

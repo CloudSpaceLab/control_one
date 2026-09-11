@@ -164,6 +164,22 @@ func TestInstallScriptCarriesCompliancePolicy(t *testing.T) {
 	}
 }
 
+func TestInstallScriptDoesNotPassUnsupportedInitSystemFlag(t *testing.T) {
+	t.Parallel()
+
+	srv := newAgentTestServer(t, t.TempDir(), "", "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/install-script?token=cot_test&platform=darwin", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `ENROLL_ARGS+=("--init-system"`) {
+		t.Fatal("install script passes unsupported --init-system argument")
+	}
+}
+
 func TestAgentBinaryReturnsSignedHeadersWhenKeyConfigured(t *testing.T) {
 	t.Parallel()
 
