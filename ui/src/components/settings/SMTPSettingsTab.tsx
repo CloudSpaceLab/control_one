@@ -24,10 +24,14 @@ function SMTPForm({ tenantId }: { tenantId: string }): JSX.Element {
   const [form, setForm] = useState<UpdateSMTPSettings | null>(null);
   const [password, setPassword] = useState('');
   const [clearPassword, setClearPassword] = useState(false);
+  const [newRecipient, setNewRecipient] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -36,14 +40,14 @@ function SMTPForm({ tenantId }: { tenantId: string }): JSX.Element {
     client.getSMTPSettings(tenantId).then(value => {
       if (cancelled) return;
       setConfig(value);
-      const { host, port, tls_mode, auth_enabled, username, sender_name, sender_email, enabled } = value;
-      setForm({ host, port, tls_mode, auth_enabled, username, sender_name, sender_email, enabled });
+      const { host, port, tls_mode, auth_enabled, username, sender_name, sender_email, recipients, enabled } = value;
+      setForm({ host, port, tls_mode, auth_enabled, username, sender_name, sender_email, recipients, enabled }); setDirty(false);
     }).catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Unable to load SMTP settings.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [client, tenantId, reload]);
 
-  const change = (patch: Partial<UpdateSMTPSettings>) => { setForm(previous => previous && { ...previous, ...patch }); setSaved(false); };
+  const change = (patch: Partial<UpdateSMTPSettings>) => { setForm(previous => previous && { ...previous, ...patch }); setSaved(false); setDirty(true); };
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (!form) return;
@@ -52,13 +56,31 @@ function SMTPForm({ tenantId }: { tenantId: string }): JSX.Element {
       const value = await client.updateSMTPSettings(tenantId, {
         ...form, ...(!form.auth_enabled && clearPassword ? { password: '' } : form.auth_enabled && password ? { password } : {}),
       });
-      setConfig(value); setPassword(''); setClearPassword(false); setSaved(true);
+      setConfig(value); setPassword(''); setClearPassword(false); setSaved(true); setDirty(false);
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to save SMTP settings.'); }
     finally { setSaving(false); }
   };
 
+  const addRecipient = () => {
+    if (!form) return;
+    const email = newRecipient.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) { setError('Enter a valid recipient email address.'); return; }
+    if (form.recipients.some(value => value.toLowerCase() === email)) { setError('That recipient has already been added.'); return; }
+    if (form.recipients.length >= 100) { setError('A maximum of 100 recipients is supported.'); return; }
+    change({ recipients: [...form.recipients, email] }); setNewRecipient(''); setError('');
+  };
+
+  const sendTest = async () => {
+    setTesting(true); setError(''); setTestResult('');
+    try {
+      const result = await client.testSMTPSettings(tenantId);
+      setTestResult(`Test email sent to ${result.recipients} recipient${result.recipients === 1 ? '' : 's'}.`);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to send test email.'); }
+    finally { setTesting(false); }
+  };
+
   return <Panel title="Email alerts" eyebrow="SMTP" className="max-w-3xl">
-    <p className="text-sm text-muted-foreground">Configure the outgoing mail server for this tenant. Recipient lists and email delivery will be available in the next phase.</p>
+    <p className="text-sm text-muted-foreground">Configure the outgoing mail server and the addresses that should receive alert emails for this tenant.</p>
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
     {loading ? <p role="status">Loading SMTP settings…</p> : !form || !config ? <Button onClick={() => setReload(value => value + 1)}>Retry</Button> :
       <form onSubmit={save} className="space-y-5">
@@ -75,12 +97,18 @@ function SMTPForm({ tenantId }: { tenantId: string }): JSX.Element {
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.auth_enabled} onChange={event => change({ auth_enabled: event.target.checked, ...(event.target.checked && form.tls_mode === 'none' ? { tls_mode: 'starttls' as const } : {}) })} />SMTP authentication</label>
           {form.auth_enabled && <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2"><Label htmlFor="smtp-username">Username</Label><Input id="smtp-username" autoComplete="off" required maxLength={320} value={form.username} onChange={event => change({ username: event.target.value })} /></div>
-            <div className="space-y-2"><Label htmlFor="smtp-password">Password</Label><Input id="smtp-password" type="password" autoComplete="new-password" maxLength={4096} required={!config.password_configured} value={password} onChange={event => { setPassword(event.target.value); setSaved(false); }} /><p className="text-xs text-muted-foreground">{config.password_configured ? 'Password saved. Leave blank to keep it.' : 'Enter the SMTP password or app password.'}</p></div>
+            <div className="space-y-2"><Label htmlFor="smtp-password">Password</Label><Input id="smtp-password" type="password" autoComplete="new-password" maxLength={4096} required={!config.password_configured} value={password} onChange={event => { setPassword(event.target.value); setSaved(false); setDirty(true); }} /><p className="text-xs text-muted-foreground">{config.password_configured ? 'Password saved. Leave blank to keep it.' : 'Enter the SMTP password or app password.'}</p></div>
           </div>}
-          {!form.auth_enabled && config.password_configured && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={clearPassword} onChange={event => { setClearPassword(event.target.checked); setSaved(false); }} />Remove saved password</label>}
-          <Button type="submit" disabled={saving || (form.auth_enabled && !config.encryption_available)}>{saving ? 'Saving…' : 'Save SMTP settings'}</Button>
+          <div className="space-y-2">
+            <Label htmlFor="smtp-recipient">Alert recipients</Label>
+            <div className="flex gap-2"><Input id="smtp-recipient" type="email" placeholder="oncall@example.com" value={newRecipient} onChange={event => setNewRecipient(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addRecipient(); } }} /><Button type="button" variant="secondary" onClick={addRecipient}>Add recipient</Button></div>
+            {form.recipients.length === 0 ? <p className="text-xs text-muted-foreground">Add at least one address before enabling email alerts.</p> : <ul aria-label="Configured alert recipients" className="flex flex-wrap gap-2">{form.recipients.map(email => <li key={email} className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"><span>{email}</span><button type="button" aria-label={`Remove ${email}`} className="text-muted-foreground hover:text-foreground" onClick={() => change({ recipients: form.recipients.filter(value => value !== email) })}>×</button></li>)}</ul>}
+          </div>
+          {!form.auth_enabled && config.password_configured && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={clearPassword} onChange={event => { setClearPassword(event.target.checked); setSaved(false); setDirty(true); }} />Remove saved password</label>}
+          <div className="flex gap-2"><Button type="submit" disabled={saving || testing || (form.auth_enabled && !config.encryption_available)}>{saving ? 'Saving…' : 'Save SMTP settings'}</Button><Button type="button" variant="secondary" title={dirty ? 'Save changes before testing' : undefined} disabled={saving || testing || dirty || !config.configured || form.recipients.length === 0} onClick={sendTest}>{testing ? 'Sending…' : 'Send test email'}</Button></div>
         </fieldset>
         {saved && <p role="status" className="text-sm">SMTP settings saved. No email has been sent.</p>}
+        {testResult && <p role="status" className="text-sm">{testResult}</p>}
       </form>}
   </Panel>;
 }

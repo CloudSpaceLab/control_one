@@ -2058,6 +2058,7 @@ export interface SMTPSettings {
   username: string;
   sender_name: string;
   sender_email: string;
+  recipients: string[];
   enabled: boolean;
   configured: boolean;
   password_configured: boolean;
@@ -2075,6 +2076,10 @@ export class APIClient {
     return this.request(`/api/v1/settings/smtp?tenant_id=${encodeURIComponent(tenantId)}`, {
       method: 'PUT', body: JSON.stringify(settings),
     });
+  }
+
+  async testSMTPSettings(tenantId: string): Promise<{ ok: boolean; recipients: number }> {
+    return this.request(`/api/v1/settings/smtp/test?tenant_id=${encodeURIComponent(tenantId)}`, { method: 'POST' });
   }
 
   private readonly baseUrl: string;

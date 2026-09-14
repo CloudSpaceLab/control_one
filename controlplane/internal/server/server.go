@@ -864,6 +864,8 @@ type Server struct {
 	// sealer encrypts provider credentials at rest. nil means secrets
 	// encryption is not configured — mutating endpoints must refuse to write.
 	sealer *secretbox.Sealer
+	// smtpSend is replaceable in tests. Production uses sendSMTPMessage.
+	smtpSend func(context.Context, storage.SMTPSettings, string, []string) error
 	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
 	// to SSE subscribers and internal correlators. nil means events are a no-op.
 	eventBus        *eventbus.Bus
@@ -1102,6 +1104,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/access/sync", s.handleAccessSync)
 	s.baseRouter.HandleFunc("/api/v1/webhooks", s.handleWebhooksCollection)
 	s.baseRouter.HandleFunc("/api/v1/settings/smtp", s.handleSMTPSettings)
+	s.baseRouter.HandleFunc("/api/v1/settings/smtp/test", s.handleTestSMTPSettings)
 	s.baseRouter.HandleFunc("/api/v1/sessions", s.handleSessionsCollection)
 	s.baseRouter.HandleFunc("/api/v1/sessions/", s.handleSessionSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/webhooks/", s.handleWebhookSubroutes)
