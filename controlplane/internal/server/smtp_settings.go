@@ -55,7 +55,7 @@ func validateSMTPSettings(p *smtpSettingsRequest) error {
 				return fmt.Errorf("invalid SMTP hostname")
 			}
 			for _, c := range label {
-				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
 					return fmt.Errorf("invalid SMTP hostname")
 				}
 			}
@@ -90,7 +90,7 @@ func (s *Server) handleSMTPSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet && r.Method != http.MethodPut {
 		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	principal, ok := s.authorize(w, r, roleAdmin)
@@ -103,12 +103,12 @@ func (s *Server) handleSMTPSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	store, ok := s.store.(smtpSettingsStore)
 	if !ok {
-		http.Error(w, "SMTP settings storage unavailable", 503)
+		http.Error(w, "SMTP settings storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	existing, err := store.GetSMTPSettings(r.Context(), tenantID)
 	if err != nil {
-		http.Error(w, "unable to load SMTP settings", 500)
+		http.Error(w, "unable to load SMTP settings", http.StatusInternalServerError)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -116,15 +116,15 @@ func (s *Server) handleSMTPSettings(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&p); err != nil {
-			http.Error(w, "invalid SMTP settings request", 400)
+			http.Error(w, "invalid SMTP settings request", http.StatusBadRequest)
 			return
 		}
 		if decoder.Decode(&struct{}{}) != io.EOF {
-			http.Error(w, "request must contain one JSON object", 400)
+			http.Error(w, "request must contain one JSON object", http.StatusBadRequest)
 			return
 		}
 		if err := validateSMTPSettings(&p); err != nil {
-			http.Error(w, err.Error(), 400)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		hasPassword := existing != nil && len(existing.PasswordCiphertext) > 0
@@ -132,27 +132,27 @@ func (s *Server) handleSMTPSettings(w http.ResponseWriter, r *http.Request) {
 			hasPassword = *p.Password != ""
 		}
 		if p.AuthEnabled && !hasPassword {
-			http.Error(w, "SMTP password is required when authentication is enabled", 400)
+			http.Error(w, "SMTP password is required when authentication is enabled", http.StatusBadRequest)
 			return
 		}
 		if p.AuthEnabled && s.sealer == nil {
-			http.Error(w, "SMTP credential encryption is unavailable. Ask your administrator to configure the server encryption key.", 503)
+			http.Error(w, "SMTP credential encryption is unavailable. Ask your administrator to configure the server encryption key.", http.StatusServiceUnavailable)
 			return
 		}
 		c := storage.SMTPSettings{TenantID: tenantID, Host: p.Host, Port: p.Port, TLSMode: p.TLSMode, AuthEnabled: p.AuthEnabled, Username: p.Username, SenderName: p.SenderName, SenderEmail: p.SenderEmail, Enabled: p.Enabled}
 		if p.Password != nil && *p.Password != "" {
 			if s.sealer == nil {
-				http.Error(w, "SMTP credential encryption is unavailable", 503)
+				http.Error(w, "SMTP credential encryption is unavailable", http.StatusServiceUnavailable)
 				return
 			}
 			c.PasswordCiphertext, c.PasswordNonce, err = s.sealer.Seal([]byte(*p.Password))
 			if err != nil {
-				http.Error(w, "unable to encrypt SMTP password", 500)
+				http.Error(w, "unable to encrypt SMTP password", http.StatusInternalServerError)
 				return
 			}
 		}
 		if err := store.UpsertSMTPSettings(r.Context(), c, p.Password != nil); err != nil {
-			http.Error(w, "unable to save SMTP settings", 500)
+			http.Error(w, "unable to save SMTP settings", http.StatusInternalServerError)
 			return
 		}
 		// Respond from the accepted request; never serialize stored credential material.
