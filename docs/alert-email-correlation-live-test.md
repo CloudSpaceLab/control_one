@@ -33,113 +33,40 @@ passwords or session tokens into documentation or commits.
 
 ## Run the test
 
-Run the following commands in PowerShell from the repository root. The script
-reads the local admin password without printing it and gives every run a unique
-identifier so it can be repeated without alert or event deduplication conflicts.
+Run the reusable helper in PowerShell from the repository root:
 
 ```powershell
-$ErrorActionPreference = "Stop"
-$baseUrl = "http://127.0.0.1:8443"
-$runId = [guid]::NewGuid().ToString("N").Substring(0, 10)
-
-$admin = Get-Content -Raw "tmp/local/credentials.json" |
-  ConvertFrom-Json |
-  Where-Object email -eq "admin@local"
-
-$loginBody = @{
-  email = $admin.email
-  password = $admin.password
-} | ConvertTo-Json
-
-$login = Invoke-RestMethod `
-  -Method Post `
-  -Uri "$baseUrl/api/v1/auth/login" `
-  -ContentType "application/json" `
-  -Body $loginBody
-
-$headers = @{ Authorization = "Bearer $($login.token)" }
-
-$tenants = Invoke-RestMethod `
-  -Method Get `
-  -Uri "$baseUrl/api/v1/tenants?limit=1" `
-  -Headers $headers
-
-$tenantId = $tenants.data[0].id
-if (-not $tenantId) {
-  throw "No local tenant is available for the test"
-}
-
-$ruleBody = @{
-  tenant_id = $tenantId
-  name = "Repeated high-risk activity ($runId)"
-  description = "Local correlation email delivery test"
-  event_types = @("security.event")
-  window_seconds = 300
-  threshold = 3
-  dimension = "tenant_id"
-  severity = "high"
-  enabled = $true
-} | ConvertTo-Json
-
-$rule = Invoke-RestMethod `
-  -Method Post `
-  -Uri "$baseUrl/api/v1/correlation-rules" `
-  -Headers $headers `
-  -ContentType "application/json" `
-  -Body $ruleBody
-
-Write-Host "Created correlation rule $($rule.id)"
-
-# The correlation engine caches its rule list for up to 30 seconds.
-Start-Sleep -Seconds 31
-
-1..3 | ForEach-Object {
-  $attempt = $_
-  $eventBody = @{
-    tenant_id = $tenantId
-    event_type = "demo.repeated_failed_login"
-    severity = "high"
-    source = "correlation-email-demo"
-    details = @{
-      test_run = $runId
-      attempt = $attempt
-    }
-    dedup_key = "correlation-email-demo/$runId/$attempt"
-  } | ConvertTo-Json -Depth 4
-
-  $event = Invoke-RestMethod `
-    -Method Post `
-    -Uri "$baseUrl/api/v1/security-events" `
-    -Headers $headers `
-    -ContentType "application/json" `
-    -Body $eventBody
-
-  Write-Host "Created event $attempt: $($event.id)"
-}
-
-Start-Sleep -Seconds 4
+./scripts/test-correlation-alert-email.ps1
 ```
+
+The helper:
+
+1. Reads `admin@local` from `tmp/local/credentials.json`, or securely prompts
+   for its password when the file or account is unavailable.
+2. Selects the first available tenant unless `-TenantID` is supplied.
+3. Creates a temporary tenant-wide correlation rule.
+4. Waits for the correlation engine's 30-second rule cache to refresh.
+5. Creates three uniquely identified security events.
+6. Verifies the resulting alert through the control-plane API.
+7. Verifies the matching email through the Mailpit API.
+8. Deletes the temporary rule while retaining the alert and email as evidence.
+
+Successful output includes `Result: PASS`, the rule and alert IDs, the email
+subject, and a `MailURL` that opens the captured message.
+
+Use another tenant or endpoint when needed:
+
+```powershell
+./scripts/test-correlation-alert-email.ps1 `
+  -Server "http://127.0.0.1:8443" `
+  -Mailpit "http://127.0.0.1:8025" `
+  -TenantID "<tenant UUID>"
+```
+
+Pass `-KeepRule` when the temporary correlation rule should remain available
+for inspection after the test.
 
 ## Verify the alert
-
-Continue in the same PowerShell session:
-
-```powershell
-$alerts = Invoke-RestMethod `
-  -Method Get `
-  -Uri "$baseUrl/api/v1/alerts?tenant_id=$tenantId&limit=100" `
-  -Headers $headers
-
-$alert = $alerts.data |
-  Where-Object rule_id -eq $rule.id |
-  Select-Object -First 1
-
-$alert | Select-Object id, source, severity, title, state, opened_at
-
-if (-not $alert) {
-  throw "No alert was created for correlation rule $($rule.id)"
-}
-```
 
 The result should have:
 
@@ -160,36 +87,9 @@ be:
 Control One alert: [HIGH] Repeated high-risk activity (<run ID>)
 ```
 
-You can also verify delivery from the same PowerShell session:
-
-```powershell
-$mail = Invoke-RestMethod -Uri "http://127.0.0.1:8025/api/v1/messages"
-$expectedSubject = "Control One alert: [HIGH] Repeated high-risk activity ($runId)"
-$message = $mail.messages |
-  Where-Object Subject -eq $expectedSubject |
-  Select-Object -First 1
-
-$message | Select-Object ID, Subject, Created
-
-if (-not $message) {
-  throw "Mailpit did not receive: $expectedSubject"
-}
-```
-
 Mailpit runs as a local Docker container. The control-plane sends SMTP traffic
 to `mailpit:1025` over the Compose network, while the browser uses the published
 web interface at `localhost:8025`. No email leaves the local machine.
 
-## Optional cleanup
-
-Deleting the temporary rule prevents it from matching future security events:
-
-```powershell
-Invoke-RestMethod `
-  -Method Delete `
-  -Uri "$baseUrl/api/v1/correlation-rules/$($rule.id)?tenant_id=$tenantId" `
-  -Headers $headers
-```
-
-The generated events, alert, and Mailpit message may remain as local test
-evidence. They are stored only in the local development services.
+The generated events, alert, and Mailpit message remain as local test evidence.
+They are stored only in the local development services.
