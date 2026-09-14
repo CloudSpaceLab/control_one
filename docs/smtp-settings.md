@@ -1,9 +1,9 @@
-# SMTP settings (phase 1)
+# SMTP email alerts
 
 Administrators configure one outgoing SMTP server per tenant in **Settings →
 Integrations → Email alerts**. Selecting a tenant is required. This phase saves
-configuration and supports recipient management plus test messages. Automatic
-alert delivery is a subsequent phase.
+configuration, recipient management, test messages, and automatic delivery for
+new alerts.
 
 Before saving authenticated SMTP settings, configure the existing
 `CONTROLPLANE_SECRETS_ENCRYPTION_KEY` environment variable (or
@@ -34,6 +34,14 @@ saved recipients using the stored settings. Recipient addresses are SMTP
 envelope recipients and are not disclosed to each other in message headers.
 Connections time out after 15 seconds, require TLS 1.2 or newer for STARTTLS or
 implicit TLS, and never disable certificate verification.
+
+When email alerts are enabled, each newly persisted alert is delivered to the
+tenant's saved recipients. This applies to alerts created manually or by the
+correlation, content-pack detection, IP-behavior, and Finacle paths. Deduplicated
+alerts do not generate another message. Delivery runs asynchronously with a
+15-second timeout, so an unavailable mail server does not prevent the alert from
+being recorded. Delivery and configuration errors are written to the server log
+with the alert and tenant identifiers; SMTP passwords are never logged.
 
 Migration 0136 creates `smtp_settings`, with one row per tenant and encrypted
 password/nonce columns. Its down migration removes that configuration table.
