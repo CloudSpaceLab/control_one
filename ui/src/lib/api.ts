@@ -6930,20 +6930,27 @@ export interface CorrelationRule {
   tenant_id: string;
   name: string;
   description?: string;
+  event_types: string[];
+  window_seconds: number;
+  threshold: number;
+  dimension: string;
   enabled: boolean;
-  conditions: Record<string, unknown>;
   severity: string;
   created_at: string;
-  updated_at: string;
+  yaml_spec?: string;
 }
 
 export interface CreateCorrelationRulePayload {
   tenant_id: string;
   name: string;
   description?: string;
+  event_types: string[];
+  window_seconds: number;
+  threshold: number;
+  dimension: string;
   enabled?: boolean;
-  conditions: Record<string, unknown>;
   severity: string;
+  yaml_spec?: string;
 }
 
 export interface CommandACL {

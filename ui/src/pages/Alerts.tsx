@@ -38,6 +38,21 @@ type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
 const ALERTS_POLL_MS = 30_000;
+const CORRELATION_EVENT_TYPES = [
+  { value: 'security.event', label: 'Security event' },
+  { value: 'events.anomaly', label: 'Anomaly detected' },
+  { value: 'rule.triggered', label: 'Detection rule triggered' },
+  { value: 'compliance.fired', label: 'Compliance finding' },
+  { value: 'health.incident', label: 'Health incident' },
+  { value: 'remediation.applied', label: 'Remediation applied' },
+] as const;
+const CORRELATION_DIMENSIONS = [
+  { value: 'node_id', label: 'Host / node' },
+  { value: 'tenant_id', label: 'Entire tenant' },
+  { value: 'src_ip', label: 'Source IP' },
+  { value: 'user_name', label: 'User name' },
+  { value: 'correlation_id', label: 'Correlation ID' },
+] as const;
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
   value: AlertDispositionValue;
@@ -220,6 +235,11 @@ export function Alerts(): JSX.Element {
   const [deleteRuleId, setDeleteRuleId] = useState<string | null>(null);
   const [showCreateRule, setShowCreateRule] = useState(false);
   const [newRuleName, setNewRuleName] = useState('');
+  const [newRuleDescription, setNewRuleDescription] = useState('');
+  const [newRuleEventType, setNewRuleEventType] = useState('security.event');
+  const [newRuleWindowSeconds, setNewRuleWindowSeconds] = useState(60);
+  const [newRuleThreshold, setNewRuleThreshold] = useState(3);
+  const [newRuleDimension, setNewRuleDimension] = useState('node_id');
   const [newRuleSeverity, setNewRuleSeverity] = useState('medium');
   const [creatingRule, setCreatingRule] = useState(false);
 
@@ -294,13 +314,25 @@ export function Alerts(): JSX.Element {
       await client.createCorrelationRule({
         tenant_id: tenantId,
         name: newRuleName.trim(),
+        description: newRuleDescription.trim() || undefined,
+        event_types: [newRuleEventType],
+        window_seconds: newRuleWindowSeconds,
+        threshold: newRuleThreshold,
+        dimension: newRuleDimension,
         severity: newRuleSeverity,
-        conditions: {},
         enabled: true,
       });
       setNewRuleName('');
+      setNewRuleDescription('');
+      setNewRuleEventType('security.event');
+      setNewRuleWindowSeconds(60);
+      setNewRuleThreshold(3);
+      setNewRuleDimension('node_id');
       setShowCreateRule(false);
+      setError(null);
       setRulesReloadToken((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'rule creation failed');
     } finally {
       setCreatingRule(false);
     }
@@ -424,6 +456,25 @@ export function Alerts(): JSX.Element {
       header: 'Name',
       accessorKey: 'name',
       cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
+    },
+    {
+      header: 'Event stream',
+      id: 'event_types',
+      cell: ({ row }) => (
+        <span className="font-mono text-xs text-text-muted">
+          {row.original.event_types.join(', ') || 'All subscribed streams'}
+        </span>
+      ),
+    },
+    {
+      header: 'Trigger',
+      id: 'trigger',
+      cell: ({ row }) => (
+        <span className="text-xs text-text-secondary">
+          {row.original.threshold} event{row.original.threshold === 1 ? '' : 's'} / {row.original.window_seconds}s
+          <span className="block font-mono text-text-muted">by {row.original.dimension}</span>
+        </span>
+      ),
     },
     {
       header: 'Severity',
@@ -640,7 +691,7 @@ export function Alerts(): JSX.Element {
           {showCreateRule && (
             <div className="mb-4 rounded-md border border-border-subtle bg-elevated p-4">
               <p className="mb-3 text-sm font-medium text-foreground">New correlation rule</p>
-              <div className="flex flex-wrap items-end gap-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-name">Name</Label>
                   <Input
@@ -648,8 +699,66 @@ export function Alerts(): JSX.Element {
                     value={newRuleName}
                     onChange={(e) => setNewRuleName(e.target.value)}
                     placeholder="Brute-force SSH"
-                    className="h-8 w-56"
+                    className="h-8"
                   />
+                </div>
+                <div className="flex flex-col gap-1 md:col-span-2">
+                  <Label htmlFor="rule-description">Description</Label>
+                  <Input
+                    id="rule-description"
+                    value={newRuleDescription}
+                    onChange={(e) => setNewRuleDescription(e.target.value)}
+                    placeholder="Alert after repeated events in the selected window"
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-event-type">Event stream</Label>
+                  <select
+                    id="rule-event-type"
+                    className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                    value={newRuleEventType}
+                    onChange={(e) => setNewRuleEventType(e.target.value)}
+                  >
+                    {CORRELATION_EVENT_TYPES.map((eventType) => (
+                      <option key={eventType.value} value={eventType.value}>{eventType.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-threshold">Event threshold</Label>
+                  <Input
+                    id="rule-threshold"
+                    type="number"
+                    min={1}
+                    value={newRuleThreshold}
+                    onChange={(e) => setNewRuleThreshold(Math.max(1, Number(e.target.value) || 1))}
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-window">Time window (seconds)</Label>
+                  <Input
+                    id="rule-window"
+                    type="number"
+                    min={1}
+                    value={newRuleWindowSeconds}
+                    onChange={(e) => setNewRuleWindowSeconds(Math.max(1, Number(e.target.value) || 1))}
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-dimension">Group events by</Label>
+                  <select
+                    id="rule-dimension"
+                    className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                    value={newRuleDimension}
+                    onChange={(e) => setNewRuleDimension(e.target.value)}
+                  >
+                    {CORRELATION_DIMENSIONS.map((dimension) => (
+                      <option key={dimension.value} value={dimension.value}>{dimension.label}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-severity">Severity</Label>
@@ -664,7 +773,7 @@ export function Alerts(): JSX.Element {
                     ))}
                   </select>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex items-end gap-2">
                   <Button variant="primary" size="sm" onClick={handleCreateRule} disabled={creatingRule || !newRuleName.trim() || !tenantId}>
                     {creatingRule ? 'Creating...' : 'Create'}
                   </Button>
