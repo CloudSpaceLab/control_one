@@ -45,3 +45,6 @@ with the alert and tenant identifiers; SMTP passwords are never logged.
 
 Migration 0136 creates `smtp_settings`, with one row per tenant and encrypted
 password/nonce columns. Its down migration removes that configuration table.
+
+For a repeatable end-to-end local check of correlation alert delivery, follow
+[Correlation alert email live test](alert-email-correlation-live-test.md).
