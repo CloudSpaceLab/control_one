@@ -164,3 +164,35 @@ func TestEngineCopiesEventEvidenceIntoAlertContext(t *testing.T) {
 		t.Fatalf("evidence_refs missing from context: %#v", ctx["evidence_refs"])
 	}
 }
+
+func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing.T) {
+	tenant := uuid.New()
+	node := uuid.New()
+	rule := storage.CorrelationRule{
+		ID: uuid.New(), TenantID: tenant, Name: "SSH brute force",
+		EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "ssh.authentication_failure",
+		WindowSeconds: 20, Threshold: 3, GroupBy: []string{"src_ip", "node_id"},
+		SuppressionSeconds: 300, Severity: "high", Enabled: true,
+	}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(16), nil)
+	base := time.Now()
+	payload := func(eventType string) []byte {
+		blob, _ := json.Marshal(map[string]any{"event_type": eventType, "src_ip": "203.0.113.8"})
+		return blob
+	}
+
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("malware.detected")})
+	for i := 0; i < 6; i++ {
+		eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(i+1) * time.Second), Payload: payload("ssh.authentication_failure")})
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.alerts) != 1 {
+		t.Fatalf("want exactly 1 suppressed alert, got %d", len(store.alerts))
+	}
+	wantKey := rule.ID.String() + "/src_ip=203.0.113.8|node_id=" + node.String()
+	if store.alerts[0].DedupKey != wantKey {
+		t.Fatalf("dedup key = %q, want %q", store.alerts[0].DedupKey, wantKey)
+	}
+}

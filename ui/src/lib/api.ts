@@ -5124,6 +5124,17 @@ export class APIClient {
     });
   }
 
+  async updateCorrelationRule(
+    id: string,
+    tenantId: string,
+    payload: CreateCorrelationRulePayload,
+  ): Promise<CorrelationRule> {
+    return this.request<CorrelationRule>(
+      `/api/v1/correlation-rules/${encodeURIComponent(id)}?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  }
+
   // ---- DLP / Data Classification (Sprint 2) --------------------------------
 
   async listDLPRules(
@@ -6931,12 +6942,16 @@ export interface CorrelationRule {
   name: string;
   description?: string;
   event_types: string[];
+  event_type: string;
   window_seconds: number;
   threshold: number;
   dimension: string;
+  group_by: string[];
+  suppression_seconds: number;
   enabled: boolean;
   severity: string;
   created_at: string;
+  updated_at: string;
   yaml_spec?: string;
 }
 
@@ -6945,9 +6960,12 @@ export interface CreateCorrelationRulePayload {
   name: string;
   description?: string;
   event_types: string[];
+  event_type: string;
   window_seconds: number;
   threshold: number;
   dimension: string;
+  group_by: string[];
+  suppression_seconds: number;
   enabled?: boolean;
   severity: string;
   yaml_spec?: string;
