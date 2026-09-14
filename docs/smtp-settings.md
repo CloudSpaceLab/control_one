@@ -48,3 +48,5 @@ password/nonce columns. Its down migration removes that configuration table.
 
 For a repeatable end-to-end local check of correlation alert delivery, follow
 [Correlation alert email live test](alert-email-correlation-live-test.md).
+The [alert email live-test helpers](alert-email-live-test-helpers.md) also cover
+IP-behavior detection and Finacle monitoring.
