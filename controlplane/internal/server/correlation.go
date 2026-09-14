@@ -13,22 +13,23 @@ import (
 )
 
 type correlationRuleResponse struct {
-	ID                 string   `json:"id"`
-	TenantID           string   `json:"tenant_id"`
-	Name               string   `json:"name"`
-	Description        *string  `json:"description,omitempty"`
-	EventTypes         []string `json:"event_types"`
-	EventType          string   `json:"event_type"`
-	WindowSeconds      int      `json:"window_seconds"`
-	Threshold          int      `json:"threshold"`
-	Dimension          string   `json:"dimension"`
-	GroupBy            []string `json:"group_by"`
-	SuppressionSeconds int      `json:"suppression_seconds"`
-	Severity           string   `json:"severity"`
-	Enabled            bool     `json:"enabled"`
-	YAMLSpec           *string  `json:"yaml_spec,omitempty"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
+	ID                 string                         `json:"id"`
+	TenantID           string                         `json:"tenant_id"`
+	Name               string                         `json:"name"`
+	Description        *string                        `json:"description,omitempty"`
+	EventTypes         []string                       `json:"event_types"`
+	EventType          string                         `json:"event_type"`
+	WindowSeconds      int                            `json:"window_seconds"`
+	Threshold          int                            `json:"threshold"`
+	Dimension          string                         `json:"dimension"`
+	GroupBy            []string                       `json:"group_by"`
+	SuppressionSeconds int                            `json:"suppression_seconds"`
+	Conditions         []storage.CorrelationCondition `json:"conditions"`
+	Severity           string                         `json:"severity"`
+	Enabled            bool                           `json:"enabled"`
+	YAMLSpec           *string                        `json:"yaml_spec,omitempty"`
+	CreatedAt          string                         `json:"created_at"`
+	UpdatedAt          string                         `json:"updated_at"`
 }
 
 func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleResponse {
@@ -37,7 +38,7 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 		Name: r.Name, EventTypes: r.EventTypes,
 		WindowSeconds: r.WindowSeconds, Threshold: r.Threshold,
 		EventType: r.EventType, Dimension: r.Dimension, GroupBy: r.GroupBy,
-		SuppressionSeconds: r.SuppressionSeconds, Severity: r.Severity, Enabled: r.Enabled,
+		SuppressionSeconds: r.SuppressionSeconds, Conditions: r.Conditions, Severity: r.Severity, Enabled: r.Enabled,
 		CreatedAt: formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
 	}
 	if out.EventTypes == nil {
@@ -45,6 +46,9 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 	}
 	if out.GroupBy == nil {
 		out.GroupBy = []string{}
+	}
+	if out.Conditions == nil {
+		out.Conditions = []storage.CorrelationCondition{}
 	}
 	if r.Description.Valid {
 		s := r.Description.String
@@ -58,19 +62,20 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 }
 
 type createCorrelationRuleRequest struct {
-	TenantID           string   `json:"tenant_id"`
-	Name               string   `json:"name"`
-	Description        string   `json:"description"`
-	EventTypes         []string `json:"event_types"`
-	EventType          string   `json:"event_type"`
-	WindowSeconds      int      `json:"window_seconds"`
-	Threshold          int      `json:"threshold"`
-	Dimension          string   `json:"dimension"`
-	GroupBy            []string `json:"group_by"`
-	SuppressionSeconds int      `json:"suppression_seconds"`
-	Severity           string   `json:"severity"`
-	Enabled            *bool    `json:"enabled"`
-	YAMLSpec           string   `json:"yaml_spec"`
+	TenantID           string                         `json:"tenant_id"`
+	Name               string                         `json:"name"`
+	Description        string                         `json:"description"`
+	EventTypes         []string                       `json:"event_types"`
+	EventType          string                         `json:"event_type"`
+	WindowSeconds      int                            `json:"window_seconds"`
+	Threshold          int                            `json:"threshold"`
+	Dimension          string                         `json:"dimension"`
+	GroupBy            []string                       `json:"group_by"`
+	SuppressionSeconds int                            `json:"suppression_seconds"`
+	Conditions         []storage.CorrelationCondition `json:"conditions"`
+	Severity           string                         `json:"severity"`
+	Enabled            *bool                          `json:"enabled"`
+	YAMLSpec           string                         `json:"yaml_spec"`
 }
 
 var correlationTopics = map[string]bool{
@@ -81,6 +86,14 @@ var correlationDimensions = map[string]bool{
 	"node_id": true, "tenant_id": true, "src_ip": true, "user_name": true, "correlation_id": true,
 }
 var correlationSeverities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
+var correlationConditionFields = map[string]bool{
+	"src_ip": true, "dst_ip": true, "src_port": true, "dst_port": true, "protocol": true,
+	"user_name": true, "auth_result": true, "status_code": true, "http_method": true,
+	"path": true, "source": true, "severity": true,
+}
+var correlationConditionOperators = map[string]bool{
+	"eq": true, "neq": true, "contains": true, "gt": true, "gte": true, "lt": true, "lte": true,
+}
 
 func validateCorrelationRuleRequest(req *createCorrelationRuleRequest) error {
 	req.Name = strings.TrimSpace(req.Name)
@@ -120,6 +133,23 @@ func validateCorrelationRuleRequest(req *createCorrelationRuleRequest) error {
 	if req.SuppressionSeconds < 0 || req.SuppressionSeconds > 604800 {
 		return fmt.Errorf("suppression_seconds must be between 0 and 604800")
 	}
+	if len(req.Conditions) > 10 {
+		return fmt.Errorf("conditions cannot contain more than 10 entries")
+	}
+	for i := range req.Conditions {
+		condition := &req.Conditions[i]
+		condition.Field = strings.TrimSpace(condition.Field)
+		condition.Operator = strings.TrimSpace(condition.Operator)
+		if !correlationConditionFields[condition.Field] {
+			return fmt.Errorf("unsupported condition field %q", condition.Field)
+		}
+		if !correlationConditionOperators[condition.Operator] {
+			return fmt.Errorf("unsupported condition operator %q", condition.Operator)
+		}
+		if condition.Value == nil || strings.TrimSpace(fmt.Sprint(condition.Value)) == "" {
+			return fmt.Errorf("condition %d value is required", i+1)
+		}
+	}
 	return nil
 }
 
@@ -127,7 +157,7 @@ func correlationParams(tenantID uuid.UUID, req createCorrelationRuleRequest, ena
 	return storage.CreateCorrelationRuleParams{TenantID: tenantID, Name: req.Name, Description: req.Description,
 		EventTypes: req.EventTypes, EventType: req.EventType, WindowSeconds: req.WindowSeconds,
 		Threshold: req.Threshold, Dimension: req.Dimension, GroupBy: req.GroupBy,
-		SuppressionSeconds: req.SuppressionSeconds, Severity: req.Severity, Enabled: enabled, YAMLSpec: req.YAMLSpec}
+		SuppressionSeconds: req.SuppressionSeconds, Conditions: req.Conditions, Severity: req.Severity, Enabled: enabled, YAMLSpec: req.YAMLSpec}
 }
 
 func (s *Server) handleCorrelationRulesCollection(w http.ResponseWriter, r *http.Request) {

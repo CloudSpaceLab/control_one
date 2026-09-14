@@ -173,18 +173,20 @@ func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing
 		EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "ssh.authentication_failure",
 		WindowSeconds: 20, Threshold: 3, GroupBy: []string{"src_ip", "node_id"},
 		SuppressionSeconds: 300, Severity: "high", Enabled: true,
+		Conditions: []storage.CorrelationCondition{{Field: "dst_port", Operator: "eq", Value: "22"}, {Field: "auth_result", Operator: "eq", Value: "failure"}},
 	}
 	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
 	eng := New(store, eventbus.New(16), nil)
 	base := time.Now()
-	payload := func(eventType string) []byte {
-		blob, _ := json.Marshal(map[string]any{"event_type": eventType, "src_ip": "203.0.113.8"})
+	payload := func(eventType, authResult string) []byte {
+		blob, _ := json.Marshal(map[string]any{"event_type": eventType, "src_ip": "203.0.113.8", "details": map[string]any{"dst_port": 22, "auth_result": authResult}})
 		return blob
 	}
 
-	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("malware.detected")})
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("malware.detected", "failure")})
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("ssh.authentication_failure", "success")})
 	for i := 0; i < 6; i++ {
-		eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(i+1) * time.Second), Payload: payload("ssh.authentication_failure")})
+		eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(i+1) * time.Second), Payload: payload("ssh.authentication_failure", "failure")})
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
