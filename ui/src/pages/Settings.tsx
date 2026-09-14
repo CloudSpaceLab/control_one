@@ -15,6 +15,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { AISettingsTab } from '../components/settings/AISettingsTab';
+import { SMTPSettingsTab } from '../components/settings/SMTPSettingsTab';
 import { KeyRound, Shield, Trash2 } from 'lucide-react';
 
 function formatDate(value?: string): string {
@@ -976,10 +977,7 @@ export function Settings(): JSX.Element {
         </TabsContent>
 
         <TabsContent value="integrations" className="mt-4">
-          <EmptyState
-            title="No native integrations configured"
-            description="Alert delivery and ticketing integrations are not connected for this tenant."
-          />
+          <SMTPSettingsTab />
         </TabsContent>
 
         <TabsContent value="trust-center" className="mt-4 flex flex-col gap-4">

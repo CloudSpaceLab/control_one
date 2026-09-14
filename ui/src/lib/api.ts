@@ -2050,7 +2050,33 @@ export class APIError extends Error {
   }
 }
 
+export interface SMTPSettings {
+  host: string;
+  port: number;
+  tls_mode: 'starttls' | 'tls' | 'none';
+  auth_enabled: boolean;
+  username: string;
+  sender_name: string;
+  sender_email: string;
+  enabled: boolean;
+  configured: boolean;
+  password_configured: boolean;
+  encryption_available: boolean;
+}
+
+export type UpdateSMTPSettings = Omit<SMTPSettings, 'configured' | 'password_configured' | 'encryption_available'> & { password?: string };
+
 export class APIClient {
+  async getSMTPSettings(tenantId: string): Promise<SMTPSettings> {
+    return this.request(`/api/v1/settings/smtp?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
+  async updateSMTPSettings(tenantId: string, settings: UpdateSMTPSettings): Promise<SMTPSettings> {
+    return this.request(`/api/v1/settings/smtp?tenant_id=${encodeURIComponent(tenantId)}`, {
+      method: 'PUT', body: JSON.stringify(settings),
+    });
+  }
+
   private readonly baseUrl: string;
   private token: string | null | undefined;
   private unauthorizedHandler?: () => void;
