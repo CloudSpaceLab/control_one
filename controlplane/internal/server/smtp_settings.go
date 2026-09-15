@@ -20,14 +20,15 @@ type smtpSettingsStore interface {
 }
 
 type smtpSettingsFields struct {
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	TLSMode     string `json:"tls_mode"`
-	AuthEnabled bool   `json:"auth_enabled"`
-	Username    string `json:"username"`
-	SenderName  string `json:"sender_name"`
-	SenderEmail string `json:"sender_email"`
-	Enabled     bool   `json:"enabled"`
+	Host        string   `json:"host"`
+	Port        int      `json:"port"`
+	TLSMode     string   `json:"tls_mode"`
+	AuthEnabled bool     `json:"auth_enabled"`
+	Username    string   `json:"username"`
+	SenderName  string   `json:"sender_name"`
+	SenderEmail string   `json:"sender_email"`
+	Recipients  []string `json:"recipients"`
+	Enabled     bool     `json:"enabled"`
 }
 type smtpSettingsRequest struct {
 	smtpSettingsFields
@@ -42,6 +43,9 @@ type smtpSettingsResponse struct {
 }
 
 func validateSMTPSettings(p *smtpSettingsRequest) error {
+	if p.Recipients == nil {
+		p.Recipients = []string{}
+	}
 	p.Host = strings.TrimSpace(p.Host)
 	p.Username = strings.TrimSpace(p.Username)
 	p.SenderName = strings.TrimSpace(p.SenderName)
@@ -82,6 +86,25 @@ func validateSMTPSettings(p *smtpSettingsRequest) error {
 	}
 	if p.Password != nil && len(*p.Password) > 4096 {
 		return fmt.Errorf("SMTP password is too long")
+	}
+	if len(p.Recipients) > 100 {
+		return fmt.Errorf("a maximum of 100 alert recipients is supported")
+	}
+	seen := make(map[string]struct{}, len(p.Recipients))
+	for i, recipient := range p.Recipients {
+		address := strings.TrimSpace(strings.ToLower(recipient))
+		parsed, err := mail.ParseAddress(address)
+		if err != nil || parsed.Address != address || len(address) > 254 || strings.ContainsAny(address, "\r\n") {
+			return fmt.Errorf("recipient %d is not a valid email address", i+1)
+		}
+		if _, exists := seen[address]; exists {
+			return fmt.Errorf("recipient email addresses must be unique")
+		}
+		seen[address] = struct{}{}
+		p.Recipients[i] = address
+	}
+	if p.Enabled && len(p.Recipients) == 0 {
+		return fmt.Errorf("add at least one recipient before enabling email alerts")
 	}
 	return nil
 }
@@ -139,7 +162,7 @@ func (s *Server) handleSMTPSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "SMTP credential encryption is unavailable. Ask your administrator to configure the server encryption key.", http.StatusServiceUnavailable)
 			return
 		}
-		c := storage.SMTPSettings{TenantID: tenantID, Host: p.Host, Port: p.Port, TLSMode: p.TLSMode, AuthEnabled: p.AuthEnabled, Username: p.Username, SenderName: p.SenderName, SenderEmail: p.SenderEmail, Enabled: p.Enabled}
+		c := storage.SMTPSettings{TenantID: tenantID, Host: p.Host, Port: p.Port, TLSMode: p.TLSMode, AuthEnabled: p.AuthEnabled, Username: p.Username, SenderName: p.SenderName, SenderEmail: p.SenderEmail, Recipients: p.Recipients, Enabled: p.Enabled}
 		if p.Password != nil && *p.Password != "" {
 			if s.sealer == nil {
 				http.Error(w, "SMTP credential encryption is unavailable", http.StatusServiceUnavailable)
@@ -160,9 +183,12 @@ func (s *Server) handleSMTPSettings(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(smtpSettingsResponse{smtpSettingsFields: p.smtpSettingsFields, Configured: true, PasswordConfigured: hasPassword, EncryptionAvailable: s.sealer != nil})
 		return
 	}
-	response := smtpSettingsResponse{smtpSettingsFields: smtpSettingsFields{Port: 587, TLSMode: "starttls", AuthEnabled: true}, EncryptionAvailable: s.sealer != nil}
+	response := smtpSettingsResponse{smtpSettingsFields: smtpSettingsFields{Port: 587, TLSMode: "starttls", AuthEnabled: true, Recipients: []string{}}, EncryptionAvailable: s.sealer != nil}
 	if existing != nil {
-		response.smtpSettingsFields = smtpSettingsFields{Host: existing.Host, Port: existing.Port, TLSMode: existing.TLSMode, AuthEnabled: existing.AuthEnabled, Username: existing.Username, SenderName: existing.SenderName, SenderEmail: existing.SenderEmail, Enabled: existing.Enabled}
+		if existing.Recipients == nil {
+			existing.Recipients = []string{}
+		}
+		response.smtpSettingsFields = smtpSettingsFields{Host: existing.Host, Port: existing.Port, TLSMode: existing.TLSMode, AuthEnabled: existing.AuthEnabled, Username: existing.Username, SenderName: existing.SenderName, SenderEmail: existing.SenderEmail, Recipients: existing.Recipients, Enabled: existing.Enabled}
 		response.Configured = true
 		response.PasswordConfigured = len(existing.PasswordCiphertext) > 0
 	}

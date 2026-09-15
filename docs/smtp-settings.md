@@ -2,8 +2,8 @@
 
 Administrators configure one outgoing SMTP server per tenant in **Settings →
 Integrations → Email alerts**. Selecting a tenant is required. This phase saves
-configuration only; it does not connect to SMTP or send messages. Recipients,
-test messages, and automatic delivery are subsequent phases.
+configuration and supports recipient management plus test messages. Automatic
+alert delivery is a subsequent phase.
 
 Before saving authenticated SMTP settings, configure the existing
 `CONTROLPLANE_SECRETS_ENCRYPTION_KEY` environment variable (or
@@ -26,6 +26,14 @@ Omit `password` (or send null) to preserve it, supply a new value to replace it,
 or send an empty string to remove it while authentication is disabled.
 Requests require an admin principal with access to that tenant. Invalid input
 returns 400; missing encryption support for credential writes returns 503.
+
+Up to 100 unique recipient addresses can be saved per tenant. Addresses are
+normalized to lowercase and validated by both the UI and API. The test endpoint
+`POST /api/v1/settings/smtp/test?tenant_id=<uuid>` sends a plain-text test to all
+saved recipients using the stored settings. Recipient addresses are SMTP
+envelope recipients and are not disclosed to each other in message headers.
+Connections time out after 15 seconds, require TLS 1.2 or newer for STARTTLS or
+implicit TLS, and never disable certificate verification.
 
 Migration 0136 creates `smtp_settings`, with one row per tenant and encrypted
 password/nonce columns. Its down migration removes that configuration table.
