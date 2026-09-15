@@ -34,30 +34,33 @@ type windowKey struct {
 }
 
 type windowHit struct {
-	timestamp     time.Time
-	distinctValue string
+	timestamp      time.Time
+	distinctValue  string
+	aggregateValue float64
 }
 
 // Engine consumes events and opens alerts when correlation rules fire.
 type Engine struct {
-	store     AlertCreator
-	log       *zap.Logger
-	bus       *eventbus.Bus
-	mu        sync.Mutex
-	windows   map[windowKey][]windowHit
-	lastFired map[windowKey]time.Time
-	cache     sync.Map // tenantID -> []storage.CorrelationRule
-	cacheTTL  time.Duration
+	store           AlertCreator
+	log             *zap.Logger
+	bus             *eventbus.Bus
+	mu              sync.Mutex
+	windows         map[windowKey][]windowHit
+	sequenceWindows map[windowKey][]time.Time
+	lastFired       map[windowKey]time.Time
+	cache           sync.Map // tenantID -> []storage.CorrelationRule
+	cacheTTL        time.Duration
 }
 
 func New(store AlertCreator, bus *eventbus.Bus, log *zap.Logger) *Engine {
 	return &Engine{
-		store:     store,
-		log:       log,
-		bus:       bus,
-		windows:   make(map[windowKey][]windowHit),
-		lastFired: make(map[windowKey]time.Time),
-		cacheTTL:  30 * time.Second,
+		store:           store,
+		log:             log,
+		bus:             bus,
+		windows:         make(map[windowKey][]windowHit),
+		sequenceWindows: make(map[windowKey][]time.Time),
+		lastFired:       make(map[windowKey]time.Time),
+		cacheTTL:        30 * time.Second,
 	}
 }
 
@@ -101,23 +104,6 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		if !matchesEventType(r.EventTypes, ev.Topic) {
 			continue
 		}
-		if !matchesPayloadEventType(r.EventType, ev.Payload) {
-			continue
-		}
-		if !matchesConditions(r.Conditions, ev) {
-			continue
-		}
-		if !matchesConditionGroups(r.ConditionGroups, ev) {
-			continue
-		}
-		distinctValue := ""
-		if r.DistinctField != "" {
-			value, ok := eventFieldValue(r.DistinctField, ev)
-			if !ok || strings.TrimSpace(fmt.Sprint(value)) == "" {
-				continue
-			}
-			distinctValue = strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
-		}
 		dim := compoundDimensionValue(r.GroupBy, r.Dimension, ev)
 		if dim == "" {
 			continue
@@ -128,9 +114,54 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 			window = 5 * time.Minute
 		}
 		cutoff := ev.Timestamp.Add(-window)
+		if r.SequenceEventType != "" && matchesPayloadEventType(r.SequenceEventType, ev.Payload) && matchesConditions(r.SequenceConditions, ev) {
+			e.mu.Lock()
+			sequenceHits := append(e.sequenceWindows[key], ev.Timestamp)
+			e.sequenceWindows[key] = trimTimes(sequenceHits, cutoff)
+			e.mu.Unlock()
+		}
+		if !matchesPayloadEventType(r.EventType, ev.Payload) || !matchesConditions(r.Conditions, ev) || !matchesConditionGroups(r.ConditionGroups, ev) {
+			continue
+		}
+		distinctValue := ""
+		if r.DistinctField != "" {
+			value, ok := eventFieldValue(r.DistinctField, ev)
+			if !ok || strings.TrimSpace(fmt.Sprint(value)) == "" {
+				continue
+			}
+			distinctValue = strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+		}
+		aggregateValue := float64(0)
+		if r.AggregateField != "" {
+			value, ok := eventFieldValue(r.AggregateField, ev)
+			if !ok {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(fmt.Sprint(value), 64)
+			if err != nil || parsed < 0 {
+				continue
+			}
+			aggregateValue = parsed
+		}
 
 		e.mu.Lock()
-		hits := append(e.windows[key], windowHit{timestamp: ev.Timestamp, distinctValue: distinctValue})
+		if r.SequenceEventType != "" {
+			e.sequenceWindows[key] = trimTimes(e.sequenceWindows[key], cutoff)
+			precursorCount := 0
+			for _, timestamp := range e.sequenceWindows[key] {
+				// A prerequisite must precede the target. This also prevents an
+				// event that matches both sides of a sequence from satisfying its
+				// own prerequisite.
+				if timestamp.Before(ev.Timestamp) {
+					precursorCount++
+				}
+			}
+			if precursorCount < r.SequenceThreshold {
+				e.mu.Unlock()
+				continue
+			}
+		}
+		hits := append(e.windows[key], windowHit{timestamp: ev.Timestamp, distinctValue: distinctValue, aggregateValue: aggregateValue})
 		trimmed := hits[:0]
 		for _, hit := range hits {
 			if !hit.timestamp.Before(cutoff) {
@@ -146,38 +177,54 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 			}
 			hitCount = len(unique)
 		}
+		aggregateTotal := float64(0)
 		fire := hitCount >= r.Threshold
+		if r.AggregateField != "" {
+			for _, hit := range trimmed {
+				aggregateTotal += hit.aggregateValue
+			}
+			fire = aggregateTotal >= float64(r.AggregateThreshold)
+		}
 		if fire && r.SuppressionSeconds > 0 {
 			last := e.lastFired[key]
 			fire = last.IsZero() || ev.Timestamp.Sub(last) >= time.Duration(r.SuppressionSeconds)*time.Second
 		}
 		if fire {
 			e.windows[key] = nil
+			e.sequenceWindows[key] = nil
 			e.lastFired[key] = ev.Timestamp
 		}
 		e.mu.Unlock()
 
 		if fire {
-			e.openAlert(ctx, r, ev, dim, hitCount)
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal)
 		}
 	}
 }
 
-func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int) {
+func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64) {
 	title := r.Name
 	summary := "correlation rule fired"
 	ctxPayload := map[string]any{
-		"rule_id":           r.ID.String(),
-		"dimension":         r.Dimension,
-		"value":             dim,
-		"hits":              hits,
-		"window_s":          r.WindowSeconds,
-		"event_type_filter": r.EventType,
-		"group_by":          r.GroupBy,
-		"suppression_s":     r.SuppressionSeconds,
-		"conditions":        r.Conditions,
-		"condition_groups":  r.ConditionGroups,
-		"distinct_field":    r.DistinctField,
+		"rule_id":             r.ID.String(),
+		"dimension":           r.Dimension,
+		"value":               dim,
+		"hits":                hits,
+		"window_s":            r.WindowSeconds,
+		"event_type_filter":   r.EventType,
+		"group_by":            r.GroupBy,
+		"suppression_s":       r.SuppressionSeconds,
+		"conditions":          r.Conditions,
+		"condition_groups":    r.ConditionGroups,
+		"distinct_field":      r.DistinctField,
+		"sequence_event_type": r.SequenceEventType,
+		"sequence_threshold":  r.SequenceThreshold,
+		"sequence_conditions": r.SequenceConditions,
+		"aggregate_field":     r.AggregateField,
+		"aggregate_threshold": r.AggregateThreshold,
+	}
+	if r.AggregateField != "" {
+		ctxPayload["aggregate_value"] = aggregateValue
 	}
 	for key, value := range eventContext(ev) {
 		ctxPayload[key] = value
@@ -221,6 +268,16 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			Payload:  payload,
 		})
 	}
+}
+
+func trimTimes(times []time.Time, cutoff time.Time) []time.Time {
+	trimmed := times[:0]
+	for _, timestamp := range times {
+		if !timestamp.Before(cutoff) {
+			trimmed = append(trimmed, timestamp)
+		}
+	}
+	return trimmed
 }
 
 func matchesConditions(conditions []storage.CorrelationCondition, ev eventbus.Event) bool {

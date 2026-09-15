@@ -12,6 +12,8 @@ describe('correlation rule templates', () => {
       'web-path-scanner',
       'credential-stuffing',
       'port-scanning',
+      'successful-login-after-failures',
+      'suspicious-outbound-transfer',
     ]);
 
     for (const template of CORRELATION_RULE_TEMPLATES) {
@@ -23,6 +25,20 @@ describe('correlation rule templates', () => {
       expect(template.groupBy.length).toBeGreaterThan(0);
       expect(template.suppressionSeconds).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it('configures the successful-login sequence', () => {
+    expect(correlationRuleTemplate('successful-login-after-failures')).toMatchObject({
+      eventType: 'authentication.success', sequenceEventType: 'authentication.failure', sequenceThreshold: 4,
+      groupBy: ['src_ip', 'user_name', 'node_id'],
+    });
+  });
+
+  it('configures outbound transfer as a byte aggregate', () => {
+    expect(correlationRuleTemplate('suspicious-outbound-transfer')).toMatchObject({
+      eventType: 'network.connection', aggregateField: 'bytes_out', aggregateThreshold: 104857600,
+      conditions: [{ field: 'direction', operator: 'eq', value: 'outbound' }],
+    });
   });
 
   it('configures web detections with OR condition groups', () => {
