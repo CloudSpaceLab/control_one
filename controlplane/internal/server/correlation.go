@@ -13,23 +13,30 @@ import (
 )
 
 type correlationRuleResponse struct {
-	ID                 string                         `json:"id"`
-	TenantID           string                         `json:"tenant_id"`
-	Name               string                         `json:"name"`
-	Description        *string                        `json:"description,omitempty"`
-	EventTypes         []string                       `json:"event_types"`
-	EventType          string                         `json:"event_type"`
-	WindowSeconds      int                            `json:"window_seconds"`
-	Threshold          int                            `json:"threshold"`
-	Dimension          string                         `json:"dimension"`
-	GroupBy            []string                       `json:"group_by"`
-	SuppressionSeconds int                            `json:"suppression_seconds"`
-	Conditions         []storage.CorrelationCondition `json:"conditions"`
-	Severity           string                         `json:"severity"`
-	Enabled            bool                           `json:"enabled"`
-	YAMLSpec           *string                        `json:"yaml_spec,omitempty"`
-	CreatedAt          string                         `json:"created_at"`
-	UpdatedAt          string                         `json:"updated_at"`
+	ID                 string                           `json:"id"`
+	TenantID           string                           `json:"tenant_id"`
+	Name               string                           `json:"name"`
+	Description        *string                          `json:"description,omitempty"`
+	EventTypes         []string                         `json:"event_types"`
+	EventType          string                           `json:"event_type"`
+	WindowSeconds      int                              `json:"window_seconds"`
+	Threshold          int                              `json:"threshold"`
+	Dimension          string                           `json:"dimension"`
+	GroupBy            []string                         `json:"group_by"`
+	SuppressionSeconds int                              `json:"suppression_seconds"`
+	Conditions         []storage.CorrelationCondition   `json:"conditions"`
+	ConditionGroups    [][]storage.CorrelationCondition `json:"condition_groups"`
+	DistinctField      string                           `json:"distinct_field"`
+	SequenceEventType  string                           `json:"sequence_event_type"`
+	SequenceThreshold  int                              `json:"sequence_threshold"`
+	SequenceConditions []storage.CorrelationCondition   `json:"sequence_conditions"`
+	AggregateField     string                           `json:"aggregate_field"`
+	AggregateThreshold int64                            `json:"aggregate_threshold"`
+	Severity           string                           `json:"severity"`
+	Enabled            bool                             `json:"enabled"`
+	YAMLSpec           *string                          `json:"yaml_spec,omitempty"`
+	CreatedAt          string                           `json:"created_at"`
+	UpdatedAt          string                           `json:"updated_at"`
 }
 
 func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleResponse {
@@ -38,7 +45,9 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 		Name: r.Name, EventTypes: r.EventTypes,
 		WindowSeconds: r.WindowSeconds, Threshold: r.Threshold,
 		EventType: r.EventType, Dimension: r.Dimension, GroupBy: r.GroupBy,
-		SuppressionSeconds: r.SuppressionSeconds, Conditions: r.Conditions, Severity: r.Severity, Enabled: r.Enabled,
+		SuppressionSeconds: r.SuppressionSeconds, Conditions: r.Conditions, ConditionGroups: r.ConditionGroups, DistinctField: r.DistinctField,
+		SequenceEventType: r.SequenceEventType, SequenceThreshold: r.SequenceThreshold, SequenceConditions: r.SequenceConditions,
+		AggregateField: r.AggregateField, AggregateThreshold: r.AggregateThreshold, Severity: r.Severity, Enabled: r.Enabled,
 		CreatedAt: formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
 	}
 	if out.EventTypes == nil {
@@ -49,6 +58,12 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 	}
 	if out.Conditions == nil {
 		out.Conditions = []storage.CorrelationCondition{}
+	}
+	if out.ConditionGroups == nil {
+		out.ConditionGroups = [][]storage.CorrelationCondition{}
+	}
+	if out.SequenceConditions == nil {
+		out.SequenceConditions = []storage.CorrelationCondition{}
 	}
 	if r.Description.Valid {
 		s := r.Description.String
@@ -62,20 +77,27 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 }
 
 type createCorrelationRuleRequest struct {
-	TenantID           string                         `json:"tenant_id"`
-	Name               string                         `json:"name"`
-	Description        string                         `json:"description"`
-	EventTypes         []string                       `json:"event_types"`
-	EventType          string                         `json:"event_type"`
-	WindowSeconds      int                            `json:"window_seconds"`
-	Threshold          int                            `json:"threshold"`
-	Dimension          string                         `json:"dimension"`
-	GroupBy            []string                       `json:"group_by"`
-	SuppressionSeconds int                            `json:"suppression_seconds"`
-	Conditions         []storage.CorrelationCondition `json:"conditions"`
-	Severity           string                         `json:"severity"`
-	Enabled            *bool                          `json:"enabled"`
-	YAMLSpec           string                         `json:"yaml_spec"`
+	TenantID           string                           `json:"tenant_id"`
+	Name               string                           `json:"name"`
+	Description        string                           `json:"description"`
+	EventTypes         []string                         `json:"event_types"`
+	EventType          string                           `json:"event_type"`
+	WindowSeconds      int                              `json:"window_seconds"`
+	Threshold          int                              `json:"threshold"`
+	Dimension          string                           `json:"dimension"`
+	GroupBy            []string                         `json:"group_by"`
+	SuppressionSeconds int                              `json:"suppression_seconds"`
+	Conditions         []storage.CorrelationCondition   `json:"conditions"`
+	ConditionGroups    [][]storage.CorrelationCondition `json:"condition_groups"`
+	DistinctField      string                           `json:"distinct_field"`
+	SequenceEventType  string                           `json:"sequence_event_type"`
+	SequenceThreshold  int                              `json:"sequence_threshold"`
+	SequenceConditions []storage.CorrelationCondition   `json:"sequence_conditions"`
+	AggregateField     string                           `json:"aggregate_field"`
+	AggregateThreshold int64                            `json:"aggregate_threshold"`
+	Severity           string                           `json:"severity"`
+	Enabled            *bool                            `json:"enabled"`
+	YAMLSpec           string                           `json:"yaml_spec"`
 }
 
 var correlationTopics = map[string]bool{
@@ -83,14 +105,15 @@ var correlationTopics = map[string]bool{
 	"compliance.fired": true, "health.incident": true, "remediation.applied": true,
 }
 var correlationDimensions = map[string]bool{
-	"node_id": true, "tenant_id": true, "src_ip": true, "user_name": true, "correlation_id": true,
+	"node_id": true, "tenant_id": true, "src_ip": true, "dst_ip": true, "user_name": true, "correlation_id": true,
 }
 var correlationSeverities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
 var correlationConditionFields = map[string]bool{
 	"src_ip": true, "dst_ip": true, "src_port": true, "dst_port": true, "protocol": true,
 	"user_name": true, "auth_result": true, "status_code": true, "http_method": true,
-	"path": true, "source": true, "severity": true,
+	"path": true, "source": true, "severity": true, "direction": true, "bytes_out": true,
 }
+var correlationAggregateFields = map[string]bool{"bytes_out": true, "bytes_in": true}
 var correlationConditionOperators = map[string]bool{
 	"eq": true, "neq": true, "contains": true, "gt": true, "gte": true, "lt": true, "lte": true,
 }
@@ -137,18 +160,69 @@ func validateCorrelationRuleRequest(req *createCorrelationRuleRequest) error {
 		return fmt.Errorf("conditions cannot contain more than 10 entries")
 	}
 	for i := range req.Conditions {
-		condition := &req.Conditions[i]
-		condition.Field = strings.TrimSpace(condition.Field)
-		condition.Operator = strings.TrimSpace(condition.Operator)
-		if !correlationConditionFields[condition.Field] {
-			return fmt.Errorf("unsupported condition field %q", condition.Field)
+		if err := validateCorrelationCondition(&req.Conditions[i], fmt.Sprintf("condition %d", i+1)); err != nil {
+			return err
 		}
-		if !correlationConditionOperators[condition.Operator] {
-			return fmt.Errorf("unsupported condition operator %q", condition.Operator)
+	}
+	if len(req.ConditionGroups) > 10 {
+		return fmt.Errorf("condition_groups cannot contain more than 10 groups")
+	}
+	for groupIndex := range req.ConditionGroups {
+		if len(req.ConditionGroups[groupIndex]) == 0 || len(req.ConditionGroups[groupIndex]) > 10 {
+			return fmt.Errorf("condition group %d must contain between 1 and 10 entries", groupIndex+1)
 		}
-		if condition.Value == nil || strings.TrimSpace(fmt.Sprint(condition.Value)) == "" {
-			return fmt.Errorf("condition %d value is required", i+1)
+		for conditionIndex := range req.ConditionGroups[groupIndex] {
+			label := fmt.Sprintf("condition group %d entry %d", groupIndex+1, conditionIndex+1)
+			if err := validateCorrelationCondition(&req.ConditionGroups[groupIndex][conditionIndex], label); err != nil {
+				return err
+			}
 		}
+	}
+	req.DistinctField = strings.TrimSpace(req.DistinctField)
+	if req.DistinctField != "" && !correlationConditionFields[req.DistinctField] {
+		return fmt.Errorf("unsupported distinct_field %q", req.DistinctField)
+	}
+	req.SequenceEventType = strings.TrimSpace(req.SequenceEventType)
+	if req.SequenceEventType != "" {
+		if req.SequenceThreshold < 1 || req.SequenceThreshold > 1000000 {
+			return fmt.Errorf("sequence_threshold must be between 1 and 1000000")
+		}
+		if len(req.SequenceConditions) > 10 {
+			return fmt.Errorf("sequence_conditions cannot contain more than 10 entries")
+		}
+		for i := range req.SequenceConditions {
+			if err := validateCorrelationCondition(&req.SequenceConditions[i], fmt.Sprintf("sequence condition %d", i+1)); err != nil {
+				return err
+			}
+		}
+	} else if req.SequenceThreshold != 0 || len(req.SequenceConditions) != 0 {
+		return fmt.Errorf("sequence_event_type is required for sequence configuration")
+	}
+	req.AggregateField = strings.TrimSpace(req.AggregateField)
+	if req.AggregateField != "" {
+		if !correlationAggregateFields[req.AggregateField] {
+			return fmt.Errorf("unsupported aggregate_field %q", req.AggregateField)
+		}
+		if req.AggregateThreshold < 1 {
+			return fmt.Errorf("aggregate_threshold must be greater than zero")
+		}
+	} else if req.AggregateThreshold != 0 {
+		return fmt.Errorf("aggregate_field is required for aggregate_threshold")
+	}
+	return nil
+}
+
+func validateCorrelationCondition(condition *storage.CorrelationCondition, label string) error {
+	condition.Field = strings.TrimSpace(condition.Field)
+	condition.Operator = strings.TrimSpace(condition.Operator)
+	if !correlationConditionFields[condition.Field] {
+		return fmt.Errorf("unsupported condition field %q", condition.Field)
+	}
+	if !correlationConditionOperators[condition.Operator] {
+		return fmt.Errorf("unsupported condition operator %q", condition.Operator)
+	}
+	if condition.Value == nil || strings.TrimSpace(fmt.Sprint(condition.Value)) == "" {
+		return fmt.Errorf("%s value is required", label)
 	}
 	return nil
 }
@@ -157,7 +231,9 @@ func correlationParams(tenantID uuid.UUID, req createCorrelationRuleRequest, ena
 	return storage.CreateCorrelationRuleParams{TenantID: tenantID, Name: req.Name, Description: req.Description,
 		EventTypes: req.EventTypes, EventType: req.EventType, WindowSeconds: req.WindowSeconds,
 		Threshold: req.Threshold, Dimension: req.Dimension, GroupBy: req.GroupBy,
-		SuppressionSeconds: req.SuppressionSeconds, Conditions: req.Conditions, Severity: req.Severity, Enabled: enabled, YAMLSpec: req.YAMLSpec}
+		SuppressionSeconds: req.SuppressionSeconds, Conditions: req.Conditions, ConditionGroups: req.ConditionGroups, DistinctField: req.DistinctField,
+		SequenceEventType: req.SequenceEventType, SequenceThreshold: req.SequenceThreshold, SequenceConditions: req.SequenceConditions,
+		AggregateField: req.AggregateField, AggregateThreshold: req.AggregateThreshold, Severity: req.Severity, Enabled: enabled, YAMLSpec: req.YAMLSpec}
 }
 
 func (s *Server) handleCorrelationRulesCollection(w http.ResponseWriter, r *http.Request) {

@@ -7120,6 +7120,13 @@ export interface CorrelationRule {
   group_by: string[];
   suppression_seconds: number;
   conditions: CorrelationCondition[];
+  condition_groups: CorrelationCondition[][];
+  distinct_field: string;
+  sequence_event_type: string;
+  sequence_threshold: number;
+  sequence_conditions: CorrelationCondition[];
+  aggregate_field: string;
+  aggregate_threshold: number;
   enabled: boolean;
   severity: string;
   created_at: string;
@@ -7145,6 +7152,13 @@ export interface CreateCorrelationRulePayload {
   group_by: string[];
   suppression_seconds: number;
   conditions: CorrelationCondition[];
+  condition_groups: CorrelationCondition[][];
+  distinct_field: string;
+  sequence_event_type: string;
+  sequence_threshold: number;
+  sequence_conditions: CorrelationCondition[];
+  aggregate_field: string;
+  aggregate_threshold: number;
   enabled?: boolean;
   severity: string;
   yaml_spec?: string;
