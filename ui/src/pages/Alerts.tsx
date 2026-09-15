@@ -38,6 +38,21 @@ type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
 const ALERTS_POLL_MS = 30_000;
+const CORRELATION_EVENT_TYPES = [
+  { value: 'security.event', label: 'Security event' },
+  { value: 'events.anomaly', label: 'Anomaly detected' },
+  { value: 'rule.triggered', label: 'Detection rule triggered' },
+  { value: 'compliance.fired', label: 'Compliance finding' },
+  { value: 'health.incident', label: 'Health incident' },
+  { value: 'remediation.applied', label: 'Remediation applied' },
+] as const;
+const CORRELATION_DIMENSIONS = [
+  { value: 'node_id', label: 'Host / node' },
+  { value: 'tenant_id', label: 'Entire tenant' },
+  { value: 'src_ip', label: 'Source IP' },
+  { value: 'user_name', label: 'User name' },
+  { value: 'correlation_id', label: 'Correlation ID' },
+] as const;
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
   value: AlertDispositionValue;
@@ -219,8 +234,17 @@ export function Alerts(): JSX.Element {
   const [rulesReloadToken, setRulesReloadToken] = useState(0);
   const [deleteRuleId, setDeleteRuleId] = useState<string | null>(null);
   const [showCreateRule, setShowCreateRule] = useState(false);
+  const [editRuleId, setEditRuleId] = useState<string | null>(null);
   const [newRuleName, setNewRuleName] = useState('');
+  const [newRuleDescription, setNewRuleDescription] = useState('');
+  const [newRuleEventType, setNewRuleEventType] = useState('security.event');
+  const [newRuleSpecificEventType, setNewRuleSpecificEventType] = useState('');
+  const [newRuleWindowSeconds, setNewRuleWindowSeconds] = useState(60);
+  const [newRuleThreshold, setNewRuleThreshold] = useState(3);
+  const [newRuleGroupBy, setNewRuleGroupBy] = useState<string[]>(['node_id']);
   const [newRuleSeverity, setNewRuleSeverity] = useState('medium');
+  const [newRuleEnabled, setNewRuleEnabled] = useState(true);
+  const [newRuleSuppressionSeconds, setNewRuleSuppressionSeconds] = useState(300);
   const [creatingRule, setCreatingRule] = useState(false);
 
   const tenantId = currentTenantId ?? '';
@@ -287,23 +311,82 @@ export function Alerts(): JSX.Element {
     return () => { cancelled = true; };
   }, [client, tenantId, rulesReloadToken]);
 
-  const handleCreateRule = async () => {
+  const resetRuleForm = () => {
+    setEditRuleId(null);
+    setNewRuleName('');
+    setNewRuleDescription('');
+    setNewRuleEventType('security.event');
+    setNewRuleSpecificEventType('');
+    setNewRuleWindowSeconds(60);
+    setNewRuleThreshold(3);
+    setNewRuleGroupBy(['node_id']);
+    setNewRuleSeverity('medium');
+    setNewRuleEnabled(true);
+    setNewRuleSuppressionSeconds(300);
+  };
+
+  const editRule = (rule: CorrelationRule) => {
+    setEditRuleId(rule.id);
+    setNewRuleName(rule.name);
+    setNewRuleDescription(rule.description ?? '');
+    setNewRuleEventType(rule.event_types[0] ?? 'security.event');
+    setNewRuleSpecificEventType(rule.event_type ?? '');
+    setNewRuleWindowSeconds(rule.window_seconds);
+    setNewRuleThreshold(rule.threshold);
+    setNewRuleGroupBy(rule.group_by?.length ? rule.group_by : [rule.dimension]);
+    setNewRuleSeverity(rule.severity);
+    setNewRuleEnabled(rule.enabled);
+    setNewRuleSuppressionSeconds(rule.suppression_seconds ?? 0);
+    setShowCreateRule(true);
+  };
+
+  const handleSaveRule = async () => {
     if (!newRuleName.trim() || !tenantId) return;
     setCreatingRule(true);
     try {
-      await client.createCorrelationRule({
+      const payload = {
         tenant_id: tenantId,
         name: newRuleName.trim(),
+        description: newRuleDescription.trim() || undefined,
+        event_types: [newRuleEventType],
+        event_type: newRuleSpecificEventType.trim(),
+        window_seconds: newRuleWindowSeconds,
+        threshold: newRuleThreshold,
+        dimension: newRuleGroupBy[0],
+        group_by: newRuleGroupBy,
+        suppression_seconds: newRuleSuppressionSeconds,
         severity: newRuleSeverity,
-        conditions: {},
-        enabled: true,
-      });
-      setNewRuleName('');
+        enabled: newRuleEnabled,
+      };
+      if (editRuleId) await client.updateCorrelationRule(editRuleId, tenantId, payload);
+      else await client.createCorrelationRule(payload);
+      resetRuleForm();
       setShowCreateRule(false);
+      setError(null);
       setRulesReloadToken((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'rule creation failed');
     } finally {
       setCreatingRule(false);
     }
+  };
+
+  const toggleRule = async (rule: CorrelationRule) => {
+    if (!tenantId) return;
+    setCreatingRule(true);
+    try {
+      await client.updateCorrelationRule(rule.id, tenantId, {
+        tenant_id: tenantId, name: rule.name, description: rule.description,
+        event_types: rule.event_types, event_type: rule.event_type ?? '',
+        window_seconds: rule.window_seconds, threshold: rule.threshold,
+        dimension: rule.dimension, group_by: rule.group_by?.length ? rule.group_by : [rule.dimension],
+        suppression_seconds: rule.suppression_seconds ?? 0, severity: rule.severity, enabled: !rule.enabled,
+      });
+      setRulesReloadToken((n) => n + 1);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'rule update failed');
+    } finally { setCreatingRule(false); }
   };
 
   const handleDeleteRule = async () => {
@@ -426,6 +509,27 @@ export function Alerts(): JSX.Element {
       cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
     },
     {
+      header: 'Event category',
+      id: 'event_types',
+      cell: ({ row }) => (
+        <span className="font-mono text-xs text-text-muted">
+          {row.original.event_types.join(', ') || 'All subscribed streams'}
+        </span>
+      ),
+    },
+    {
+      header: 'Trigger',
+      id: 'trigger',
+      cell: ({ row }) => (
+        <span className="text-xs text-text-secondary">
+          {row.original.threshold} event{row.original.threshold === 1 ? '' : 's'} / {row.original.window_seconds}s
+          <span className="block font-mono text-text-muted">{row.original.event_type || 'any type'}</span>
+          <span className="block font-mono text-text-muted">by {(row.original.group_by?.length ? row.original.group_by : [row.original.dimension]).join(' + ')}</span>
+          <span className="block text-text-muted">suppress {row.original.suppression_seconds ?? 0}s</span>
+        </span>
+      ),
+    },
+    {
       header: 'Severity',
       accessorKey: 'severity',
       cell: ({ row }) => (
@@ -457,9 +561,15 @@ export function Alerts(): JSX.Element {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <Button variant="ghost" size="sm" onClick={() => setDeleteRuleId(row.original.id)}>
-          <Trash2 className="h-3.5 w-3.5 text-state-critical" />
-        </Button>
+        <div className="flex gap-1">
+          <Button variant="ghost" size="sm" onClick={() => editRule(row.original)}>View / edit</Button>
+          <Button variant="ghost" size="sm" disabled={creatingRule} onClick={() => void toggleRule(row.original)}>
+            {row.original.enabled ? 'Disable' : 'Enable'}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setDeleteRuleId(row.original.id)} aria-label={`Delete ${row.original.name}`}>
+            <Trash2 className="h-3.5 w-3.5 text-state-critical" />
+          </Button>
+        </div>
       ),
     },
   ];
@@ -632,15 +742,15 @@ export function Alerts(): JSX.Element {
           eyebrow="CORRELATION RULES"
           title="Detection rules"
           actions={
-            <Button variant="primary" size="sm" onClick={() => setShowCreateRule(true)}>
+            <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setShowCreateRule(true); }}>
               <Plus className="h-3.5 w-3.5" /> New rule
             </Button>
           }
         >
           {showCreateRule && (
             <div className="mb-4 rounded-md border border-border-subtle bg-elevated p-4">
-              <p className="mb-3 text-sm font-medium text-foreground">New correlation rule</p>
-              <div className="flex flex-wrap items-end gap-3">
+              <p className="mb-3 text-sm font-medium text-foreground">{editRuleId ? 'View or edit correlation rule' : 'New correlation rule'}</p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-name">Name</Label>
                   <Input
@@ -648,8 +758,77 @@ export function Alerts(): JSX.Element {
                     value={newRuleName}
                     onChange={(e) => setNewRuleName(e.target.value)}
                     placeholder="Brute-force SSH"
-                    className="h-8 w-56"
+                    className="h-8"
                   />
+                </div>
+                <div className="flex flex-col gap-1 md:col-span-2">
+                  <Label htmlFor="rule-description">Description</Label>
+                  <Input
+                    id="rule-description"
+                    value={newRuleDescription}
+                    onChange={(e) => setNewRuleDescription(e.target.value)}
+                    placeholder="Alert after repeated events in the selected window"
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-event-type">Event category</Label>
+                  <select
+                    id="rule-event-type"
+                    className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                    value={newRuleEventType}
+                    onChange={(e) => setNewRuleEventType(e.target.value)}
+                  >
+                    {CORRELATION_EVENT_TYPES.map((eventType) => (
+                      <option key={eventType.value} value={eventType.value}>{eventType.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-threshold">Event threshold</Label>
+                  <Input
+                    id="rule-threshold"
+                    type="number"
+                    min={1}
+                    value={newRuleThreshold}
+                    onChange={(e) => setNewRuleThreshold(Math.max(1, Number(e.target.value) || 1))}
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-specific-event-type">Specific event type</Label>
+                  <Input
+                    id="rule-specific-event-type"
+                    value={newRuleSpecificEventType}
+                    onChange={(e) => setNewRuleSpecificEventType(e.target.value)}
+                    placeholder="ssh.authentication_failure (blank matches any)"
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-window">Time window (seconds)</Label>
+                  <Input
+                    id="rule-window"
+                    type="number"
+                    min={1}
+                    value={newRuleWindowSeconds}
+                    onChange={(e) => setNewRuleWindowSeconds(Math.max(1, Number(e.target.value) || 1))}
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-dimension">Group events by</Label>
+                  <select multiple
+                    id="rule-dimension"
+                    className="min-h-20 rounded-md border border-border-subtle bg-surface px-2 py-1 text-sm text-foreground"
+                    value={newRuleGroupBy}
+                    onChange={(e) => setNewRuleGroupBy(Array.from(e.target.selectedOptions, (option) => option.value).slice(0, 3))}
+                  >
+                    {CORRELATION_DIMENSIONS.map((dimension) => (
+                      <option key={dimension.value} value={dimension.value}>{dimension.label}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-text-muted">Select up to three fields. Use Ctrl/Cmd to select multiple.</span>
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-severity">Severity</Label>
@@ -664,11 +843,26 @@ export function Alerts(): JSX.Element {
                     ))}
                   </select>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="primary" size="sm" onClick={handleCreateRule} disabled={creatingRule || !newRuleName.trim() || !tenantId}>
-                    {creatingRule ? 'Creating...' : 'Create'}
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-suppression">Notification suppression (seconds)</Label>
+                  <Input
+                    id="rule-suppression"
+                    type="number"
+                    min={0}
+                    value={newRuleSuppressionSeconds}
+                    onChange={(e) => setNewRuleSuppressionSeconds(Math.max(0, Number(e.target.value) || 0))}
+                    className="h-8"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input type="checkbox" checked={newRuleEnabled} onChange={(e) => setNewRuleEnabled(e.target.checked)} />
+                  Enabled
+                </label>
+                <div className="flex items-end gap-2">
+                  <Button variant="primary" size="sm" onClick={handleSaveRule} disabled={creatingRule || !newRuleName.trim() || !tenantId || newRuleGroupBy.length === 0}>
+                    {creatingRule ? 'Saving...' : editRuleId ? 'Save changes' : 'Create'}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setShowCreateRule(false)}>
+                  <Button variant="ghost" size="sm" onClick={() => { resetRuleForm(); setShowCreateRule(false); }}>
                     Cancel
                   </Button>
                 </div>
