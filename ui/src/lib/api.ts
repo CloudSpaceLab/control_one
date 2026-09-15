@@ -6949,6 +6949,8 @@ export interface CorrelationRule {
   group_by: string[];
   suppression_seconds: number;
   conditions: CorrelationCondition[];
+  condition_groups: CorrelationCondition[][];
+  distinct_field: string;
   enabled: boolean;
   severity: string;
   created_at: string;
@@ -6974,6 +6976,8 @@ export interface CreateCorrelationRulePayload {
   group_by: string[];
   suppression_seconds: number;
   conditions: CorrelationCondition[];
+  condition_groups: CorrelationCondition[][];
+  distinct_field: string;
   enabled?: boolean;
   severity: string;
   yaml_spec?: string;

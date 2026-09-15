@@ -33,13 +33,18 @@ type windowKey struct {
 	dimension string
 }
 
+type windowHit struct {
+	timestamp     time.Time
+	distinctValue string
+}
+
 // Engine consumes events and opens alerts when correlation rules fire.
 type Engine struct {
 	store     AlertCreator
 	log       *zap.Logger
 	bus       *eventbus.Bus
 	mu        sync.Mutex
-	windows   map[windowKey][]time.Time
+	windows   map[windowKey][]windowHit
 	lastFired map[windowKey]time.Time
 	cache     sync.Map // tenantID -> []storage.CorrelationRule
 	cacheTTL  time.Duration
@@ -50,7 +55,7 @@ func New(store AlertCreator, bus *eventbus.Bus, log *zap.Logger) *Engine {
 		store:     store,
 		log:       log,
 		bus:       bus,
-		windows:   make(map[windowKey][]time.Time),
+		windows:   make(map[windowKey][]windowHit),
 		lastFired: make(map[windowKey]time.Time),
 		cacheTTL:  30 * time.Second,
 	}
@@ -102,6 +107,17 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		if !matchesConditions(r.Conditions, ev) {
 			continue
 		}
+		if !matchesConditionGroups(r.ConditionGroups, ev) {
+			continue
+		}
+		distinctValue := ""
+		if r.DistinctField != "" {
+			value, ok := eventFieldValue(r.DistinctField, ev)
+			if !ok || strings.TrimSpace(fmt.Sprint(value)) == "" {
+				continue
+			}
+			distinctValue = strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+		}
 		dim := compoundDimensionValue(r.GroupBy, r.Dimension, ev)
 		if dim == "" {
 			continue
@@ -114,15 +130,23 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		cutoff := ev.Timestamp.Add(-window)
 
 		e.mu.Lock()
-		hits := append(e.windows[key], ev.Timestamp)
+		hits := append(e.windows[key], windowHit{timestamp: ev.Timestamp, distinctValue: distinctValue})
 		trimmed := hits[:0]
-		for _, t := range hits {
-			if !t.Before(cutoff) {
-				trimmed = append(trimmed, t)
+		for _, hit := range hits {
+			if !hit.timestamp.Before(cutoff) {
+				trimmed = append(trimmed, hit)
 			}
 		}
 		e.windows[key] = trimmed
-		fire := len(trimmed) >= r.Threshold
+		hitCount := len(trimmed)
+		if r.DistinctField != "" {
+			unique := make(map[string]struct{}, len(trimmed))
+			for _, hit := range trimmed {
+				unique[hit.distinctValue] = struct{}{}
+			}
+			hitCount = len(unique)
+		}
+		fire := hitCount >= r.Threshold
 		if fire && r.SuppressionSeconds > 0 {
 			last := e.lastFired[key]
 			fire = last.IsZero() || ev.Timestamp.Sub(last) >= time.Duration(r.SuppressionSeconds)*time.Second
@@ -134,7 +158,7 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		e.mu.Unlock()
 
 		if fire {
-			e.openAlert(ctx, r, ev, dim, len(trimmed))
+			e.openAlert(ctx, r, ev, dim, hitCount)
 		}
 	}
 }
@@ -152,6 +176,8 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"group_by":          r.GroupBy,
 		"suppression_s":     r.SuppressionSeconds,
 		"conditions":        r.Conditions,
+		"condition_groups":  r.ConditionGroups,
+		"distinct_field":    r.DistinctField,
 	}
 	for key, value := range eventContext(ev) {
 		ctxPayload[key] = value
@@ -205,6 +231,18 @@ func matchesConditions(conditions []storage.CorrelationCondition, ev eventbus.Ev
 		}
 	}
 	return true
+}
+
+func matchesConditionGroups(groups [][]storage.CorrelationCondition, ev eventbus.Event) bool {
+	if len(groups) == 0 {
+		return true
+	}
+	for _, group := range groups {
+		if matchesConditions(group, ev) {
+			return true
+		}
+	}
+	return false
 }
 
 func eventFieldValue(field string, ev eventbus.Event) (any, bool) {
