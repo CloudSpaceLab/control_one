@@ -89,6 +89,10 @@ func (s *Server) handleTestSMTPSettings(w http.ResponseWriter, r *http.Request) 
 }
 
 func sendSMTPMessage(ctx context.Context, settings storage.SMTPSettings, password string, recipients []string) error {
+	return sendSMTPContent(ctx, settings, password, recipients, smtpTestMessage(settings))
+}
+
+func sendSMTPContent(ctx context.Context, settings storage.SMTPSettings, password string, recipients []string, message string) error {
 	address := net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port))
 	dialer := &net.Dialer{Timeout: smtpTestTimeout}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: settings.Host}
@@ -149,7 +153,6 @@ func sendSMTPMessage(ctx context.Context, settings storage.SMTPSettings, passwor
 	if err != nil {
 		return fmt.Errorf("start message: %w", err)
 	}
-	message := smtpTestMessage(settings)
 	if _, err := io.WriteString(writer, message); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write message: %w", err)

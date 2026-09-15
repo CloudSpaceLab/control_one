@@ -1157,7 +1157,7 @@ func (s *Server) createContentPackDetectionAlert(ctx context.Context, tenantID, 
 		eventID = deterministicEventID(tenantID, nodeID, ev)
 	}
 	nodePtr := &nodeID
-	alert, err := s.store.CreateAlert(ctx, storage.CreateAlertParams{
+	alert, err := s.createAlert(ctx, storage.CreateAlertParams{
 		TenantID: tenantID,
 		NodeID:   nodePtr,
 		Source:   "content_pack_detection",

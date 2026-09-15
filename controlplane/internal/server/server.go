@@ -866,6 +866,10 @@ type Server struct {
 	sealer *secretbox.Sealer
 	// smtpSend is replaceable in tests. Production uses sendSMTPMessage.
 	smtpSend func(context.Context, storage.SMTPSettings, string, []string) error
+	// Alert email hooks keep delivery deterministic in tests. Production sends
+	// asynchronously through sendSMTPContent.
+	smtpAlertSend      func(context.Context, storage.SMTPSettings, string, []string, string) error
+	alertEmailDispatch func(func())
 	// eventBus delivers realtime events (policy.updated, alert.opened, ...)
 	// to SSE subscribers and internal correlators. nil means events are a no-op.
 	eventBus        *eventbus.Bus
@@ -967,7 +971,7 @@ func (s *Server) startCorrelationEngine() {
 	if s.correlationEng != nil {
 		return
 	}
-	s.correlationEng = correlation.New(correlationStoreAdapter{s.store}, s.eventBus, s.logger)
+	s.correlationEng = correlation.New(correlationStoreAdapter{s}, s.eventBus, s.logger)
 	s.correlationCtx, s.correlationStop = context.WithCancel(context.Background())
 	go s.correlationEng.Run(s.correlationCtx)
 }
@@ -1011,14 +1015,14 @@ func (a behavioralStoreAdapter) ListTenants(ctx context.Context, namePrefix stri
 
 // correlationStoreAdapter narrows Store to the CorrelationEngine's needs.
 type correlationStoreAdapter struct {
-	store Store
+	server *Server
 }
 
 func (a correlationStoreAdapter) ListCorrelationRules(ctx context.Context, tenantID uuid.UUID) ([]storage.CorrelationRule, error) {
-	return a.store.ListCorrelationRules(ctx, tenantID)
+	return a.server.store.ListCorrelationRules(ctx, tenantID)
 }
 func (a correlationStoreAdapter) CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
-	return a.store.CreateAlert(ctx, p)
+	return a.server.createAlert(ctx, p)
 }
 
 // publishEvent fan-outs a realtime event to SSE subscribers. Safe to call
