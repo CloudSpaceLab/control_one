@@ -1274,7 +1274,7 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 	}
 	title := fmt.Sprintf("100%% confidence %s from %s", ipBehaviorAlertCategoryLabel(category), firstNonEmptyIPBehavior(b.srcIP, "unknown source"))
 	summary := ipBehaviorAlertSummary(category, b, score, reason, evidence)
-	alert, err := s.store.CreateAlert(ctx, storage.CreateAlertParams{
+	alert, err := s.createAlert(ctx, storage.CreateAlertParams{
 		TenantID: tenantID,
 		NodeID:   nodeArg,
 		Source:   "ip_behavior",

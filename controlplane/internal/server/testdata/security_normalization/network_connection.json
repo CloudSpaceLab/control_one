@@ -1,0 +1,1 @@
+{"source_ip":"198.51.100.30","destination_ip":"10.0.0.20","source_port":52000,"destination_port":22,"protocol":"tcp","direction":"inbound"}

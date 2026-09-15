@@ -1,0 +1,6 @@
+ALTER TABLE correlation_rules
+    ADD COLUMN IF NOT EXISTS sequence_event_type TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS sequence_threshold INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS sequence_conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS aggregate_field TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS aggregate_threshold BIGINT NOT NULL DEFAULT 0;

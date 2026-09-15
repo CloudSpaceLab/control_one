@@ -3,12 +3,12 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { SMTPSettingsTab } from './SMTPSettingsTab';
 
-const mocks = vi.hoisted(() => ({ tenant: 'tenant-a', roles: ['admin'], client: { getSMTPSettings: vi.fn(), updateSMTPSettings: vi.fn() } }));
+const mocks = vi.hoisted(() => ({ tenant: 'tenant-a', roles: ['admin'], client: { getSMTPSettings: vi.fn(), updateSMTPSettings: vi.fn(), testSMTPSettings: vi.fn() } }));
 vi.mock('@/hooks/useApiClient', () => ({ useApiClient: () => mocks.client }));
 vi.mock('@/providers/TenantProvider', () => ({ useTenant: () => ({ currentTenantId: mocks.tenant }) }));
 vi.mock('@/providers/AuthProvider', () => ({ useAuth: () => ({ profile: { roles: mocks.roles } }) }));
-const config = { host: 'smtp.example.com', port: 587, tls_mode: 'starttls', auth_enabled: true, username: 'user', sender_name: 'Alerts', sender_email: 'alerts@example.com', enabled: false, configured: true, password_configured: true, encryption_available: true };
-beforeEach(() => { vi.clearAllMocks(); mocks.tenant = 'tenant-a'; mocks.roles = ['admin']; mocks.client.getSMTPSettings.mockResolvedValue(config); mocks.client.updateSMTPSettings.mockResolvedValue(config); });
+const config = { host: 'smtp.example.com', port: 587, tls_mode: 'starttls', auth_enabled: true, username: 'user', sender_name: 'Alerts', sender_email: 'alerts@example.com', recipients: ['soc@example.com'], enabled: false, configured: true, password_configured: true, encryption_available: true };
+beforeEach(() => { vi.clearAllMocks(); mocks.tenant = 'tenant-a'; mocks.roles = ['admin']; mocks.client.getSMTPSettings.mockResolvedValue(config); mocks.client.updateSMTPSettings.mockResolvedValue(config); mocks.client.testSMTPSettings.mockResolvedValue({ ok: true, recipients: 1 }); });
 afterEach(cleanup);
 
 it('preserves a saved password without putting a placeholder in the payload', async () => {
@@ -40,4 +40,17 @@ it('keeps failed loads out of the editable form', async () => {
   render(<SMTPSettingsTab />);
   expect(await screen.findByRole('alert')).toHaveTextContent('Unavailable');
   expect(screen.queryByRole('button', { name: 'Save SMTP settings' })).not.toBeInTheDocument();
+});
+
+it('adds unique recipients and sends a test only after settings exist', async () => {
+  render(<SMTPSettingsTab />);
+  await userEvent.type(await screen.findByLabelText('Alert recipients'), 'second@example.com');
+  await userEvent.click(screen.getByRole('button', { name: 'Add recipient' }));
+  expect(screen.getByText('second@example.com')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Send test email' })).toBeDisabled();
+  await userEvent.click(screen.getByRole('button', { name: 'Save SMTP settings' }));
+  await screen.findByText('SMTP settings saved. No email has been sent.');
+  await userEvent.click(screen.getByRole('button', { name: 'Send test email' }));
+  expect(await screen.findByText('Test email sent to 1 recipient.')).toBeInTheDocument();
+  expect(mocks.client.testSMTPSettings).toHaveBeenCalledWith('tenant-a');
 });

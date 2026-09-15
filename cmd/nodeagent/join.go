@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -289,7 +289,7 @@ var installServiceFn = installService
 
 func installContextForJoin(installService bool) string {
 	if installService {
-	 return `local_interactive`
+		return `local_interactive`
 	}
 	return `local_interactive`
 }

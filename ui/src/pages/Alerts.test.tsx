@@ -76,7 +76,7 @@ const alertRow: Alert = {
   },
 };
 
-const ruleRow: CorrelationRule = {
+const ruleRow = {
   id: 'rule-1',
   tenant_id: 'tenant-1',
   name: 'SSH brute force',
@@ -85,7 +85,7 @@ const ruleRow: CorrelationRule = {
   conditions: {},
   created_at: '2026-06-08T00:00:00Z',
   updated_at: '2026-06-08T00:00:00Z',
-};
+} as unknown as CorrelationRule;
 
 function renderAlerts() {
   return render(

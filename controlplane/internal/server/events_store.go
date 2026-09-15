@@ -171,6 +171,7 @@ func (s *Server) handleCreateSecurityEvent(w http.ResponseWriter, r *http.Reques
 		"event_id":   ev.ID.String(),
 		"event_type": ev.EventType,
 		"severity":   ev.Severity,
+		"details":    ev.Details,
 	})
 	s.publishEvent(eventbus.Event{
 		Topic:    eventbus.TopicSecurityEvent,

@@ -2162,6 +2162,7 @@ export interface SMTPSettings {
   username: string;
   sender_name: string;
   sender_email: string;
+  recipients: string[];
   enabled: boolean;
   configured: boolean;
   password_configured: boolean;
@@ -2179,6 +2180,10 @@ export class APIClient {
     return this.request(`/api/v1/settings/smtp?tenant_id=${encodeURIComponent(tenantId)}`, {
       method: 'PUT', body: JSON.stringify(settings),
     });
+  }
+
+  async testSMTPSettings(tenantId: string): Promise<{ ok: boolean; recipients: number }> {
+    return this.request(`/api/v1/settings/smtp/test?tenant_id=${encodeURIComponent(tenantId)}`, { method: 'POST' });
   }
 
   private readonly baseUrl: string;
@@ -5281,6 +5286,17 @@ export class APIClient {
     });
   }
 
+  async updateCorrelationRule(
+    id: string,
+    tenantId: string,
+    payload: CreateCorrelationRulePayload,
+  ): Promise<CorrelationRule> {
+    return this.request<CorrelationRule>(
+      `/api/v1/correlation-rules/${encodeURIComponent(id)}?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  }
+
   // ---- DLP / Data Classification (Sprint 2) --------------------------------
 
   async listDLPRules(
@@ -7126,20 +7142,56 @@ export interface CorrelationRule {
   tenant_id: string;
   name: string;
   description?: string;
+  event_types: string[];
+  event_type: string;
+  window_seconds: number;
+  threshold: number;
+  dimension: string;
+  group_by: string[];
+  suppression_seconds: number;
+  conditions: CorrelationCondition[];
+  condition_groups: CorrelationCondition[][];
+  distinct_field: string;
+  sequence_event_type: string;
+  sequence_threshold: number;
+  sequence_conditions: CorrelationCondition[];
+  aggregate_field: string;
+  aggregate_threshold: number;
   enabled: boolean;
-  conditions: Record<string, unknown>;
   severity: string;
   created_at: string;
   updated_at: string;
+  yaml_spec?: string;
+}
+
+export interface CorrelationCondition {
+  field: string;
+  operator: 'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte';
+  value: string | number;
 }
 
 export interface CreateCorrelationRulePayload {
   tenant_id: string;
   name: string;
   description?: string;
+  event_types: string[];
+  event_type: string;
+  window_seconds: number;
+  threshold: number;
+  dimension: string;
+  group_by: string[];
+  suppression_seconds: number;
+  conditions: CorrelationCondition[];
+  condition_groups: CorrelationCondition[][];
+  distinct_field: string;
+  sequence_event_type: string;
+  sequence_threshold: number;
+  sequence_conditions: CorrelationCondition[];
+  aggregate_field: string;
+  aggregate_threshold: number;
   enabled?: boolean;
-  conditions: Record<string, unknown>;
   severity: string;
+  yaml_spec?: string;
 }
 
 export interface CommandACL {

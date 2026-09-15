@@ -6035,6 +6035,9 @@ func (f *fakeStore) DeleteCommandACL(_ context.Context, id uuid.UUID) error {
 func (f *fakeStore) CreateCorrelationRule(_ context.Context, _ storage.CreateCorrelationRuleParams) (*storage.CorrelationRule, error) {
 	return nil, errors.New("not implemented")
 }
+func (f *fakeStore) UpdateCorrelationRule(_ context.Context, _, _ uuid.UUID, _ storage.CreateCorrelationRuleParams) (*storage.CorrelationRule, error) {
+	return nil, errors.New("not implemented")
+}
 func (f *fakeStore) GetCorrelationRule(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*storage.CorrelationRule, error) {
 	return nil, nil
 }

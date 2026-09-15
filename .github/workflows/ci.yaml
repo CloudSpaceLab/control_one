@@ -38,6 +38,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Format check
+        shell: bash
         run: gofmt -l . && test -z "$(gofmt -l .)"
 
       - name: Vet
