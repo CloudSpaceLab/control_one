@@ -24,6 +24,7 @@ type AIInvestigation struct {
 	ID               uuid.UUID             `json:"id"`
 	TenantID         uuid.UUID             `json:"tenant_id"`
 	NodeID           uuid.UUID             `json:"node_id,omitempty"`
+	AlertID          uuid.NullUUID         `json:"alert_id,omitempty"`
 	TriggerType      string                `json:"trigger_type"`
 	TriggerEventType string                `json:"trigger_event_type"`
 	TriggerDedupKey  string                `json:"trigger_dedup_key"`
@@ -38,6 +39,7 @@ type AIInvestigation struct {
 type CreateAIInvestigationParams struct {
 	TenantID         uuid.UUID
 	NodeID           uuid.UUID
+	AlertID          uuid.NullUUID
 	TriggerType      string
 	TriggerEventType string
 	TriggerDedupKey  string
@@ -138,21 +140,22 @@ func (s *Store) CreateAIInvestigation(ctx context.Context, params CreateAIInvest
 
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO ai_investigations (
-			id, tenant_id, node_id, trigger_type, trigger_event_type,
+			id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
 			trigger_dedup_key, severity, summary, evidence, status
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
 		ON CONFLICT (tenant_id, trigger_dedup_key)
 		DO UPDATE SET
 			trigger_event_type = EXCLUDED.trigger_event_type,
 			severity           = EXCLUDED.severity,
 			summary            = EXCLUDED.summary,
 			evidence           = EXCLUDED.evidence,
+			alert_id           = COALESCE(EXCLUDED.alert_id, ai_investigations.alert_id),
 			updated_at         = NOW()
-		RETURNING id, tenant_id, node_id, trigger_type, trigger_event_type,
+		RETURNING id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
 		          trigger_dedup_key, severity, summary, evidence, status,
 		          created_at, updated_at
-	`, id, params.TenantID, nullableUUID(params.NodeID), triggerType, eventType, dedupKey, severity, summary, []byte(evidence), string(status))
+	`, id, params.TenantID, nullableUUID(params.NodeID), nullableUUID(params.AlertID.UUID), triggerType, eventType, dedupKey, severity, summary, []byte(evidence), string(status))
 
 	return scanAIInvestigation(row)
 }
@@ -165,7 +168,7 @@ func (s *Store) GetAIInvestigation(ctx context.Context, id uuid.UUID) (*AIInvest
 		return nil, errors.New("investigation id is required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, node_id, trigger_type, trigger_event_type,
+		SELECT id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
 		       trigger_dedup_key, severity, summary, evidence, status,
 		       created_at, updated_at
 		FROM ai_investigations
@@ -219,7 +222,7 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, node_id, trigger_type, trigger_event_type,
+		SELECT id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
 		       trigger_dedup_key, severity, summary, evidence, status,
 		       created_at, updated_at
 		FROM ai_investigations
@@ -376,6 +379,7 @@ func scanAIInvestigation(row interface {
 	var (
 		out      AIInvestigation
 		nodeID   sql.NullString
+		alertID  sql.NullString
 		evidence []byte
 		status   string
 	)
@@ -383,6 +387,7 @@ func scanAIInvestigation(row interface {
 		&out.ID,
 		&out.TenantID,
 		&nodeID,
+		&alertID,
 		&out.TriggerType,
 		&out.TriggerEventType,
 		&out.TriggerDedupKey,
@@ -398,6 +403,11 @@ func scanAIInvestigation(row interface {
 	if nodeID.Valid {
 		if parsed, err := uuid.Parse(nodeID.String); err == nil {
 			out.NodeID = parsed
+		}
+	}
+	if alertID.Valid {
+		if parsed, err := uuid.Parse(alertID.String); err == nil {
+			out.AlertID = uuid.NullUUID{UUID: parsed, Valid: true}
 		}
 	}
 	out.Evidence = json.RawMessage(evidence)

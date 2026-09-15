@@ -80,11 +80,6 @@ type socCaseNoteResponse struct {
 }
 
 func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
 	principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
 	if !ok {
 		return
@@ -97,6 +92,18 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 	if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
 		return
 	}
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListSOCCases(w, r, principal, tenantID)
+	case http.MethodPost:
+		s.handleCreateSOCCaseFromAlert(w, r, principal, tenantID)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, principal *auth.Principal, tenantID uuid.UUID) {
 	backend := s.aiOperatorBackend()
 	if backend == nil {
 		http.Error(w, "case store unavailable", http.StatusServiceUnavailable)
@@ -146,6 +153,121 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 		Data:       out,
 		Pagination: newPaginationMeta(total, limit, offset, len(out)),
 	})
+}
+
+type createSOCCaseFromAlertRequest struct {
+	AlertID string `json:"alert_id"`
+	Summary string `json:"summary,omitempty"`
+}
+
+func (s *Server) handleCreateSOCCaseFromAlert(w http.ResponseWriter, r *http.Request, principal *auth.Principal, tenantID uuid.UUID) {
+	var req createSOCCaseFromAlertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	alertID, err := uuid.Parse(strings.TrimSpace(req.AlertID))
+	if err != nil {
+		http.Error(w, "invalid alert_id", http.StatusBadRequest)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	alertRow, err := s.store.GetAlert(r.Context(), alertID)
+	if err != nil {
+		s.logger.Warn("get alert for case", zap.Error(err), zap.String("alert_id", alertID.String()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if alertRow == nil || alertRow.TenantID != tenantID {
+		http.NotFound(w, r)
+		return
+	}
+	backend := s.aiOperatorBackend()
+	if backend == nil {
+		http.Error(w, "case store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	summary := strings.TrimSpace(req.Summary)
+	if summary == "" {
+		summary = "Investigation case promoted from alert: " + strings.TrimSpace(alertRow.Title)
+	}
+	var nodeID uuid.UUID
+	if alertRow.NodeID.Valid {
+		nodeID = alertRow.NodeID.UUID
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"alert_id":  alertID.String(),
+		"alert_rule_id": socCaseEvidenceRuleID(alertRow),
+		"title":     alertRow.Title,
+		"severity":  alertRow.Severity,
+		"state":     alertRow.State,
+		"source":    alertRow.Source,
+		"opened_at": formatTime(alertRow.OpenedAt),
+		"context":   alertRow.Context,
+		"collector": firstNonEmptyString(alertRow.Source, "alerts"),
+	})
+	if err != nil {
+		s.logger.Warn("marshal alert case evidence", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	row, err := backend.CreateAIInvestigation(r.Context(), storage.CreateAIInvestigationParams{
+		TenantID:         tenantID,
+		NodeID:           nodeID,
+		AlertID:          uuid.NullUUID{UUID: alertID, Valid: true},
+		TriggerType:      "alert",
+		TriggerEventType: firstNonEmptyString(alertRow.Source, "alert"),
+		TriggerDedupKey:  "alert:" + alertID.String(),
+		Severity:         alertRow.Severity,
+		Summary:          summary,
+		Evidence:         evidence,
+		Status:           storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		s.logger.Warn("create soc case from alert", zap.Error(err), zap.String("alert_id", alertID.String()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	caseID := row.ID.String()
+	metadata := map[string]any{
+		"alert_id":  alertID.String(),
+		"case_id":   caseID,
+		"source":    "soc_cases_api",
+		"guardrails": []string{"tenant_scoped", "from_alert", "proposal_only"},
+	}
+	entry := &storage.AuditLog{
+		TenantID:     tenantID,
+		ActorType:    "user",
+		Action:       "soc.case.from_alert",
+		ResourceType: "ai_investigation",
+		ResourceID:   &caseID,
+		Metadata:     metadata,
+	}
+	if principal != nil {
+		entry.ActorType = firstNonEmptyString(strings.TrimSpace(principal.Type), "user")
+		if strings.TrimSpace(principal.Subject) != "" {
+			if user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject); err == nil && user != nil {
+				entry.ActorID = user.ID
+			} else {
+				metadata["created_by_subject"] = boundedToolString(principal.Subject, 256)
+			}
+		}
+	}
+	if _, err := s.store.CreateAuditLog(r.Context(), entry); err != nil {
+		s.logger.Warn("audit soc case from alert", zap.Error(err), zap.String("case_id", caseID))
+	}
+	resp := newSOCCaseResponse(*row)
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func socCaseEvidenceRuleID(alertRow *storage.Alert) string {
+	if alertRow.RuleID.Valid {
+		return alertRow.RuleID.UUID.String()
+	}
+	return ""
 }
 
 func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) {

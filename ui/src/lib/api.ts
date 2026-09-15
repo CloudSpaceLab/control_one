@@ -2598,6 +2598,16 @@ export class APIClient {
     return this.request<SOCCase>(`/api/v1/soc/cases/${encodeURIComponent(caseId)}${qs ? `?${qs}` : ''}`);
   }
 
+  async createSOCCaseFromAlert(tenantId: string, payload: { alert_id: string; summary?: string }): Promise<SOCCase> {
+    return this.request<SOCCase>(
+      `/api/v1/soc/cases?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
   async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[] }): Promise<SOCCaseNote> {
     return this.request<SOCCaseNote>(
       `/api/v1/soc/cases/${encodeURIComponent(caseId)}/notes?tenant_id=${encodeURIComponent(tenantId)}`,

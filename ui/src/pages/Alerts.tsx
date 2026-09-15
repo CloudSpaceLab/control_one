@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ClipboardPlus, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -281,7 +281,7 @@ export function Alerts(): JSX.Element {
     }
   }, [ackingId, client, refresh, resolvingAlert]);
 
-  const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
+const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     setResolvingAlert(true);
     setResolveError(null);
     setAlertActionError(null);
@@ -295,6 +295,14 @@ export function Alerts(): JSX.Element {
       setResolvingAlert(false);
     }
   };
+
+  const createCaseForAlert = useCallback(
+    async (alert: Alert) => {
+      const created = await client.createSOCCaseFromAlert(tenantId, { alert_id: alert.id });
+      return created.case_id;
+    },
+    [client, tenantId],
+  );
 
   // Correlation rules
   useEffect(() => {
@@ -841,7 +849,7 @@ export function Alerts(): JSX.Element {
         ) : null}
       </ConfirmModal>
 
-      <ResolveAlertModal
+<ResolveAlertModal
         alert={resolveTarget}
         open={resolveTargetId !== null && resolveTarget !== null}
         resolving={resolvingAlert}
@@ -852,6 +860,7 @@ export function Alerts(): JSX.Element {
           setResolveError(null);
         }}
         onActionTaken={() => { void refresh(); }}
+        onCreateCase={createCaseForAlert}
       />
     </div>
   );
@@ -1085,6 +1094,7 @@ function ResolveAlertModal({
   onConfirm,
   onCancel,
   onActionTaken,
+  onCreateCase,
 }: {
   alert: Alert | null;
   open: boolean;
@@ -1093,22 +1103,30 @@ function ResolveAlertModal({
   onConfirm: (payload: UpdateAlertDispositionPayload) => void;
   onCancel: () => void;
   onActionTaken: () => void;
+  onCreateCase: (alert: Alert) => Promise<string>;
 }) {
   const plan = alert ? alertResolutionPlan(alert) : null;
   const ip = alert ? alertSourceIP(alert) : '';
-  const [disposition, setDisposition] = useState<AlertDispositionValue>('resolved');
+  const [disposition, setDisposition] = useState<AlertDispositionValue>('true_positive');
   const [reason, setReason] = useState('');
   const [suppressUntil, setSuppressUntil] = useState('');
+  const [caseId, setCaseId] = useState<string | null>(null);
+  const [creatingCase, setCreatingCase] = useState(false);
+  const [caseError, setCaseError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setDisposition(alert?.disposition?.value ?? 'resolved');
+    setDisposition(alert?.disposition?.value ?? 'true_positive');
     setReason(alert?.disposition?.reason ?? '');
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
+    setCaseId(null);
+    setCreatingCase(false);
+    setCaseError(null);
   }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
 
   const selectedDisposition = dispositionOption(disposition);
-  const reasonMissing = reason.trim().length === 0;
+  const needsReason = disposition === 'resolved' || disposition === 'suppressed';
+  const reasonMissing = needsReason && reason.trim().length === 0;
   const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
   const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
   const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid;
@@ -1125,47 +1143,161 @@ function ResolveAlertModal({
     onConfirm(payload);
   };
 
+  const handleCreateCase = async () => {
+    if (!alert || creatingCase) return;
+    setCreatingCase(true);
+    setCaseError(null);
+    try {
+      const id = await onCreateCase(alert);
+      setCaseId(id);
+    } catch (err) {
+      setCaseError(errorMessage(err, 'Failed to create case.'));
+    } finally {
+      setCreatingCase(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next && !resolving) onCancel(); }}>
-      <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Resolve alert with evidence</DialogTitle>
+          <DialogTitle>Alert disposition</DialogTitle>
           <DialogDescription>
-            Resolve should mean containment or a documented false-positive decision exists, not just inbox cleanup.
+            Record the outcome or open a case for follow-up.
           </DialogDescription>
         </DialogHeader>
 
         {alert && plan ? (
-          <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
-            <div className="space-y-3">
-              <div className="rounded-lg border border-border-subtle bg-elevated p-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-text-muted">{alert.severity} alert</p>
-                    <h3 className="mt-1 text-base font-semibold text-foreground">{alert.title}</h3>
-                  </div>
-                  <StatusTag tone={severityTone(alert.severity)}>{alert.state}</StatusTag>
+          <div className="space-y-3">
+            <div className="rounded-lg border border-border-subtle bg-elevated p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusTag tone={severityTone(alert.severity)} className="font-mono uppercase">
+                  {alert.severity}
+                </StatusTag>
+                <span className="text-sm font-semibold text-foreground">{alert.title}</span>
+                {ip ? (
+                  <StatusTag tone="degraded" className="font-mono text-xs">{ip}</StatusTag>
+                ) : null}
+                <StatusTag tone={stateTone(alert.state)}>{alert.state}</StatusTag>
+              </div>
+              {alert.summary ? (
+                <p className="mt-2 text-sm text-text-secondary line-clamp-2">{alert.summary}</p>
+              ) : null}
+              <p className="mt-2 text-xs text-text-muted">
+                {alertDispositionSummary(alert)}
+              </p>
+            </div>
+
+            {caseId ? (
+              <div className="flex items-center justify-between rounded-lg border border-state-healthy/30 bg-state-healthy/5 px-3 py-2">
+                <span className="text-sm text-state-healthy">Case created — tracking in the case queue.</span>
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/cases">Open cases</Link>
+                </Button>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border-subtle bg-surface p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void handleCreateCase()}
+                    loading={creatingCase}
+                    disabled={creatingCase || !!caseId}
+                  >
+                    <ClipboardPlus className="h-4 w-4" />
+                    Create investigation case
+                  </Button>
+                  <span className="text-xs text-text-muted">Queue for team follow-up while the alert stays open.</span>
                 </div>
-                {alert.summary ? <p className="mt-2 text-sm text-text-secondary">{alert.summary}</p> : null}
-                {plan.facts.length > 0 ? (
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {plan.facts.map((fact) => (
-                      <div key={`${fact.label}:${fact.value}`} className="rounded-md border border-border-subtle bg-surface px-2.5 py-2">
-                        <p className="text-[0.68rem] uppercase tracking-wide text-text-muted">{fact.label}</p>
-                        <StatusTag tone={fact.tone} className="mt-1 max-w-full truncate">
-                          {fact.value}
-                        </StatusTag>
-                      </div>
-                    ))}
-                  </div>
+                {caseError ? (
+                  <p className="mt-2 text-xs text-state-critical" role="alert">{caseError}</p>
                 ) : null}
               </div>
+            )}
 
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ListChecks className="h-4 w-4 text-brand-400" />
-                  Recommended resolution actions
+            {ip ? (
+              <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-state-critical" />
+                  <span className="text-sm font-medium text-foreground">Contain source IP</span>
                 </div>
+                <IpActionMenu
+                  ip={ip}
+                  onActionTaken={onActionTaken}
+                  trigger={(
+                    <Button type="button" variant="danger" size="sm" className="mt-2 w-full">
+                      <Shield />
+                      Block / allow IP
+                    </Button>
+                  )}
+                />
+              </div>
+            ) : null}
+
+            <div className="rounded-lg border border-border-subtle bg-surface p-3 space-y-3">
+              <SelectField
+                id="alert-disposition"
+                label="Disposition"
+                value={disposition}
+                onChange={(event) => setDisposition(event.target.value as AlertDispositionValue)}
+              >
+                {ALERT_DISPOSITION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
+              {selectedDisposition ? (
+                <p className="text-xs text-text-secondary">{selectedDisposition.description}</p>
+              ) : null}
+
+              {disposition === 'suppressed' ? (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="alert-suppress-until">Suppress until</Label>
+                  <Input
+                    id="alert-suppress-until"
+                    type="datetime-local"
+                    value={suppressUntil}
+                    onChange={(event) => setSuppressUntil(event.target.value)}
+                  />
+                  {suppressMissing || suppressInvalid ? (
+                    <p className="text-xs text-state-critical" role="alert">
+                      Select a valid suppression expiry.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="alert-disposition-reason">
+                  {needsReason ? 'Evidence reason' : 'Notes'}
+                </Label>
+                <textarea
+                  id="alert-disposition-reason"
+                  className="min-h-16 w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-text-muted focus-visible:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/30"
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  placeholder={needsReason ? 'What happened, what was done, remaining risk.' : 'Optional context about this alert.'}
+                />
+                {needsReason && reasonMissing ? (
+                  <p className="text-xs text-state-critical" role="alert">
+                    Reason is required to close this alert.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <details className="group rounded-lg border border-border-subtle bg-surface open:bg-elevated/50">
+              <summary className="flex cursor-pointer items-center justify-between px-3 py-2 text-sm font-medium text-foreground hover:bg-elevated/30 select-none">
+                <span className="flex items-center gap-2">
+                  <ListChecks className="h-4 w-4 text-brand-400" />
+                  Investigation checklist
+                </span>
+                <span className="text-xs text-text-muted group-open:hidden">{plan.steps.length} steps</span>
+              </summary>
+              <div className="px-3 pb-3 space-y-3">
                 <ol className="space-y-2">
                   {plan.steps.map((step, index) => (
                     <li key={step} className="flex gap-2 text-sm text-text-secondary">
@@ -1176,126 +1308,25 @@ function ResolveAlertModal({
                     </li>
                   ))}
                 </ol>
-              </div>
-
-              <div className="grid gap-2 sm:grid-cols-2">
-                {plan.actions.map((action) => (
-                  <Button key={action.to} asChild variant="outline" size="sm" className="justify-between">
-                    <Link to={action.to}>
-                      {action.label}
-                      <ArrowRight />
-                    </Link>
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {ip ? (
-                <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
-                  <div className="flex items-start gap-2">
-                    <Shield className="mt-0.5 h-4 w-4 text-state-critical" />
-                    <div>
-                      <p className="text-sm font-medium text-foreground">Contain source IP</p>
-                      <p className="mt-1 font-mono text-xs text-text-secondary">{ip}</p>
-                    </div>
-                  </div>
-                  <IpActionMenu
-                    ip={ip}
-                    onActionTaken={onActionTaken}
-                    trigger={(
-                      <Button type="button" variant="danger" size="sm" className="mt-3 w-full">
-                        <Shield />
-                        Block / allow IP
-                      </Button>
-                    )}
-                  />
-                </div>
-              ) : null}
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ShieldCheck className="h-4 w-4 text-brand-400" />
-                  Posture recommendation
-                </div>
-                <div className="space-y-2">
-                  {plan.posture.map((item) => (
-                    <div key={`${item.mode}:${item.scope}`} className="rounded-md border border-border-subtle bg-elevated p-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusTag tone={item.tone}>{item.mode}</StatusTag>
-                        <span className="text-xs text-text-muted">{item.scope}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-text-secondary">{item.reason}</p>
-                      <p className="mt-1 text-xs text-text-muted">{item.equivalent}</p>
-                    </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {plan.actions.map((action) => (
+                    <Button key={action.to} asChild variant="outline" size="sm" className="justify-between">
+                      <Link to={alertActionURL(action.to, alert.id)}>
+                        {action.label}
+                        <ArrowRight />
+                      </Link>
+                    </Button>
                   ))}
                 </div>
-              </div>
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <CheckCircle2 className="h-4 w-4 text-state-healthy" />
-                  Resolution gate
-                </div>
-                <p className="text-sm text-text-secondary">{plan.gate}</p>
-              </div>
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <SelectField
-                  id="alert-disposition"
-                  label="Disposition"
-                  value={disposition}
-                  onChange={(event) => setDisposition(event.target.value as AlertDispositionValue)}
-                >
-                  {ALERT_DISPOSITION_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </SelectField>
-                {selectedDisposition ? (
-                  <p className="mt-2 text-xs text-text-secondary">{selectedDisposition.description}</p>
-                ) : null}
-                {disposition === 'suppressed' ? (
-                  <div className="mt-3 flex flex-col gap-1.5">
-                    <Label htmlFor="alert-suppress-until">Suppress until</Label>
-                    <Input
-                      id="alert-suppress-until"
-                      type="datetime-local"
-                      value={suppressUntil}
-                      onChange={(event) => setSuppressUntil(event.target.value)}
-                    />
-                    {suppressMissing || suppressInvalid ? (
-                      <p className="text-xs text-state-critical" role="alert">
-                        Select a valid suppression expiry.
-                      </p>
-                    ) : null}
+                <div className="rounded-md border border-border-subtle bg-elevated p-2">
+                  <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-state-healthy" />
+                    Resolution gate
                   </div>
-                ) : null}
-                <div className="mt-3 flex flex-col gap-1.5">
-                  <Label htmlFor="alert-disposition-reason">Evidence reason</Label>
-                  <textarea
-                    id="alert-disposition-reason"
-                    className="min-h-24 w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-text-muted focus-visible:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/30"
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value)}
-                    placeholder="Summarize the raw evidence, controls applied, owner approval, and remaining risk."
-                  />
-                  {reasonMissing ? (
-                    <p className="text-xs text-state-critical" role="alert">
-                      Evidence reason is required for alert disposition.
-                    </p>
-                  ) : null}
+                  <p className="mt-1 text-xs text-text-secondary">{plan.gate}</p>
                 </div>
               </div>
-
-              <Button asChild variant="ghost" size="sm" className="w-full justify-between">
-                <Link to="/audit">
-                  Review audit trail
-                  <ExternalLink />
-                </Link>
-              </Button>
-            </div>
+            </details>
           </div>
         ) : null}
 
@@ -1332,7 +1363,43 @@ function toDateTimeLocal(value?: string): string {
     pad(date.getHours()),
     ':',
     pad(date.getMinutes()),
-  ].join('');
+].join('');
+}
+
+function alertDispositionSummary(alert: Alert): string {
+  const parts: string[] = [];
+  if (alert.acked_at) {
+    parts.push(`Acknowledged ${timeAgo(alert.acked_at)}`);
+  }
+  if (alert.disposition) {
+    const display = alert.disposition.value.replace(/_/g, ' ');
+    const reason = alert.disposition.reason;
+    parts.push(
+      reason
+        ? `${display}: ${reason.slice(0, 80)}${reason.length > 80 ? '...' : ''}`
+        : display,
+    );
+  }
+  return parts.length > 0 ? parts.join(' · ') : 'Not yet investigated';
+}
+
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  if (ms < 0) return 'just now';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function alertActionURL(to: string, alertId: string): string {
+  const qIndex = to.indexOf('?');
+  const path = qIndex >= 0 ? to.slice(0, qIndex) : to;
+  const search = new URLSearchParams(qIndex >= 0 ? to.slice(qIndex + 1) : '');
+  search.set('fromAlert', alertId);
+  return `${path}?${search.toString()}`;
 }
 
 function alertResolutionPlan(alert: Alert): AlertResolutionPlan {

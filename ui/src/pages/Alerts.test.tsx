@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
   const listCorrelationRules = vi.fn();
   const createCorrelationRule = vi.fn();
   const deleteCorrelationRule = vi.fn();
+  const createSOCCaseFromAlert = vi.fn();
   return {
     apiClient: {
       listAlerts,
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
       listCorrelationRules,
       createCorrelationRule,
       deleteCorrelationRule,
+      createSOCCaseFromAlert,
     },
     listAlerts,
     ackAlert,
@@ -27,6 +29,7 @@ const mocks = vi.hoisted(() => {
     listCorrelationRules,
     createCorrelationRule,
     deleteCorrelationRule,
+    createSOCCaseFromAlert,
     currentTenantId: 'tenant-1',
     setCurrentTenantId: vi.fn(),
   };
@@ -109,6 +112,7 @@ describe('Alerts page failure states', () => {
     mocks.listCorrelationRules.mockResolvedValue(paginated([ruleRow]));
     mocks.createCorrelationRule.mockResolvedValue(ruleRow);
     mocks.deleteCorrelationRule.mockResolvedValue(undefined);
+    mocks.createSOCCaseFromAlert.mockResolvedValue({ case_id: 'case-1' });
   });
 
   it('does not show all-clear or empty inbox copy when alerts fail to load', async () => {
@@ -143,14 +147,30 @@ describe('Alerts page failure states', () => {
     renderAlerts();
 
     await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
-    const dialog = screen.getByRole('dialog', { name: /resolve alert with evidence/i });
+    const dialog = screen.getByRole('dialog', { name: /alert disposition/i });
+    await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'resolved');
     await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Blocked the source and verified no new attempts.');
     await user.click(within(dialog).getByRole('button', { name: /record disposition/i }));
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'Alert disposition failed: evidence gate denied',
     );
-    expect(screen.getByRole('dialog', { name: /resolve alert with evidence/i })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /alert disposition/i })).toBeInTheDocument();
+  });
+
+  it('creates an investigation case from the resolution modal', async () => {
+    const user = userEvent.setup();
+    mocks.createSOCCaseFromAlert.mockResolvedValue({ case_id: 'case-7' });
+
+    renderAlerts();
+
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    const dialog = screen.getByRole('dialog', { name: /alert disposition/i });
+    await user.click(within(dialog).getByRole('button', { name: /create investigation case/i }));
+
+    expect(await within(dialog).findByText(/case created/i)).toBeInTheDocument();
+    expect(mocks.createSOCCaseFromAlert).toHaveBeenCalledWith('tenant-1', { alert_id: 'alert-1' });
+    expect(within(dialog).getByRole('link', { name: /open cases/i })).toHaveAttribute('href', '/cases');
   });
 
   it('does not show a false empty state when correlation rules fail to load', async () => {
