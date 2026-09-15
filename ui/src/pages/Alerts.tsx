@@ -31,6 +31,7 @@ import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
+import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from '../lib/correlationTemplates';
 import type { Alert, AlertDispositionValue, CorrelationCondition, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -260,6 +261,7 @@ export function Alerts(): JSX.Element {
   const [newRuleEnabled, setNewRuleEnabled] = useState(true);
   const [newRuleSuppressionSeconds, setNewRuleSuppressionSeconds] = useState(300);
   const [newRuleConditions, setNewRuleConditions] = useState<CorrelationCondition[]>([]);
+  const [newRuleTemplateId, setNewRuleTemplateId] = useState('');
   const [creatingRule, setCreatingRule] = useState(false);
 
   const tenantId = currentTenantId ?? '';
@@ -339,6 +341,26 @@ export function Alerts(): JSX.Element {
     setNewRuleEnabled(true);
     setNewRuleSuppressionSeconds(300);
     setNewRuleConditions([]);
+    setNewRuleTemplateId('');
+  };
+
+  const applyRuleTemplate = (templateId: string) => {
+    const template = correlationRuleTemplate(templateId);
+    if (!template) return;
+    setEditRuleId(null);
+    setNewRuleTemplateId(template.id);
+    setNewRuleName(template.name);
+    setNewRuleDescription(template.description);
+    setNewRuleEventType(template.eventCategory);
+    setNewRuleSpecificEventType(template.eventType);
+    setNewRuleWindowSeconds(template.windowSeconds);
+    setNewRuleThreshold(template.threshold);
+    setNewRuleGroupBy([...template.groupBy]);
+    setNewRuleSeverity(template.severity);
+    setNewRuleEnabled(false);
+    setNewRuleSuppressionSeconds(template.suppressionSeconds);
+    setNewRuleConditions(template.conditions.map((condition) => ({ ...condition })));
+    setShowCreateRule(true);
   };
 
   const editRule = (rule: CorrelationRule) => {
@@ -770,14 +792,32 @@ export function Alerts(): JSX.Element {
           eyebrow="CORRELATION RULES"
           title="Detection rules"
           actions={
-            <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setShowCreateRule(true); }}>
-              <Plus className="h-3.5 w-3.5" /> New rule
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Create rule from template"
+                className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                value={newRuleTemplateId}
+                onChange={(event) => applyRuleTemplate(event.target.value)}
+              >
+                <option value="">Create from template…</option>
+                {CORRELATION_RULE_TEMPLATES.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+              <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setShowCreateRule(true); }}>
+                <Plus className="h-3.5 w-3.5" /> New rule
+              </Button>
+            </div>
           }
         >
           {showCreateRule && (
             <div className="mb-4 rounded-md border border-border-subtle bg-elevated p-4">
               <p className="mb-3 text-sm font-medium text-foreground">{editRuleId ? 'View or edit correlation rule' : 'New correlation rule'}</p>
+              {newRuleTemplateId ? (
+                <div className="mb-3 rounded-md border border-brand-500/30 bg-brand-500/5 px-3 py-2 text-xs text-text-secondary">
+                  Template loaded. Review every value, choose whether to enable the rule, then create it.
+                </div>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-name">Name</Label>
