@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +99,9 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		if !matchesPayloadEventType(r.EventType, ev.Payload) {
 			continue
 		}
+		if !matchesConditions(r.Conditions, ev) {
+			continue
+		}
 		dim := compoundDimensionValue(r.GroupBy, r.Dimension, ev)
 		if dim == "" {
 			continue
@@ -147,6 +151,7 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"event_type_filter": r.EventType,
 		"group_by":          r.GroupBy,
 		"suppression_s":     r.SuppressionSeconds,
+		"conditions":        r.Conditions,
 	}
 	for key, value := range eventContext(ev) {
 		ctxPayload[key] = value
@@ -190,6 +195,73 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			Payload:  payload,
 		})
 	}
+}
+
+func matchesConditions(conditions []storage.CorrelationCondition, ev eventbus.Event) bool {
+	for _, condition := range conditions {
+		got, ok := eventFieldValue(condition.Field, ev)
+		if !ok || !compareCondition(got, condition.Operator, condition.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func eventFieldValue(field string, ev eventbus.Event) (any, bool) {
+	switch field {
+	case "node_id":
+		if ev.NodeID != nil {
+			return ev.NodeID.String(), true
+		}
+	case "tenant_id":
+		if ev.TenantID != uuid.Nil {
+			return ev.TenantID.String(), true
+		}
+	}
+	if len(ev.Payload) == 0 {
+		return nil, false
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(ev.Payload, &raw); err != nil {
+		return nil, false
+	}
+	if value, ok := raw[field]; ok {
+		return value, true
+	}
+	if details, ok := raw["details"].(map[string]any); ok {
+		value, found := details[field]
+		return value, found
+	}
+	return nil, false
+}
+
+func compareCondition(got any, operator string, want any) bool {
+	gotText := fmt.Sprint(got)
+	wantText := fmt.Sprint(want)
+	switch operator {
+	case "eq":
+		return strings.EqualFold(gotText, wantText)
+	case "neq":
+		return !strings.EqualFold(gotText, wantText)
+	case "contains":
+		return strings.Contains(strings.ToLower(gotText), strings.ToLower(wantText))
+	}
+	gotNumber, gotErr := strconv.ParseFloat(gotText, 64)
+	wantNumber, wantErr := strconv.ParseFloat(wantText, 64)
+	if gotErr != nil || wantErr != nil {
+		return false
+	}
+	switch operator {
+	case "gt":
+		return gotNumber > wantNumber
+	case "gte":
+		return gotNumber >= wantNumber
+	case "lt":
+		return gotNumber < wantNumber
+	case "lte":
+		return gotNumber <= wantNumber
+	}
+	return false
 }
 
 func matchesPayloadEventType(want string, payload []byte) bool {

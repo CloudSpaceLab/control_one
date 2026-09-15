@@ -6948,11 +6948,18 @@ export interface CorrelationRule {
   dimension: string;
   group_by: string[];
   suppression_seconds: number;
+  conditions: CorrelationCondition[];
   enabled: boolean;
   severity: string;
   created_at: string;
   updated_at: string;
   yaml_spec?: string;
+}
+
+export interface CorrelationCondition {
+  field: string;
+  operator: 'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte';
+  value: string | number;
 }
 
 export interface CreateCorrelationRulePayload {
@@ -6966,6 +6973,7 @@ export interface CreateCorrelationRulePayload {
   dimension: string;
   group_by: string[];
   suppression_seconds: number;
+  conditions: CorrelationCondition[];
   enabled?: boolean;
   severity: string;
   yaml_spec?: string;

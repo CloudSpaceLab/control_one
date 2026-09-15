@@ -31,7 +31,8 @@ import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
-import type { Alert, AlertDispositionValue, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
+import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from '../lib/correlationTemplates';
+import type { Alert, AlertDispositionValue, CorrelationCondition, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
 type PageTab = 'alerts' | 'rules';
@@ -52,6 +53,20 @@ const CORRELATION_DIMENSIONS = [
   { value: 'src_ip', label: 'Source IP' },
   { value: 'user_name', label: 'User name' },
   { value: 'correlation_id', label: 'Correlation ID' },
+] as const;
+const CORRELATION_CONDITION_FIELDS = [
+  { value: 'src_ip', label: 'Source IP' }, { value: 'dst_ip', label: 'Destination IP' },
+  { value: 'src_port', label: 'Source port' }, { value: 'dst_port', label: 'Destination port' },
+  { value: 'protocol', label: 'Protocol' }, { value: 'user_name', label: 'User name' },
+  { value: 'auth_result', label: 'Authentication result' }, { value: 'status_code', label: 'HTTP status' },
+  { value: 'http_method', label: 'HTTP method' }, { value: 'path', label: 'Request path' },
+  { value: 'source', label: 'Event source' }, { value: 'severity', label: 'Event severity' },
+] as const;
+const CORRELATION_OPERATORS = [
+  { value: 'eq', label: 'equals' }, { value: 'neq', label: 'does not equal' },
+  { value: 'contains', label: 'contains' }, { value: 'gt', label: 'greater than' },
+  { value: 'gte', label: 'greater than or equal' }, { value: 'lt', label: 'less than' },
+  { value: 'lte', label: 'less than or equal' },
 ] as const;
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
@@ -245,6 +260,8 @@ export function Alerts(): JSX.Element {
   const [newRuleSeverity, setNewRuleSeverity] = useState('medium');
   const [newRuleEnabled, setNewRuleEnabled] = useState(true);
   const [newRuleSuppressionSeconds, setNewRuleSuppressionSeconds] = useState(300);
+  const [newRuleConditions, setNewRuleConditions] = useState<CorrelationCondition[]>([]);
+  const [newRuleTemplateId, setNewRuleTemplateId] = useState('');
   const [creatingRule, setCreatingRule] = useState(false);
 
   const tenantId = currentTenantId ?? '';
@@ -323,6 +340,27 @@ export function Alerts(): JSX.Element {
     setNewRuleSeverity('medium');
     setNewRuleEnabled(true);
     setNewRuleSuppressionSeconds(300);
+    setNewRuleConditions([]);
+    setNewRuleTemplateId('');
+  };
+
+  const applyRuleTemplate = (templateId: string) => {
+    const template = correlationRuleTemplate(templateId);
+    if (!template) return;
+    setEditRuleId(null);
+    setNewRuleTemplateId(template.id);
+    setNewRuleName(template.name);
+    setNewRuleDescription(template.description);
+    setNewRuleEventType(template.eventCategory);
+    setNewRuleSpecificEventType(template.eventType);
+    setNewRuleWindowSeconds(template.windowSeconds);
+    setNewRuleThreshold(template.threshold);
+    setNewRuleGroupBy([...template.groupBy]);
+    setNewRuleSeverity(template.severity);
+    setNewRuleEnabled(false);
+    setNewRuleSuppressionSeconds(template.suppressionSeconds);
+    setNewRuleConditions(template.conditions.map((condition) => ({ ...condition })));
+    setShowCreateRule(true);
   };
 
   const editRule = (rule: CorrelationRule) => {
@@ -337,7 +375,12 @@ export function Alerts(): JSX.Element {
     setNewRuleSeverity(rule.severity);
     setNewRuleEnabled(rule.enabled);
     setNewRuleSuppressionSeconds(rule.suppression_seconds ?? 0);
+    setNewRuleConditions(rule.conditions ?? []);
     setShowCreateRule(true);
+  };
+
+  const updateCondition = (index: number, patch: Partial<CorrelationCondition>) => {
+    setNewRuleConditions((current) => current.map((condition, i) => i === index ? { ...condition, ...patch } : condition));
   };
 
   const handleSaveRule = async () => {
@@ -355,6 +398,7 @@ export function Alerts(): JSX.Element {
         dimension: newRuleGroupBy[0],
         group_by: newRuleGroupBy,
         suppression_seconds: newRuleSuppressionSeconds,
+        conditions: newRuleConditions,
         severity: newRuleSeverity,
         enabled: newRuleEnabled,
       };
@@ -381,6 +425,7 @@ export function Alerts(): JSX.Element {
         window_seconds: rule.window_seconds, threshold: rule.threshold,
         dimension: rule.dimension, group_by: rule.group_by?.length ? rule.group_by : [rule.dimension],
         suppression_seconds: rule.suppression_seconds ?? 0, severity: rule.severity, enabled: !rule.enabled,
+        conditions: rule.conditions ?? [],
       });
       setRulesReloadToken((n) => n + 1);
       setError(null);
@@ -526,6 +571,11 @@ export function Alerts(): JSX.Element {
           <span className="block font-mono text-text-muted">{row.original.event_type || 'any type'}</span>
           <span className="block font-mono text-text-muted">by {(row.original.group_by?.length ? row.original.group_by : [row.original.dimension]).join(' + ')}</span>
           <span className="block text-text-muted">suppress {row.original.suppression_seconds ?? 0}s</span>
+          {(row.original.conditions ?? []).map((condition, index) => (
+            <span className="block font-mono text-text-muted" key={`${condition.field}-${index}`}>
+              {condition.field} {condition.operator} {String(condition.value)}
+            </span>
+          ))}
         </span>
       ),
     },
@@ -742,14 +792,32 @@ export function Alerts(): JSX.Element {
           eyebrow="CORRELATION RULES"
           title="Detection rules"
           actions={
-            <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setShowCreateRule(true); }}>
-              <Plus className="h-3.5 w-3.5" /> New rule
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Create rule from template"
+                className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                value={newRuleTemplateId}
+                onChange={(event) => applyRuleTemplate(event.target.value)}
+              >
+                <option value="">Create from template…</option>
+                {CORRELATION_RULE_TEMPLATES.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+              <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setShowCreateRule(true); }}>
+                <Plus className="h-3.5 w-3.5" /> New rule
+              </Button>
+            </div>
           }
         >
           {showCreateRule && (
             <div className="mb-4 rounded-md border border-border-subtle bg-elevated p-4">
               <p className="mb-3 text-sm font-medium text-foreground">{editRuleId ? 'View or edit correlation rule' : 'New correlation rule'}</p>
+              {newRuleTemplateId ? (
+                <div className="mb-3 rounded-md border border-brand-500/30 bg-brand-500/5 px-3 py-2 text-xs text-text-secondary">
+                  Template loaded. Review every value, choose whether to enable the rule, then create it.
+                </div>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-name">Name</Label>
@@ -815,6 +883,56 @@ export function Alerts(): JSX.Element {
                     onChange={(e) => setNewRuleWindowSeconds(Math.max(1, Number(e.target.value) || 1))}
                     className="h-8"
                   />
+                </div>
+                <div className="flex flex-col gap-2 md:col-span-2 xl:col-span-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Field conditions</Label>
+                      <p className="text-xs text-text-muted">Every condition must match before an event is counted.</p>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={newRuleConditions.length >= 10}
+                      onClick={() => setNewRuleConditions((current) => [...current, { field: 'dst_port', operator: 'eq', value: '22' }])}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Add condition
+                    </Button>
+                  </div>
+                  {newRuleConditions.map((condition, index) => (
+                    <div className="grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" key={index}>
+                      <select
+                        aria-label={`Condition ${index + 1} field`}
+                        className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={condition.field}
+                        onChange={(e) => updateCondition(index, { field: e.target.value })}
+                      >
+                        {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+                      </select>
+                      <select
+                        aria-label={`Condition ${index + 1} operator`}
+                        className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={condition.operator}
+                        onChange={(e) => updateCondition(index, { operator: e.target.value as CorrelationCondition['operator'] })}
+                      >
+                        {CORRELATION_OPERATORS.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
+                      </select>
+                      <Input
+                        aria-label={`Condition ${index + 1} value`}
+                        className="h-8"
+                        value={String(condition.value)}
+                        onChange={(e) => updateCondition(index, { value: e.target.value })}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Remove condition ${index + 1}`}
+                        onClick={() => setNewRuleConditions((current) => current.filter((_, i) => i !== index))}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-dimension">Group events by</Label>

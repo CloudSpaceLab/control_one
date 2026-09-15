@@ -173,18 +173,20 @@ func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing
 		EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "ssh.authentication_failure",
 		WindowSeconds: 20, Threshold: 3, GroupBy: []string{"src_ip", "node_id"},
 		SuppressionSeconds: 300, Severity: "high", Enabled: true,
+		Conditions: []storage.CorrelationCondition{{Field: "dst_port", Operator: "eq", Value: "22"}, {Field: "auth_result", Operator: "eq", Value: "failure"}},
 	}
 	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
 	eng := New(store, eventbus.New(16), nil)
 	base := time.Now()
-	payload := func(eventType string) []byte {
-		blob, _ := json.Marshal(map[string]any{"event_type": eventType, "src_ip": "203.0.113.8"})
+	payload := func(eventType, authResult string) []byte {
+		blob, _ := json.Marshal(map[string]any{"event_type": eventType, "src_ip": "203.0.113.8", "details": map[string]any{"dst_port": 22, "auth_result": authResult}})
 		return blob
 	}
 
-	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("malware.detected")})
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("malware.detected", "failure")})
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload("ssh.authentication_failure", "success")})
 	for i := 0; i < 6; i++ {
-		eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(i+1) * time.Second), Payload: payload("ssh.authentication_failure")})
+		eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(i+1) * time.Second), Payload: payload("ssh.authentication_failure", "failure")})
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -194,5 +196,85 @@ func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing
 	wantKey := rule.ID.String() + "/src_ip=203.0.113.8|node_id=" + node.String()
 	if store.alerts[0].DedupKey != wantKey {
 		t.Fatalf("dedup key = %q, want %q", store.alerts[0].DedupKey, wantKey)
+	}
+}
+
+func TestEnginePhase3AThresholdTemplatesMatchAndRejectEvents(t *testing.T) {
+	tests := []struct {
+		name       string
+		eventType  string
+		threshold  int
+		window     int
+		groupBy    []string
+		conditions []storage.CorrelationCondition
+		matching   map[string]any
+		nonmatch   map[string]any
+	}{
+		{
+			name: "SSH brute force", eventType: "ssh.authentication_failure", threshold: 4, window: 20,
+			groupBy:    []string{"src_ip", "node_id"},
+			conditions: []storage.CorrelationCondition{{Field: "dst_port", Operator: "eq", Value: "22"}, {Field: "protocol", Operator: "eq", Value: "tcp"}, {Field: "auth_result", Operator: "eq", Value: "failure"}},
+			matching:   map[string]any{"src_ip": "203.0.113.20", "dst_port": 22, "protocol": "tcp", "auth_result": "failure"},
+			nonmatch:   map[string]any{"src_ip": "203.0.113.20", "dst_port": 23, "protocol": "tcp", "auth_result": "failure"},
+		},
+		{
+			name: "Windows repeated login failures", eventType: "windows.authentication_failure", threshold: 5, window: 60,
+			groupBy:    []string{"user_name", "node_id"},
+			conditions: []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "failure"}},
+			matching:   map[string]any{"user_name": "administrator", "auth_result": "failure"},
+			nonmatch:   map[string]any{"user_name": "administrator", "auth_result": "success"},
+		},
+		{
+			name: "Repeated web-server errors", eventType: "web.request", threshold: 10, window: 60,
+			groupBy:    []string{"node_id"},
+			conditions: []storage.CorrelationCondition{{Field: "status_code", Operator: "gte", Value: "500"}},
+			matching:   map[string]any{"status_code": 503},
+			nonmatch:   map[string]any{"status_code": 404},
+		},
+		{
+			name: "Database authentication failures", eventType: "database.authentication_failure", threshold: 5, window: 60,
+			groupBy:    []string{"user_name", "node_id"},
+			conditions: []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "failure"}},
+			matching:   map[string]any{"user_name": "dbadmin", "auth_result": "failure"},
+			nonmatch:   map[string]any{"user_name": "dbadmin", "auth_result": "success"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tenant, node := uuid.New(), uuid.New()
+			rule := storage.CorrelationRule{
+				ID: uuid.New(), TenantID: tenant, Name: tt.name,
+				EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: tt.eventType,
+				WindowSeconds: tt.window, Threshold: tt.threshold, GroupBy: tt.groupBy,
+				SuppressionSeconds: 300, Severity: "high", Enabled: true, Conditions: tt.conditions,
+			}
+			store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+			eng := New(store, eventbus.New(tt.threshold+2), nil)
+			base := time.Now()
+			payload := func(fields map[string]any) []byte {
+				body := map[string]any{"event_type": tt.eventType, "details": fields}
+				for key, value := range fields {
+					body[key] = value
+				}
+				blob, err := json.Marshal(body)
+				if err != nil {
+					t.Fatalf("marshal event: %v", err)
+				}
+				return blob
+			}
+
+			eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base, Payload: payload(tt.nonmatch)})
+			for i := 0; i < tt.threshold-1; i++ {
+				eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(i+1) * time.Second), Payload: payload(tt.matching)})
+			}
+			if len(store.alerts) != 0 {
+				t.Fatalf("nonmatching event counted toward threshold: got %d alerts", len(store.alerts))
+			}
+			eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: base.Add(time.Duration(tt.threshold) * time.Second), Payload: payload(tt.matching)})
+			if len(store.alerts) != 1 {
+				t.Fatalf("matching events should create one alert, got %d", len(store.alerts))
+			}
+		})
 	}
 }
