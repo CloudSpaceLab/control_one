@@ -375,6 +375,11 @@ func matchesPayloadEventType(want string, payload []byte) bool {
 			return true
 		}
 	}
+	if details, ok := raw["details"].(map[string]any); ok {
+		if got, ok := details["event_type"].(string); ok && got == want {
+			return true
+		}
+	}
 	return false
 }
 
