@@ -483,7 +483,7 @@ export function Alerts(): JSX.Element {
       else await client.createCorrelationRule(payload);
       resetRuleForm();
       setShowCreateRule(false);
-      setError(null);
+      setRulesError(null);
       setRulesReloadToken((n) => n + 1);
     } catch (err) {
       setCreateRuleError(errorMessage(err, 'Create failed.'));
@@ -509,9 +509,9 @@ export function Alerts(): JSX.Element {
         aggregate_threshold: rule.aggregate_threshold ?? 0,
       });
       setRulesReloadToken((n) => n + 1);
-      setError(null);
+      setRulesError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'rule update failed');
+      setRulesError(err instanceof Error ? err.message : 'rule update failed');
     } finally { setCreatingRule(false); }
   };
 
