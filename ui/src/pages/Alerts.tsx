@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -187,6 +187,12 @@ export function alertContextPills(alert: Alert): Array<{ label: string; value: s
   const ctx = alert.context ?? {};
   const pills: Array<{ label: string; value: string; tone: StateTone }> = [];
   addContextPill(pills, 'Signal', contextString(ctx, 'event_type'), 'info');
+  addContextPill(pills, 'Source IP', contextString(ctx, 'src_ip', 'source_ip'), 'critical');
+  addContextPill(pills, 'Host', contextString(ctx, 'node_id', 'host', 'hostname'), 'info');
+  const matched = contextString(ctx, 'matched_event_count', 'hits', 'occurrence_count');
+  const windowSeconds = contextString(ctx, 'window_s');
+  addContextPill(pills, 'Activity', matched ? `${matched}${windowSeconds ? ` in ${windowSeconds}s` : ''}` : '', 'warning');
+  addContextPill(pills, 'Notify', contextString(ctx, 'notification_state'), 'warning');
   addContextPill(pills, 'App', contextString(ctx, 'application_name', 'app', 'vhost'), 'healthy');
   addContextPill(pills, 'Parser', contextString(ctx, 'parser_profile'), 'info');
   addContextPill(pills, 'Log', basename(contextString(ctx, 'source_file')), 'unknown');
@@ -194,7 +200,7 @@ export function alertContextPills(alert: Alert): Array<{ label: string; value: s
   const country = contextString(ctx, 'country_code', 'country');
   const asn = contextString(ctx, 'asn');
   addContextPill(pills, 'Origin', [country, asn ? `ASN ${asn}` : ''].filter(Boolean).join(' / '), 'degraded');
-  return pills.slice(0, 6);
+  return pills.slice(0, 10);
 }
 
 function addContextPill(
@@ -240,6 +246,7 @@ function errorMessage(error: unknown, fallback: string): string {
 
 export function Alerts(): JSX.Element {
   const client = useApiClient();
+  const navigate = useNavigate();
   const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
   const [pageTab, setPageTab] = useState<PageTab>('alerts');
   const [state, setState] = useState<typeof STATE_FILTERS[number]>('open');
@@ -251,6 +258,7 @@ export function Alerts(): JSX.Element {
   const [ackingId, setAckingId] = useState<string | null>(null);
   const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
   const [resolvingAlert, setResolvingAlert] = useState(false);
+  const [creatingCase, setCreatingCase] = useState(false);
 
   // Correlation rules state
   const [rules, setRules] = useState<CorrelationRule[]>([]);
@@ -1284,6 +1292,19 @@ export function Alerts(): JSX.Element {
           setResolveError(null);
         }}
         onActionTaken={() => { void refresh(); }}
+        creatingCase={creatingCase}
+        onCreateCase={async (alert) => {
+          setCreatingCase(true);
+          setResolveError(null);
+          try {
+            const created = await client.createAlertSOCCase(alert.id);
+            navigate(`/cases?case_id=${encodeURIComponent(created.case_id)}`);
+          } catch (err) {
+            setResolveError(errorMessage(err, 'Case creation failed.'));
+          } finally {
+            setCreatingCase(false);
+          }
+        }}
       />
     </div>
   );
@@ -1517,6 +1538,8 @@ function ResolveAlertModal({
   onConfirm,
   onCancel,
   onActionTaken,
+  creatingCase,
+  onCreateCase,
 }: {
   alert: Alert | null;
   open: boolean;
@@ -1525,6 +1548,8 @@ function ResolveAlertModal({
   onConfirm: (payload: UpdateAlertDispositionPayload) => void;
   onCancel: () => void;
   onActionTaken: () => void;
+  creatingCase: boolean;
+  onCreateCase: (alert: Alert) => Promise<void>;
 }) {
   const plan = alert ? alertResolutionPlan(alert) : null;
   const ip = alert ? alertSourceIP(alert) : '';
@@ -1609,6 +1634,8 @@ function ResolveAlertModal({
                   ))}
                 </ol>
               </div>
+
+              <ContributingEvents alert={alert} />
 
               <div className="grid gap-2 sm:grid-cols-2">
                 {plan.actions.map((action) => (
@@ -1722,10 +1749,13 @@ function ResolveAlertModal({
               </div>
 
               <Button asChild variant="ghost" size="sm" className="w-full justify-between">
-                <Link to="/audit">
+                <Link to={alertAuditRoute(alert)}>
                   Review audit trail
                   <ExternalLink />
                 </Link>
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="w-full" loading={creatingCase} onClick={() => void onCreateCase(alert)}>
+                Create SOC case with evidence
               </Button>
             </div>
           </div>
@@ -1840,6 +1870,36 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     actions: dedupeActions(actions),
     posture,
   };
+}
+
+function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
+  const raw = alert.context?.contributing_events;
+  const events = Array.isArray(raw) ? raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : [];
+  if (events.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+        <ListChecks className="h-4 w-4 text-brand-400" />
+        Contributing events ({events.length})
+      </div>
+      <ol className="max-h-56 space-y-2 overflow-y-auto">
+        {events.map((event, index) => (
+          <li key={`${String(event.timestamp ?? '')}:${index}`} className="rounded-md border border-border-subtle bg-elevated p-2 text-xs text-text-secondary">
+            <span className="font-mono">{formatAlertContextTime(String(event.timestamp ?? ''))}</span>
+            <span className="ml-2">{String(event.event_type ?? event.topic ?? 'security event')}</span>
+            {event.src_ip ? <span className="ml-2 font-mono">from {String(event.src_ip)}</span> : null}
+            {event.user_name ? <span className="ml-2">user {String(event.user_name)}</span> : null}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function alertAuditRoute(alert: Alert): string {
+  const correlationID = contextString(alert.context ?? {}, 'correlation_id');
+  const query = correlationID || alert.id;
+  return `/audit?q=${encodeURIComponent(query)}`;
 }
 
 export function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {

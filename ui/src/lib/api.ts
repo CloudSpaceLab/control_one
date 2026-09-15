@@ -4439,6 +4439,10 @@ export class APIClient {
     );
   }
 
+  async createAlertSOCCase(id: string): Promise<SOCCase> {
+    return this.request<SOCCase>(`/api/v1/alerts/${encodeURIComponent(id)}/case`, { method: "POST" });
+  }
+
   async listAccessRequests(
     params: {
       tenantId?: string;

@@ -275,9 +275,57 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			"reason":      reason,
 		})
 		writeJSON(w, http.StatusOK, newAlertResponse(*alert))
+	case "case":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		alert, ok := s.requireAlertTenantAccess(w, r, principal, id, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		s.handleCreateAlertSOCCase(w, r, principal, *alert)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) handleCreateAlertSOCCase(w http.ResponseWriter, r *http.Request, principal *auth.Principal, alert storage.Alert) {
+	backend := s.aiOperatorBackend()
+	if backend == nil {
+		http.Error(w, "case store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"alert_id": alert.ID.String(), "rule_id": alert.RuleID.UUID.String(),
+		"correlation_id": alert.Context["correlation_id"], "alert_context": alert.Context,
+	})
+	if err != nil {
+		http.Error(w, "marshal alert evidence", http.StatusInternalServerError)
+		return
+	}
+	nodeID := uuid.Nil
+	if alert.NodeID.Valid {
+		nodeID = alert.NodeID.UUID
+	}
+	row, err := backend.CreateAIInvestigation(r.Context(), storage.CreateAIInvestigationParams{
+		TenantID: alert.TenantID, NodeID: nodeID, TriggerType: "correlation_alert",
+		TriggerEventType: firstNonEmptyString(fmt.Sprint(alert.Context["event_type"]), "alert"),
+		TriggerDedupKey:  "alert:" + alert.ID.String(), Severity: alert.Severity,
+		Summary: firstNonEmptyString(alert.Title, alert.Summary.String), Evidence: evidence,
+		Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		http.Error(w, "create alert SOC case", http.StatusInternalServerError)
+		return
+	}
+	s.recordAudit(r.Context(), principal, alert.TenantID, "alert.soc_case_opened", "alert", alert.ID.String(), map[string]any{"case_id": row.ID.String(), "correlation_id": alert.Context["correlation_id"]})
+	writeJSON(w, http.StatusCreated, newSOCCaseResponse(*row))
 }
 
 func (s *Server) requireAlertTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, id uuid.UUID, roles ...string) (*storage.Alert, bool) {

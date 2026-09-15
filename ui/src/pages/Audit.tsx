@@ -93,7 +93,7 @@ export function Audit(): JSX.Element {
   const [actorTypeFilter, setActorTypeFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('');
   const [resourceTypeFilter, setResourceTypeFilter] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => params.get('q') ?? '');
   const [limit] = useState(100);
   const [offset, setOffset] = useState(0);
 

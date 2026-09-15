@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
   const listCorrelationRules = vi.fn();
   const createCorrelationRule = vi.fn();
   const deleteCorrelationRule = vi.fn();
+  const createAlertSOCCase = vi.fn();
   return {
     apiClient: {
       listAlerts,
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
       listCorrelationRules,
       createCorrelationRule,
       deleteCorrelationRule,
+      createAlertSOCCase,
     },
     listAlerts,
     ackAlert,
@@ -27,6 +29,7 @@ const mocks = vi.hoisted(() => {
     listCorrelationRules,
     createCorrelationRule,
     deleteCorrelationRule,
+    createAlertSOCCase,
     currentTenantId: 'tenant-1',
     setCurrentTenantId: vi.fn(),
   };
@@ -70,6 +73,10 @@ const alertRow: Alert = {
   context: {
     source_ip: '203.0.113.9',
     event_type: 'auth failure',
+    matched_event_count: 4,
+    window_s: 20,
+    notification_state: 'suppressed',
+    contributing_events: [{ timestamp: '2026-06-08T00:00:00Z', event_type: 'ssh.authentication_failure', src_ip: '203.0.113.9', user_name: 'root' }],
   },
 };
 
@@ -109,6 +116,7 @@ describe('Alerts page failure states', () => {
     mocks.listCorrelationRules.mockResolvedValue(paginated([ruleRow]));
     mocks.createCorrelationRule.mockResolvedValue(ruleRow);
     mocks.deleteCorrelationRule.mockResolvedValue(undefined);
+    mocks.createAlertSOCCase.mockResolvedValue({ case_id: 'case-1' });
   });
 
   it('does not show all-clear or empty inbox copy when alerts fail to load', async () => {
@@ -151,6 +159,16 @@ describe('Alerts page failure states', () => {
       'Alert disposition failed: evidence gate denied',
     );
     expect(screen.getByRole('dialog', { name: /resolve alert with evidence/i })).toBeInTheDocument();
+  });
+
+  it('shows the correlation activity summary and contributing events', async () => {
+    const user = userEvent.setup();
+    renderAlerts();
+    expect(await screen.findByText('Activity: 4 in 20s')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /review alert critical ssh burst/i }));
+    expect(screen.getByText('Contributing events (1)')).toBeInTheDocument();
+    expect(screen.getByText(/ssh\.authentication_failure/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create soc case with evidence/i })).toBeInTheDocument();
   });
 
   it('does not show a false empty state when correlation rules fail to load', async () => {

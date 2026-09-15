@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowRight,
@@ -34,6 +34,8 @@ import type { SOCCase, SOCCaseExport, SOCCaseEvidenceRef, SOCCaseTimelineItem } 
 import { entityRoute } from '@/lib/entity';
 
 export function Cases(): JSX.Element {
+  const [searchParams] = useSearchParams();
+  const requestedCaseId = searchParams.get('case_id');
   const api = useApiClient();
   const { currentTenantId, currentTenant } = useTenant();
   const [cases, setCases] = useState<SOCCase[]>([]);
@@ -68,7 +70,7 @@ export function Cases(): JSX.Element {
       setSelectedId((current) => (
         current && response.data.some((row) => row.case_id === current)
           ? current
-          : response.data[0]?.case_id ?? null
+          : (response.data.some((row) => row.case_id === requestedCaseId) ? requestedCaseId : response.data[0]?.case_id) ?? null
       ));
     } catch (err) {
       setError(errorMessage(err, 'Failed to load SOC cases.'));
@@ -80,7 +82,7 @@ export function Cases(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [api, currentTenantId]);
+  }, [api, currentTenantId, requestedCaseId]);
 
   useEffect(() => {
     void refresh();
