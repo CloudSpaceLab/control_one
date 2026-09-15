@@ -64,12 +64,12 @@ export function NetworkSecurity(): JSX.Element {
         description="Threat feeds, live connections, active blocks, IP behavior, and firewall state."
       />
       <Tabs value={tab} onValueChange={onTabChange} className="w-full">
-        <TabsList>
-          <TabsTrigger value="threats">Threat feeds</TabsTrigger>
-          <TabsTrigger value="connections">Connections</TabsTrigger>
-          <TabsTrigger value="ip-behavior">IP behavior</TabsTrigger>
-          <TabsTrigger value="blocks">Active blocks</TabsTrigger>
-          <TabsTrigger value="firewall">Firewall</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="threats">Threat feeds</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="ip-behavior">IP behavior</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="blocks">Active blocks</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="firewall">Firewall</TabsTrigger>
         </TabsList>
 
         <TabsContent value="threats" className="pt-4">

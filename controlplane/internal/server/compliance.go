@@ -11,9 +11,11 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	cpCompliance "github.com/CloudSpaceLab/control_one/controlplane/internal/compliance"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
+	"github.com/CloudSpaceLab/control_one/internal/scanner"
 )
 
 type complianceEvaluateRequest struct {
@@ -61,9 +63,16 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	principal, ok := s.authorize(w, r, roleOperator)
+	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
+	}
+	agentPrincipal := principal.Type == "agent"
+	if !agentPrincipal {
+		if _, ok := s.authorizePrincipal(w, principal, roleOperator); !ok {
+			return
+		}
 	}
 
 	var req complianceEvaluateRequest
@@ -83,6 +92,19 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	nodeID, _ := uuid.Parse(req.NodeID)
+	var agentTenantID uuid.UUID
+	if agentPrincipal {
+		tenantID, boundNodeID, err := s.tenantNodeForAgent(r.Context(), principal)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if boundNodeID != nodeID {
+			http.Error(w, "agent cannot evaluate compliance for another node", http.StatusForbidden)
+			return
+		}
+		agentTenantID = tenantID
+	}
 	node, err := s.store.GetNode(r.Context(), nodeID)
 	if err != nil {
 		s.logger.Error("get compliance evaluation node", zap.Error(err))
@@ -93,7 +115,12 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleOperator, roleAdmin) {
+	if agentPrincipal {
+		if node.TenantID != agentTenantID {
+			http.Error(w, "agent node tenant mismatch", http.StatusForbidden)
+			return
+		}
+	} else if !s.requireTenantAccess(w, r, principal, node.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -102,6 +129,13 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 		s.logger.Error("compliance evaluation", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+	if agentPrincipal {
+		if err := s.persistAgentComplianceEvaluation(r.Context(), node.TenantID, nodeID, req, results); err != nil {
+			s.logger.Error("persist agent compliance evaluation", zap.Error(err), zap.String("node_id", nodeID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	resp := complianceEvaluateResponse{Results: results}
@@ -115,6 +149,192 @@ func (s *Server) handleComplianceEvaluate(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Warn("encode compliance evaluate response", zap.Error(err))
+	}
+}
+
+type agentComplianceReportRequest struct {
+	NodeID    string           `json:"node_id"`
+	Timestamp string           `json:"timestamp"`
+	Results   []scanner.Result `json:"results"`
+	Summary   map[string]any   `json:"summary"`
+}
+
+func (s *Server) handleAgentComplianceReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal == nil || principal.Type != "agent" {
+		http.Error(w, "agent principal required", http.StatusForbidden)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	tenantID, nodeID, err := s.tenantNodeForAgent(r.Context(), principal)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer func() { _ = r.Body.Close() }()
+	var req agentComplianceReportRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.NodeID) != "" {
+		requested, err := uuid.Parse(strings.TrimSpace(req.NodeID))
+		if err != nil {
+			http.Error(w, "invalid node_id", http.StatusBadRequest)
+			return
+		}
+		if requested != nodeID {
+			http.Error(w, "agent cannot report compliance for another node", http.StatusForbidden)
+			return
+		}
+	}
+	reportedAt := time.Now().UTC()
+	if strings.TrimSpace(req.Timestamp) != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.Timestamp)); err == nil {
+			reportedAt = parsed.UTC()
+		} else if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(req.Timestamp)); err == nil {
+			reportedAt = parsed.UTC()
+		}
+	}
+	job, err := s.createAgentComplianceJob(r.Context(), tenantID, nodeID, "agent_report", reportedAt, map[string]any{
+		"node_id":      nodeID.String(),
+		"reported_at":  reportedAt.Format(time.RFC3339Nano),
+		"summary":      req.Summary,
+		"result_count": len(req.Results),
+	})
+	if err != nil {
+		s.logger.Error("create agent compliance report job", zap.Error(err), zap.String("node_id", nodeID.String()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if len(req.Results) > 0 {
+		records := make([]storage.ComplianceResult, 0, len(req.Results))
+		for _, result := range req.Results {
+			if strings.TrimSpace(result.RuleID) == "" {
+				continue
+			}
+			records = append(records, scannerResultRecord(job.ID, tenantID, nodeID, reportedAt, result))
+		}
+		if err := s.store.CreateComplianceResults(r.Context(), records); err != nil {
+			s.logger.Error("persist agent compliance report", zap.Error(err), zap.String("node_id", nodeID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+	s.handleFirstScanHook(r.Context(), nodeID)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"job_id":    job.ID.String(),
+		"accepted":  true,
+		"results":   len(req.Results),
+		"node_id":   nodeID.String(),
+		"tenant_id": tenantID.String(),
+	})
+}
+
+func (s *Server) persistAgentComplianceEvaluation(ctx context.Context, tenantID, nodeID uuid.UUID, req complianceEvaluateRequest, results []compliance.Result) error {
+	reportedAt := time.Now().UTC()
+	job, err := s.createAgentComplianceJob(ctx, tenantID, nodeID, "agent_evaluate", reportedAt, map[string]any{
+		"node_id":        nodeID.String(),
+		"region":         req.Region,
+		"rulesets":       req.RuleSets,
+		"certifications": req.Certifications,
+		"result_count":   len(results),
+		"use_real_scan":  req.UseRealScan,
+	})
+	if err != nil {
+		return err
+	}
+	payload := &compliancePayload{
+		ScanID:   job.ID.String(),
+		TenantID: tenantID.String(),
+		NodeID:   nodeID.String(),
+		Policies: req.Policies,
+	}
+	if err := s.persistComplianceResults(ctx, job, payload, results); err != nil {
+		return err
+	}
+	s.handleFirstScanHook(ctx, nodeID)
+	s.emitComplianceEvents(ctx, tenantID, nodeID, results, payload.ScanID)
+	autoApply := false
+	if s.cfg != nil {
+		autoApply = s.cfg.Jobs.Compliance.AutoApply
+	}
+	for _, result := range results {
+		if !result.Passed {
+			s.triggerAutoRemediation(ctx, tenantID, nodeID, result, autoApply)
+		}
+	}
+	return nil
+}
+
+func (s *Server) createAgentComplianceJob(ctx context.Context, tenantID, nodeID uuid.UUID, source string, reportedAt time.Time, payload map[string]any) (*storage.Job, error) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["source"] = source
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	job := &storage.Job{
+		TenantID:   tenantID,
+		Type:       JobTypeComplianceScan,
+		Status:     storage.JobStatusSucceeded,
+		Payload:    payloadBytes,
+		StartedAt:  &reportedAt,
+		FinishedAt: &reportedAt,
+	}
+	return s.store.CreateJob(ctx, job, &storage.JobEvent{
+		Status:  storage.JobStatusSucceeded,
+		Message: "agent compliance " + source,
+	})
+}
+
+func scannerResultRecord(jobID, tenantID, nodeID uuid.UUID, reportedAt time.Time, result scanner.Result) storage.ComplianceResult {
+	checkedAt := result.CheckedAt
+	if checkedAt.IsZero() {
+		checkedAt = reportedAt
+	}
+	status := strings.ToLower(strings.TrimSpace(result.Status))
+	passed := status == scanner.StatusCompliant
+	severity := strings.TrimSpace(result.Metadata["severity"])
+	if severity == "" {
+		if status == scanner.StatusError {
+			severity = "high"
+		} else {
+			severity = "medium"
+		}
+	}
+	details := strings.TrimSpace(result.Details)
+	metadata := map[string]any{
+		"source":      "agent_scanner",
+		"status":      result.Status,
+		"reported_at": reportedAt.Format(time.RFC3339Nano),
+	}
+	for key, value := range result.Metadata {
+		metadata[key] = value
+	}
+	return storage.ComplianceResult{
+		JobID:     jobID,
+		TenantID:  tenantID,
+		NodeID:    nodeID,
+		RuleID:    strings.TrimSpace(result.RuleID),
+		Passed:    passed,
+		Severity:  &severity,
+		Details:   stringPtrOrNil(details),
+		Metadata:  metadata,
+		CheckedAt: &checkedAt,
 	}
 }
 

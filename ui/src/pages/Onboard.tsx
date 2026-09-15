@@ -1,18 +1,22 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   ArrowRight,
-  Boxes,
   CheckCircle2,
+  Clipboard,
+  ClipboardCheck,
   Globe,
   Key,
   Lock,
+  Layers,
+  Monitor,
   Network,
-  PackageCheck,
+  Package,
   Plus,
   Server,
   ShieldCheck,
   Sparkles,
   Terminal,
+  Wrench,
   XCircle,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -42,20 +46,50 @@ import type {
   OnboardingProtocol,
   TestConnectionPayload,
   TestConnectionResult,
+  EnrollmentToken,
 } from '../lib/api';
 
 const PROTO_HINT: Record<OnboardingProtocol, string> = {
-  ssh: 'Linux, macOS, or any host with sshd. Default port 22.',
-  winrm: 'Windows Server with WinRM enabled. Default port 5985 (HTTP) / 5986 (HTTPS).',
-  rdp: 'TCP reachability check only. Pair with a WinRM credential to enrol the host.',
+  ssh: 'Linux or macOS with SSH enabled. Default port 22.',
+  winrm: 'Windows machine with WinRM enabled. Default port 5985 (HTTP) / 5986 (HTTPS).',
+  rdp: 'TCP reachability check only. Pair with a WinRM credential to enrol the machine.',
 };
 
-type Mode = 'single' | 'hypervisor';
+type Scenario = 'local' | 'remote' | 'bulk' | 'offline' | 'repair';
+type InstallOS = 'windows' | 'macos' | 'linux';
+
+function detectOS(): InstallOS {
+  const ua = navigator.userAgent.toLowerCase();
+  const plat = navigator.platform.toLowerCase();
+  if (ua.includes('win') || plat.includes('win')) return 'windows';
+  if (ua.includes('mac') || plat.includes('mac')) return 'macos';
+  return 'linux';
+}
+
+function installPlatform(os: InstallOS): string {
+  return os === 'macos' ? 'darwin' : os;
+}
+
+function buildInstallScriptUrl(origin: string, token: string, os: InstallOS): string {
+  const search = new URLSearchParams({
+    token,
+    platform: installPlatform(os),
+  });
+  return `${origin}/api/v1/agent/install-script?${search.toString()}`;
+}
+
+function buildInstallCommand(origin: string, token: string, os: InstallOS): string {
+  const url = buildInstallScriptUrl(origin, token, os);
+  if (os === 'windows') {
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod -Uri '${url}' | Invoke-Expression"`;
+  }
+  return `curl -fsSL '${url}' | sudo bash`;
+}
 
 export function Onboard(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId, tenants, refresh: refreshTenants } = useTenant();
-  const [mode, setMode] = useState<Mode>('single');
+  const [scenario, setScenario] = useState<Scenario | null>(null);
 
   const [protocol, setProtocol] = useState<OnboardingProtocol>('ssh');
   const [host, setHost] = useState('');
@@ -77,11 +111,38 @@ export function Onboard(): JSX.Element {
   const [creatingTenant, setCreatingTenant] = useState(false);
   const [newTenantName, setNewTenantName] = useState('');
 
+  // Command install copy state
+  const [copied, setCopied] = useState(false);
+  const detectedOS = detectOS();
+  const [installOS, setInstallOS] = useState<InstallOS>(detectedOS);
+  const [installToken, setInstallToken] = useState<EnrollmentToken | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const installOrigin = window.location.origin;
+  const installCommand = installToken?.token
+    ? buildInstallCommand(installOrigin, installToken.token, installOS)
+    : buildInstallCommand(installOrigin, '<generate-token>', installOS);
+
+  const resetInstallCommand = () => {
+    setInstallToken(null);
+    setInstallError(null);
+    setCopied(false);
+  };
+
+  const selectEnrollmentTenant = (tenantId: string | null) => {
+    if (tenantId !== enrolTenantId) resetInstallCommand();
+    setEnrolTenantId(tenantId);
+  };
+
   useEffect(() => {
     if (!enrolTenantId && currentTenantId) setEnrolTenantId(currentTenantId);
   }, [currentTenantId, enrolTenantId]);
 
-  // Auto country lookup once we know the host is reachable. Uses the
+  useEffect(() => {
+    setResult(null);
+    setJobId(null);
+  }, [scenario]);
+
+  // Auto country lookup once we know the address is reachable. Uses the
   // existing ipintel pipeline (akyriako/ipquery + AbuseIPDB fallback).
   const enrichQ = useQuery<IpEnrichment | null>({
     queryKey: ['onboard.enrich', host, result?.ok, enrolTenantId ?? currentTenantId],
@@ -139,7 +200,7 @@ export function Onboard(): JSX.Element {
       if (!token.token) throw new Error('controlplane returned no raw enrolment token');
 
       // Step 2: dispatch the existing fleet enroller. Reuses the same
-      // queued-job + per-host result tracking the bulk enrol page already
+      // queued-job + per-target result tracking the bulk enrol page already
       // has, so the wizard never duplicates that machinery.
       const payload = {
         targets: [
@@ -167,11 +228,39 @@ export function Onboard(): JSX.Element {
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Enrolment failed'),
   });
 
+  const generateInstallToken = useMutation({
+    mutationFn: async () => {
+      const tenantIdForToken = enrolTenantId ?? currentTenantId;
+      if (!tenantIdForToken) throw new Error('Select a tenant before generating a token');
+      const issued = await client.createEnrollmentToken({
+        name: `command-install-${installOS}-${Date.now()}`,
+        tenant_id: tenantIdForToken,
+        max_nodes: 1,
+        ttl: '24h',
+        labels: { onboard_source: 'command-install', platform: installPlatform(installOS) },
+        capabilities: ['agent.run'],
+      });
+      if (!issued.token) throw new Error('controlplane returned no raw enrollment token');
+      return issued;
+    },
+    onSuccess: (issued) => {
+      setInstallToken(issued);
+      setInstallError(null);
+      setCopied(false);
+      toast.success('Token generated');
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : 'Token generation failed';
+      setInstallError(msg);
+      toast.error(msg);
+    },
+  });
+
   const createTenant = useMutation({
     mutationFn: () => client.createTenant({ name: newTenantName.trim() }),
     onSuccess: async (t) => {
       await refreshTenants();
-      setEnrolTenantId(t.id);
+      selectEnrollmentTenant(t.id);
       setNewTenantName('');
       setCreatingTenant(false);
       toast.success(`Tenant "${t.name}" created`);
@@ -217,47 +306,135 @@ export function Onboard(): JSX.Element {
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="ONBOARDING"
-        title="Add servers to Control One"
-        description="Enroll one host, import a fleet from infrastructure, or prepare an offline bundle. All paths use the same node labels, tenant scope, and job tracking."
-        actions={
-          <>
-            <Button asChild variant="secondary" size="sm">
-              <Link to="/fleet-enroll">
-                <Server className="h-4 w-4" /> Bulk hosts
-              </Link>
-            </Button>
-            <Button asChild variant="secondary" size="sm">
-              <Link to="/hypervisors">
-                <Boxes className="h-4 w-4" /> Hypervisors
-              </Link>
-            </Button>
-            <Button asChild variant="secondary" size="sm">
-              <Link to="/offline-bundle">
-                <PackageCheck className="h-4 w-4" /> Offline bundle
-              </Link>
-            </Button>
-          </>
-        }
+        title="Add machines to Control One"
+        description="Agent identity survives hostname and IP changes."
       />
 
       <OnboardAIPanel />
 
-      <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
-        <TabsList>
-          <TabsTrigger value="single">
-            <Server className="h-4 w-4" /> Single server
-          </TabsTrigger>
-          <TabsTrigger value="hypervisor">
-            <Boxes className="h-4 w-4" /> Hypervisor / cloud account
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
+      {/* ── Scenario cards ───────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <ScenarioCard
+          icon={<Monitor className="h-5 w-5" />}
+          title="Command install"
+          description="No inbound access required."
+          outcome="First heartbeat activates the machine."
+          active={scenario === 'local'}
+          onClick={() => setScenario(scenario === 'local' ? null : 'local')}
+        />
+        <ScenarioCard
+          icon={<Globe className="h-5 w-5" />}
+          title="Install on another machine"
+          description="SSH or WinRM push install."
+          outcome="Credential probe required before enrollment."
+          active={scenario === 'remote'}
+          onClick={() => setScenario(scenario === 'remote' ? null : 'remote')}
+        />
+        <ScenarioCard
+          icon={<Layers className="h-5 w-5" />}
+          title="Bulk enroll"
+          description="CSV, pasted target list, or API-driven enrollment."
+          outcome="Many machines, one tracked job."
+          active={false}
+          onClick={() => {}}
+          link="/fleet-enroll"
+        />
+        <ScenarioCard
+          icon={<Package className="h-5 w-5" />}
+          title="Offline or restricted network"
+          description="Signed bundle for restricted networks."
+          outcome="No internet fetch during install."
+          active={false}
+          onClick={() => {}}
+          link="/offline-bundle"
+        />
+        <ScenarioCard
+          icon={<Wrench className="h-5 w-5" />}
+          title="Repair existing agent"
+          description="One-shot reinstall token."
+          outcome="Identity and history preserved."
+          active={false}
+          onClick={() => {}}
+          link="/nodes"
+        />
+      </div>
 
-      {mode === 'hypervisor' ? <HypervisorPathCard /> : null}
+      {/* ── Command install panel ─────────────────────────────────────── */}
+      {scenario === 'local' && (
+        <Panel padding="md" eyebrow="COMMAND INSTALL" title="Run install command" toneAccent="brand">
+          <p className="text-sm text-text-secondary mb-3">
+            Run from an elevated terminal on the machine being enrolled.
+          </p>
+          <Tabs
+            value={installOS}
+            onValueChange={(v) => {
+              setInstallOS(v as InstallOS);
+              resetInstallCommand();
+            }}
+            className="mb-3"
+          >
+            <TabsList>
+              <TabsTrigger value="linux">
+                <Terminal className="h-4 w-4" /> Linux
+              </TabsTrigger>
+              <TabsTrigger value="macos">
+                <Monitor className="h-4 w-4" /> macOS
+              </TabsTrigger>
+              <TabsTrigger value="windows">
+                <Monitor className="h-4 w-4" /> Windows
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-text-secondary">One machine, 24h token.</p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={generateInstallToken.isPending}
+              disabled={generateInstallToken.isPending || !(enrolTenantId ?? currentTenantId)}
+              onClick={() => generateInstallToken.mutate()}
+            >
+              <Key className="h-4 w-4" />
+              {installToken?.token ? 'Regenerate token' : 'Generate token'}
+            </Button>
+          </div>
+          <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground">
+            <code className="flex-1 break-all">{installCommand}</code>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={!installToken?.token}
+              onClick={() => {
+                if (!installToken?.token) return;
+                navigator.clipboard.writeText(installCommand);
+                setCopied(true);
+                toast.success('Copied to clipboard');
+                setTimeout(() => setCopied(false), 2000);
+              }}
+            >
+              {copied ? <ClipboardCheck className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+          {installError ? (
+            <p className="mt-2 text-xs text-state-critical">{installError}</p>
+          ) : null}
+          <div className="mt-3 rounded-md border border-accent-400/20 bg-accent-400/5 px-3 py-2 text-xs text-text-secondary">
+            First heartbeat activates the machine. Static IP and inbound access are not required.
+          </div>
+        </Panel>
+      )}
 
-      {mode === 'single' && (
+      {/* ── "Install on another machine" — existing protocol-pick flow ── */}
+      {scenario === 'remote' && (
         <>
-          <Panel padding="md" eyebrow="STEP 1 · PROTOCOL" title="Pick how to reach the host" toneAccent="brand">
+          <div className="rounded-md border border-accent-400/20 bg-accent-400/5 px-3 py-2 text-xs text-text-secondary">
+            First heartbeat activates the machine. Inbound access is not required after install. IP changes remain network observations.
+          </div>
+
+          <Panel padding="md" eyebrow="STEP 1 · PROTOCOL" title="Remote install method" toneAccent="brand">
             <Tabs
               value={protocol}
               onValueChange={(v) => {
@@ -284,17 +461,19 @@ export function Onboard(): JSX.Element {
           </Panel>
 
           <form onSubmit={submitTest} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Panel padding="md" eyebrow="TARGET" title="Where is the server?">
-              <Field label="Host" icon={<Globe className="h-3.5 w-3.5" />}>
+            <Panel padding="md" eyebrow="TARGET" title="Current network address">
+              <Field label="Address" htmlFor="onboard-address" icon={<Globe className="h-3.5 w-3.5" />}>
                 <Input
-                  placeholder="10.0.0.42 or server.example.com"
+                  id="onboard-address"
+                  placeholder="10.0.0.42 or machine.example.com"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
                   required
                 />
               </Field>
-              <Field label="Port (optional)">
+              <Field label="Port (optional)" htmlFor="onboard-port">
                 <Input
+                  id="onboard-port"
                   type="number"
                   placeholder={
                     protocol === 'ssh' ? '22' : protocol === 'winrm' ? (https ? '5986' : '5985') : '3389'
@@ -328,9 +507,10 @@ export function Onboard(): JSX.Element {
             </Panel>
 
             {protocol !== 'rdp' && (
-              <Panel padding="md" eyebrow="CREDENTIALS" title="How should we authenticate?" toneAccent="accent">
-                <Field label="Username" icon={<ShieldCheck className="h-3.5 w-3.5" />}>
+              <Panel padding="md" eyebrow="CREDENTIALS" title="Authentication" toneAccent="accent">
+                <Field label="Username" htmlFor="onboard-username" icon={<ShieldCheck className="h-3.5 w-3.5" />}>
                   <Input
+                    id="onboard-username"
                     placeholder={protocol === 'ssh' ? 'ubuntu' : 'Administrator'}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -349,8 +529,9 @@ export function Onboard(): JSX.Element {
                       </TabsTrigger>
                     </TabsList>
                     <TabsContent value="password">
-                      <Field label="Password">
+                      <Field label="Password" htmlFor="onboard-ssh-password">
                         <Input
+                          id="onboard-ssh-password"
                           type="password"
                           placeholder="••••••••"
                           value={password}
@@ -379,8 +560,9 @@ export function Onboard(): JSX.Element {
                           autoComplete="off"
                         />
                       </div>
-                      <Field label="Passphrase (optional)">
+                      <Field label="Passphrase (optional)" htmlFor="onboard-private-key-passphrase">
                         <Input
+                          id="onboard-private-key-passphrase"
                           type="password"
                           placeholder="leave blank if key is unencrypted"
                           value={passphrase}
@@ -391,8 +573,9 @@ export function Onboard(): JSX.Element {
                     </TabsContent>
                   </Tabs>
                 ) : (
-                  <Field label="Password">
+                  <Field label="Password" htmlFor="onboard-winrm-password">
                     <Input
+                      id="onboard-winrm-password"
                       type="password"
                       placeholder="••••••••"
                       value={password}
@@ -404,7 +587,7 @@ export function Onboard(): JSX.Element {
                   </Field>
                 )}
                 <p className="text-[0.65rem] text-text-muted">
-                  Credentials are sent once, used to probe the host, and never persisted. No keys hit the database.
+                  Credentials are sent once, used to probe the machine, and never persisted. No keys hit the database.
                 </p>
               </Panel>
             )}
@@ -436,17 +619,48 @@ export function Onboard(): JSX.Element {
                   ) : (
                     <XCircle className="h-5 w-5 text-state-critical" />
                   )}
-                  {result.ok ? 'Server is reachable' : 'Could not reach the server'}
+                   {result.ok ? 'Machine is reachable' : 'Could not reach the machine'}
                 </span>
               }
             >
               {result.ok && result.probe ? (
                 <ProbeSummary probe={result.probe} />
               ) : (
-                <p className="text-sm text-state-critical">
-                  {result.error || 'Connection failed for an unknown reason.'}
-                </p>
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm text-state-critical">
+                    {result.error || 'Connection failed for an unknown reason.'}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setScenario('local')}>
+                      Command install
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" asChild>
+                      <Link to="/offline-bundle">Offline bundle</Link>
+                    </Button>
+                  </div>
+                </div>
               )}
+            </Panel>
+          )}
+
+          {result?.ok && protocol === 'rdp' && (
+            <Panel
+              padding="md"
+              eyebrow="ENROLLMENT PATH"
+              title="WinRM or command install required"
+              toneAccent="accent"
+            >
+              <p className="text-sm text-text-secondary">
+                RDP confirms reachability only. Agent enrollment needs WinRM, SSH, command install, or an offline bundle.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => setProtocol('winrm')}>
+                  Switch to WinRM
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setScenario('local')}>
+                  Command install
+                </Button>
+              </div>
             </Panel>
           )}
 
@@ -454,15 +668,17 @@ export function Onboard(): JSX.Element {
             <Panel
               padding="md"
               eyebrow="STEP 2 · GROUP & ENROL"
-              title="Name the server group and enrol"
+              title="Name the machine group and enrol"
               toneAccent="brand"
             >
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field
-                  label="Server group"
+                  label="Machine group"
+                  htmlFor="onboard-machine-group"
                   icon={<Sparkles className="h-3.5 w-3.5 text-accent-400" />}
                 >
                   <Input
+                    id="onboard-machine-group"
                     placeholder="Group US"
                     value={groupName}
                     onChange={(e) => {
@@ -475,7 +691,7 @@ export function Onboard(): JSX.Element {
                     {enrichQ.isLoading ? 'IP intelligence…' : enrichQ.data?.geo?.country_code
                       ? `IP origin (${enrichQ.data.geo.country_code}${enrichQ.data.geo?.country ? ' · ' + enrichQ.data.geo.country : ''})`
                       : 'a generic default'}{' '}
-                    — override anytime. Group is stored as a label so existing nodes pages, rules and dashboards filter by it automatically.
+                    for rule and dashboard scoping.
                   </p>
                 </Field>
                 <div className="flex flex-col gap-1.5">
@@ -532,7 +748,7 @@ export function Onboard(): JSX.Element {
                       <SelectField
                         label="Tenant"
                         value={enrolTenantId ?? ''}
-                        onChange={(e) => setEnrolTenantId(e.target.value || null)}
+                        onChange={(e) => selectEnrollmentTenant(e.target.value || null)}
                         wrapperClassName="flex-1"
                       >
                         <option value="">Select tenant…</option>
@@ -551,7 +767,7 @@ export function Onboard(): JSX.Element {
                     </div>
                   )}
                   <p className="text-[0.65rem] text-text-muted">
-                    Defaults to the active tenant. Single-server enrolment scopes the new node here.
+                    Active tenant selected by default. Enrollment is tenant-scoped.
                   </p>
                 </div>
               </div>
@@ -572,7 +788,7 @@ export function Onboard(): JSX.Element {
                   disabled={!canEnrol}
                   onClick={() => enrol.mutate()}
                 >
-                  Enrol server <ArrowRight className="h-4 w-4" />
+                   Enrol machine <ArrowRight className="h-4 w-4" />
                 </Button>
               </div>
 
@@ -593,68 +809,92 @@ export function Onboard(): JSX.Element {
 
           {!result && !test.isPending && (
             <EmptyState
-              title="Run a test"
-              description="Fill the form above and click Test connection. Successful probes unlock enrollment."
+              title="Connection test required"
+              description="Successful probes unlock enrollment."
               icon={<Terminal />}
             />
           )}
         </>
       )}
+
+      {/* ── Repair existing agent ─────────────────────────────────────── */}
+      {scenario === 'repair' && (
+        <Panel padding="md" eyebrow="REPAIR AGENT" title="Preserve identity during reinstall" toneAccent="accent">
+          <p className="text-sm text-text-secondary">
+            One-shot token. Fresh binary. Existing node history preserved.
+          </p>
+          <ul className="mt-2 list-disc pl-5 text-xs text-text-muted">
+            <li>Agent node key and historical data are preserved.</li>
+            <li>A fresh agent binary is deployed via SSH or WinRM.</li>
+            <li>No manual re-enrollment is needed after the repair completes.</li>
+          </ul>
+          <div className="mt-3 flex justify-end">
+            <Button asChild variant="primary" size="md" shimmer>
+              <Link to="/repair-agent">
+                Repair agent <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }
 
-function HypervisorPathCard(): JSX.Element {
-  return (
-    <Panel
-      padding="md"
-      eyebrow="HYPERVISOR / CLOUD ACCOUNT"
-      title="Enroll from a hypervisor or cloud account"
-      toneAccent="accent"
-    >
-      <p className="text-sm text-text-secondary">
-        Register vCenter, libvirt, AWS, or Azure once. Control One enumerates running
-        VMs and enrolls them as a fleet. Existing tooling lives at{' '}
-        <Link to="/hypervisors" className="text-brand-400 underline">
-          /hypervisors
-        </Link>
-        . The single-server wizard reuses the same fleet-enroll pipeline, so groups, labels, and
-        agents stay consistent across both paths.
-      </p>
-      <ul className="mt-2 grid gap-2 sm:grid-cols-2">
-        {[
-          { name: 'AWS', hint: 'access key + region; enumerates EC2 + SSM-managed hosts' },
-          { name: 'Azure', hint: 'service principal; enumerates VMs and Arc-connected machines' },
-          { name: 'VMware vCenter', hint: 'API + read-only datastore role; pulls VMs across clusters' },
-          { name: 'libvirt / KVM', hint: 'libvirt-uri credentials; enumerates running domains' },
-        ].map((p) => (
-          <li
-            key={p.name}
-            className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface px-3 py-2"
-          >
-            <Boxes className="mt-0.5 h-4 w-4 text-accent-400" />
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-foreground">{p.name}</span>
-              <span className="text-xs text-text-muted">{p.hint}</span>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-3 flex justify-end">
-        <Button asChild variant="primary" size="md" shimmer>
-          <Link to="/hypervisors">
-            Open hypervisor enrollment <ArrowRight className="h-4 w-4" />
-          </Link>
-        </Button>
+function ScenarioCard({
+  icon,
+  title,
+  description,
+  outcome,
+  active,
+  onClick,
+  link,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  outcome: string;
+  active: boolean;
+  onClick: () => void;
+  link?: string;
+}): JSX.Element {
+  const cardClasses = [
+    'flex flex-col gap-2 rounded-lg border px-4 py-3 text-left transition-colors cursor-pointer',
+    active
+      ? 'border-brand-400 bg-brand-400/10 ring-1 ring-brand-400/30'
+      : 'border-border-subtle bg-surface hover:border-border-strong hover:bg-surface-hover',
+  ].join(' ');
+
+  const inner = (
+    <>
+      <div className="flex items-center gap-2">
+        <span className={active ? 'text-brand-400' : 'text-text-secondary'}>{icon}</span>
+        <span className="text-sm font-medium text-foreground">{title}</span>
       </div>
-    </Panel>
+      <p className="text-xs text-text-secondary leading-relaxed">{description}</p>
+      <p className="text-[0.65rem] text-text-muted">{outcome}</p>
+    </>
+  );
+
+  if (link) {
+    return (
+      <Link to={link} className={cardClasses.replace('cursor-pointer', 'cursor-pointer')}>
+        {inner}
+      </Link>
+    );
+  }
+
+  return (
+    <button type="button" className={cardClasses} onClick={onClick}>
+      {inner}
+    </button>
   );
 }
 
-function Field({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) {
+function Field({ label, htmlFor, icon, children }: { label: string; htmlFor?: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className="inline-flex items-center gap-1.5">
+      <Label htmlFor={htmlFor} className="inline-flex items-center gap-1.5">
         {icon}
         {label}
       </Label>
@@ -736,4 +976,3 @@ function toBase64(pem: string): string {
   const normalized = pem.replace(/\r\n/g, '\n');
   return btoa(normalized);
 }
-

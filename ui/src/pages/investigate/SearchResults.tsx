@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bookmark, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -10,7 +11,7 @@ import { useApiClient } from '@/hooks/useApiClient';
 import { useTenant } from '@/providers/TenantProvider';
 import { entityRoute, ENTITY_TYPE_LABELS } from '@/lib/entity';
 import type { EntityType } from '@/components/kit';
-import type { ClassificationChip, InvestigateSearchResult } from '@/lib/api';
+import type { ClassificationChip, InvestigateSearchResult, SavedSearch } from '@/lib/api';
 
 const SEV_TO_TONE: Record<string, StateTone> = {
   critical: 'critical',
@@ -21,13 +22,21 @@ const SEV_TO_TONE: Record<string, StateTone> = {
   unknown: 'unknown',
 };
 
+function savedSearchName(query: string): string {
+  const label = query.length > 72 ? `${query.slice(0, 72)}...` : query;
+  return `Search: ${label}`;
+}
+
 export function SearchResults(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const client = useApiClient();
+  const qc = useQueryClient();
   const { currentTenantId } = useTenant();
   const [tab, setTab] = useState('all');
   const [refineQuery, setRefineQuery] = useState(q);
+  const normalizedQuery = q.trim();
+  const hasQuery = normalizedQuery.length > 0;
 
   // Keep refine input in sync when URL changes (e.g. browser back)
   useEffect(() => {
@@ -36,16 +45,48 @@ export function SearchResults(): JSX.Element {
 
   const handleRefine = () => {
     const trimmed = refineQuery.trim();
-    if (trimmed && trimmed !== q) {
-      setParams({ q: trimmed });
+    if (trimmed !== normalizedQuery) {
+      setParams(trimmed ? { q: trimmed } : {});
       setTab('all');
     }
   };
 
   const searchQ = useQuery<InvestigateSearchResult>({
     queryKey: ['search', currentTenantId, q],
-    queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q, limit: 200 }),
-    enabled: q.length > 0 && !!currentTenantId,
+    queryFn: () => client.investigateSearch({ tenantId: currentTenantId, q: normalizedQuery, limit: 200 }),
+    enabled: hasQuery && !!currentTenantId,
+  });
+  const savedSearchesQ = useQuery({
+    queryKey: ['saved-searches', currentTenantId],
+    queryFn: () => client.listSavedSearches({ tenantId: currentTenantId }),
+    enabled: hasQuery && !!currentTenantId,
+  });
+  const entityTypeFilter = tab === 'all' ? '' : tab;
+  const matchingSavedSearch = (savedSearchesQ.data?.items ?? []).find(
+    (saved) => saved.query.trim() === normalizedQuery && (saved.entity_type ?? '') === entityTypeFilter,
+  );
+
+  const saveSearch = useMutation({
+    mutationFn: () =>
+      client.createSavedSearch(
+        {
+          name: savedSearchName(normalizedQuery),
+          query: normalizedQuery,
+          entity_type: tab === 'all' ? undefined : tab,
+          filters: tab === 'all' ? undefined : { type: tab },
+          shared: false,
+        },
+        { tenantId: currentTenantId },
+      ),
+    onSuccess: (row) => {
+      qc.setQueryData<{ items: SavedSearch[] }>(['saved-searches', currentTenantId], (current) => {
+        const items = current?.items ?? [];
+        return items.some((item) => item.id === row.id) ? { items } : { items: [row, ...items] };
+      });
+      qc.invalidateQueries({ queryKey: ['saved-searches', currentTenantId] });
+      toast.success('Search saved');
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Save failed'),
   });
 
   const items = searchQ.data?.items ?? [];
@@ -64,7 +105,7 @@ export function SearchResults(): JSX.Element {
             value={refineQuery}
             onChange={(e) => setRefineQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleRefine()}
-            placeholder="Refine search…"
+            placeholder="Refine search..."
           />
         </div>
         <Button variant="secondary" onClick={handleRefine}>
@@ -74,25 +115,34 @@ export function SearchResults(): JSX.Element {
 
       <SectionHeader
         eyebrow="SEARCH RESULTS"
-        title={
-          <span className="inline-flex items-center gap-3">
-            <span className="font-mono text-text-muted">›</span>
-            <span className="break-all">{q || '(empty query)'}</span>
-          </span>
-        }
+        title={hasQuery ? 'Search results' : 'Search'}
         description={
           searchQ.isLoading
-            ? 'Searching across events, alerts, audit and tags…'
-            : `${items.length.toLocaleString()} match${items.length === 1 ? '' : 'es'}`
+            ? `Searching for "${normalizedQuery}" across events, alerts, audit, and tags...`
+            : hasQuery
+              ? `${items.length.toLocaleString()} match${items.length === 1 ? '' : 'es'} for "${normalizedQuery}"`
+              : 'Search events, alerts, audit entries, and tags across the selected tenant.'
         }
         actions={
-          <Button variant="secondary" size="md">
-            <Bookmark className="h-4 w-4" /> Save search
+          <Button
+            variant="secondary"
+            size="md"
+            disabled={
+              !hasQuery ||
+              !currentTenantId ||
+              saveSearch.isPending ||
+              savedSearchesQ.isLoading ||
+              Boolean(matchingSavedSearch)
+            }
+            loading={saveSearch.isPending}
+            onClick={() => saveSearch.mutate()}
+          >
+            <Bookmark className="h-4 w-4" /> {matchingSavedSearch ? 'Saved' : 'Save search'}
           </Button>
         }
       />
 
-      {q.length === 0 ? (
+      {!hasQuery ? (
         <EmptyState title="Enter a query" description="Type in the search bar above and press Enter or click Search." />
       ) : (
         <Tabs value={tab} onValueChange={setTab}>

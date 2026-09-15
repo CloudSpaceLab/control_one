@@ -70,27 +70,19 @@ curl -sS -X POST \
 The response includes a `token` field (only shown once). Use that with the
 one-line installer.
 
-## Install the agent on a Linux host
+## Install the agent
 
 ```bash
-# On the target host (root):
-curl -sSL https://control-one.cloudspacetechs.com/api/v1/agent/install-script \
-  -H "Authorization: Bearer $TOKEN" \
-  -d "tenant_id=$TENANT_ID&enrollment_token=$ENROLLMENT_TOKEN" \
-  | bash
+# Linux or macOS target:
+curl -fsSL "https://control-one.cloudspacetechs.com/api/v1/agent/install-script?token=$ENROLLMENT_TOKEN&platform=linux" | sudo bash
 ```
 
-Distro-aware (apt, dnf, yum, zypper, apk, pacman) and init-aware (systemd,
-OpenRC, SysV). Windows install via `install.ps1`:
+For macOS, change `platform=linux` to `platform=darwin`. The installer detects
+the CPU architecture and starts the platform service.
 
 ```powershell
-# On the target Windows host (admin PowerShell):
-$env:CO_TOKEN = "$TOKEN"
-$env:CO_TENANT = "$TENANT_ID"
-$env:CO_ENROLL = "$ENROLLMENT_TOKEN"
-iex (New-Object Net.WebClient).DownloadString(
-  "https://control-one.cloudspacetechs.com/api/v1/agent/install-script?os=windows"
-)
+# Windows Command Prompt or PowerShell, run as Administrator:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod -Uri 'https://control-one.cloudspacetechs.com/api/v1/agent/install-script?token=$ENROLLMENT_TOKEN&platform=windows' | Invoke-Expression"
 ```
 
 ## Bulk-enrol existing fleet over SSH

@@ -7,15 +7,17 @@ import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
 import { useTenant } from '../providers/TenantProvider';
 import { useWorkerStatus } from '../hooks/useWorkerStatus';
-import { Webhook, CreateWebhookPayload, UpdateWebhookPayload, MFAFactor } from '../lib/api';
+import { Webhook, CreateWebhookPayload, UpdateWebhookPayload, MFAFactor, AdminCapacity } from '../lib/api';
+import { formatBytes } from '../lib/format';
 import { ConfirmModal } from '../components/ConfirmModal';
-import { Panel, SectionHeader, StatusTag, EmptyState, SelectField, KpiTile } from '../components/kit';
+import { Panel, SectionHeader, StatusTag, EmptyState, SelectField, KpiTile, type StateTone } from '../components/kit';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { AISettingsTab } from '../components/settings/AISettingsTab';
 import { KeyRound, Shield, Trash2 } from 'lucide-react';
+import { useHref } from 'react-router-dom';
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -42,6 +44,8 @@ const AVAILABLE_EVENTS = [
   'tenant.updated',
 ];
 
+type SettingsTab = 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai';
+
 const newWebhookForm = (): CreateWebhookPayload => ({
   name: '',
   url: '',
@@ -66,6 +70,115 @@ function parseWebhookHeaders(value: string): Record<string, unknown> | undefined
 
 function webhookHasHeaders(webhook?: Webhook | null): boolean {
   return Boolean(webhook?.headers_configured) || Object.keys(webhook?.headers ?? {}).length > 0;
+}
+
+function titleCaseStatus(value?: string): string {
+  const normalized = (value || '').trim();
+  if (!normalized) {
+    return 'Unknown';
+  }
+  if (normalized.toLowerCase() === 'ok') {
+    return 'OK';
+  }
+  return normalized
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function healthTone(status?: string): StateTone {
+  switch ((status || '').toLowerCase()) {
+    case 'ok':
+    case 'ready':
+    case 'running':
+    case 'healthy':
+    case 'disabled':
+      return 'healthy';
+    case 'projection_pending':
+    case 'pending':
+      return 'warning';
+    case 'degraded':
+      return 'degraded';
+    case 'down':
+    case 'failed':
+    case 'critical':
+    case 'unconfigured':
+      return 'critical';
+    default:
+      return 'unknown';
+  }
+}
+
+function olapStatusLabel(capacity: AdminCapacity): string {
+  const status = (capacity.warehouse_status || capacity.doris_status || '').toLowerCase();
+  if (status === 'disabled') {
+    return 'Off';
+  }
+  if (status === 'ok') {
+    return 'Ready';
+  }
+  if (status === 'unconfigured') {
+    return 'Missing';
+  }
+  return titleCaseStatus(status);
+}
+
+function olapStatusTone(capacity: AdminCapacity): StateTone {
+  const status = (capacity.warehouse_status || capacity.doris_status || '').toLowerCase();
+  if (status === 'disabled' && capacity.analytics_mode === 'small') {
+    return 'healthy';
+  }
+  return healthTone(status);
+}
+
+function diskUsedPercent(capacity: AdminCapacity): number | null {
+  if (!capacity.disk_total || capacity.disk_total <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, (capacity.disk_used / capacity.disk_total) * 100));
+}
+
+function diskTone(percent: number | null): StateTone {
+  if (percent == null) {
+    return 'unknown';
+  }
+  if (percent >= 95) {
+    return 'critical';
+  }
+  if (percent >= 85) {
+    return 'warning';
+  }
+  return 'healthy';
+}
+
+function projectionStatusLabel(capacity: AdminCapacity): string {
+  return titleCaseStatus(capacity.projection?.status ?? capacity.analytics_status ?? capacity.doris_status);
+}
+
+function projectionReadCheckLabel(capacity: AdminCapacity): string {
+  return titleCaseStatus(
+    capacity.projection?.read_check ?? capacity.projection?.quick_check ?? capacity.projection?.status,
+  );
+}
+
+function projectionTotalBytes(capacity: AdminCapacity): number {
+  const projection = capacity.projection;
+  if (!projection) {
+    return 0;
+  }
+  return projection.total_bytes ?? ((projection.db_bytes ?? 0) + (projection.wal_bytes ?? 0) + (projection.shm_bytes ?? 0));
+}
+
+function projectionSizeTone(bytes: number): StateTone {
+  if (bytes >= 25 * 1024 * 1024 * 1024) {
+    return 'critical';
+  }
+  if (bytes >= 10 * 1024 * 1024 * 1024) {
+    return 'warning';
+  }
+  return 'healthy';
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -161,13 +274,15 @@ function serializeWebAuthnAttestation(credential: PublicKeyCredential): Record<s
 
 export function Settings(): JSX.Element {
   const api = useApiClient();
-  const [activeTab, setActiveTab] = useState<'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai'>('webhooks');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('webhooks');
 
   // MFA state
   const [mfaFactors, setMfaFactors] = useState<MFAFactor[]>([]);
   const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaReloadToken, setMfaReloadToken] = useState(0);
   const [deleteMfaId, setDeleteMfaId] = useState<string | null>(null);
+  const [deletingMfa, setDeletingMfa] = useState(false);
   const [totpEnrollStep, setTotpEnrollStep] = useState<'idle' | 'scanning' | 'verifying'>('idle');
   const [totpEnrollData, setTotpEnrollData] = useState<{ factor_id: string; secret: string; provisioning_uri: string } | null>(null);
   const [totpQrDataUrl, setTotpQrDataUrl] = useState<string | null>(null);
@@ -179,23 +294,76 @@ export function Settings(): JSX.Element {
 
   // Worker pool
   const { status: workerStatus, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus({ pollIntervalMs: 0 });
+  const [capacity, setCapacity] = useState<AdminCapacity | null>(null);
+  const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityError, setCapacityError] = useState<string | null>(null);
+  const [capacityReloadToken, setCapacityReloadToken] = useState(0);
+
+  useEffect(() => {
+    if (activeTab !== 'system') {
+      return;
+    }
+    let cancelled = false;
+    setCapacityLoading(true);
+    setCapacityError(null);
+    api
+      .getAdminCapacity()
+      .then((nextCapacity) => {
+        if (!cancelled) {
+          setCapacity(nextCapacity);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setCapacity(null);
+          setCapacityError(err instanceof Error ? err.message : 'Unable to fetch analytics health');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCapacityLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [activeTab, api, capacityReloadToken]);
 
   useEffect(() => {
     let cancelled = false;
     setMfaLoading(true);
     api
       .listMFAFactors()
-      .then((r) => { if (!cancelled) setMfaFactors(r.factors ?? []); })
-      .catch(() => { if (!cancelled) setMfaFactors([]); })
+      .then((r) => {
+        if (!cancelled) {
+          setMfaFactors(r.factors ?? []);
+          setMfaError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setMfaFactors([]);
+          setMfaError(err instanceof Error ? err.message : 'Failed to load MFA factors');
+        }
+      })
       .finally(() => { if (!cancelled) setMfaLoading(false); });
     return () => { cancelled = true; };
   }, [api, mfaReloadToken]);
 
   const handleDeleteMFA = async () => {
-    if (!deleteMfaId) return;
-    await api.deleteMFAFactor(deleteMfaId);
-    setDeleteMfaId(null);
-    setMfaReloadToken((n) => n + 1);
+    if (!deleteMfaId || deletingMfa) return;
+    try {
+      setDeletingMfa(true);
+      setMfaError(null);
+      await api.deleteMFAFactor(deleteMfaId);
+      setDeleteMfaId(null);
+      setMfaReloadToken((n) => n + 1);
+      showToast('MFA factor revoked', 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not revoke the MFA factor';
+      setMfaError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeletingMfa(false);
+    }
   };
 
   const handleBeginTOTPEnroll = async () => {
@@ -475,7 +643,17 @@ export function Settings(): JSX.Element {
   const showForm = isCreatingWebhook || editingWebhook !== null;
   const trustCenterTenant = tenants.find((tenant) => tenant.id === effectiveTenant);
   const trustCenterTenantName = trustCenterTenant?.name ?? tenants[0]?.name ?? 'default';
-  const trustCenterHref = `/trust/${encodeURIComponent(trustCenterTenantName)}`;
+  const trustCenterPath = `/trust/${encodeURIComponent(trustCenterTenantName)}`;
+  const trustCenterHref = useHref(trustCenterPath);
+  const deletingMfaFactor = deleteMfaId ? mfaFactors.find((factor) => factor.id === deleteMfaId) : null;
+  const capacityDiskPercent = capacity ? diskUsedPercent(capacity) : null;
+  const capacityDiskLabel = capacityDiskPercent == null ? 'Unknown' : `${capacityDiskPercent.toFixed(0)}%`;
+  const capacityMode = titleCaseStatus(capacity?.analytics_mode);
+  const capacityStatus = titleCaseStatus(capacity?.analytics_status ?? capacity?.doris_status);
+  const capacityPostgresStatus = titleCaseStatus(capacity?.postgres_status);
+  const capacityProjectionTotal = capacity ? projectionTotalBytes(capacity) : 0;
+  const capacityProjectionStatus = capacity ? projectionStatusLabel(capacity) : 'Unknown';
+  const capacityProjectionReadCheck = capacity ? projectionReadCheckLabel(capacity) : 'Unknown';
 
   return (
     <div className="flex flex-col gap-5">
@@ -485,14 +663,14 @@ export function Settings(): JSX.Element {
         description="Webhook endpoints and platform integrations."
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'webhooks' | 'security' | 'system' | 'integrations' | 'trust-center' | 'ai')}>
-        <TabsList>
-          <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
-          <TabsTrigger value="security">Security</TabsTrigger>
-          <TabsTrigger value="system">System health</TabsTrigger>
-          <TabsTrigger value="integrations">Integrations</TabsTrigger>
-          <TabsTrigger value="trust-center">Trust Center</TabsTrigger>
-          <TabsTrigger value="ai">AI</TabsTrigger>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="webhooks">Webhooks</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="security">Security</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="system">System health</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="trust-center">Trust Center</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="ai">AI</TabsTrigger>
         </TabsList>
 
         <TabsContent value="webhooks" className="mt-4 flex flex-col gap-4">
@@ -860,7 +1038,11 @@ export function Settings(): JSX.Element {
               </div>
             )}
 
-            {mfaLoading ? (
+            {mfaError && !deleteMfaId ? (
+              <p role="alert" className="text-sm text-state-critical">
+                {mfaFactors.length > 0 ? 'MFA action failed' : 'MFA status unavailable'}: {mfaError}
+              </p>
+            ) : mfaLoading ? (
               <p className="text-sm text-text-muted">Loading factors...</p>
             ) : mfaFactors.length === 0 ? (
               <EmptyState
@@ -884,6 +1066,8 @@ export function Settings(): JSX.Element {
                       variant="ghost"
                       size="sm"
                       onClick={() => setDeleteMfaId(f.id)}
+                      aria-label={`Revoke ${f.name} MFA factor`}
+                      title={`Revoke ${f.name} MFA factor`}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-state-critical" />
                     </Button>
@@ -896,12 +1080,24 @@ export function Settings(): JSX.Element {
           <ConfirmModal
             open={deleteMfaId !== null}
             title="Revoke MFA factor?"
-            body="This factor will be removed immediately. You may be locked out if it is your only factor."
-            confirmLabel="Revoke"
+            body={
+              deletingMfaFactor
+                ? `${deletingMfaFactor.name} will be removed immediately. You may be locked out if it is your only factor.`
+                : 'This factor will be removed immediately. You may be locked out if it is your only factor.'
+            }
+            confirmLabel={deletingMfa ? 'Revoking...' : 'Revoke'}
             variant="danger"
             onConfirm={handleDeleteMFA}
-            onCancel={() => setDeleteMfaId(null)}
-          />
+            onCancel={() => {
+              if (!deletingMfa) setDeleteMfaId(null);
+            }}
+          >
+            {mfaError && deleteMfaId ? (
+              <p role="alert" className="text-sm text-state-critical">
+                MFA action failed: {mfaError}
+              </p>
+            ) : null}
+          </ConfirmModal>
 
           <Panel
             padding="md"
@@ -938,6 +1134,126 @@ export function Settings(): JSX.Element {
         </TabsContent>
 
         <TabsContent value="system" className="mt-4 flex flex-col gap-4">
+          <Panel
+            padding="md"
+            eyebrow="SYSTEM / ANALYTICS"
+            title="Analytics health"
+            actions={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setCapacityReloadToken((token) => token + 1)}
+                disabled={capacityLoading}
+                aria-label="Refresh analytics health"
+              >
+                Refresh
+              </Button>
+            }
+          >
+            {capacity ? (
+              <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  <KpiTile
+                    label="Mode"
+                    value={capacityMode}
+                    tone={capacity.analytics_mode === 'small' ? 'healthy' : 'info'}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Projection"
+                    value={capacityStatus}
+                    tone={healthTone(capacity.analytics_status ?? capacity.doris_status)}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="OLAP"
+                    value={olapStatusLabel(capacity)}
+                    tone={olapStatusTone(capacity)}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Postgres"
+                    value={capacityPostgresStatus}
+                    tone={healthTone(capacity.postgres_status)}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Disk used"
+                    value={capacityDiskLabel}
+                    tone={diskTone(capacityDiskPercent)}
+                    hint={`${formatBytes(capacity.disk_used)} / ${formatBytes(capacity.disk_total)}`}
+                    size="sm"
+                  />
+                  <KpiTile
+                    label="Retention"
+                    value={capacity.retention_days_remaining > 0 ? `${capacity.retention_days_remaining}d` : 'Current'}
+                    tone={capacity.retention_days_remaining > 0 ? 'info' : 'healthy'}
+                    size="sm"
+                  />
+                </div>
+                {capacity.projection ? (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <KpiTile
+                      label="Read check"
+                      value={capacityProjectionReadCheck}
+                      tone={healthTone(
+                        capacity.projection.read_check ?? capacity.projection.quick_check ?? capacity.projection.status,
+                      )}
+                      hint={capacity.projection.checked_at ? `Checked ${formatDate(capacity.projection.checked_at)}` : undefined}
+                      size="sm"
+                    />
+                    <KpiTile
+                      label="Projection size"
+                      value={formatBytes(capacityProjectionTotal)}
+                      tone={projectionSizeTone(capacityProjectionTotal)}
+                      hint={`DB ${formatBytes(capacity.projection.db_bytes ?? 0)} / WAL ${formatBytes(capacity.projection.wal_bytes ?? 0)}`}
+                      size="sm"
+                    />
+                    <KpiTile
+                      label="WAL"
+                      value={formatBytes(capacity.projection.wal_bytes ?? 0)}
+                      tone={projectionSizeTone(capacity.projection.wal_bytes ?? 0)}
+                      hint={`Shared memory ${formatBytes(capacity.projection.shm_bytes ?? 0)}`}
+                      size="sm"
+                    />
+                    <KpiTile
+                      label="Cache cap"
+                      value={capacity.projection.cache_mb ? `${capacity.projection.cache_mb} MB` : 'Auto'}
+                      tone="info"
+                      size="sm"
+                    />
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusTag tone={healthTone(capacity.analytics_status ?? capacity.doris_status)}>
+                    {capacityStatus}
+                  </StatusTag>
+                  {capacity.projection ? (
+                    <StatusTag tone={healthTone(capacity.projection.status ?? capacity.analytics_status)}>
+                      Projection {capacityProjectionStatus}
+                    </StatusTag>
+                  ) : null}
+                  <StatusTag tone={olapStatusTone(capacity)}>
+                    OLAP {olapStatusLabel(capacity)}
+                  </StatusTag>
+                </div>
+                {capacity.projection?.last_error ? (
+                  <p role="alert" className="text-sm text-state-critical">
+                    Projection health failed: {capacity.projection.last_error}
+                  </p>
+                ) : null}
+              </div>
+            ) : capacityLoading ? (
+              <p className="text-sm text-text-muted">Loading analytics health...</p>
+            ) : (
+              <EmptyState
+                title="Analytics health unavailable"
+                description={capacityError ?? 'The analytics health check did not respond.'}
+              />
+            )}
+          </Panel>
+
           <Panel
             padding="md"
             eyebrow="SYSTEM / WORKER POOL"
@@ -994,7 +1310,7 @@ export function Settings(): JSX.Element {
             <div className="flex flex-col gap-3">
               <p className="text-sm text-text-secondary">
                 The Trust Center displays subprocessors, certifications, security FAQ, and incident history to the public.
-                Access the public portal at <code className="text-brand-600">/trust/:tenant-name</code>.
+                Access the public portal at <code className="text-brand-600">/console/trust/:tenant-name</code>.
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                 <Button variant="secondary" asChild>

@@ -278,13 +278,18 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTenantAccess(w, r, principal, scope.TenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
 		return
 	}
+	entityType, entityID, err := normalizeTimelineEntityScope(scope.TenantID, req.EntityType, req.EntityID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	rows, source, backendGuardrails, err := s.buildInvestigationTimeline(r.Context(), doris.TimelineBuildParams{
 		TenantID:      scope.TenantID.String(),
 		CorrelationID: strings.TrimSpace(req.CorrelationID),
 		NodeID:        strings.TrimSpace(req.NodeID),
 		ConnID:        strings.TrimSpace(req.ConnID),
-		EntityType:    strings.TrimSpace(req.EntityType),
-		EntityID:      strings.TrimSpace(req.EntityID),
+		EntityType:    entityType,
+		EntityID:      entityID,
 		Since:         scope.Since,
 		Until:         scope.Until,
 		Limit:         scope.Limit,
@@ -316,8 +321,8 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		"correlation_id": strings.TrimSpace(req.CorrelationID),
 		"conn_id":        strings.TrimSpace(req.ConnID),
 		"node_id":        strings.TrimSpace(req.NodeID),
-		"entity_type":    strings.TrimSpace(req.EntityType),
-		"entity_id":      strings.TrimSpace(req.EntityID),
+		"entity_type":    entityType,
+		"entity_id":      entityID,
 	} {
 		if value != "" {
 			responseScope[key] = value
@@ -335,6 +340,25 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func normalizeTimelineEntityScope(tenantID uuid.UUID, entityType, entityID string) (string, string, error) {
+	cleanType := strings.ToLower(strings.TrimSpace(entityType))
+	cleanID := strings.TrimSpace(entityID)
+	if cleanType == "tenant_id" {
+		cleanType = "tenant"
+	}
+	if cleanType != "tenant" {
+		return strings.TrimSpace(entityType), cleanID, nil
+	}
+	expected := tenantID.String()
+	if cleanID == "" {
+		cleanID = expected
+	}
+	if cleanID != expected {
+		return "", "", fmt.Errorf("tenant entity_id must match tenant_id")
+	}
+	return "tenant", cleanID, nil
+}
+
 func (s *Server) queryInvestigationEvents(ctx context.Context, p doris.EventQueryParams) ([]doris.EventRow, int, string, []string, error) {
 	if s != nil && s.usesDorisAnalytics() {
 		rows, total, err := s.dorisClient.QueryEvents(ctx, p)
@@ -345,9 +369,9 @@ func (s *Server) queryInvestigationEvents(ctx context.Context, p doris.EventQuer
 	}
 	if s != nil && s.localAnalytics != nil {
 		rows, total, err := s.localAnalytics.QueryEvents(ctx, p)
-		return rows, total, "small-analytics", []string{"small analytics currently projects connection facts; OLAP mode is required for full generic/file/db/web event search"}, err
+		return rows, total, "small-analytics", []string{"Recent evidence projection currently includes connection facts; full generic, file, database, and web event search requires the OLAP profile."}, err
 	}
-	return nil, 0, "small-analytics-pending", []string{"small analytics event query requires analytics.sqlite_dir or OLAP mode"}, nil
+	return nil, 0, "small-analytics-pending", []string{"Recent evidence projection is not ready yet; fleet health and durable ingest remain available while projection catches up."}, nil
 }
 
 func (s *Server) buildInvestigationTimeline(ctx context.Context, p doris.TimelineBuildParams) ([]doris.TimelineItem, string, []string, error) {
@@ -360,9 +384,9 @@ func (s *Server) buildInvestigationTimeline(ctx context.Context, p doris.Timelin
 	}
 	if s != nil && s.localAnalytics != nil {
 		rows, err := s.localAnalytics.BuildTimeline(ctx, p)
-		return rows, "small-analytics", []string{"small analytics currently builds timelines from connection facts; OLAP mode is required for full generic/file/db/web timelines"}, err
+		return rows, "small-analytics", []string{"Recent timelines currently include connection facts; full generic, file, database, and web timelines require the OLAP profile."}, err
 	}
-	return nil, "small-analytics-pending", []string{"small analytics timeline requires analytics.sqlite_dir or OLAP mode"}, nil
+	return nil, "small-analytics-pending", []string{"Recent timeline projection is not ready yet; fleet health and durable ingest remain available while projection catches up."}, nil
 }
 
 func (s *Server) dbQueryTextCaptureAllowed(ctx context.Context, tenantID uuid.UUID) bool {

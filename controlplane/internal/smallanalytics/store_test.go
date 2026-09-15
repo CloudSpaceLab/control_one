@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -120,6 +121,154 @@ func TestStoreProjectsConnectionRowsToEventsAndTimeline(t *testing.T) {
 	if len(timeline) != 2 || timeline[0].SourceTable != "process_connections" || timeline[0].EventType != "conn.close" {
 		t.Fatalf("unexpected timeline: %+v", timeline)
 	}
+
+	connectionTimeline, err := store.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "connection",
+		EntityID:   "conn-1",
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build connection timeline: %v", err)
+	}
+	if len(connectionTimeline) != 2 || connectionTimeline[0].ConnID != "conn-1" || connectionTimeline[0].EventType != "conn.close" {
+		t.Fatalf("unexpected connection timeline: %+v", connectionTimeline)
+	}
+
+	tenantTimeline, err := store.BuildTimeline(ctx, doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "tenant",
+		EntityID:   "tenant-1",
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(2 * time.Minute),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build tenant timeline: %v", err)
+	}
+	if len(tenantTimeline) != 2 || tenantTimeline[0].TenantID != "tenant-1" || tenantTimeline[0].EventType != "conn.close" {
+		t.Fatalf("unexpected tenant timeline: %+v", tenantTimeline)
+	}
+}
+
+func TestStoreQueryEventsUsesBoundedLookaheadPagination(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
+	rows := make([]map[string]any, 0, 4)
+	for i := 0; i < 4; i++ {
+		rows = append(rows, connRow(
+			"tenant-1",
+			"node-1",
+			fmt.Sprintf("conn-%d", i+1),
+			base.Add(time.Duration(i)*time.Minute),
+			time.Time{},
+			"outbound",
+			"10.0.0.5",
+			fmt.Sprintf("8.8.8.%d", i+1),
+			0,
+			0,
+			"",
+		))
+	}
+	if err := store.AppendConnectionRows(ctx, rows); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+
+	firstPage, total, err := store.QueryEvents(ctx, doris.EventQueryParams{
+		TenantID:   "tenant-1",
+		EventTypes: []string{"conn.open"},
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(5 * time.Minute),
+		Limit:      2,
+	})
+	if err != nil {
+		t.Fatalf("query first page: %v", err)
+	}
+	if len(firstPage) != 2 || total != 3 {
+		t.Fatalf("first page should expose lookahead total, total=%d rows=%+v", total, firstPage)
+	}
+	if firstPage[0].ConnID != "conn-4" || firstPage[1].ConnID != "conn-3" {
+		t.Fatalf("first page should remain newest-first: %+v", firstPage)
+	}
+
+	secondPage, total, err := store.QueryEvents(ctx, doris.EventQueryParams{
+		TenantID:   "tenant-1",
+		EventTypes: []string{"conn.open"},
+		Since:      base.Add(-time.Minute),
+		Until:      base.Add(5 * time.Minute),
+		Limit:      2,
+		Offset:     2,
+	})
+	if err != nil {
+		t.Fatalf("query second page: %v", err)
+	}
+	if len(secondPage) != 2 || total != 4 {
+		t.Fatalf("last page should expose exact exhausted total, total=%d rows=%+v", total, secondPage)
+	}
+	if secondPage[0].ConnID != "conn-2" || secondPage[1].ConnID != "conn-1" {
+		t.Fatalf("second page should continue newest-first: %+v", secondPage)
+	}
+}
+
+func TestBuildConnectionTimelineSQLPushesPivotsIntoBranches(t *testing.T) {
+	query, args, err := buildConnectionTimelineSQL(doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "connection",
+		EntityID:   "conn-1",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build connection timeline sql: %v", err)
+	}
+	if got := strings.Count(query, "conn_id = ?"); got < 2 {
+		t.Fatalf("connection pivot should be pushed into each branch, got %d occurrences in %s", got, query)
+	}
+	if len(args) < 5 {
+		t.Fatalf("connection pivot args should include branch and outer predicates, got %#v", args)
+	}
+
+	query, args, err = buildConnectionTimelineSQL(doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "ip",
+		EntityID:   "8.8.8.8",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build ip timeline sql: %v", err)
+	}
+	if got := strings.Count(query, "src_ip = ?"); got < 2 {
+		t.Fatalf("source-ip pivot should be pushed into open and close branches, got %d occurrences in %s", got, query)
+	}
+	if got := strings.Count(query, "dst_ip = ?"); got < 2 {
+		t.Fatalf("destination-ip pivot should be pushed into open and close branches, got %d occurrences in %s", got, query)
+	}
+	if len(args) < 11 {
+		t.Fatalf("ip pivot args should include branch and outer predicates, got %#v", args)
+	}
+
+	query, args, err = buildConnectionTimelineSQL(doris.TimelineBuildParams{
+		TenantID:   "tenant-1",
+		EntityType: "tenant",
+		EntityID:   "tenant-1",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("build tenant timeline sql: %v", err)
+	}
+	if strings.Contains(query, "1 = 0") {
+		t.Fatalf("tenant pivot should not guard out tenant-scoped rows:\n%s", query)
+	}
+	if strings.Count(query, "tenant_id = ?") != 2 {
+		t.Fatalf("tenant pivot should rely on branch tenant predicates, args=%#v query=%s", args, query)
+	}
 }
 
 func TestStoreIndexesClosedConnectionEventPivots(t *testing.T) {
@@ -192,6 +341,39 @@ func TestStoreConfiguresPooledConnectionsForBusyTimeout(t *testing.T) {
 		if timeouts[i] < 2500 {
 			t.Fatalf("conn %d busy_timeout = %dms, want at least 2500ms", i, timeouts[i])
 		}
+	}
+}
+
+func TestStoreStatsReportsProjectionHealthAndSize(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dir: t.TempDir(), CacheMB: 16})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	if err := store.AppendConnectionRows(ctx, []map[string]any{
+		connRow("tenant-1", "node-1", "conn-1", base, time.Time{}, "outbound", "10.0.0.5", "8.8.8.8", 100, 250, ""),
+	}); err != nil {
+		t.Fatalf("append rows: %v", err)
+	}
+
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Status != "ok" || stats.ReadCheck != "ok" {
+		t.Fatalf("unexpected stats health: %+v", stats)
+	}
+	if stats.CacheMB != 16 {
+		t.Fatalf("CacheMB = %d, want 16", stats.CacheMB)
+	}
+	if stats.DBBytes <= 0 || stats.TotalBytes < stats.DBBytes {
+		t.Fatalf("expected projection file sizes, got %+v", stats)
+	}
+	if stats.CheckedAt.IsZero() {
+		t.Fatalf("expected CheckedAt to be populated")
 	}
 }
 

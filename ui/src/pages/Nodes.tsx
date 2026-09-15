@@ -26,6 +26,7 @@ import type {
   NodeHealthScore,
   NodeSummary,
 } from '../lib/api';
+import type { NodeState as LifecycleState } from '../lib/api';
 import {
   agentUpdateStatusLabel,
   agentUpdateStatusTone,
@@ -195,6 +196,13 @@ function coordinatesFromIP(node: NodeSummary): { lat: number; lon: number; label
   if (a === 178 && b === 62) return { ...CITY_COORDS.frankfurt, precision: 'estimated' };
   if (a === 128 && b === 199) return { ...CITY_COORDS.singapore, precision: 'estimated' };
   return null;
+}
+
+function primaryObservedIP(node: NodeSummary): string | null {
+  const observations = node.network_observations ?? [];
+  const preferred = observations.find((obs) => obs.kind === 'public_ip' && obs.value)
+    ?? observations.find((obs) => obs.kind === 'private_ip' && obs.value);
+  return preferred?.value ?? node.public_ip ?? null;
 }
 
 interface IPGeoPoint {
@@ -676,6 +684,7 @@ function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps
     : isOnline(node)
     ? 'healthy'
     : 'unknown';
+  const observedIP = primaryObservedIP(node);
 
   return (
     <motion.button
@@ -698,8 +707,11 @@ function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps
 
       {/* Meta */}
       <div className="flex flex-col gap-1">
-        {node.public_ip && (
-          <code className="font-mono text-[0.65rem] text-text-muted">{node.public_ip}</code>
+        {observedIP && (
+          <div className="flex items-center gap-1.5 text-[0.65rem] text-text-muted">
+            <span className="font-medium uppercase tracking-wider">Observed IP</span>
+            <code className="font-mono">{observedIP}</code>
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5">
           {node.os && (
@@ -712,15 +724,39 @@ function NodeCard({ node, health, agentJob, tenantName, onClick }: NodeCardProps
               {node.arch}
             </span>
           )}
+          {node.target_type && node.target_type !== 'unknown' && (
+            <span className="rounded bg-accent-400/15 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wider text-accent-300">
+              {node.target_type.replace(/_/g, ' ')}
+            </span>
+          )}
+          {node.reachability_mode && node.reachability_mode !== 'unknown' && (
+            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[0.6rem] font-medium tracking-wider text-text-muted">
+              {node.reachability_mode.replace(/_/g, ' ')}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Footer */}
       <div className="flex items-center justify-between gap-2">
         <span className="text-[0.6rem] text-text-muted truncate">{tenantName}</span>
-        <StatusTag tone={STATE_TONE[state]}>
-          {health ? (health.risk_level === 'calibrating' ? 'calibrating' : `${health.risk_level} · ${health.score}`) : state}
-        </StatusTag>
+        <div className="flex items-center gap-1.5">
+          {(() => {
+            const lifecycleState = node.state as LifecycleState;
+            const lifecycleTone: StateTone = lifecycleState === 'active' ? 'healthy'
+              : lifecycleState === 'enrollment_pending' ? 'warning'
+              : lifecycleState === 'enrollment_failed' ? 'critical'
+              : 'unknown';
+            return (
+              <StatusTag tone={lifecycleTone}>
+                {String(lifecycleState).replace(/_/g, ' ')}
+              </StatusTag>
+            );
+          })()}
+          <StatusTag tone={STATE_TONE[state]}>
+            {health ? (health.risk_level === 'calibrating' ? 'calibrating' : `${health.risk_level} · ${health.score}`) : state}
+          </StatusTag>
+        </div>
       </div>
 
       {/* Last seen */}
@@ -935,6 +971,7 @@ function AgentUpdateRolloutPanel({ nodes, jobsByNode, loading, onQueue }: AgentU
                   variant={active ? 'ghost' : 'secondary'}
                   size="sm"
                   disabled={active}
+                  aria-label={`Queue agent update for ${node.hostname}`}
                   onClick={() => onQueue(node.id)}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${active ? 'animate-spin' : ''}`} />
@@ -957,6 +994,17 @@ function AgentUpdateRolloutPanel({ nodes, jobsByNode, loading, onQueue }: AgentU
 
 type ViewMode = 'overview' | 'table';
 
+interface InlineActionState {
+  message: string;
+  tone: StateTone;
+  busy?: boolean;
+}
+
+interface PendingIsolationAction {
+  node: NodeSummary;
+  currentlyAirgapped: boolean;
+}
+
 export function Nodes(): JSX.Element {
   const api = useApiClient();
   const navigate = useNavigate();
@@ -967,11 +1015,17 @@ export function Nodes(): JSX.Element {
   const [activeRegion, setActiveRegion] = useState<RegionKey | null>(null);
   const [hostnameFilter, setHostnameFilter] = useState('');
   const [healthMap, setHealthMap] = useState<Record<string, NodeHealthScore | null>>({});
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [ipGeoMap, setIPGeoMap] = useState<Record<string, IPGeoPoint | null>>({});
   const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
+  const [atRiskError, setAtRiskError] = useState<string | null>(null);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
+  const [agentUpdateError, setAgentUpdateError] = useState<string | null>(null);
   const [agentUpdating, setAgentUpdating] = useState(false);
   const [isolationUpdatingId, setIsolationUpdatingId] = useState<string | null>(null);
+  const [isolationAction, setIsolationAction] = useState<Record<string, InlineActionState>>({});
+  const [pendingIsolation, setPendingIsolation] = useState<PendingIsolationAction | null>(null);
+  const [confirmIsolationError, setConfirmIsolationError] = useState<string | null>(null);
 
   // Fetch nodes scoped to the active tenant. Without a tenant filter the
   // server returns every tenant's nodes, so callers must pass currentTenantId.
@@ -1006,19 +1060,30 @@ export function Nodes(): JSX.Element {
   // Bulk-fetch per-node health scores
   useEffect(() => {
     let cancelled = false;
-    if (nodes.length === 0) return;
+    if (nodes.length === 0) {
+      setHealthMap({});
+      setHealthError(null);
+      return () => { cancelled = true; };
+    }
+    setHealthError(null);
 
     Promise.all(
       nodes.map((n) =>
         api.getNodeHealth(n.id)
-          .then((score) => [n.id, score] as const)
-          .catch(() => [n.id, null] as const),
+          .then((score) => ({ id: n.id, score, error: null as string | null }))
+          .catch((err) => ({ id: n.id, score: null, error: errorMessage(err, 'Health score unavailable.') })),
       ),
     ).then((entries) => {
       if (cancelled) return;
       const next: Record<string, NodeHealthScore | null> = {};
-      for (const [id, score] of entries) next[id] = score;
+      const failures = entries.filter((entry) => entry.error).length;
+      for (const entry of entries) next[entry.id] = entry.score;
       setHealthMap(next);
+      if (failures === entries.length) {
+        setHealthError(`Node health scores could not be loaded: ${entries[0].error}`);
+      } else if (failures > 0) {
+        setHealthError(`${failures} node health ${failures === 1 ? 'score is' : 'scores are'} unavailable.`);
+      }
     });
 
     return () => { cancelled = true; };
@@ -1027,11 +1092,21 @@ export function Nodes(): JSX.Element {
   // At-risk fleet
   useEffect(() => {
     let cancelled = false;
-    api.listAtRiskNodes(undefined).then((r) => {
+    if (!currentTenantId) {
+      setAtRiskFleet(null);
+      setAtRiskError(null);
+      return () => { cancelled = true; };
+    }
+    setAtRiskError(null);
+    api.listAtRiskNodes(currentTenantId).then((r) => {
       if (!cancelled) setAtRiskFleet(r);
-    }).catch(() => {});
+    }).catch((err) => {
+      if (cancelled) return;
+      setAtRiskFleet(null);
+      setAtRiskError(errorMessage(err, 'At-risk fleet could not be loaded.'));
+    });
     return () => { cancelled = true; };
-  }, [api, nodes.length]);
+  }, [api, currentTenantId]);
 
   // Region grouping
   const regionData = useMemo((): Record<RegionKey, { count: number; state: NodeState }> => {
@@ -1151,9 +1226,23 @@ export function Nodes(): JSX.Element {
     return groups;
   }, [filteredNodes]);
 
-  const handleQuickAirgap = async (node: NodeSummary, isolation: NodeIsolationView) => {
+  const requestQuickAirgap = (node: NodeSummary, isolation: NodeIsolationView) => {
     const currentlyAirgapped = isolation.active && isolation.mode === 'airgapped';
+    setConfirmIsolationError(null);
+    setPendingIsolation({ node, currentlyAirgapped });
+  };
+
+  const executeQuickAirgap = async () => {
+    if (!pendingIsolation) return;
+    const { node, currentlyAirgapped } = pendingIsolation;
+    const actionLabel = currentlyAirgapped
+      ? `Return ${node.hostname} online`
+      : `Airgap ${node.hostname} for 1 hour`;
     setIsolationUpdatingId(node.id);
+    setIsolationAction((current) => ({
+      ...current,
+      [node.id]: { message: `${actionLabel} updating...`, tone: 'warning', busy: true },
+    }));
     try {
       await api.setNodeIsolation(
         node.id,
@@ -1161,10 +1250,20 @@ export function Nodes(): JSX.Element {
           ? { mode: 'online' }
           : { mode: 'airgapped', duration_seconds: 60 * 60, reason: 'Operator quick airgap from fleet list' },
       );
+      setIsolationAction((current) => ({
+        ...current,
+        [node.id]: { message: `${actionLabel} updated`, tone: 'healthy' },
+      }));
       showToast(currentlyAirgapped ? `${node.hostname} returned online.` : `${node.hostname} airgapped for 1 hour.`, 'success');
+      setPendingIsolation(null);
       reload();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to update network isolation.', 'error');
+      const failure = `${actionLabel} failed: ${errorMessage(err, 'Failed to update network isolation.')}`;
+      setIsolationAction((current) => ({
+        ...current,
+        [node.id]: { message: failure, tone: 'critical' },
+      }));
+      setConfirmIsolationError(failure);
     } finally {
       setIsolationUpdatingId(null);
     }
@@ -1183,9 +1282,40 @@ export function Nodes(): JSX.Element {
       },
     },
     {
+      header: 'Lifecycle',
+      id: 'lifecycle',
+      cell: ({ row }) => {
+        const state = row.original.state as LifecycleState;
+        const tone: StateTone = state === 'active' ? 'healthy'
+          : state === 'enrollment_pending' ? 'warning'
+          : state === 'enrollment_failed' ? 'critical'
+          : state === 'retired' ? 'unknown'
+          : 'unknown';
+        return <StatusTag tone={tone}>{String(state).replace(/_/g, ' ')}</StatusTag>;
+      },
+    },
+    {
       header: 'Hostname',
       accessorKey: 'hostname',
       cell: ({ row }) => <span className="font-medium text-foreground">{row.original.hostname}</span>,
+    },
+    {
+      header: 'Type',
+      id: 'target_type',
+      cell: ({ row }) => {
+        const tt = row.original.target_type;
+        if (!tt || tt === 'unknown') return <span className="text-text-muted">—</span>;
+        return <span className="text-xs text-accent-300 capitalize">{tt.replace(/_/g, ' ')}</span>;
+      },
+    },
+    {
+      header: 'Reachability',
+      id: 'reachability',
+      cell: ({ row }) => {
+        const rm = row.original.reachability_mode;
+        if (!rm || rm === 'unknown') return <span className="text-text-muted">—</span>;
+        return <span className="text-xs text-text-secondary capitalize">{rm.replace(/_/g, ' ')}</span>;
+      },
     },
     {
       header: 'Tenant',
@@ -1206,9 +1336,9 @@ export function Nodes(): JSX.Element {
       cell: ({ row }) => <span className="text-text-secondary">{row.original.os ?? '—'}</span>,
     },
     {
-      header: 'Public IP',
-      accessorKey: 'public_ip',
-      cell: ({ row }) => <code className="font-mono text-xs text-text-secondary">{row.original.public_ip ?? '—'}</code>,
+      header: 'Observed IP',
+      id: 'observed_ip',
+      cell: ({ row }) => <code className="font-mono text-xs text-text-secondary">{primaryObservedIP(row.original) ?? '—'}</code>,
     },
     {
       header: 'Health',
@@ -1255,25 +1385,54 @@ export function Nodes(): JSX.Element {
       cell: ({ row }) => {
         const isolation = nodeIsolationView(row.original);
         const airgapped = isolation.active && isolation.mode === 'airgapped';
+        const actionState = isolationAction[row.original.id];
         return (
-          <div className="flex items-center gap-1">
-            <Button type="button" variant="secondary" size="sm" onClick={() => navigate(`/nodes/${row.original.id}`)}>
-              Open
-            </Button>
-            <Button
-              type="button"
-              variant={airgapped ? 'secondary' : 'ghost'}
-              size="sm"
-              title={airgapped ? 'Return online' : 'Airgap for 1 hour'}
-              aria-label={airgapped ? `Return ${row.original.hostname} online` : `Airgap ${row.original.hostname} for 1 hour`}
-              disabled={isolationUpdatingId === row.original.id}
-              onClick={() => handleQuickAirgap(row.original, isolation)}
-            >
-              {airgapped ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" title="Queue agent update" onClick={() => setAgentUpdateNodeId(row.original.id)}>
-              <RefreshCw className="h-3.5 w-3.5" />
-            </Button>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                aria-label={`Open ${row.original.hostname}`}
+                onClick={() => navigate(`/nodes/${row.original.id}`)}
+              >
+                Open
+              </Button>
+              <Button
+                type="button"
+                variant={airgapped ? 'secondary' : 'ghost'}
+                size="sm"
+                title={airgapped ? 'Return online' : 'Airgap for 1 hour'}
+                aria-label={airgapped ? `Return ${row.original.hostname} online` : `Airgap ${row.original.hostname} for 1 hour`}
+                disabled={isolationUpdatingId === row.original.id || actionState?.busy}
+                onClick={() => requestQuickAirgap(row.original, isolation)}
+              >
+                {airgapped ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                title="Queue agent update"
+                aria-label={`Queue agent update for ${row.original.hostname}`}
+                onClick={() => {
+                  setAgentUpdateError(null);
+                  setAgentUpdateNodeId(row.original.id);
+                }}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {actionState && (
+              <p
+                className={`max-w-56 text-right text-[0.65rem] ${
+                  actionState.tone === 'critical' ? 'text-state-critical' : 'text-text-muted'
+                }`}
+                role={actionState.tone === 'critical' ? 'alert' : undefined}
+              >
+                {actionState.message}
+              </p>
+            )}
           </div>
         );
       },
@@ -1283,27 +1442,42 @@ export function Nodes(): JSX.Element {
   const handleAgentUpdate = async () => {
     if (!agentUpdateNodeId) return;
     setAgentUpdating(true);
+    setAgentUpdateError(null);
+    const targetNode = nodes.find((node) => node.id === agentUpdateNodeId);
     try {
       await api.updateAgent(agentUpdateNodeId);
       showToast('Agent update queued.', 'success');
       refreshAgentUpdateJobs();
       reload();
+      setAgentUpdateNodeId(null);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to queue agent update.', 'error');
+      setAgentUpdateError(
+        `Agent update failed for ${targetNode?.hostname ?? agentUpdateNodeId}: ${errorMessage(err, 'Failed to queue agent update.')}`,
+      );
     } finally {
       setAgentUpdating(false);
-      setAgentUpdateNodeId(null);
     }
   };
 
   const totals = fleetSnap?.totals;
+  const nodesUnavailable = !loading && Boolean(error);
+  const pendingAgentNode = agentUpdateNodeId ? nodes.find((node) => node.id === agentUpdateNodeId) : null;
+  const pendingIsolationLabel = pendingIsolation
+    ? pendingIsolation.currentlyAirgapped
+      ? `Return ${pendingIsolation.node.hostname} online`
+      : `Airgap ${pendingIsolation.node.hostname} for 1 hour`
+    : '';
 
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="INFRASTRUCTURE · FLEET"
         title="Fleet Overview"
-        description={`${pagination.total} agent${pagination.total === 1 ? '' : 's'} across ${tenantGroups.size} group${tenantGroups.size === 1 ? '' : 's'}`}
+        description={
+          nodesUnavailable
+            ? 'Fleet data unavailable.'
+            : `${pagination.total} agent${pagination.total === 1 ? '' : 's'} across ${tenantGroups.size} group${tenantGroups.size === 1 ? '' : 's'}`
+        }
         actions={
           <div className="flex items-center gap-2">
             <Button asChild type="button" variant="secondary" size="sm">
@@ -1324,7 +1498,7 @@ export function Nodes(): JSX.Element {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <KpiTile
           label="Total nodes"
-          value={pagination.total}
+          value={nodesUnavailable ? '—' : pagination.total}
           tone="brand"
           icon={<Server />}
           loading={loading}
@@ -1350,17 +1524,34 @@ export function Nodes(): JSX.Element {
         />
         <KpiTile
           label="At risk"
-          value={atRiskFleet?.total_count ?? '—'}
+          value={atRiskError ? '—' : atRiskFleet?.total_count ?? '—'}
           tone={atRiskFleet && atRiskFleet.total_count > 0 ? 'critical' : 'unknown'}
           icon={<Shield />}
         />
       </div>
 
+      {healthError && (
+        <Panel padding="md" toneAccent="warning" title="Node health scores degraded">
+          <p className="text-sm text-state-warning" role="alert">{healthError}</p>
+        </Panel>
+      )}
+
+      {atRiskError && (
+        <Panel padding="md" toneAccent="critical" title="At-risk fleet unavailable">
+          <p className="text-sm text-state-critical" role="alert">
+            At-risk fleet could not be loaded: {atRiskError}
+          </p>
+        </Panel>
+      )}
+
       <AgentUpdateRolloutPanel
         nodes={filteredNodes}
         jobsByNode={latestAgentJobsByNode}
         loading={agentUpdateJobsLoading}
-        onQueue={setAgentUpdateNodeId}
+        onQueue={(nodeId) => {
+          setAgentUpdateError(null);
+          setAgentUpdateNodeId(nodeId);
+        }}
       />
 
       {/* At-risk alert banner */}
@@ -1416,7 +1607,13 @@ export function Nodes(): JSX.Element {
           </div>
         }
       >
-        {useNodeMap ? (
+        {nodesUnavailable ? (
+          <EmptyState
+            title="Fleet map unavailable"
+            description="Node locations could not be loaded. Refresh when the fleet API recovers."
+            icon={<MapPin />}
+          />
+        ) : useNodeMap ? (
           <NodeWorldMap
             points={nodeMapPoints}
             onNodeClick={(nodeId) => navigate(`/nodes/${nodeId}`)}
@@ -1429,7 +1626,7 @@ export function Nodes(): JSX.Element {
           />
         )}
         {/* Region chips */}
-        <div className="flex flex-wrap gap-2 pt-1">
+        {!nodesUnavailable && <div className="flex flex-wrap gap-2 pt-1">
           {(Object.entries(regionData) as [RegionKey, { count: number; state: NodeState }][])
             .filter(([, v]) => v.count > 0)
             .sort(([, a], [, b]) => b.count - a.count)
@@ -1449,7 +1646,7 @@ export function Nodes(): JSX.Element {
                 <span className="font-mono text-text-muted">{count}</span>
               </button>
             ))}
-        </div>
+        </div>}
       </Panel>
 
       {/* Fleet groups + nodes */}
@@ -1471,6 +1668,7 @@ export function Nodes(): JSX.Element {
                 type="button"
                 variant={view === 'overview' ? 'primary' : 'ghost'}
                 size="sm"
+                aria-label="Show node cards"
                 onClick={() => setView('overview')}
                 className="rounded-none border-0"
               >
@@ -1480,6 +1678,7 @@ export function Nodes(): JSX.Element {
                 type="button"
                 variant={view === 'table' ? 'primary' : 'ghost'}
                 size="sm"
+                aria-label="Show node table"
                 onClick={() => setView('table')}
                 className="rounded-none border-0 border-l border-border-subtle"
               >
@@ -1489,11 +1688,16 @@ export function Nodes(): JSX.Element {
           </div>
         }
       >
-        {error && (
-          <p className="text-sm text-state-critical" role="alert">Failed to load nodes: {error}</p>
-        )}
-
-        {view === 'overview' ? (
+        {nodesUnavailable ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-state-critical" role="alert">Failed to load nodes: {error}</p>
+            <EmptyState
+              title="Fleet nodes could not be loaded"
+              description="The fleet list is unavailable. Existing node workflows remain intact once the API recovers."
+              icon={<Server />}
+            />
+          </div>
+        ) : view === 'overview' ? (
           filteredTenantGroups.size === 0 ? (
             <EmptyState
               title="No nodes"
@@ -1543,11 +1747,51 @@ export function Nodes(): JSX.Element {
       <ConfirmModal
         open={agentUpdateNodeId !== null}
         title="Queue agent self-update?"
-        body="The node agent will download the latest binary and restart on its next heartbeat cycle."
+        body={
+          pendingAgentNode
+            ? `${pendingAgentNode.hostname} will download the latest binary and restart on its next heartbeat cycle.`
+            : 'The node agent will download the latest binary and restart on its next heartbeat cycle.'
+        }
         confirmLabel={agentUpdating ? 'Queuing…' : 'Update agent'}
+        confirmDisabled={agentUpdating}
+        cancelDisabled={agentUpdating}
         onConfirm={handleAgentUpdate}
-        onCancel={() => setAgentUpdateNodeId(null)}
-      />
+        onCancel={() => {
+          setAgentUpdateNodeId(null);
+          setAgentUpdateError(null);
+        }}
+      >
+        {agentUpdateError && (
+          <p className="text-sm text-state-critical" role="alert">{agentUpdateError}</p>
+        )}
+      </ConfirmModal>
+
+      <ConfirmModal
+        open={pendingIsolation !== null}
+        title="Change node isolation?"
+        body={
+          pendingIsolation?.currentlyAirgapped
+            ? `${pendingIsolationLabel}. This returns the node to normal connectivity.`
+            : `${pendingIsolationLabel}. This blocks non-control traffic for one hour from the fleet list.`
+        }
+        confirmLabel={isolationUpdatingId ? 'Updating…' : pendingIsolation?.currentlyAirgapped ? 'Return online' : 'Airgap node'}
+        confirmDisabled={Boolean(isolationUpdatingId)}
+        cancelDisabled={Boolean(isolationUpdatingId)}
+        variant={pendingIsolation?.currentlyAirgapped ? 'default' : 'danger'}
+        onConfirm={executeQuickAirgap}
+        onCancel={() => {
+          setPendingIsolation(null);
+          setConfirmIsolationError(null);
+        }}
+      >
+        {confirmIsolationError && (
+          <p className="text-sm text-state-critical" role="alert">{confirmIsolationError}</p>
+        )}
+      </ConfirmModal>
     </div>
   );
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
 }

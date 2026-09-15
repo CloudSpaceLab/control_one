@@ -54,13 +54,21 @@ vi.mock('../hooks/useTenants', () => ({
   }),
 }));
 
+function renderFleetEnroll() {
+  return render(
+    <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+      <FleetEnroll />
+    </MemoryRouter>,
+  );
+}
+
 describe('FleetEnroll', () => {
   beforeEach(() => {
     mocks.startFleetEnroll.mockReset();
     mocks.getFleetEnrollStatus.mockReset();
     mocks.getNode.mockReset();
     mocks.listPolicies.mockReset();
-    mocks.listPolicies.mockResolvedValue({ data: [], pagination: { total: 0, count: 0, limit: 100, offset: 0 } });
+    mocks.listPolicies.mockReturnValue(new Promise(() => {}));
     mocks.createEnrollmentToken.mockReset();
     mocks.createEnrollmentToken.mockResolvedValue({ id: 'tok-1', token: 'cot_auto' });
     mocks.showToast.mockReset();
@@ -71,22 +79,14 @@ describe('FleetEnroll', () => {
   });
 
   it('renders the form heading', () => {
-    render(
-      <MemoryRouter>
-        <FleetEnroll />
-      </MemoryRouter>,
-    );
+    renderFleetEnroll();
     expect(
-      screen.getByRole('heading', { name: /bulk enrol hosts/i }),
+      screen.getByRole('heading', { name: /bulk enrol machines/i }),
     ).toBeInTheDocument();
   });
 
   it('rejects submit with no targets', async () => {
-    render(
-      <MemoryRouter>
-        <FleetEnroll />
-      </MemoryRouter>,
-    );
+    renderFleetEnroll();
     const submit = screen.getByRole('button', { name: /start fleet enrollment/i });
 
     await act(async () => {
@@ -94,7 +94,7 @@ describe('FleetEnroll', () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(/add at least one host/i),
+      expect(screen.getByRole('alert')).toHaveTextContent(/add at least one machine/i),
     );
     expect(mocks.startFleetEnroll).not.toHaveBeenCalled();
   });
@@ -133,11 +133,7 @@ describe('FleetEnroll', () => {
       updated_at: '2026-04-20T00:00:05Z',
     });
 
-    render(
-      <MemoryRouter>
-        <FleetEnroll />
-      </MemoryRouter>,
-    );
+    renderFleetEnroll();
 
     fireEvent.change(screen.getByLabelText(/targets/i), {
       target: { value: '10.0.0.5\n' },
@@ -168,30 +164,27 @@ describe('FleetEnroll', () => {
     expect(payload.ssh_user).toBe('ubuntu');
     expect(payload.ssh_key).toBeTruthy();
     expect(payload.compliance_policy_id).toBe('control-one-default-hardening');
+    expect(mocks.showToast).toHaveBeenCalledWith('Fleet enrollment started — 1 target', 'success');
 
-    // The per-host table renders once the status poll returns results.
+    // The per-target table renders once the status poll returns results.
     await waitFor(() =>
       expect(
-        screen.getByRole('table', { name: /per-host enrollment progress/i }),
+        screen.getByRole('table', { name: /per-target enrollment progress/i }),
       ).toBeInTheDocument(),
     );
-    // The host appears in both the textarea (value) and the table row;
+    // The target appears in both the textarea (value) and the table row;
     // asserting the table link-text confirms the polling path landed.
     await waitFor(() => {
-      const table = screen.getByRole('table', { name: /per-host enrollment progress/i });
+      const table = screen.getByRole('table', { name: /per-target enrollment progress/i });
       expect(table).toHaveTextContent('10.0.0.5');
     });
   });
 
-  it('parses user@host:port target syntax and strips comments', async () => {
+  it('parses user@address:port target syntax and strips comments', async () => {
     mocks.startFleetEnroll.mockResolvedValue({ job_id: 'job-2', status: 'queued', message: 'ok' });
     mocks.getFleetEnrollStatus.mockResolvedValue({ job_id: 'job-2', status: 'running', results: [] });
 
-    render(
-      <MemoryRouter>
-        <FleetEnroll />
-      </MemoryRouter>,
-    );
+    renderFleetEnroll();
     fireEvent.change(screen.getByLabelText(/targets/i), {
       target: { value: 'admin@10.0.0.9:2222\n# comment\n   \nroot@10.0.0.10' },
     });

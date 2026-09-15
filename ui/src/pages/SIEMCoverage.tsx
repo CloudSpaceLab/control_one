@@ -9,6 +9,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import {
   Check,
   DatabaseZap,
+  Download,
   RefreshCw,
   Save,
   ShieldAlert,
@@ -33,6 +34,7 @@ import {
 import { useApiClient } from "@/hooks/useApiClient";
 import { useAuth } from "@/providers/AuthProvider";
 import { useTenant } from "@/providers/TenantProvider";
+import { saveBlob } from "@/lib/download";
 import type {
   ContentPackEdgeCollector,
   ContentPackOTelConfigCandidate,
@@ -239,6 +241,22 @@ function sourceHealthCasePrimaryEvidenceRef(item: SOCCase): string {
   return item.evidence_refs?.[0]?.id?.trim() ?? "";
 }
 
+function sourceHealthCaseExportFilename(
+  item: Pick<SOCCase, "case_id" | "created_at" | "updated_at">,
+): string {
+  const safeId =
+    item.case_id
+      .replace(/[^a-zA-Z0-9-]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48) || "case";
+  const stamp = (
+    item.updated_at ||
+    item.created_at ||
+    new Date().toISOString()
+  ).slice(0, 10);
+  return `soc-case-${safeId}-${stamp}.json`;
+}
+
 function formatStatus(value?: string): string {
   return (value || "unknown").replace(/_/g, " ");
 }
@@ -384,6 +402,8 @@ export function SIEMCoverage(): JSX.Element {
   const [busySourceHealthCaseNoteId, setBusySourceHealthCaseNoteId] = useState<
     string | null
   >(null);
+  const [exportingSourceHealthCaseId, setExportingSourceHealthCaseId] =
+    useState<string | null>(null);
   const [healthPagination, setHealthPagination] =
     useState<PaginationMeta | null>(null);
   const [healthOffset, setHealthOffset] = useState(0);
@@ -447,6 +467,7 @@ export function SIEMCoverage(): JSX.Element {
       setSourceHealthCasePagination(null);
       setSourceHealthCaseNoteDrafts({});
       setBusySourceHealthCaseNoteId(null);
+      setExportingSourceHealthCaseId(null);
       setHealthSummary(null);
       setHealthPagination(null);
       setHealthOffset(0);
@@ -765,6 +786,28 @@ export function SIEMCoverage(): JSX.Element {
       );
     } finally {
       setBusySourceHealthCaseNoteId(null);
+    }
+  };
+
+  const downloadSourceHealthCaseExport = async (item: SOCCase) => {
+    const tenantId = item.tenant_id || currentTenantId;
+    if (!tenantId) return;
+    setExportingSourceHealthCaseId(item.case_id);
+    try {
+      const packet = await api.exportSOCCase(item.case_id, tenantId);
+      saveBlob(
+        new Blob([JSON.stringify(packet, null, 2)], {
+          type: "application/json",
+        }),
+        sourceHealthCaseExportFilename(item),
+      );
+      toast.success("Source investigation export downloaded");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Export could not be downloaded",
+      );
+    } finally {
+      setExportingSourceHealthCaseId(null);
     }
   };
 
@@ -2031,14 +2074,24 @@ export function SIEMCoverage(): JSX.Element {
                   {sourceHealthInvestigationCase.case_id}
                 </span>
                 {sourceHealthInvestigationCase.export_url && (
-                  <a
-                    className="text-brand-400 hover:underline"
-                    href={sourceHealthInvestigationCase.export_url}
-                    target="_blank"
-                    rel="noreferrer"
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="link"
+                    className="h-auto px-0 text-xs"
+                    loading={
+                      exportingSourceHealthCaseId ===
+                      sourceHealthInvestigationCase.case_id
+                    }
+                    onClick={() =>
+                      void downloadSourceHealthCaseExport(
+                        sourceHealthInvestigationCase,
+                      )
+                    }
                   >
+                    <Download className="h-3.5 w-3.5" />
                     Export
-                  </a>
+                  </Button>
                 )}
               </div>
             )}
@@ -2257,14 +2310,15 @@ export function SIEMCoverage(): JSX.Element {
                 </div>
                 <div className="flex items-start justify-end">
                   {item.export_url ? (
-                    <Button size="sm" variant="outline" asChild>
-                      <a
-                        href={item.export_url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Export
-                      </a>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      loading={exportingSourceHealthCaseId === item.case_id}
+                      onClick={() => void downloadSourceHealthCaseExport(item)}
+                    >
+                      <Download className="h-4 w-4" />
+                      Export
                     </Button>
                   ) : (
                     <span className="text-xs text-text-muted">No export</span>

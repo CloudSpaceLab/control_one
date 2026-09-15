@@ -20,11 +20,11 @@ export function SectionHeader({ eyebrow, title, description, actions, className 
     >
       <div className="min-w-0 flex flex-col gap-1.5">
         {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-        <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">
+        <h1 className="break-words font-display text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">
           {title}
         </h1>
         {description && (
-          <p className="max-w-2xl text-sm text-text-secondary">{description}</p>
+          <p className="max-w-2xl break-words text-sm text-text-secondary">{description}</p>
         )}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}

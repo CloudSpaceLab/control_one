@@ -623,9 +623,25 @@ export interface AdminSLO {
 export interface AdminCapacity {
   disk_used: number;
   disk_total: number;
+  analytics_mode?: string;
+  analytics_status?: string;
+  warehouse_status?: string;
+  warehouse_configured?: boolean;
   doris_status: string;
   postgres_status: string;
   retention_days_remaining: number;
+  projection?: {
+    status?: string;
+    read_check?: string;
+    quick_check?: string;
+    db_bytes?: number;
+    wal_bytes?: number;
+    shm_bytes?: number;
+    total_bytes?: number;
+    cache_mb?: number;
+    checked_at?: string;
+    last_error?: string;
+  };
 }
 
 // Investigate / search
@@ -1126,6 +1142,42 @@ export type NodeState =
   | "enrollment_failed"
   | "retired";
 
+export interface TargetClassificationResponse {
+  source: string;
+  confidence: number;
+  evidence: string[];
+}
+
+export type TargetType =
+  | "personal_pc"
+  | "workstation"
+  | "laptop"
+  | "server"
+  | "vm"
+  | "cloud_instance"
+  | "domain_controller"
+  | "kiosk"
+  | "unknown"
+  | (string & {});
+
+export type ReachabilityMode =
+  | "outbound_only"
+  | "direct_private"
+  | "direct_public"
+  | "overlay"
+  | "offline_periodic"
+  | "unknown"
+  | (string & {});
+
+export interface NetworkObservationResponse {
+  kind: string;
+  value: string;
+  source: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+  confidence: number;
+}
+
 export interface NodeSummary {
   id: string;
   tenant_id: string;
@@ -1140,6 +1192,13 @@ export interface NodeSummary {
   labels?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  machine_id?: string;
+  management_mode?: string;
+  target_type?: TargetType;
+  reachability_mode?: ReachabilityMode;
+  install_context?: string;
+  classification?: TargetClassificationResponse;
+  network_observations?: NetworkObservationResponse[];
 }
 
 export interface FleetEnrollTarget {
@@ -1654,6 +1713,7 @@ export interface ListTelemetryLogsParams {
   node_id?: string;
   log_level?: string;
   log_source?: string;
+  search?: string;
   since?: string;
   until?: string;
   limit?: number;
@@ -2030,14 +2090,52 @@ async function safeErrorMessage(
   response: Response,
 ): Promise<string | undefined> {
   try {
-    const data = await response.json();
-    if (data && typeof data.message === "string") {
-      return data.message;
+    const text = (await response.text()).trim();
+    if (!text) return response.statusText;
+    try {
+      const data = JSON.parse(text);
+      if (data && typeof data === "object") {
+        const record = data as Record<string, unknown>;
+        for (const key of ["message", "error", "detail"]) {
+          const value = record[key];
+          if (typeof value === "string" && value.trim()) {
+            return value.trim();
+          }
+        }
+      }
+    } catch {
+      // Plain text http.Error bodies are common in the Go API.
+    }
+    const contentType = response.headers.get("Content-Type") ?? "";
+    if (!contentType.toLowerCase().includes("html")) {
+      return text.length > 500 ? `${text.slice(0, 500)}...` : text;
     }
   } catch {
-    // ignore json parse errors
+    // ignore body parse errors
   }
   return response.statusText;
+}
+
+function filenameFromContentDisposition(
+  disposition: string | null,
+): string | undefined {
+  if (!disposition) return undefined;
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1].replace(/^"|"$/g, ""));
+    } catch {
+      return utf8[1].replace(/^"|"$/g, "");
+    }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i);
+  return plain?.[1];
+}
+
+export interface DownloadedFile {
+  blob: Blob;
+  filename?: string;
+  contentType?: string;
 }
 
 export class APIError extends Error {
@@ -2957,6 +3055,7 @@ export class APIClient {
     if (params.node_id) search.set("node_id", params.node_id);
     if (params.log_level) search.set("log_level", params.log_level);
     if (params.log_source) search.set("log_source", params.log_source);
+    if (params.search) search.set("search", params.search);
     if (params.since) search.set("since", params.since);
     if (params.until) search.set("until", params.until);
     if (typeof params.limit === "number")
@@ -4653,6 +4752,36 @@ export class APIClient {
     return (await response.json()) as T;
   }
 
+  private async download(path: string): Promise<DownloadedFile> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      headers: {
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      },
+    });
+
+    if (!response.ok) {
+      if (
+        response.status === HTTP_STATUS_UNAUTHORIZED &&
+        this.unauthorizedHandler
+      ) {
+        this.unauthorizedHandler();
+      }
+      const message = await safeErrorMessage(response);
+      throw new APIError(
+        message || `Download failed with status ${response.status}`,
+        response.status,
+      );
+    }
+
+    return {
+      blob: await response.blob(),
+      filename: filenameFromContentDisposition(
+        response.headers.get("Content-Disposition"),
+      ),
+      contentType: response.headers.get("Content-Type") ?? undefined,
+    };
+  }
+
   // ---- Connections / forensics (Phase 7) -------------------------------
 
   async listConnections(
@@ -4717,10 +4846,13 @@ export class APIClient {
     if (typeof params.limit === "number")
       search.set("limit", String(params.limit));
     const q = search.toString();
-    const resp = await this.request<TopTalker[] | { data?: TopTalker[] }>(
+    const resp = await this.request<
+      Array<TopTalker | RawTopTalker> | { data?: Array<TopTalker | RawTopTalker> }
+    >(
       `/api/v1/connections/top-talkers${q ? `?${q}` : ""}`,
     );
-    return Array.isArray(resp) ? resp : resp.data ?? [];
+    const rows = Array.isArray(resp) ? resp : resp.data ?? [];
+    return rows.map(normalizeTopTalker).filter((row) => Boolean(row.ip));
   }
 
   async fleetHealthSnapshot(
@@ -5608,10 +5740,32 @@ export class APIClient {
     return `${this.baseUrl}/api/v1/compliance/reports/${encodeURIComponent(id)}/download?${search.toString()}`;
   }
 
+  async downloadAuditReport(
+    id: string,
+    tenantId: string,
+  ): Promise<DownloadedFile> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", tenantId);
+    return this.download(
+      `/api/v1/compliance/reports/${encodeURIComponent(id)}/download?${search.toString()}`,
+    );
+  }
+
   buildEvidenceDownloadUrl(id: string, tenantId: string): string {
     const search = new URLSearchParams();
     search.set("tenant_id", tenantId);
     return `${this.baseUrl}/api/v1/compliance/evidence/${encodeURIComponent(id)}/download?${search.toString()}`;
+  }
+
+  async downloadComplianceEvidence(
+    id: string,
+    tenantId: string,
+  ): Promise<DownloadedFile> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", tenantId);
+    return this.download(
+      `/api/v1/compliance/evidence/${encodeURIComponent(id)}/download?${search.toString()}`,
+    );
   }
 
   // ---- Compliance Reviews ----------------------------------------
@@ -6452,6 +6606,20 @@ function normalizeConnectionRow(raw: ConnectionRow | RawConnectionRow): Connecti
   };
 }
 
+function normalizeTopTalker(raw: TopTalker | RawTopTalker): TopTalker {
+  const row = raw as RawTopTalker;
+  const threatHits = rawNumber(row, 'threat_hits', 'ThreatHits');
+  const normalized: TopTalker = {
+    ip: rawString(row, 'ip', 'IP') ?? '',
+    bytes_out: rawNumber(row, 'bytes_out', 'BytesOut') ?? 0,
+    bytes_in: rawNumber(row, 'bytes_in', 'BytesIn') ?? 0,
+    conn_count: rawNumber(row, 'conn_count', 'connections', 'Connections') ?? 0,
+    threat_match: rawBoolean(row, 'threat_match', 'ThreatMatch') ?? ((threatHits ?? 0) > 0),
+  };
+  if (threatHits !== undefined) normalized.threat_hits = threatHits;
+  return normalized;
+}
+
 export interface ForensicEvent {
   ts: string;
   source: "event" | "file" | "db" | "log" | "alert" | "process";
@@ -6480,7 +6648,10 @@ export interface TopTalker {
   bytes_in: number;
   conn_count: number;
   threat_match: boolean;
+  threat_hits?: number;
 }
+
+type RawTopTalker = Partial<TopTalker> & Record<string, unknown>;
 
 export interface NodeHealthSummary {
   node_id: string;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { APIClient } from './api';
+import { APIClient, APIError } from './api';
 
 describe('APIClient.normalizeBase', () => {
   it('returns DEFAULT for null/undefined (env unset)', () => {
@@ -49,6 +49,36 @@ describe('APIClient.normalizeBase', () => {
       expect(url).not.toMatch(/\/api\/api\//);
       expect(url.endsWith('/api/v1/auth/login')).toBe(true);
     }
+  });
+});
+
+describe('APIClient errors', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('surfaces plain-text backend error bodies', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('api_key required for otx\n', {
+        status: 400,
+        statusText: 'Bad Request',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    await expect(
+      client.createThreatFeed({
+        tenant_id: 'tenant-1',
+        name: 'OTX',
+        feed_type: 'otx',
+      }),
+    ).rejects.toMatchObject({
+      name: 'APIError',
+      message: 'api_key required for otx',
+      status: 400,
+    } satisfies Partial<APIError>);
   });
 });
 
@@ -109,7 +139,10 @@ describe('APIClient.listTopTalkers', () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          data: [{ ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false }],
+          data: [
+            { ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false },
+            { IP: '198.51.100.5', BytesOut: 40, BytesIn: 30, Connections: 4, ThreatHits: 1 },
+          ],
           source: 'small-analytics-pending',
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -124,6 +157,7 @@ describe('APIClient.listTopTalkers', () => {
     expect(url).toBe('https://cp.example.com/api/v1/connections/top-talkers?tenant_id=tenant-1&limit=5');
     expect(talkers).toEqual([
       { ip: '203.0.113.10', bytes_out: 20, bytes_in: 10, conn_count: 2, threat_match: false },
+      { ip: '198.51.100.5', bytes_out: 40, bytes_in: 30, conn_count: 4, threat_match: true, threat_hits: 1 },
     ]);
   });
 });
@@ -139,7 +173,7 @@ describe('APIClient.listConnectionsDetailed', () => {
         JSON.stringify({
           data: [],
           source: 'small-analytics-pending',
-          guardrails: ['raw connection rows require the small analytics store or OLAP mode'],
+          guardrails: ['Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up.'],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -154,7 +188,7 @@ describe('APIClient.listConnectionsDetailed', () => {
     expect(result).toEqual({
       rows: [],
       source: 'small-analytics-pending',
-      guardrails: ['raw connection rows require the small analytics store or OLAP mode'],
+      guardrails: ['Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up.'],
     });
   });
 });

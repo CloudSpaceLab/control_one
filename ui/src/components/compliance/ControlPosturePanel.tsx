@@ -202,15 +202,17 @@ function ControlAccordionRow({ control }: { control: ControlCoverage }): JSX.Ele
       open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
     >
-      <summary className="grid cursor-pointer grid-cols-[24px_140px_1fr_90px_90px_80px] items-center gap-3 px-3 py-2 text-xs">
+      <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 text-xs sm:gap-3">
         <ChevronDown className={`h-4 w-4 transition-transform ${open ? '' : '-rotate-90'}`} />
         <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.7rem] text-text-secondary">
           {control.control_id}
         </code>
-        <span className="truncate text-foreground">{control.title}</span>
-        <StatusTag tone={statusTone(control.status)}>{control.status}</StatusTag>
-        <span className="font-mono tabular-nums text-text-secondary">{ratio} nodes</span>
-        <span className="font-mono tabular-nums text-text-muted">{control.evidence_count} ev</span>
+        <span className="min-w-[12rem] flex-1 truncate text-foreground">{control.title}</span>
+        <span className="flex min-w-0 flex-wrap items-center gap-2">
+          <StatusTag tone={statusTone(control.status)}>{control.status}</StatusTag>
+          <span className="font-mono tabular-nums text-text-secondary">{ratio} nodes</span>
+          <span className="font-mono tabular-nums text-text-muted">{control.evidence_count} ev</span>
+        </span>
       </summary>
       <div className="border-t border-border-subtle px-3 py-3 text-xs">
         <dl className="grid grid-cols-2 gap-y-2 gap-x-6">

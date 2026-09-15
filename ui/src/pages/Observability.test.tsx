@@ -170,4 +170,25 @@ describe('Observability', () => {
     await user.click(screen.getByRole('button', { name: /Needs access evidencestale PostgreSQL audit/i }));
     expect(screen.getByText('observability:source-health:runtime-1')).toBeInTheDocument();
   });
+
+  it('keeps rendering when live observability payloads omit arrays', async () => {
+    mocks.listWebserverInstances.mockResolvedValueOnce({
+      pagination: { total: 0, count: 0, limit: 100, offset: 0, nextOffset: null, prevOffset: null },
+    });
+    mocks.getContentPackSourceHealth.mockResolvedValueOnce({
+      tenant_id: 'tenant-1',
+      generated_at: '2026-06-06T12:00:00Z',
+      totals: { sources: 0, collectors_reporting: 0, by_state: {} },
+    });
+
+    render(
+      <MemoryRouter>
+        <Observability />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Guided setup' })).toBeInTheDocument();
+    expect(screen.getAllByText('live data').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Database audit coverage').length).toBeGreaterThan(0);
+  });
 });

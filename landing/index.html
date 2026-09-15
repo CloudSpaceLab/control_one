@@ -104,7 +104,7 @@
   <div class="container">
     <p class="logos__lede">Built on standards your team already uses</p>
     <ul class="logos__row">
-      <li>OIDC</li><li>WebAuthn</li><li>SOC 2</li><li>ISO 27001</li><li>CIS</li><li>OpenTelemetry</li><li>Apache Doris</li><li>WireGuard</li>
+      <li>OIDC</li><li>WebAuthn</li><li>SOC 2</li><li>ISO 27001</li><li>CIS</li><li>OpenTelemetry</li><li>Postgres</li><li>Redis</li><li>SQLite</li><li>WireGuard</li>
     </ul>
   </div>
 </section>
@@ -187,7 +187,7 @@
       </div>
 
       <!-- Global fleet metrics -->
-      <div class="dash-metrics" style="grid-template-columns:repeat(5,1fr)">
+      <div class="dash-metrics dash-metrics--5">
         <div class="dash-metric">
           <div class="dash-metric__value" style="font-size:1.1rem">3</div>
           <div class="dash-metric__label">Datacenters</div>
@@ -303,7 +303,7 @@
           <span class="dash-topbar__title">C1 Capsule · IP Intelligence</span>
           <span class="dash-topbar__meta">window: 02:00–07:00 UTC</span>
         </div>
-        <div class="dash-metrics" style="grid-template-columns:repeat(3,1fr)">
+        <div class="dash-metrics dash-metrics--3">
           <div class="dash-metric">
             <div class="dash-metric__value dash-metric__value--amber">23</div>
             <div class="dash-metric__label">IPs Detected</div>
@@ -459,7 +459,7 @@
           <span class="dash-topbar__title">Compliance · SOC 2 Type II</span>
           <span class="dash-topbar__meta">next audit in 12d</span>
         </div>
-        <div class="dash-metrics" style="grid-template-columns:repeat(3,1fr)">
+        <div class="dash-metrics dash-metrics--3">
           <div class="dash-metric">
             <div class="dash-metric__value dash-metric__value--green">96%</div>
             <div class="dash-metric__label">Overall Score</div>
@@ -524,7 +524,7 @@
       <li>
         <span class="step__num">1</span>
         <h3>Bootstrap the control plane</h3>
-        <p>Deploy via Docker, Kubernetes, or the offline bundle. Bring your own Postgres + Redis or use the embedded stack. On-prem, cloud, air-gapped — your choice.</p>
+        <p>Deploy via Docker, Kubernetes, or the offline bundle. Small fleets run on Postgres, Redis, and embedded SQLite analytics; larger estates can attach a dedicated OLAP warehouse. On-prem, cloud, air-gapped — your choice.</p>
       </li>
       <li>
         <span class="step__num">2</span>
@@ -632,7 +632,7 @@
         <ul>
           <li>Everything in Business, plus:</li>
           <li>Air-gapped deployment</li>
-          <li>BYO Postgres / Redis / Doris</li>
+          <li>BYO Postgres / Redis / optional OLAP warehouse</li>
           <li>WireGuard mesh + bastion proxy</li>
           <li>FedRAMP / IRAP scoping</li>
           <li>Named TAM, 24×7 SLA</li>
@@ -694,11 +694,11 @@
     </details>
     <details>
       <summary>Do I need to replace my existing SIEM?</summary>
-      <p>No. C1 Capsules work alongside your existing SIEM. The Apache Doris backbone handles millions of events per day, and you can forward events to Splunk, Loki, or Elastic when you need a unified pane across teams.</p>
+      <p>No. C1 Capsules work alongside your existing SIEM. Small fleets use a lightweight local analytics projection for recent evidence; larger estates can attach a dedicated OLAP warehouse for longer retention and higher concurrency. You can also forward events to Splunk, Loki, or Elastic when you need a unified pane across teams.</p>
     </details>
     <details>
       <summary>How do you handle air-gapped environments?</summary>
-      <p>One tarball, no outbound calls. The offline bundle ships every capsule binary, migration, and threat-feed mirror you need. The included docker-compose runs Postgres, Redis, the control plane, and the operator console with zero internet egress.</p>
+      <p>One tarball, no outbound calls. The offline bundle ships every capsule binary, migration, and threat-feed mirror you need. The included docker-compose runs Postgres, Redis, embedded analytics, the control plane, and the operator console with zero internet egress.</p>
     </details>
     <details>
       <summary>What's your security posture?</summary>

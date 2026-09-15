@@ -292,6 +292,10 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// AI LogFixer actions run node-local and return structured dry-run
 			// or mutation receipts through the normal heartbeat completion queue.
 			go executeAILogFixerAction(ctx, client, log, action)
+		case strings.HasPrefix(action, "connectivity_test:"):
+			// Connectivity tests probe TCP reachability from the agent host.
+			// Results are reported back via completed_actions metadata.
+			go executeConnectivityTest(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {

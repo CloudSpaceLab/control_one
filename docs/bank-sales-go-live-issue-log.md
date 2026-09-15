@@ -1124,6 +1124,127 @@ Live audit evidence from 2026-06-06:
   own scroller. Final live verification on 2026-06-06 showed desktop
   `docOverflowX=0`, mobile `docOverflowX=0`, zero app HTTP failures, and zero
   console warnings/errors on `/console/observability?verify=a9a84464-*`.
+- 2026-06-07 Observability/Compliance mobile polish follow-up: live desktop
+  validation found the Observability Knowledge Tree detail pane could extend
+  outside its fixed side column at 1440px when citation/vault chunk evidence
+  was selected. The UI now stacks that evidence detail inside the side column
+  with `min-w-0` constraints instead of widening the page. A paired 390x844
+  mobile sweep found two additional real clipping risks: Observability DBMS
+  onboarding step cards and Compliance control-posture evidence counters. Both
+  were fixed without removing fields or workflows by wrapping content inside
+  the existing controls. Local checks passed
+  `npm run test -- src/pages/Observability.test.tsx src/components/coverage/CoverageTruth.test.tsx`
+  and `npm run build` in `ui/`; the console-only deploy then completed. Final
+  production retest covered 36 authenticated console routes at 390x844 with
+  zero document-level horizontal overflow, zero unscrollable overflow
+  candidates, zero visible error states, zero failed Control One app API
+  responses, zero browser console/page errors, zero Doris/analytic-store copy,
+  and zero `/api/v1/events/stream` requests. Intentionally wide operational
+  tables remained available through their local horizontal scrollers. Host
+  checks after deploy showed `/healthz=ok`, Redis healthy, Doris FE/BE absent
+  in the small profile, controlplane about 147 MiB of 1 GiB, console about
+  4.6 MiB of 256 MiB, Redis about 7.8 MiB of 192 MiB, landing about 5.7 MiB of
+  128 MiB, and ipq about 4.8 MiB of 128 MiB.
+- 2026-06-07 safe workflow interaction follow-up: a whitelist-only production
+  browser pass at 390x844 exercised non-mutating interactions across 18 routes:
+  Alerts tabs/review panel, Network Security tabs, SIEM Inspect/search/clear,
+  Observability debug/detail/evidence selection, Patch tabs/deploy dialog open,
+  Compliance tabs, Access command-policy/new-rule open, Users role edit open,
+  Jobs submit panel open, Settings tabs, Secrets group dialog open, Webserver
+  inventory/plan, and Data Security tabs. The sweep avoided destructive
+  buttons such as ack, approve, reject, apply, deploy, delete, save, and submit.
+  It found one real mobile polish defect: a long Observability evidence path
+  chip (`controlplane/internal/server/db_audit_discovery.go`) could extend
+  roughly 7 px outside the viewport after selecting Knowledge Tree evidence.
+  The shared `StatusTag` now constrains badge width and allows long evidence
+  values to wrap inside the chip, preserving the citation instead of truncating
+  or removing it. Local checks passed
+  `npm run test -- src/pages/Observability.test.tsx src/components/coverage/CoverageTruth.test.tsx`
+  and `npm run build`; the console-only deploy completed. Live retest on
+  Observability initial, Healthy evidence, Coverage gap, Compliance evidence,
+  SIEM coverage, and Settings security at mobile width showed
+  `scrollWidth=clientWidth`, zero overflow offenders, zero failed app API
+  responses, zero browser console/page errors, zero Doris/analytic-store copy,
+  and zero `/api/v1/events/stream` requests. Host checks after deploy showed
+  public `/healthz=ok`, only the small-profile services running, no Doris FE/BE
+  under the `olap` profile, console about 6 MiB of 256 MiB, controlplane about
+  194 MiB of 1 GiB, Redis about 7.5 MiB of 192 MiB, landing about 5.7 MiB of
+  128 MiB, and ipq about 4.8 MiB of 128 MiB.
+- 2026-06-07 live performance/public-workflow follow-up: a chunked production
+  browser timing pass covered 53 authenticated console routes across Control
+  Room, Alerts, Cases, Search, Investigation, Ask AI, Nodes, Network Security,
+  SIEM, Webservers, Observability, Patch, Coverage, Compliance, Access, Audit,
+  Users/Roles, Telemetry, Secrets, Offline Bundle, Settings, Onboard, Data
+  Security, Misconduct, Finacle, Fleet Enroll, Hypervisors, Jobs, Templates,
+  Sessions, Tenants, Rules, and tenant detail. The sweep used real live tenant,
+  node, and IP data. Aside from browser-cancelled `ERR_ABORTED` requests caused
+  by intentionally navigating away quickly, the authenticated pass showed zero
+  app HTTP failures, zero console/page errors, zero document-level horizontal
+  overflow, zero misleading small-mode/Doris error copy, and zero
+  `/api/v1/events/stream` requests. The slowest normal app API response across
+  the chunks was about 657 ms; the one `/sessions` chunk navigation timeout was
+  isolated immediately afterward and loaded to `document.readyState=complete`
+  in about 327 ms with `GET /api/v1/sessions` returning 200 and no errors.
+  A separate unauthenticated/public mobile pass covered `/`, `/intake`,
+  `/intake-status`, `/trust/default`, their `/console/...` redirected routes,
+  and `/console/login`. It exposed two real landing-page defects: stale
+  default-Doris sales copy on the public root and a mobile overflow in the
+  dashboard metric mock caused by inline grid columns overriding responsive CSS.
+  The landing page now describes the default small-fleet stack as Postgres,
+  Redis, and embedded SQLite analytics, keeps the larger-estate OLAP warehouse
+  path as optional, and replaces inline dashboard metric grids with responsive
+  metric classes. The landing-only deploy completed, and post-deploy public
+  mobile retest across those 8 routes showed zero stale Doris-first copy, zero
+  overflow offenders, zero response failures, zero console/page errors, and
+  login still presenting one password field. Final host checks showed
+  `/healthz=ok`, small-profile services running, no Doris FE/BE under the
+  `olap` profile, no recent panic/fatal/SQLite/analytic-store/stream log
+  matches, console about 6.3 MiB of 256 MiB, controlplane about 234 MiB of
+  1 GiB, Redis about 7.5 MiB of 192 MiB, landing about 4.4 MiB of 128 MiB, and
+  ipq about 4.8 MiB of 128 MiB.
+- 2026-06-07 console route-fallback/operations follow-up: another live browser
+  pass found that invalid nested console paths such as `/console/settings/security`
+  and `/console/audit/reports` could render the authenticated shell with an
+  empty main panel because the inner console router had no wildcard fallback.
+  `ui/src/App.tsx` now renders an authenticated in-app not-found state with the
+  unmatched path plus Control Room and Search navigation instead of a blank
+  workspace. Local `npm run build` passed, the console-only deploy completed,
+  and mobile production retest at 390x844 confirmed `/console/settings/security`,
+  `/console/audit/reports`, and `/console/no-such-demo-route` all showed the
+  not-found panel with no document overflow. A desktop production sweep at
+  1440x900 then covered 16 valid operational routes across Fleet Enroll,
+  Hypervisors, Tenants, Telemetry, Data Security, Misconduct, Finacle, Coverage,
+  Observability, Compliance evidence/reports, Audit reports, SIEM coverage,
+  Webservers, Patch, and Network Security IP behavior with zero failed app API
+  responses, zero browser console/page errors, zero overflow offenders, zero
+  `/api/v1/events/stream` requests, and zero Doris/analytic-store copy. The
+  mobile admin/security route pass immediately before the fix covered 12 routes
+  with the same clean API/error/overflow result and exposed the invalid-route
+  blank-state risk. Post-deploy host checks showed `/healthz=ok`, Redis healthy,
+  no Doris FE/BE containers under the `olap` profile, no recent panic/fatal/
+  SQLite-lock/analytic-store/status-5/stream log matches, and memory still light:
+  controlplane about 118 MiB of 1 GiB, console about 5.4 MiB of 256 MiB, Redis
+  about 4 MiB of 192 MiB, landing about 4.5 MiB of 128 MiB, and ipq about
+  4.8 MiB of 128 MiB.
+- 2026-06-07 live mobile interaction follow-up: a corrected non-mutating
+  browser pass at 390x844 exercised 12 authenticated workflows through safe
+  operator interactions instead of only page loads. The pass covered Control
+  Room, Nodes, Network Connections, Alerts, Cases, Rules, Access, Compliance,
+  Settings, SIEM coverage, Observability, and Fleet Enroll. It opened the
+  command palette with `Ctrl+K`, searched for roles, clicked safe detail/
+  refresh/refine controls, switched visible tab strips across Network Security,
+  Rules, Access, Compliance, and Settings, and touched/cleared local text
+  inputs while explicitly rejecting any unexpected API write method as a
+  failure. The corrected run produced zero `POST`/`PUT`/`PATCH`/`DELETE`
+  requests, zero failed app API responses, zero browser console/page errors,
+  zero request failures, zero document overflow or unscrollable overflow
+  offenders, zero `/api/v1/events/stream` requests, and zero Doris/
+  analytic-store error copy. Host checks after the pass showed `/healthz=ok`,
+  Redis healthy, no Doris FE/BE containers under the `olap` profile, no recent
+  panic/fatal/SQLite-lock/analytic-store/status-5/stream log matches, and
+  memory still light: controlplane about 121 MiB of 1 GiB, console about
+  5.4 MiB of 256 MiB, Redis about 4 MiB of 192 MiB, landing about 4.5 MiB of
+  128 MiB, and ipq about 4.8 MiB of 128 MiB.
 
 Verification completed locally after the 2026-06-06 fixes:
 
@@ -1156,6 +1277,19 @@ Exit criteria:
   sized infrastructure.
 - Met: live mobile sweep at 390px covered 26 authenticated routes with no
   document-level horizontal overflow.
+- Met: later live mobile sweep at 390px covered 36 authenticated routes with no
+  document-level horizontal overflow or unscrollable overflow candidates.
+- Met: live safe-workflow interaction sweep covered 18 authenticated routes
+  with non-mutating clicks/filters/dialog opens and no app API, console,
+  stream, or page-error failures after the evidence-chip polish fix.
+- Met: live timing/API sweep covered 53 authenticated routes plus 8 public
+  routes, with the public landing copy/layout corrections deployed and retested.
+- Met: invalid nested console paths now render an explicit in-app not-found
+  fallback instead of a blank authenticated workspace, and 16 valid operational
+  desktop routes were retested clean after deploy.
+- Met: non-mutating mobile interaction audit covered 12 authenticated workflows
+  with zero unexpected write requests, app failures, console errors, stream
+  traffic, or overflow findings.
 - Met for current deploy: event-stream QUIC noise is avoided by polling mode.
 - Continue: keep auditing remaining console routes and safe workflows before
   calling the whole product bank-grade clean.
@@ -2116,6 +2250,390 @@ raw connection-history/top-talker slices as it lands. Doris remains valuable for
 large retention windows and concurrent analytic queries, but only as an opt-in
 OLAP tier on dedicated analytics capacity.
 
+2026-06-07 demo architecture update: formalized this as Control One Lite
+Analytics in `docs/small-fleet-analytics-architecture.md`. The demo/small-fleet
+path keeps the full product surface while moving recent investigation reads,
+connection timelines, top-talkers, and future normalized event/FTS projections
+onto Postgres + bounded Redis + embedded SQLite/WAL. Doris is preserved as an
+explicit OLAP upgrade path and must not consume memory in the default demo
+deployment.
+
+2026-06-07 minimum-memory refinement: the Lite Analytics design now documents
+the smallest credible demo runtime as one controlplane-owned SQLite writer, one
+hard-capped Redis container, the existing Postgres journal, and zero Doris FE/BE
+processes unless the `olap` profile is explicitly selected. Redis is explicitly
+non-evidentiary and eviction-safe; SQLite/WAL is the recent cited evidence read
+model; Postgres remains the audit/replay truth; and Doris remains the dedicated
+warehouse tier for larger fleets rather than a default demo dependency.
+
+2026-06-07 small-analytics integration follow-up: the Redis+SQLite small-fleet
+path now has a server-side connection reader in
+`controlplane/internal/server/analytics_connections.go`. IP-scoped network
+targeting, node documentation top connections, and event-capture flow deltas
+now read through the selected analytics backend, so small mode can preserve
+those workflows from SQLite connection facts while OLAP mode keeps using Doris.
+This is additive and feature-preserving: Doris remains the warehouse upgrade
+path, but the demo profile keeps Doris at 0 MB. A fresh production footprint
+check showed `/healthz=ok`, `ANALYTICS_MODE=small`, `DORIS_ENABLED=false`,
+`SQLITE_CACHE_MB=16`, no Doris FE/BE services under the `olap` profile,
+controlplane about 85.8 MiB / 1 GiB, Redis about 4.84 MiB / 192 MiB, and
+console about 4.28 MiB / 256 MiB.
+
+Post-deploy verification update: the controlplane was rebuilt from a prebuilt
+local binary and recreated successfully, then authenticated production API
+checks confirmed the selected small analytics backend on live data:
+`/api/v1/connections?...&node_id=0d4893c0-867a-4bf1-8aa9-e247680280ab`
+returned `source=small-analytics` with 5 sampled rows, node documentation for
+that node returned 10 top connections, and `/flow-delta` returned 16 rows.
+Host checks stayed clean: `/healthz=ok`, Redis healthy, no Doris FE/BE profile
+containers, no recent controlplane panic/fatal/SQLite/analytic-store errors,
+no edge 5xx entries, controlplane about 60.86 MiB / 1 GiB, Redis about
+4.83 MiB / 192 MiB, and console about 4.48 MiB / 256 MiB.
+
+Saved-search duplicate prevention was also deployed and retested in a real
+browser. Query `codex-duplicate-guard-1780843512220` produced exactly one
+`POST /api/v1/saved-searches` with 201, the button changed from `Save search`
+to disabled `Saved`, the saved-search list contained exactly one matching row,
+cleanup deleted that row with 204, and a follow-up list showed zero remaining
+rows. The same production browser check reported zero console errors, zero page
+errors, zero failed API responses, and zero document horizontal overflow on the
+search page.
+
+A 390x844 mobile browser smoke across Search, Saved Searches, Network
+Connections, and the live node detail route also showed zero console/page/API
+errors, zero Doris or analytic-store unavailable copy, and zero document-level
+horizontal overflow. The Saved and Network tables remain wider than the
+viewport inside their table containers, but the document itself does not
+overflow.
+
+2026-06-07 live footprint check: the demo host reports
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; `docker compose --profile olap ps
+doris-fe doris-be` shows no Doris containers. Current post-deploy container
+memory is roughly controlplane 63.7 MiB / 1 GiB, Redis 7.9 MiB / 192 MiB,
+console 4.5 MiB / 256 MiB, landing 5.9 MiB / 128 MiB, and ipq 4.8 MiB /
+128 MiB.
+
+2026-06-07 production follow-up: deploy `27088445229` succeeded for
+`a06ef72d`, closing the live agent contract failures without removing policy,
+compliance, or mesh features. Post-deploy logs show
+`POST /api/v1/compliance/report` returning 202, `GET /api/v1/mesh/peers`
+returning 200, `POST /api/v1/mesh/rotate` returning 200, and agent
+`GET /api/v1/policies` returning 200. The remaining threat-feed warnings are
+external-source responses (`tor-exit` 403 and AbuseIPDB 429) with local snapshot
+fallback, not ingest/deploy failures. A real-browser route smoke across 15
+console routes returned HTTP 200 navigations, no failing app API responses, and
+no browser console errors. Deploy `27088747860` then succeeded for `86196ab8`;
+a 390x844 production browser check confirmed the Compliance tab strip now wraps
+all five tabs visibly on mobile, with Compliance API calls returning 200 and
+zero browser console errors.
+
+2026-06-07 mobile onboarding follow-up: a deeper 390x844 browser sweep across
+Access, Audit, Data Security, Finacle, Misconduct, Onboard, Investigation IP
+detail, Search, Sessions, Webservers, Patch, SIEM, and Offline Bundle returned
+HTTP 200 navigations, no failed app API responses, and no browser console
+errors. The sweep found one real mobile UX defect: `/console/onboard` allowed
+the `Hypervisor / cloud account` mode tab to extend past the viewport. Commit
+`8f72e15a` wraps the onboarding mode tabs using the same responsive grid pattern
+as the other corrected tab strips. Local production build passed, and a
+console-only live deploy was completed after fixing `deploy/deploy_console.py`
+so it no longer excludes source paths such as `ui/src/components/coverage` while
+skipping generated `ui/coverage` output. Production retest at
+`/console/onboard?verify=8f72e15a-live` returned HTTP 200 with all three tab
+strips in bounds, no document horizontal overflow, no failed app API responses,
+no browser console errors, no Doris/analytic-store unavailable copy, and live
+post-deploy `/healthz=ok`.
+
+2026-06-07 node/detail live-data follow-up: authenticated production API probes
+confirmed the default tenant has two active nodes with fresh heartbeats and the
+small analytics fleet source remains `small-analytics-postgres`. A 390x844
+browser sweep then loaded real detail and investigation paths:
+`/nodes/0d4893c0-867a-4bf1-8aa9-e247680280ab`,
+`/nodes/1ab45ccc-3984-4315-bc17-641ad43f02c8`,
+`/investigate/ip/158.220.87.109`, `/investigate/ip/172.67.163.40`,
+`/security/network?tab=connections`, and Control Room drilldowns for exposure,
+app/db health, patch posture, and the overview. All navigations returned HTTP
+200 with no browser console errors, no failed app API responses, and no
+Doris/analytic-store unavailable copy. The sweep found one real polish issue on
+the long-hostname node detail page: the header/breadcrumb content rendered
+wider than the mobile viewport. Commit `8dcea4b7` fixes this by adding
+mobile-safe wrapping/breaking to Node Detail and the shared section header. The
+console-only deploy completed, and production retest at both 390x844 and
+1440x900 showed the real node detail page with header right edge inside the
+viewport, no overflow candidates, no horizontal document overflow, all seven
+tabs in bounds, no failed app API responses, and no browser console errors.
+Post-deploy `/healthz=ok`, Redis remained healthy, Doris FE/BE remained absent,
+and container memory stayed light.
+
+2026-06-07 live interaction/transport follow-up: a post-deploy browser check
+found one production regression from the console-only build path: the live UI
+bundle had fallen back to the default SSE transport and Chromium reported
+`ERR_QUIC_PROTOCOL_ERROR` for `/api/v1/events/stream`. The fix keeps the SSE
+feature available for private/direct deployments but makes the small-fleet demo
+default polling mode in `ui/src/config/live.ts`; `useLiveSubscribe` now also
+honors the same transport switch before opening `streamEvents`. Local
+`npm run build` passed, the console-only deploy completed, and fresh production
+browser pages for Control Room, Alerts, and Rules made zero
+`/api/v1/events/stream` requests, produced zero stream failures, zero browser
+console/page errors, zero failed app API responses, no document-level
+horizontal overflow, and no Doris/analytic-store unavailable copy.
+
+The same live slice exercised read-only demo flows end to end: Ctrl+K command
+palette IP pivot opened `/console/investigate/ip/172.67.163.40`; Network
+Connections showed 500 live rows and opened the connection detail sheet; the
+real node detail page for `0d4893c0-867a-4bf1-8aa9-e247680280ab` showed 250
+connection rows, opened the same detail sheet, and loaded Packages plus
+Recommendations tabs. A 390x844 mobile pass across Control Room, Alerts,
+Rules, Network Connections, and Node Detail had zero app failures and zero
+stream traffic. The pass found one real mobile polish defect: the Node Detail
+Connections action row shifted the "Listening only" control partly off-screen.
+`ui/src/pages/NodeDetail.tsx` now wraps that action group; production retest
+showed all three controls inside the 390px viewport, the mobile connection
+detail sheet visible, no document overflow, no browser errors, no failed app
+responses, and no fresh `/events/stream` log entries. Post-deploy
+`/healthz=ok`; Doris FE/BE remained stopped/absent; memory stayed light
+(controlplane about 88 MiB, console about 4.5 MiB, Redis about 7 MiB).
+
+2026-06-07 Control Room freshness/auth follow-up: a live auth and security
+matrix passed 30/30 checks. Invalid login returned 401, protected API reads
+returned 401 without a token and with an invalid bearer token, public
+misconduct/trust/health endpoints stayed reachable, authenticated reads
+succeeded, logout invalidated the session, HTTPS responses carried the expected
+security headers, HTTP requests redirected to HTTPS, and the slowest observed
+check was 914 ms.
+
+The same real-browser Control Room retest found one material freshness/UX issue:
+the 24h header said "8 incidents, 12 pending actions, 6 IP findings in 24h" even
+though the visible IP behavior findings were stale May 18 unresolved findings.
+The fix scopes unresolved IP behavior findings by the selected overview window
+in the backend, and changes the UI copy to distinguish persistent open
+incidents from recent IP findings. This preserves useful open incidents instead
+of deleting signal for the demo, while no longer implying stale findings landed
+inside the selected 24h window. After deploy, the live API returned
+`ip_findings=0`, `ip_requests=0`, `pending_actions=2`, `top_incidents=8`, and
+682 ms for the 24h overview; the browser header now reads "8 open incidents, 2
+pending actions, 0 recent IP findings (24h)", the IP behavior lane shows zero
+recent requests/findings, and browser console errors/warnings remained at zero.
+
+Post-deploy host evidence still matches the hyper-light design:
+`/healthz=ok`, controlplane/console/redis are up, Doris FE/BE are absent under
+the `olap` profile, `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, Redis data memory is about 1.78 MiB with a
+128 MiB cap, controlplane is about 65.6 MiB / 1 GiB, console about 4.6 MiB /
+256 MiB, Redis about 4.8 MiB / 192 MiB, and a 20-minute severe-log scan found no
+panic/fatal/SQLite lock/analytics unavailable/stream transport signatures.
+
+2026-06-07 Search/investigation UX follow-up: a fresh production browser sweep
+covered 100 current-state route loads across desktop and 390px mobile. The
+authenticated chunks covered Control Room and drilldowns, Search, Investigation,
+Cases, Tenants, Nodes, Fleet Enroll, Hypervisors, Jobs, Observability,
+Templates, Coverage, Compliance, Rules, Alerts, Access, Network Security tabs,
+SIEM, Webservers, Patch, Sessions, Roles, Audit, Users, Telemetry, Secrets,
+Offline Bundle, Settings, Data Security, Misconduct, and Finacle. The public and
+redirect chunk covered `/`, intake, intake status, Trust Center, route aliases,
+and the console 404 path. Clean chunks showed zero app API 4xx/5xx failures,
+zero browser console/page errors, zero document-level horizontal overflow, and
+no Doris/analytic-store unavailable copy.
+
+The sweep found one real search-workflow polish issue: `/console/search` rendered
+the primary heading as a leading chevron plus `(empty query)` or the raw query
+(`› nginx`), and `Save search` stayed enabled with no query. The Search page now
+uses explicit headings (`Search` and `Search results`), keeps the query context
+in the description, disables Save Search until there is a real query, and lets a
+cleared refine box return to the empty-query state. Focused
+`SearchResults.test.tsx` coverage and `npm run build` passed. The console-only
+deploy completed, and live desktop/mobile retest confirmed the fixed headings,
+`0 matches for "nginx"` description, disabled empty Save Search button, zero
+document overflow, zero app failures, and zero console/page errors. Post-deploy
+host checks remained clean: `/healthz=ok`, no Doris FE/BE, console about
+4.8 MiB / 256 MiB, controlplane about 115 MiB / 1 GiB, Redis about 4.8 MiB /
+192 MiB, and no severe controlplane or edge 5xx logs.
+
+2026-06-07 Saved Search workflow follow-up: continuing from the Search audit,
+live browser testing found that the now-polished `Save search` button was still
+only visual on production. On `/console/search?q=nginx`, the button was enabled,
+but clicking it emitted zero `/api/v1/saved-searches` requests, created no saved
+row, and showed no product feedback. The UI now integrates the existing
+role-gated saved-search API instead of adding a parallel feature: it creates a
+private saved search named from the current query, preserves any active entity
+type tab as metadata, disables while saving or without a tenant/query, invalidates
+saved-search consumers, and reports success/error via toast.
+
+Focused `SearchResults.test.tsx` coverage now includes the empty-query guard,
+query clearing, and the `createSavedSearch` payload. `npm run test --
+SearchResults.test.tsx --runInBand` and `npm run build` passed, with the same
+known npm/React Router future warnings only. The console-only production deploy
+completed. Live browser round trip then created a temporary query
+`codex-save-roundtrip-*` from Search, observed `POST /api/v1/saved-searches`
+returning 201, verified the saved row on `/console/investigate/saved`, deleted
+that exact temporary row with `DELETE /api/v1/saved-searches/{id}` returning 204,
+and confirmed the row was gone after reload. The live run had zero browser
+console/page errors, zero app request failures, and zero document overflow.
+Post-deploy host checks remained clean: `/healthz=ok`, console/controlplane/Redis
+up, no Doris FE/BE, console about 4.7 MiB / 256 MiB, controlplane about
+140.6 MiB / 1 GiB, Redis about 4.8 MiB / 192 MiB, and no severe controlplane or
+edge 5xx logs.
+
+2026-06-07 post-`e490bbe5` broad live sweep: with the Browser Use Node bridge
+unavailable, the audit used the Playwright MCP fallback for a chunked
+authenticated browser pass. The pass covered 23 additional console routes at
+desktop 1440x1000 and mobile 390x844, for 46 route loads total:
+`/console/access`, `/console/sessions`, `/console/cases`, `/console/jobs`,
+`/console/templates`, `/console/fleet-enroll`, `/console/hypervisors`,
+`/console/compliance`, `/console/security/siem`,
+`/console/security/webservers`, `/console/infrastructure/patch`,
+`/console/roles`, `/console/users`, `/console/audit`, `/console/telemetry`,
+`/console/secrets`, `/console/offline-bundle`, `/console/settings`,
+`/console/data-security`, `/console/misconduct`, `/console/access/finacle`,
+`/console/investigate/knowledge-graph`, and `/console/observability`. Every
+navigation returned HTTP 200, and the sweep found zero browser console/page
+errors, zero app API failures, zero document-level horizontal overflow, zero
+uncontained off-viewport elements, and zero Doris/analytic-store unavailable
+copy. No new UI defect was found in this slice.
+
+The same live validation rechecked RBAC/list integrity after the saved-search
+and small-analytics hardening: `/api/v1/users?limit=100&offset=0` returned 6
+users with zero duplicate user-role rows, and `/api/v1/roles` returned 5 roles
+with 5 unique names and no duplicate role names. GitHub Actions did not expose a
+visible run for commit `e490bbe5` in the queried branch/run list, so this slice
+is recorded as local test plus manual live deployment/browser/API evidence.
+
+Fresh host evidence still matches the Redis+SQLite+Postgres small-fleet design:
+`/healthz=ok`, Compose and container env report `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, Redis is healthy, and
+`docker compose --profile olap ps doris-fe doris-be` shows no Doris containers.
+Memory stayed light at about console 4.55 MiB / 256 MiB, controlplane
+64.05 MiB / 1 GiB, Redis 4.84 MiB / 192 MiB, landing 4.48 MiB / 128 MiB, and
+ipq 4.81 MiB / 128 MiB. A 30-minute log scan found no controlplane panic,
+fatal, SQLite lock, analytic-store unavailable, stream transport, or edge 5xx
+matches.
+
+2026-06-07 evidence/export workflow follow-up: the next production audit slice
+focused on bank-facing export paths rather than route loads. Direct authenticated
+API probes showed all static CSV report exports returning HTTP 200 with
+`text/csv` attachment headers: compliance (4,523 non-empty lines,
+`rule_id,node_id,passed,severity,checked_at`), audit (2,519 lines,
+`occurred_at,actor_id,action,resource_type,resource_id`), alerts (21 lines,
+`opened_at,severity,state,source,title,node_id`), and access (header-only,
+`requested_at,user_id,resource_type,requested_access,status,decided_at,decided_by,ttl_seconds`,
+which is correct for no access requests in the window). A SOC case export
+returned HTTP 200 JSON with `export_version=soc-case-export-v1`, 6 evidence
+references, 5 guardrails, and no `raw_evidence` field in the packet body.
+
+Real-browser export checks then validated the operator controls. On
+`/console/cases?verify=export-packet-browser`, clicking `Preview export`
+triggered `GET /api/v1/soc/cases/{id}/export` with HTTP 200, rendered packet
+evidence and guardrail copy, and did not expose raw evidence text. On
+`/console/audit?verify=client-csv-audit` and
+`/console/compliance?verify=client-csv-compliance`, the single enabled
+`Export CSV` button on each page produced real downloads named
+`audit-logs-2026-06-07.csv` and `compliance-results-2026-06-07.csv`. On
+`/console/investigate/knowledge-graph?verify=kg-md-export`, the `Download .md`
+button produced `knowledge_graph_00000000-0000-0000-0000-000000000001.md`.
+Those browser checks observed zero console warnings/errors, zero page errors,
+zero failed app API responses, zero request failures, no document-level
+horizontal overflow, no broken/mojibake rendered copy, and no Doris/
+analytic-store unavailable copy. The generated audit-report artifact list
+currently returned `data:null` with `total=0`, so there was no live generated
+report file to download in this slice; the UI's list normalizer treats that as
+an empty report list.
+
+Post-slice host checks remained clean: `/healthz=ok`,
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`,
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, Redis healthy, no Doris FE/BE under
+the `olap` profile, console about 4.56 MiB / 256 MiB, controlplane about
+63.86 MiB / 1 GiB, Redis about 4.84 MiB / 192 MiB, landing about 4.48 MiB /
+128 MiB, and ipq about 4.81 MiB / 128 MiB. A 30-minute log scan found no
+controlplane panic, fatal, SQLite lock, analytic-store unavailable, stream
+transport, or edge 5xx matches.
+
+2026-06-07 small-fleet analytics architecture decision: for the demo host and
+branch-size deployments, Control One should run the full operator experience on
+Postgres + Redis + embedded SQLite/WAL and keep Doris at 0 MB unless
+`ANALYTICS_MODE=olap`, `DORIS_ENABLED=true`, and the Compose `olap` profile are
+explicitly selected. This is a product-preserving architecture, not a feature
+cut: Postgres remains the durable ingest journal and audit/workflow truth,
+SQLite supplies recent cited analytic evidence, Redis supplies bounded hot
+state and queues, and Doris stays as the explicit high-volume OLAP upgrade
+path. The standalone design record is
+`docs/small-fleet-analytics-architecture.md`; it now calls out the remaining
+Doris-coupled server paths that need backend-neutral migration rather than UI
+removal. Focused validation for this decision passed with
+`go test ./controlplane/internal/smallanalytics -count=1` and targeted server
+tests covering small-mode fleet health, top talkers, and SQLite-backed
+connections.
+
+2026-06-07 compliance report artifact hardening and live browser fix:
+production checks found that empty generated-report/review API responses could
+serialize `data:null`, report/review rows leaked Go-style field names, generated
+report artifacts needed a writable nonroot reports mount, and the Reports UI
+opened protected artifact URLs in a new tab without the bearer token. The fix
+keeps the feature surface intact: report/review APIs now return arrays and
+snake_case fields, deploy mounts/chowns `/var/lib/control-one/reports`, and the
+Reports/Evidence buttons fetch protected artifacts with the authenticated API
+client before saving a browser download.
+
+Local validation passed: focused compliance/report server tests, storage tests,
+smallanalytics tests, `go vet ./controlplane/internal/server ./controlplane/internal/storage ./controlplane/internal/smallanalytics`,
+`go test -short ./controlplane/internal/server -count=1`, `npm run build`, and
+`npm run lint` (lint emitted only the existing ESLintRC deprecation warning).
+The live controlplane and console were redeployed. Direct live API checks showed
+`/api/v1/compliance/reports` and `/api/v1/compliance/reviews` returning array
+`data`, created report `b811e3a3-7d03-47d5-8a28-d88c749d0341`, downloaded it
+with HTTP 200, and then listed it as `status=ready` with `pdf_path` present and
+no Go field names. Real-browser verification on
+`/console/compliance?tab=reports&verify=auth-download-fix-20260607` showed the
+Reports table with ready SOC2 rows; clicking a ready row's download control made
+an authenticated `/api/v1/compliance/reports/{id}/download` request with HTTP
+200 and saved `compliance-report-SOC2-2026-06-07.html` (8,156 bytes). The page
+had zero current console warnings/errors and no document-level horizontal
+overflow. Post-deploy host evidence remained healthy: `/healthz=ok`,
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`,
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, no Doris FE/BE containers under
+the OLAP profile, memory around controlplane 65.89 MiB / 1 GiB, Redis
+4.79 MiB / 192 MiB, console 7.03 MiB / 256 MiB, landing 4.49 MiB / 128 MiB,
+and ipq 4.81 MiB / 128 MiB. A 20-minute post-deploy log scan found no panic,
+fatal, permission denied, audit report artifact, SQLite lock, analytics
+unavailable, or edge 5xx matches.
+
+2026-06-07 broad post-architecture live sweep: with the Browser Use Node bridge
+still unavailable, the audit used the Playwright MCP fallback for another
+authenticated production browser pass against the deployed small-mode console.
+The desktop pass covered 48 route loads at 1440x900 across core operations,
+investigation, fleet, compliance, detection rules, privileged access, network
+security, SIEM/webserver controls, patching, sessions, RBAC/users, audit,
+telemetry, secrets, offline bundle, settings, data-security, misconduct,
+Finacle, and compatibility aliases such as `/console/reports`,
+`/console/connections`, `/console/behavioral`, `/console/recommendations`,
+`/console/compliance-evidence`, `/console/audit-reports`, and
+`/console/frameworks`. The route batches found zero browser console errors,
+zero page errors, zero app API HTTP 4xx/5xx responses, and zero
+document-level horizontal overflow.
+
+Candidate findings were checked and classified: `/console/rules/builder` is an
+intentional alias to `/console/rules`; compliance `Failed` strings are policy
+result/status labels, not load failures; the webserver "approval required"
+message is the expected safety gate before applying a config plan; and isolated
+`net::ERR_ABORTED` entries were stale in-flight requests during route
+transition or Cloudflare RUM beacons, with no UI or HTTP failure. A 390x844
+mobile smoke pass covered 12 high-risk routes and found no body overflow, no
+runtime/API failures, and no bad Doris/analytics-unavailable copy. The mobile
+controls that initially appeared offscreen were verified to live inside
+`overflow-x:auto` table containers, with explicit scroll ancestors on Alerts,
+Users, Roles, Network Connections, and Compliance Reports.
+
+Fresh host evidence continues to match the minimum-memory small-fleet
+architecture: public `/healthz=ok`; the deployed controlplane environment shows
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; `docker ps` shows no Doris
+containers; and the current memory profile is approximately controlplane
+79.11 MiB / 1 GiB, console 7.10 MiB / 256 MiB, Redis 6.15 MiB / 192 MiB,
+landing 4.49 MiB / 128 MiB, and ipq 4.81 MiB / 128 MiB. A 30-minute
+controlplane/console/edge log scan found no panic, fatal, permission denied,
+audit report artifact, SQLite lock, database locked, analytics unavailable, or
+edge 5xx matches. No new code defect was confirmed in this sweep.
+
 1. Control One core on prem:
    - Small fleet/demo: control plane, Postgres, Redis, embedded SQLite
      analytics, object storage, worker, UI, offline content store.
@@ -2177,3 +2695,1960 @@ External references:
 - NetBird architecture/access/routing docs: https://docs.netbird.io/about-netbird/how-netbird-works, https://docs.netbird.io/manage/access-control, https://docs.netbird.io/manage/networks/how-routing-peers-work
 - Headscale features/routes/ACLs: https://headscale.net/0.28.0/about/features/, https://headscale.net/0.26.0/ref/routes/, https://headscale.net/0.28.0/ref/acls/
 - OpenZiti network access/tunnelers: https://openziti.io/docs/learn/core-concepts/zero-trust-models/ztna/, https://openziti.io/docs/reference/tunnelers/, https://github.com/openziti/ziti
+
+2026-06-07 small-fleet analytics contract/performance follow-up: the live
+demo direction remains Redis+SQLite/WAL+Postgres, with Doris preserved as the
+explicit OLAP upgrade path rather than deleted. This pass found three real
+defects in the small-mode implementation: direct analytics API responses leaked
+Go struct keys such as `ConnID`, `ThreatHits`, and `NodeID`; unscoped
+small-mode `/api/v1/events/query` and connection-pivot
+`/api/v1/timelines/build` could exceed the 5s SQLite query timeout; and the
+network connection drawer still depended on legacy `detail.events`, so small
+mode could show "No correlated activity" even when the backend-neutral timeline
+API had cited connection facts.
+
+Implemented fixes are additive and feature-preserving. Shared connection,
+top-talker, and fleet structs now emit snake_case JSON. The UI top-talker
+normalizer accepts both snake_case and legacy Go-shaped rows. Small analytics
+event/timeline SQL now pushes tenant/time/node/correlation/connection filters
+inside the open/close union branches, and IP timelines split source-IP and
+destination-IP branches so existing SQLite indexes are usable. The connection
+detail drawer now fetches `/api/v1/timelines/build` in parallel with the
+connection metadata call, maps cited timeline rows into the existing
+`EventTimeline`, and falls back to legacy detail events when needed.
+
+Local validation passed: `go test ./controlplane/internal/smallanalytics -count=1`, focused server tests for small analytics events/timelines and
+connections, `go test ./controlplane/internal/doris -count=1`, `go vet ./controlplane/internal/server ./controlplane/internal/doris ./controlplane/internal/smallanalytics`, `npx vitest run src/lib/api.normalize.test.ts`, `npm run build`, `npm run lint`, and
+`git diff --check`. A broader `go test ./controlplane/internal/server` run
+was blocked by local Postgres test authentication for `controlone_test`, not
+by this change.
+
+The fixed controlplane and console were deployed to production. Live API
+evidence on tenant `00000000-0000-0000-0000-000000000001` showed
+`fleet_health`, `connections_external`, `top_talkers`, `connection_detail`,
+`connections_by_ip`, `timeline_by_ip_entity`, `events_query`, and
+`timeline_by_conn` all returning HTTP 200 with `go_style_keys=false`. Final
+server-side timings after the deploy settled were approximately: fleet health
+2-7 ms, connections list 3-15 ms, top talkers 19 ms, IP-filtered connections
+25 ms, event query 643 ms, IP timeline 906 ms, connection detail 2 ms, and
+connection timeline 780 ms. The SQLite projection held about 608k connection
+rows during the test, so this was not an empty-fixture check.
+
+Real-browser verification on
+`/console/security/network?tab=connections&verify=small-analytics-contract-20260607c`
+showed the Connections table populated with live rows and threat labels,
+opening a row made `/api/v1/connections/{id}` and `/api/v1/timelines/build`
+requests with HTTP 200, and the drawer rendered a cited `conn.open` forensic
+timeline row instead of the empty-state message. Browser console warnings/errors
+were zero on the final clean pass. Host evidence stayed aligned with the
+minimum-memory design: public `/healthz=ok`, no Doris FE/BE containers under
+the OLAP profile, controlplane about 63 MiB / 1 GiB, console about 6.5 MiB /
+256 MiB, Redis about 6.2 MiB / 192 MiB, and ipq about 4.8 MiB / 128 MiB.
+
+2026-06-07 tenant timeline follow-up: a broader live API smoke of the main
+console contracts found one real small-mode backend defect after the route
+sweep: `POST /api/v1/timelines/build` returned HTTP 500 for
+`entity_type=tenant` / `entity_id=<tenant_id>`, even though the tenant scope was
+already authorized and the request should mean "recent tenant-scoped timeline".
+This was a contract gap, not a resource issue: the failing request returned in
+about 761 ms before the fix, while the server log showed a fast 500.
+
+The fix is additive. Tenant timeline pivots are normalized at the HTTP and AI
+tool boundary, `tenant_id` is treated as the canonical `tenant` pivot alias, a
+mismatched tenant entity ID now returns HTTP 400, and both small analytics and
+Doris timeline predicate builders treat tenant pivots as the already-required
+tenant scope instead of unsupported entity filters. Regression coverage now
+includes small analytics tenant timelines, HTTP tenant timeline success and
+mismatch rejection, and the Doris timeline SQL tenant-pivot path.
+
+Local validation passed: `go test ./controlplane/internal/smallanalytics -count=1`,
+focused Doris timeline SQL tests, focused server investigation timeline tests,
+`go vet ./controlplane/internal/server ./controlplane/internal/doris ./controlplane/internal/smallanalytics`,
+and `git diff --check`. The new Linux/amd64 controlplane binary
+`eecf4a4688be2b3583b2c9ed07442f917b8e479930f8e56c9ac9172f0211d7f9` was deployed
+to production and the controlplane container was recreated.
+
+Post-deploy live evidence: public `/healthz=ok`; tenant timeline returned
+HTTP 200 in about 520 ms with 10 items, 10 citations, `source=small-analytics`,
+and scope `tenant/00000000-0000-0000-0000-000000000001`; a mismatched tenant
+timeline returned HTTP 400; and a corrected 29-endpoint authenticated API smoke
+returned zero failures. A post-deploy browser sweep of Control Room, Network,
+SIEM, Compliance, Reports, Alerts, Cases, Observability, Nodes, Coverage, Audit,
+and Telemetry showed no visible error states, no same-origin failed requests,
+and no console warnings/errors. Recent controlplane logs showed no 5xx, panic,
+database lock, analytics-unavailable, or Doris-unavailable matches; only the
+known AbuseIPDB 429 local-snapshot warning appeared. Host memory remained in the
+small-fleet envelope: controlplane about 62.6 MiB / 1 GiB, console about
+6.6 MiB / 256 MiB, Redis about 6.2 MiB / 192 MiB, ipq about 4.8 MiB / 128 MiB,
+and no Doris FE/BE containers under the OLAP profile.
+
+2026-06-07 fresh-login deep-link follow-up: a fresh isolated browser context
+opened
+`/console/security/network?tab=connections&verify=fresh-login-return-20260607`
+without a session. The console correctly redirected to `/console/login`, but
+after a successful `admin@local` password login it landed on `/console` instead
+of returning to the requested Network Connections page. This is a real demo and
+operator UX defect because alert, case, report, and investigation links must
+survive session establishment.
+
+The fix is small and preserves existing auth behavior: protected-route redirects
+now pass `{from: pathname + search + hash}` to `/login`, and the existing login
+return logic uses that state after password, token, or SSO sign-in. A focused
+React Router regression test proves an unauthenticated
+`/security/network?tab=connections#row-7` route carries the full return target
+into the login route.
+
+Local validation passed: `npx vitest run src/App.test.tsx`, `npm run build`,
+and `npm run lint` (only the existing ESLintRC deprecation warning). The console
+was rebuilt and redeployed. Live retest in a fresh isolated browser context
+showed the same protected Network deep link redirecting to `/console/login`, then
+returning after sign-in to
+`/console/security/network?tab=connections&verify=fresh-login-return-fixed-20260607`.
+The Network page rendered the expected tab surface with no visible error state,
+no same-origin failed requests, and zero browser console warnings/errors. Host
+evidence after redeploy: `/healthz=ok`, recent console/controlplane logs showed
+no actual 4xx/5xx/panic/database-lock/analytics-unavailable matches, no Doris
+FE/BE containers were running, and memory remained within the small profile:
+controlplane about 64.6 MiB / 1 GiB, console about 5.2 MiB / 256 MiB, Redis
+about 6.9 MiB / 192 MiB, and ipq about 4.8 MiB / 128 MiB.
+
+2026-06-07 session revocation and expired-session UX follow-up: a live
+isolated-browser auth audit found two production session issues. First, when a
+stale stored token opened a protected Network deep link, the UI cleared the
+token and returned correctly after re-login, but the primary email sign-in form
+did not show the "Session has expired. Please sign in again." message. Second,
+clicking the profile-menu Sign out item cleared browser storage and returned to
+`/console/login`, but the old bearer token still returned HTTP 200 from
+`/api/v1/auth/me`, proving the UI had not revoked the backend session.
+
+The fix preserves the existing auth model and features. `AuthProvider.signOut`
+now calls `POST /api/v1/auth/logout` with the active bearer token before
+clearing local state, and still clears local state in a `finally` block if the
+network logout attempt fails. The profile menu intentionally fires the async
+sign-out without leaking a promise into the menu handler. The login page now
+surfaces provider-level auth notices on the primary email/password form with an
+alert role, instead of hiding expired-session guidance behind advanced bearer
+token options.
+
+Regression coverage now includes `AuthProvider` proving sign-out sends
+`POST /api/v1/auth/logout` with the active Authorization header before local
+storage is cleared, and `Login` proving expired-session guidance appears on the
+primary form. Local validation passed:
+`npx vitest run src/providers/AuthProvider.test.tsx src/pages/Login.test.tsx src/App.test.tsx`,
+`npm run build`, `npm run lint`, and `git diff --check`.
+
+The console was rebuilt and redeployed. Live post-deploy evidence: the stale
+token replay on
+`/console/security/network?tab=connections&verify=session-ux-fixed-20260607`
+landed on `/console/login`, removed `control-one-token`, displayed
+`Session has expired. Please sign in again.`, and returned to the original
+Network page after password login. A cleanup logout for that temporary session
+returned HTTP 200. A separate profile-menu sign-out replay showed an
+authenticated `/api/v1/auth/me` check returning HTTP 200 before sign-out, a
+real `POST /api/v1/auth/logout` request with Authorization during sign-out,
+browser storage cleared on `/console/login`, and the same old token returning
+HTTP 401 afterward. The only browser console resource errors in this slice were
+the expected 401s deliberately generated by stale-token and revoked-token probes.
+Host evidence after deploy: `/healthz=ok`, strict recent console/controlplane
+log scans showed no actual nginx 4xx/5xx or controlplane 5xx/panic/database
+lock/analytics-unavailable/Doris-unavailable matches, no Doris FE/BE containers
+were running, and memory stayed inside the small-fleet envelope: console about
+6.8 MiB / 256 MiB, controlplane about 80.0 MiB / 1 GiB, Redis about 6.7 MiB /
+192 MiB, and ipq about 4.8 MiB / 128 MiB.
+
+2026-06-07 public route boundary and intake link follow-up: an isolated live
+browser sweep checked unauthenticated public pages and protected redirects at
+desktop and mobile sizes. `/console/trust/default`, `/console/intake`, and
+`/console/intake-status` rendered without a session token, root aliases such as
+`/intake` and `/intake-status` canonicalized to the `/console/...` routes,
+protected `/console/security/network?tab=connections` redirected to
+`/console/login`, and mobile login/intake/status views had no horizontal
+overflow. The sweep found one real public-flow defect in source: after an
+anonymous misconduct report is submitted, the success-page "Check status with
+your token" link used raw `href="/intake-status"`, which can escape the console
+basename in deployments where public routes are served under `/console`.
+
+The fix is additive and routing-safe: `WhistleblowerIntake` now uses React
+Router `Link to="/intake-status"`, letting the configured console basename
+render the correct `/console/intake-status` href. Regression coverage simulates
+a successful anonymous intake submission under `MemoryRouter basename="/console"`
+and proves the status link href is `/console/intake-status`.
+
+Local validation passed:
+`npx vitest run src/pages/WhistleblowerIntake.test.tsx src/pages/TrustCenter.test.tsx src/pages/Login.test.tsx`,
+`npm run build`, `npm run lint`, and `git diff --check`. The console was rebuilt
+and redeployed. Post-deploy browser evidence used Playwright route interception
+for `/api/v1/misconduct/challenge` and `/api/v1/misconduct/submit`, so no real
+production report was created; the submitted state rendered the audit token,
+showed "Check status with your token", and the link resolved to
+`https://control-one.cloudspacetechs.com/console/intake-status`. A fresh
+post-deploy public/protected sweep again showed Trust Center, root intake-status
+canonicalization, mobile login, mobile intake, and protected Network redirecting
+as expected, with no visible auth leak, no horizontal overflow, no same-origin
+failed requests, and zero browser console warnings/errors. Host evidence after
+deploy: `/healthz=ok`, strict recent console/controlplane log scans showed no
+actual nginx 4xx/5xx or controlplane 5xx/panic/database-lock/analytics-unavailable
+matches, no Doris FE/BE containers were running, and memory stayed within the
+small-fleet envelope: console about 4.5 MiB / 256 MiB, controlplane about
+83.7 MiB / 1 GiB, Redis about 6.7 MiB / 192 MiB, and ipq about 4.8 MiB /
+128 MiB.
+
+2026-06-07 node drill-down go-live audit: this pass focused on the core
+operator path from fleet inventory into a specific host. The live API first
+selected node `0d4893c0-867a-4bf1-8aa9-e247680280ab`
+(`vmi2172335.contaboserver.net`) from `/api/v1/nodes?limit=20&offset=0`.
+Direct contract checks returned HTTP 200 for node metadata, node health, node
+telemetry, node services, node packages, and node-scoped connections. Observed
+timings were approximately: metadata 671 ms, health 341 ms, telemetry 526 ms,
+services 469 ms, packages 607 ms, and connections 944 ms.
+
+Live browser verification then opened `/console/nodes`, authenticated through
+the normal password login flow, and confirmed the fleet overview rendered the
+two active agents. The selected node detail page rendered the expected
+predictive score, vitals, current telemetry, and host identity. A desktop
+browser pass exercised all node detail tabs: Overview, Activity, Connections,
+Knowledge graph, Packages, Recommendations, and Settings. Each tab selected
+correctly, showed expected content, had no visible critical error or failed-load
+message, and produced no same-origin 4xx/5xx responses, request failures, page
+errors, or browser console warnings/errors. The calls observed from that pass
+included `/api/v1/nodes/{id}`, `/health`, `/telemetry/nodes/{id}/metrics`,
+node-scoped `/connections`, `/services`, `/packages`, and
+`/compliance/recommendations`.
+
+Mobile verification at 390x844 exercised the same node's Overview, Connections,
+Packages, and Settings tabs. The dense tables and tab strip stayed inside the
+viewport (`overflowX=false`), expected content rendered, and there were no
+same-origin failed requests, browser console warnings/errors, or page errors.
+No product code changes were required in this slice. Host evidence after the
+audit: `/healthz=ok`, strict recent console/controlplane log scans showed no
+actual nginx 4xx/5xx or controlplane 5xx/panic/database-lock/analytics-unavailable
+matches, no Doris FE/BE containers were running, and memory remained within the
+small-fleet envelope: console about 4.5 MiB / 256 MiB, controlplane about
+87.5 MiB / 1 GiB, Redis about 6.7 MiB / 192 MiB, and ipq about 4.8 MiB /
+128 MiB.
+
+2026-06-07 SIEM source-health export follow-up: source inspection found one
+remaining export-path defect after the earlier evidence/report hardening. The
+SIEM source-health investigation panel and source-investigation rows rendered
+`export_url` as a plain new-tab link. SOC case export endpoints are bearer-token
+protected and the login flow does not set an auth cookie, so those links could
+open a 401 tab instead of delivering the audit packet. A live direct API check
+confirmed the risk on an existing SOC case: the raw export URL returned HTTP
+401 without a bearer token, while the same endpoint returned HTTP 200 with
+`export_version=soc-case-export-v1`, 6 evidence refs, and 5 guardrails when
+called with Authorization.
+
+The fix preserves the feature: both SIEM Export controls now call
+`api.exportSOCCase(...)` through the authenticated API client and save a
+pretty-printed JSON packet named `soc-case-{case_id}-{date}.json`; no export
+button or SOC packet capability was removed. Regression coverage proves the
+source-health export is a button rather than a raw link, calls
+`exportSOCCase(case_id, tenant_id)`, saves the packet through `saveBlob`, and
+keeps the existing source-health workflows intact.
+
+Local validation passed:
+`npm --prefix ui run test -- src/pages/SIEMCoverage.test.tsx`,
+`npm --prefix ui run build`, `npm --prefix ui run lint`, and
+`git diff --check` (lint only emitted the existing ESLintRC deprecation
+warning). The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+Production currently has four SIEM source-health rows, all `collecting`, and no
+live source-health SOC case row, so browser verification used Playwright route
+interception for only the source-health case list and export packet to avoid
+creating a synthetic production incident. The deployed `/console/security/siem`
+page rendered the intercepted source-investigation row, had zero raw
+`/api/v1/soc/cases/.../export` anchors, clicked the Export button, sent an
+authenticated bearer request to the export endpoint, and produced
+`soc-case-22222222-3333-4444-5555-666666666666-2026-06-07.json`. The page had
+no document-level horizontal overflow, no browser console warnings/errors, and
+no same-origin app 4xx/5xx responses; the only request failure observed was a
+Cloudflare RUM `net::ERR_ABORTED` beacon.
+
+Post-deploy host evidence remained healthy: `/healthz=ok`, Compose config still
+reports `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, no Doris FE/BE containers were
+running under the OLAP profile, memory stayed light at about console
+6.0 MiB / 256 MiB, controlplane 71.4 MiB / 1 GiB, Redis 6.7 MiB / 192 MiB, and
+ipq 4.8 MiB / 128 MiB, and a strict 20-minute console/controlplane log scan
+showed no actual nginx 4xx/5xx, controlplane 5xx, panic, fatal, permission,
+database-lock, analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Users/RBAC replacement-flow follow-up: source review found a real
+role-management UX and state bug in the Users console. The bulk action was
+labelled "Bulk Assign Roles", but the existing API/storage contract replaces
+the full role set for each selected user. The same boolean also controlled both
+modal visibility and the in-flight request, so the confirmation button was
+disabled as soon as the modal opened. The single-user editor also let operators
+uncheck every role and press Save, although the server rejects empty role sets.
+
+The fix preserves the feature and makes the contract explicit. The bulk action
+is now "Bulk Replace Roles"; modal-open state is separate from request-in-flight
+state; the success path clears selection, closes the modal, reloads users and
+roles, and shows page-level confirmation; and single-user role edits now warn
+that at least one role is required and disable Save until a role is selected.
+
+Regression coverage proves empty single-user role saves are blocked without an
+API call and bulk replacement calls `updateUserRoles(userId, { roles: [...] })`
+once per selected user. Local validation passed:
+`npm --prefix ui run test -- src/pages/Users.test.tsx`,
+`go test ./controlplane/internal/server -run 'TestUserAndRoleManagement|TestRequireTenantAccess' -count=1`,
+`go test ./controlplane/internal/storage -run 'TestIsBuiltInRoleName' -count=1`,
+`npm --prefix ui run build`, `npm --prefix ui run lint`, and
+`git diff --check` (only existing lint deprecation and CRLF warnings).
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+Post-deploy API integrity showed 6 users, 5 unique built-in roles, no duplicate
+user-role rows, 28 permissions, admin carrying all 28 permissions, and
+unauthenticated `/api/v1/users` returning HTTP 401.
+
+Live browser verification opened `/console/users` and `/console/roles` on the
+deployed site. Users rendered 6 users and 5 available roles; empty single-user
+role save was blocked; bulk replacement showed replacement copy, enabled only
+after a role was selected, sent one bearer-authenticated
+`PATCH /api/v1/users/{id}` with body `{"roles":["operator"]}`, closed the modal,
+and showed `Successfully replaced roles for 1 user(s)`. That PATCH was fulfilled
+by Playwright route interception, so no production user roles were changed. The
+Roles page rendered 5 total roles, 5 built-in roles, 0 custom roles, and no
+delete buttons for built-ins. Both pages had no document-level horizontal
+overflow, browser console warnings/errors, unexpected request failures, or
+same-origin app 4xx/5xx responses.
+
+Host evidence remained healthy: `/healthz=ok`, small analytics config still
+reports `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, no Doris FE/BE containers were
+running under the OLAP profile, memory stayed light at about console
+5.8 MiB / 256 MiB, controlplane 73.4 MiB / 1 GiB, Redis 5.6 MiB / 192 MiB, and
+ipq 4.8 MiB / 128 MiB, and strict recent console/controlplane log scans showed
+no actual nginx 4xx/5xx, controlplane 5xx, panic, fatal, permission,
+database-lock, analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Settings MFA and Trust Center follow-up: source review found two
+bank-grade UX defects in the Settings console. MFA factor load failures were
+silently converted into the empty state, so an operator could see "No MFA
+factors enrolled" when the security status request had actually failed. MFA
+factor revoke buttons also exposed only an icon with no explicit accessible
+name, and revoke failures could be missed instead of remaining visible in the
+confirmation modal. The Trust Center action used the root `/trust/:tenant`
+alias, which worked by nginx redirect but should resolve directly inside the
+console basename.
+
+The fix preserves the existing features and tightens their contracts. MFA load
+failures now render `MFA status unavailable: ...` and do not show the empty
+factor state. Revoke controls have factor-specific accessible names and titles,
+the confirmation copy names the selected factor, the modal stays open during
+revocation failure, and the inline error remains visible as
+`MFA action failed: ...`. The Trust Center link now uses React Router `useHref`
+so the public portal link resolves directly to `/console/trust/:tenant-name`.
+
+Regression coverage proves the Trust Center href is `/console/trust/Tenant%20A`,
+MFA load failures surface as an alert instead of an empty state, and failed
+revocation keeps a visible modal error while showing an error toast. Local
+validation passed: `npm --prefix ui run test -- src/pages/Settings.test.tsx`,
+`npm --prefix ui run build`, `npm --prefix ui run lint`, and `git diff --check`
+(only the existing React Router future-flag, ESLintRC deprecation, and CRLF
+warnings appeared).
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+The final live browser verification used isolated Playwright contexts and
+route interception for `/api/v1/mfa/factors` so no production MFA state changed.
+Desktop verification logged in through the real API, rendered an explicit
+simulated MFA outage, confirmed the empty-factor state was not shown, refreshed
+to a synthetic TOTP factor, verified one named `Revoke Authenticator app MFA
+factor` control, opened factor-specific revoke confirmation copy, intercepted
+one bearer-authenticated DELETE with a simulated 500, kept
+`MFA action failed: Internal Server Error` visible, and confirmed the Trust
+Center link resolved to `/console/trust/default`. The desktop page had no
+horizontal overflow, no unexpected same-origin app 4xx/5xx responses, no
+unexpected request failures, and only the expected simulated 503/500 console
+resource errors. A separate isolated mobile pass at 390x844 rendered the same
+synthetic MFA factor, verified the named revoke control, and had no horizontal
+overflow, request failures, page errors, or console warnings/errors.
+
+Real API and host checks after deploy remained clean: `GET /api/v1/mfa/factors`
+returned `{"data":[]}`, confirming the browser pass did not leave production
+MFA factors behind; `/console/settings` and `/console/trust/default` returned
+HTTP 200; root `/trust/default` returned HTTP 308 to
+`/console/trust/default`; `/healthz=ok`; no Doris FE/BE containers were running;
+small analytics config still reports `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`; memory stayed light at about
+console 4.5 MiB / 256 MiB, controlplane 78.4 MiB / 1 GiB, Redis 5.6 MiB /
+192 MiB, and ipq 4.8 MiB / 128 MiB; and strict recent console/controlplane log
+scans showed no actual nginx 4xx/5xx, controlplane 4xx/5xx, panic, fatal,
+permission, database-lock, analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Access/JIT and command-policy follow-up: source review found
+operator-risk defects in the privileged-access console. JIT request creation
+failures could leave the form with no visible error, access approval/denial
+failures could disappear inside the inline decision panel, command ACL load
+failures were silently converted into the empty state, and command ACL
+create/delete failures were not reliably visible. Custom JIT TTL values below
+the server's 60-second minimum could also be entered before submit.
+
+The fix preserves the existing Access workflow while making failure modes
+explicit. JIT request failures now render `Access request failed: ...` while
+preserving the requested access fields. The approve/deny panel now catches
+decision failures, keeps the panel open, disables controls only during the
+in-flight request, and renders `Decision failed: ...`. Command policy load
+failures now render `Command policy unavailable: ...` instead of the false
+`No command policy rules` empty state; create/delete failures remain visible,
+and failed deletes keep the confirmation modal open. Custom TTL submit is
+disabled until the value is finite and at least 60 seconds.
+
+Regression coverage proves failed JIT request submission preserves the form,
+invalid custom TTLs do not call the API, failed approve decisions keep a visible
+error panel, command ACL load failures do not show a false empty state, command
+policy delete buttons are named for assistive technology, and command ACL
+creation still uses the canonical role API list. Local validation passed:
+`npm --prefix ui run test -- src/pages/Access.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check` (only existing ESLintRC and CRLF warnings appeared).
+
+The console-only production deploy initially exposed an operational reliability
+gap: Paramiko's fixed 20-second SSH banner/auth timeout failed on the live host,
+while OpenSSH succeeded after a slower handshake. `deploy/deploy_console.py`
+now uses 60-second SSH handshake/auth timeouts and three connection attempts;
+`python -m py_compile deploy/deploy_console.py` passed. The same deploy command
+then completed successfully and rebuilt/restarted only the console container:
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`.
+
+Live browser verification on `/console/access` used safe Playwright route
+interception for mutating Access and command-policy calls, so no production JIT
+request or command ACL was created, approved, or deleted. The deployed page
+rendered a synthetic pending `root@prod-db-01` request; an intercepted failed
+JIT POST showed `Access request failed: Service Unavailable` and preserved the
+form; an intercepted failed approve kept the decision panel open with
+`Decision failed: Service Unavailable`; an intercepted command ACL load failure
+showed `Command policy unavailable: Service Unavailable` and did not show
+`No command policy rules`; a synthetic ACL row rendered with one accessible
+delete button; intercepted create/delete failures showed command-policy errors,
+and the failed delete kept the confirmation modal open. A final clean Access
+tab loaded with the heading and command-policy tab visible, no page alerts, and
+zero browser console warnings/errors.
+
+Real read-only API checks from the authenticated browser session returned HTTP
+200 for tenants, tenant-scoped `/api/v1/access-requests`, and tenant-scoped
+`/api/v1/command-acls`. Post-deploy host evidence stayed healthy: origin
+`/healthz=ok`, `/console/` returned HTTP 200 with the refreshed asset timestamp,
+no Doris FE/BE containers were running under the OLAP profile,
+`ANALYTICS_MODE=small`, `DORIS_ENABLED=false`, memory stayed light at about
+console 7.1 MiB / 256 MiB, controlplane 199.7 MiB / 1 GiB, Redis 6.7 MiB /
+192 MiB, and ipq 4.8 MiB / 128 MiB, host memory had about 3.5 GiB available,
+and strict recent console/controlplane log scans showed no actual nginx 4xx/5xx,
+controlplane 5xx, panic, fatal, permission, database-lock,
+analytics-unavailable, or Doris-unavailable matches.
+
+2026-06-07 Small-fleet analytics architecture decision: the demo should not
+try to make Doris smaller as the default path. The selected architecture is
+Control One Lite Analytics: Postgres as durable ingest journal and product
+truth, SQLite/WAL as the embedded recent evidence projection, Redis as bounded
+hot state/queues/freshness, and Doris FE/BE at 0 MB unless an operator
+explicitly selects `ANALYTICS_MODE=olap`, `DORIS_ENABLED=true`, and the Compose
+`olap` profile.
+
+The decision preserves useful product capability instead of deleting routes or
+workflows. Dashboard, network security, investigation, timeline, search,
+citation, and export flows should keep the same API and UI contracts in small
+mode. Redis-only data is not evidence, SQLite projections must cite stable
+event IDs or raw references, and Postgres remains the replay/rebuild boundary.
+Projection gaps should return source/guardrail metadata with analytics-neutral
+copy, not Doris-specific errors or hidden UI affordances. The detailed design
+and implementation proof plan are now captured in
+`docs/small-fleet-analytics-architecture.md`.
+
+2026-06-07 Secrets vault and Redis hot-state follow-up: source review found
+several operator-risk issues in the Secrets console. Secret group delete used a
+native browser confirmation and a generic row action, delete and sync failures
+could disappear after a toast, sync state disabled every row without naming the
+active group, create allowed invalid/blank sync intervals to be silently coerced
+to 900 seconds, the create overlay lacked dialog semantics and could be
+accidentally dismissed by clicking the backdrop, and a secret-group load failure
+could still render the false `No secret groups found` empty state.
+
+The fix preserves the Secrets workflow while making failure and destructive
+states explicit. Secret group delete now uses the shared in-app confirmation
+modal with group/backend-specific copy, disabled in-flight actions, and a
+durable modal error on failure. Row Sync/Delete controls now have group-specific
+accessible names, failed syncs render a persistent `Secret operation failed`
+alert, invalid sync intervals below 60 seconds disable submit and make no API
+call, the create modal exposes dialog semantics and a named close action, and
+load failures no longer show the empty state. `ConfirmModal` now supports
+optional disabled confirm/cancel states so shared destructive flows can prevent
+double submits while work is in flight.
+
+Regression coverage proves the in-app delete modal avoids native `confirm`,
+successful delete refreshes the list, failed delete stays visible in the modal,
+row actions are named for assistive technology, failed sync remains visible
+after the toast, load failures do not show a false empty state, and invalid
+sync intervals do not call create. Local validation passed:
+`npm --prefix ui run test -- src/pages/Secrets.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check` (only the existing ESLintRC deprecation and CRLF warnings
+appeared).
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; the refreshed `/console/` and
+`/console/secrets` assets returned HTTP 200 with `Last-Modified: Sun, 07 Jun
+2026 22:44:02 GMT`.
+
+Live desktop browser verification on `/console/secrets` used real login and
+real tenant/API reads, then safe Playwright route interception for mutating
+Secrets calls so no production secret group was created, synced, or deleted.
+The deployed page showed `Failed to load secret groups` without
+`No secret groups found` under an intercepted list outage, rendered a synthetic
+`prod-vault-safe` row with named Sync/Delete controls, kept
+`Sync failed for prod-vault-safe: Service Unavailable` visible after an
+intercepted sync failure, opened an in-app `Delete secret group?` modal with
+group/backend-specific copy, kept `Secret group delete failed: Service
+Unavailable` visible after an intercepted delete failure, and blocked a 30
+second create interval with no create POST. A clean real Secrets reload had no
+alerts, no horizontal overflow, zero browser console warnings/errors, and the
+tenant-scoped real `/api/v1/secrets/groups?limit=5` read returned HTTP 200 with
+`data: []`.
+
+Mobile verification at 390x844 reloaded the real Secrets page, found no alerts
+or horizontal overflow, opened the create dialog, confirmed the invalid interval
+message and disabled submit state, and recorded zero page errors, request
+failures, console warnings/errors, or same-origin 4xx/5xx responses.
+
+During host checks, live Redis was found running the stale `allkeys-lru`
+eviction policy even though the repository default had already moved to
+`volatile-lru`. That could evict protected queue/control keys under memory
+pressure, so the live `deploy/docker-compose.yaml` was synced from the repo and
+only Redis was recreated with the existing persisted volume. Redis came back
+healthy with `maxmemory=128mb`, container memory `192MiB`, and
+`maxmemory-policy=volatile-lru`, protecting non-TTL queue/control keys while
+still allowing TTL-bound hot analytics keys to evict.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/secrets`
+returned HTTP 200, authenticated tenants and secret-groups API reads returned
+HTTP 200, Redis answered `PONG`, no Doris FE/BE containers were running under
+the OLAP profile, the controlplane container reported
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`, memory stayed light at about Redis
+10.5 MiB / 192 MiB, console 6.9 MiB / 256 MiB, controlplane 121.7 MiB / 1 GiB,
+and ipq 8.8 MiB / 128 MiB, and strict recent log scans showed no console
+4xx/5xx, controlplane 5xx, panic, fatal, permission, database-lock,
+analytics-unavailable, Doris-unavailable, small-analytics unavailable, or
+Secrets 4xx/5xx matches.
+
+2026-06-08 SOC Cases failure-mode hardening: source review found operator-risk
+gaps in the incident-packet workflow. A case-list outage could collapse into a
+false empty queue, a failed detail fetch could leave stale evidence from the
+previous case on screen, export preview failures could become an unhandled
+dead-end, and note-write failures were not durable enough for an analyst to
+recover confidently.
+
+The fix preserves the existing SOC Cases workflow and makes the failure states
+explicit. Tenant changes and list failures now clear stale case/detail/export
+state, the selected case is preserved only if it still exists in the refreshed
+list, detail fetch failures clear stale evidence and show a `Case data
+unavailable` alert, list failures show queue-recovery copy instead of `No SOC
+cases yet`, export preview has disabled/loading/error states, and failed note
+writes keep the analyst draft visible with a persistent alert.
+
+Regression coverage now proves list failures do not show the false empty state,
+detail failures clear stale evidence, export failures surface without rendering
+an export version, and failed note submissions preserve the draft. Local
+validation passed: `npm --prefix ui run test -- src/pages/Cases.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check` for the touched files.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/cases` returned HTTP
+200 with `Last-Modified: Sun, 07 Jun 2026 23:12:01 GMT` and no-store headers.
+
+Live browser verification on `/console/cases` used Playwright route
+interception for SOC Cases only, so no production case note or export was
+created. A synthetic list outage rendered `Case data unavailable`, surfaced
+`Service Unavailable`, showed queue-recovery copy, and did not show `No SOC
+cases yet`. A synthetic evidence-backed case rendered the detail heading,
+facts, evidence drawer, timeline, and export packet. Intercepted export and
+note failures each fired exactly once, showed `Export preview failed: Service
+Unavailable` and `Note failed: Service Unavailable`, did not render a failed
+export version, and preserved the note draft. A clean real production reload
+then had no case alerts, zero new browser warnings/errors, and the
+tenant-scoped authenticated `/api/v1/soc/cases?limit=5` read returned HTTP 200
+with five rows. Mobile verification at 390x844 had no alerts and no horizontal
+overflow (`381/381`).
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/cases` returned
+HTTP 200, no Doris FE/BE containers were running under the OLAP profile, Redis
+remained `maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory
+stayed light at about console 5.6 MiB / 256 MiB, Redis 10.5 MiB / 192 MiB,
+controlplane 126.8 MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent
+console/controlplane log scans showed no console 4xx/5xx, no controlplane 5xx,
+panic, fatal, permission, deadline, database-lock, analytics-unavailable,
+Doris-unavailable, or small-analytics unavailable matches. The only recent
+Cases 4xx/5xx line was an expected unauthenticated HTTP 401 from the initial
+browser-side API probe before the bearer header was added; a shorter post-clean
+window showed no `/api/v1/soc/cases` 4xx/5xx matches.
+
+2026-06-08 Threat Feeds failure-mode hardening: source review found
+operator-risk gaps in threat-intelligence source management. Plain-text Go
+`http.Error` responses were flattened to generic status text, so important
+backend guidance like missing OTX API keys could become `Bad Request`. A
+threat-feed list outage could render the false `No threat feeds configured`
+empty state, blacklist-summary failures could look like a warming cache,
+enable/disable failures could disappear as unhandled actions, delete failures
+could close the confirmation path, and blank numeric inputs could be coerced
+into misleading values.
+
+The fix preserves the existing Threat Feeds workflow while making every
+operator decision recoverable. API errors now read JSON or plain-text response
+bodies and suppress HTML bodies. Feed-list, summary, form, row-action, and
+delete failures have separate durable states, tenant changes clear stale
+errors, failed feed loads clear stale rows and show recovery copy, failed
+summary loads no longer show warming-cache copy, OTX and URL-backed sources are
+validated before submit, score and refresh fields keep blank state instead of
+coercing to zero, row enable/disable controls are feed-specific and loading
+aware, and failed deletes remain inside the shared confirmation modal with the
+affected feed name visible.
+
+Regression coverage now proves plain-text backend errors are preserved, feed
+list failures avoid the false empty state, blacklist-summary failures avoid the
+warming-cache copy, failed enable toggles stay visible and name the row action,
+failed deletes remain in the confirmation modal, and invalid refresh intervals
+block create without making an API call. Local validation passed:
+`npm --prefix ui run test -- src/pages/ThreatFeeds.test.tsx
+src/lib/api.normalize.test.ts`, `npm --prefix ui run lint`,
+`npm --prefix ui run build`, and `git diff --check` for the touched files.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/security/network?tab=threats`
+returned HTTP 200 with no-store headers and `Last-Modified: Sun, 07 Jun 2026
+23:37:12 GMT`.
+
+Live browser verification on
+`/console/security/network?tab=threats` used the authenticated session and
+safe Playwright route interception for Threat Feeds only, so no production
+feed was created, toggled, or deleted. The deployed page showed a feed-list
+outage alert, avoided the false empty state, showed table recovery copy,
+surfaced a blacklist-summary outage without warming-cache copy, rendered a
+synthetic `FireHOL production` row, kept an intercepted toggle failure visible,
+kept an intercepted delete failure inside the modal, blocked missing OTX API
+keys before create, preserved a plain-text create error, and confirmed the
+intercepted create, toggle, and delete routes fired exactly once. A clean real
+production reload then had no Threat Feeds alerts, zero browser console
+warnings/errors, a healthy direct threat-feeds API read, and a healthy direct
+threat-summary API read. Mobile verification at 390x844 had no alerts and no
+horizontal overflow (`381/381`).
+
+Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/security/network?tab=threats` returned HTTP 200, no Doris FE/BE
+containers were running under the OLAP profile, Redis remained
+`maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory stayed light
+at about console 4.5 MiB / 256 MiB, Redis 10.5 MiB / 192 MiB, controlplane
+129.2 MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent
+console/controlplane log scans showed no console 4xx/5xx, no controlplane 5xx,
+panic, fatal, permission, deadline, database-lock, analytics-unavailable,
+Doris-unavailable, small-analytics unavailable, or Threat Feeds 4xx/5xx
+matches.
+
+2026-06-08 Users and Roles RBAC hardening: source review and saved browser
+evidence found bank-grade access-administration risks. User rows could render
+duplicate role chips such as `VIEWER VIEWER` or `ADMIN ADMIN`, users and roles
+load failures could still collapse into false empty states, the single-user and
+bulk role editors lacked proper dialog semantics, bulk role failures were not
+visible inside the active modal, the Roles page used native browser
+`confirm`/`alert`, failed permission writes could feel accepted until a later
+refresh, and custom role create/delete errors were not recoverable enough for a
+CISO/admin workflow.
+
+The fix preserves the existing Users directory, bulk role replacement, and live
+Role / permission matrix. User role names are now normalized and deduplicated
+for display, KPI counting, side-panel role counts, and edit initialization.
+Selected users are pruned when the visible page changes. Users and roles load
+failures now show recovery empty states instead of `No users found` or `No
+roles yet`. The user role modals expose dialog semantics and named close
+actions, failed bulk replacements stay visible inside the modal, Roles uses the
+shared in-app confirmation modal for custom role deletion, custom role create
+failures render inline instead of using `alert`, destructive delete failures
+stay in the modal, permission checkboxes have role/permission-specific names,
+and failed permission writes rollback the optimistic checkbox state with a
+durable `Role operation failed` alert.
+
+Regression coverage now proves duplicate role assignments render once, user
+load failures avoid the false empty state, empty single-user role sets cannot be
+saved, bulk replacement copy and API behavior remain explicit, failed bulk role
+updates stay in the modal, built-in roles remain delete-protected even when IDs
+vary, older built-in payloads are still protected by name, role load failures
+avoid the false empty state, failed permission writes rollback, failed custom
+role deletes stay in the confirmation modal, and custom role create failures do
+not call browser `alert`. Local validation passed:
+`npm --prefix ui run test -- src/pages/Users.test.tsx
+src/pages/Roles.test.tsx`, `npm --prefix ui run lint`,
+`npm --prefix ui run build`, and `git diff --check` for the touched files.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/users` and
+`/console/roles` returned HTTP 200 with no-store headers and `Last-Modified:
+Mon, 08 Jun 2026 00:07:40 GMT`.
+
+Live browser verification used the authenticated production session and safe
+Playwright route interception for RBAC mutations, so no production user or role
+was changed. The deployed Users page showed a synthetic user-list outage alert
+without the false `No users found` state, rendered a duplicate-role synthetic
+`Ada Admin` row with one `viewer` and one `operator` chip, kept an intercepted
+bulk role replacement failure visible inside the modal, and confirmed the
+PATCH route fired exactly once. The deployed Roles page showed a synthetic role
+catalog outage alert without `No roles yet`, protected the built-in role, only
+exposed delete for the synthetic custom role, rolled back an intercepted
+permission-write failure, preserved a plain-text create error, kept an
+intercepted delete failure inside the confirmation modal, and confirmed the
+PUT, POST, and DELETE routes fired exactly once. A clean real production reload
+then had no Users or Roles alerts, zero browser console warnings/errors, direct
+authenticated API reads returned HTTP 200 for users, roles, permissions, and
+the role matrix, and live users had no duplicate-role API row at verification
+time. Mobile verification at 390x844 had no alerts and no body horizontal
+overflow on Users or Roles (`381/381`).
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/users` and
+`/console/roles` returned HTTP 200, no Doris FE/BE containers were running
+under the OLAP profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 132.5 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, small-analytics
+unavailable, or Users/Roles/Permissions 4xx/5xx matches.
+
+2026-06-08 Alerts SOC triage failure-mode hardening: source review found
+operator-risk gaps in the top-level alert triage surface. Alert-list failures
+could leave stale rows or collapse into false `All clear` / `No alerts` copy,
+failed acknowledgements were not visible as durable row-scoped action errors,
+failed dispositions wrote into generic page error state instead of the active
+evidence modal, correlation-rule list failures were swallowed as false empty
+state, rule create failures were not shown in the form, and rule delete
+failures could disappear from the confirmation path. The rule delete icon also
+lacked a rule-specific accessible name.
+
+The fix preserves the existing inbox, critical response center, evidence
+disposition modal, and correlation-rule workflow while making failures
+recoverable. Alert load, alert action, disposition, rules load, rule create,
+and rule delete errors now have separate durable states. Failed alert loads
+clear stale rows and show `Alerts could not be loaded`; failed ACKs name the
+affected alert and keep the row visible; failed dispositions stay inside the
+open modal; failed rule loads show `Correlation rules could not be loaded`;
+failed creates keep the entered rule name; failed deletes remain inside the
+confirmation modal with the rule name visible. ACK, review, and delete controls
+now expose row-specific accessible names and loading/disabled states.
+
+Regression coverage now proves alert-list failures avoid false empty/all-clear
+states, failed acknowledgements remain visible and row-specific, failed
+dispositions stay in the resolution modal, correlation-rule list failures avoid
+false empty state, failed rule creates preserve the draft, and failed rule
+deletes stay in the confirmation modal. Local validation passed:
+`npm --prefix ui run test -- src/pages/Alerts.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check -- ui/src/pages/Alerts.tsx ui/src/pages/Alerts.test.tsx`.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/alerts` returned HTTP
+200 with no-store headers and `Last-Modified: Mon, 08 Jun 2026 00:32:52 GMT`.
+
+Live browser verification on `/console/alerts` used the authenticated
+production session and safe Playwright route interception for Alerts and
+correlation-rule endpoints, so no production alert or rule was acknowledged,
+resolved, created, or deleted. Synthetic checks showed the alert-list outage
+error and recovery copy without `All clear` or `No alerts`, rendered a
+synthetic `Critical SSH burst` row, kept an intercepted ACK failure visible,
+kept an intercepted disposition failure inside the evidence modal, showed the
+correlation-rule outage without `No correlation rules`, preserved a failed
+rule-create draft, and kept an intercepted rule-delete failure inside the
+confirmation modal. Intercept counts were alert list 503 x2, ACK 503 x1,
+disposition 503 x1, rule list 503 x1, create 400 x1, and delete 503 x1. A
+clean real production reload then had the Alerts heading visible, zero
+role-alert errors, zero browser console warnings/errors, no desktop or mobile
+horizontal overflow, and direct authenticated API reads returned HTTP 200 for
+tenants, open alerts, and correlation rules for tenant
+`00000000-0000-0000-0000-000000000001`.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/alerts`
+returned HTTP 200, no Doris FE/BE containers were running under the OLAP
+profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 132.2 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, small-analytics
+unavailable, or Alerts/correlation-rules 4xx/5xx matches.
+
+2026-06-08 Control Room action failure and stale-data hardening: source review
+found several operator-risk gaps in the main command surface. A failed overview
+refresh could leave previous data on screen without clearly marking it stale,
+or an initial load failure could collapse critical panels into false healthy
+states such as `No open incidents`, `No approvals waiting`, `No open IP
+behavior anomalies`, `No webserver inventory yet`, and `No lanes yet`.
+Webserver apply/rollback and network isolation actions used native browser
+confirmation prompts, failed action errors were not kept inside the active
+confirmation path, and repeated row buttons lacked action-specific accessible
+names.
+
+The fix preserves the existing Control Room, lane map, queue, IP behavior,
+incident, webserver, and isolation workflows while making degraded states
+explicit. Failed initial overview loads now clear same-scope data and show
+unavailable states for each dependent panel. Failed refreshes keep only
+same-tenant/same-period last-known data and label it `Last known data`.
+Overview failures render as alerts. Webserver apply/rollback and network
+isolation changes now use the shared in-app confirmation modal, failures stay
+visible in the modal and row, success and busy states are row scoped, and
+webserver/isolation buttons expose target-specific accessible names.
+
+Regression coverage now proves initial overview failures avoid false healthy
+empty states, failed refreshes mark last-known data stale, failed webserver
+apply actions use the in-app modal and remain visible, and failed isolation
+changes use the in-app modal and remain visible. Local validation passed:
+`npm --prefix ui run test -- src/pages/ControlRoom.test.tsx`,
+`npm --prefix ui run lint`, `npm --prefix ui run build`, and
+`git diff --check -- ui/src/pages/ControlRoom.tsx
+ui/src/pages/ControlRoom.test.tsx`.
+
+The console-only production deploy completed with
+`python deploy/deploy_console.py --host 139.162.40.237 --user root --key
+C:/Users/Son/OneDrive/cowork/bigbundle.pem`; `/console/control-room` returned
+HTTP 200 with no-store headers and `Last-Modified: Mon, 08 Jun 2026 00:58:14
+GMT`.
+
+Live browser verification on `/console/control-room` used the authenticated
+production session and safe Playwright route interception for Control Room
+reads and mutations, so no production webserver policy or node isolation state
+was changed. Synthetic checks showed an overview-store outage alert,
+unavailable states for confidence, lanes, queue, IP behavior, incidents, and
+webserver inventory, and none of the false healthy empty states. A synthetic
+overview then rendered `Server Health`, `nginx nginx`, and `core-api-01`; a
+failed refresh kept `Server Health` as last-known data with stale copy. Failed
+webserver apply and failed isolation changes stayed visible inside the
+confirmation modal and the affected row. Intercept counts were overview 503 x4,
+webserver apply 503 x1, and isolation 503 x1. A clean real production reload
+then had the Control Room heading visible, zero role-alert errors, zero browser
+console warnings/errors, no desktop or mobile horizontal overflow, and a direct
+authenticated overview API read returned HTTP 200 with six lanes for tenant
+`00000000-0000-0000-0000-000000000001`.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/control-room`
+returned HTTP 200, no Doris FE/BE containers were running under the OLAP
+profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 131.7 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, small-analytics
+unavailable, or Control Room/webserver/isolation 4xx/5xx matches.
+
+2026-06-08 Nodes fleet failure-state and action hardening: source review found
+several production-readiness gaps in the Servers/Nodes workflow. The at-risk
+fleet request was not scoped to the active tenant, so a tenant-scoped page could
+ask for aggregate at-risk data. Nodes load failures could clear data while the
+page still rendered misleading healthy empty states such as `No nodes` and `No
+nodes online`. At-risk and node-health enrichment failures were swallowed, the
+table quick Airgap/Return actions executed without in-app confirmation, failed
+isolation changes were only toasted, failed agent-update queue requests closed
+their confirmation path, and repeated table/view buttons lacked target-specific
+accessible names.
+
+The fix preserves the existing fleet map, cards, table, rollout, health, and
+isolation workflows while making degraded states and risky actions explicit.
+At-risk requests now pass the active tenant ID. Initial nodes failures render
+`Fleet data unavailable`, `Fleet map unavailable`, and a fleet-list unavailable
+state instead of false empties. At-risk and health-score failures render alerts
+while keeping the rest of the page usable. Table isolation changes now use the
+shared confirmation modal, failed isolation errors remain visible in the modal
+and row, failed agent update queue requests stay inside the update modal, and
+node/action buttons now expose target-specific accessible names.
+
+Regression coverage now proves fleet and at-risk reads are scoped to the active
+tenant, nodes load failures avoid false empty states, at-risk lookup failures
+surface visibly, failed isolation changes require in-app confirmation and remain
+visible, and failed agent-update queue requests remain in the confirmation
+modal. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/Nodes.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/Nodes.tsx ui/src/pages/Nodes.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/nodes` returned HTTP 200 with no-store headers and
+`Last-Modified: Mon, 08 Jun 2026 01:49:01 GMT`.
+
+Live browser verification on `/console/nodes` used the authenticated production
+session and safe Playwright route interception for Nodes reads and mutations, so
+no production node isolation or agent-update state was changed. Synthetic outage
+checks showed the nodes-list outage state, the at-risk outage alert, no `No
+nodes` or `No nodes online` false empty copy, and intercept counts of nodes list
+503 x2 and at-risk 503 x1. A synthetic node then rendered in the table; failed
+Airgap and failed agent update requests stayed visible in the confirmation
+modal, with the isolation failure also retained on the row. Mutation intercept
+counts were isolation 503 x1 and agent update 503 x1. A clean real production
+reload then had the Nodes heading visible, zero role-alert errors, zero browser
+console warnings/errors, no desktop or mobile horizontal overflow, direct
+authenticated `/api/v1/nodes` returning HTTP 200 with two nodes, and direct
+authenticated `/api/v1/health/at-risk` returning HTTP 200 with zero current
+at-risk nodes.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/nodes`
+returned HTTP 200, no Doris FE/BE containers were running under the OLAP
+profile, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, memory stayed light at about console 4.5 MiB / 256 MiB,
+Redis 10.6 MiB / 192 MiB, controlplane 132.6 MiB / 1 GiB, and ipq 8.8 MiB /
+128 MiB. Strict recent console/controlplane log scans showed no actual console
+4xx/5xx, no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
+unavailable matches. Two earlier Nodes API 401s came from an initial
+unauthenticated verification probe; the bearer-token rerun returned HTTP 200 for
+both Nodes and at-risk reads.
+
+2026-06-08 Audit trail and compliance-reporting hardening: source review found
+several bank-demo correctness and UX gaps in the audit/reporting workflow.
+Audit log load failures already showed an error banner, but the dependent KPIs,
+table empty state, and pagination still collapsed into false zero/empty states
+such as `No audit entries` and `Page 1 of 1`. The `Export CSV` action exported
+only the currently loaded page and ignored the client-side search filter, while
+its label implied a broader audit export. Audit Reports defaulted to the first
+tenant in the tenant list instead of the active tenant, swallowed report-history
+load failures into `No generated reports`, allowed inverted reporting periods to
+reach the create endpoint, left form fields under-labelled, and presented failed
+or pending reports as downloadable.
+
+The fix preserves the existing audit log, filters, chart, pagination, report
+history, generate, and download workflows while making degraded states and
+export scope explicit. Audit-log failures now render `Audit trail unavailable`,
+show `N/A` in dependent KPIs, disable export, and replace pagination with an
+unavailable state instead of false empty results. The CSV action is now labelled
+`Export page CSV` and exports the visible filtered page. Audit Reports now
+defaults to the active tenant, surfaces `Report history unavailable` with retry,
+keeps download failures visible, validates period start/end before create,
+associates labels with report controls, and disables downloads for reports that
+are not ready.
+
+Regression coverage now proves audit failures avoid false empty states, audit
+CSV exports only visible filtered rows, report history loads for the active
+tenant, report-history failures avoid false `No generated reports` copy,
+inverted report periods do not call create, download failures stay visible, and
+failed reports cannot be downloaded. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/Audit.test.tsx src/pages/AuditReports.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/Audit.tsx ui/src/pages/AuditReports.tsx ui/src/pages/Audit.test.tsx ui/src/pages/AuditReports.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/audit` returned HTTP 200 with no-store headers and
+`Last-Modified: Mon, 08 Jun 2026 02:23:41 GMT`.
+
+Live browser verification on `/console/audit` used the authenticated production
+session and safe Playwright route interception for audit/report reads and the
+report download path, so no production report was created, downloaded, or
+mutated. Synthetic checks showed audit-log outage copy with two `Audit trail
+unavailable` states, three `N/A` KPI values, disabled export, pagination
+unavailable copy, and no `No audit entries`; the audit-read intercept count was
+503 x1. Report-history outage checks showed two `Report history unavailable`
+states and no `No generated reports`; the report-list intercept count was 503
+x1. A synthetic ready report then kept an intercepted download failure visible
+with `artifact missing`, a synthetic failed report rendered a disabled
+`PCI-DSS report is not ready` action, and inverted period dates showed the
+validation error without sending a create request. Intercept counts were
+synthetic report list 200 x1, download 503 x1, and create POST x0.
+
+A clean real production reload then had the Audit heading visible, zero
+role-alert errors, zero browser console warnings/errors, and direct
+authenticated API reads returning HTTP 200 for `/api/v1/audit` with five sampled
+rows out of 2,618 and `/api/v1/compliance/reports` with three reports. Desktop
+showed zero horizontal overflow. A 390x844 mobile reload had zero role-alert
+errors and no document/body horizontal overflow; the audit table is wider than
+the viewport but is contained inside its own `overflow-auto` table scroller, so
+the page itself does not scroll sideways.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`, `/console/audit` returned
+HTTP 200, no Doris FE/BE containers were running under the OLAP profile, Redis
+remained `maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory
+stayed light at about console 7.1 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB,
+controlplane 197 MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent
+console/controlplane log scans showed no console 4xx/5xx and no controlplane
+5xx, panic, fatal, permission, deadline, database-lock, analytics-unavailable,
+Doris-unavailable, or small-analytics unavailable matches; recent audit and
+report API log lines were normal HTTP 200 reads.
+
+2026-06-08 Webserver auto-control failure-state and action hardening: source
+review found several operator-risk gaps in the dedicated webserver
+capture/enforcement workflow. Inventory load failures surfaced an error but
+could still collapse the KPIs and inventory panel into misleading zero/empty
+states such as `No webserver inventory`. Config-action and receipt-history load
+failures were folded into a generic status string while the dependent panels
+still rendered `No config actions` and `No receipts`. Capture, enforcement, and
+rollback actions used native browser confirmation prompts, failed apply errors
+were easy to lose after the confirmation path closed, and repeated action
+buttons lacked target-specific accessible names.
+
+The fix preserves the existing webserver inventory, application-root context,
+plan, capture, enforcement, rollback, action history, receipt history, and
+Control Room navigation workflows while making degraded states explicit.
+Inventory failures now clear same-scope rows, show `Webserver inventory
+unavailable`, render `N/A` in dependent KPIs, and provide retry. History and
+receipt failures now show `Webserver action history unavailable`, `Config
+action history unavailable`, and `Receipts unavailable` instead of false
+empty-state copy. Capture/enforcement/rollback actions now use the shared
+in-app confirmation modal, keep failed action errors visible inside the modal
+and selected-instance context, keep busy/success/error state scoped by
+instance/action, and expose target-specific accessible names such as `Apply
+capture for nginx nginx`.
+
+Regression coverage now proves inventory failures avoid false empty states,
+failed capture apply actions use the in-app modal without `window.confirm` and
+remain visible, and history failures avoid false `No config actions` / `No
+receipts` copy. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/WebserverAutoControl.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/WebserverAutoControl.tsx ui/src/pages/WebserverAutoControl.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/security/webservers` returned HTTP 200 with
+no-store headers and `Last-Modified: Mon, 08 Jun 2026 02:41:22 GMT`.
+
+Live browser verification on `/console/security/webservers` used the
+authenticated production session and safe Playwright route interception for
+synthetic webserver reads/history/action failures, so no production webserver
+configuration was changed. Synthetic inventory outage checks returned
+`Webserver inventory unavailable` and four `N/A` KPI values, with zero `No
+webserver inventory` false-empty states and an inventory 503 intercept count of
+1. Synthetic history outage checks rendered `nginx nginx`, `Webserver action
+history unavailable`, `Config action history unavailable`, and `Receipts
+unavailable`, with zero `No config actions` or `No receipts` false-empty
+states; intercept counts were webserver list 200 x1 and history/receipt 503 x2.
+Synthetic capture failure checks showed the in-app `Apply capture webserver
+control?` modal before any POST, `applyHitsBeforeConfirm=0`,
+`applyHitsAfterConfirm=1`, `nativeDialogs=0`, visible `Webserver action
+failed`, and the failed message retained in the dialog and selected-instance
+context.
+
+A clean real production reload then had the `Capture and enforcement` heading
+visible, zero role-alert errors, zero browser console warnings/errors, no
+desktop document/body horizontal overflow, and direct authenticated
+`/api/v1/webservers` returning HTTP 200 with two webserver records for tenant
+`00000000-0000-0000-0000-000000000001`. A 390x844 mobile reload also had zero
+role-alert errors and no document/body horizontal overflow; the application-root
+table is wider than the viewport but is contained inside its intended
+horizontal table scroller, so the page itself does not scroll sideways.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/security/webservers` returned HTTP 200, no Doris FE/BE containers
+were running under the OLAP profile, Redis remained
+`maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory stayed light
+at about console 4.5 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB, controlplane 233.1
+MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent log scans showed no
+console 4xx/5xx and no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
+unavailable matches. Recent webserver API log lines were normal HTTP 200 reads
+in a few milliseconds; one 401 line was from an intentional direct fetch without
+the bearer header during verification and the corrected bearer-token rerun
+returned HTTP 200.
+
+2026-06-08 Control Room drill-down exposure containment hardening: source
+review found a remaining operator-risk gap in the lane drill-down workflow.
+The exposure drill-down's whitelist and airgap containment controls still used
+native `window.confirm`, so a bank operator could not see consistent product
+context, queued scope, or retained failure evidence inside the app. Failed
+isolation updates were rendered only as small inline text. A same-scope refresh
+failure could keep prior detail data visible without clearly labelling it as
+last-known data, and a cross-period/tenant failed refresh could retain old-scope
+detail rows under the newly selected scope.
+
+The fix preserves the existing Control Room drill-down, source navigation,
+exposure posture, public-listener table, firewall table, app/DB coverage, period
+filtering, and node isolation workflows while making risky actions and stale
+state explicit. Exposure containment now uses the shared in-app confirmation
+modal, with action-specific names such as `Apply 24 hour whitelist to
+edge-web-02`. Failed containment stays visible in the modal and in the exposure
+panel context, with row-scoped busy/error state. Same-scope refresh failures now
+render `Detail refresh failed` and explicitly label the data below as
+last-known; cross-scope loads clear old detail data before fetching the selected
+scope.
+
+Regression coverage now proves the exposure drill-down still renders firewall
+and isolation posture, containment uses the in-app modal without
+`window.confirm`, failed containment remains visible, and the existing app/DB
+coverage filters still work. Local validation passed:
+
+- `npm --prefix ui run test -- src/pages/ControlRoomDrilldown.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check -- ui/src/pages/ControlRoomDrilldown.tsx ui/src/pages/ControlRoomDrilldown.test.tsx`
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/control-room/exposure?period=24h` returned HTTP 200
+with no-store headers and `Last-Modified: Mon, 08 Jun 2026 03:04:35 GMT`.
+
+Live browser verification on `/console/control-room/exposure?period=24h` used
+the authenticated production session and safe Playwright route interception for
+overview and isolation failure paths, so no production node isolation state was
+changed. Synthetic initial overview outage checks showed `Detail data
+unavailable`, surfaced `overview store unavailable`, and avoided false `No
+evidence rows` / `No queued actions` detail empties. Synthetic same-scope
+refresh failure checks showed `Detail refresh failed`, `last-known detail data
+for 24h`, and kept the synthetic exposure lane visible. Synthetic containment
+failure checks showed the `Apply whitelist exposure containment?` modal before
+any POST, `postHitsBeforeConfirm=0`, `postHitsAfterConfirm=1`,
+`nativeDialogs=0`, visible `Exposure action failed`, and the failed message
+retained in the modal and page context.
+
+A clean real production reload then had the exposure posture panel visible,
+zero role-alert errors, zero browser console warnings/errors, and direct
+authenticated `/api/v1/control-room/overview?period=24h` returning HTTP 200 with
+six lanes and 49 exposure public-listener rows for tenant
+`00000000-0000-0000-0000-000000000001`. Desktop showed no document/body
+horizontal overflow. A 390x844 mobile reload also had zero role-alert errors and
+no document/body horizontal overflow; the public-listener table is wider than
+the viewport but is contained inside its intended table scroller, so the page
+itself does not scroll sideways.
+
+Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/control-room/exposure?period=24h` returned HTTP 200, no Doris FE/BE
+containers were running under the OLAP profile, Redis remained
+`maxmemory-policy=volatile-lru` with `maxmemory=134217728`, memory stayed light
+at about console 6.5 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB, controlplane 289.8
+MiB / 1 GiB, and ipq 8.8 MiB / 128 MiB. Strict recent log scans showed no
+console 4xx/5xx and no controlplane 5xx, panic, fatal, permission, deadline,
+database-lock, analytics-unavailable, Doris-unavailable, or small-analytics
+unavailable matches. Recent control-room overview API log lines were normal
+HTTP 200 reads in about 13-21 ms, and no production node-isolation API line was
+emitted by the synthetic containment test because the POST was intercepted in
+the browser.
+
+2026-06-08 Hypervisor inventory failure-state and destructive-action
+hardening: source review found remaining operator-risk gaps in the dedicated
+hypervisor and provider-credential workflow. Inventory load failures could
+collapse the page into misleading tenant-empty states such as `No hypervisor
+hosts` and `No credentials`. Host and credential deletion still used native
+browser confirmation prompts, which gave operators less context than the rest
+of the app, and failed removal attempts were easy to lose after the prompt
+flow. Host scan, verify, and remove controls also lacked target-specific
+accessible names when multiple rows were present.
+
+The fix preserves the existing hypervisor registration, provider credential,
+scan, verify, delete, cluster-reference, job, and audit-history workflows while
+making degraded states explicit. Inventory failures now clear same-scope rows,
+render `Hypervisor inventory unavailable`, keep failed load details visible,
+and show `Hypervisor hosts unavailable` / `Provider credentials unavailable`
+instead of false tenant-empty copy. Host and credential removal now use the
+shared in-app confirmation modal, keep failed deletion evidence visible in the
+modal and row context, scope busy/error state by target, and expose action names
+such as `Remove hypervisor host lon-kvm-01` and `Delete provider credential
+kvm-root`.
+
+Regression coverage now proves inventory failures avoid false empty states,
+failed host removal uses the in-app modal without `window.confirm`, and failed
+credential deletion remains visible after confirmation. Local validation
+passed:
+
+- `npm --prefix ui test -- Hypervisors.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After redeploying the controlplane, live admin API verification confirmed the
+new small-mode contract. `/api/v1/admin/ingest/backlog` returned in about 328
+ms with `status=ok`, `analytics_mode=small`, `analytics_status=ok`,
+`warehouse_status=disabled`, `warehouse_configured=false`,
+`doris_status=unconfigured`, `doris_configured=false`, and zero pending or
+failed batches. `/api/v1/admin/capacity` returned in about 277 ms with
+`analytics_mode=small`, `analytics_status=ok`,
+`warehouse_status=disabled`, `warehouse_configured=false`,
+`doris_status=unconfigured`, and `postgres_status=ok`.
+
+Live browser verification covered `/console/settings` at a 390x844 viewport,
+selected the System health tab, rendered the worker-pool status cards, showed
+zero current browser console warnings/errors, only 200 responses for relevant
+`/api/v1` calls, no document/body horizontal overflow, and no visible Doris or
+warehouse status copy. Public `/healthz` returned HTTP 200 in about 0.56s. The
+deployed controlplane image was
+`sha256:08784d03f49a260c8e9f0526828fbd4f6ee0c1d22e11dee6b908e847c83605f6`
+started at `2026-06-08T09:25:31Z`.
+
+Post-deploy host evidence stayed hyper-light: controlplane used about 58.73
+MiB / 1 GiB, console 4.531 MiB / 256 MiB, Redis 5.043 MiB / 192 MiB, landing
+4.641 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. Redis reported
+`used_memory_human:1.81M`, `maxmemory_human:128.00M`, and
+`maxmemory_policy:volatile-lru`; the deployed environment reported
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`,
+`CONTROLPLANE_ANALYTICS_SQLITE_DIR=/var/lib/control-one/analytics`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. No Doris FE/BE containers were
+running, and a recent controlplane log scan found no panic, fatal,
+`SQLITE_BUSY`, database lock, analytic-store, context-deadline, 500, or 502
+lines.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/hypervisors` returned HTTP 200 with no-store
+headers and `Last-Modified: Mon, 08 Jun 2026 04:12:48 GMT`.
+
+Live browser verification on `/console/hypervisors` used the authenticated
+production session and safe Playwright route interception for synthetic
+inventory and delete failures, so no production hypervisor host or provider
+credential was removed. Synthetic inventory outage checks showed `Hypervisor
+inventory unavailable`, `Hypervisor hosts unavailable`, and `Provider
+credentials unavailable`, with zero false `No hypervisor hosts` / `No
+credentials` empty states. Synthetic host removal and credential deletion
+checks showed the in-app confirmation dialog before any DELETE, had
+`deleteHitsBeforeConfirm=0`, `deleteHitsAfterConfirm=1`, `nativeDialogs=0`, and
+kept `Removal failed` plus the target-specific failure message visible in the
+dialog and row context.
+
+A clean real production reload then had the hypervisor page heading visible,
+zero role-alert errors, zero browser console warnings/errors, no stale Doris
+copy, and no document/body horizontal overflow. Post-fix host evidence stayed
+healthy: `/healthz=ok`, `/console/hypervisors` returned HTTP 200, no Doris
+FE/BE containers were running under the small OLAP profile, and memory stayed
+light at about console 4.5 MiB / 256 MiB, Redis 3.7 MiB / 192 MiB,
+controlplane 370.8 MiB / 1 GiB, landing 4.7 MiB / 128 MiB, and ipq 8.8 MiB /
+128 MiB. Strict recent log scans showed no panic, fatal, SQLite lock,
+analytics, hypervisor, or provider-credential errors; recent hypervisor and
+provider-credential API lines were normal HTTP 200 reads in a few milliseconds.
+
+2026-06-08 Patch Management partial-load and fleet-action hardening: source
+review found several remaining operator-risk gaps in the fleet patching
+workflow. Secondary API failures for managed proxies, maintenance windows, and
+pending approvals were silently converted to empty lists, so an outage could
+look like `No managed proxies`, `No maintenance windows`, or `No pending
+approvals`. A deployment-list failure could also leave the KPI row looking like
+zero activity. Proxy removal, maintenance-window force-close, and approval
+denial still used native browser confirmation prompts, so operators did not get
+consistent Control One context, target scope, or retained failure evidence
+before queueing fleet-impacting actions.
+
+The fix preserves the existing deployment list, per-node deployment selector,
+proxy install/remove, maintenance-window schedule/open/close/force-close, and
+approval approve/deny workflows while making degraded states explicit. Patch
+loads now settle each data source independently, clear failed same-scope rows,
+show `Patch management data unavailable` or `Patch management data partially
+unavailable`, render deployment KPIs as `N/A` when deployments cannot load, and
+use `Patch deployments unavailable`, `Managed proxies unavailable`,
+`Maintenance windows unavailable`, and `Patch approvals unavailable` instead of
+false empty-state copy. Proxy removal, force-close, and approval denial now use
+the shared in-app confirmation modal, keep failed action evidence visible in
+the modal and table row, scope busy/error state by target, and expose
+target-specific accessible action names such as `Remove patch proxy
+patch-proxy.local:3128`, `Force-close maintenance window Emergency patch
+window`, and `Deny patch deployment for node node-synth-123456`.
+
+Regression coverage now proves partial load failures avoid false empty states,
+deployment failures render unavailable KPIs, and failed proxy removal,
+maintenance-window force-close, and approval denial use the in-app modal
+without native `confirm` while retaining failed action evidence. Local
+validation passed:
+
+- `npm --prefix ui test -- PatchManagement.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|confirm\\(" ui/src/pages/PatchManagement.tsx ui/src/pages/PatchManagement.test.tsx` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/infrastructure/patch` returned HTTP 200 with
+no-store headers and `Last-Modified: Mon, 08 Jun 2026 04:38:09 GMT`. The
+deployed build served `PatchManagement-DSL0STtn.js`.
+
+Live browser verification on `/console/infrastructure/patch` used the
+authenticated production session and safe Playwright route interception for
+synthetic patch API outages and action failures, so no production proxy,
+maintenance window, or patch approval was changed. Synthetic full patch-store
+outage checks showed `Patch management data unavailable`, `Patch deployments
+unavailable`, zero false `No deployments yet` copy, and unavailable KPI values.
+Synthetic action failure checks showed the in-app dialogs before any mutation
+request, with `deletesBeforeConfirm=0` and `postsBeforeConfirm=0`; after
+confirmation, each intercepted request count was exactly 1, `nativeDialogs=0`,
+and `Proxy removal failed`, `Window force-close failed`, and `Patch approval
+denial failed` remained visible with target-specific failure messages in both
+modal and table context.
+
+A clean real production reload then had the Patch Management heading visible,
+zero role-alert errors, zero browser console warnings/errors, no desktop
+document/body horizontal overflow, and no mobile document/body horizontal
+overflow at 390x844. Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/infrastructure/patch` returned HTTP 200, no Doris FE/BE containers
+were running, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, and memory stayed light at about console 6.3 MiB / 256
+MiB, Redis 3.7 MiB / 192 MiB, controlplane 383.2 MiB / 1 GiB, landing 4.7 MiB
+/ 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent controlplane patch API lines were
+normal HTTP 200 GET reads in about 2-4 ms, and a strict recent log scan showed
+no real patch POST/DELETE lines during the synthetic browser test window.
+
+2026-06-08 Compliance policy inventory and deletion hardening: source review
+found a remaining operator-risk gap in the compliance policy workflow. Policy
+inventory load failures only showed a toast and could leave the policy manager
+stuck at the load prompt or stale from the prior tenant/filter context.
+Deleting a policy still used a native browser confirmation prompt, so a bank
+operator did not see consistent Control One context, impact copy, target scope,
+or retained failure evidence before removing a policy that can affect future
+evaluations, assignments, reports, and audit posture.
+
+The fix preserves the existing compliance posture, policy creation, assignment,
+version, promotion, evaluation, evidence, framework, and report workflows while
+making the risky policy-manager states explicit. Policy loads now clear
+same-scope rows on failure, reset stale rows when tenant scope/filter changes,
+show `Compliance policies unavailable`, keep the backend load message visible,
+and render an unavailable empty state instead of false `No policies` copy.
+Policy deletion now uses the shared in-app confirmation modal, explains that
+existing scan results, audit history, and reports remain available, keeps failed
+deletion evidence visible in the modal and policy row, scopes busy/error state
+by policy, and exposes target-specific accessible names such as `Delete
+compliance policy SSH baseline`.
+
+Regression coverage now proves failed policy loads avoid false empty states and
+failed policy deletion uses the in-app modal without native `window.confirm`
+while retaining the failed backend message. Local validation passed:
+
+- `npm --prefix ui test -- Compliance.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(" ui/src/pages/Compliance.tsx ui/src/pages/Compliance.test.tsx` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/compliance?tab=policies` returned HTTP 200 with
+no-store headers and `Last-Modified: Mon, 08 Jun 2026 04:56:25 GMT`. The
+deployed build served `Compliance-CwpNYoFJ.js`.
+
+Live browser verification on `/console/compliance?tab=policies` used the
+authenticated production session and safe Playwright route interception for
+synthetic policy inventory and delete failures, so no production compliance
+policy was deleted. Synthetic policy-store outage checks showed two visible
+`Compliance policies unavailable` signals, surfaced `synthetic policy store
+offline`, and had zero false `No policies` states. Synthetic deletion checks
+showed the `Delete compliance policy SSH baseline?` in-app dialog before any
+DELETE, `deleteHitsBeforeConfirm=0`, `deleteHitsAfterConfirm=1`,
+`nativeDialogs=0`, visible `Policy deletion failed`, and the failed delete
+message retained in modal and row context.
+
+A clean real production reload then had the Compliance policies panel visible,
+zero role-alert errors, zero browser console warnings/errors, no desktop
+document/body horizontal overflow, and no mobile document/body horizontal
+overflow at 390x844. Post-fix host evidence stayed healthy: `/healthz=ok`,
+`/console/compliance?tab=policies` returned HTTP 200, no Doris FE/BE containers
+were running, Redis remained `maxmemory-policy=volatile-lru` with
+`maxmemory=134217728`, and memory stayed light at about console 4.5 MiB / 256
+MiB, Redis 3.7 MiB / 192 MiB, controlplane 426.5 MiB / 1 GiB, landing 4.8 MiB
+/ 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent policy API lines were normal HTTP
+200 GET reads in a few milliseconds, and a strict recent log scan showed no
+real policy DELETE lines during the synthetic browser test window.
+
+2026-06-08 Small-fleet analytics architecture and tenant deletion hardening:
+the demo/small-fleet architecture decision was consolidated into a single
+operator-ready ADR in `docs/small-fleet-analytics-architecture.md`. The
+decision remains feature-preserving: Postgres is the durable ingest, replay,
+audit, and workflow source of truth; SQLite/WAL is the embedded recent evidence
+projection; Redis is capped hot state, queues, freshness, and short streams;
+and Doris remains an explicit OLAP upgrade path with 0 MB in the default demo
+profile. The cleaned document removes duplicated historical sections and keeps
+the anti-regression rule explicit: production-ready small mode must not delete
+dashboard, network, investigation, timeline, search, citation, export, AI, or
+admin health workflows because a projection is incomplete.
+
+Source review then found a remaining operator-risk gap in the tenant directory.
+Tenant deletion still used a native browser confirmation prompt, and tenant
+load failures could render an unavailable error beside a false `No tenants`
+empty state. This is too weak for a tenant isolation boundary because deleting
+a tenant can affect nodes, jobs, policies, reports, remediation settings, and
+audit interpretation.
+
+The fix preserves tenant listing, filtering, create, rename, delete, and
+remediation safety-gate workflows. Tenant load failures now render a single
+`Tenants unavailable` alert with retry action instead of a misleading empty
+table. Tenant deletion now uses the shared in-app confirmation modal with
+target-specific accessible action names such as `Delete tenant Bank Tenant`, a
+typed exact tenant-name confirmation gate, a disabled destructive action until
+the name matches, and retained modal evidence when the backend delete fails.
+
+Regression coverage now proves failed tenant loads avoid false empty states,
+tenant deletion does not call native `window.confirm`, no DELETE is sent before
+the in-app modal is confirmed, exact-name confirmation is required, and failed
+deletion remains visible in the modal. Local validation passed:
+
+- `npm --prefix ui test -- Tenants.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(" ui/src/pages/Tenants.tsx ui/src/pages/Tenants.test.tsx` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/tenants?verify=tenant-delete-modal-20260608`
+returned HTTP 200 with `Last-Modified: Mon, 08 Jun 2026 05:23:01 GMT`, and
+the deployed build served `Tenants-BesV59fP.js`.
+
+Live browser verification on `/console/tenants` used the authenticated
+production session and Playwright route interception for a synthetic tenant
+list/remediation/delete path, so no production tenant was deleted. The
+synthetic desktop delete check showed `nativeDialogs=0`,
+`hitsBeforeConfirm=0`, `deleteHits=1` only after exact-name confirmation,
+`disabledBefore=true`, `disabledPartial=true`, `enabledExact=true`, and
+`failureVisible=true` with the dialog still open on the intercepted backend
+failure. The expected synthetic console errors were limited to the fake tenant
+context and intercepted 503; a clean real production reload immediately after
+showed the Tenants page with one real row, no `Tenants unavailable` alert, no
+false `No tenants` state, no native dialogs, and zero browser console
+warnings/errors.
+
+Mobile live verification at 390x844 used real tenant data with a DELETE route
+guard and cancelled the modal before any mutation. It showed one `View` action,
+one target-specific tenant delete button, visible exact-name confirmation
+input, destructive confirm disabled before typing, `unexpectedDeleteHits=0`,
+`nativeDialogs=0`, no document/body horizontal overflow, and zero browser
+console warnings/errors.
+
+Post-fix host evidence stayed healthy: public `/healthz` returned HTTP 200 in
+about 0.54s, `/console/tenants` returned HTTP 200, console/controlplane/Redis
+were up, Redis was healthy, and no Doris FE/BE containers were running in the
+small profile. Memory stayed within the demo budget at about console 4.5 MiB /
+256 MiB, Redis 3.7 MiB / 192 MiB, controlplane 435.1 MiB / 1 GiB, landing 4.8
+MiB / 128 MiB, and ipq 8.8 MiB / 128 MiB. Recent tenant API lines were normal
+HTTP 200 GET reads and remediation-config reads in about 1-4 ms, and a strict
+recent control-plane log scan returned `NO_REAL_TENANT_DELETE_LOGS`.
+
+2026-06-08 Offline bundle tenant scoping and content activation hardening:
+source review found the last remaining native browser confirmation under
+`ui/src` in the signed offline content activation workflow. Activating a
+signed geo/threat/parser/adapter content sequence can affect air-gapped
+scoring and adapter behavior, but the old path used `window.confirm` with
+minimal context and no retained backend failure evidence. Live production
+browser verification also exposed a first-load race in the same page:
+enrollment tokens were requested before the tenant provider had selected a
+tenant, causing production to return `tenant_id query parameter is required`
+on a fresh session.
+
+The fix preserves the existing offline agent download, raw token override,
+SCP command helper, signed content import, content inventory, and content
+activation workflows. Enrollment-token loading now waits for a concrete
+tenant id, always sends `tenant_id`, clears stale selected/raw token state on
+tenant changes, and ignores stale token-load responses. Signed content
+activation now uses the shared in-app confirmation modal with target-specific
+accessible names such as `Activate offline content bundle geo-threat-pack
+sequence 42`, review copy for air-gapped scoring/parsers/threat
+content/adapters, no mutation before confirmation, and retained modal evidence
+when activation fails.
+
+Regression coverage now proves tenant-scoped token loading, no-token request
+while the tenant is still unknown, in-app activation confirmation without
+native `window.confirm`, no rollback request before modal confirmation, and
+failed activation remaining visible in the modal. Local validation passed:
+
+- `npm --prefix ui test -- OfflineBundle.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(|window\\.alert|\\balert\\(" ui/src -g "*.tsx" -g "*.ts"` returned no matches.
+
+The console-only production deploy completed successfully against
+`139.162.40.237`; `/console/offline-bundle?verify=offline-host-20260608`
+returned HTTP 200 with no-store headers and `Last-Modified: Mon, 08 Jun 2026
+05:53:30 GMT`. The deployed build served `OfflineBundle-Calmcgz7.js`.
+
+Live browser verification on `/console/offline-bundle` used an authenticated
+production session plus Playwright route interception for synthetic offline
+content data, so no production offline content sequence was changed. The clean
+desktop reload showed the route heading and download action, zero alerts,
+zero browser console warnings/errors, no native dialogs, no horizontal
+overflow, and exactly one enrollment-token request:
+`/api/v1/enrollment-tokens?tenant_id=00000000-0000-0000-0000-000000000001&limit=50&offset=0`.
+The synthetic activation success path showed `rollbackBeforeConfirm=0`,
+`rollbackHits=1` only after confirming the in-app modal, the expected rollback
+payload `{"bundle_id":"geo-threat-pack","sequence":42}`, a visible success
+toast, `nativeDialogs=[]`, tenant-scoped token requests, no alerts, no
+horizontal overflow, and zero browser console warnings/errors. Mobile live
+verification at 390x844 showed the route and download action visible,
+tenant-scoped token loading, no alerts, no native dialogs, no horizontal
+overflow, and zero browser console warnings/errors.
+
+Post-fix host evidence stayed healthy: public `/healthz` returned HTTP 200 in
+about 0.54s, console/controlplane/Redis/landing/ipq were up, no Doris FE/BE
+containers were running in the small profile, and memory stayed light at about
+console 4.488 MiB / 256 MiB, Redis 3.68 MiB / 192 MiB, controlplane 132.9 MiB
+/ 1 GiB, landing 4.848 MiB / 128 MiB, and ipq 8.809 MiB / 128 MiB. Recent
+offline-bundle API lines were normal HTTP 200 GET reads, and a strict recent
+control-plane log scan returned `NO_REAL_OFFLINE_ROLLBACK_LOGS`. Unrelated
+recent warnings were limited to an unauthenticated `/api/.env` scan and an
+external threat-feed 429 that fell back to the local snapshot.
+
+2026-06-08 Built-in RBAC permission immutability and small-fleet analytics
+architecture hardening: source review found that the Roles page already
+protected built-in roles from deletion, but the permission matrix still rendered
+their grants as live toggles and the backend `SetRolePermissions` path would
+replace grants for any role id. That is a bank-grade governance risk because
+accidental or scripted mutation of canonical `admin`, `ciso`, `investigator`,
+`operator`, or `viewer` grants can silently change authorization semantics for
+every operator using those roles.
+
+The fix preserves useful functionality rather than removing it. Built-in roles
+remain visible as permission baselines in the matrix, but their checkboxes are
+disabled and labelled as read-only baselines. Custom roles keep the existing
+live permission toggle behavior. The backend now treats canonical built-in role
+names as immutable and returns HTTP 400 `cannot edit built-in role permissions`
+before deleting or inserting any permission rows. The small-fleet architecture
+doc was also strengthened to make the demo-light Doris alternative explicit:
+Postgres remains durable replay/audit truth, SQLite/WAL is the bounded recent
+analytic read model, Redis is capped reconstructable hot state only, and Doris
+stays behind the explicit `olap` profile. The doc now includes sizing tiers,
+Redis key boundaries, SQLite write/checkpoint discipline, neutral response
+envelopes, and OLAP transition triggers.
+
+Regression coverage now proves both halves of the RBAC contract: storage rejects
+built-in role mutation while preserving custom role updates, the HTTP endpoint
+maps that immutable-role error to 400, and the Roles UI renders built-in
+permissions as disabled read-only baselines while custom-role permissions remain
+editable. Local validation passed:
+
+- `go test ./controlplane/internal/storage -run "TestIsBuiltInRoleName|TestSetRolePermissionsRejectsBuiltInRoleName" -count=1`
+- `go test ./controlplane/internal/server -run TestRolePermissionEndpointRejectsBuiltInRoleMutation -count=1`
+- `npm --prefix ui test -- Roles.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `go vet ./controlplane/internal/server ./controlplane/internal/storage`
+- `git diff --check`
+- `rg -n "window\\.confirm|\\bconfirm\\(|window\\.alert|\\balert\\(" ui/src -g "*.tsx" -g "*.ts"` returned no matches.
+
+The production controlplane image is `sha256:dde524608f92592ad7aae962fcdde32fc22a57260a382673cfe1eac860747280`
+started at `2026-06-08T07:16:44Z`, and the production console image is
+`sha256:7e630da2083052ef3b6dbf06761fcf95dc0dfe40d9c04234122c6521dba587d0`
+started at `2026-06-08T07:18:17Z`. `/console/roles?verify=rbac-host-20260608`
+returned HTTP 200 with `Last-Modified: Mon, 08 Jun 2026 07:18:14 GMT`, and the
+deployed page served `Roles-qVRbrNen.js`.
+
+Live API verification used the authenticated production API and attempted to
+replace the built-in admin role permissions with an empty set. Production
+returned HTTP 400 with `cannot edit built-in role permissions`, and a follow-up
+read proved the admin permission count stayed unchanged at 28 before and after
+the attempted mutation. Live browser verification on `/console/roles` showed
+the deployed Roles page with 140 built-in permission checkboxes and all 140
+disabled, zero mutable built-in checkboxes, zero built-in `Grant`/`Revoke`
+labels, the read-only baseline copy visible, no native dialogs, no browser
+console warnings/errors, no API errors, and no horizontal overflow. Because the
+live database currently has only the five built-in roles, a Playwright
+route-intercepted custom-role scenario verified the preserved custom workflow
+without mutating production data: `soc-reviewer` `roles.write` was enabled,
+clicking it sent exactly one intercepted PUT with `["roles.read","roles.write"]`,
+and the UI reflected the checked state with no operation error. Mobile
+verification at 390x844 repeated the real-data pass with all 140 built-in
+checkboxes disabled, no dialogs, no console/page/API errors, and no horizontal
+overflow.
+
+Post-fix host evidence stayed healthy: public `/healthz` returned HTTP 200 in
+about 0.55s, console/controlplane/Redis/landing/ipq were up, Redis was healthy
+with `used_memory_human:1.61M`, `maxmemory_human:128.00M`, and
+`maxmemory_policy:volatile-lru`, and no Doris FE/BE containers were running
+under the `olap` profile. The controlplane environment reported
+`CONTROLPLANE_ANALYTICS_MODE=small`, `CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. Memory stayed light at about
+controlplane 64.24 MiB / 1 GiB, console 6.988 MiB / 256 MiB, Redis 4.945 MiB /
+192 MiB, landing 4.633 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. The small
+analytics files were present under `/opt/control-one/deploy/analytics`
+(`controlone-small-analytics.db` about 1.2 GiB and WAL about 9.5 MiB). Recent
+RBAC logs showed normal 200 reads plus the expected 400 rejected built-in PUT,
+and a strict recent scan returned no panic, fatal, `SQLITE_BUSY`, database lock,
+analytic-store, or built-in immutability error lines. The only unrelated recent
+warning remained the external AbuseIPDB 429 fallback to local threat-intel
+snapshot.
+
+2026-06-08 Core console route sweep and Users role-chip audit: after the RBAC
+immutability deployment, a real-browser authenticated production sweep covered
+31 core console routes at 1440x950: `/`, `/control-room`, `/investigate`,
+`/cases`, `/tenants`, `/nodes`, `/fleet-enroll`, `/hypervisors`, `/jobs`,
+`/observability`, `/templates`, `/coverage`, `/compliance`, `/rules`,
+`/alerts`, `/access`, `/sessions`, `/security/network`, `/security/siem`,
+`/security/webservers`, `/infrastructure/patch`, `/roles`, `/audit`, `/users`,
+`/telemetry`, `/secrets`, `/offline-bundle`, `/settings`, `/data-security`,
+`/misconduct`, and `/access/finacle`. Every route returned HTTP 200, rendered
+its expected heading, produced zero browser console warnings/errors, zero page
+errors, zero native dialogs, zero `/api/v1` 4xx/5xx responses, and no document
+or body horizontal overflow.
+
+A mobile pass at 390x844 covered the densest routes: `/`, `/nodes`,
+`/security/network`, `/compliance`, `/rules`, `/alerts`, `/access`, `/roles`,
+`/users`, `/settings`, `/offline-bundle`, and `/access/finacle`. The initial
+combined sweep saw a navigation timeout on `/compliance`, so that route was
+isolated and loaded three times. All three isolated compliance attempts
+returned HTTP 200 in about 2.4-2.7s, rendered the page, and showed no
+console/API/page errors or overflow; the only automation complication was a
+strict-locator conflict because both the nav item and page heading expose the
+accessible text `Compliance`. Mobile table contents on several routes were
+wider than the viewport inside their intentional scroll containers, but the
+document/body did not horizontally overflow.
+
+The untracked historical `users-roles-duplicates.png` artifact was rechecked
+against the deployed Users page. Source review showed `Users.tsx` uses
+`uniqueRoleNames` for displayed role chips, role counts, edit initialization,
+and available-role counts, and `Users.test.tsx` already proves duplicate role
+assignments render once per role. A live DOM probe initially counted duplicate
+role strings because `StatusTag` renders a badge wrapper and inner text span
+for a single visible chip; the actual table-cell text for each live user showed
+one role value, not duplicated visible role chips. The page returned HTTP 200,
+loaded six users from `/api/v1/users`, and showed no console/page/API errors or
+horizontal overflow.
+
+Post-sweep host evidence stayed healthy: public `/healthz` returned HTTP 200
+in about 0.57s; console, controlplane, Redis, landing, and ipq were up; Redis
+was healthy; and no Doris FE/BE services were running under the `olap` profile.
+The controlplane environment still reported `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, and
+`CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. Memory remained light at about
+controlplane 66.87 MiB / 1 GiB, console 7.066 MiB / 256 MiB, Redis 5.258 MiB /
+192 MiB, landing 4.637 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. A recent
+log scan showed normal 200/202 API lines for fleet, users, compliance,
+content-pack, telemetry, ingest, and alerts reads/writes, and no panic, fatal,
+`SQLITE_BUSY`, database lock, analytic-store, 500, or 502 lines.
+
+2026-06-08 Analytics-neutral projection copy and bounded small-mode event
+pagination: while hardening the demo-light Redis+SQLite architecture, review
+found that several small-mode guardrails and empty notices leaked backend
+implementation details to operators: `Redis+SQLite small analytics store`,
+`analytics.sqlite_dir`, and "small analytics currently..." copy. The fix keeps
+useful compatibility fields such as `source=small-analytics` and
+`source=small-analytics-pending`, but changes human-facing guardrails/notices to
+projection-oriented language such as "Recent evidence projection..." and
+"Recent connection evidence projection..." so product UX does not depend on
+knowing which backend is selected.
+
+The same live verification exposed a real small-fleet performance bug before
+the final fix: a 24-hour authenticated `/api/v1/events/query` in small mode
+returned `count small analytics events: context deadline exceeded` because the
+SQLite path performed an exact `COUNT(*)` over the event union before fetching a
+five-row page. This was corrected without removing event search or citations:
+`controlplane/internal/smallanalytics` now fetches `limit + 1` event rows and
+derives pagination from one-row lookahead. Pages that exhaust the result set
+still expose the exact total; oversized pages expose the minimal total needed to
+drive `next_offset`. `docs/small-fleet-analytics-architecture.md` now records
+that hot small-mode operator paths should use bounded lookahead or rollups
+instead of OLAP-style exact counts.
+
+Local validation passed:
+
+- `go test ./controlplane/internal/smallanalytics -count=1`
+- `go test ./controlplane/internal/server -run "TestEventsQuery|TestInvestigation|TestFleetHealth|TestConnections|TestTopTalkers|TestConnection" -count=1`
+- `npm --prefix ui test -- api.normalize.test.ts`
+- `go vet ./controlplane/internal/smallanalytics ./controlplane/internal/server`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After redeploying the controlplane, the same 24-hour live API probe returned
+successfully: `/api/v1/events/query` responded in about 414 ms with
+`source=small-analytics`, five rows, `pagination.total=6`, and
+`next_offset=5`; `/api/v1/timelines/build` responded in about 436 ms with
+`source=small-analytics` and five rows; `/api/v1/connections` responded in
+about 292 ms with five rows; and `/api/v1/connections/top-talkers` responded in
+about 296 ms with five rows. Event and timeline guardrails used the new
+projection language, and a strict guardrail scan found zero matches for the old
+implementation strings.
+
+Live browser verification covered `/console/security/network?tab=connections`
+at desktop and 390x844 mobile viewports. The page selected the Connections tab,
+rendered 500 live connection rows, showed zero browser console warnings/errors,
+zero `/api/v1` failures, no document/body horizontal overflow, and no visible
+matches for the old backend terms. A live node detail pass opened
+`/console/nodes/0d4893c0-867a-4bf1-8aa9-e247680280ab`, selected the Connections
+tab, rendered 250 live rows from the node-scoped connections API, and showed the
+same clean console/API/overflow/copy results.
+
+Post-deploy host evidence stayed hyper-light: public `/healthz` returned HTTP
+200 in about 0.048s; console, controlplane, Redis, landing, and ipq were up;
+Redis was healthy with `used_memory_human:1.78M`,
+`maxmemory_human:128.00M`, and `maxmemory_policy:volatile-lru`; and no Doris
+FE/BE containers were running in the default or `olap` profile output. The
+controlplane environment reported `CONTROLPLANE_ANALYTICS_MODE=small`,
+`CONTROLPLANE_DORIS_ENABLED=false`, `CONTROLPLANE_ANALYTICS_SQLITE_DIR` mounted,
+and `CONTROLPLANE_ANALYTICS_SQLITE_CACHE_MB=16`. Memory stayed light at about
+controlplane 62.04 MiB / 1 GiB, console 4.523 MiB / 256 MiB, Redis 5.023 MiB /
+192 MiB, landing 4.637 MiB / 128 MiB, and ipq 4.809 MiB / 128 MiB. The live
+SQLite projection files were present under `/opt/control-one/deploy/analytics`
+with the main DB about 1.2 GiB and WAL about 13 MiB. The deployed controlplane
+image was `sha256:9009e6ac35ef77c9f2c1724f48bc54555967416e9fdc83da24984ad725be7198`
+started at `2026-06-08T08:33:35Z`; the console image remained
+`sha256:7352df3e2a921763975204eb0ebed3004f524105fa34ca00d3f5fdff97cf345d`
+started at `2026-06-08T08:13:42Z`. A recent controlplane log scan found no
+panic, fatal, `SQLITE_BUSY`, database lock, analytic-store, context-deadline,
+500, or 502 lines after the fix.
+
+2026-06-08 Admin ingest health backend-neutral small-mode status hardening:
+small-fleet architecture review found another Doris coupling in operational
+health. `/api/v1/admin/ingest/backlog`, `/api/v1/admin/capacity`, and the AI
+`doris_ingest_health` tool exposed warehouse-specific status as the primary
+contract, and small-mode pending replay could be interpreted as `down` simply
+because Doris is intentionally absent from the demo profile.
+
+The fix preserves useful compatibility instead of deleting features. Admin
+backlog and capacity now emit backend-neutral `analytics_mode`,
+`analytics_status`, `warehouse_status`, and `warehouse_configured` fields while
+retaining legacy `doris_status` and `doris_configured`. Small-mode pending or
+failed replay is reported as degraded local analytics health; explicit OLAP
+mode with pending replay and no configured warehouse still reports `down`. The
+AI health tool is now available as neutral `ingest_health`, with
+`doris_ingest_health` retained as a compatibility alias that preserves the
+legacy citation tool name. Tool guardrails now refer to ingest replay and
+analytic completeness instead of Doris writer internals.
+
+Local validation passed:
+
+- `go test ./controlplane/internal/server -run "TestAdminIngestBacklogRoleGate|TestAdminCapacityRoleGate|TestAIInvestigationToolsExposeEventAndTimelineTools|TestDorisIngestHealthAIToolReturnsTenantScopedEvidence" -count=1`
+- `go vet ./controlplane/internal/server`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+2026-06-08 Settings System health analytics visibility: after the
+backend-neutral admin capacity work, review found that the live Settings
+System health tab still surfaced only worker-pool status. Operators could call
+`/api/v1/admin/capacity`, but the product UI did not show the small-fleet
+analytics mode, projection health, OLAP-off state, Postgres status, disk use,
+or retention posture in the existing system-health workflow.
+
+The fix is additive. The worker-pool panel remains unchanged, and the System
+health tab now renders an Analytics health panel backed by
+`/api/v1/admin/capacity`. In the small profile, `warehouse_status=disabled`
+renders as `OLAP Off` with a healthy tone, while projection/Postgres health use
+the neutral `analytics_status` and `postgres_status` fields. The panel avoids
+Doris/warehouse copy and keeps the useful OLAP signal visible for larger
+deployments.
+
+Local validation passed:
+
+- `npm --prefix ui test -- Settings.test.tsx`
+- `npm --prefix ui run build`
+- `npm --prefix ui run lint`
+- `git diff --check`
+
+After redeploying the console image, live browser verification covered
+`/console/settings` at 1440x950 and 390x844. The System health tab rendered the
+new Analytics health panel above the existing Worker pool panel, with visible
+`Small`, `Projection OK`, `OLAP Off`, `Postgres OK`, `Disk used`, and
+`Retention Current` states. `/api/v1/admin/capacity` returned HTTP 200 from the
+page. Both desktop and mobile checks showed zero current browser console
+warnings/errors, no document/body horizontal overflow, and no visible Doris or
+warehouse copy. Public `/healthz` returned HTTP 200 in about 0.63s.
+
+Post-deploy host evidence stayed light: the deployed console image was
+`sha256:c15831fa13b02090e3f6549119838214b9508694f48ac879515fd960ec7e2463`
+started at `2026-06-08T09:40:44Z`; controlplane used about 67.88 MiB / 1 GiB,
+console 6.332 MiB / 256 MiB, Redis 5.023 MiB / 192 MiB, landing 4.641 MiB /
+128 MiB, and ipq 4.809 MiB / 128 MiB. Redis reported
+`used_memory_human:1.80M`, `maxmemory_human:128.00M`, and
+`maxmemory_policy:volatile-lru`. No Doris FE/BE containers were running, and a
+five-minute console access-log scan found no 4xx/5xx responses.
+
+2026-06-08 Small-fleet analytics architecture clarification: reviewed the
+current small-mode implementation and refreshed
+`docs/small-fleet-analytics-architecture.md` to make the Redis+SQLite+Postgres
+alternative explicit as the demo/small-fleet design rather than a vague Doris
+tuning exercise. The design now calls out the principles that should govern the
+implementation: Postgres is durable ingest/replay truth, Redis is bounded
+hot-state acceleration only, SQLite/WAL is the local recent-evidence read
+model, Doris stays at 0 MB unless OLAP is explicitly selected, and useful UI/API
+features must stay present behind backend-neutral source/lag/guardrail
+metadata.
+
+The same update documents the reference topologies for the single demo host,
+small production/pilot active-passive projection shape, and OLAP upgrade path.
+It also adds a feature-preservation contract so future work treats missing
+small-mode projection coverage as backlog and test work, not a reason to delete
+routes, buttons, exports, timeline pivots, search, AI tools, or investigation
+drilldowns.
+
+2026-06-08 Small projection health visibility: continuing the Redis+SQLite
+small-fleet path, review found that `/api/v1/admin/capacity` could report
+neutral projection status but not the embedded projection's own operating
+evidence. A small-mode operator could not see local read-check status,
+projection DB/WAL/SHM size, total local projection footprint, cache cap, or the
+last projection health error from the console.
+
+The fix keeps the existing feature surface and adds observability rather than
+switching back to a heavier backend. `controlplane/internal/smallanalytics`
+now exposes lightweight projection stats without forcing a deep database scan
+or checkpoint from the admin page. Admin capacity includes a backend-neutral
+`projection` object, and Settings System health renders compact `Read check`,
+`Projection size`, `WAL`, and `Cache cap` tiles under the existing Analytics
+health panel. OLAP state remains visible separately, and the copy stays free of
+Doris/warehouse language in the small-mode UI. Deep SQLite quick-check and
+checkpoint evidence remain scheduled/admin-job work, not synchronous Settings
+page work.
+
+Local validation passed:
+
+- `go test ./controlplane/internal/smallanalytics -count=1`
+- `go test ./controlplane/internal/server -run "TestAdminCapacity|TestAdminIngestBacklogRoleGate" -count=1`
+- `npm --prefix ui test -- Settings.test.tsx`
+- `go vet ./controlplane/internal/smallanalytics ./controlplane/internal/server`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+Live validation caught and closed an important performance/accuracy issue
+before this slice was considered done. The first deployed version ran a full
+SQLite `PRAGMA quick_check` inside `/api/v1/admin/capacity`; on the live
+projection, with the DB around 1.3 GB, that timed out with `context deadline
+exceeded` and made the projection appear degraded even though ordinary reads
+were healthy. The final implementation now uses a lightweight schema/read
+check for synchronous admin capacity and leaves deep quick-check/checkpoint
+evidence to scheduled or explicit admin work.
+
+After redeploying both controlplane and console, authenticated live API
+validation showed `/api/v1/admin/capacity` responding in about 293 ms with
+`analytics_mode=small`, `analytics_status=ok`, `warehouse_status=disabled`,
+`postgres_status=ok`, `projection.status=ok`, `projection.read_check=ok`,
+`projection.cache_mb=16`, about 1.33 GB total projection bytes, about 8.9 MB
+WAL bytes, and no projection last error. Host checks showed public `/healthz`
+HTTP 200 in about 0.05s, controlplane about 61 MiB / 1 GiB, console about
+6 MiB / 256 MiB, Redis about 5 MiB / 192 MiB, and no Doris containers running.
+Recent controlplane logs showed `small analytics sqlite store ready` with no
+`SQLITE_BUSY`, database lock, panic, fatal, context-deadline, or projection
+health errors after the final restart.
+
+Live browser validation covered `/console/settings` System health at 390x844
+and 1440x950. The panel rendered `Small`, `Projection OK`, `OLAP Off`,
+`Postgres OK`, `Read check OK`, `Projection size`, `WAL`, and `Cache cap 16 MB`
+with no visible Doris/warehouse/timeout/error copy, no document/body
+horizontal overflow, zero current console warnings/errors, and the relevant
+Control One app API requests returning HTTP 200.
+
+2026-06-08 Templates provisioning workflow hardening: continuing the live
+console audit, review found that the Templates page could turn unavailable data
+into misleading empty states. Assignment load failures rendered beside `No
+assignments`, template version load failures rendered beside `No versions
+published yet`, and rollout-wave load failures were swallowed as `No rollout
+waves`. Rollout pause/resume/abort failures had no persistent visible error,
+and assignment removal fired immediately without an in-app confirmation.
+
+The fix keeps the provisioning feature set intact. The Templates page now shows
+persistent `Template assignments unavailable`, `Template versions unavailable`,
+and `Rollout waves unavailable` states only when the relevant API actually
+fails, while successful empty responses still show normal empty states. Rollout
+actions are disabled while in flight and surface failures on the page. Template
+assignment removal now opens the shared confirmation modal, keeps failed remove
+attempts visible inside the modal, and leaves the assignment row intact when
+the API rejects the mutation. The page copy was also cleaned of non-ASCII
+punctuation that had rendered as mojibake in some environments.
+
+Local validation passed:
+
+- `npm --prefix ui test -- Templates.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After commit `6139ba19` was pushed and the console was redeployed, production
+served the new `Templates-CT00BBS6.js` asset from `/console/templates`.
+Authenticated live browser verification covered `/console/templates` at
+1440x950 and 390x844. Both the Templates and Rollouts tabs rendered with zero
+current browser console warnings/errors, zero `/api/v1` failures, no document
+or body horizontal overflow, no mojibake, and no false unavailable alerts. The
+live tenant currently has zero templates and zero rollout waves, so the page
+correctly showed `No templates` and `No rollout waves` backed by HTTP 200 API
+responses rather than swallowed errors.
+
+Post-deploy host evidence stayed healthy: public `/healthz` returned HTTP 200
+in about 0.56s; the console container image was
+`sha256:503fc8efac970de434dfa85c91145b583b215f11aa1e0a57eba04b3f7c75ec26`
+started at `2026-06-08T11:17:24Z`; console memory was about 4.49 MiB / 256 MiB,
+controlplane about 67.8 MiB / 1 GiB, and Redis about 5.03 MiB / 192 MiB.
+Recent console logs served the Templates route and chunk with HTTP 200, and
+recent controlplane logs showed `/api/v1/templates` and `/api/v1/rollout/waves`
+returning HTTP 200 with no panic, fatal, `SQLITE_BUSY`, database-lock, 500,
+502, or 503 lines in the checked window.
+
+2026-06-08 Compliance nested policy workflow hardening: continuing the
+compliance audit, review found that expanded policy rows still had failure
+surfaces that could confuse operators. Assignment and version load failures
+could collapse into normal empty-state language, and assignment removal was a
+one-click destructive mutation. The fix keeps the policy inventory workflow
+intact while adding row-local unavailable states for assignments and versions,
+persistent delete-failure feedback inside the confirmation modal, and a
+non-mutating confirmation step before assignment removal. The row expand and
+assignment remove controls now also carry explicit accessible labels, and the
+remaining user-facing copy touched in this area was normalized to ASCII.
+
+Local validation passed:
+
+- `npm --prefix ui test -- Compliance.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After commit `523dc912` was pushed and the console was redeployed, production
+served the new `Compliance-CkGdTz6A.js` asset from
+`/console/compliance?tab=policies`. Authenticated live browser verification
+covered the Policies tab at 1440x950 and 390x844. In both viewports the page
+started from the explicit `Load policies` state, loaded real production policy
+data over HTTP 200, expanded `[Default] VNC port closed`, and rendered the
+real `Org-wide` assignment plus `v1`/`Rule definition` version evidence with
+no false `No assignments`, no false `No versions yet`, no unavailable alert,
+no mojibake, zero current browser console warnings/errors, and no document or
+body horizontal overflow. The assignment removal path was checked up to the
+confirmation boundary on desktop and mobile, then cancelled without sending a
+delete mutation or changing production data.
+
+Post-deploy host evidence stayed healthy: public `/healthz` returned HTTP 200
+in about 0.58s; the console container image was
+`sha256:7e6b976e83ea614487d3fa505327e15389789d4a88824e921f748fbfe0172635`
+started at `2026-06-08T11:37:54Z`; console memory was about 6.23 MiB / 256
+MiB, controlplane about 69.83 MiB / 1 GiB, and Redis about 5.03 MiB / 192
+MiB. Recent controlplane logs showed `/api/v1/policies`,
+`/api/v1/policies/.../versions`, and `/api/v1/policies/.../assignments`
+returning HTTP 200 with millisecond durations, and a recent controlplane plus
+console log scan found no 5xx, structured error-level, panic, or fatal entries.
+
+2026-06-08 Data Security failure-state and mobile table hardening: continuing
+the live production-readiness audit, source review found that the Data Security
+DLP page could still mislead operators. Findings, column-scan, and DLP rule
+load failures rendered next to normal empty tables, several visible fallbacks
+contained mojibake, and failed `Resolve finding` / `Delete rule` mutations
+closed their confirmation modals instead of preserving the failed action for
+review. The fix keeps the DLP workflow intact while adding explicit
+`PII findings unavailable`, `Column scans unavailable`, and `Classification
+rules unavailable` states; named resolve/delete controls; in-flight guards for
+seed/create/delete/resolve; and modal-local failure messages for destructive
+or irreversible actions.
+
+Local validation passed:
+
+- `npm --prefix ui test -- DataSecurity.test.tsx`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run build`
+- `git diff --check`
+
+After commit `4ac93980` was pushed and the console was deployed, live mobile
+validation caught a second issue before sign-off: dense tables were clipped
+inside their framed container at 390px instead of scrolling inside the table
+frame. Commit `dc4852f0` fixed the shared `DataTable` wrapper to keep the
+bordered frame while allowing horizontal table scrolling on narrow screens.
+The final production deployment served `DataSecurity-kLo_emO0.js` and
+`DataTable-D6QAhXg9.js`.
+
+Authenticated live browser validation covered `/console/data-security` at
+1440x950 and 390x844 after the final deployment. Findings, Columns, and Rules
+all loaded successfully over HTTP 200: `/api/v1/dlp/findings`,
+`/api/v1/dlp/columns`, and `/api/v1/dlp/rules`. The live tenant currently has
+zero DLP findings, zero column scans, and zero classification rules, so the
+page correctly showed `No findings`, `No column scans`, and
+`No classification rules` backed by successful API responses, not swallowed
+errors. No seed, create, resolve, or delete mutation was sent during live
+validation. Both desktop and mobile checks showed zero current browser console
+warnings/errors, no document/body horizontal overflow, no mojibake, no false
+unavailable alerts, and the mobile table frame reported `overflowX=auto` with
+internal scroll available.
+
+Post-deploy host evidence stayed light: public `/healthz` returned HTTP 200
+in about 0.54s; the console image was
+`sha256:5e9f253596fe63e5c8f4cf3245bdd64dd470837ed690eea40d21b179c22c49d4`
+started at `2026-06-08T12:06:55Z`; console memory was about 4.51 MiB / 256
+MiB, controlplane about 78.86 MiB / 1 GiB, and Redis about 5.03 MiB / 192
+MiB. Recent controlplane logs showed the DLP findings, columns, and rules
+endpoints returning HTTP 200 with millisecond durations, and a recent
+controlplane plus console log scan found no 5xx, structured error-level,
+panic, or fatal entries.

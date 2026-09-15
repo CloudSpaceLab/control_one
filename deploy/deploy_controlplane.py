@@ -25,6 +25,15 @@ REPO_ROOT    = Path(__file__).resolve().parent.parent
 REMOTE_ROOT  = "/opt/control-one"
 REMOTE_DEPLOY = f"{REMOTE_ROOT}/deploy"
 
+AGENT_BINARY_TARGETS = (
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+    ("darwin", "amd64"),
+    ("darwin", "arm64"),
+    ("windows", "amd64"),
+    ("windows", "arm64"),
+)
+
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -35,7 +44,6 @@ def build_binaries(repo_root: Path, out_dir: Path) -> None:
     for name, pkg in [
         ("controlplane",              "./controlplane/cmd/controlplane"),
         ("bootstrap-admin",           "./controlplane/cmd/bootstrap-admin"),
-        ("controlone-agent-linux-amd64", "./cmd/nodeagent"),
     ]:
         out = out_dir / name
         log(f"  Compiling {pkg} ...")
@@ -46,6 +54,21 @@ def build_binaries(repo_root: Path, out_dir: Path) -> None:
         )
         if result.returncode != 0:
             raise RuntimeError(f"go build failed for {pkg}")
+        size_kb = out.stat().st_size // 1024
+        log(f"  {name}: {size_kb} KB")
+
+    for goos, goarch in AGENT_BINARY_TARGETS:
+        name = f"controlone-agent-{goos}-{goarch}"
+        out = out_dir / name
+        agent_env = {**os.environ, "GOOS": goos, "GOARCH": goarch, "CGO_ENABLED": "0"}
+        log(f"  Compiling ./cmd/nodeagent for {goos}/{goarch} ...")
+        result = subprocess.run(
+            ["go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(out), "./cmd/nodeagent"],
+            cwd=str(repo_root),
+            env=agent_env,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"go build failed for ./cmd/nodeagent ({goos}/{goarch})")
         size_kb = out.stat().st_size // 1024
         log(f"  {name}: {size_kb} KB")
 
@@ -136,10 +159,10 @@ def main() -> int:
                     f"chmod +x {REMOTE_DEPLOY}/prebuilt/controlplane "
                     f"{REMOTE_DEPLOY}/prebuilt/bootstrap-admin"
                 )
-                # Upload nodeagent binary to the agent-binaries mount directory
-                agent_binary = "controlone-agent-linux-amd64"
-                remote.put_file(out_dir / agent_binary, f"{REMOTE_DEPLOY}/agent-binaries/{agent_binary}")
-                remote.run(f"chmod +x {REMOTE_DEPLOY}/agent-binaries/{agent_binary}")
+                for goos, goarch in AGENT_BINARY_TARGETS:
+                    agent_binary = f"controlone-agent-{goos}-{goarch}"
+                    remote.put_file(out_dir / agent_binary, f"{REMOTE_DEPLOY}/agent-binaries/{agent_binary}")
+                    remote.run(f"chmod +x {REMOTE_DEPLOY}/agent-binaries/{agent_binary}")
                 remote.put_file(
                     REPO_ROOT / "deploy" / "Dockerfile.controlplane.prebuilt",
                     f"{REMOTE_DEPLOY}/Dockerfile.controlplane.prebuilt",

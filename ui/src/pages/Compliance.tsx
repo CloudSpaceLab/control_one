@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Download, FileText, Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronRight, Tag } from 'lucide-react';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import {
+  Alert,
   Chart,
   DataTable,
   EmptyState,
@@ -48,6 +50,15 @@ import { AuditReports } from './AuditReports';
 type Tab = 'posture' | 'policies' | 'evidence' | 'frameworks' | 'reports';
 
 const COMPLIANCE_TABS = ['posture', 'policies', 'evidence', 'frameworks', 'reports'] as const;
+
+interface InlineActionState {
+  busy?: boolean;
+  message?: string;
+  tone?: StateTone;
+}
+
+type PendingPolicyDelete = { policy: Policy; error?: string };
+type PendingAssignmentDelete = { assignment: PolicyAssignment; error?: string };
 
 function complianceTabFromParams(params: URLSearchParams): Tab {
   const value = params.get('tab');
@@ -116,7 +127,7 @@ const RULE_TEMPLATES: Record<string, string> = {
 const RULESETS = ['cis-linux', 'cis-docker', 'nist-800-53', 'pci-dss', 'hipaa', 'soc2', 'iso27001', 'gdpr'];
 
 function formatDate(value?: string): string {
-  if (!value) return '—';
+  if (!value) return '-';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
@@ -175,17 +186,17 @@ export function Compliance(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="POSTURE · COMPLIANCE"
+        eyebrow="POSTURE / COMPLIANCE"
         title="Compliance"
         description="Define policies, run evaluations, prove continuous control."
       />
       <Tabs value={tab} onValueChange={onTabChange}>
-        <TabsList>
-          <TabsTrigger value="posture">Posture</TabsTrigger>
-          <TabsTrigger value="policies">Policies</TabsTrigger>
-          <TabsTrigger value="evidence">Evidence</TabsTrigger>
-          <TabsTrigger value="frameworks">Frameworks</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="posture">Posture</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="policies">Policies</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="evidence">Evidence</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="frameworks">Frameworks</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="reports">Reports</TabsTrigger>
         </TabsList>
         <TabsContent value="posture" className="mt-5">
           <PostureTab />
@@ -308,7 +319,7 @@ function PostureTab(): JSX.Element {
       header: 'Node',
       cell: ({ row }) => {
         const nodeId = row.original.node_id;
-        if (!nodeId) return <span className="text-sm text-text-muted">—</span>;
+        if (!nodeId) return <span className="text-sm text-text-muted">-</span>;
         const node = nodes.find((n) => n.id === nodeId);
         return (
           <Link
@@ -333,7 +344,7 @@ function PostureTab(): JSX.Element {
       header: 'Severity',
       cell: ({ getValue }) => {
         const sev = getValue() as string | undefined;
-        if (!sev) return <span className="text-text-muted">—</span>;
+        if (!sev) return <span className="text-text-muted">-</span>;
         return <StatusTag tone={severityTone(sev)} className="font-mono uppercase">{sev}</StatusTag>;
       },
     },
@@ -349,7 +360,7 @@ function PostureTab(): JSX.Element {
       header: 'Details',
       cell: ({ getValue }) => {
         const d = getValue() as string | undefined;
-        return d ? <ExpandableCode label="View details" content={d} /> : <span className="text-text-muted">—</span>;
+        return d ? <ExpandableCode label="View details" content={d} /> : <span className="text-text-muted">-</span>;
       },
     },
   ], [nodes]);
@@ -368,7 +379,7 @@ function PostureTab(): JSX.Element {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <KpiTile
           label="COMPLIANCE SCORE"
-          value={complianceScore !== null ? `${complianceScore}%` : '—'}
+          value={complianceScore !== null ? `${complianceScore}%` : '-'}
           tone={complianceScore === null ? 'unknown' : complianceScore >= 80 ? 'healthy' : complianceScore >= 60 ? 'warning' : 'critical'}
           loading={summaryLoading}
           hint={summary ? `${summary.passed} of ${summary.total} checks passed` : undefined}
@@ -451,7 +462,7 @@ function PostureTab(): JSX.Element {
       )}
 
       {trendChartData && (
-        <Panel padding="md" eyebrow="TRENDS · 30 DAYS" title="Compliance trend" loading={trendsLoading}>
+        <Panel padding="md" eyebrow="TRENDS / 30 DAYS" title="Compliance trend" loading={trendsLoading}>
           <div className="h-56">
             <Chart kind="line" data={trendChartData} ariaLabel="Compliance trend" />
           </div>
@@ -467,7 +478,7 @@ function PostureTab(): JSX.Element {
         tenantSelected={Boolean(effectiveTenantId)}
       />
 
-      <Panel padding="sm" tone="inset" eyebrow={`RESULTS · ${results.length} of ${pagination.total}`} title="Compliance results">
+      <Panel padding="sm" tone="inset" eyebrow={`RESULTS / ${results.length} of ${pagination.total}`} title="Compliance results">
         <DataTable
           columns={columns} rows={results} rowKey={(r) => r.id}
           loading={resultsLoading} compact
@@ -505,6 +516,9 @@ function PoliciesTab(): JSX.Element {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [policiesLoading, setPoliciesLoading] = useState(false);
   const [policiesLoaded, setPoliciesLoaded] = useState(false);
+  const [policiesLoadError, setPoliciesLoadError] = useState<string | null>(null);
+  const [policyDeleteState, setPolicyDeleteState] = useState<Record<string, InlineActionState>>({});
+  const [pendingPolicyDelete, setPendingPolicyDelete] = useState<PendingPolicyDelete | null>(null);
   const [tenantFilter, setTenantFilter] = useState('');
 
   // Create policy form
@@ -532,9 +546,16 @@ function PoliciesTab(): JSX.Element {
     });
   }, [createTenantId]);
 
+  useEffect(() => {
+    setPolicies([]);
+    setPoliciesLoaded(false);
+    setPoliciesLoadError(null);
+  }, [currentTenantId, tenantFilter]);
+
   // Expanded policy (versions + create version)
   const [expandedPolicyId, setExpandedPolicyId] = useState<string | null>(null);
   const [versionsMap, setVersionsMap] = useState<Record<string, PolicyVersion[]>>({});
+  const [versionErrorsMap, setVersionErrorsMap] = useState<Record<string, string>>({});
   const [versionsLoadingId, setVersionsLoadingId] = useState<string | null>(null);
 
   // Create version form
@@ -555,15 +576,22 @@ function PoliciesTab(): JSX.Element {
     if (!tenantForList) {
       setPolicies([]);
       setPoliciesLoaded(true);
+      setPoliciesLoadError(null);
       return;
     }
     setPoliciesLoading(true);
+    setPoliciesLoadError(null);
     try {
       const res = await api.listPolicies({ tenant_id: tenantForList, limit: 100 });
       setPolicies(res.data);
       setPoliciesLoaded(true);
+      setPoliciesLoadError(null);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to load policies', 'error');
+      const message = errorMessage(err, 'Failed to load policies');
+      setPolicies([]);
+      setPoliciesLoaded(true);
+      setPoliciesLoadError(message);
+      showToast(message, 'error');
     } finally {
       setPoliciesLoading(false);
     }
@@ -571,11 +599,18 @@ function PoliciesTab(): JSX.Element {
 
   const loadVersions = async (policyId: string) => {
     setVersionsLoadingId(policyId);
+    setVersionErrorsMap((prev) => {
+      const next = { ...prev };
+      delete next[policyId];
+      return next;
+    });
     try {
       const res = await api.listPolicyVersions(policyId);
       setVersionsMap((prev) => ({ ...prev, [policyId]: res.data }));
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to load versions', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to load versions';
+      setVersionErrorsMap((prev) => ({ ...prev, [policyId]: message }));
+      showToast(message, 'error');
     } finally {
       setVersionsLoadingId(null);
     }
@@ -645,15 +680,40 @@ function PoliciesTab(): JSX.Element {
   };
 
   const handleDelete = async (policy: Policy) => {
-    if (!window.confirm(`Delete policy "${policy.name}"?`)) return;
+    setPendingPolicyDelete({ policy });
+  };
+
+  const runDeletePolicy = async (policy: Policy) => {
+    const key = policyActionKey(policy);
+    setPolicyDeleteState((state) => ({ ...state, [key]: { busy: true } }));
     try {
       await api.deletePolicy(policy.id);
+      setPolicyDeleteState((state) => {
+        const next = { ...state };
+        delete next[key];
+        return next;
+      });
+      setPendingPolicyDelete(null);
       showToast(`Policy "${policy.name}" deleted`, 'success');
       await loadPolicies();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to delete policy', 'error');
+      const message = `Failed to delete policy ${policy.name}: ${errorMessage(err, 'delete failed')}`;
+      setPolicyDeleteState((state) => ({ ...state, [key]: { busy: false, message, tone: 'critical' } }));
+      setPendingPolicyDelete((current) =>
+        current?.policy.id === policy.id ? { ...current, error: message } : current,
+      );
+      showToast(message, 'error');
     }
   };
+
+  const confirmPolicyDelete = async () => {
+    if (!pendingPolicyDelete) return;
+    await runDeletePolicy(pendingPolicyDelete.policy);
+  };
+
+  const pendingDeleteBusy = pendingPolicyDelete
+    ? Boolean(policyDeleteState[policyActionKey(pendingPolicyDelete.policy)]?.busy)
+    : false;
 
   const handleCreateVersion = async () => {
     if (!versionPolicyId || !versionDef.trim()) {
@@ -697,9 +757,9 @@ function PoliciesTab(): JSX.Element {
       });
       setEvalResults(res.results);
       if (res.metadata?.no_policies_assigned) {
-        showToast('No policies assigned to this node — assign policies before scanning.', 'error');
+        showToast('No policies assigned to this node - assign policies before scanning.', 'error');
       } else {
-        showToast(`Evaluation complete — ${res.results.length} result(s)`, 'success');
+        showToast(`Evaluation complete - ${res.results.length} result(s)`, 'success');
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Evaluation failed', 'error');
@@ -723,7 +783,7 @@ function PoliciesTab(): JSX.Element {
         </p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <SelectField id="eval-node" label="Target node" value={evalNodeId} onChange={(e) => setEvalNodeId(e.target.value)}>
-            <option value="">Select node…</option>
+            <option value="">Select node...</option>
             {nodes.map((n) => (
               <option key={n.id} value={n.id}>{n.hostname}</option>
             ))}
@@ -755,7 +815,7 @@ function PoliciesTab(): JSX.Element {
         <div className="flex items-center gap-2 pt-1">
           <Button variant="primary" onClick={handleEvaluate} disabled={evaluating || !evalNodeId}>
             <Play className="h-4 w-4" />
-            {evaluating ? 'Evaluating…' : 'Run evaluation'}
+            {evaluating ? 'Evaluating...' : 'Run evaluation'}
           </Button>
         </div>
 
@@ -763,7 +823,7 @@ function PoliciesTab(): JSX.Element {
           <div className="mt-3">
             <EmptyState
               title="No policies assigned to this node"
-              description="Assign CIS-mapped or custom policies to this node before running an evaluation. Until policies are assigned, scans return no results — synthetic placeholders are no longer fabricated."
+              description="Assign CIS-mapped or custom policies to this node before running an evaluation. Until policies are assigned, scans return no results; synthetic placeholders are no longer fabricated."
             />
           </div>
         )}
@@ -793,12 +853,12 @@ function PoliciesTab(): JSX.Element {
                       <td className="px-3 py-2">
                         {r.severity ? (
                           <StatusTag tone={severityTone(r.severity)} className="font-mono uppercase">{r.severity}</StatusTag>
-                        ) : <span className="text-text-muted">—</span>}
+                        ) : <span className="text-text-muted">-</span>}
                       </td>
                       <td className="max-w-xs px-3 py-2">
                         {r.details ? (
                           <ExpandableCode label="Details" content={r.details} />
-                        ) : <span className="text-text-muted">—</span>}
+                        ) : <span className="text-text-muted">-</span>}
                       </td>
                     </tr>
                   ))}
@@ -829,6 +889,20 @@ function PoliciesTab(): JSX.Element {
           </div>
         }
       >
+        {policiesLoadError ? (
+          <Alert
+            variant="critical"
+            title="Compliance policies unavailable"
+            actions={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void loadPolicies()} disabled={policiesLoading}>
+                Retry
+              </Button>
+            }
+          >
+            {policiesLoadError}
+          </Alert>
+        ) : null}
+
         {/* Create policy form */}
         {showCreate && (
           <div className="rounded-md border border-brand-500/30 bg-brand-500/5 p-4">
@@ -867,7 +941,7 @@ function PoliciesTab(): JSX.Element {
             </label>
             <div className="mt-3 flex gap-2">
               <Button variant="primary" size="sm" onClick={handleCreate} disabled={creating || !createTenantId}>
-                {creating ? 'Creating…' : 'Create policy'}
+                {creating ? 'Creating...' : 'Create policy'}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setShowCreate(false)}>Cancel</Button>
             </div>
@@ -885,10 +959,18 @@ function PoliciesTab(): JSX.Element {
         )}
 
         {policiesLoading && (
-          <p className="py-4 text-center text-sm text-text-muted">Loading policies…</p>
+          <p className="py-4 text-center text-sm text-text-muted">Loading policies...</p>
         )}
 
-        {policiesLoaded && policies.length === 0 && (
+        {policiesLoaded && policiesLoadError && policies.length === 0 && (
+          <EmptyState
+            title="Compliance policies unavailable"
+            description="Retry after the policy inventory request succeeds."
+            icon={<FileText />}
+          />
+        )}
+
+        {policiesLoaded && !policiesLoadError && policies.length === 0 && (
           <EmptyState
             title="No policies"
             description="Create a policy to start defining compliance checks."
@@ -905,6 +987,8 @@ function PoliciesTab(): JSX.Element {
             expanded={expandedPolicyId === policy.id}
             versions={versionsMap[policy.id] ?? null}
             versionsLoading={versionsLoadingId === policy.id}
+            versionsError={versionErrorsMap[policy.id] ?? null}
+            deleteStatus={policyDeleteState[policyActionKey(policy)]}
             versionPolicyId={versionPolicyId}
             versionDef={versionDef}
             creatingVersion={creatingVersion}
@@ -922,6 +1006,29 @@ function PoliciesTab(): JSX.Element {
             onEvaluate={() => setEvalPolicyId(evalPolicyId === policy.id ? null : policy.id)}
           />
         ))}
+
+        <ConfirmModal
+          open={Boolean(pendingPolicyDelete)}
+          title={
+            pendingPolicyDelete
+              ? `Delete compliance policy ${pendingPolicyDelete.policy.name}?`
+              : 'Delete compliance policy?'
+          }
+          body="This removes the policy from future compliance evaluation and assignment workflows. Existing scan results, audit history, and reports remain available."
+          confirmLabel="Delete policy"
+          cancelLabel="Cancel"
+          confirmDisabled={pendingDeleteBusy}
+          cancelDisabled={pendingDeleteBusy}
+          variant="danger"
+          onConfirm={() => void confirmPolicyDelete()}
+          onCancel={() => setPendingPolicyDelete(null)}
+        >
+          {pendingPolicyDelete?.error ? (
+            <Alert variant="critical" title="Policy deletion failed">
+              {pendingPolicyDelete.error}
+            </Alert>
+          ) : null}
+        </ConfirmModal>
       </Panel>
     </div>
   );
@@ -933,6 +1040,8 @@ interface PolicyRowProps {
   expanded: boolean;
   versions: PolicyVersion[] | null;
   versionsLoading: boolean;
+  versionsError?: string | null;
+  deleteStatus?: InlineActionState;
   versionPolicyId: string | null;
   versionDef: string;
   creatingVersion: boolean;
@@ -953,6 +1062,8 @@ function PolicyRow({
   expanded,
   versions,
   versionsLoading,
+  versionsError,
+  deleteStatus,
   versionPolicyId,
   versionDef,
   creatingVersion,
@@ -971,16 +1082,23 @@ function PolicyRow({
   const policyTenantId = policy.tenant_id ?? '';
   const [assignments, setAssignments] = useState<PolicyAssignment[]>([]);
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
   const [assignmentScope, setAssignmentScope] = useState<ScopePickerValue>({ scope_type: 'tenant' });
   const [creatingAssignment, setCreatingAssignment] = useState(false);
+  const [pendingAssignmentDelete, setPendingAssignmentDelete] = useState<PendingAssignmentDelete | null>(null);
+  const [deletingAssignment, setDeletingAssignment] = useState(false);
 
   const loadAssignments = useCallback(async () => {
     setAssignmentsLoading(true);
+    setAssignmentsError(null);
     try {
       const response = await api.listPolicyAssignments(policy.id);
       setAssignments(response.items ?? []);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to load policy assignments', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to load policy assignments';
+      setAssignments([]);
+      setAssignmentsError(message);
+      showToast(message, 'error');
     } finally {
       setAssignmentsLoading(false);
     }
@@ -1003,6 +1121,7 @@ function PolicyRow({
       await api.createPolicyAssignment(policy.id, scopedAssignment.payload);
       setAssignmentScope({ scope_type: 'tenant' });
       await loadAssignments();
+      setAssignmentsError(null);
       showToast(`Assignment added for ${describeAssignmentScope(scopedAssignment.payload)}`, 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to add assignment', 'error');
@@ -1011,13 +1130,23 @@ function PolicyRow({
     }
   };
 
-  const handleDeleteAssignment = async (assignmentId: string) => {
+  const handleConfirmDeleteAssignment = async () => {
+    if (!pendingAssignmentDelete) {
+      return;
+    }
+    setDeletingAssignment(true);
+    setPendingAssignmentDelete((current) => current ? { assignment: current.assignment } : current);
     try {
-      await api.deletePolicyAssignment(policy.id, assignmentId);
-      setAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
+      await api.deletePolicyAssignment(policy.id, pendingAssignmentDelete.assignment.id);
+      setAssignments((current) => current.filter((assignment) => assignment.id !== pendingAssignmentDelete.assignment.id));
+      setPendingAssignmentDelete(null);
       showToast('Assignment removed', 'success');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to remove assignment', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to remove assignment';
+      setPendingAssignmentDelete((current) => current ? { ...current, error: message } : current);
+      showToast(message, 'error');
+    } finally {
+      setDeletingAssignment(false);
     }
   };
 
@@ -1025,7 +1154,12 @@ function PolicyRow({
     <div className="rounded-md border border-border-subtle bg-surface">
       {/* Header row */}
       <div className="flex items-center gap-3 px-4 py-3">
-        <button type="button" onClick={onToggleExpand} className="shrink-0 text-text-muted hover:text-foreground">
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          className="shrink-0 text-text-muted hover:text-foreground"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} compliance policy ${policy.name}`}
+        >
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </button>
         <div className="flex-1 min-w-0">
@@ -1045,13 +1179,36 @@ function PolicyRow({
             <p className="mt-0.5 text-xs text-text-secondary">{policy.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onToggleEnabled}>
-            {policy.enabled ? 'Disable' : 'Enable'}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-state-critical hover:text-state-critical" onClick={onDelete}>
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={onToggleEnabled}
+              disabled={deleteStatus?.busy}
+              aria-label={`${policy.enabled ? 'Disable' : 'Enable'} compliance policy ${policy.name}`}
+            >
+              {policy.enabled ? 'Disable' : 'Enable'}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-state-critical hover:text-state-critical"
+              loading={deleteStatus?.busy}
+              onClick={onDelete}
+              aria-label={`Delete compliance policy ${policy.name}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {deleteStatus?.message ? (
+            <p className={`max-w-[18rem] text-right text-xs ${toneText(deleteStatus.tone)}`}>
+              {deleteStatus.message}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -1074,7 +1231,12 @@ function PolicyRow({
             </div>
 
             {assignmentsLoading ? <p className="text-xs text-text-muted">Loading assignments...</p> : null}
-            {!assignmentsLoading && assignments.length === 0 ? (
+            {assignmentsError ? (
+              <p className="text-xs text-state-critical" role="alert">
+                Policy assignments unavailable: {assignmentsError}
+              </p>
+            ) : null}
+            {!assignmentsLoading && !assignmentsError && assignments.length === 0 ? (
               <p className="text-xs text-text-muted">No assignments.</p>
             ) : null}
             {!assignmentsLoading && assignments.length > 0 ? (
@@ -1095,7 +1257,8 @@ function PolicyRow({
                       variant="ghost"
                       size="sm"
                       className="h-7 px-2 text-state-critical hover:text-state-critical"
-                      onClick={() => void handleDeleteAssignment(assignment.id)}
+                      onClick={() => setPendingAssignmentDelete({ assignment })}
+                      aria-label={`Remove policy assignment ${describeAssignmentScope(assignment)}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -1131,9 +1294,15 @@ function PolicyRow({
             </Button>
           </div>
 
-          {versionsLoading && <p className="text-xs text-text-muted">Loading versions…</p>}
+          {versionsLoading && <p className="text-xs text-text-muted">Loading versions...</p>}
 
-          {versions !== null && versions.length === 0 && (
+          {versionsError ? (
+            <p className="text-xs text-state-critical" role="alert">
+              Policy versions unavailable: {versionsError}
+            </p>
+          ) : null}
+
+          {!versionsError && versions !== null && versions.length === 0 && (
             <p className="text-xs text-text-muted">No versions yet. Create a version to activate this policy.</p>
           )}
 
@@ -1163,7 +1332,7 @@ function PolicyRow({
           {/* Create version inline form */}
           {versionPolicyId === policy.id && (
             <div className="rounded-md border border-brand-500/30 bg-brand-500/5 p-3 flex flex-col gap-2">
-              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-brand-400">New version · rule definition (JSON)</p>
+              <p className="font-mono text-[0.65rem] uppercase tracking-wider text-brand-400">New version / rule definition (JSON)</p>
               <textarea
                 className="flex min-h-[120px] w-full rounded-md border border-border-subtle bg-surface px-3 py-2 font-mono text-xs text-foreground placeholder:text-text-muted focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-2 focus-visible:ring-brand-500/30"
                 value={versionDef}
@@ -1173,7 +1342,7 @@ function PolicyRow({
               />
               <div className="flex gap-2">
                 <Button variant="primary" size="sm" onClick={onCreateVersion} disabled={creatingVersion}>
-                  {creatingVersion ? 'Creating…' : 'Create version'}
+                  {creatingVersion ? 'Creating...' : 'Create version'}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={onCloseCreateVersion}>Cancel</Button>
               </div>
@@ -1181,6 +1350,32 @@ function PolicyRow({
           )}
         </div>
       )}
+      <ConfirmModal
+        open={Boolean(pendingAssignmentDelete)}
+        title="Remove policy assignment"
+        body={
+          pendingAssignmentDelete
+            ? `Remove ${describeAssignmentScope(pendingAssignmentDelete.assignment)} from ${policy.name}? Existing scan results and audit history remain available.`
+            : undefined
+        }
+        confirmLabel={deletingAssignment ? 'Removing...' : 'Remove assignment'}
+        cancelLabel="Cancel"
+        confirmDisabled={deletingAssignment}
+        cancelDisabled={deletingAssignment}
+        variant="danger"
+        onConfirm={() => void handleConfirmDeleteAssignment()}
+        onCancel={() => {
+          if (!deletingAssignment) {
+            setPendingAssignmentDelete(null);
+          }
+        }}
+      >
+        {pendingAssignmentDelete?.error ? (
+          <p className="text-sm text-state-critical" role="alert">
+            {pendingAssignmentDelete.error}
+          </p>
+        ) : null}
+      </ConfirmModal>
     </div>
   );
 }
@@ -1205,4 +1400,27 @@ function FilterSelect({
       ))}
     </SelectField>
   );
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
+  if (typeof err === 'string' && err.trim()) return err;
+  return fallback;
+}
+
+function policyActionKey(policy: Policy): string {
+  return `policy:${policy.id}`;
+}
+
+function toneText(tone?: StateTone): string {
+  switch (tone) {
+    case 'critical':
+      return 'text-state-critical';
+    case 'warning':
+      return 'text-state-warning';
+    case 'healthy':
+      return 'text-state-healthy';
+    default:
+      return 'text-text-muted';
+  }
 }

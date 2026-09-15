@@ -5,9 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -1015,5 +1017,229 @@ func TestHeartbeatCompletedActionsAcceptAllPatchModes(t *testing.T) {
 				t.Fatalf("job status = %s for mode %s, want succeeded", got, mode)
 			}
 		})
+	}
+}
+
+func TestHeartbeatPersistsTargetMetadataObservations(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	store := &fakeStore{
+		nodes: []storage.Node{{
+			ID:        nodeID,
+			TenantID:  tenantID,
+			Hostname:  "endpoint-1",
+			State:     storage.NodeStateActive,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Labels:    map[string]any{},
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+
+	body := `{"agent_version":"1.2.3","target_type":"workstation","reachability_mode":"outbound_only","install_context":"local_interactive","network_observations":[{"kind":"private_ip","value":"10.0.0.25","source":"agent_interface","confidence":80}],"target_classification_evidence":["desktop OS edition","battery present"],"target_classification_confidence":75}`
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	node, err := srv.store.GetNode(context.Background(), nodeID)
+	if err != nil || node == nil {
+		t.Fatalf("node: %v", err)
+	}
+	if node.Labels["target.type"] != "workstation" {
+		t.Fatalf("labels=%+v", node.Labels)
+	}
+	if node.Labels["target.reachability_mode"] != "outbound_only" {
+		t.Fatalf("labels=%+v", node.Labels)
+	}
+}
+
+func TestHeartbeatSkipsTargetMetadataWriteWhenLabelsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	node := storage.Node{
+		ID:        nodeID,
+		TenantID:  tenantID,
+		Hostname:  "stable-workstation",
+		OS:        sql.NullString{String: "windows", Valid: true},
+		State:     storage.NodeStateActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Labels: map[string]any{
+			"target.type":                      "workstation",
+			"target.type_source":               "heuristic",
+			"target.classification_confidence": 70,
+		},
+	}
+	store := &fakeStore{nodes: []storage.Node{node}}
+	srv := buildHeartbeatServer(t, store)
+
+	updated, err := srv.updateNodeTargetMetadataFromHeartbeat(context.Background(), &node, heartbeatRequest{})
+	if err != nil {
+		t.Fatalf("update target metadata: %v", err)
+	}
+	if updated != &node {
+		t.Fatalf("unchanged metadata should return the original node pointer")
+	}
+	if store.updateNodeLabelsCalls != 0 {
+		t.Fatalf("UpdateNodeLabels calls = %d, want 0", store.updateNodeLabelsCalls)
+	}
+}
+
+func TestHeartbeatMergesNetworkObservationsWithoutLosingHistory(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	firstSeen := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	node := storage.Node{
+		ID:       nodeID,
+		TenantID: tenantID,
+		Hostname: "roaming-laptop",
+		State:    storage.NodeStateActive,
+		Labels: map[string]any{
+			"target.network_observations": []any{
+				map[string]any{
+					"kind":          "private_ip",
+					"value":         "10.0.0.25",
+					"source":        "agent_interface",
+					"first_seen_at": firstSeen,
+					"last_seen_at":  firstSeen,
+					"confidence":    float64(80),
+				},
+			},
+		},
+	}
+	store := &fakeStore{nodes: []storage.Node{node}}
+	srv := buildHeartbeatServer(t, store)
+
+	updated, err := srv.updateNodeTargetMetadataFromHeartbeat(context.Background(), &node, heartbeatRequest{
+		NetworkObservations: []heartbeatNetworkObservation{
+			{Kind: "private_ip", Value: "10.0.0.25", Source: "agent_interface", Confidence: 80},
+			{Kind: "public_ip", Value: "198.51.100.8", Source: "agent_observed", Confidence: 90},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update target metadata: %v", err)
+	}
+	observations, ok := updated.Labels["target.network_observations"].([]map[string]any)
+	if !ok {
+		t.Fatalf("network observations = %#v", updated.Labels["target.network_observations"])
+	}
+	if len(observations) != 2 {
+		t.Fatalf("network observations = %+v, want old plus new observation", observations)
+	}
+	if observations[0]["first_seen_at"] != firstSeen {
+		t.Fatalf("first_seen_at = %v, want %s", observations[0]["first_seen_at"], firstSeen)
+	}
+	if observations[1]["kind"] != "public_ip" || observations[1]["value"] != "198.51.100.8" {
+		t.Fatalf("new observation missing: %+v", observations)
+	}
+}
+
+func TestHeartbeatSkipsNetworkObservationWriteWhenObservationUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	firstSeen := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	node := storage.Node{
+		ID:       nodeID,
+		TenantID: tenantID,
+		Hostname: "steady-laptop",
+		State:    storage.NodeStateActive,
+		Labels: map[string]any{
+			"target.management_mode": "agent_managed",
+			"target.network_observations": []any{
+				map[string]any{
+					"kind":          "private_ip",
+					"value":         "10.0.0.25",
+					"source":        "agent_interface",
+					"first_seen_at": firstSeen,
+					"last_seen_at":  firstSeen,
+					"confidence":    float64(80),
+				},
+			},
+		},
+	}
+	store := &fakeStore{nodes: []storage.Node{node}}
+	srv := buildHeartbeatServer(t, store)
+
+	_, err := srv.updateNodeTargetMetadataFromHeartbeat(context.Background(), &node, heartbeatRequest{
+		NetworkObservations: []heartbeatNetworkObservation{
+			{Kind: "private_ip", Value: "10.0.0.25", Source: "agent_interface", Confidence: 80},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update target metadata: %v", err)
+	}
+	if store.updateNodeLabelsCalls != 0 {
+		t.Fatalf("UpdateNodeLabels calls = %d, want 0", store.updateNodeLabelsCalls)
+	}
+}
+
+func TestHeartbeatBackfillsMissingNetworkObservationFirstSeen(t *testing.T) {
+	t.Parallel()
+
+	lastSeen := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	observedAt := time.Date(2026, 7, 21, 9, 30, 0, 0, time.UTC)
+	merged := mergeHeartbeatNetworkObservations(
+		[]any{
+			map[string]any{
+				"kind":         "private_ip",
+				"value":        "10.0.0.25",
+				"source":       "agent_interface",
+				"last_seen_at": lastSeen,
+				"confidence":   float64(80),
+			},
+		},
+		[]heartbeatNetworkObservation{
+			{Kind: "private_ip", Value: "10.0.0.25", Source: "agent_interface", Confidence: 80},
+		},
+		observedAt,
+	)
+
+	if len(merged) != 1 {
+		t.Fatalf("network observations = %+v, want one observation", merged)
+	}
+	if merged[0]["first_seen_at"] != lastSeen {
+		t.Fatalf("first_seen_at = %v, want prior last_seen_at %s", merged[0]["first_seen_at"], lastSeen)
+	}
+	if merged[0]["last_seen_at"] != observedAt.Format(time.RFC3339) {
+		t.Fatalf("last_seen_at = %v, want %s", merged[0]["last_seen_at"], observedAt.Format(time.RFC3339))
+	}
+}
+
+func TestHeartbeatNetworkObservationsStayBounded(t *testing.T) {
+	t.Parallel()
+
+	existing := make([]any, 0, maxHeartbeatNetworkObservations)
+	for i := 0; i < maxHeartbeatNetworkObservations; i++ {
+		existing = append(existing, map[string]any{
+			"kind":       "private_ip",
+			"value":      fmt.Sprintf("10.0.0.%d", i),
+			"source":     "agent_interface",
+			"confidence": float64(80),
+		})
+	}
+	merged := mergeHeartbeatNetworkObservations(existing, []heartbeatNetworkObservation{
+		{Kind: "public_ip", Value: "198.51.100.8", Source: "agent_observed", Confidence: 90},
+	}, time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC))
+
+	if len(merged) != maxHeartbeatNetworkObservations {
+		t.Fatalf("network observations len = %d, want %d", len(merged), maxHeartbeatNetworkObservations)
+	}
+	if merged[len(merged)-1]["value"] != "198.51.100.8" {
+		t.Fatalf("new observation was not retained: %+v", merged[len(merged)-1])
 	}
 }

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Webhook } from '../lib/api';
 import { Settings } from './Settings';
@@ -34,6 +35,27 @@ const mocks = vi.hoisted(() => {
       beginWebAuthnEnroll: vi.fn(),
       finishWebAuthnEnroll: vi.fn(),
       generateMFARecoveryCodes: vi.fn().mockResolvedValue({ codes: [] }),
+      getAdminCapacity: vi.fn().mockResolvedValue({
+        disk_used: 64 * 1024 * 1024 * 1024,
+        disk_total: 128 * 1024 * 1024 * 1024,
+        analytics_mode: 'small',
+        analytics_status: 'ok',
+        warehouse_status: 'disabled',
+        warehouse_configured: false,
+        doris_status: 'unconfigured',
+        postgres_status: 'ok',
+        retention_days_remaining: 0,
+        projection: {
+          status: 'ok',
+          read_check: 'ok',
+          db_bytes: 1024 * 1024 * 1024,
+          wal_bytes: 16 * 1024 * 1024,
+          shm_bytes: 1024 * 1024,
+          total_bytes: (1024 + 16 + 1) * 1024 * 1024,
+          cache_mb: 16,
+          checked_at: '2026-06-08T10:00:00Z',
+        },
+      }),
     },
   };
 });
@@ -120,6 +142,14 @@ function configuredWebhook() {
   };
 }
 
+function renderSettings() {
+  return render(
+    <MemoryRouter basename="/console" initialEntries={['/console/settings']}>
+      <Settings />
+    </MemoryRouter>,
+  );
+}
+
 describe('Settings webhooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -132,7 +162,7 @@ describe('Settings webhooks', () => {
 
   it('creates a signed webhook with custom headers', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
 
     await user.click(screen.getByRole('button', { name: /new webhook/i }));
     await user.type(screen.getByLabelText(/^name$/i), 'SOC forwarder');
@@ -164,7 +194,7 @@ describe('Settings webhooks', () => {
     const user = userEvent.setup();
     mocks.webhooks = [configuredWebhook()];
 
-    const { container } = render(<Settings />);
+    const { container } = renderSettings();
 
     expect(screen.getByText('Signed')).toBeInTheDocument();
     expect(screen.getByText('Custom headers')).toBeInTheDocument();
@@ -185,12 +215,12 @@ describe('Settings webhooks', () => {
 
   it('links the public Trust Center by tenant name instead of tenant id', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
 
     await user.click(screen.getByRole('tab', { name: /trust center/i }));
 
     const link = screen.getByRole('link', { name: /view public trust center/i });
-    expect(link).toHaveAttribute('href', '/trust/Tenant%20A');
+    expect(link).toHaveAttribute('href', '/console/trust/Tenant%20A');
   });
 });
 
@@ -213,7 +243,7 @@ describe('Settings MFA enrollment', () => {
       provisioning_uri: 'otpauth://totp/Control%20One:admin@local?secret=ABC123&issuer=Control%20One',
     });
 
-    const { container } = render(<Settings />);
+    const { container } = renderSettings();
 
     await user.click(screen.getByRole('tab', { name: /security/i }));
     await user.click(screen.getByRole('button', { name: /add totp/i }));
@@ -263,7 +293,7 @@ describe('Settings MFA enrollment', () => {
       },
     });
 
-    render(<Settings />);
+    renderSettings();
 
     await user.click(screen.getByRole('tab', { name: /security/i }));
     await user.click(screen.getByRole('button', { name: /add security key/i }));
@@ -293,5 +323,103 @@ describe('Settings MFA enrollment', () => {
         }),
       );
     });
+  });
+
+  it('surfaces MFA load failures instead of showing an empty-factor state', async () => {
+    const user = userEvent.setup();
+    mocks.apiClient.listMFAFactors.mockRejectedValueOnce(new Error('mfa store unavailable'));
+
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'MFA status unavailable: mfa store unavailable',
+    );
+    expect(screen.queryByText(/no mfa factors enrolled/i)).not.toBeInTheDocument();
+  });
+
+  it('names MFA revoke controls and keeps a visible error if revocation fails', async () => {
+    const user = userEvent.setup();
+    mocks.apiClient.listMFAFactors.mockResolvedValueOnce({
+      factors: [
+        {
+          id: 'factor-1',
+          type: 'totp',
+          name: 'Authenticator app',
+          created_at: '2026-06-07T00:00:00Z',
+        },
+      ],
+    });
+    mocks.apiClient.deleteMFAFactor.mockRejectedValueOnce(new Error('revocation denied'));
+
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+    await screen.findByText('Authenticator app');
+    await user.click(screen.getByRole('button', { name: /revoke authenticator app mfa factor/i }));
+
+    expect(screen.getByText(/authenticator app will be removed immediately/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Revoke' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('MFA action failed: revocation denied');
+    expect(mocks.showToast).toHaveBeenCalledWith('revocation denied', 'error');
+  });
+});
+
+describe('Settings system health', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.webhooks = [];
+    mocks.apiClient.listMFAFactors.mockResolvedValue({ factors: [] });
+    mocks.apiClient.getAdminCapacity.mockResolvedValue({
+      disk_used: 64 * 1024 * 1024 * 1024,
+      disk_total: 128 * 1024 * 1024 * 1024,
+      analytics_mode: 'small',
+      analytics_status: 'ok',
+      warehouse_status: 'disabled',
+      warehouse_configured: false,
+      doris_status: 'unconfigured',
+      postgres_status: 'ok',
+      retention_days_remaining: 0,
+      projection: {
+        status: 'ok',
+        read_check: 'ok',
+        db_bytes: 1024 * 1024 * 1024,
+        wal_bytes: 16 * 1024 * 1024,
+        shm_bytes: 1024 * 1024,
+        total_bytes: (1024 + 16 + 1) * 1024 * 1024,
+        cache_mb: 16,
+        checked_at: '2026-06-08T10:00:00Z',
+      },
+    });
+  });
+
+  it('shows small-mode analytics health without treating OLAP off as an outage', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /system health/i }));
+
+    const title = await screen.findByText('Analytics health');
+    const panel = title.closest('section');
+    if (!panel) {
+      throw new Error('Analytics health panel not found');
+    }
+    expect(panel).toHaveTextContent('Small');
+    expect(panel).toHaveTextContent('Projection');
+    expect(panel).toHaveTextContent('OK');
+    expect(panel).toHaveTextContent('OLAP');
+    expect(panel).toHaveTextContent('Off');
+    expect(panel).toHaveTextContent('Postgres');
+    expect(panel).toHaveTextContent('50%');
+    expect(panel).toHaveTextContent('Current');
+    expect(panel).toHaveTextContent('Read check');
+    expect(panel).toHaveTextContent('Projection size');
+    expect(panel).toHaveTextContent('WAL');
+    expect(panel).toHaveTextContent('Cache cap');
+    expect(panel).toHaveTextContent('16 MB');
+    expect(panel).not.toHaveTextContent(/Doris|warehouse/i);
+    expect(mocks.apiClient.getAdminCapacity).toHaveBeenCalledTimes(1);
   });
 });

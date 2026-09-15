@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => {
   const createContentPackSourceHealthInvestigation = vi.fn();
   const listSOCCases = vi.fn();
   const createSOCCaseNote = vi.fn();
+  const exportSOCCase = vi.fn();
   const getTenantConnectorPolicy = vi.fn();
   const updateTenantConnectorPolicy = vi.fn();
   const listContentPackEdgeCollectors = vi.fn();
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => {
   const queueContentPackOTelConfigCandidate = vi.fn();
   const toastSuccess = vi.fn();
   const toastError = vi.fn();
+  const saveBlob = vi.fn();
 
   return {
     listContentPackSourceProposals,
@@ -37,6 +39,7 @@ const mocks = vi.hoisted(() => {
     createContentPackSourceHealthInvestigation,
     listSOCCases,
     createSOCCaseNote,
+    exportSOCCase,
     getTenantConnectorPolicy,
     updateTenantConnectorPolicy,
     listContentPackEdgeCollectors,
@@ -47,6 +50,7 @@ const mocks = vi.hoisted(() => {
     queueContentPackOTelConfigCandidate,
     toastSuccess,
     toastError,
+    saveBlob,
     apiClient: {
       listContentPackSourceProposals: (params: unknown) =>
         listContentPackSourceProposals(params),
@@ -69,6 +73,8 @@ const mocks = vi.hoisted(() => {
       listSOCCases: (params: unknown) => listSOCCases(params),
       createSOCCaseNote: (tenantId: string, caseId: string, payload: unknown) =>
         createSOCCaseNote(tenantId, caseId, payload),
+      exportSOCCase: (caseId: string, tenantId: string) =>
+        exportSOCCase(caseId, tenantId),
       getTenantConnectorPolicy: (tenantId: string) =>
         getTenantConnectorPolicy(tenantId),
       updateTenantConnectorPolicy: (tenantId: string, payload: unknown) =>
@@ -127,6 +133,10 @@ vi.mock("sonner", () => ({
     success: mocks.toastSuccess,
     error: mocks.toastError,
   },
+}));
+
+vi.mock("@/lib/download", () => ({
+  saveBlob: mocks.saveBlob,
 }));
 
 function expectKpiValue(label: string, value: string): void {
@@ -364,6 +374,16 @@ describe("SIEMCoverage", () => {
       created_at: "2026-05-28T10:07:00Z",
       guardrails: ["tenant_scoped", "source_row_citations"],
     });
+    mocks.exportSOCCase.mockReset();
+    mocks.exportSOCCase.mockResolvedValue({
+      export_version: "soc-case-export-v1",
+      generated_at: "2026-05-28T10:08:00Z",
+      tenant_id: "tenant-1",
+      case: sampleSourceHealthCase,
+      evidence: sampleSourceHealthCase.evidence_refs,
+      notes: sampleSourceHealthCase.notes,
+      guardrails: ["tenant_scoped", "source_row_citations"],
+    });
     mocks.getTenantConnectorPolicy.mockReset();
     mocks.getTenantConnectorPolicy.mockResolvedValue(samplePolicy);
     mocks.updateTenantConnectorPolicy.mockReset();
@@ -438,6 +458,7 @@ describe("SIEMCoverage", () => {
     });
     mocks.toastSuccess.mockReset();
     mocks.toastError.mockReset();
+    mocks.saveBlob.mockReset();
   });
 
   it("loads policy, proposals, and source health for the active tenant", async () => {
@@ -531,6 +552,38 @@ describe("SIEMCoverage", () => {
     expect(
       await screen.findByText(/Parser owner confirmed timestamp format drift/i),
     ).toBeInTheDocument();
+  });
+
+  it("downloads source health investigation exports through the authenticated API client", async () => {
+    const user = userEvent.setup();
+    render(<SIEMCoverage />);
+
+    expect(
+      await screen.findByText(
+        "Parser failure investigation opened for Postgres audit",
+      ),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.queryByRole("link", { name: /export/i }),
+    ).not.toBeInTheDocument();
+    const exportButtons = screen.getAllByRole("button", { name: /export/i });
+    expect(exportButtons).toHaveLength(1);
+    await user.click(exportButtons[0]);
+
+    await waitFor(() => {
+      expect(mocks.exportSOCCase).toHaveBeenCalledWith(
+        "case-existing",
+        "tenant-1",
+      );
+    });
+    expect(mocks.saveBlob).toHaveBeenCalledTimes(1);
+    expect(mocks.saveBlob.mock.calls[0][1]).toBe(
+      "soc-case-case-existing-2026-05-28.json",
+    );
+    expect(mocks.toastSuccess).toHaveBeenCalledWith(
+      "Source investigation export downloaded",
+    );
   });
 
   it("uses source proposal summary totals for fleet-level proposal KPIs", async () => {

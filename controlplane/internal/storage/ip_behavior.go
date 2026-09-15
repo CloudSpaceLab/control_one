@@ -200,6 +200,7 @@ type IPBehaviorFindingFilter struct {
 	TenantID uuid.UUID
 	Resolved *bool
 	SourceIP string
+	Since    time.Time
 }
 
 type IPBlocklistEntryFilter struct {
@@ -803,6 +804,10 @@ func (s *Store) ListIPBehaviorFindings(ctx context.Context, filter IPBehaviorFin
 		}
 		args = append(args, sourceIP)
 		where = append(where, fmt.Sprintf("src_ip = $%d", len(args)))
+	}
+	if !filter.Since.IsZero() {
+		args = append(args, filter.Since.UTC())
+		where = append(where, fmt.Sprintf("last_seen_at >= $%d", len(args)))
 	}
 	whereSQL := strings.Join(where, " AND ")
 	var total int

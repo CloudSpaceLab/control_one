@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -87,9 +88,9 @@ func main() {
 	joinToken := flag.String("token", "", "Enrollment token")
 	nodeName := flag.String("name", "", "Override node hostname")
 	compliancePolicyID := flag.String("compliance-policy", "control-one-default-hardening", "Compliance policy to apply during enrollment")
-	configDirFlag := flag.String("config-dir", "/etc/control-one", "Config directory")
-	dataDirFlag := flag.String("data-dir", "/var/lib/control-one/nodeagent", "Data directory")
-	installServiceFlag := flag.Bool("install-service", false, "Install systemd service")
+	configDirFlag := flag.String("config-dir", defaultConfigDir(), "Config directory")
+	dataDirFlag := flag.String("data-dir", defaultDataDir(), "Data directory")
+	installServiceFlag := flag.Bool("install-service", false, "Install host service")
 	startAfterJoin := flag.Bool("start", false, "Start agent after join")
 	flag.Parse()
 
@@ -905,27 +906,41 @@ func buildMTLSClient(certFile, keyFile, caCertFile string) (*http.Client, error)
 }
 
 func defaultConfigDir() string {
-	switch runtime.GOOS {
-	case "windows":
-		return filepath.Join(os.Getenv("ProgramData"), "ControlOne")
-	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "ControlOne")
-		}
-	}
-	return "/etc/control-one"
+	home, _ := os.UserHomeDir()
+	return platformConfigDir(runtime.GOOS, os.Getenv("ProgramData"), home, os.Geteuid() == 0)
 }
 
 func defaultDataDir() string {
-	switch runtime.GOOS {
+	home, _ := os.UserHomeDir()
+	return platformDataDir(runtime.GOOS, os.Getenv("ProgramData"), home, os.Geteuid() == 0)
+}
+
+func platformConfigDir(goos, programData, home string, root bool) string {
+	switch goos {
 	case "windows":
-		return filepath.Join(os.Getenv("ProgramData"), "ControlOne", "nodeagent")
-	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "ControlOne", "nodeagent")
+		if strings.TrimSpace(programData) == "" {
+			programData = `C:\ProgramData`
 		}
+		return strings.TrimRight(programData, `\\/`) + `\ControlOne`
+	case "darwin":
+		if root || strings.TrimSpace(home) == "" {
+			return "/Library/Application Support/ControlOne"
+		}
+		return path.Join(home, "Library", "Application Support", "ControlOne")
+	default:
+		return "/etc/control-one"
 	}
-	return "/var/lib/control-one/nodeagent"
+}
+
+func platformDataDir(goos, programData, home string, root bool) string {
+	if goos != "windows" && goos != "darwin" {
+		return "/var/lib/control-one/nodeagent"
+	}
+	configDir := platformConfigDir(goos, programData, home, root)
+	if goos == "windows" {
+		return configDir + `\nodeagent`
+	}
+	return path.Join(configDir, "nodeagent")
 }
 
 func dbQueryTargetsFromConfig(configured []config.DBQueryTargetConfig) []dbquery.Target {

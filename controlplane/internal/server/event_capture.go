@@ -188,9 +188,6 @@ func (s *Server) eventCapturePayload(ctx context.Context, kind string, filter Ev
 }
 
 func (s *Server) listFlowDeltas(ctx context.Context, filter EventCaptureFilter) ([]FlowDeltaRow, error) {
-	if s == nil || s.dorisClient == nil {
-		return []FlowDeltaRow{}, nil
-	}
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 100
@@ -199,11 +196,11 @@ func (s *Server) listFlowDeltas(ctx context.Context, filter EventCaptureFilter) 
 	if span <= 0 {
 		span = time.Hour
 	}
-	current, err := s.dorisClient.ListConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since, filter.Until, limit, false, false)
+	current, _, err := s.listAnalyticsConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since, filter.Until, limit, false, false)
 	if err != nil {
 		return nil, err
 	}
-	previous, err := s.dorisClient.ListConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since.Add(-span), filter.Since, limit, false, false)
+	previous, _, err := s.listAnalyticsConnectionsForNode(ctx, filter.TenantID.String(), filter.NodeID.String(), filter.Since.Add(-span), filter.Since, limit, false, false)
 	if err != nil {
 		return nil, err
 	}

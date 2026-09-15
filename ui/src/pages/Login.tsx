@@ -26,6 +26,7 @@ export function Login(): JSX.Element {
     const state = location.state as RedirectState | null;
     return state?.from;
   }, [location.state]);
+  const authNotice = emailError ? null : error;
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -171,7 +172,8 @@ export function Login(): JSX.Element {
                 required
               />
             </div>
-            {emailError ? <span className="form-error">{emailError}</span> : null}
+            {authNotice ? <span className="form-error" role="alert">{authNotice}</span> : null}
+            {emailError ? <span className="form-error" role="alert">{emailError}</span> : null}
             <div className="login-submit">
               <button type="submit" className="primary-button" disabled={emailLoading}>
                 {emailLoading ? 'Signing in…' : 'Sign in'}
@@ -217,7 +219,6 @@ export function Login(): JSX.Element {
                     style={{ marginTop: '0.4rem' }}
                   />
                   {localError ? <span className="form-error">{localError}</span> : null}
-                  {error ? <span className="form-error">{error}</span> : null}
                   <button type="submit" className="primary-button" disabled={loading} style={{ marginTop: '0.75rem', width: '100%', justifyContent: 'center' }}>
                     {loading ? 'Signing in…' : 'Continue'}
                   </button>

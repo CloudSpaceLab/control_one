@@ -255,7 +255,7 @@ func (s *Server) configureJobIntegrations() {
 				Baselines:       []string{"cis-aws-foundations"},
 				AutoRemediation: s.cfg.Jobs.Provisioning.AutoRemediation,
 			}
-			s.logger.Warn("provisioning client unavailable; using mock engine")
+			s.logger.Info("external provisioning API not configured; registering simulated provisioning handler")
 			s.provisioningEngine = provisioning.NewEngine(s.logger.Named("provisioning-engine"), nil, opts)
 			s.jobHandlers[JobTypeProvisionApply] = s.handleProvisionApply
 		}
@@ -284,7 +284,7 @@ func (s *Server) configureJobIntegrations() {
 				Certifications: []string{"soc2"},
 				AutoApply:      s.cfg.Jobs.Compliance.AutoApply,
 			}
-			s.logger.Warn("compliance client unavailable; using mock engine")
+			s.logger.Info("external compliance scanner not configured; registering local policy evaluator")
 			s.complianceEngine = compliance.NewEngine(s.logger.Named("compliance-engine"), nil, opts)
 			s.jobHandlers[JobTypeComplianceScan] = s.handleComplianceScan
 		}

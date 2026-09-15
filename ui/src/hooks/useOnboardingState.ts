@@ -52,10 +52,10 @@ export function useOnboardingState(): {
     },
     {
       id: 'server',
-      title: 'Onboard a server',
-      description: 'Connect your first host over SSH, WinRM, or RDP. We test credentials before enrolling.',
+      title: 'Onboard a machine',
+      description: 'Agent install for PCs, workstations, servers, VMs, and restricted networks.',
       to: '/onboard',
-      cta: hasNode ? 'Manage nodes' : 'Add server',
+      cta: hasNode ? 'Manage machines' : 'Add machine',
       done: hasNode,
       required: true,
     },

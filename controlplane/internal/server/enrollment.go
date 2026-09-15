@@ -55,6 +55,8 @@ type enrollRequest struct {
 	Fingerprint        string `json:"fingerprint"`
 	MachineID          string `json:"machine_id"`
 	CompliancePolicyID string `json:"compliance_policy_id,omitempty"`
+	InstallContext     string `json:"install_context,omitempty"`
+	TargetHint         string `json:"target_hint,omitempty"`
 }
 
 type enrollResponse struct {
@@ -492,7 +494,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 				s.logger.Warn("update node on re-enrollment", zap.Error(updErr))
 			}
 		}
-		mergedLabels := enrollmentNodeLabels(existing.Labels, token)
+		mergedLabels := enrollmentNodeLabels(existing.Labels, token, req)
 		if err := s.store.UpdateNodeLabels(r.Context(), existing.ID, mergedLabels); err != nil {
 			s.logger.Warn("update enrollment labels on re-enrollment", zap.Error(err),
 				zap.String("node_id", existing.ID.String()))
@@ -561,7 +563,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		PublicIP:  toNullString(&req.PublicIP),
 		MachineID: toNullString(&machineID),
 		State:     storage.NodeStateEnrollmentPending,
-		Labels:    enrollmentNodeLabels(nil, token),
+		Labels:    enrollmentNodeLabels(nil, token, req),
 	}
 
 	created, err := s.store.CreateNode(r.Context(), node)
@@ -632,24 +634,66 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers ---
 
-func enrollmentNodeLabels(existing map[string]any, token *storage.EnrollmentToken) map[string]any {
+func enrollmentNodeLabels(existing map[string]any, token *storage.EnrollmentToken, req enrollRequest) map[string]any {
 	labels := map[string]any{}
 	for key, value := range existing {
 		labels[key] = value
 	}
-	if token == nil {
-		return labels
-	}
-	for key, value := range token.Labels {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
+	if token != nil {
+		for key, value := range token.Labels {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				labels[key] = strings.TrimSpace(value)
+			}
 		}
-		labels[key] = strings.TrimSpace(value)
+		labels["enrollment.token_id"] = token.ID.String()
+		labels["enrollment.token_name"] = token.Name
 	}
-	labels["enrollment.token_id"] = token.ID.String()
-	labels["enrollment.token_name"] = token.Name
+	labels["target.management_mode"] = "agent_managed"
+	installContext := normalizeInstallContext(req.InstallContext)
+	if installContext != "" {
+		labels["target.install_context"] = installContext
+	}
+	if targetType := normalizeTargetType(req.TargetHint); targetType != "" {
+		labels["target.type"] = targetType
+		labels["target.type_source"] = "enrollment_hint"
+		labels["target.classification_confidence"] = 60
+	} else if _, ok := labels["target.type"]; !ok {
+		labels["target.type"] = "unknown"
+		labels["target.type_source"] = "default"
+	}
+	if publicIP := strings.TrimSpace(req.PublicIP); publicIP != "" {
+		labels["target.reachability_mode"] = "direct_public"
+		labels["target.network_observations"] = mergeHeartbeatNetworkObservations(
+			labels["target.network_observations"],
+			[]heartbeatNetworkObservation{{
+				Kind:       "public_ip",
+				Value:      publicIP,
+				Source:     "enrollment",
+				Confidence: 90,
+			}},
+			time.Now().UTC(),
+		)
+	}
 	return labels
+}
+
+func normalizeInstallContext(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "local_interactive", "remote_push", "fleet_enroll", "offline_bundle", "repair":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeTargetType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "personal_pc", "workstation", "laptop", "server", "vm", "cloud_instance", "domain_controller", "kiosk":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func newEnrollmentTokenResponse(t storage.EnrollmentToken, rawToken string) enrollmentTokenResponse {

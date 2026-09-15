@@ -26,10 +26,9 @@ export interface RepairAgentDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-// RepairAgentDialog ships agent-repair as a one-click flow when controlplane
-// can SSH into the host with operator-supplied credentials, and falls back
-// to a copy-paste curl one-liner when SSH fails or the operator can't share
-// keys with the controlplane.
+// RepairAgentDialog ships agent-repair as a one-click flow when Control One
+// can SSH into the current address, and falls back to a copy-paste installer
+// when SSH is blocked or the operator cannot share credentials.
 export function RepairAgentDialog({ open, node, onOpenChange }: RepairAgentDialogProps): JSX.Element {
   const [mode, setMode] = useState<Mode>('ssh');
 
@@ -45,10 +44,9 @@ export function RepairAgentDialog({ open, node, onOpenChange }: RepairAgentDialo
           <DialogTitle>Repair / re-enroll {node.hostname || 'this node'}</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-text-secondary">
-          Re-runs agent installation on the host. Default path: SSH from
-          controlplane using credentials you provide here (one-shot, never
-          stored). Fallback: copy-paste a curl one-liner an operator runs
-          manually if the SSH path can&apos;t reach the host.
+          Re-runs agent installation. SSH uses one-shot credentials and the
+          current reachable address. Command install covers firewalled,
+          roaming, and outbound-only machines.
         </p>
         <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)} className="mt-2">
           <TabsList>
@@ -206,7 +204,7 @@ function SSHRepair({
         {!finished && (
           <Alert variant="info">
             <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Repair in flight on {host}:{port} (job{' '}
+              <Loader2 className="h-4 w-4 animate-spin" /> Repair in flight for {host}:{port} (job{' '}
               <span className="font-mono text-xs">{jobId.slice(0, 8)}</span>) — status:{' '}
               {jobStatus?.status ?? 'queued'}
             </span>
@@ -269,11 +267,12 @@ function SSHRepair({
         to disk.
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr]">
-        <Field label="Host">
-          <Input value={host} onChange={(e) => setHost(e.target.value)} required />
+        <Field label="Address" htmlFor="repair-address">
+          <Input id="repair-address" value={host} onChange={(e) => setHost(e.target.value)} required />
         </Field>
-        <Field label="Port">
+        <Field label="Port" htmlFor="repair-port">
           <Input
+            id="repair-port"
             type="number"
             value={port}
             onChange={(e) => setPort(Number(e.target.value) || 22)}
@@ -282,8 +281,8 @@ function SSHRepair({
           />
         </Field>
       </div>
-      <Field label="SSH user">
-        <Input value={user} onChange={(e) => setUser(e.target.value)} required />
+      <Field label="SSH user" htmlFor="repair-ssh-user">
+        <Input id="repair-ssh-user" value={user} onChange={(e) => setUser(e.target.value)} required />
       </Field>
       <Tabs value={authKind} onValueChange={(v) => setAuthKind(v as AuthKind)}>
         <TabsList>
@@ -335,8 +334,9 @@ function SSHRepair({
           />
         </TabsContent>
         <TabsContent value="password" className="mt-3">
-          <Field label="Password">
+          <Field label="Password" htmlFor="repair-ssh-password">
             <Input
+              id="repair-ssh-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -402,9 +402,8 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-text-secondary">
-          Use this when the controlplane can&apos;t reach the host over SSH (firewalled,
-          air-gapped, missing credentials). Generates a one-shot 24h enrollment
-          token + a curl one-liner to paste on the host as root.
+          One-shot 24h enrollment token and installer command for firewalled,
+          air-gapped, roaming, or outbound-only machines.
         </p>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
@@ -422,7 +421,7 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
         <div className="flex items-center justify-between">
-          <Eyebrow>Run this on the host</Eyebrow>
+          <Eyebrow>Run on target</Eyebrow>
           <Button variant="secondary" size="sm" onClick={() => copy('Install command', installCmd)}>
             Copy command
           </Button>
@@ -456,10 +455,10 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <Label className="text-xs text-text-muted">{label}</Label>
+      <Label htmlFor={htmlFor} className="text-xs text-text-muted">{label}</Label>
       {children}
     </div>
   );

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ReactNode } from 'react';
 import { OfflineBundle } from './OfflineBundle';
 import * as useApiClientModule from '../hooks/useApiClient';
 import * as useToastModule from '../providers/ToastProvider';
 import * as useTenantModule from '../providers/TenantProvider';
-import type { APIClient, EnrollmentToken } from '../lib/api';
+import type { APIClient, EnrollmentToken, OfflineContentBundle } from '../lib/api';
 
 // Minimal ToastProvider stub — real provider pulls createContext whose value
 // we override via the module mock below, so we can render the page in tests
@@ -43,6 +43,21 @@ const sampleTokens: EnrollmentToken[] = [
   },
 ];
 
+const sampleContentBundle: OfflineContentBundle = {
+  id: 'bundle-row-1',
+  tenant_id: 'tenant-a',
+  bundle_id: 'geo-threat-pack',
+  version: '2026.06.08',
+  sequence: 42,
+  status: 'imported',
+  public_key_fingerprint: 'SHA256:abc123',
+  manifest_sha256: 'abc123',
+  storage_path: '/var/lib/control-one/offline/geo-threat-pack.tgz',
+  contents: [{ kind: 'threat-feed' }, { kind: 'parser-profile' }],
+  warnings: [],
+  imported_at: '2026-06-08T00:00:00Z',
+};
+
 function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBundleDownloadUrl' | 'listOfflineContentBundles' | 'importOfflineContentBundle' | 'rollbackOfflineContentBundle'> {
   return {
     listEnrollmentTokens: vi.fn().mockResolvedValue({
@@ -72,6 +87,7 @@ describe('OfflineBundle', () => {
   const showToastMock = vi.fn();
   let windowLocationAssign: ReturnType<typeof vi.fn>;
   let originalLocation: Location;
+  let api: ReturnType<typeof makeApiClientStub>;
 
   beforeEach(() => {
     vi.spyOn(useToastModule, 'useToast').mockReturnValue({
@@ -91,7 +107,7 @@ describe('OfflineBundle', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
-    const api = makeApiClientStub();
+    api = makeApiClientStub();
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(api as unknown as APIClient);
 
     windowLocationAssign = vi.fn();
@@ -117,8 +133,30 @@ describe('OfflineBundle', () => {
     await waitFor(() => {
       expect(screen.getByRole('combobox', { name: /enrollment token/i })).toBeInTheDocument();
     });
+    expect(api.listEnrollmentTokens).toHaveBeenCalledWith({ tenant_id: 'tenant-a', limit: 50, offset: 0 });
     expect(screen.getByRole('option', { name: /prod-fleet/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /revoked-fleet/i })).toBeDisabled();
+  });
+
+  it('waits for a tenant before loading enrollment tokens', async () => {
+    vi.mocked(useTenantModule.useTenant).mockReturnValue({
+      currentTenantId: null,
+      tenants: [],
+      currentTenant: null,
+      loading: true,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(undefined),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    render(<OfflineBundle />, { wrapper: Wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: /enrollment token/i })).toBeDisabled();
+    });
+    expect(api.listEnrollmentTokens).not.toHaveBeenCalled();
+    expect(screen.queryByText(/tenant_id query parameter is required/i)).not.toBeInTheDocument();
   });
 
   it('blocks submit until a token value is available', async () => {
@@ -192,5 +230,61 @@ describe('OfflineBundle', () => {
     });
 
     expect(screen.getByLabelText(/scp command template/i)).toHaveTextContent(/install-offline\.ps1/);
+  });
+
+  it('requires in-app confirmation before activating signed content', async () => {
+    vi.mocked(api.listOfflineContentBundles).mockResolvedValue({
+      items: [sampleContentBundle],
+      pagination: { total: 1, count: 1, limit: 25, offset: 0, nextOffset: null, prevOffset: null },
+    });
+    vi.mocked(api.rollbackOfflineContentBundle).mockResolvedValue(sampleContentBundle);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<OfflineBundle />, { wrapper: Wrapper });
+
+    await user.click(await screen.findByRole('button', {
+      name: 'Activate offline content bundle geo-threat-pack sequence 42',
+    }));
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(api.rollbackOfflineContentBundle).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog', { name: 'Activate geo-threat-pack sequence 42?' });
+    expect(dialog).toHaveTextContent('version 2026.06.08');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Activate bundle' }));
+
+    await waitFor(() => {
+      expect(api.rollbackOfflineContentBundle).toHaveBeenCalledWith('tenant-a', 'geo-threat-pack', 42);
+    });
+    expect(showToastMock).toHaveBeenCalledWith('Offline content bundle activated.', 'success');
+  });
+
+  it('keeps failed signed-content activation visible in the modal', async () => {
+    vi.mocked(api.listOfflineContentBundles).mockResolvedValue({
+      items: [sampleContentBundle],
+      pagination: { total: 1, count: 1, limit: 25, offset: 0, nextOffset: null, prevOffset: null },
+    });
+    vi.mocked(api.rollbackOfflineContentBundle).mockRejectedValueOnce(new Error('signature revoked'));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<OfflineBundle />, { wrapper: Wrapper });
+
+    await user.click(await screen.findByRole('button', {
+      name: 'Activate offline content bundle geo-threat-pack sequence 42',
+    }));
+    const dialog = screen.getByRole('dialog', { name: 'Activate geo-threat-pack sequence 42?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Activate bundle' }));
+
+    await waitFor(() => {
+      expect(api.rollbackOfflineContentBundle).toHaveBeenCalledWith('tenant-a', 'geo-threat-pack', 42);
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Activate geo-threat-pack sequence 42?' })).toBeInTheDocument();
+    expect(await within(dialog).findByText('Bundle activation failed')).toBeInTheDocument();
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('signature revoked');
+    expect(showToastMock).toHaveBeenCalledWith('signature revoked', 'error');
   });
 });

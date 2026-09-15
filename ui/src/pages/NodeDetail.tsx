@@ -237,10 +237,10 @@ export function NodeDetail(): JSX.Element {
   const tone = riskTone(health?.risk_level);
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+    <div className="flex min-w-0 flex-col gap-5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <Link
               to="/nodes"
               className="inline-flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-foreground"
@@ -248,14 +248,15 @@ export function NodeDetail(): JSX.Element {
               <ArrowLeft className="h-3.5 w-3.5" /> Nodes
             </Link>
             <span className="text-text-muted">/</span>
-            <span className="font-mono text-xs text-text-muted">{node.id}</span>
+            <span className="min-w-0 break-all font-mono text-xs text-text-muted">{node.id}</span>
           </div>
           <SectionHeader
+            className="min-w-0"
             eyebrow="FLEET · NODE DETAIL"
             title={node.hostname || 'Unnamed node'}
             description={`${node.os ?? '—'} · ${node.arch ?? '—'} · agent ${node.agent_version ?? '—'}`}
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <StatusTag tone={tone}>{riskLabel(health?.risk_level, health?.score ?? 0, calibratingSamples)}</StatusTag>
             <Button
               variant="ghost"
@@ -274,14 +275,14 @@ export function NodeDetail(): JSX.Element {
       <AgentRepairBanner node={node} onRepair={() => setTab('settings')} />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="activity">Activity</TabsTrigger>
-          <TabsTrigger value="connections">Connections</TabsTrigger>
-          <TabsTrigger value="kg">Knowledge graph</TabsTrigger>
-          <TabsTrigger value="packages">Packages</TabsTrigger>
-          <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
+          <TabsTrigger className="w-full sm:w-auto" value="overview">Overview</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="activity">Activity</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="kg">Knowledge graph</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="packages">Packages</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="recommendations">Recommendations</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="pt-4">
@@ -389,12 +390,26 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
           <Vital label="State" value={String(node.state)} />
           <Vital label="First scan" value={formatTs(node.first_scan_at)} />
           <Vital label="Last seen" value={formatTs(node.last_seen_at)} />
+          <Vital label="Target type" value={node.target_type?.replace(/_/g, ' ') ?? '—'} />
+          <Vital label="Reachability" value={node.reachability_mode?.replace(/_/g, ' ') ?? '—'} />
+          <Vital label="Management" value={node.management_mode?.replace(/_/g, ' ') ?? '—'} />
           <Vital label="CPU cores" value={cpuCount != null ? String(Math.round(cpuCount)) : '—'} />
           <Vital label="Total RAM" value={memTotal != null ? fmtBytes(memTotal) : '—'} />
           <Vital label="Disk size" value={diskTotal != null ? fmtBytes(diskTotal) : '—'} />
           <Vital label="Disk free" value={diskFree != null ? fmtBytes(diskFree) : '—'} />
           <Vital label="Disk used" value={diskUsed != null ? fmtBytes(diskUsed) : '—'} />
         </dl>
+        {node.classification && node.classification.evidence.length > 0 && (
+          <div className="mt-3 border-t border-border-subtle pt-3">
+            <p className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted mb-1">Classification evidence</p>
+            <div className="flex flex-wrap gap-1">
+              {node.classification.evidence.map((e, i) => (
+                <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 text-[0.6rem] text-text-muted">{e}</span>
+              ))}
+            </div>
+            <p className="text-[0.6rem] text-text-muted mt-1">Source: {node.classification.source} · Confidence: {node.classification.confidence}</p>
+          </div>
+        )}
       </Panel>
 
       <Panel padding="md" eyebrow="CPU" title="Last 24h" className="lg:col-span-1">
@@ -545,7 +560,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
       setRows(resp.rows);
       setAnalyticsNotice(
         resp.source === 'small-analytics-pending'
-          ? 'Connection-level history is awaiting the small analytics store; fleet health and rollups remain live.'
+          ? 'Connection-level history is waiting for recent evidence projection; fleet health and rollups remain live.'
           : null,
       );
       setErr(null);
@@ -692,7 +707,7 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
         eyebrow="NETWORK"
         title="Connections"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center justify-start gap-2">
             <Button
               variant={listeningOnly ? 'primary' : 'ghost'}
               size="sm"

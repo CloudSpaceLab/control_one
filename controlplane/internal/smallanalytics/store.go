@@ -31,6 +31,20 @@ type Store struct {
 	db           *sql.DB
 	queryTimeout time.Duration
 	writeMu      sync.Mutex
+	dbPath       string
+	cacheMB      int
+}
+
+type Stats struct {
+	Status     string
+	ReadCheck  string
+	QuickCheck string
+	DBBytes    int64
+	WALBytes   int64
+	SHMBytes   int64
+	TotalBytes int64
+	CacheMB    int
+	CheckedAt  time.Time
 }
 
 func Open(ctx context.Context, cfg Config) (*Store, error) {
@@ -45,7 +59,12 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	if queryTimeout <= 0 {
 		queryTimeout = 5 * time.Second
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(filepath.Join(dir, "controlone-small-analytics.db"), cfg.CacheMB, queryTimeout))
+	cacheMB := cfg.CacheMB
+	if cacheMB <= 0 {
+		cacheMB = 32
+	}
+	dbPath := filepath.Join(dir, "controlone-small-analytics.db")
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath, cacheMB, queryTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -54,8 +73,10 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	store := &Store{
 		db:           db,
 		queryTimeout: queryTimeout,
+		dbPath:       dbPath,
+		cacheMB:      cacheMB,
 	}
-	if err := store.migrate(ctx, cfg.CacheMB); err != nil {
+	if err := store.migrate(ctx, cacheMB); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -92,16 +113,38 @@ func (s *Store) Healthy(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("small analytics unavailable")
 	}
+	_, err := s.Stats(ctx)
+	return err
+}
+
+func (s *Store) Stats(ctx context.Context) (Stats, error) {
+	stats := Stats{
+		Status:    "unavailable",
+		CacheMB:   32,
+		CheckedAt: time.Now().UTC(),
+	}
+	if s == nil || s.db == nil {
+		return stats, fmt.Errorf("small analytics unavailable")
+	}
+	stats.Status = "degraded"
+	stats.CacheMB = s.cacheMB
+	stats.DBBytes = fileSize(s.dbPath)
+	stats.WALBytes = fileSize(s.dbPath + "-wal")
+	stats.SHMBytes = fileSize(s.dbPath + "-shm")
+	stats.TotalBytes = stats.DBBytes + stats.WALBytes + stats.SHMBytes
+
 	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
-	var status string
-	if err := s.db.QueryRowContext(qctx, "PRAGMA quick_check").Scan(&status); err != nil {
-		return err
+	var tableCount int
+	if err := s.db.QueryRowContext(qctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'process_connections'").Scan(&tableCount); err != nil {
+		return stats, err
 	}
-	if !strings.EqualFold(status, "ok") {
-		return fmt.Errorf("sqlite quick_check: %s", status)
+	if tableCount == 0 {
+		return stats, fmt.Errorf("small analytics projection schema missing process_connections")
 	}
-	return nil
+	stats.ReadCheck = "ok"
+	stats.Status = "ok"
+	return stats, nil
 }
 
 func (s *Store) migrate(ctx context.Context, cacheMB int) error {
@@ -312,32 +355,42 @@ func (s *Store) QueryEvents(ctx context.Context, p doris.EventQueryParams) ([]do
 	if s == nil || s.db == nil {
 		return nil, 0, fmt.Errorf("small analytics unavailable")
 	}
-	query, countQuery, args, err := buildConnectionEventQuerySQL(p)
+	query, args, err := buildConnectionEventQuerySQL(p)
 	if err != nil {
 		return nil, 0, err
 	}
 	qctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
-	var total int
-	if err := s.db.QueryRowContext(qctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count small analytics events: %w", err)
-	}
-	rows, err := s.db.QueryContext(qctx, query, append(args, clampSmallEventLimit(p.Limit), maxInt(p.Offset, 0))...)
+	limit := clampSmallEventLimit(p.Limit)
+	offset := maxInt(p.Offset, 0)
+	rows, err := s.db.QueryContext(qctx, query, append(args, limit+1, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query small analytics events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := make([]doris.EventRow, 0, clampSmallEventLimit(p.Limit))
+	out := make([]doris.EventRow, 0, limit)
+	hasNext := false
 	for rows.Next() {
 		ev, err := scanConnectionEvent(rows)
 		if err != nil {
 			return nil, 0, err
 		}
+		if len(out) == limit {
+			hasNext = true
+			continue
+		}
 		out = append(out, ev.eventRow())
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	total := offset + len(out)
+	if hasNext {
+		total = offset + limit + 1
+	}
+	return out, total, nil
 }
 
 // BuildTimeline returns a bounded connection timeline from the local SQLite
@@ -510,33 +563,66 @@ type connectionEvent struct {
 	Message        string
 }
 
-func buildConnectionEventQuerySQL(p doris.EventQueryParams) (string, string, []any, error) {
-	where, args, err := connectionEventWhereClause(p)
+func buildConnectionEventQuerySQL(p doris.EventQueryParams) (string, []any, error) {
+	base, baseArgs, err := connectionEventBaseSQL(p)
 	if err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
-	base := connectionEventProjectionSQL()
+	where, outerArgs, err := connectionEventOuterWhereClause(p)
+	if err != nil {
+		return "", nil, err
+	}
+	args := append(baseArgs, outerArgs...)
 	selectSQL := selectConnectionEventColumns + `
 		FROM (` + base + `) connection_events
 		WHERE ` + where + `
 		ORDER BY ts_ms DESC, event_id DESC
 		LIMIT ? OFFSET ?`
-	countSQL := `SELECT COUNT(*) FROM (` + base + `) connection_events WHERE ` + where
-	return selectSQL, countSQL, args, nil
+	return selectSQL, args, nil
 }
 
 func buildConnectionTimelineSQL(p doris.TimelineBuildParams) (string, []any, error) {
-	where, args, err := connectionTimelineWhereClause(p)
+	base, baseArgs, err := connectionTimelineBaseSQL(p)
+	if err != nil {
+		return "", nil, err
+	}
+	where, args, err := appendConnectionEntityPredicate("1 = 1", nil, p.EntityType, p.EntityID)
 	if err != nil {
 		return "", nil, err
 	}
 	query := selectConnectionEventColumns + `
-		FROM (` + connectionEventProjectionSQL() + `) connection_events
+		FROM (` + base + `) connection_events
 		WHERE ` + where + `
 		ORDER BY ts_ms DESC, event_id DESC
 		LIMIT ?`
-	args = append(args, clampSmallTimelineLimit(p.Limit))
-	return query, args, nil
+	timelineArgs := append([]any{}, baseArgs...)
+	timelineArgs = append(timelineArgs, args...)
+	timelineArgs = append(timelineArgs, clampSmallTimelineLimit(p.Limit))
+	return query, timelineArgs, nil
+}
+
+func connectionTimelineBaseSQL(p doris.TimelineBuildParams) (string, []any, error) {
+	eventParams := doris.EventQueryParams{
+		TenantID:      p.TenantID,
+		NodeID:        p.NodeID,
+		CorrelationID: p.CorrelationID,
+		ConnID:        p.ConnID,
+		Since:         p.Since,
+		Until:         p.Until,
+	}
+	entityType := strings.ToLower(strings.TrimSpace(p.EntityType))
+	entityID := strings.TrimSpace(p.EntityID)
+	switch entityType {
+	case "connection":
+		if strings.TrimSpace(eventParams.ConnID) == "" {
+			eventParams.ConnID = entityID
+		}
+	case "host", "node":
+		if strings.TrimSpace(eventParams.NodeID) == "" {
+			eventParams.NodeID = entityID
+		}
+	}
+	return connectionEventBaseSQLWithEntity(eventParams, entityType, entityID)
 }
 
 const selectConnectionEventColumns = `SELECT tenant_id, row_key, conn_id, correlation_id,
@@ -583,19 +669,95 @@ func connectionEventProjectionSQL() string {
 		WHERE ended_at_ms IS NOT NULL`
 }
 
-func connectionEventWhereClause(p doris.EventQueryParams) (string, []any, error) {
+func connectionEventBaseSQL(p doris.EventQueryParams) (string, []any, error) {
+	return connectionEventBaseSQLWithEntity(p, "", "")
+}
+
+func connectionEventBaseSQLWithEntity(p doris.EventQueryParams, entityType, entityID string) (string, []any, error) {
 	tenantID := strings.TrimSpace(p.TenantID)
 	if tenantID == "" {
 		return "", nil, fmt.Errorf("tenant_id required")
 	}
+	includeOpen, includeClose := connectionEventBranchesForTypes(p.EventTypes)
+	branches := make([]string, 0, 2)
+	args := make([]any, 0, 16)
+	if includeOpen {
+		if err := appendConnectionEventBranches(&branches, &args, p, "open", "conn.open", "started_at_ms", false, entityType, entityID); err != nil {
+			return "", nil, err
+		}
+	}
+	if includeClose {
+		if err := appendConnectionEventBranches(&branches, &args, p, "close", "conn.close", "ended_at_ms", true, entityType, entityID); err != nil {
+			return "", nil, err
+		}
+	}
+	if len(branches) == 0 {
+		return "SELECT * FROM (" + connectionEventProjectionSQL() + ") WHERE 1 = 0", nil, nil
+	}
+	return strings.Join(branches, "\n\t\tUNION ALL\n"), args, nil
+}
+
+func connectionEventBranchesForTypes(types []string) (includeOpen, includeClose bool) {
+	cleaned := cleanEventTypes(types)
+	if len(cleaned) == 0 {
+		return true, true
+	}
+	for _, typ := range cleaned {
+		switch strings.ToLower(strings.TrimSpace(typ)) {
+		case "conn.open":
+			includeOpen = true
+		case "conn.close":
+			includeClose = true
+		default:
+			// Direction aliases such as conn.outbound match both open and
+			// close facts; unknown types are filtered by the outer predicate.
+			includeOpen = true
+			includeClose = true
+		}
+	}
+	return includeOpen, includeClose
+}
+
+func appendConnectionEventBranches(branches *[]string, args *[]any, p doris.EventQueryParams, phase, eventType, tsColumn string, requireEnded bool, entityType, entityID string) error {
+	entityType = strings.ToLower(strings.TrimSpace(entityType))
+	entityID = strings.TrimSpace(entityID)
+	if entityType == "ip" && entityID != "" {
+		srcBranch, srcArgs, err := connectionEventBranchSQL(p, phase, eventType, tsColumn, requireEnded, "", "", []string{"src_ip = ?"}, []any{entityID})
+		if err != nil {
+			return err
+		}
+		*branches = append(*branches, srcBranch)
+		*args = append(*args, srcArgs...)
+
+		dstBranch, dstArgs, err := connectionEventBranchSQL(p, phase, eventType, tsColumn, requireEnded, "", "", []string{"dst_ip = ?", "(src_ip IS NULL OR src_ip <> dst_ip)"}, []any{entityID})
+		if err != nil {
+			return err
+		}
+		*branches = append(*branches, dstBranch)
+		*args = append(*args, dstArgs...)
+		return nil
+	}
+	branch, branchArgs, err := connectionEventBranchSQL(p, phase, eventType, tsColumn, requireEnded, entityType, entityID, nil, nil)
+	if err != nil {
+		return err
+	}
+	*branches = append(*branches, branch)
+	*args = append(*args, branchArgs...)
+	return nil
+}
+
+func connectionEventBranchSQL(p doris.EventQueryParams, phase, eventType, tsColumn string, requireEnded bool, entityType, entityID string, extraWhere []string, extraArgs []any) (string, []any, error) {
 	where := []string{"tenant_id = ?"}
-	args := []any{tenantID}
+	args := []any{strings.TrimSpace(p.TenantID)}
+	if requireEnded {
+		where = append(where, "ended_at_ms IS NOT NULL")
+	}
 	if !p.Since.IsZero() {
-		where = append(where, "ts_ms >= ?")
+		where = append(where, tsColumn+" >= ?")
 		args = append(args, timeMillis(p.Since))
 	}
 	if !p.Until.IsZero() {
-		where = append(where, "ts_ms <= ?")
+		where = append(where, tsColumn+" <= ?")
 		args = append(args, timeMillis(p.Until))
 	}
 	if v := strings.TrimSpace(p.NodeID); v != "" {
@@ -610,6 +772,45 @@ func connectionEventWhereClause(p doris.EventQueryParams) (string, []any, error)
 		where = append(where, "conn_id = ?")
 		args = append(args, v)
 	}
+	if len(extraWhere) > 0 {
+		where = append(where, extraWhere...)
+		args = append(args, extraArgs...)
+	}
+	var err error
+	where, args, err = appendConnectionPhysicalEntityPredicate(where, args, entityType, entityID)
+	if err != nil {
+		return "", nil, err
+	}
+	query := fmt.Sprintf(`
+		SELECT tenant_id, row_key, conn_id, correlation_id,
+		       started_at_ms, ended_at_ms, %s AS ts_ms,
+		       duration_ms, direction, '%s' AS event_phase, '%s' AS event_type,
+		       CASE WHEN threat_match != 0 THEN 'high' ELSE 'info' END AS severity,
+		       pid, process_name, cmdline, user_name,
+		       src_ip, src_port, dst_ip, dst_port, protocol,
+		       bytes_in, bytes_out, packets_in, packets_out,
+		       threat_match, threat_feed, closed_reason, bastion_session_id, node_id,
+		       'conn:' || COALESCE(NULLIF(conn_id, ''), row_key) || ':%s' AS event_id,
+		       'smallanalytics://process_connections/' || tenant_id || '/' || COALESCE(NULLIF(conn_id, ''), row_key) || '/%s' AS raw_ref,
+		       TRIM(COALESCE(NULLIF(process_name, ''), 'process') || ' %s ' ||
+		            COALESCE(src_ip, '') || ':' || CAST(COALESCE(src_port, 0) AS TEXT) ||
+		            ' -> ' || COALESCE(dst_ip, '') || ':' || CAST(COALESCE(dst_port, 0) AS TEXT)) AS message,
+		       CASE WHEN direction != '' THEN 'conn.' || direction ELSE 'conn.flow' END AS direction_event_type
+		FROM process_connections
+		WHERE %s`, tsColumn, phase, eventType, phase, phase, phaseVerb(phase), strings.Join(where, " AND "))
+	return query, args, nil
+}
+
+func phaseVerb(phase string) string {
+	if phase == "close" {
+		return "closed"
+	}
+	return "opened"
+}
+
+func connectionEventOuterWhereClause(p doris.EventQueryParams) (string, []any, error) {
+	where := []string{"1 = 1"}
+	args := []any{}
 	if v := strings.TrimSpace(p.EventID); v != "" {
 		where = append(where, "event_id = ?")
 		args = append(args, v)
@@ -651,20 +852,36 @@ func connectionEventWhereClause(p doris.EventQueryParams) (string, []any, error)
 	return strings.Join(where, " AND "), args, nil
 }
 
-func connectionTimelineWhereClause(p doris.TimelineBuildParams) (string, []any, error) {
-	eventParams := doris.EventQueryParams{
-		TenantID:      p.TenantID,
-		NodeID:        p.NodeID,
-		CorrelationID: p.CorrelationID,
-		ConnID:        p.ConnID,
-		Since:         p.Since,
-		Until:         p.Until,
+func appendConnectionPhysicalEntityPredicate(where []string, args []any, entityType, entityID string) ([]string, []any, error) {
+	entityType = strings.ToLower(strings.TrimSpace(entityType))
+	entityID = strings.TrimSpace(entityID)
+	if entityType == "" || entityID == "" {
+		return where, args, nil
 	}
-	where, args, err := connectionEventWhereClause(eventParams)
-	if err != nil {
-		return "", nil, err
+	switch entityType {
+	case "tenant", "tenant_id":
+		return where, args, nil
+	case "ip":
+		where = append(where, "(src_ip = ? OR dst_ip = ?)")
+		args = append(args, entityID, entityID)
+	case "user":
+		where = append(where, "user_name = ?")
+		args = append(args, entityID)
+	case "process":
+		where = append(where, "process_name = ?")
+		args = append(args, entityID)
+	case "host", "node":
+		where = append(where, "node_id = ?")
+		args = append(args, entityID)
+	case "connection":
+		where = append(where, "conn_id = ?")
+		args = append(args, entityID)
+	case "event", "raw_ref":
+		return where, args, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported timeline entity_type %q", entityType)
 	}
-	return appendConnectionEntityPredicate(where, args, p.EntityType, p.EntityID)
+	return where, args, nil
 }
 
 func appendConnectionEntityPredicate(where string, args []any, entityType, entityID string) (string, []any, error) {
@@ -674,6 +891,8 @@ func appendConnectionEntityPredicate(where string, args []any, entityType, entit
 		return where, args, nil
 	}
 	switch entityType {
+	case "tenant", "tenant_id":
+		return where, args, nil
 	case "ip":
 		args = append(args, entityID, entityID)
 		return where + " AND (src_ip = ? OR dst_ip = ?)", args, nil
@@ -1103,6 +1322,17 @@ func nullableTimeMillis(t time.Time) any {
 		return nil
 	}
 	return t.UTC().UnixMilli()
+}
+
+func fileSize(path string) int64 {
+	if strings.TrimSpace(path) == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil || info == nil || info.IsDir() {
+		return 0
+	}
+	return info.Size()
 }
 
 func timeMillis(t time.Time) int64 {

@@ -495,7 +495,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("hardening.profiles", []string{"baseline"})
 	v.SetDefault("hardening.allow_overrides", false)
 
-	v.SetDefault("telemetry_prefs.collect_logs", false)
+	v.SetDefault("telemetry_prefs.collect_logs", true)
 	v.SetDefault("telemetry_prefs.auto_discover_log_sources", true)
 	v.SetDefault("telemetry_prefs.log_namespaces", []string{"system", "application"})
 	v.SetDefault("telemetry_prefs.file_integrity", false)
