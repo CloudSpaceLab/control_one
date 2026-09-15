@@ -11,9 +11,11 @@ func TestValidateCorrelationRuleRequest(t *testing.T) {
 		Name: "SSH brute force", EventTypes: []string{"security.event"},
 		EventType: "ssh.authentication_failure", WindowSeconds: 20, Threshold: 4,
 		GroupBy: []string{"src_ip", "node_id"}, Severity: "high", SuppressionSeconds: 300,
-		Conditions:      []storage.CorrelationCondition{{Field: "dst_port", Operator: "eq", Value: "22"}},
-		ConditionGroups: [][]storage.CorrelationCondition{{{Field: "dst_port", Operator: "eq", Value: "80"}}, {{Field: "dst_port", Operator: "eq", Value: "443"}}},
-		DistinctField:   "user_name",
+		Conditions:        []storage.CorrelationCondition{{Field: "dst_port", Operator: "eq", Value: "22"}},
+		ConditionGroups:   [][]storage.CorrelationCondition{{{Field: "dst_port", Operator: "eq", Value: "80"}}, {{Field: "dst_port", Operator: "eq", Value: "443"}}},
+		DistinctField:     "user_name",
+		SequenceEventType: "authentication.failure", SequenceThreshold: 4,
+		SequenceConditions: []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "failure"}},
 	}
 	if err := validateCorrelationRuleRequest(&req); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
@@ -37,6 +39,10 @@ func TestValidateCorrelationRuleRequestRejectsInvalidConfiguration(t *testing.T)
 		{"empty condition group", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 4, GroupBy: []string{"node_id"}, Severity: "high", ConditionGroups: [][]storage.CorrelationCondition{{}}}},
 		{"bad grouped condition", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 4, GroupBy: []string{"node_id"}, Severity: "high", ConditionGroups: [][]storage.CorrelationCondition{{{Field: "password", Operator: "eq", Value: "x"}}}}},
 		{"bad distinct field", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 4, GroupBy: []string{"node_id"}, Severity: "high", DistinctField: "password"}},
+		{"sequence missing threshold", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", SequenceEventType: "authentication.failure"}},
+		{"sequence missing type", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", SequenceThreshold: 4}},
+		{"bad aggregate field", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", AggregateField: "password", AggregateThreshold: 100}},
+		{"aggregate missing threshold", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", AggregateField: "bytes_out"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

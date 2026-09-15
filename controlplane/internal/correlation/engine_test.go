@@ -371,3 +371,50 @@ func TestEnginePhase3BTemplatesRejectNonmatchingEvents(t *testing.T) {
 		})
 	}
 }
+
+func TestEngineRequiresPrecursorSequenceBeforeTarget(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{ID: uuid.New(), TenantID: tenant, Name: "Successful login after failures", EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "authentication.success", WindowSeconds: 300, Threshold: 1, GroupBy: []string{"src_ip", "user_name", "node_id"}, Severity: "critical", Enabled: true, Conditions: []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "success"}}, SequenceEventType: "authentication.failure", SequenceThreshold: 4, SequenceConditions: []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "failure"}}}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(8), nil)
+	base := time.Now()
+	event := func(eventType, result string, at time.Time) eventbus.Event {
+		payload, _ := json.Marshal(map[string]any{"event_type": eventType, "src_ip": "203.0.113.60", "user_name": "admin", "auth_result": result})
+		return eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: at, Payload: payload}
+	}
+	eng.handle(context.Background(), event("authentication.success", "success", base))
+	for i := 0; i < 3; i++ {
+		eng.handle(context.Background(), event("authentication.failure", "failure", base.Add(time.Duration(i+1)*time.Second)))
+	}
+	eng.handle(context.Background(), event("authentication.success", "success", base.Add(4*time.Second)))
+	if len(store.alerts) != 0 {
+		t.Fatal("a success before four failures must not alert")
+	}
+	eng.handle(context.Background(), event("authentication.failure", "failure", base.Add(5*time.Second)))
+	eng.handle(context.Background(), event("authentication.success", "success", base.Add(6*time.Second)))
+	if len(store.alerts) != 1 {
+		t.Fatalf("four failures followed by success should alert once, got %d", len(store.alerts))
+	}
+}
+
+func TestEngineSumsAggregateFieldWithinWindow(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{ID: uuid.New(), TenantID: tenant, Name: "Suspicious outbound transfer", EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "network.connection", WindowSeconds: 300, Threshold: 1, GroupBy: []string{"node_id", "dst_ip"}, Severity: "critical", Enabled: true, Conditions: []storage.CorrelationCondition{{Field: "direction", Operator: "eq", Value: "outbound"}}, AggregateField: "bytes_out", AggregateThreshold: 100}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(8), nil)
+	base := time.Now()
+	event := func(direction string, bytesOut int, at time.Time) eventbus.Event {
+		payload, _ := json.Marshal(map[string]any{"event_type": "network.connection", "dst_ip": "198.51.100.20", "direction": direction, "bytes_out": bytesOut})
+		return eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: at, Payload: payload}
+	}
+	eng.handle(context.Background(), event("inbound", 1000, base))
+	eng.handle(context.Background(), event("outbound", 40, base.Add(time.Second)))
+	eng.handle(context.Background(), event("outbound", 40, base.Add(2*time.Second)))
+	if len(store.alerts) != 0 {
+		t.Fatal("aggregate below threshold must not alert")
+	}
+	eng.handle(context.Background(), event("outbound", 20, base.Add(3*time.Second)))
+	if len(store.alerts) != 1 {
+		t.Fatalf("aggregate reaching threshold should alert once, got %d", len(store.alerts))
+	}
+}
