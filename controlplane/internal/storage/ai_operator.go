@@ -53,6 +53,7 @@ type ListAIInvestigationsFilter struct {
 	TenantID         uuid.UUID
 	NodeID           uuid.UUID
 	Status           AIInvestigationStatus
+	Severity         string
 	TriggerType      string
 	TriggerEventType string
 	Search           string
@@ -211,6 +212,10 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 		args = append(args, string(filter.Status))
 		clauses = append(clauses, fmt.Sprintf("status = $%d", len(args)))
 	}
+	if severity := strings.ToLower(strings.TrimSpace(filter.Severity)); severity != "" {
+		args = append(args, severity)
+		clauses = append(clauses, fmt.Sprintf("LOWER(severity) = $%d", len(args)))
+	}
 	if strings.TrimSpace(filter.TriggerType) != "" {
 		args = append(args, strings.TrimSpace(filter.TriggerType))
 		clauses = append(clauses, fmt.Sprintf("trigger_type = $%d", len(args)))
@@ -244,7 +249,7 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 	case "updated_at":
 		sortCol = "updated_at"
 	case "severity":
-		sortCol = "severity"
+		sortCol = severitySortExpr
 	case "status":
 		sortCol = "status"
 	case "title", "summary":

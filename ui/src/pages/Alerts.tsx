@@ -236,7 +236,7 @@ export function Alerts(): JSX.Element {
   const [creatingRule, setCreatingRule] = useState(false);
   const [createRuleError, setCreateRuleError] = useState<string | null>(null);
 
-const tenantId = currentTenantId ?? '';
+  const tenantId = currentTenantId ?? '';
   const [severity, setSeverity] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -245,6 +245,7 @@ const tenantId = currentTenantId ?? '';
   const [total, setTotal] = useState(0);
   const pageSize = 25;
   const searchTimer = useRef<number | null>(null);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
@@ -269,6 +270,7 @@ const tenantId = currentTenantId ?? '';
       setAlertActionError(null);
       return;
     }
+    const seq = ++requestSeq.current;
     setLoading(true);
     try {
       const resp = await client.listAlerts({
@@ -281,15 +283,22 @@ const tenantId = currentTenantId ?? '';
         limit: pageSize,
         offset: page * pageSize,
       });
+      if (seq !== requestSeq.current) return;
+      const nextTotal = resp.pagination?.total ?? resp.data.length;
+      setTotal(nextTotal);
+      if (resp.data.length === 0 && nextTotal > 0 && page > 0) {
+        setPage(Math.max(0, Math.ceil(nextTotal / pageSize) - 1));
+        return;
+      }
       setAlerts(resp.data);
-      setTotal(resp.pagination?.total ?? resp.data.length);
       setAlertsError(null);
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setAlerts([]);
       setTotal(0);
       setAlertsError(errorMessage(err, 'Alert list failed.'));
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [client, tenantId, state, severity, debouncedSearch, sorting, page]);
 
@@ -317,7 +326,7 @@ const tenantId = currentTenantId ?? '';
     }
   }, [ackingId, client, refresh, resolvingAlert]);
 
-const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
+  const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     setResolvingAlert(true);
     setResolveError(null);
     setAlertActionError(null);
@@ -497,6 +506,7 @@ const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     {
       id: 'actions',
       header: '',
+      enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center gap-2">
           {row.original.state === 'open' ? (
@@ -1178,6 +1188,7 @@ function ResolveAlertModal({
   const [reason, setReason] = useState('');
   const [suppressUntil, setSuppressUntil] = useState('');
   const [caseId, setCaseId] = useState<string | null>(null);
+  const [containmentTaken, setContainmentTaken] = useState(false);
   const [creatingCase, setCreatingCase] = useState(false);
   const [caseError, setCaseError] = useState<string | null>(null);
 
@@ -1187,16 +1198,18 @@ function ResolveAlertModal({
     setReason(alert?.disposition?.reason ?? '');
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
     setCaseId(null);
+    setContainmentTaken(false);
     setCreatingCase(false);
     setCaseError(null);
   }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
 
   const selectedDisposition = dispositionOption(disposition);
-  const needsReason = disposition === 'resolved' || disposition === 'suppressed';
-  const reasonMissing = needsReason && reason.trim().length === 0;
+  const reasonMissing = reason.trim().length === 0;
   const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
   const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
-  const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid;
+  const requiresEvidence = disposition === 'true_positive' || disposition === 'resolved';
+  const evidenceMissing = requiresEvidence && !caseId && !containmentTaken;
+  const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid || evidenceMissing;
 
   const handleConfirm = () => {
     if (confirmDisabled) return;
@@ -1292,7 +1305,10 @@ function ResolveAlertModal({
                 </div>
                 <IpActionMenu
                   ip={ip}
-                  onActionTaken={onActionTaken}
+                  onActionTaken={() => {
+                    setContainmentTaken(true);
+                    onActionTaken();
+                  }}
                   trigger={(
                     <Button type="button" variant="danger" size="sm" className="mt-2 w-full">
                       <Shield />
@@ -1338,19 +1354,17 @@ function ResolveAlertModal({
               ) : null}
 
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="alert-disposition-reason">
-                  {needsReason ? 'Evidence reason' : 'Notes'}
-                </Label>
+                <Label htmlFor="alert-disposition-reason">Evidence reason</Label>
                 <textarea
                   id="alert-disposition-reason"
                   className="min-h-16 w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-text-muted focus-visible:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/30"
                   value={reason}
                   onChange={(event) => setReason(event.target.value)}
-                  placeholder={needsReason ? 'What happened, what was done, remaining risk.' : 'Optional context about this alert.'}
+                  placeholder="What happened, what was done, remaining risk."
                 />
-                {needsReason && reasonMissing ? (
+                {reasonMissing ? (
                   <p className="text-xs text-state-critical" role="alert">
-                    Reason is required to close this alert.
+                    Reason is required to record a disposition.
                   </p>
                 ) : null}
               </div>
@@ -1398,6 +1412,11 @@ function ResolveAlertModal({
         ) : null}
 
         <DialogFooter>
+          {evidenceMissing ? (
+            <p className="mr-auto rounded-md border border-border-subtle bg-elevated px-3 py-2 text-xs text-text-secondary">
+              Contain the source IP or create a case to record this disposition.
+            </p>
+          ) : null}
           {error ? (
             <p className="mr-auto rounded-md border border-state-critical/40 bg-state-critical/10 px-3 py-2 text-sm text-state-critical" role="alert">
               Alert disposition failed: {error}

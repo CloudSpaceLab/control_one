@@ -11,6 +11,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// severitySortExpr orders severity by risk rank rather than alphabetically so
+// that e.g. "medium" sorts after "high" instead of after "info".
+const severitySortExpr = `CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END`
+
 type Alert struct {
 	ID         uuid.UUID
 	TenantID   uuid.UUID
@@ -190,7 +194,7 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 	case "source":
 		sortCol = "source"
 	case "severity":
-		sortCol = "severity"
+		sortCol = severitySortExpr
 	case "state":
 		sortCol = "state"
 	case "opened_at":

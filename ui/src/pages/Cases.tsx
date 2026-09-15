@@ -60,7 +60,7 @@ export function Cases(): JSX.Element {
   const [noteDraft, setNoteDraft] = useState('');
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
-const [exportLoading, setExportLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
@@ -71,6 +71,7 @@ const [exportLoading, setExportLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const pageSize = 12;
   const searchTimer = useRef<number | null>(null);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
@@ -97,7 +98,8 @@ const [exportLoading, setExportLoading] = useState(false);
       setLoading(false);
       return;
     }
-setLoading(true);
+    const seq = ++requestSeq.current;
+    setLoading(true);
     setError(null);
     try {
       const response = await api.listSOCCases({
@@ -105,18 +107,26 @@ setLoading(true);
         limit: pageSize,
         offset: page * pageSize,
         status: statusFilter || undefined,
+        severity: severityFilter || undefined,
         search: debouncedSearch || undefined,
         sortBy: sorting[0]?.id,
         sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
       });
+      if (seq !== requestSeq.current) return;
+      const nextTotal = response.pagination?.total ?? response.data.length;
+      setTotal(nextTotal);
+      if (response.data.length === 0 && nextTotal > 0 && page > 0) {
+        setPage(Math.max(0, Math.ceil(nextTotal / pageSize) - 1));
+        return;
+      }
       setCases(response.data);
-      setTotal(response.pagination?.total ?? response.data.length);
       setSelectedId((current) => (
         current && response.data.some((row) => row.case_id === current)
           ? current
           : response.data[0]?.case_id ?? null
       ));
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setError(errorMessage(err, 'Failed to load SOC cases.'));
       setCases([]);
       setTotal(0);
@@ -125,9 +135,9 @@ setLoading(true);
       setExportPreview(null);
       setNoteStatus(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, [api, currentTenantId, statusFilter, debouncedSearch, sorting, page]);
+  }, [api, currentTenantId, statusFilter, severityFilter, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -198,6 +208,7 @@ setLoading(true);
     {
       id: 'refs',
       header: 'Refs',
+      enableSorting: false,
       cell: ({ row }) => (
         <span className="tabular-nums text-xs text-text-secondary">{caseEvidenceCount(row.original)}</span>
       ),
@@ -205,6 +216,7 @@ setLoading(true);
     {
       id: 'notes',
       header: 'Notes',
+      enableSorting: false,
       cell: ({ row }) => (
         <span className="tabular-nums text-xs text-text-secondary">{row.original.notes?.length ?? 0}</span>
       ),
@@ -292,7 +304,7 @@ setLoading(true);
       ) : null}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.4fr)]">
-<Panel padding="md" eyebrow="QUEUE" title="Incident packets">
+        <Panel padding="md" eyebrow="QUEUE" title="Incident packets">
           <div className="flex flex-col gap-3">
             <div className="relative max-w-full">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />

@@ -1,8 +1,25 @@
-import { Outlet } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import { useAuth } from '../providers/AuthProvider';
 import { Sidebar } from './shell/Sidebar';
 import { TopBar } from './shell/TopBar';
 import { CommandPalette } from './CommandPalette';
+
+function ReturnToAlertChip(): JSX.Element | null {
+  const location = useLocation();
+  const fromAlert = new URLSearchParams(location.search).get('fromAlert');
+  if (!fromAlert || location.pathname === '/alerts') return null;
+
+  return (
+    <Link
+      to="/alerts"
+      className="fixed bottom-4 right-4 z-50 inline-flex items-center gap-2 rounded-md border border-border-strong bg-surface px-3 py-2 text-sm font-medium text-foreground shadow-lg transition hover:bg-surface-2"
+    >
+      <ArrowLeft className="h-4 w-4" />
+      Return to alert triage
+    </Link>
+  );
+}
 
 export function MainLayout(): JSX.Element {
   const { profile } = useAuth();
@@ -18,6 +35,7 @@ export function MainLayout(): JSX.Element {
           <Outlet />
         </main>
       </div>
+      <ReturnToAlertChip />
     </div>
   );
 }

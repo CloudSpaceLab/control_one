@@ -2024,6 +2024,7 @@ export interface SOCCaseExport {
 export interface ListSOCCasesParams {
   tenantId?: string | null;
   status?: string;
+  severity?: string;
   triggerType?: string;
   triggerEventType?: string;
   nodeId?: string;
@@ -2576,6 +2577,7 @@ export class APIClient {
     const search = new URLSearchParams();
     if (params.tenantId) search.set("tenant_id", params.tenantId);
     if (params.status?.trim()) search.set("status", params.status.trim());
+    if (params.severity?.trim()) search.set("severity", params.severity.trim());
     if (params.triggerType?.trim())
       search.set("trigger_type", params.triggerType.trim());
     if (params.triggerEventType?.trim())

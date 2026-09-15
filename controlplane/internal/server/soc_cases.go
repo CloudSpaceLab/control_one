@@ -119,6 +119,7 @@ func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, prin
 		Status:           storage.AIInvestigationStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
 		TriggerType:      strings.TrimSpace(r.URL.Query().Get("trigger_type")),
 		TriggerEventType: strings.TrimSpace(r.URL.Query().Get("trigger_event_type")),
+		Severity:         strings.TrimSpace(r.URL.Query().Get("severity")),
 		Search:           strings.TrimSpace(r.URL.Query().Get("q")),
 		SortBy:           strings.TrimSpace(r.URL.Query().Get("sort_by")),
 		SortOrder:        strings.TrimSpace(r.URL.Query().Get("sort_order")),
