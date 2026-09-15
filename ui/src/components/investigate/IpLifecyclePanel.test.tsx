@@ -24,9 +24,9 @@ vi.mock('@/providers/TenantProvider', () => ({
 }));
 
 vi.mock('@/hooks/useApiClient', () => ({
-  useApiClient: () => ({
-    entityAction: vi.fn(),
-  }),
+  // Match the real hook's stable client so detail-sheet effects do not rerun
+  // on every state update while the sheet is closed.
+  useApiClient: vi.fn().mockReturnValue({ entityAction: vi.fn() }),
 }));
 
 describe('IpLifecyclePanel', () => {
