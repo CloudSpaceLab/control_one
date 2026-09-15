@@ -142,8 +142,12 @@ func (s *Store) updateOpenAlertOccurrence(ctx context.Context, existing *Alert, 
 		merged = map[string]any{}
 	}
 	for key, value := range p.Context {
+		if key == "contributing_events" {
+			continue
+		}
 		merged[key] = value
 	}
+	merged["contributing_events"] = appendEvidenceTimeline(merged["contributing_events"], p.Context["contributing_events"])
 	merged["occurrence_count"] = count
 	merged["first_seen_at"] = firstSeen.Format(time.RFC3339Nano)
 	merged["last_seen_at"] = now.Format(time.RFC3339Nano)
@@ -151,6 +155,9 @@ func (s *Store) updateOpenAlertOccurrence(ctx context.Context, existing *Alert, 
 	notify := suppression <= 0 || now.Sub(lastNotification) >= time.Duration(suppression)*time.Second
 	if notify {
 		merged["last_notification_at"] = now.Format(time.RFC3339Nano)
+		merged["notification_state"] = "renotification_due"
+	} else {
+		merged["notification_state"] = "suppressed"
 	}
 	ctxJSON, err := marshalJSONBMap(merged)
 	if err != nil {
@@ -167,6 +174,30 @@ func (s *Store) updateOpenAlertOccurrence(ctx context.Context, existing *Alert, 
 		return updated, ErrAlertRenotificationDue
 	}
 	return updated, ErrAlertDeduped
+}
+
+func appendEvidenceTimeline(existing, incoming any) []any {
+	timeline := jsonArray(existing)
+	timeline = append(timeline, jsonArray(incoming)...)
+	if len(timeline) > 50 {
+		timeline = timeline[len(timeline)-50:]
+	}
+	return timeline
+}
+
+func jsonArray(value any) []any {
+	switch values := value.(type) {
+	case []any:
+		return append([]any{}, values...)
+	case []map[string]any:
+		out := make([]any, 0, len(values))
+		for _, item := range values {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return []any{}
+	}
 }
 
 func positiveContextInt(values map[string]any, key string, fallback int) int {

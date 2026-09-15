@@ -216,6 +216,7 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64, updateOnly bool) {
 	title := r.Name
 	summary := "correlation rule fired"
+	dedup := r.ID.String() + "/" + dim
 	ctxPayload := map[string]any{
 		"rule_id":             r.ID.String(),
 		"dimension":           r.Dimension,
@@ -234,6 +235,14 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"aggregate_field":     r.AggregateField,
 		"aggregate_threshold": r.AggregateThreshold,
 		"evidence_links":      map[string]any{"alert_inbox": "/console/alerts", "investigation": "/console/investigate"},
+		"correlation_id":      dedup,
+		"matched_event_count": hits,
+		"matched_conditions":  r.Conditions,
+		"contributing_events": []any{correlationEvidenceEvent(ev)},
+		"notification_state":  "pending",
+	}
+	if r.SuppressionSeconds > 0 {
+		ctxPayload["suppression_expires_at"] = ev.Timestamp.Add(time.Duration(r.SuppressionSeconds) * time.Second).UTC().Format(time.RFC3339Nano)
 	}
 	if r.AggregateField != "" {
 		ctxPayload["aggregate_value"] = aggregateValue
@@ -241,7 +250,6 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 	for key, value := range eventContext(ev) {
 		ctxPayload[key] = value
 	}
-	dedup := r.ID.String() + "/" + dim
 	var nodeArg *uuid.UUID
 	if (len(r.GroupBy) == 1 && r.GroupBy[0] == "node_id") || (len(r.GroupBy) == 0 && r.Dimension == "node_id") {
 		if parsed, err := uuid.Parse(dim); err == nil {
@@ -290,6 +298,21 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			Payload:  payload,
 		})
 	}
+}
+
+func correlationEvidenceEvent(ev eventbus.Event) map[string]any {
+	evidence := map[string]any{"timestamp": ev.Timestamp.UTC().Format(time.RFC3339Nano), "topic": ev.Topic}
+	payload := map[string]any{}
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		evidence["payload_error"] = err.Error()
+		return evidence
+	}
+	for _, field := range []string{"event_type", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "user_name", "node_id", "auth_result", "source", "path", "status_code"} {
+		if value, ok := payload[field]; ok {
+			evidence[field] = value
+		}
+	}
+	return evidence
 }
 
 func trimTimes(times []time.Time, cutoff time.Time) []time.Time {
