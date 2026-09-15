@@ -756,6 +756,12 @@ export function Alerts(): JSX.Element {
             </Panel>
           )}
 
+          {alertActionError && (
+            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Alert action failed">
+              <p className="text-sm text-state-critical" role="alert">{alertActionError}</p>
+            </Panel>
+          )}
+
 <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${total}`} title="Inbox">
             <DataTable
               columns={columns}
@@ -1239,7 +1245,7 @@ function ResolveAlertModal({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next && !resolving) onCancel(); }}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Alert disposition</DialogTitle>
           <DialogDescription>

@@ -200,7 +200,7 @@ describe('Cases', () => {
       </MemoryRouter>,
     );
 
-expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
+    expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
 
     await user.click(await screen.findByText('Database audit gap'));
 

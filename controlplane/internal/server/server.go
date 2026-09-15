@@ -1128,6 +1128,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/access/entitlements/", s.handleEntitlementSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/access/sync", s.handleAccessSync)
 	s.baseRouter.HandleFunc("/api/v1/webhooks", s.handleWebhooksCollection)
+	s.baseRouter.HandleFunc("/api/v1/settings/smtp", s.handleSMTPSettings)
 	s.baseRouter.HandleFunc("/api/v1/sessions", s.handleSessionsCollection)
 	s.baseRouter.HandleFunc("/api/v1/sessions/", s.handleSessionSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/webhooks/", s.handleWebhookSubroutes)
