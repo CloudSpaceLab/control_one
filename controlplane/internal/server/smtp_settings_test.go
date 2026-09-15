@@ -46,7 +46,7 @@ func TestSMTPSettingsSecurity(t *testing.T) {
 		s.handleSMTPSettings(w, r)
 		return w
 	}
-	body := `{"host":"smtp.example.com","port":587,"tls_mode":"starttls","auth_enabled":true,"username":"smtp-user","password":"private-password","sender_email":"alerts@example.com","enabled":true}`
+	body := `{"host":"smtp.example.com","port":587,"tls_mode":"starttls","auth_enabled":true,"username":"smtp-user","password":"private-password","sender_email":"alerts@example.com","recipients":["soc@example.com"],"enabled":true}`
 	for _, role := range []string{"", roleViewer, roleOperator} {
 		w := request("PUT", body, role)
 		if w.Code != 401 && w.Code != 403 {
@@ -123,11 +123,49 @@ func TestSMTPSettingsValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := smtpSettingsRequest{smtpSettingsFields: smtpSettingsFields{Host: "smtp.example.com", Port: 587, TLSMode: "starttls", AuthEnabled: true, Username: "user", SenderEmail: "alerts@example.com"}}
+			p := smtpSettingsRequest{smtpSettingsFields: smtpSettingsFields{Host: "smtp.example.com", Port: 587, TLSMode: "starttls", AuthEnabled: true, Username: "user", SenderEmail: "alerts@example.com", Recipients: []string{"soc@example.com"}}}
 			tc.change(&p)
 			if validateSMTPSettings(&p) == nil {
 				t.Fatal("accepted invalid settings")
 			}
 		})
+	}
+}
+
+func TestSMTPTestUsesDecryptedPasswordAndSavedRecipients(t *testing.T) {
+	tenant := uuid.New()
+	sealer, _ := secretbox.NewSealer(bytes.Repeat([]byte{2}, 32))
+	ciphertext, nonce, _ := sealer.Seal([]byte("saved-password"))
+	store := &smtpFakeStore{
+		tenantAccessFakeStore: tenantAccessFakeStore{allowed: true, fakeStore: fakeStore{users: map[string]*storage.User{"admin-subject": {ID: uuid.New(), ExternalID: "admin-subject"}}}},
+		config:                &storage.SMTPSettings{TenantID: tenant, Host: "smtp.example.com", Port: 587, TLSMode: "starttls", AuthEnabled: true, Username: "user", PasswordCiphertext: ciphertext, PasswordNonce: nonce, SenderEmail: "alerts@example.com", Recipients: []string{"one@example.com", "two@example.com"}},
+	}
+	called := false
+	s := &Server{store: store, sealer: sealer, smtpSend: func(_ context.Context, settings storage.SMTPSettings, password string, recipients []string) error {
+		called = true
+		if password != "saved-password" || settings.TenantID != tenant || len(recipients) != 2 {
+			t.Fatalf("unexpected send arguments")
+		}
+		return nil
+	}}
+	r := httptest.NewRequest("POST", "/api/v1/settings/smtp/test?tenant_id="+tenant.String(), nil)
+	r = r.WithContext(context.WithValue(r.Context(), auth.ContextKeyPrincipal, &auth.Principal{Type: "user", Subject: "admin-subject", Roles: []string{roleAdmin}}))
+	w := httptest.NewRecorder()
+	s.handleTestSMTPSettings(w, r)
+	if w.Code != 200 || !called || !strings.Contains(w.Body.String(), `"recipients":2`) {
+		t.Fatalf("status=%d body=%s called=%v", w.Code, w.Body.String(), called)
+	}
+}
+
+func TestSMTPTestRequiresSavedRecipients(t *testing.T) {
+	tenant := uuid.New()
+	store := &smtpFakeStore{tenantAccessFakeStore: tenantAccessFakeStore{allowed: true, fakeStore: fakeStore{users: map[string]*storage.User{"admin-subject": {ID: uuid.New(), ExternalID: "admin-subject"}}}}, config: &storage.SMTPSettings{TenantID: tenant}}
+	s := &Server{store: store}
+	r := httptest.NewRequest("POST", "/api/v1/settings/smtp/test?tenant_id="+tenant.String(), nil)
+	r = r.WithContext(context.WithValue(r.Context(), auth.ContextKeyPrincipal, &auth.Principal{Type: "user", Subject: "admin-subject", Roles: []string{roleAdmin}}))
+	w := httptest.NewRecorder()
+	s.handleTestSMTPSettings(w, r)
+	if w.Code != 409 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }

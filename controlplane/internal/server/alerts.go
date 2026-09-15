@@ -407,7 +407,7 @@ func (s *Server) handleCreateAlert(w http.ResponseWriter, r *http.Request, princ
 		}
 		params.NodeID = &id
 	}
-	alert, err := s.store.CreateAlert(r.Context(), params)
+	alert, err := s.createAlert(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, storage.ErrAlertDeduped) {
 			writeJSON(w, http.StatusOK, newAlertResponse(*alert))

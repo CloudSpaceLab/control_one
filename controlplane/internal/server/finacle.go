@@ -1036,7 +1036,7 @@ func (s *Server) emitFinacleAlert(ctx context.Context, tenantID uuid.UUID, sever
 		return
 	}
 	dedup := fmt.Sprintf("finacle:%v:%v", contextPayload["shift_id"], contextPayload["direction"])
-	_, err := s.store.CreateAlert(ctx, storage.CreateAlertParams{
+	_, err := s.createAlert(ctx, storage.CreateAlertParams{
 		TenantID: tenantID,
 		Source:   "finacle",
 		Severity: severity,
