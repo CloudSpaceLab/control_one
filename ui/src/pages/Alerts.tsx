@@ -964,12 +964,6 @@ export function Alerts(): JSX.Element {
             </Panel>
           )}
 
-          {alertActionError && (
-            <Panel padding="md" tone="inset" toneAccent="critical" eyebrow="ERROR" title="Alert action failed">
-              <p className="text-sm text-state-critical" role="alert">{alertActionError}</p>
-            </Panel>
-          )}
-
 <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${total}`} title="Inbox">
             <DataTable
               columns={columns}
