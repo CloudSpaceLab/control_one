@@ -665,7 +665,7 @@ export function Alerts(): JSX.Element {
       id: 'event_types',
       cell: ({ row }) => (
         <span className="font-mono text-xs text-text-muted">
-          {row.original.event_types.join(', ') || 'All subscribed streams'}
+          {(row.original.event_types ?? []).join(', ') || 'All subscribed streams'}
         </span>
       ),
     },
@@ -678,12 +678,12 @@ export function Alerts(): JSX.Element {
           <span className="block font-mono text-text-muted">{row.original.event_type || 'any type'}</span>
           <span className="block font-mono text-text-muted">by {(row.original.group_by?.length ? row.original.group_by : [row.original.dimension]).join(' + ')}</span>
           <span className="block text-text-muted">suppress {row.original.suppression_seconds ?? 0}s</span>
-          {(row.original.conditions ?? []).map((condition, index) => (
+          {(Array.isArray(row.original.conditions) ? row.original.conditions : []).map((condition, index) => (
             <span className="block font-mono text-text-muted" key={`${condition.field}-${index}`}>
               {condition.field} {condition.operator} {String(condition.value)}
             </span>
           ))}
-          {(row.original.condition_groups ?? []).map((group, groupIndex) => (
+          {(Array.isArray(row.original.condition_groups) ? row.original.condition_groups : []).map((group, groupIndex) => (
             <span className="block font-mono text-text-muted" key={`group-${groupIndex}`}>
               OR {group.map((condition) => `${condition.field} ${condition.operator} ${String(condition.value)}`).join(' AND ')}
             </span>
