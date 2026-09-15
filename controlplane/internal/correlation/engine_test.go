@@ -397,6 +397,28 @@ func TestEngineRequiresPrecursorSequenceBeforeTarget(t *testing.T) {
 	}
 }
 
+func TestEngineSequenceRejectsFutureAndCurrentEventAsPrecursors(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{ID: uuid.New(), TenantID: tenant, Name: "Ordered sequence", EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "authentication.failure", WindowSeconds: 300, Threshold: 1, GroupBy: []string{"src_ip", "node_id"}, Severity: "high", Enabled: true, SequenceEventType: "authentication.failure", SequenceThreshold: 2}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(8), nil)
+	base := time.Now()
+	event := func(at time.Time) eventbus.Event {
+		payload, _ := json.Marshal(map[string]any{"event_type": "authentication.failure", "src_ip": "203.0.113.61"})
+		return eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: at, Payload: payload}
+	}
+
+	eng.handle(context.Background(), event(base.Add(20*time.Second)))
+	eng.handle(context.Background(), event(base.Add(10*time.Second)))
+	if len(store.alerts) != 0 {
+		t.Fatal("future or current events must not satisfy a target's prerequisite")
+	}
+	eng.handle(context.Background(), event(base.Add(30*time.Second)))
+	if len(store.alerts) != 1 {
+		t.Fatalf("two earlier events should satisfy the sequence, got %d alerts", len(store.alerts))
+	}
+}
+
 func TestEngineSumsAggregateFieldWithinWindow(t *testing.T) {
 	tenant, node := uuid.New(), uuid.New()
 	rule := storage.CorrelationRule{ID: uuid.New(), TenantID: tenant, Name: "Suspicious outbound transfer", EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "network.connection", WindowSeconds: 300, Threshold: 1, GroupBy: []string{"node_id", "dst_ip"}, Severity: "critical", Enabled: true, Conditions: []storage.CorrelationCondition{{Field: "direction", Operator: "eq", Value: "outbound"}}, AggregateField: "bytes_out", AggregateThreshold: 100}

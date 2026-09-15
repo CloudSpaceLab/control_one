@@ -147,7 +147,16 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		e.mu.Lock()
 		if r.SequenceEventType != "" {
 			e.sequenceWindows[key] = trimTimes(e.sequenceWindows[key], cutoff)
-			if len(e.sequenceWindows[key]) < r.SequenceThreshold {
+			precursorCount := 0
+			for _, timestamp := range e.sequenceWindows[key] {
+				// A prerequisite must precede the target. This also prevents an
+				// event that matches both sides of a sequence from satisfying its
+				// own prerequisite.
+				if timestamp.Before(ev.Timestamp) {
+					precursorCount++
+				}
+			}
+			if precursorCount < r.SequenceThreshold {
 				e.mu.Unlock()
 				continue
 			}
