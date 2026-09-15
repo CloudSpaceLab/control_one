@@ -116,6 +116,15 @@ type alertDispositionRequest struct {
 	SuppressUntil string `json:"suppress_until,omitempty"`
 }
 
+type alertWorkflowRequest struct {
+	AssignedTo string `json:"assigned_to"`
+	Note       string `json:"note"`
+}
+
+type alertWorkflowUpdater interface {
+	UpdateAlertWorkflow(context.Context, uuid.UUID, storage.UpdateAlertWorkflowParams) (*storage.Alert, error)
+}
+
 func (s *Server) handleAlertsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -290,6 +299,41 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleCreateAlertSOCCase(w, r, principal, *alert)
+	case "workflow":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		alert, ok := s.requireAlertTenantAccess(w, r, principal, id, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		var req alertWorkflowRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.AssignedTo) == "" && strings.TrimSpace(req.Note) == "" {
+			http.Error(w, "assigned_to or note is required", http.StatusBadRequest)
+			return
+		}
+		updater, ok := s.store.(alertWorkflowUpdater)
+		if !ok {
+			http.Error(w, "alert workflow store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		updated, err := updater.UpdateAlertWorkflow(r.Context(), alert.ID, storage.UpdateAlertWorkflowParams{AssignedTo: req.AssignedTo, Note: req.Note, By: s.userIDForPrincipalCtx(r.Context(), principal), At: time.Now().UTC()})
+		if err != nil {
+			http.Error(w, "update alert workflow", http.StatusInternalServerError)
+			return
+		}
+		s.recordAudit(r.Context(), principal, alert.TenantID, "alert.workflow_updated", "alert", alert.ID.String(), map[string]any{"assigned_to": req.AssignedTo, "note_added": strings.TrimSpace(req.Note) != ""})
+		writeJSON(w, http.StatusOK, newAlertResponse(*updated))
 	default:
 		http.NotFound(w, r)
 	}

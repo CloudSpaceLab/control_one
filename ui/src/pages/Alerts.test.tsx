@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
   const createCorrelationRule = vi.fn();
   const deleteCorrelationRule = vi.fn();
   const createAlertSOCCase = vi.fn();
+  const updateAlertWorkflow = vi.fn();
   return {
     apiClient: {
       listAlerts,
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => {
       createCorrelationRule,
       deleteCorrelationRule,
       createAlertSOCCase,
+      updateAlertWorkflow,
     },
     listAlerts,
     ackAlert,
@@ -30,6 +32,7 @@ const mocks = vi.hoisted(() => {
     createCorrelationRule,
     deleteCorrelationRule,
     createAlertSOCCase,
+    updateAlertWorkflow,
     currentTenantId: 'tenant-1',
     setCurrentTenantId: vi.fn(),
   };
@@ -117,6 +120,7 @@ describe('Alerts page failure states', () => {
     mocks.createCorrelationRule.mockResolvedValue(ruleRow);
     mocks.deleteCorrelationRule.mockResolvedValue(undefined);
     mocks.createAlertSOCCase.mockResolvedValue({ case_id: 'case-1' });
+    mocks.updateAlertWorkflow.mockResolvedValue(alertRow);
   });
 
   it('does not show all-clear or empty inbox copy when alerts fail to load', async () => {
@@ -169,6 +173,19 @@ describe('Alerts page failure states', () => {
     expect(screen.getByText('Contributing events (1)')).toBeInTheDocument();
     expect(screen.getByText(/ssh\.authentication_failure/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create soc case with evidence/i })).toBeInTheDocument();
+  });
+
+  it('saves analyst assignment and notes from alert review', async () => {
+    const user = userEvent.setup();
+    renderAlerts();
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    await user.type(screen.getByLabelText(/assigned analyst/i), 'analyst@example.com');
+    await user.type(screen.getByLabelText(/analyst note/i), 'Validated the four failed SSH events.');
+    await user.click(screen.getByRole('button', { name: /save assignment and note/i }));
+    expect(mocks.updateAlertWorkflow).toHaveBeenCalledWith('alert-1', {
+      assigned_to: 'analyst@example.com',
+      note: 'Validated the four failed SSH events.',
+    });
   });
 
   it('does not show a false empty state when correlation rules fail to load', async () => {

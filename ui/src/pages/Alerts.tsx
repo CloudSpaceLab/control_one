@@ -259,6 +259,7 @@ export function Alerts(): JSX.Element {
   const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
   const [resolvingAlert, setResolvingAlert] = useState(false);
   const [creatingCase, setCreatingCase] = useState(false);
+  const [savingWorkflow, setSavingWorkflow] = useState(false);
 
   // Correlation rules state
   const [rules, setRules] = useState<CorrelationRule[]>([]);
@@ -1305,6 +1306,14 @@ export function Alerts(): JSX.Element {
             setCreatingCase(false);
           }
         }}
+        savingWorkflow={savingWorkflow}
+        onSaveWorkflow={async (alert, payload) => {
+          setSavingWorkflow(true);
+          setResolveError(null);
+          try { await client.updateAlertWorkflow(alert.id, payload); await refresh(); }
+          catch (err) { setResolveError(errorMessage(err, 'Workflow update failed.')); }
+          finally { setSavingWorkflow(false); }
+        }}
       />
     </div>
   );
@@ -1540,6 +1549,8 @@ function ResolveAlertModal({
   onActionTaken,
   creatingCase,
   onCreateCase,
+  savingWorkflow,
+  onSaveWorkflow,
 }: {
   alert: Alert | null;
   open: boolean;
@@ -1550,18 +1561,24 @@ function ResolveAlertModal({
   onActionTaken: () => void;
   creatingCase: boolean;
   onCreateCase: (alert: Alert) => Promise<void>;
+  savingWorkflow: boolean;
+  onSaveWorkflow: (alert: Alert, payload: { assigned_to?: string; note?: string }) => Promise<void>;
 }) {
   const plan = alert ? alertResolutionPlan(alert) : null;
   const ip = alert ? alertSourceIP(alert) : '';
   const [disposition, setDisposition] = useState<AlertDispositionValue>('resolved');
   const [reason, setReason] = useState('');
   const [suppressUntil, setSuppressUntil] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
+  const [analystNote, setAnalystNote] = useState('');
 
   useEffect(() => {
     if (!open) return;
     setDisposition(alert?.disposition?.value ?? 'resolved');
     setReason(alert?.disposition?.reason ?? '');
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
+    setAssignedTo(contextString(alert?.context ?? {}, 'assigned_to'));
+    setAnalystNote('');
   }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
 
   const selectedDisposition = dispositionOption(disposition);
@@ -1757,6 +1774,13 @@ function ResolveAlertModal({
               <Button type="button" variant="outline" size="sm" className="w-full" loading={creatingCase} onClick={() => void onCreateCase(alert)}>
                 Create SOC case with evidence
               </Button>
+              <div className="rounded-lg border border-border-subtle bg-surface p-3">
+                <Label htmlFor="alert-assigned-to">Assigned analyst</Label>
+                <Input id="alert-assigned-to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} placeholder="Name or email" />
+                <Label className="mt-3 block" htmlFor="alert-analyst-note">Analyst note</Label>
+                <textarea id="alert-analyst-note" className="min-h-20 w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm" value={analystNote} onChange={(event) => setAnalystNote(event.target.value)} />
+                <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" loading={savingWorkflow} disabled={!assignedTo.trim() && !analystNote.trim()} onClick={() => void onSaveWorkflow(alert, { assigned_to: assignedTo.trim(), note: analystNote.trim() })}>Save assignment and note</Button>
+              </div>
             </div>
           </div>
         ) : null}

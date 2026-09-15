@@ -51,6 +51,13 @@ type UpdateAlertDispositionParams struct {
 	At            time.Time
 }
 
+type UpdateAlertWorkflowParams struct {
+	AssignedTo string
+	Note       string
+	By         uuid.UUID
+	At         time.Time
+}
+
 // CreateAlert inserts a new alert. If DedupKey is set and an open alert with
 // the same (tenant, dedup_key) exists, ErrAlertDeduped is returned along with
 // the existing alert — callers treat this as idempotent.
@@ -398,6 +405,39 @@ func (s *Store) UpdateAlertDisposition(ctx context.Context, id uuid.UUID, p Upda
 	`, ctxJSON, state, at, byArg, id)
 	if err != nil {
 		return nil, fmt.Errorf("update alert disposition: %w", err)
+	}
+	return s.GetAlert(ctx, id)
+}
+
+func (s *Store) UpdateAlertWorkflow(ctx context.Context, id uuid.UUID, p UpdateAlertWorkflowParams) (*Alert, error) {
+	alert, err := s.GetAlert(ctx, id)
+	if err != nil || alert == nil {
+		return alert, err
+	}
+	values := alert.Context
+	if values == nil {
+		values = map[string]any{}
+	}
+	if assigned := strings.TrimSpace(p.AssignedTo); assigned != "" {
+		values["assigned_to"] = assigned
+	}
+	if note := strings.TrimSpace(p.Note); note != "" {
+		at := p.At.UTC()
+		if at.IsZero() {
+			at = s.clock().UTC()
+		}
+		entry := map[string]any{"note": note, "created_at": at.Format(time.RFC3339Nano)}
+		if p.By != uuid.Nil {
+			entry["created_by"] = p.By.String()
+		}
+		values["analyst_notes"] = appendJSONHistory(values["analyst_notes"], entry)
+	}
+	encoded, err := marshalJSONBMap(values)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE alerts SET context=$1 WHERE id=$2`, encoded, id); err != nil {
+		return nil, fmt.Errorf("update alert workflow: %w", err)
 	}
 	return s.GetAlert(ctx, id)
 }
