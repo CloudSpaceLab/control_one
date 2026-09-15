@@ -10,7 +10,7 @@ func TestClassifyBatteryAndDesktopOS(t *testing.T) {
 	labels := map[string]any{
 		"target.battery_present": true,
 	}
- targetType, confidence, evidence := ClassifyTarget(labels, "Windows 11", "amd64", "")
+	targetType, confidence, evidence := ClassifyTarget(labels, "Windows 11", "amd64", "")
 	if targetType != "personal_pc" {
 		t.Errorf("targetType = %q, want %q", targetType, "personal_pc")
 	}
@@ -45,7 +45,7 @@ func TestClassifyCloudMetadata(t *testing.T) {
 	labels := map[string]any{
 		"target.cloud_provider": "aws",
 	}
- targetType, confidence, evidence := ClassifyTarget(labels, "Ubuntu 22.04", "amd64", "")
+	targetType, confidence, evidence := ClassifyTarget(labels, "Ubuntu 22.04", "amd64", "")
 	if targetType != "cloud_instance" {
 		t.Errorf("targetType = %q, want %q", targetType, "cloud_instance")
 	}
@@ -64,7 +64,7 @@ func TestClassifyDomainController(t *testing.T) {
 	labels := map[string]any{
 		"target.domain_controller": true,
 	}
- targetType, confidence, evidence := ClassifyTarget(labels, "Windows Server 2022", "amd64", "")
+	targetType, confidence, evidence := ClassifyTarget(labels, "Windows Server 2022", "amd64", "")
 	if targetType != "domain_controller" {
 		t.Errorf("targetType = %q, want %q", targetType, "domain_controller")
 	}
@@ -85,7 +85,7 @@ func TestClassifyAgentHighConfidencePreserved(t *testing.T) {
 		"target.classification_confidence": float64(85),
 		"target.classification_evidence":   []any{"agent self-report"},
 	}
- targetType, confidence, _ := ClassifyTarget(labels, "Windows Server 2022", "amd64", "")
+	targetType, confidence, _ := ClassifyTarget(labels, "Windows Server 2022", "amd64", "")
 	if targetType != "workstation" {
 		t.Errorf("targetType = %q, want %q (agent classification should be preserved)", targetType, "workstation")
 	}
@@ -117,7 +117,7 @@ func TestClassifyLowAgentConfidenceOverridden(t *testing.T) {
 		"target.type":                      "unknown",
 		"target.classification_confidence": float64(20),
 	}
- targetType, confidence, _ := ClassifyTarget(labels, "Windows Server 2022", "amd64", "")
+	targetType, confidence, _ := ClassifyTarget(labels, "Windows Server 2022", "amd64", "")
 	if targetType != "server" {
 		t.Errorf("targetType = %q, want %q (low confidence agent should be overridden)", targetType, "server")
 	}
@@ -132,7 +132,7 @@ func TestClassifyServiceKeywords(t *testing.T) {
 	labels := map[string]any{
 		"service.role": "webserver,redis",
 	}
- targetType, confidence, evidence := ClassifyTarget(labels, "Ubuntu 22.04", "amd64", "")
+	targetType, confidence, evidence := ClassifyTarget(labels, "Ubuntu 22.04", "amd64", "")
 	if targetType != "server" {
 		t.Errorf("targetType = %q, want %q", targetType, "server")
 	}
@@ -150,7 +150,7 @@ func TestClassifyDeviceBatteryLabel(t *testing.T) {
 	labels := map[string]any{
 		"device.battery": "true",
 	}
- targetType, confidence, _ := ClassifyTarget(labels, "macOS", "arm64", "")
+	targetType, confidence, _ := ClassifyTarget(labels, "macOS", "arm64", "")
 	if targetType != "personal_pc" {
 		t.Errorf("targetType = %q, want %q", targetType, "personal_pc")
 	}

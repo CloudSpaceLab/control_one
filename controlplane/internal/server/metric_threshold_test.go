@@ -69,9 +69,9 @@ func TestMetricThresholdAboveThresholdFiresAlert(t *testing.T) {
 
 	bus := eventbus.New(16)
 	srv := &Server{
-		store:       store,
-		logger:      zap.NewNop(),
-		eventBus:    bus,
+		store:    store,
+		logger:   zap.NewNop(),
+		eventBus: bus,
 	}
 
 	sub := bus.Subscribe(tenantID, []string{eventbus.TopicAlertOpened}, nil)
