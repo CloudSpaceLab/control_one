@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,22 +35,24 @@ type windowKey struct {
 
 // Engine consumes events and opens alerts when correlation rules fire.
 type Engine struct {
-	store    AlertCreator
-	log      *zap.Logger
-	bus      *eventbus.Bus
-	mu       sync.Mutex
-	windows  map[windowKey][]time.Time
-	cache    sync.Map // tenantID -> []storage.CorrelationRule
-	cacheTTL time.Duration
+	store     AlertCreator
+	log       *zap.Logger
+	bus       *eventbus.Bus
+	mu        sync.Mutex
+	windows   map[windowKey][]time.Time
+	lastFired map[windowKey]time.Time
+	cache     sync.Map // tenantID -> []storage.CorrelationRule
+	cacheTTL  time.Duration
 }
 
 func New(store AlertCreator, bus *eventbus.Bus, log *zap.Logger) *Engine {
 	return &Engine{
-		store:    store,
-		log:      log,
-		bus:      bus,
-		windows:  make(map[windowKey][]time.Time),
-		cacheTTL: 30 * time.Second,
+		store:     store,
+		log:       log,
+		bus:       bus,
+		windows:   make(map[windowKey][]time.Time),
+		lastFired: make(map[windowKey]time.Time),
+		cacheTTL:  30 * time.Second,
 	}
 }
 
@@ -86,10 +90,19 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		return
 	}
 	for _, r := range rules {
+		if !r.Enabled {
+			continue
+		}
 		if !matchesEventType(r.EventTypes, ev.Topic) {
 			continue
 		}
-		dim := dimensionValue(r.Dimension, ev)
+		if !matchesPayloadEventType(r.EventType, ev.Payload) {
+			continue
+		}
+		if !matchesConditions(r.Conditions, ev) {
+			continue
+		}
+		dim := compoundDimensionValue(r.GroupBy, r.Dimension, ev)
 		if dim == "" {
 			continue
 		}
@@ -110,8 +123,13 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		}
 		e.windows[key] = trimmed
 		fire := len(trimmed) >= r.Threshold
+		if fire && r.SuppressionSeconds > 0 {
+			last := e.lastFired[key]
+			fire = last.IsZero() || ev.Timestamp.Sub(last) >= time.Duration(r.SuppressionSeconds)*time.Second
+		}
 		if fire {
 			e.windows[key] = nil
+			e.lastFired[key] = ev.Timestamp
 		}
 		e.mu.Unlock()
 
@@ -125,18 +143,22 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 	title := r.Name
 	summary := "correlation rule fired"
 	ctxPayload := map[string]any{
-		"rule_id":   r.ID.String(),
-		"dimension": r.Dimension,
-		"value":     dim,
-		"hits":      hits,
-		"window_s":  r.WindowSeconds,
+		"rule_id":           r.ID.String(),
+		"dimension":         r.Dimension,
+		"value":             dim,
+		"hits":              hits,
+		"window_s":          r.WindowSeconds,
+		"event_type_filter": r.EventType,
+		"group_by":          r.GroupBy,
+		"suppression_s":     r.SuppressionSeconds,
+		"conditions":        r.Conditions,
 	}
 	for key, value := range eventContext(ev) {
 		ctxPayload[key] = value
 	}
 	dedup := r.ID.String() + "/" + dim
 	var nodeArg *uuid.UUID
-	if r.Dimension == "node_id" {
+	if (len(r.GroupBy) == 1 && r.GroupBy[0] == "node_id") || (len(r.GroupBy) == 0 && r.Dimension == "node_id") {
 		if parsed, err := uuid.Parse(dim); err == nil {
 			nodeArg = &parsed
 		}
@@ -173,6 +195,110 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			Payload:  payload,
 		})
 	}
+}
+
+func matchesConditions(conditions []storage.CorrelationCondition, ev eventbus.Event) bool {
+	for _, condition := range conditions {
+		got, ok := eventFieldValue(condition.Field, ev)
+		if !ok || !compareCondition(got, condition.Operator, condition.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func eventFieldValue(field string, ev eventbus.Event) (any, bool) {
+	switch field {
+	case "node_id":
+		if ev.NodeID != nil {
+			return ev.NodeID.String(), true
+		}
+	case "tenant_id":
+		if ev.TenantID != uuid.Nil {
+			return ev.TenantID.String(), true
+		}
+	}
+	if len(ev.Payload) == 0 {
+		return nil, false
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(ev.Payload, &raw); err != nil {
+		return nil, false
+	}
+	if value, ok := raw[field]; ok {
+		return value, true
+	}
+	if details, ok := raw["details"].(map[string]any); ok {
+		value, found := details[field]
+		return value, found
+	}
+	return nil, false
+}
+
+func compareCondition(got any, operator string, want any) bool {
+	gotText := fmt.Sprint(got)
+	wantText := fmt.Sprint(want)
+	switch operator {
+	case "eq":
+		return strings.EqualFold(gotText, wantText)
+	case "neq":
+		return !strings.EqualFold(gotText, wantText)
+	case "contains":
+		return strings.Contains(strings.ToLower(gotText), strings.ToLower(wantText))
+	}
+	gotNumber, gotErr := strconv.ParseFloat(gotText, 64)
+	wantNumber, wantErr := strconv.ParseFloat(wantText, 64)
+	if gotErr != nil || wantErr != nil {
+		return false
+	}
+	switch operator {
+	case "gt":
+		return gotNumber > wantNumber
+	case "gte":
+		return gotNumber >= wantNumber
+	case "lt":
+		return gotNumber < wantNumber
+	case "lte":
+		return gotNumber <= wantNumber
+	}
+	return false
+}
+
+func matchesPayloadEventType(want string, payload []byte) bool {
+	if want == "" {
+		return true
+	}
+	if len(payload) == 0 {
+		return false
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return false
+	}
+	for _, key := range []string{"event_type", "type"} {
+		if got, ok := raw[key].(string); ok && got == want {
+			return true
+		}
+	}
+	return false
+}
+
+func compoundDimensionValue(groupBy []string, legacy string, ev eventbus.Event) string {
+	if len(groupBy) == 0 {
+		groupBy = []string{legacy}
+	}
+	if len(groupBy) == 1 {
+		return dimensionValue(groupBy[0], ev)
+	}
+	parts := make([]string, 0, len(groupBy))
+	for _, field := range groupBy {
+		value := dimensionValue(field, ev)
+		if value == "" {
+			return ""
+		}
+		parts = append(parts, field+"="+value)
+	}
+	return strings.Join(parts, "|")
 }
 
 func eventContext(ev eventbus.Event) map[string]any {
@@ -342,6 +468,13 @@ func dimensionValue(dim string, ev eventbus.Event) string {
 	if v, ok := raw[dim]; ok {
 		if s, ok := v.(string); ok {
 			return s
+		}
+	}
+	if details, ok := raw["details"].(map[string]any); ok {
+		if v, ok := details[dim]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
 		}
 	}
 	return ""

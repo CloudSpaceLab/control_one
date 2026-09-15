@@ -31,13 +31,42 @@ import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
-import type { Alert, AlertDispositionValue, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
+import type { Alert, AlertDispositionValue, CorrelationCondition, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
 type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
 const ALERTS_POLL_MS = 30_000;
+const CORRELATION_EVENT_TYPES = [
+  { value: 'security.event', label: 'Security event' },
+  { value: 'events.anomaly', label: 'Anomaly detected' },
+  { value: 'rule.triggered', label: 'Detection rule triggered' },
+  { value: 'compliance.fired', label: 'Compliance finding' },
+  { value: 'health.incident', label: 'Health incident' },
+  { value: 'remediation.applied', label: 'Remediation applied' },
+] as const;
+const CORRELATION_DIMENSIONS = [
+  { value: 'node_id', label: 'Host / node' },
+  { value: 'tenant_id', label: 'Entire tenant' },
+  { value: 'src_ip', label: 'Source IP' },
+  { value: 'user_name', label: 'User name' },
+  { value: 'correlation_id', label: 'Correlation ID' },
+] as const;
+const CORRELATION_CONDITION_FIELDS = [
+  { value: 'src_ip', label: 'Source IP' }, { value: 'dst_ip', label: 'Destination IP' },
+  { value: 'src_port', label: 'Source port' }, { value: 'dst_port', label: 'Destination port' },
+  { value: 'protocol', label: 'Protocol' }, { value: 'user_name', label: 'User name' },
+  { value: 'auth_result', label: 'Authentication result' }, { value: 'status_code', label: 'HTTP status' },
+  { value: 'http_method', label: 'HTTP method' }, { value: 'path', label: 'Request path' },
+  { value: 'source', label: 'Event source' }, { value: 'severity', label: 'Event severity' },
+] as const;
+const CORRELATION_OPERATORS = [
+  { value: 'eq', label: 'equals' }, { value: 'neq', label: 'does not equal' },
+  { value: 'contains', label: 'contains' }, { value: 'gt', label: 'greater than' },
+  { value: 'gte', label: 'greater than or equal' }, { value: 'lt', label: 'less than' },
+  { value: 'lte', label: 'less than or equal' },
+] as const;
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
   value: AlertDispositionValue;
@@ -229,8 +258,18 @@ export function Alerts(): JSX.Element {
   const [deleteRuleError, setDeleteRuleError] = useState<string | null>(null);
   const [deletingRule, setDeletingRule] = useState(false);
   const [showCreateRule, setShowCreateRule] = useState(false);
+  const [editRuleId, setEditRuleId] = useState<string | null>(null);
   const [newRuleName, setNewRuleName] = useState('');
+  const [newRuleDescription, setNewRuleDescription] = useState('');
+  const [newRuleEventType, setNewRuleEventType] = useState('security.event');
+  const [newRuleSpecificEventType, setNewRuleSpecificEventType] = useState('');
+  const [newRuleWindowSeconds, setNewRuleWindowSeconds] = useState(60);
+  const [newRuleThreshold, setNewRuleThreshold] = useState(3);
+  const [newRuleGroupBy, setNewRuleGroupBy] = useState<string[]>(['node_id']);
   const [newRuleSeverity, setNewRuleSeverity] = useState('medium');
+  const [newRuleEnabled, setNewRuleEnabled] = useState(true);
+  const [newRuleSuppressionSeconds, setNewRuleSuppressionSeconds] = useState(300);
+  const [newRuleConditions, setNewRuleConditions] = useState<CorrelationCondition[]>([]);
   const [creatingRule, setCreatingRule] = useState(false);
   const [createRuleError, setCreateRuleError] = useState<string | null>(null);
 
@@ -325,26 +364,91 @@ export function Alerts(): JSX.Element {
     return () => { cancelled = true; };
   }, [client, tenantId, rulesReloadToken]);
 
-  const handleCreateRule = async () => {
+  const resetRuleForm = () => {
+    setEditRuleId(null);
+    setNewRuleName('');
+    setNewRuleDescription('');
+    setNewRuleEventType('security.event');
+    setNewRuleSpecificEventType('');
+    setNewRuleWindowSeconds(60);
+    setNewRuleThreshold(3);
+    setNewRuleGroupBy(['node_id']);
+    setNewRuleSeverity('medium');
+    setNewRuleEnabled(true);
+    setNewRuleSuppressionSeconds(300);
+    setNewRuleConditions([]);
+  };
+
+  const editRule = (rule: CorrelationRule) => {
+    setEditRuleId(rule.id);
+    setNewRuleName(rule.name);
+    setNewRuleDescription(rule.description ?? '');
+    setNewRuleEventType(rule.event_types[0] ?? 'security.event');
+    setNewRuleSpecificEventType(rule.event_type ?? '');
+    setNewRuleWindowSeconds(rule.window_seconds);
+    setNewRuleThreshold(rule.threshold);
+    setNewRuleGroupBy(rule.group_by?.length ? rule.group_by : [rule.dimension]);
+    setNewRuleSeverity(rule.severity);
+    setNewRuleEnabled(rule.enabled);
+    setNewRuleSuppressionSeconds(rule.suppression_seconds ?? 0);
+    setNewRuleConditions(rule.conditions ?? []);
+    setShowCreateRule(true);
+  };
+
+  const updateCondition = (index: number, patch: Partial<CorrelationCondition>) => {
+    setNewRuleConditions((current) => current.map((condition, i) => i === index ? { ...condition, ...patch } : condition));
+  };
+
+  const handleSaveRule = async () => {
     if (!newRuleName.trim() || !tenantId) return;
     setCreatingRule(true);
     setCreateRuleError(null);
     try {
-      await client.createCorrelationRule({
+      const payload = {
         tenant_id: tenantId,
         name: newRuleName.trim(),
+        description: newRuleDescription.trim() || undefined,
+        event_types: [newRuleEventType],
+        event_type: newRuleSpecificEventType.trim(),
+        window_seconds: newRuleWindowSeconds,
+        threshold: newRuleThreshold,
+        dimension: newRuleGroupBy[0],
+        group_by: newRuleGroupBy,
+        suppression_seconds: newRuleSuppressionSeconds,
+        conditions: newRuleConditions,
         severity: newRuleSeverity,
-        conditions: {},
-        enabled: true,
-      });
-      setNewRuleName('');
+        enabled: newRuleEnabled,
+      };
+      if (editRuleId) await client.updateCorrelationRule(editRuleId, tenantId, payload);
+      else await client.createCorrelationRule(payload);
+      resetRuleForm();
       setShowCreateRule(false);
+      setError(null);
       setRulesReloadToken((n) => n + 1);
     } catch (err) {
       setCreateRuleError(errorMessage(err, 'Create failed.'));
     } finally {
       setCreatingRule(false);
     }
+  };
+
+  const toggleRule = async (rule: CorrelationRule) => {
+    if (!tenantId) return;
+    setCreatingRule(true);
+    try {
+      await client.updateCorrelationRule(rule.id, tenantId, {
+        tenant_id: tenantId, name: rule.name, description: rule.description,
+        event_types: rule.event_types, event_type: rule.event_type ?? '',
+        window_seconds: rule.window_seconds, threshold: rule.threshold,
+        dimension: rule.dimension, group_by: rule.group_by?.length ? rule.group_by : [rule.dimension],
+        suppression_seconds: rule.suppression_seconds ?? 0, severity: rule.severity, enabled: !rule.enabled,
+        conditions: rule.conditions ?? [],
+      });
+      setRulesReloadToken((n) => n + 1);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'rule update failed');
+    } finally { setCreatingRule(false); }
   };
 
   const handleDeleteRule = async () => {
@@ -493,6 +597,32 @@ export function Alerts(): JSX.Element {
       cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span>,
     },
     {
+      header: 'Event category',
+      id: 'event_types',
+      cell: ({ row }) => (
+        <span className="font-mono text-xs text-text-muted">
+          {row.original.event_types.join(', ') || 'All subscribed streams'}
+        </span>
+      ),
+    },
+    {
+      header: 'Trigger',
+      id: 'trigger',
+      cell: ({ row }) => (
+        <span className="text-xs text-text-secondary">
+          {row.original.threshold} event{row.original.threshold === 1 ? '' : 's'} / {row.original.window_seconds}s
+          <span className="block font-mono text-text-muted">{row.original.event_type || 'any type'}</span>
+          <span className="block font-mono text-text-muted">by {(row.original.group_by?.length ? row.original.group_by : [row.original.dimension]).join(' + ')}</span>
+          <span className="block text-text-muted">suppress {row.original.suppression_seconds ?? 0}s</span>
+          {(row.original.conditions ?? []).map((condition, index) => (
+            <span className="block font-mono text-text-muted" key={`${condition.field}-${index}`}>
+              {condition.field} {condition.operator} {String(condition.value)}
+            </span>
+          ))}
+        </span>
+      ),
+    },
+    {
       header: 'Severity',
       accessorKey: 'severity',
       cell: ({ row }) => (
@@ -524,18 +654,24 @@ export function Alerts(): JSX.Element {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setDeleteRuleError(null);
-            setDeleteRuleId(row.original.id);
-          }}
-          aria-label={`Delete correlation rule ${row.original.name}`}
-          disabled={deletingRule}
-        >
-          <Trash2 className="h-3.5 w-3.5 text-state-critical" />
-        </Button>
+        <div className="flex gap-1">
+          <Button variant="ghost" size="sm" onClick={() => editRule(row.original)}>View / edit</Button>
+          <Button variant="ghost" size="sm" disabled={creatingRule} onClick={() => void toggleRule(row.original)}>
+            {row.original.enabled ? 'Disable' : 'Enable'}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setDeleteRuleError(null);
+              setDeleteRuleId(row.original.id);
+            }}
+            aria-label={`Delete correlation rule ${row.original.name}`}
+            disabled={deletingRule}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-state-critical" />
+          </Button>
+        </div>
       ),
     },
   ];
@@ -720,22 +856,15 @@ export function Alerts(): JSX.Element {
           eyebrow="CORRELATION RULES"
           title="Detection rules"
           actions={
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                setCreateRuleError(null);
-                setShowCreateRule(true);
-              }}
-            >
+            <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setCreateRuleError(null); setShowCreateRule(true); }}>
               <Plus className="h-3.5 w-3.5" /> New rule
             </Button>
           }
         >
           {showCreateRule && (
             <div className="mb-4 rounded-md border border-border-subtle bg-elevated p-4">
-              <p className="mb-3 text-sm font-medium text-foreground">New correlation rule</p>
-              <div className="flex flex-wrap items-end gap-3">
+              <p className="mb-3 text-sm font-medium text-foreground">{editRuleId ? 'View or edit correlation rule' : 'New correlation rule'}</p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-name">Name</Label>
                   <Input
@@ -746,8 +875,127 @@ export function Alerts(): JSX.Element {
                       if (createRuleError) setCreateRuleError(null);
                     }}
                     placeholder="Brute-force SSH"
-                    className="h-8 w-56"
+                    className="h-8"
                   />
+                </div>
+                <div className="flex flex-col gap-1 md:col-span-2">
+                  <Label htmlFor="rule-description">Description</Label>
+                  <Input
+                    id="rule-description"
+                    value={newRuleDescription}
+                    onChange={(e) => setNewRuleDescription(e.target.value)}
+                    placeholder="Alert after repeated events in the selected window"
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-event-type">Event category</Label>
+                  <select
+                    id="rule-event-type"
+                    className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                    value={newRuleEventType}
+                    onChange={(e) => setNewRuleEventType(e.target.value)}
+                  >
+                    {CORRELATION_EVENT_TYPES.map((eventType) => (
+                      <option key={eventType.value} value={eventType.value}>{eventType.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-threshold">Event threshold</Label>
+                  <Input
+                    id="rule-threshold"
+                    type="number"
+                    min={1}
+                    value={newRuleThreshold}
+                    onChange={(e) => setNewRuleThreshold(Math.max(1, Number(e.target.value) || 1))}
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-specific-event-type">Specific event type</Label>
+                  <Input
+                    id="rule-specific-event-type"
+                    value={newRuleSpecificEventType}
+                    onChange={(e) => setNewRuleSpecificEventType(e.target.value)}
+                    placeholder="ssh.authentication_failure (blank matches any)"
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-window">Time window (seconds)</Label>
+                  <Input
+                    id="rule-window"
+                    type="number"
+                    min={1}
+                    value={newRuleWindowSeconds}
+                    onChange={(e) => setNewRuleWindowSeconds(Math.max(1, Number(e.target.value) || 1))}
+                    className="h-8"
+                  />
+                </div>
+                <div className="flex flex-col gap-2 md:col-span-2 xl:col-span-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Field conditions</Label>
+                      <p className="text-xs text-text-muted">Every condition must match before an event is counted.</p>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={newRuleConditions.length >= 10}
+                      onClick={() => setNewRuleConditions((current) => [...current, { field: 'dst_port', operator: 'eq', value: '22' }])}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Add condition
+                    </Button>
+                  </div>
+                  {newRuleConditions.map((condition, index) => (
+                    <div className="grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" key={index}>
+                      <select
+                        aria-label={`Condition ${index + 1} field`}
+                        className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={condition.field}
+                        onChange={(e) => updateCondition(index, { field: e.target.value })}
+                      >
+                        {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+                      </select>
+                      <select
+                        aria-label={`Condition ${index + 1} operator`}
+                        className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={condition.operator}
+                        onChange={(e) => updateCondition(index, { operator: e.target.value as CorrelationCondition['operator'] })}
+                      >
+                        {CORRELATION_OPERATORS.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
+                      </select>
+                      <Input
+                        aria-label={`Condition ${index + 1} value`}
+                        className="h-8"
+                        value={String(condition.value)}
+                        onChange={(e) => updateCondition(index, { value: e.target.value })}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Remove condition ${index + 1}`}
+                        onClick={() => setNewRuleConditions((current) => current.filter((_, i) => i !== index))}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-dimension">Group events by</Label>
+                  <select multiple
+                    id="rule-dimension"
+                    className="min-h-20 rounded-md border border-border-subtle bg-surface px-2 py-1 text-sm text-foreground"
+                    value={newRuleGroupBy}
+                    onChange={(e) => setNewRuleGroupBy(Array.from(e.target.selectedOptions, (option) => option.value).slice(0, 3))}
+                  >
+                    {CORRELATION_DIMENSIONS.map((dimension) => (
+                      <option key={dimension.value} value={dimension.value}>{dimension.label}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-text-muted">Select up to three fields. Use Ctrl/Cmd to select multiple.</span>
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-severity">Severity</Label>
@@ -762,19 +1010,26 @@ export function Alerts(): JSX.Element {
                     ))}
                   </select>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="primary" size="sm" onClick={handleCreateRule} disabled={creatingRule || !newRuleName.trim() || !tenantId}>
-                    {creatingRule ? 'Creating...' : 'Create'}
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-suppression">Notification suppression (seconds)</Label>
+                  <Input
+                    id="rule-suppression"
+                    type="number"
+                    min={0}
+                    value={newRuleSuppressionSeconds}
+                    onChange={(e) => setNewRuleSuppressionSeconds(Math.max(0, Number(e.target.value) || 0))}
+                    className="h-8"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input type="checkbox" checked={newRuleEnabled} onChange={(e) => setNewRuleEnabled(e.target.checked)} />
+                  Enabled
+                </label>
+                <div className="flex items-end gap-2">
+                  <Button variant="primary" size="sm" onClick={handleSaveRule} disabled={creatingRule || !newRuleName.trim() || !tenantId || newRuleGroupBy.length === 0}>
+                    {creatingRule ? 'Saving...' : editRuleId ? 'Save changes' : 'Create'}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setShowCreateRule(false);
-                      setCreateRuleError(null);
-                    }}
-                    disabled={creatingRule}
-                  >
+                  <Button variant="ghost" size="sm" onClick={() => { resetRuleForm(); setCreateRuleError(null); setShowCreateRule(false); }} disabled={creatingRule}>
                     Cancel
                   </Button>
                 </div>
