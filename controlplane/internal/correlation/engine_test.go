@@ -19,6 +19,16 @@ type fakeStore struct {
 	alerts []storage.CreateAlertParams
 }
 
+func TestMatchesPayloadEventTypeFromNormalizedDetails(t *testing.T) {
+	payload := []byte(`{"type":"security.event","details":{"event_type":"ssh.authentication_failure"}}`)
+	if !matchesPayloadEventType("ssh.authentication_failure", payload) {
+		t.Fatal("normalized details event_type should match")
+	}
+	if matchesPayloadEventType("web.request", payload) {
+		t.Fatal("different normalized event_type should not match")
+	}
+}
+
 func (f *fakeStore) ListCorrelationRules(_ context.Context, _ uuid.UUID) ([]storage.CorrelationRule, error) {
 	return f.rules, nil
 }

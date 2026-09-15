@@ -686,6 +686,20 @@ func (s *Server) fanOutEventsWithBatch(ctx context.Context, batchID, tenantID, n
 
 func (s *Server) prepareEventFanout(ctx context.Context, tenantID, nodeID uuid.UUID, events []IngestedEvent) ([]IngestedEvent, []IngestedEvent) {
 	fanoutEvents := append([]IngestedEvent(nil), events...)
+	if normalized := normalizeSecurityEvents(tenantID, nodeID, fanoutEvents); len(normalized) > 0 {
+		for i := range normalized {
+			if normalized[i].ParserStatus == "error" {
+				s.logger.Warn("security event normalization failed",
+					zap.String("tenant_id", tenantID.String()),
+					zap.String("node_id", nodeID.String()),
+					zap.String("source", fmt.Sprint(normalized[i].Details["source"])),
+					zap.String("event_id", fmt.Sprint(normalized[i].Details["source_event_id"])),
+					zap.String("reason", fmt.Sprint(normalized[i].Details["error"])),
+				)
+			}
+		}
+		fanoutEvents = append(fanoutEvents, normalized...)
+	}
 	s.enrichConnectionThreatIntel(tenantID, fanoutEvents)
 	anomalies := s.detectAnomalies(ctx, tenantID, nodeID, fanoutEvents)
 	if len(anomalies) > 0 {
