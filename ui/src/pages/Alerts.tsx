@@ -261,6 +261,8 @@ export function Alerts(): JSX.Element {
   const [newRuleEnabled, setNewRuleEnabled] = useState(true);
   const [newRuleSuppressionSeconds, setNewRuleSuppressionSeconds] = useState(300);
   const [newRuleConditions, setNewRuleConditions] = useState<CorrelationCondition[]>([]);
+  const [newRuleConditionGroups, setNewRuleConditionGroups] = useState<CorrelationCondition[][]>([]);
+  const [newRuleDistinctField, setNewRuleDistinctField] = useState('');
   const [newRuleTemplateId, setNewRuleTemplateId] = useState('');
   const [creatingRule, setCreatingRule] = useState(false);
 
@@ -341,6 +343,8 @@ export function Alerts(): JSX.Element {
     setNewRuleEnabled(true);
     setNewRuleSuppressionSeconds(300);
     setNewRuleConditions([]);
+    setNewRuleConditionGroups([]);
+    setNewRuleDistinctField('');
     setNewRuleTemplateId('');
   };
 
@@ -360,6 +364,8 @@ export function Alerts(): JSX.Element {
     setNewRuleEnabled(false);
     setNewRuleSuppressionSeconds(template.suppressionSeconds);
     setNewRuleConditions(template.conditions.map((condition) => ({ ...condition })));
+    setNewRuleConditionGroups(template.conditionGroups.map((group) => group.map((condition) => ({ ...condition }))));
+    setNewRuleDistinctField(template.distinctField);
     setShowCreateRule(true);
   };
 
@@ -376,11 +382,19 @@ export function Alerts(): JSX.Element {
     setNewRuleEnabled(rule.enabled);
     setNewRuleSuppressionSeconds(rule.suppression_seconds ?? 0);
     setNewRuleConditions(rule.conditions ?? []);
+    setNewRuleConditionGroups(rule.condition_groups ?? []);
+    setNewRuleDistinctField(rule.distinct_field ?? '');
     setShowCreateRule(true);
   };
 
   const updateCondition = (index: number, patch: Partial<CorrelationCondition>) => {
     setNewRuleConditions((current) => current.map((condition, i) => i === index ? { ...condition, ...patch } : condition));
+  };
+
+  const updateConditionGroup = (groupIndex: number, conditionIndex: number, patch: Partial<CorrelationCondition>) => {
+    setNewRuleConditionGroups((current) => current.map((group, gi) => gi === groupIndex
+      ? group.map((condition, ci) => ci === conditionIndex ? { ...condition, ...patch } : condition)
+      : group));
   };
 
   const handleSaveRule = async () => {
@@ -399,6 +413,8 @@ export function Alerts(): JSX.Element {
         group_by: newRuleGroupBy,
         suppression_seconds: newRuleSuppressionSeconds,
         conditions: newRuleConditions,
+        condition_groups: newRuleConditionGroups,
+        distinct_field: newRuleDistinctField,
         severity: newRuleSeverity,
         enabled: newRuleEnabled,
       };
@@ -426,6 +442,7 @@ export function Alerts(): JSX.Element {
         dimension: rule.dimension, group_by: rule.group_by?.length ? rule.group_by : [rule.dimension],
         suppression_seconds: rule.suppression_seconds ?? 0, severity: rule.severity, enabled: !rule.enabled,
         conditions: rule.conditions ?? [],
+        condition_groups: rule.condition_groups ?? [], distinct_field: rule.distinct_field ?? '',
       });
       setRulesReloadToken((n) => n + 1);
       setError(null);
@@ -576,6 +593,12 @@ export function Alerts(): JSX.Element {
               {condition.field} {condition.operator} {String(condition.value)}
             </span>
           ))}
+          {(row.original.condition_groups ?? []).map((group, groupIndex) => (
+            <span className="block font-mono text-text-muted" key={`group-${groupIndex}`}>
+              OR {group.map((condition) => `${condition.field} ${condition.operator} ${String(condition.value)}`).join(' AND ')}
+            </span>
+          ))}
+          {row.original.distinct_field ? <span className="block text-text-muted">count distinct {row.original.distinct_field}</span> : null}
         </span>
       ),
     },
@@ -933,6 +956,58 @@ export function Alerts(): JSX.Element {
                       </Button>
                     </div>
                   ))}
+                </div>
+                <div className="flex flex-col gap-2 md:col-span-2 xl:col-span-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Alternative condition groups</Label>
+                      <p className="text-xs text-text-muted">At least one group must match. Conditions inside a group must all match.</p>
+                    </div>
+                    <Button variant="secondary" size="sm" disabled={newRuleConditionGroups.length >= 10}
+                      onClick={() => setNewRuleConditionGroups((current) => [...current, [{ field: 'dst_port', operator: 'eq', value: '80' }]])}>
+                      <Plus className="h-3.5 w-3.5" /> Add OR group
+                    </Button>
+                  </div>
+                  {newRuleConditionGroups.map((group, groupIndex) => (
+                    <div className="rounded-md border border-border-subtle p-3" key={groupIndex}>
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-medium text-text-secondary">Group {groupIndex + 1}</span>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="sm" disabled={group.length >= 10}
+                            onClick={() => setNewRuleConditionGroups((current) => current.map((item, index) => index === groupIndex ? [...item, { field: 'dst_port', operator: 'eq', value: '80' }] : item))}>
+                            <Plus className="h-3.5 w-3.5" /> Add AND condition
+                          </Button>
+                          <Button variant="ghost" size="sm" aria-label={`Remove condition group ${groupIndex + 1}`}
+                            onClick={() => setNewRuleConditionGroups((current) => current.filter((_, index) => index !== groupIndex))}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                      {group.map((condition, conditionIndex) => (
+                        <div className="mb-2 grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" key={conditionIndex}>
+                          <select aria-label={`Group ${groupIndex + 1} condition ${conditionIndex + 1} field`} className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={condition.field} onChange={(e) => updateConditionGroup(groupIndex, conditionIndex, { field: e.target.value })}>
+                            {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+                          </select>
+                          <select aria-label={`Group ${groupIndex + 1} condition ${conditionIndex + 1} operator`} className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={condition.operator} onChange={(e) => updateConditionGroup(groupIndex, conditionIndex, { operator: e.target.value as CorrelationCondition['operator'] })}>
+                            {CORRELATION_OPERATORS.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
+                          </select>
+                          <Input aria-label={`Group ${groupIndex + 1} condition ${conditionIndex + 1} value`} className="h-8" value={String(condition.value)} onChange={(e) => updateConditionGroup(groupIndex, conditionIndex, { value: e.target.value })} />
+                          <Button variant="ghost" size="sm" aria-label={`Remove group ${groupIndex + 1} condition ${conditionIndex + 1}`} disabled={group.length === 1}
+                            onClick={() => setNewRuleConditionGroups((current) => current.map((item, index) => index === groupIndex ? item.filter((_, ci) => ci !== conditionIndex) : item))}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-distinct-field">Count distinct values</Label>
+                  <select id="rule-distinct-field" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={newRuleDistinctField} onChange={(e) => setNewRuleDistinctField(e.target.value)}>
+                    <option value="">Count every matching event</option>
+                    {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+                  </select>
+                  <span className="text-xs text-text-muted">Use this for scans or attempts across multiple accounts.</span>
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-dimension">Group events by</Label>

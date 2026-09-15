@@ -278,3 +278,96 @@ func TestEnginePhase3AThresholdTemplatesMatchAndRejectEvents(t *testing.T) {
 		})
 	}
 }
+
+func TestEngineMatchesAnyConditionGroup(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{
+		ID: uuid.New(), TenantID: tenant, Name: "Web request flood", EventTypes: []string{eventbus.TopicSecurityEvent},
+		EventType: "web.request", WindowSeconds: 60, Threshold: 2, GroupBy: []string{"src_ip", "node_id"}, Severity: "high", Enabled: true,
+		ConditionGroups: [][]storage.CorrelationCondition{{{Field: "dst_port", Operator: "eq", Value: "80"}}, {{Field: "dst_port", Operator: "eq", Value: "443"}}},
+	}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(4), nil)
+	base := time.Now()
+	event := func(port int, at time.Time) eventbus.Event {
+		payload, _ := json.Marshal(map[string]any{"event_type": "web.request", "src_ip": "203.0.113.30", "dst_port": port})
+		return eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: at, Payload: payload}
+	}
+	eng.handle(context.Background(), event(22, base))
+	eng.handle(context.Background(), event(80, base.Add(time.Second)))
+	eng.handle(context.Background(), event(443, base.Add(2*time.Second)))
+	if len(store.alerts) != 1 {
+		t.Fatalf("ports 80 and 443 should satisfy the OR groups, got %d alerts", len(store.alerts))
+	}
+}
+
+func TestEngineCountsDistinctFieldValues(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{
+		ID: uuid.New(), TenantID: tenant, Name: "Credential stuffing", EventTypes: []string{eventbus.TopicSecurityEvent},
+		EventType: "authentication.failure", WindowSeconds: 60, Threshold: 3, GroupBy: []string{"src_ip", "node_id"}, Severity: "critical", Enabled: true,
+		Conditions: []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "failure"}}, DistinctField: "user_name",
+	}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(8), nil)
+	base := time.Now()
+	event := func(user string, at time.Time) eventbus.Event {
+		payload, _ := json.Marshal(map[string]any{"event_type": "authentication.failure", "src_ip": "203.0.113.40", "user_name": user, "auth_result": "failure"})
+		return eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: at, Payload: payload}
+	}
+	eng.handle(context.Background(), event("alice", base))
+	eng.handle(context.Background(), event("alice", base.Add(time.Second)))
+	eng.handle(context.Background(), event("bob", base.Add(2*time.Second)))
+	if len(store.alerts) != 0 {
+		t.Fatal("a repeated username must count once")
+	}
+	eng.handle(context.Background(), event("carol", base.Add(3*time.Second)))
+	if len(store.alerts) != 1 {
+		t.Fatalf("three distinct usernames should create one alert, got %d", len(store.alerts))
+	}
+	if got := store.alerts[0].Context["hits"]; got != 3 {
+		t.Fatalf("alert hits = %#v, want 3 distinct values", got)
+	}
+}
+
+func TestEnginePhase3BTemplatesRejectNonmatchingEvents(t *testing.T) {
+	tests := []struct {
+		name            string
+		eventType       string
+		conditions      []storage.CorrelationCondition
+		conditionGroups [][]storage.CorrelationCondition
+		distinctField   string
+		matching        map[string]any
+		nonmatching     map[string]any
+	}{
+		{"Web request flood", "web.request", []storage.CorrelationCondition{{Field: "protocol", Operator: "eq", Value: "tcp"}}, [][]storage.CorrelationCondition{{{Field: "dst_port", Operator: "eq", Value: "80"}}, {{Field: "dst_port", Operator: "eq", Value: "443"}}}, "", map[string]any{"protocol": "tcp", "dst_port": 443}, map[string]any{"protocol": "tcp", "dst_port": 22}},
+		{"Web path scanner", "web.request", nil, [][]storage.CorrelationCondition{{{Field: "path", Operator: "contains", Value: "/.env"}}, {{Field: "path", Operator: "contains", Value: "/wp-admin"}}, {{Field: "path", Operator: "contains", Value: "/phpmyadmin"}}}, "", map[string]any{"path": "/phpmyadmin/index.php"}, map[string]any{"path": "/health"}},
+		{"Credential stuffing", "authentication.failure", []storage.CorrelationCondition{{Field: "auth_result", Operator: "eq", Value: "failure"}}, nil, "user_name", map[string]any{"auth_result": "failure", "user_name": "alice"}, map[string]any{"auth_result": "success", "user_name": "alice"}},
+		{"Port scanning", "network.connection", []storage.CorrelationCondition{{Field: "protocol", Operator: "eq", Value: "tcp"}}, nil, "dst_port", map[string]any{"protocol": "tcp", "dst_port": 443}, map[string]any{"protocol": "udp", "dst_port": 443}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tenant, node := uuid.New(), uuid.New()
+			rule := storage.CorrelationRule{ID: uuid.New(), TenantID: tenant, Name: tt.name, EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: tt.eventType, WindowSeconds: 60, Threshold: 1, GroupBy: []string{"src_ip", "node_id"}, Severity: "high", Enabled: true, Conditions: tt.conditions, ConditionGroups: tt.conditionGroups, DistinctField: tt.distinctField}
+			store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+			eng := New(store, eventbus.New(4), nil)
+			event := func(fields map[string]any, at time.Time) eventbus.Event {
+				body := map[string]any{"event_type": tt.eventType, "src_ip": "203.0.113.50"}
+				for key, value := range fields {
+					body[key] = value
+				}
+				payload, _ := json.Marshal(body)
+				return eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: at, Payload: payload}
+			}
+			base := time.Now()
+			eng.handle(context.Background(), event(tt.nonmatching, base))
+			if len(store.alerts) != 0 {
+				t.Fatal("nonmatching event created an alert")
+			}
+			eng.handle(context.Background(), event(tt.matching, base.Add(time.Second)))
+			if len(store.alerts) != 1 {
+				t.Fatalf("matching event should create one alert, got %d", len(store.alerts))
+			}
+		})
+	}
+}

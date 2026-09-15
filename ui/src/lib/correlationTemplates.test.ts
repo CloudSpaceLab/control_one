@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from './correlationTemplates';
 
 describe('correlation rule templates', () => {
-  it('defines the four Phase 3A templates with valid threshold rule values', () => {
+  it('defines the Phase 3A and 3B templates with valid threshold rule values', () => {
     expect(CORRELATION_RULE_TEMPLATES.map((template) => template.id)).toEqual([
       'ssh-brute-force',
       'windows-repeated-login-failures',
       'repeated-web-server-errors',
       'database-authentication-failures',
+      'web-request-flood',
+      'web-path-scanner',
+      'credential-stuffing',
+      'port-scanning',
     ]);
 
     for (const template of CORRELATION_RULE_TEMPLATES) {
@@ -19,6 +23,24 @@ describe('correlation rule templates', () => {
       expect(template.groupBy.length).toBeGreaterThan(0);
       expect(template.suppressionSeconds).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it('configures web detections with OR condition groups', () => {
+    expect(correlationRuleTemplate('web-request-flood')).toMatchObject({
+      eventType: 'web.request', threshold: 1000,
+      conditionGroups: [
+        [{ field: 'dst_port', operator: 'eq', value: '80' }],
+        [{ field: 'dst_port', operator: 'eq', value: '443' }],
+      ],
+    });
+    expect(correlationRuleTemplate('web-path-scanner')?.conditionGroups).toHaveLength(3);
+  });
+
+  it.each([
+    ['credential-stuffing', 'user_name'],
+    ['port-scanning', 'dst_port'],
+  ])('configures %s to count distinct %s values', (id, distinctField) => {
+    expect(correlationRuleTemplate(id)).toMatchObject({ distinctField });
   });
 
   it('provides matching conditions for the SSH template', () => {

@@ -12,6 +12,8 @@ export interface CorrelationRuleTemplate {
   severity: string;
   suppressionSeconds: number;
   conditions: CorrelationCondition[];
+  conditionGroups: CorrelationCondition[][];
+  distinctField: string;
 }
 
 export const CORRELATION_RULE_TEMPLATES: CorrelationRuleTemplate[] = [
@@ -31,6 +33,8 @@ export const CORRELATION_RULE_TEMPLATES: CorrelationRuleTemplate[] = [
       { field: 'protocol', operator: 'eq', value: 'tcp' },
       { field: 'auth_result', operator: 'eq', value: 'failure' },
     ],
+    conditionGroups: [],
+    distinctField: '',
   },
   {
     id: 'windows-repeated-login-failures',
@@ -46,6 +50,8 @@ export const CORRELATION_RULE_TEMPLATES: CorrelationRuleTemplate[] = [
     conditions: [
       { field: 'auth_result', operator: 'eq', value: 'failure' },
     ],
+    conditionGroups: [],
+    distinctField: '',
   },
   {
     id: 'repeated-web-server-errors',
@@ -61,6 +67,8 @@ export const CORRELATION_RULE_TEMPLATES: CorrelationRuleTemplate[] = [
     conditions: [
       { field: 'status_code', operator: 'gte', value: '500' },
     ],
+    conditionGroups: [],
+    distinctField: '',
   },
   {
     id: 'database-authentication-failures',
@@ -76,6 +84,55 @@ export const CORRELATION_RULE_TEMPLATES: CorrelationRuleTemplate[] = [
     conditions: [
       { field: 'auth_result', operator: 'eq', value: 'failure' },
     ],
+    conditionGroups: [],
+    distinctField: '',
+  },
+  {
+    id: 'web-request-flood',
+    name: 'Web request flood',
+    description: 'Detect a high volume of HTTP or HTTPS requests from one source against one host.',
+    eventCategory: 'security.event', eventType: 'web.request', threshold: 1000, windowSeconds: 60,
+    groupBy: ['src_ip', 'node_id'], severity: 'high', suppressionSeconds: 300,
+    conditions: [{ field: 'protocol', operator: 'eq', value: 'tcp' }],
+    conditionGroups: [
+      [{ field: 'dst_port', operator: 'eq', value: '80' }],
+      [{ field: 'dst_port', operator: 'eq', value: '443' }],
+    ],
+    distinctField: '',
+  },
+  {
+    id: 'web-path-scanner',
+    name: 'Web path scanner',
+    description: 'Detect repeated probes for sensitive web paths from one source against one host.',
+    eventCategory: 'security.event', eventType: 'web.request', threshold: 10, windowSeconds: 60,
+    groupBy: ['src_ip', 'node_id'], severity: 'high', suppressionSeconds: 300,
+    conditions: [],
+    conditionGroups: [
+      [{ field: 'path', operator: 'contains', value: '/.env' }],
+      [{ field: 'path', operator: 'contains', value: '/wp-admin' }],
+      [{ field: 'path', operator: 'contains', value: '/phpmyadmin' }],
+    ],
+    distinctField: '',
+  },
+  {
+    id: 'credential-stuffing',
+    name: 'Credential stuffing',
+    description: 'Detect failed authentication attempts against many accounts from one source.',
+    eventCategory: 'security.event', eventType: 'authentication.failure', threshold: 10, windowSeconds: 60,
+    groupBy: ['src_ip', 'node_id'], severity: 'critical', suppressionSeconds: 300,
+    conditions: [{ field: 'auth_result', operator: 'eq', value: 'failure' }],
+    conditionGroups: [],
+    distinctField: 'user_name',
+  },
+  {
+    id: 'port-scanning',
+    name: 'Port scanning',
+    description: 'Detect one source probing many destination ports on the same host.',
+    eventCategory: 'security.event', eventType: 'network.connection', threshold: 20, windowSeconds: 60,
+    groupBy: ['src_ip', 'node_id'], severity: 'high', suppressionSeconds: 300,
+    conditions: [{ field: 'protocol', operator: 'eq', value: 'tcp' }],
+    conditionGroups: [],
+    distinctField: 'dst_port',
   },
 ];
 
