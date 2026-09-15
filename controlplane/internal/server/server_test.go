@@ -5866,6 +5866,9 @@ func (f *fakeStore) ConsumeStepUpChallenge(_ context.Context, id uuid.UUID) (*st
 func (f *fakeStore) CreateAlert(_ context.Context, _ storage.CreateAlertParams) (*storage.Alert, error) {
 	return nil, errors.New("not implemented")
 }
+func (f *fakeStore) UpdateOpenAlertOccurrence(_ context.Context, _ storage.CreateAlertParams) (*storage.Alert, error) {
+	return nil, nil
+}
 func (f *fakeStore) GetAlert(_ context.Context, id uuid.UUID) (*storage.Alert, error) {
 	for _, alert := range f.alerts {
 		if alert.ID == id {

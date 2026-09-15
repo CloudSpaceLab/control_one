@@ -262,6 +262,7 @@ type Store interface {
 	CountRemediationsSince(context.Context, uuid.UUID, time.Time, time.Time) (int, error)
 	// Alerts.
 	CreateAlert(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
+	UpdateOpenAlertOccurrence(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
 	GetAlert(context.Context, uuid.UUID) (*storage.Alert, error)
 	ListAlerts(context.Context, storage.AlertFilter, int, int) ([]storage.Alert, int, error)
 	AckAlert(context.Context, uuid.UUID, uuid.UUID) error
@@ -1048,6 +1049,18 @@ func (a correlationStoreAdapter) ListCorrelationRules(ctx context.Context, tenan
 }
 func (a correlationStoreAdapter) CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
 	return a.server.createAlert(ctx, p)
+}
+func (a correlationStoreAdapter) UpdateOpenAlertOccurrence(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
+	alert, err := a.server.store.UpdateOpenAlertOccurrence(ctx, p)
+	if errors.Is(err, storage.ErrAlertRenotificationDue) {
+		a.server.dispatchAlertEmail(*alert)
+		return alert, nil
+	}
+	if errors.Is(err, storage.ErrAlertDeduped) {
+		a.server.recordAudit(ctx, a.server.systemActor(), alert.TenantID, "alert.occurrence_suppressed", "alert", alert.ID.String(), alertDeliveryAuditMetadata(*alert, nil))
+		return alert, nil
+	}
+	return alert, err
 }
 
 // publishEvent fan-outs a realtime event to SSE subscribers. Safe to call

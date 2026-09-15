@@ -1842,7 +1842,7 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
   };
 }
 
-function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {
+export function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {
   const ctx = alert.context ?? {};
   const facts: AlertResolutionFact[] = [];
   const country = contextString(ctx, 'country_code', 'country');
@@ -1852,17 +1852,27 @@ function alertResolutionFacts(alert: Alert, category: string, scope: string, ip:
   addFact(facts, 'Scope', scope, 'info');
   addFact(facts, 'Source IP', ip, 'critical');
   addFact(facts, 'Signal', contextString(ctx, 'event_type', 'signal', 'reason'), 'info');
+  addFact(facts, 'Occurrences', contextString(ctx, 'occurrence_count'), 'warning');
+  addFact(facts, 'First seen', formatAlertContextTime(contextString(ctx, 'first_seen_at')), 'info');
+  addFact(facts, 'Last seen', formatAlertContextTime(contextString(ctx, 'last_seen_at')), 'warning');
+  addFact(facts, 'Last notification', formatAlertContextTime(contextString(ctx, 'last_notification_at')), 'healthy');
   addFact(facts, 'App', contextString(ctx, 'application_name', 'app', 'vhost'), 'healthy');
   addFact(facts, 'Origin', [country, asn ? `ASN ${asn}` : ''].filter(Boolean).join(' / '), 'degraded');
   addFact(facts, 'Confidence', formatPercentLike(contextString(ctx, 'confidence', 'score', 'auto_alert_threshold', 'threat_confidence')), severityTone(alert.severity));
   addFact(facts, 'Request burst', contextString(ctx, 'request_burst', 'requests_1m', 'request_count', 'events'), 'warning');
   addFact(facts, 'Outbound', contextBytes(ctx, 'outbound_transfer', 'outbound_bytes', 'bytes_out'), 'critical');
   addFact(facts, 'Probed paths', contextListString(ctx, 'top_probed_paths', 'probed_paths', 'paths'), 'warning');
-  return facts.slice(0, 9);
+  return facts.slice(0, 12);
+}
+
+function formatAlertContextTime(value: string): string {
+  if (!value) return '';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 function addFact(facts: AlertResolutionFact[], label: string, value: string, tone: StateTone) {
-  if (!value || facts.some((fact) => fact.label === label || fact.value === value)) return;
+  if (!value || facts.some((fact) => fact.label === label)) return;
   facts.push({ label, value, tone });
 }
 

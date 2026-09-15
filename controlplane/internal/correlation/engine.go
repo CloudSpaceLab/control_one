@@ -28,6 +28,10 @@ type AlertCreator interface {
 	CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error)
 }
 
+type alertOccurrenceUpdater interface {
+	UpdateOpenAlertOccurrence(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error)
+}
+
 type windowKey struct {
 	ruleID    uuid.UUID
 	dimension string
@@ -185,24 +189,31 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 			}
 			fire = aggregateTotal >= float64(r.AggregateThreshold)
 		}
+		suppressed := false
 		if fire && r.SuppressionSeconds > 0 {
 			last := e.lastFired[key]
-			fire = last.IsZero() || ev.Timestamp.Sub(last) >= time.Duration(r.SuppressionSeconds)*time.Second
+			suppressed = !last.IsZero() && ev.Timestamp.Sub(last) < time.Duration(r.SuppressionSeconds)*time.Second
+			fire = !suppressed
 		}
 		if fire {
 			e.windows[key] = nil
 			e.sequenceWindows[key] = nil
 			e.lastFired[key] = ev.Timestamp
+		} else if suppressed {
+			e.windows[key] = nil
+			e.sequenceWindows[key] = nil
 		}
 		e.mu.Unlock()
 
 		if fire {
-			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal)
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, false)
+		} else if suppressed {
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, true)
 		}
 	}
 }
 
-func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64) {
+func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64, updateOnly bool) {
 	title := r.Name
 	summary := "correlation rule fired"
 	ctxPayload := map[string]any{
@@ -222,6 +233,7 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"sequence_conditions": r.SequenceConditions,
 		"aggregate_field":     r.AggregateField,
 		"aggregate_threshold": r.AggregateThreshold,
+		"evidence_links":      map[string]any{"alert_inbox": "/console/alerts", "investigation": "/console/investigate"},
 	}
 	if r.AggregateField != "" {
 		ctxPayload["aggregate_value"] = aggregateValue
@@ -236,7 +248,7 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			nodeArg = &parsed
 		}
 	}
-	_, err := e.store.CreateAlert(ctx, storage.CreateAlertParams{
+	params := storage.CreateAlertParams{
 		TenantID: ev.TenantID,
 		NodeID:   nodeArg,
 		RuleID:   &r.ID,
@@ -246,7 +258,17 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		Summary:  summary,
 		DedupKey: dedup,
 		Context:  ctxPayload,
-	})
+	}
+	var err error
+	if updateOnly {
+		updater, ok := e.store.(alertOccurrenceUpdater)
+		if !ok {
+			return
+		}
+		_, err = updater.UpdateOpenAlertOccurrence(ctx, params)
+	} else {
+		_, err = e.store.CreateAlert(ctx, params)
+	}
 	if err != nil {
 		if e.log != nil {
 			e.log.Warn("correlation create alert", zap.Error(err))

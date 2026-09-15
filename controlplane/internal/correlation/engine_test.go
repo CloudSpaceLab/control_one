@@ -14,9 +14,17 @@ import (
 )
 
 type fakeStore struct {
-	mu     sync.Mutex
-	rules  []storage.CorrelationRule
-	alerts []storage.CreateAlertParams
+	mu                sync.Mutex
+	rules             []storage.CorrelationRule
+	alerts            []storage.CreateAlertParams
+	occurrenceUpdates []storage.CreateAlertParams
+}
+
+func (f *fakeStore) UpdateOpenAlertOccurrence(_ context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.occurrenceUpdates = append(f.occurrenceUpdates, p)
+	return &storage.Alert{ID: uuid.New(), TenantID: p.TenantID, Severity: p.Severity, Title: p.Title}, storage.ErrAlertDeduped
 }
 
 func TestMatchesPayloadEventTypeFromNormalizedDetails(t *testing.T) {
@@ -202,6 +210,9 @@ func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing
 	defer store.mu.Unlock()
 	if len(store.alerts) != 1 {
 		t.Fatalf("want exactly 1 suppressed alert, got %d", len(store.alerts))
+	}
+	if len(store.occurrenceUpdates) != 1 {
+		t.Fatalf("want 1 suppressed occurrence update, got %d", len(store.occurrenceUpdates))
 	}
 	wantKey := rule.ID.String() + "/src_ip=203.0.113.8|node_id=" + node.String()
 	if store.alerts[0].DedupKey != wantKey {

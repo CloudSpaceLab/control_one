@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Alert, CorrelationRule } from '../lib/api';
-import { Alerts, alertContextPills, alertDispositionPill } from './Alerts';
+import { Alerts, alertContextPills, alertDispositionPill, alertResolutionFacts } from './Alerts';
 
 const mocks = vi.hoisted(() => {
   const listAlerts = vi.fn();
@@ -255,5 +255,18 @@ describe('alertContextPills', () => {
       value: 'Accepted risk',
       tone: 'warning',
     });
+  });
+});
+
+describe('alertResolutionFacts', () => {
+  it('shows correlation occurrence and notification timing', () => {
+    const alert: Alert = {
+      id: 'alert-phase5', tenant_id: 'tenant-1', source: 'correlation', severity: 'high',
+      title: 'SSH brute force', state: 'open', opened_at: '2026-09-15T10:00:00Z',
+      context: { occurrence_count: 8, first_seen_at: '2026-09-15T10:00:00Z', last_seen_at: '2026-09-15T10:01:00Z', last_notification_at: '2026-09-15T10:00:00Z' },
+    };
+    const facts = alertResolutionFacts(alert, 'credential', 'node-1', '203.0.113.25');
+    expect(facts.map((fact) => fact.label)).toEqual(expect.arrayContaining(['Occurrences', 'First seen', 'Last seen', 'Last notification']));
+    expect(facts.find((fact) => fact.label === 'Occurrences')?.value).toBe('8');
   });
 });

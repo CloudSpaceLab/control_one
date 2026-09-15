@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -54,6 +55,7 @@ type UpdateAlertDispositionParams struct {
 // the same (tenant, dedup_key) exists, ErrAlertDeduped is returned along with
 // the existing alert — callers treat this as idempotent.
 var ErrAlertDeduped = errors.New("alert deduplicated")
+var ErrAlertRenotificationDue = errors.New("alert renotification due")
 
 func (s *Store) CreateAlert(ctx context.Context, p CreateAlertParams) (*Alert, error) {
 	if s.db == nil {
@@ -88,8 +90,20 @@ func (s *Store) CreateAlert(ctx context.Context, p CreateAlertParams) (*Alert, e
 			return nil, err
 		}
 		if existing != nil {
-			return existing, ErrAlertDeduped
+			return s.updateOpenAlertOccurrence(ctx, existing, p)
 		}
+	}
+	now := s.clock().UTC()
+	if p.Context == nil {
+		p.Context = map[string]any{}
+	}
+	p.Context["occurrence_count"] = positiveContextInt(p.Context, "hits", 1)
+	p.Context["first_seen_at"] = now.Format(time.RFC3339Nano)
+	p.Context["last_seen_at"] = now.Format(time.RFC3339Nano)
+	p.Context["last_notification_at"] = now.Format(time.RFC3339Nano)
+	ctxJSON, err = marshalJSONBMap(p.Context)
+	if err != nil {
+		return nil, err
 	}
 	var summaryArg any
 	if strings.TrimSpace(p.Summary) != "" {
@@ -100,11 +114,95 @@ func (s *Store) CreateAlert(ctx context.Context, p CreateAlertParams) (*Alert, e
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO alerts (id, tenant_id, rule_id, node_id, source, severity, title, summary, state, dedup_key, context, opened_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11)
-	`, id, p.TenantID, ruleID, nodeID, p.Source, p.Severity, p.Title, summaryArg, dedupArg, ctxJSON, s.clock())
+	`, id, p.TenantID, ruleID, nodeID, p.Source, p.Severity, p.Title, summaryArg, dedupArg, ctxJSON, now)
 	if err != nil {
 		return nil, fmt.Errorf("insert alert: %w", err)
 	}
 	return s.GetAlert(ctx, id)
+}
+
+func (s *Store) UpdateOpenAlertOccurrence(ctx context.Context, p CreateAlertParams) (*Alert, error) {
+	if strings.TrimSpace(p.DedupKey) == "" {
+		return nil, errors.New("dedup_key required")
+	}
+	existing, err := s.findOpenAlertByDedup(ctx, p.TenantID, p.DedupKey)
+	if err != nil || existing == nil {
+		return existing, err
+	}
+	return s.updateOpenAlertOccurrence(ctx, existing, p)
+}
+
+func (s *Store) updateOpenAlertOccurrence(ctx context.Context, existing *Alert, p CreateAlertParams) (*Alert, error) {
+	now := s.clock().UTC()
+	count := positiveContextInt(existing.Context, "occurrence_count", 1) + positiveContextInt(p.Context, "hits", 1)
+	firstSeen := firstContextTime(existing.Context, "first_seen_at", existing.OpenedAt)
+	lastNotification := firstContextTime(existing.Context, "last_notification_at", existing.OpenedAt)
+	merged := existing.Context
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for key, value := range p.Context {
+		merged[key] = value
+	}
+	merged["occurrence_count"] = count
+	merged["first_seen_at"] = firstSeen.Format(time.RFC3339Nano)
+	merged["last_seen_at"] = now.Format(time.RFC3339Nano)
+	suppression := positiveContextInt(p.Context, "suppression_s", 0)
+	notify := suppression <= 0 || now.Sub(lastNotification) >= time.Duration(suppression)*time.Second
+	if notify {
+		merged["last_notification_at"] = now.Format(time.RFC3339Nano)
+	}
+	ctxJSON, err := marshalJSONBMap(merged)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE alerts SET context=$1, severity=$2, summary=COALESCE(NULLIF($3,''),summary) WHERE id=$4`, ctxJSON, nonEmptyString(p.Severity, existing.Severity), p.Summary, existing.ID); err != nil {
+		return nil, fmt.Errorf("update alert occurrence: %w", err)
+	}
+	updated, err := s.GetAlert(ctx, existing.ID)
+	if err != nil {
+		return nil, err
+	}
+	if notify {
+		return updated, ErrAlertRenotificationDue
+	}
+	return updated, ErrAlertDeduped
+}
+
+func positiveContextInt(values map[string]any, key string, fallback int) int {
+	if values == nil {
+		return fallback
+	}
+	switch value := values[key].(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil && parsed > 0 {
+			return int(parsed)
+		}
+	}
+	return fallback
+}
+
+func firstContextTime(values map[string]any, key string, fallback time.Time) time.Time {
+	if values != nil {
+		if raw, ok := values[key].(string); ok {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				return parsed
+			}
+		}
+	}
+	return fallback.UTC()
 }
 
 func (s *Store) findOpenAlertByDedup(ctx context.Context, tenant uuid.UUID, key string) (*Alert, error) {
