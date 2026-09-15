@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ClipboardPlus, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ClipboardPlus, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -20,6 +20,7 @@ import {
   EmptyState,
   EntityChip,
   KpiTile,
+  Pagination,
   Panel,
   SectionHeader,
   SelectField,
@@ -32,11 +33,12 @@ import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
 import type { Alert, AlertDispositionValue, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
-import type { ColumnDef } from '@tanstack/react-table';
+import type { ColumnDef, SortingState } from '@tanstack/react-table';
 
 type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
+const SEVERITY_FILTERS = ['critical', 'high', 'medium', 'low', 'info'] as const;
 const ALERTS_POLL_MS = 30_000;
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
@@ -234,11 +236,34 @@ export function Alerts(): JSX.Element {
   const [creatingRule, setCreatingRule] = useState(false);
   const [createRuleError, setCreateRuleError] = useState<string | null>(null);
 
-  const tenantId = currentTenantId ?? '';
+const tenantId = currentTenantId ?? '';
+  const [severity, setSeverity] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'opened_at', desc: true }]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const pageSize = 25;
+  const searchTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    searchTimer.current = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => {
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    };
+  }, [search]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [tenantId, state, severity, debouncedSearch, sorting]);
 
   const refresh = useCallback(async () => {
     if (!tenantId) {
       setAlerts([]);
+      setTotal(0);
       setLoading(false);
       setAlertsError(null);
       setAlertActionError(null);
@@ -246,16 +271,27 @@ export function Alerts(): JSX.Element {
     }
     setLoading(true);
     try {
-      const resp = await client.listAlerts({ tenantId, state, limit: 100, offset: 0 });
+      const resp = await client.listAlerts({
+        tenantId,
+        state,
+        severity: severity || undefined,
+        search: debouncedSearch || undefined,
+        sortBy: sorting[0]?.id,
+        sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
+        limit: pageSize,
+        offset: page * pageSize,
+      });
       setAlerts(resp.data);
+      setTotal(resp.pagination?.total ?? resp.data.length);
       setAlertsError(null);
     } catch (err) {
       setAlerts([]);
+      setTotal(0);
       setAlertsError(errorMessage(err, 'Alert list failed.'));
     } finally {
       setLoading(false);
     }
-  }, [client, tenantId, state]);
+  }, [client, tenantId, state, severity, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -399,7 +435,7 @@ const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
       ),
     },
     {
-      id: 'title',
+      accessorKey: 'title',
       header: 'Title',
       cell: ({ row }) => {
         const pills = alertContextPills(row.original);
@@ -440,7 +476,7 @@ const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
       header: 'Opened',
       cell: ({ getValue }) => (
         <span className="font-mono text-xs tabular-nums text-text-secondary">
-          {new Date(getValue() as string).toLocaleString()}
+          {timeAgo(getValue() as string)}
         </span>
       ),
     },
@@ -660,19 +696,41 @@ const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
           )}
 
           <Panel padding="md" eyebrow="FILTERS" title="Refine">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-              <FilterSelect
-                label="Tenant"
-                value={tenantId}
-                onChange={(v) => setCurrentTenantId(v)}
-                options={tenants.map((t) => ({ label: t.name, value: t.id }))}
-              />
-              <FilterSelect
-                label="State"
-                value={state}
-                onChange={(v) => setState(v as typeof STATE_FILTERS[number])}
-                options={STATE_FILTERS.map((s) => ({ label: s, value: s }))}
-              />
+            <div className="flex flex-col gap-3">
+              <div className="relative max-w-md">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+                <Input
+                  id="alert-search"
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search title, summary, or source..."
+                  className="pl-9"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+                <FilterSelect
+                  label="Tenant"
+                  value={tenantId}
+                  onChange={(v) => setCurrentTenantId(v)}
+                  options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+                />
+                <FilterSelect
+                  label="State"
+                  value={state}
+                  onChange={(v) => setState(v as typeof STATE_FILTERS[number])}
+                  options={STATE_FILTERS.map((s) => ({ label: s, value: s }))}
+                />
+                <FilterSelect
+                  label="Severity"
+                  value={severity}
+                  onChange={(v) => setSeverity(v)}
+                  options={[
+                    { label: 'All severities', value: '' },
+                    ...SEVERITY_FILTERS.map((s) => ({ label: s, value: s })),
+                  ]}
+                />
+              </div>
             </div>
           </Panel>
 
@@ -688,13 +746,15 @@ const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
             </Panel>
           )}
 
-          <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${alerts.length}`} title="Inbox">
+<Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${total}`} title="Inbox">
             <DataTable
               columns={columns}
               rows={alerts}
               rowKey={(r) => r.id}
               loading={loading}
               compact
+              sorting={sorting}
+              onSortingChange={setSorting}
               empty={
                 alertsError ? (
                   <EmptyState
@@ -707,16 +767,23 @@ const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
                     tone="success"
                     icon={<ShieldCheck />}
                     title="All clear"
-                    description="No open alerts. Detection rules are healthy and the inbox is empty."
+                    description="No open alerts match the current filters. Detection rules are healthy and the inbox is empty."
                   />
                 ) : (
                   <EmptyState
                     icon={<Bell />}
                     title="No alerts"
-                    description={`No alerts in state "${state}".`}
+                    description={`No alerts in state "${state}"${severity ? ` with severity "${severity}"` : ''}${debouncedSearch ? ` matching "${debouncedSearch}"` : ''}.`}
                   />
                 )
               }
+            />
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              className="mt-3"
             />
           </Panel>
         </>

@@ -308,8 +308,17 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request, princi
 		return
 	}
 	f := storage.AlertFilter{
-		State:    strings.TrimSpace(r.URL.Query().Get("state")),
-		Severity: strings.TrimSpace(r.URL.Query().Get("severity")),
+		State:     strings.TrimSpace(r.URL.Query().Get("state")),
+		Severity:  strings.TrimSpace(r.URL.Query().Get("severity")),
+		Search:    strings.TrimSpace(r.URL.Query().Get("q")),
+		SortBy:    strings.TrimSpace(r.URL.Query().Get("sort_by")),
+		SortOrder: strings.TrimSpace(r.URL.Query().Get("sort_order")),
+	}
+	if f.SortBy == "" {
+		f.SortBy = "opened_at"
+	}
+	if f.SortOrder == "" {
+		f.SortOrder = "desc"
 	}
 	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantParam == "" {
@@ -340,6 +349,14 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request, princi
 			return
 		}
 		f.Since = &t
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("until")); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid until", http.StatusBadRequest)
+			return
+		}
+		f.Until = &t
 	}
 	alerts, total, err := s.store.ListAlerts(r.Context(), f, limit, offset)
 	if err != nil {

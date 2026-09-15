@@ -33,6 +33,8 @@ export interface DataTableProps<T> {
   sticky?: boolean;
   initialSorting?: SortingState;
   globalFilter?: string;
+  sorting?: SortingState;
+  onSortingChange?: (sorting: SortingState) => void;
 }
 
 export function DataTable<T>({
@@ -47,14 +49,22 @@ export function DataTable<T>({
   sticky,
   initialSorting = [],
   globalFilter,
+  sorting: controlledSorting,
+  onSortingChange,
 }: DataTableProps<T>) {
-  const [sorting, setSorting] = useState<SortingState>(initialSorting);
+  const [internalSorting, setInternalSorting] = useState<SortingState>(initialSorting);
+  const isControlled = controlledSorting !== undefined;
+  const sortingState = isControlled ? controlledSorting : internalSorting;
 
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting, globalFilter },
-    onSortingChange: setSorting,
+    state: { sorting: sortingState, globalFilter },
+    onSortingChange: (updater) => {
+      const next = typeof updater === 'function' ? updater(sortingState) : updater;
+      if (!isControlled) setInternalSorting(next);
+      onSortingChange?.(next);
+    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),

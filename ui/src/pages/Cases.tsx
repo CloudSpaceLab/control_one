@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -14,16 +14,22 @@ import {
   MessageSquarePlus,
   Network,
   RefreshCw,
+  Search,
   Server,
   Shield,
   ShieldCheck,
 } from 'lucide-react';
+import type { ColumnDef, SortingState } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
+  DataTable,
   EmptyState,
   IpActionMenu,
+  Pagination,
   Panel,
   SectionHeader,
+  SelectField,
   StatusTag,
   type StateTone,
 } from '@/components/kit';
@@ -32,6 +38,14 @@ import { useTenant } from '@/providers/TenantProvider';
 import { cn } from '@/lib/utils';
 import type { SOCCase, SOCCaseExport, SOCCaseEvidenceRef, SOCCaseTimelineItem } from '@/lib/api';
 import { entityRoute } from '@/lib/entity';
+
+const CASE_SEVERITIES = [
+  { label: 'Critical', value: 'critical' },
+  { label: 'High', value: 'high' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'Low', value: 'low' },
+  { label: 'Info', value: 'info' },
+];
 
 export function Cases(): JSX.Element {
   const api = useApiClient();
@@ -46,8 +60,31 @@ export function Cases(): JSX.Element {
   const [noteDraft, setNoteDraft] = useState('');
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
-  const [exportLoading, setExportLoading] = useState(false);
+const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'updated_at', desc: true }]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const pageSize = 12;
+  const searchTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    searchTimer.current = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => {
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    };
+  }, [search]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [currentTenantId, statusFilter, severityFilter, debouncedSearch, sorting]);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
@@ -60,11 +97,20 @@ export function Cases(): JSX.Element {
       setLoading(false);
       return;
     }
-    setLoading(true);
+setLoading(true);
     setError(null);
     try {
-      const response = await api.listSOCCases({ tenantId: currentTenantId, limit: 50 });
+      const response = await api.listSOCCases({
+        tenantId: currentTenantId,
+        limit: pageSize,
+        offset: page * pageSize,
+        status: statusFilter || undefined,
+        search: debouncedSearch || undefined,
+        sortBy: sorting[0]?.id,
+        sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
+      });
       setCases(response.data);
+      setTotal(response.pagination?.total ?? response.data.length);
       setSelectedId((current) => (
         current && response.data.some((row) => row.case_id === current)
           ? current
@@ -73,6 +119,7 @@ export function Cases(): JSX.Element {
     } catch (err) {
       setError(errorMessage(err, 'Failed to load SOC cases.'));
       setCases([]);
+      setTotal(0);
       setSelectedId(null);
       setSelectedCase(null);
       setExportPreview(null);
@@ -80,7 +127,7 @@ export function Cases(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [api, currentTenantId]);
+  }, [api, currentTenantId, statusFilter, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -118,6 +165,60 @@ export function Cases(): JSX.Element {
       cancelled = true;
     };
   }, [api, currentTenantId, selectedId]);
+
+  const columns = useMemo<ColumnDef<SOCCase>[]>(() => [
+    {
+      accessorKey: 'severity',
+      header: 'Severity',
+      cell: ({ row }) => (
+        <StatusTag tone={severityTone(row.original.severity)} className="font-mono uppercase">
+          {row.original.severity || 'unknown'}
+        </StatusTag>
+      ),
+    },
+    {
+      accessorKey: 'title',
+      header: 'Title',
+      cell: ({ row }) => (
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium text-foreground">{row.original.title}</span>
+          <span className="truncate text-xs text-text-muted">{caseSummaryText(row.original)}</span>
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ getValue }) => (
+        <StatusTag tone={caseStatusTone(getValue() as string)} variant="outline">
+          {String(getValue())}
+        </StatusTag>
+      ),
+    },
+    {
+      id: 'refs',
+      header: 'Refs',
+      cell: ({ row }) => (
+        <span className="tabular-nums text-xs text-text-secondary">{caseEvidenceCount(row.original)}</span>
+      ),
+    },
+    {
+      id: 'notes',
+      header: 'Notes',
+      cell: ({ row }) => (
+        <span className="tabular-nums text-xs text-text-secondary">{row.original.notes?.length ?? 0}</span>
+      ),
+    },
+    {
+      accessorKey: 'updated_at',
+      header: 'Updated',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums text-text-secondary">
+          {timeAgo(getValue() as string)}
+        </span>
+      ),
+    },
+  ], []);
 
   const statusCounts = useMemo(() => summarizeCases(cases), [cases]);
 
@@ -191,31 +292,76 @@ export function Cases(): JSX.Element {
       ) : null}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.4fr)]">
-        <Panel padding="md" eyebrow="QUEUE" title="Incident packets">
-          {loading ? (
-            <p className="text-sm text-text-muted">Loading cases...</p>
-          ) : cases.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {cases.map((row) => (
-                <CaseQueueRow
-                  key={row.case_id}
-                  row={row}
-                  active={row.case_id === selectedId}
-                  onSelect={() => setSelectedId(row.case_id)}
-                />
-              ))}
+<Panel padding="md" eyebrow="QUEUE" title="Incident packets">
+          <div className="flex flex-col gap-3">
+            <div className="relative max-w-full">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+              <Input
+                id="case-search"
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search title, summary, or trigger..."
+                className="pl-9"
+              />
             </div>
-          ) : error ? (
-            <p className="text-sm text-text-muted">
-              Case queue could not be loaded. Resolve the error above and refresh.
-            </p>
-          ) : (
-            <EmptyState
-              icon={<ShieldCheck />}
-              title="No SOC cases yet"
-              description="Cases appear after AI investigations, alerts, posture gaps, or DB audit gaps are promoted into an incident packet."
+            <div className="grid grid-cols-2 gap-3">
+              <FilterSelect
+                label="Status"
+                value={statusFilter}
+                onChange={(v) => setStatusFilter(v)}
+                options={[
+                  { label: 'All statuses', value: '' },
+                  { label: 'Open', value: 'open' },
+                  { label: 'Investigating', value: 'investigating' },
+                  { label: 'Closed', value: 'closed' },
+                ]}
+              />
+              <FilterSelect
+                label="Severity"
+                value={severityFilter}
+                onChange={(v) => setSeverityFilter(v)}
+                options={[
+                  { label: 'All severities', value: '' },
+                  ...CASE_SEVERITIES,
+                ]}
+              />
+            </div>
+          </div>
+          <div className="mt-3">
+            <DataTable
+              columns={columns}
+              rows={cases}
+              rowKey={(row) => row.case_id}
+              loading={loading}
+              compact
+              sorting={sorting}
+              onSortingChange={setSorting}
+              onRowClick={(row) => setSelectedId(row.case_id)}
+              empty={
+                error ? (
+                  <EmptyState
+                    icon={<ClipboardList />}
+                    title="Case queue could not be loaded"
+                    description="Resolve the error above and refresh."
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<ShieldCheck />}
+                    title="No SOC cases yet"
+                    description="Cases appear after AI investigations, alerts, posture gaps, or DB audit gaps are promoted into an incident packet."
+                  />
+                )
+              }
             />
-          )}
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              className="mt-3"
+            />
+          </div>
         </Panel>
 
         <Panel
@@ -300,42 +446,37 @@ function CaseMetric({ label, value, tone }: { label: string; value: number; tone
   );
 }
 
-function CaseQueueRow({
-  row,
-  active,
-  onSelect,
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
 }: {
-  row: SOCCase;
-  active: boolean;
-  onSelect: () => void;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
 }): JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        'rounded-md border border-border-subtle bg-surface p-3 text-left transition hover:border-border-strong hover:bg-hover',
-        active && 'border-brand-500/60 bg-brand-500/10',
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{row.title}</p>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-secondary">
-            {caseSummaryText(row)}
-          </p>
-        </div>
-        <StatusTag tone={severityTone(row.severity)}>{row.severity}</StatusTag>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        <StatusTag tone={caseStatusTone(row.status)} variant="outline">{row.status}</StatusTag>
-        <StatusTag tone={caseEvidenceCount(row) > 0 ? 'healthy' : 'warning'} variant="outline">
-          {caseEvidenceCount(row)} refs
-        </StatusTag>
-        <StatusTag tone="info" variant="outline">{formatShortDate(row.updated_at)}</StatusTag>
-      </div>
-    </button>
+    <SelectField label={label} value={value} onChange={(e) => onChange(e.target.value)}>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </SelectField>
   );
+}
+
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'recently';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 function CaseFactsPanel({ row }: { row: SOCCase }): JSX.Element {

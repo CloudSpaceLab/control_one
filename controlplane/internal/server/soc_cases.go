@@ -119,6 +119,31 @@ func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, prin
 		Status:           storage.AIInvestigationStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
 		TriggerType:      strings.TrimSpace(r.URL.Query().Get("trigger_type")),
 		TriggerEventType: strings.TrimSpace(r.URL.Query().Get("trigger_event_type")),
+		Search:           strings.TrimSpace(r.URL.Query().Get("q")),
+		SortBy:           strings.TrimSpace(r.URL.Query().Get("sort_by")),
+		SortOrder:        strings.TrimSpace(r.URL.Query().Get("sort_order")),
+	}
+	if filter.SortBy == "" {
+		filter.SortBy = "created_at"
+	}
+	if filter.SortOrder == "" {
+		filter.SortOrder = "desc"
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid since", http.StatusBadRequest)
+			return
+		}
+		filter.Since = &parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("until")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid until", http.StatusBadRequest)
+			return
+		}
+		filter.Until = &parsed
 	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("node_id")); raw != "" {
 		parsed, err := uuid.Parse(raw)

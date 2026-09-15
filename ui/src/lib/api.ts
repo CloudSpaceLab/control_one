@@ -2027,6 +2027,11 @@ export interface ListSOCCasesParams {
   triggerType?: string;
   triggerEventType?: string;
   nodeId?: string;
+  search?: string;
+  since?: string;
+  until?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
   includeNotes?: boolean;
   limit?: number;
   offset?: number;
@@ -2576,6 +2581,11 @@ export class APIClient {
     if (params.triggerEventType?.trim())
       search.set("trigger_event_type", params.triggerEventType.trim());
     if (params.nodeId?.trim()) search.set("node_id", params.nodeId.trim());
+    if (params.search?.trim()) search.set("q", params.search.trim());
+    if (params.since?.trim()) search.set("since", params.since.trim());
+    if (params.until?.trim()) search.set("until", params.until.trim());
+    if (params.sortBy?.trim()) search.set("sort_by", params.sortBy.trim());
+    if (params.sortOrder?.trim()) search.set("sort_order", params.sortOrder.trim());
     if (params.includeNotes) search.set("include_notes", "true");
     if (typeof params.limit === "number")
       search.set("limit", params.limit.toString());
@@ -4374,6 +4384,10 @@ export class APIClient {
       tenantId?: string;
       state?: string;
       severity?: string;
+      search?: string;
+      until?: string;
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
       limit?: number;
       offset?: number;
     } = {},
@@ -4382,6 +4396,10 @@ export class APIClient {
     if (params.tenantId) search.set("tenant_id", params.tenantId);
     if (params.state) search.set("state", params.state);
     if (params.severity) search.set("severity", params.severity);
+    if (params.search) search.set("q", params.search);
+    if (params.until) search.set("until", params.until);
+    if (params.sortBy) search.set("sort_by", params.sortBy);
+    if (params.sortOrder) search.set("sort_order", params.sortOrder);
     if (typeof params.limit === "number")
       search.set("limit", String(params.limit));
     if (typeof params.offset === "number")

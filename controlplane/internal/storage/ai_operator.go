@@ -55,6 +55,11 @@ type ListAIInvestigationsFilter struct {
 	Status           AIInvestigationStatus
 	TriggerType      string
 	TriggerEventType string
+	Search           string
+	Since            *time.Time
+	Until            *time.Time
+	SortBy           string
+	SortOrder        string
 }
 
 type AIOperatorProposalStatus string
@@ -214,11 +219,42 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 		args = append(args, strings.TrimSpace(filter.TriggerEventType))
 		clauses = append(clauses, fmt.Sprintf("trigger_event_type = $%d", len(args)))
 	}
+	if search := strings.TrimSpace(filter.Search); search != "" {
+		patterns := "%" + strings.ToLower(search) + "%"
+		args = append(args, patterns)
+		clauses = append(clauses, fmt.Sprintf("(LOWER(COALESCE(summary, '')) LIKE $%d OR LOWER(COALESCE(trigger_event_type, '')) LIKE $%d)", len(args), len(args)))
+	}
+	if filter.Since != nil {
+		args = append(args, *filter.Since)
+		clauses = append(clauses, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if filter.Until != nil {
+		args = append(args, *filter.Until)
+		clauses = append(clauses, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
 
 	where := strings.Join(clauses, " AND ")
 	var total int
 	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM ai_investigations WHERE %s`, where), args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count ai investigations: %w", err)
+	}
+
+	sortCol := "created_at"
+	switch strings.ToLower(strings.TrimSpace(filter.SortBy)) {
+	case "updated_at":
+		sortCol = "updated_at"
+	case "severity":
+		sortCol = "severity"
+	case "status":
+		sortCol = "status"
+	case "title", "summary":
+		sortCol = "summary"
+	case "created_at":
+		sortCol = "created_at"
+	}
+	order := "DESC"
+	if strings.EqualFold(strings.TrimSpace(filter.SortOrder), "asc") {
+		order = "ASC"
 	}
 
 	query := fmt.Sprintf(`
@@ -227,8 +263,8 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 		       created_at, updated_at
 		FROM ai_investigations
 		WHERE %s
-		ORDER BY created_at DESC
-	`, where)
+		ORDER BY %s %s
+	`, where, sortCol, order)
 	pagedArgs := append([]any{}, args...)
 	if limit > 0 {
 		pagedArgs = append(pagedArgs, limit)

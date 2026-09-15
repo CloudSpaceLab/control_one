@@ -200,9 +200,9 @@ describe('Cases', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
+expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /database audit gap/i }));
+    await user.click(await screen.findByText('Database audit gap'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('case detail unavailable');
     await waitFor(() => {
