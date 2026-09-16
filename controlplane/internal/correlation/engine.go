@@ -41,6 +41,7 @@ type windowHit struct {
 	timestamp      time.Time
 	distinctValue  string
 	aggregateValue float64
+	evidence       map[string]any
 }
 
 // Engine consumes events and opens alerts when correlation rules fire.
@@ -165,7 +166,10 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 				continue
 			}
 		}
-		hits := append(e.windows[key], windowHit{timestamp: ev.Timestamp, distinctValue: distinctValue, aggregateValue: aggregateValue})
+		hits := append(e.windows[key], windowHit{
+			timestamp: ev.Timestamp, distinctValue: distinctValue, aggregateValue: aggregateValue,
+			evidence: correlationEvidenceEvent(ev),
+		})
 		trimmed := hits[:0]
 		for _, hit := range hits {
 			if !hit.timestamp.Before(cutoff) {
@@ -182,6 +186,10 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 			hitCount = len(unique)
 		}
 		aggregateTotal := float64(0)
+		evidence := make([]any, 0, len(trimmed))
+		for _, hit := range trimmed {
+			evidence = append(evidence, hit.evidence)
+		}
 		fire := hitCount >= r.Threshold
 		if r.AggregateField != "" {
 			for _, hit := range trimmed {
@@ -206,14 +214,14 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 		e.mu.Unlock()
 
 		if fire {
-			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, false)
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, evidence, false)
 		} else if suppressed {
-			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, true)
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, evidence, true)
 		}
 	}
 }
 
-func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64, updateOnly bool) {
+func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64, evidence []any, updateOnly bool) {
 	title := r.Name
 	summary := "correlation rule fired"
 	dedup := r.ID.String() + "/" + dim
@@ -238,7 +246,7 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"correlation_id":      dedup,
 		"matched_event_count": hits,
 		"matched_conditions":  r.Conditions,
-		"contributing_events": []any{correlationEvidenceEvent(ev)},
+		"contributing_events": evidence,
 		"notification_state":  "pending",
 	}
 	if r.SuppressionSeconds > 0 {

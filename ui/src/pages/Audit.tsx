@@ -203,17 +203,7 @@ export function Audit(): JSX.Element {
     },
   ], []);
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return logs;
-    const q = search.toLowerCase();
-    return logs.filter(
-      (l) =>
-        l.action.toLowerCase().includes(q) ||
-        l.resource_type.toLowerCase().includes(q) ||
-        (l.resource_id ?? '').toLowerCase().includes(q) ||
-        (l.actor_id ?? '').toLowerCase().includes(q),
-    );
-  }, [logs, search]);
+  const filtered = useMemo(() => logs.filter((log) => matchesAuditSearch(log, search)), [logs, search]);
 
   const userCount = logs.filter((l) => l.actor_type === 'user').length;
   const systemCount = logs.filter((l) => l.actor_type === 'system').length;
@@ -423,6 +413,18 @@ export function Audit(): JSX.Element {
       </Tabs>
     </div>
   );
+}
+
+export function matchesAuditSearch(log: AuditLog, search: string): boolean {
+  const q = search.trim().toLowerCase();
+  if (!q) return true;
+  return [
+    log.action,
+    log.resource_type,
+    log.resource_id ?? '',
+    log.actor_id ?? '',
+    JSON.stringify(log.metadata ?? {}),
+  ].some((value) => value.toLowerCase().includes(q));
 }
 
 function FilterSelect({

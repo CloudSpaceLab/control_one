@@ -359,7 +359,7 @@ func (s *Server) handleCreateAlertSOCCase(w http.ResponseWriter, r *http.Request
 	}
 	row, err := backend.CreateAIInvestigation(r.Context(), storage.CreateAIInvestigationParams{
 		TenantID: alert.TenantID, NodeID: nodeID, TriggerType: "correlation_alert",
-		TriggerEventType: firstNonEmptyString(fmt.Sprint(alert.Context["event_type"]), "alert"),
+		TriggerEventType: firstNonEmptyString(alertContextString(alert.Context, "event_type", "event_type_filter"), "alert"),
 		TriggerDedupKey:  "alert:" + alert.ID.String(), Severity: alert.Severity,
 		Summary: firstNonEmptyString(alert.Title, alert.Summary.String), Evidence: evidence,
 		Status: storage.AIInvestigationStatusOpen,
@@ -370,6 +370,19 @@ func (s *Server) handleCreateAlertSOCCase(w http.ResponseWriter, r *http.Request
 	}
 	s.recordAudit(r.Context(), principal, alert.TenantID, "alert.soc_case_opened", "alert", alert.ID.String(), map[string]any{"case_id": row.ID.String(), "correlation_id": alert.Context["correlation_id"]})
 	writeJSON(w, http.StatusCreated, newSOCCaseResponse(*row))
+}
+
+func alertContextString(context map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := context[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text := strings.TrimSpace(fmt.Sprint(value)); text != "" && text != "<nil>" {
+			return text
+		}
+	}
+	return ""
 }
 
 func (s *Server) requireAlertTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, id uuid.UUID, roles ...string) (*storage.Alert, bool) {

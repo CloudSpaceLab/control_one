@@ -214,6 +214,12 @@ func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing
 	if len(store.occurrenceUpdates) != 1 {
 		t.Fatalf("want 1 suppressed occurrence update, got %d", len(store.occurrenceUpdates))
 	}
+	if evidence, ok := store.alerts[0].Context["contributing_events"].([]any); !ok || len(evidence) != 3 {
+		t.Fatalf("initial contributing events = %#v, want 3", store.alerts[0].Context["contributing_events"])
+	}
+	if evidence, ok := store.occurrenceUpdates[0].Context["contributing_events"].([]any); !ok || len(evidence) != 3 {
+		t.Fatalf("suppressed contributing events = %#v, want 3", store.occurrenceUpdates[0].Context["contributing_events"])
+	}
 	wantKey := rule.ID.String() + "/src_ip=203.0.113.8|node_id=" + node.String()
 	if store.alerts[0].DedupKey != wantKey {
 		t.Fatalf("dedup key = %q, want %q", store.alerts[0].DedupKey, wantKey)

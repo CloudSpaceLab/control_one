@@ -1921,9 +1921,7 @@ function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
 }
 
 function alertAuditRoute(alert: Alert): string {
-  const correlationID = contextString(alert.context ?? {}, 'correlation_id');
-  const query = correlationID || alert.id;
-  return `/audit?q=${encodeURIComponent(query)}`;
+  return `/audit?q=${encodeURIComponent(alert.id)}`;
 }
 
 export function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {
