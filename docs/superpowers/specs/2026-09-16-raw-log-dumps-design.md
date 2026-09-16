@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS agent_log_dumps (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     node_id         UUID REFERENCES nodes(id) ON DELETE CASCADE,
+    job_id          UUID REFERENCES jobs(id) ON DELETE SET NULL,
     source          TEXT NOT NULL CHECK (source IN ('control_plane', 'node_agent')),
     entity_filter   JSONB NOT NULL DEFAULT '{}'::jsonb,
     window_start    TIMESTAMPTZ NOT NULL,
@@ -70,6 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_log_dumps_tenant_created
     ON agent_log_dumps (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_dumps_node
     ON agent_log_dumps (node_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_log_dumps_job
+    ON agent_log_dumps (job_id)
+    WHERE status = 'requested';
 
 CREATE INDEX IF NOT EXISTS idx_log_dumps_expires
     ON agent_log_dumps (expires_at)
