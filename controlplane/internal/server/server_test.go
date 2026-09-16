@@ -2631,6 +2631,7 @@ type fakeStore struct {
 	markNotificationReads        []notificationReadCall
 	markNotificationReadRequests []notificationReadCall
 	caseAssignees                map[string]uuid.UUID
+	caseAssigneeErr              error
 	caseMentionedUsers           map[string][]uuid.UUID
 	assignCaseCalls              []assignCaseCall
 	getUserCalls                 int
@@ -3021,6 +3022,9 @@ func (f *fakeStore) AssignCase(_ context.Context, tenantID, caseID, assigneeID, 
 func (f *fakeStore) CaseAssignee(_ context.Context, tenantID, caseID uuid.UUID) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.caseAssigneeErr != nil {
+		return uuid.Nil, f.caseAssigneeErr
+	}
 	return f.caseAssignees[teamCollabCaseKey(tenantID, caseID)], nil
 }
 
@@ -8409,13 +8413,17 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 
 func TestHandleAssignCaseValidatesAssigneeInTenant(t *testing.T) {
 	tenantID := uuid.New()
+	foreignTenantID := uuid.New()
 	actorID := uuid.New()
 	foreignAssigneeID := uuid.New()
 	base := &fakeStore{
 		users: map[string]*storage.User{
 			"investigator": {ID: actorID, ExternalID: "investigator"},
 		},
-		teamUsers: []storage.TeamUser{{ID: actorID, Name: "Investigator"}},
+		teamUsersByTenant: map[uuid.UUID][]storage.TeamUser{
+			tenantID:        {{ID: actorID, Name: "Investigator"}},
+			foreignTenantID: {{ID: foreignAssigneeID, Name: "Foreign Tenant User"}},
+		},
 	}
 	row, err := base.CreateAIInvestigation(context.Background(), storage.CreateAIInvestigationParams{
 		TenantID: tenantID, TriggerType: "alert", TriggerEventType: "alert.open", TriggerDedupKey: "assign-tenant-validation", Severity: "high", Summary: "Assignment validation", Status: storage.AIInvestigationStatusOpen,
@@ -8436,6 +8444,39 @@ func TestHandleAssignCaseValidatesAssigneeInTenant(t *testing.T) {
 	}
 	if !contains(rec.Body.String(), "assignee must be a team member in this tenant") {
 		t.Fatalf("body=%s, want tenant-membership error", rec.Body.String())
+	}
+	if len(base.assignCaseCalls) != 0 {
+		t.Fatalf("assign calls=%+v, want none", base.assignCaseCalls)
+	}
+}
+
+func TestHandleAssignCaseReturnsNotFoundWhenAssigneeReadSeesDeletedCase(t *testing.T) {
+	tenantID := uuid.New()
+	actorID := uuid.New()
+	assigneeID := uuid.New()
+	base := &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: actorID, ExternalID: "investigator"},
+		},
+		teamUsers:       []storage.TeamUser{{ID: actorID, Name: "Investigator"}, {ID: assigneeID, Name: "Assignee"}},
+		caseAssigneeErr: sql.ErrNoRows,
+	}
+	row, err := base.CreateAIInvestigation(context.Background(), storage.CreateAIInvestigationParams{
+		TenantID: tenantID, TriggerType: "alert", TriggerEventType: "alert.open", TriggerDedupKey: "assign-disappearing-case", Severity: "high", Summary: "Disappearing case", Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		t.Fatalf("seed case: %v", err)
+	}
+	store := &teamCollabTenantStore{fakeStore: base, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{"assignee_id":"`+assigneeID.String()+`"}`))
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.handleSOCCaseSubroutes(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
 	}
 	if len(base.assignCaseCalls) != 0 {
 		t.Fatalf("assign calls=%+v, want none", base.assignCaseCalls)

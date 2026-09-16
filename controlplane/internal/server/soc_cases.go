@@ -479,6 +479,10 @@ func (s *Server) handleAssignSOCCase(w http.ResponseWriter, r *http.Request, pri
 	actorID, _ := s.userIDForPrincipal(r.Context(), principal)
 	currentAssigneeID, err := s.store.CaseAssignee(r.Context(), row.TenantID, row.ID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
 		s.logger.Warn("get soc case assignee", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
