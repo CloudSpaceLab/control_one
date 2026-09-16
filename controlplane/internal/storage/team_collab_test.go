@@ -193,7 +193,7 @@ func TestNotificationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert two notifications for the recipient: case_assigned, case_mentioned.
-	n1, err := store.CreateNotification(ctx, Notification{
+	n1, err := store.CreateNotification(ctx, CreateNotificationParams{
 		TenantID:    tenantID,
 		RecipientID: recipient.ID,
 		ActorID:     actor.ID,
@@ -208,7 +208,7 @@ func TestNotificationLifecycle(t *testing.T) {
 	// Ensure distinct created_at so newest-first ordering is deterministic.
 	time.Sleep(2 * time.Millisecond)
 
-	n2, err := store.CreateNotification(ctx, Notification{
+	n2, err := store.CreateNotification(ctx, CreateNotificationParams{
 		TenantID:    tenantID,
 		RecipientID: recipient.ID,
 		ActorID:     actor.ID,
@@ -220,7 +220,7 @@ func TestNotificationLifecycle(t *testing.T) {
 	require.Equal(t, "case_mentioned", n2.Kind)
 
 	// List all: should return 2 newest-first.
-	items, total, err := store.ListNotifications(ctx, tenantID, recipient.ID, ListNotificationsFilter{Limit: 50})
+	items, total, err := store.ListNotifications(ctx, NotificationFilter{TenantID: tenantID, RecipientID: recipient.ID}, 50, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, total)
 	require.Len(t, items, 2)
@@ -228,7 +228,7 @@ func TestNotificationLifecycle(t *testing.T) {
 	require.Equal(t, n1.ID, items[1].ID)
 
 	// Unread-only filter.
-	items, total, err = store.ListNotifications(ctx, tenantID, recipient.ID, ListNotificationsFilter{UnreadOnly: true, Limit: 50})
+	items, total, err = store.ListNotifications(ctx, NotificationFilter{TenantID: tenantID, RecipientID: recipient.ID, UnreadOnly: true}, 50, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, total)
 	require.Len(t, items, 2)

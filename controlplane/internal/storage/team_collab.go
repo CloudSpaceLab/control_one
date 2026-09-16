@@ -110,8 +110,18 @@ func scanNotification(scan func(dest ...any) error) (Notification, error) {
 	return n, nil
 }
 
+// CreateNotificationParams describes one inbox row to persist.
+type CreateNotificationParams struct {
+	TenantID    uuid.UUID
+	RecipientID uuid.UUID
+	ActorID     uuid.UUID
+	Kind        string
+	CaseID      uuid.UUID
+	CaseTitle   string
+}
+
 // CreateNotification inserts a new inbox row for a recipient and returns it.
-func (s *Store) CreateNotification(ctx context.Context, n Notification) (*Notification, error) {
+func (s *Store) CreateNotification(ctx context.Context, p CreateNotificationParams) (*Notification, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
@@ -121,7 +131,7 @@ func (s *Store) CreateNotification(ctx context.Context, n Notification) (*Notifi
 		RETURNING id, tenant_id, recipient_id, actor_id,
 		          COALESCE((SELECT display_name FROM users WHERE id = actor_id), '') AS actor_name,
 		          kind, case_id, case_title, read_at, created_at
-	`, n.TenantID, n.RecipientID, nullableUUID(n.ActorID), n.Kind, n.CaseID, n.CaseTitle)
+	`, p.TenantID, p.RecipientID, nullableUUID(p.ActorID), p.Kind, p.CaseID, p.CaseTitle)
 	out, err := scanNotification(row.Scan)
 	if err != nil {
 		return nil, fmt.Errorf("insert notification: %w", err)
@@ -129,30 +139,30 @@ func (s *Store) CreateNotification(ctx context.Context, n Notification) (*Notifi
 	return &out, nil
 }
 
-// ListNotificationsFilter controls the tenant+recipient-scoped inbox query.
-type ListNotificationsFilter struct {
-	UnreadOnly bool
-	Offset     int
-	Limit      int
+// NotificationFilter scopes the notification inbox query.
+type NotificationFilter struct {
+	TenantID    uuid.UUID
+	RecipientID uuid.UUID
+	UnreadOnly  bool
 }
 
 // ListNotifications returns a recipient's notifications for a tenant, newest
 // first, with total count and LIMIT/OFFSET paging applied to the returned
 // page.
-func (s *Store) ListNotifications(ctx context.Context, tenantID, recipientID uuid.UUID, f ListNotificationsFilter) ([]Notification, int, error) {
+func (s *Store) ListNotifications(ctx context.Context, filter NotificationFilter, limit, offset int) ([]Notification, int, error) {
 	if s.db == nil {
 		return nil, 0, errors.New("store database not initialized")
 	}
-	if f.Limit <= 0 {
-		f.Limit = 50
+	if limit <= 0 {
+		limit = 50
 	}
-	if f.Offset < 0 {
-		f.Offset = 0
+	if offset < 0 {
+		offset = 0
 	}
 
 	where := " WHERE n.tenant_id = $1 AND n.recipient_id = $2"
-	args := []any{tenantID, recipientID}
-	if f.UnreadOnly {
+	args := []any{filter.TenantID, filter.RecipientID}
+	if filter.UnreadOnly {
 		where += " AND n.read_at IS NULL"
 	}
 
@@ -162,7 +172,7 @@ func (s *Store) ListNotifications(ctx context.Context, tenantID, recipientID uui
 		return nil, 0, fmt.Errorf("count notifications: %w", err)
 	}
 
-	args = append(args, f.Limit, f.Offset)
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, notificationSelect+where+`
 		ORDER BY n.created_at DESC, n.id DESC
 		LIMIT $3 OFFSET $4`, args...)
@@ -171,7 +181,7 @@ func (s *Store) ListNotifications(ctx context.Context, tenantID, recipientID uui
 	}
 	defer rows.Close()
 
-	out := make([]Notification, 0, f.Limit)
+	out := make([]Notification, 0, limit)
 	for rows.Next() {
 		n, err := scanNotification(rows.Scan)
 		if err != nil {
