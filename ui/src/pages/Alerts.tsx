@@ -299,6 +299,10 @@ export function Alerts(): JSX.Element {
   const [newRuleSequenceConditions, setNewRuleSequenceConditions] = useState<CorrelationCondition[]>([]);
   const [newRuleAggregateField, setNewRuleAggregateField] = useState('');
   const [newRuleAggregateThreshold, setNewRuleAggregateThreshold] = useState(0);
+  const [newRuleResponseMode, setNewRuleResponseMode] = useState<CorrelationRule['response_mode']>('alert_only');
+  const [newRuleResponseTTL, setNewRuleResponseTTL] = useState(3600);
+  const [newRuleResponseScope, setNewRuleResponseScope] = useState<CorrelationRule['response_scope']>('affected');
+  const [newRuleResponseEnforcement, setNewRuleResponseEnforcement] = useState<CorrelationRule['response_enforcement']>('firewall');
   const [newRuleTemplateId, setNewRuleTemplateId] = useState('');
   const [creatingRule, setCreatingRule] = useState(false);
   const [createRuleError, setCreateRuleError] = useState<string | null>(null);
@@ -411,6 +415,8 @@ export function Alerts(): JSX.Element {
     setNewRuleDistinctField('');
     setNewRuleSequenceEventType(''); setNewRuleSequenceThreshold(0); setNewRuleSequenceConditions([]);
     setNewRuleAggregateField(''); setNewRuleAggregateThreshold(0);
+    setNewRuleResponseMode('alert_only'); setNewRuleResponseTTL(3600);
+    setNewRuleResponseScope('affected'); setNewRuleResponseEnforcement('firewall');
     setNewRuleTemplateId('');
   };
 
@@ -435,6 +441,8 @@ export function Alerts(): JSX.Element {
     setNewRuleSequenceEventType(template.sequenceEventType); setNewRuleSequenceThreshold(template.sequenceThreshold);
     setNewRuleSequenceConditions(template.sequenceConditions.map((condition) => ({ ...condition })));
     setNewRuleAggregateField(template.aggregateField); setNewRuleAggregateThreshold(template.aggregateThreshold);
+    setNewRuleResponseMode('alert_only'); setNewRuleResponseTTL(3600);
+    setNewRuleResponseScope('affected'); setNewRuleResponseEnforcement('firewall');
     setShowCreateRule(true);
   };
 
@@ -456,6 +464,8 @@ export function Alerts(): JSX.Element {
     setNewRuleSequenceEventType(rule.sequence_event_type ?? ''); setNewRuleSequenceThreshold(rule.sequence_threshold ?? 0);
     setNewRuleSequenceConditions(rule.sequence_conditions ?? []);
     setNewRuleAggregateField(rule.aggregate_field ?? ''); setNewRuleAggregateThreshold(rule.aggregate_threshold ?? 0);
+    setNewRuleResponseMode(rule.response_mode ?? 'alert_only'); setNewRuleResponseTTL(rule.response_ttl_seconds ?? 3600);
+    setNewRuleResponseScope(rule.response_scope ?? 'affected'); setNewRuleResponseEnforcement(rule.response_enforcement ?? 'firewall');
     setShowCreateRule(true);
   };
 
@@ -495,6 +505,10 @@ export function Alerts(): JSX.Element {
         sequence_event_type: newRuleSequenceEventType.trim(), sequence_threshold: newRuleSequenceThreshold,
         sequence_conditions: newRuleSequenceConditions, aggregate_field: newRuleAggregateField,
         aggregate_threshold: newRuleAggregateThreshold,
+        response_mode: newRuleResponseMode,
+        response_ttl_seconds: newRuleResponseTTL,
+        response_scope: newRuleResponseScope,
+        response_enforcement: newRuleResponseEnforcement,
         severity: newRuleSeverity,
         enabled: newRuleEnabled,
       };
@@ -526,6 +540,8 @@ export function Alerts(): JSX.Element {
         sequence_event_type: rule.sequence_event_type ?? '', sequence_threshold: rule.sequence_threshold ?? 0,
         sequence_conditions: rule.sequence_conditions ?? [], aggregate_field: rule.aggregate_field ?? '',
         aggregate_threshold: rule.aggregate_threshold ?? 0,
+        response_mode: rule.response_mode ?? 'alert_only', response_ttl_seconds: rule.response_ttl_seconds ?? 3600,
+        response_scope: rule.response_scope ?? 'affected', response_enforcement: rule.response_enforcement ?? 'firewall',
       });
       setRulesReloadToken((n) => n + 1);
       setRulesError(null);
@@ -710,6 +726,12 @@ export function Alerts(): JSX.Element {
           {row.original.distinct_field ? <span className="block text-text-muted">count distinct {row.original.distinct_field}</span> : null}
           {row.original.sequence_event_type ? <span className="block text-text-muted">after {row.original.sequence_threshold} × {row.original.sequence_event_type}</span> : null}
           {row.original.aggregate_field ? <span className="block text-text-muted">sum {row.original.aggregate_field} ≥ {row.original.aggregate_threshold}</span> : null}
+          <span className="block text-text-muted">
+            response {(row.original.response_mode ?? 'alert_only').replaceAll('_', ' ')}
+            {row.original.response_mode && row.original.response_mode !== 'alert_only'
+              ? ` · ${row.original.response_ttl_seconds ?? 3600}s · ${row.original.response_scope ?? 'affected'} · ${row.original.response_enforcement ?? 'firewall'}`
+              : ''}
+          </span>
         </span>
       ),
     },
@@ -1217,6 +1239,43 @@ export function Alerts(): JSX.Element {
                     className="h-8"
                   />
                 </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-response-mode">Response action</Label>
+                  <select id="rule-response-mode" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                    value={newRuleResponseMode} onChange={(e) => setNewRuleResponseMode(e.target.value as CorrelationRule['response_mode'])}>
+                    <option value="alert_only">Alert only</option>
+                    <option value="create_proposal">Create block proposal</option>
+                    <option value="require_approval">Require administrator approval</option>
+                    <option value="auto_temporary_block">Automatically block temporarily</option>
+                  </select>
+                  <span className="text-xs text-text-muted">Existing rules remain alert-only. Automated blocks still pass protected-address and rate-limit safety checks.</span>
+                </div>
+                {newRuleResponseMode !== 'alert_only' ? (
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rule-response-ttl">Block duration</Label>
+                      <select id="rule-response-ttl" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={newRuleResponseTTL} onChange={(e) => setNewRuleResponseTTL(Number(e.target.value))}>
+                        <option value={900}>15 minutes</option><option value={3600}>1 hour</option><option value={86400}>24 hours</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rule-response-scope">Response scope</Label>
+                      <select id="rule-response-scope" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={newRuleResponseScope} onChange={(e) => setNewRuleResponseScope(e.target.value as CorrelationRule['response_scope'])}>
+                        <option value="affected">Affected node</option>
+                        <option value="fleet" disabled={newRuleResponseMode === 'auto_temporary_block'}>Tenant fleet</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="rule-response-enforcement">Enforcement target</Label>
+                      <select id="rule-response-enforcement" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                        value={newRuleResponseEnforcement} onChange={(e) => setNewRuleResponseEnforcement(e.target.value as CorrelationRule['response_enforcement'])}>
+                        <option value="firewall">Host firewall</option><option value="webserver">Web server</option><option value="both">Firewall and web server</option>
+                      </select>
+                    </div>
+                  </>
+                ) : null}
                 <label className="flex items-center gap-2 text-sm text-foreground">
                   <input type="checkbox" checked={newRuleEnabled} onChange={(e) => setNewRuleEnabled(e.target.checked)} />
                   Enabled

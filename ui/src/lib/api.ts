@@ -7142,6 +7142,10 @@ export interface CorrelationRule {
   sequence_conditions: CorrelationCondition[];
   aggregate_field: string;
   aggregate_threshold: number;
+  response_mode: 'alert_only' | 'create_proposal' | 'require_approval' | 'auto_temporary_block';
+  response_ttl_seconds: number;
+  response_scope: 'affected' | 'fleet';
+  response_enforcement: 'firewall' | 'webserver' | 'both';
   enabled: boolean;
   severity: string;
   created_at: string;
@@ -7174,6 +7178,10 @@ export interface CreateCorrelationRulePayload {
   sequence_conditions: CorrelationCondition[];
   aggregate_field: string;
   aggregate_threshold: number;
+  response_mode: 'alert_only' | 'create_proposal' | 'require_approval' | 'auto_temporary_block';
+  response_ttl_seconds: number;
+  response_scope: 'affected' | 'fleet';
+  response_enforcement: 'firewall' | 'webserver' | 'both';
   enabled?: boolean;
   severity: string;
   yaml_spec?: string;

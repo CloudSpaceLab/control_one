@@ -32,6 +32,10 @@ type alertOccurrenceUpdater interface {
 	UpdateOpenAlertOccurrence(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error)
 }
 
+type responseHandler interface {
+	HandleCorrelationResponse(context.Context, storage.CorrelationRule, *storage.Alert, eventbus.Event) error
+}
+
 type windowKey struct {
 	ruleID    uuid.UUID
 	dimension string
@@ -275,21 +279,29 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		DedupKey: dedup,
 		Context:  ctxPayload,
 	}
+	var alert *storage.Alert
 	var err error
 	if updateOnly {
 		updater, ok := e.store.(alertOccurrenceUpdater)
 		if !ok {
 			return
 		}
-		_, err = updater.UpdateOpenAlertOccurrence(ctx, params)
+		alert, err = updater.UpdateOpenAlertOccurrence(ctx, params)
 	} else {
-		_, err = e.store.CreateAlert(ctx, params)
+		alert, err = e.store.CreateAlert(ctx, params)
 	}
 	if err != nil {
 		if e.log != nil {
 			e.log.Warn("correlation create alert", zap.Error(err))
 		}
 		return
+	}
+	if !updateOnly && alert != nil && r.ResponseMode != "" && r.ResponseMode != "alert_only" {
+		if handler, ok := e.store.(responseHandler); ok {
+			if responseErr := handler.HandleCorrelationResponse(ctx, r, alert, ev); responseErr != nil && e.log != nil {
+				e.log.Warn("correlation response action", zap.String("rule_id", r.ID.String()), zap.String("alert_id", alert.ID.String()), zap.Error(responseErr))
+			}
+		}
 	}
 	if e.bus != nil {
 		payload, mErr := json.Marshal(ctxPayload)

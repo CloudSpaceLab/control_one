@@ -1062,6 +1062,9 @@ func (a correlationStoreAdapter) UpdateOpenAlertOccurrence(ctx context.Context, 
 	}
 	return alert, err
 }
+func (a correlationStoreAdapter) HandleCorrelationResponse(ctx context.Context, rule storage.CorrelationRule, alert *storage.Alert, ev eventbus.Event) error {
+	return a.server.handleCorrelationResponse(ctx, rule, alert, ev)
+}
 
 // publishEvent fan-outs a realtime event to SSE subscribers. Safe to call
 // when the bus is not configured (no-op).
