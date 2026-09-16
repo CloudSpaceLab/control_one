@@ -1827,9 +1827,8 @@ function ResolveAlertModal({
 				  </select>
 				  <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" loading={creatingCase} disabled={!caseId} onClick={() => void onAttachCase(alert, caseId)}>Attach alert evidence</Button>
 				</div>
-			  ) : null}
+              ) : null}
               <div className="rounded-lg border border-border-subtle bg-surface p-3">
-				<p className="mb-3 text-xs leading-5 text-text-secondary">Assign an owner so the alert has clear responsibility. Add notes to preserve findings, decisions, and handover context without changing the alert disposition.</p>
                 <Label htmlFor="alert-assigned-to">Assigned analyst</Label>
                 <Input id="alert-assigned-to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} placeholder="Name or email" />
                 <Label className="mt-3 block" htmlFor="alert-analyst-note">Analyst note</Label>
