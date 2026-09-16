@@ -183,6 +183,17 @@ describe('Alerts page failure states', () => {
     expect(screen.getByRole('button', { name: /create soc case with evidence/i })).toBeInTheDocument();
   });
 
+	it('requires confirmation before creating a SOC case', async () => {
+		const user = userEvent.setup();
+		renderAlerts();
+		await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+		await user.click(screen.getByRole('button', { name: /create soc case with evidence/i }));
+		expect(mocks.createAlertSOCCase).not.toHaveBeenCalled();
+		expect(screen.getByText(/create a new soc case/i)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /confirm creation/i }));
+		expect(mocks.createAlertSOCCase).toHaveBeenCalledWith('alert-1');
+	});
+
   it('saves analyst assignment and notes from alert review', async () => {
     const user = userEvent.setup();
     renderAlerts();

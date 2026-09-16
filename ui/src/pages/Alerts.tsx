@@ -1599,6 +1599,7 @@ function ResolveAlertModal({
   const [assignedTo, setAssignedTo] = useState('');
   const [analystNote, setAnalystNote] = useState('');
 	const [caseId, setCaseId] = useState('');
+	const [confirmCreateCase, setConfirmCreateCase] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -1608,6 +1609,7 @@ function ResolveAlertModal({
     setAssignedTo(contextString(alert?.context ?? {}, 'assigned_to'));
     setAnalystNote('');
 	setCaseId('');
+	setConfirmCreateCase(false);
   }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
 
   const selectedDisposition = dispositionOption(disposition);
@@ -1792,6 +1794,9 @@ function ResolveAlertModal({
                     </p>
                   ) : null}
                 </div>
+				<Button type="button" variant="primary" className="mt-3 w-full" onClick={handleConfirm} loading={resolving} disabled={confirmDisabled || resolving}>
+				  Record disposition
+				</Button>
               </div>
 
               <Button asChild variant="ghost" size="sm" className="w-full justify-between">
@@ -1800,9 +1805,19 @@ function ResolveAlertModal({
                   <ExternalLink />
                 </Link>
               </Button>
-              <Button type="button" variant="outline" size="sm" className="w-full" loading={creatingCase} onClick={() => void onCreateCase(alert)}>
+			  <Button type="button" variant="outline" size="sm" className="w-full" loading={creatingCase} onClick={() => setConfirmCreateCase(true)}>
                 Create SOC case with evidence
               </Button>
+			  {confirmCreateCase ? (
+				<div className="rounded-lg border border-state-warning/40 bg-state-warning/5 p-3" role="alert">
+				  <p className="text-sm font-medium text-foreground">Create a new SOC case?</p>
+				  <p className="mt-1 text-xs leading-5 text-text-secondary">This creates a separate investigation case and copies this alert’s rule, correlation, timeline, and contributing-event evidence into it.</p>
+				  <div className="mt-3 grid grid-cols-2 gap-2">
+					<Button type="button" variant="ghost" size="sm" disabled={creatingCase} onClick={() => setConfirmCreateCase(false)}>Cancel</Button>
+					<Button type="button" variant="primary" size="sm" loading={creatingCase} onClick={() => void onCreateCase(alert)}>Confirm creation</Button>
+				  </div>
+				</div>
+			  ) : null}
 			  {availableCases.length > 0 ? (
 				<div className="rounded-lg border border-border-subtle bg-surface p-3">
 				  <Label htmlFor="alert-existing-case">Attach to existing case</Label>
@@ -1814,6 +1829,7 @@ function ResolveAlertModal({
 				</div>
 			  ) : null}
               <div className="rounded-lg border border-border-subtle bg-surface p-3">
+				<p className="mb-3 text-xs leading-5 text-text-secondary">Assign an owner so the alert has clear responsibility. Add notes to preserve findings, decisions, and handover context without changing the alert disposition.</p>
                 <Label htmlFor="alert-assigned-to">Assigned analyst</Label>
                 <Input id="alert-assigned-to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} placeholder="Name or email" />
                 <Label className="mt-3 block" htmlFor="alert-analyst-note">Analyst note</Label>
@@ -1831,10 +1847,7 @@ function ResolveAlertModal({
             </p>
           ) : null}
           <Button type="button" variant="secondary" onClick={onCancel} disabled={resolving}>
-            Cancel
-          </Button>
-          <Button type="button" variant="primary" onClick={handleConfirm} loading={resolving} disabled={confirmDisabled || resolving}>
-            Record disposition
+			Close
           </Button>
         </DialogFooter>
       </DialogContent>
