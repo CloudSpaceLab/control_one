@@ -62,51 +62,62 @@ func (s *Server) serveNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	suffix := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/notifications"), "/")
-	switch r.Method {
-	case http.MethodGet:
-		switch suffix {
-		case "":
-			s.handleListNotifications(w, r, tenantID, recipientID)
-		case "unread-count":
-			s.handleUnreadNotificationsCount(w, r, tenantID, recipientID)
-		default:
+	const notificationPath = "/api/v1/notifications"
+	switch r.URL.Path {
+	case notificationPath:
+		if r.Method != http.MethodGet {
 			s.notificationsMethodNotAllowed(w)
+			return
 		}
-	case http.MethodPost:
-		switch suffix {
-		case "read-all":
-			if _, err := s.store.MarkAllNotificationsRead(r.Context(), tenantID, recipientID); err != nil {
-				s.logger.Warn("mark all notifications read", zap.Error(err), zap.String("tenant_id", tenantID.String()), zap.String("recipient_id", recipientID.String()))
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]bool{"marked_read": true})
-		default:
-			if suffix == "" {
-				s.notificationsMethodNotAllowed(w)
-				return
-			}
-			parts := strings.Split(suffix, "/")
-			if len(parts) == 2 && parts[1] != "read" || len(parts) > 2 {
-				s.notificationsMethodNotAllowed(w)
-				return
-			}
-			id, err := uuid.Parse(parts[0])
-			if err != nil {
-				http.Error(w, "invalid notification id", http.StatusBadRequest)
-				return
-			}
-			if err := s.store.MarkNotificationRead(r.Context(), tenantID, recipientID, id); err != nil {
-				s.logger.Warn("mark notification read", zap.Error(err), zap.String("tenant_id", tenantID.String()), zap.String("recipient_id", recipientID.String()), zap.String("notification_id", id.String()))
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]bool{"read": true})
+		s.handleListNotifications(w, r, tenantID, recipientID)
+		return
+	case notificationPath + "/unread-count":
+		if r.Method != http.MethodGet {
+			s.notificationsMethodNotAllowed(w)
+			return
 		}
-	default:
-		s.notificationsMethodNotAllowed(w)
+		s.handleUnreadNotificationsCount(w, r, tenantID, recipientID)
+		return
+	case notificationPath + "/read-all":
+		if r.Method != http.MethodPost {
+			s.notificationsMethodNotAllowed(w)
+			return
+		}
+		if _, err := s.store.MarkAllNotificationsRead(r.Context(), tenantID, recipientID); err != nil {
+			s.logger.Warn("mark all notifications read", zap.Error(err), zap.String("tenant_id", tenantID.String()), zap.String("recipient_id", recipientID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"marked_read": true})
+		return
 	}
+
+	if !strings.HasPrefix(r.URL.Path, notificationPath+"/") {
+		s.notificationsMethodNotAllowed(w)
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, notificationPath+"/"), "/")
+	if len(parts) == 2 && parts[1] == "read" {
+		parts = parts[:1]
+	} else if len(parts) != 1 || parts[0] == "" {
+		s.notificationsMethodNotAllowed(w)
+		return
+	}
+	id, err := uuid.Parse(parts[0])
+	if err != nil {
+		http.Error(w, "invalid notification id", http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodPost {
+		s.notificationsMethodNotAllowed(w)
+		return
+	}
+	if err := s.store.MarkNotificationRead(r.Context(), tenantID, recipientID, id); err != nil {
+		s.logger.Warn("mark notification read", zap.Error(err), zap.String("tenant_id", tenantID.String()), zap.String("recipient_id", recipientID.String()), zap.String("notification_id", id.String()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"read": true})
 }
 
 func (s *Server) notificationsMethodNotAllowed(w http.ResponseWriter) {
@@ -186,10 +197,16 @@ func (s *Server) hydrateNotificationActorNames(r *http.Request, items []storage.
 }
 
 func (s *Server) userIDForPrincipal(ctx context.Context, principal *auth.Principal) (uuid.UUID, bool) {
-	if principal == nil || strings.TrimSpace(principal.Subject) == "" {
+	if s == nil || s.store == nil || principal == nil || strings.TrimSpace(principal.Subject) == "" {
 		return uuid.Nil, false
 	}
-	user, err := s.store.GetUserByExternalID(ctx, strings.TrimSpace(principal.Subject))
+	subject := strings.TrimSpace(principal.Subject)
+	if id, err := uuid.Parse(subject); err == nil && id != uuid.Nil {
+		if user, err := s.store.GetUser(ctx, id); err == nil && user != nil {
+			return user.ID, true
+		}
+	}
+	user, err := s.store.GetUserByExternalID(ctx, subject)
 	if err != nil || user == nil {
 		return uuid.Nil, false
 	}

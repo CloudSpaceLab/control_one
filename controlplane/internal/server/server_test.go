@@ -2629,6 +2629,9 @@ type fakeStore struct {
 	notifications                []storage.Notification
 	markNotificationReads        []notificationReadCall
 	markNotificationReadRequests []notificationReadCall
+	caseAssignees                map[string]uuid.UUID
+	caseMentionedUsers           map[string][]uuid.UUID
+	assignCaseCalls              []assignCaseCall
 }
 
 type listTenantUsersCall struct {
@@ -2641,6 +2644,23 @@ type notificationReadCall struct {
 	TenantID    uuid.UUID
 	RecipientID uuid.UUID
 	ID          uuid.UUID
+}
+
+type assignCaseCall struct {
+	TenantID   uuid.UUID
+	CaseID     uuid.UUID
+	AssigneeID uuid.UUID
+	AssignedBy uuid.UUID
+	Now        time.Time
+}
+
+type teamCollabTenantStore struct {
+	*fakeStore
+	allowedTenants map[uuid.UUID]bool
+}
+
+func (s *teamCollabTenantStore) UserHasTenantRole(_ context.Context, _ uuid.UUID, tenantID uuid.UUID, _ []string) (bool, error) {
+	return s.allowedTenants[tenantID], nil
 }
 
 type rolePermsCall struct {
@@ -2981,16 +3001,31 @@ func (f *fakeStore) MarkAllNotificationsRead(_ context.Context, tenantID, recipi
 	return count, nil
 }
 
-func (f *fakeStore) AssignCase(_ context.Context, _, _, _, _ uuid.UUID, _ time.Time) error {
+func (f *fakeStore) AssignCase(_ context.Context, tenantID, caseID, assigneeID, assignedBy uuid.UUID, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.caseAssignees == nil {
+		f.caseAssignees = make(map[string]uuid.UUID)
+	}
+	f.assignCaseCalls = append(f.assignCaseCalls, assignCaseCall{TenantID: tenantID, CaseID: caseID, AssigneeID: assigneeID, AssignedBy: assignedBy, Now: now})
+	f.caseAssignees[teamCollabCaseKey(tenantID, caseID)] = assigneeID
 	return nil
 }
 
-func (f *fakeStore) CaseAssignee(_ context.Context, _, _ uuid.UUID) (uuid.UUID, error) {
-	return uuid.Nil, nil
+func (f *fakeStore) CaseAssignee(_ context.Context, tenantID, caseID uuid.UUID) (uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.caseAssignees[teamCollabCaseKey(tenantID, caseID)], nil
 }
 
-func (f *fakeStore) CaseMentionedUsers(_ context.Context, _, _ uuid.UUID) ([]uuid.UUID, error) {
-	return []uuid.UUID{}, nil
+func (f *fakeStore) CaseMentionedUsers(_ context.Context, tenantID, caseID uuid.UUID) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]uuid.UUID(nil), f.caseMentionedUsers[teamCollabCaseKey(tenantID, caseID)]...), nil
+}
+
+func teamCollabCaseKey(tenantID, caseID uuid.UUID) string {
+	return tenantID.String() + ":" + caseID.String()
 }
 
 func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error) {
@@ -8271,10 +8306,16 @@ func (f *fakeStore) CreateSavedSearch(_ context.Context, in storage.SavedSearch)
 
 func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 	tenantID := uuid.New()
-	store := &fakeStore{teamUsers: []storage.TeamUser{
-		{ID: uuid.New(), Name: "Ada Lovelace", Email: "ada@example.com"},
-		{ID: uuid.New(), Name: "Grace Hopper", Email: "grace@example.com"},
-	}}
+	userID := uuid.New()
+	store := &teamCollabTenantStore{fakeStore: &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: userID, ExternalID: "investigator"},
+		},
+		teamUsers: []storage.TeamUser{
+			{ID: uuid.New(), Name: "Ada Lovelace", Email: "ada@example.com"},
+			{ID: uuid.New(), Name: "Grace Hopper", Email: "grace@example.com"},
+		},
+	}, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
 	srv := &Server{store: store, logger: zap.NewNop()}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/team/users?tenant_id="+tenantID.String()+"&q=%20ada%20", nil)
 	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
@@ -8285,10 +8326,10 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-	if len(store.listTenantUsersCalls) != 1 {
-		t.Fatalf("ListTenantUsers calls=%d, want 1", len(store.listTenantUsersCalls))
+	if len(store.fakeStore.listTenantUsersCalls) != 1 {
+		t.Fatalf("ListTenantUsers calls=%d, want 1", len(store.fakeStore.listTenantUsersCalls))
 	}
-	call := store.listTenantUsersCalls[0]
+	call := store.fakeStore.listTenantUsersCalls[0]
 	if call.TenantID != tenantID || call.Query != "ada" || call.Limit != 25 {
 		t.Fatalf("ListTenantUsers call=%+v, want tenant=%s query=ada limit=25", call, tenantID)
 	}
@@ -8301,6 +8342,37 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 	if len(body.Users) != 1 || body.Users[0].Name != "Ada Lovelace" {
 		t.Fatalf("users=%+v, want Ada only", body.Users)
 	}
+
+	t.Run("rejects unauthorized roles before listing users", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/team/users?tenant_id="+tenantID.String(), nil)
+		req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleViewer}})
+		rec := httptest.NewRecorder()
+
+		srv.handleTeamUsers(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
+		}
+		if got := len(store.fakeStore.listTenantUsersCalls); got != 1 {
+			t.Fatalf("ListTenantUsers calls=%d, want unchanged", got)
+		}
+	})
+
+	t.Run("rejects tenant non-members before listing users", func(t *testing.T) {
+		otherTenantID := uuid.New()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/team/users?tenant_id="+otherTenantID.String(), nil)
+		req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+		rec := httptest.NewRecorder()
+
+		srv.handleTeamUsers(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
+		}
+		if got := len(store.fakeStore.listTenantUsersCalls); got != 1 {
+			t.Fatalf("ListTenantUsers calls=%d, want unchanged", got)
+		}
+	})
 }
 
 func TestHandleNotificationsReadOnlyOwnRows(t *testing.T) {
@@ -8334,5 +8406,77 @@ func TestHandleNotificationsReadOnlyOwnRows(t *testing.T) {
 	call := store.markNotificationReadRequests[0]
 	if call.TenantID != tenantID || call.RecipientID != recipientID || call.ID != foreignID {
 		t.Fatalf("MarkNotificationRead request=%+v, want current tenant and recipient", call)
+	}
+}
+
+func TestServeNotificationsRejectsMalformedOrUnsupportedPostRoutes(t *testing.T) {
+	tenantID := uuid.New()
+	recipientID := uuid.New()
+	notificationID := uuid.New()
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "double slash", path: "/api/v1/notifications//" + notificationID.String()},
+		{name: "trailing slash", path: "/api/v1/notifications/" + notificationID.String() + "/"},
+		{name: "unread count is get only", path: "/api/v1/notifications/unread-count"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{
+				users: map[string]*storage.User{"investigator": {ID: recipientID, ExternalID: "investigator"}},
+				notifications: []storage.Notification{{
+					ID: notificationID, TenantID: tenantID, RecipientID: recipientID, Kind: "case.assigned", CreatedAt: time.Now().UTC(),
+				}},
+			}
+			srv := &Server{store: store, logger: zap.NewNop()}
+			req := httptest.NewRequest(http.MethodPost, tt.path+"?tenant_id="+tenantID.String(), nil)
+			req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+			rec := httptest.NewRecorder()
+
+			srv.serveNotifications(rec, req)
+
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("status=%d body=%s, want 405", rec.Code, rec.Body.String())
+			}
+			if allow := rec.Header().Get("Allow"); allow != "GET, POST" {
+				t.Errorf("Allow=%q, want GET, POST", allow)
+			}
+			if len(store.markNotificationReadRequests) != 0 || len(store.markNotificationReads) != 0 {
+				t.Errorf("malformed path attempted a notification mutation: requests=%+v mutations=%+v", store.markNotificationReadRequests, store.markNotificationReads)
+			}
+		})
+	}
+}
+
+func TestServeNotificationsResolvesLocalSessionPrincipal(t *testing.T) {
+	tenantID := uuid.New()
+	userID := uuid.New()
+	store := &fakeStore{
+		usersByID: map[uuid.UUID]*storage.User{
+			userID: {ID: userID, ExternalID: "local-user"},
+		},
+		notifications: []storage.Notification{{
+			ID: uuid.New(), TenantID: tenantID, RecipientID: userID, Kind: "case.assigned", CreatedAt: time.Now().UTC(),
+		}},
+	}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/unread-count?tenant_id="+tenantID.String(), nil)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: userID.String(), Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.serveNotifications(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Unread int `json:"unread"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Unread != 1 {
+		t.Fatalf("unread=%d, want 1", body.Unread)
 	}
 }
