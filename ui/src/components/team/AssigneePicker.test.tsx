@@ -27,7 +27,9 @@ describe('AssigneePicker', () => {
     expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveTextContent('Unassigned');
 
     await user.click(screen.getByRole('combobox', { name: 'Assignee' }));
-    await user.type(screen.getByLabelText('Search assignees'), 'grace');
+    expect(screen.getByRole('dialog', { name: 'Assignee picker' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Search assignees' })).toBeInTheDocument();
+    await user.type(screen.getByRole('combobox', { name: 'Search assignees' }), 'grace');
 
     expect(screen.getByRole('option', { name: /grace hopper/i })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /ada lovelace/i })).not.toBeInTheDocument();

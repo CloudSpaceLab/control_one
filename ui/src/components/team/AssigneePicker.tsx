@@ -45,8 +45,8 @@ export function AssigneePicker({
             <ChevronsUpDown className="h-3.5 w-3.5 text-text-muted" aria-hidden />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 p-0">
-          <Command>
+        <PopoverContent aria-label="Assignee picker" align="start" className="w-72 p-0">
+          <Command label="Search assignees">
             <CommandInput aria-label="Search assignees" placeholder="Search assignees" />
             <CommandList>
               <CommandEmpty>No matching assignees.</CommandEmpty>
