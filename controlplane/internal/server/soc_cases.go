@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -31,11 +33,18 @@ type socCaseResponse struct {
 	EvidenceRefs     []socCaseEvidenceRef   `json:"evidence_refs,omitempty"`
 	Timeline         []socCaseTimelineItem  `json:"timeline"`
 	Notes            []socCaseNoteResponse  `json:"notes,omitempty"`
+	Assignee         *socCaseUserRef        `json:"assignee,omitempty"`
+	MentionedUsers   []socCaseUserRef       `json:"mentioned_users,omitempty"`
 	Citations        []aiWorkflowCitation   `json:"citations"`
 	CoverageBadges   []socCaseCoverageBadge `json:"coverage_badges"`
 	ExportURL        string                 `json:"export_url"`
 	CreatedAt        string                 `json:"created_at"`
 	UpdatedAt        string                 `json:"updated_at"`
+}
+
+type socCaseUserRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type socCaseEvidenceRef struct {
@@ -73,6 +82,7 @@ type socCaseNoteResponse struct {
 	CaseID     string               `json:"case_id"`
 	Note       string               `json:"note"`
 	Citations  []socCaseEvidenceRef `json:"citations,omitempty"`
+	Mentions   []string             `json:"mentions,omitempty"`
 	AuditID    string               `json:"audit_id"`
 	CreatedAt  string               `json:"created_at"`
 	CreatedBy  string               `json:"created_by,omitempty"`
@@ -162,8 +172,16 @@ func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, prin
 	}
 	out := make([]socCaseResponse, 0, len(rows))
 	includeNotes := parseBoolQuery(r.URL.Query().Get("include_notes"))
+	teamUsers, err := s.store.ListTenantUsers(r.Context(), tenantID, "", 1000)
+	if err != nil {
+		s.logger.Warn("list tenant users for soc case collection", zap.Error(err), zap.String("tenant_id", tenantID.String()))
+		teamUsers = nil
+	}
 	for _, row := range rows {
 		resp := newSOCCaseResponse(row)
+		if teamUsers != nil {
+			s.hydrateCaseCollaborationWithUsers(r.Context(), tenantID, row, &resp, teamUsers)
+		}
 		if includeNotes {
 			notes, _, err := s.listSOCCaseNotes(r.Context(), tenantID, row.ID, 3, 0)
 			if err != nil {
@@ -291,6 +309,7 @@ func (s *Server) handleCreateSOCCaseFromAlert(w http.ResponseWriter, r *http.Req
 		s.logger.Warn("audit soc case from alert", zap.Error(err), zap.String("case_id", caseID))
 	}
 	resp := newSOCCaseResponse(*row)
+	s.hydrateCaseCollaboration(r.Context(), tenantID, *row, &resp)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -302,8 +321,18 @@ func socCaseEvidenceRuleID(alertRow *storage.Alert) string {
 }
 
 func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/soc/cases/")
+	segments := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(segments) == 0 || segments[0] == "" || len(segments) > 2 {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		w.Header().Set("Allow", "GET, POST")
+		allow := "GET, POST"
+		if len(segments) == 2 && segments[1] == "assign" {
+			allow = http.MethodPost
+		}
+		w.Header().Set("Allow", allow)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
@@ -317,12 +346,6 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
-		return
-	}
-	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/soc/cases/")
-	segments := strings.Split(strings.Trim(trimmed, "/"), "/")
-	if len(segments) == 0 || segments[0] == "" || len(segments) > 2 {
-		http.NotFound(w, r)
 		return
 	}
 	id, err := uuid.Parse(segments[0])
@@ -345,7 +368,6 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
-	resp := newSOCCaseResponse(*row)
 	if len(segments) == 2 {
 		switch segments[1] {
 		case "export":
@@ -354,6 +376,8 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 				return
 			}
+			resp := newSOCCaseResponse(*row)
+			s.hydrateCaseCollaboration(r.Context(), tenantID, *row, &resp)
 			notes, _, err := s.listSOCCaseNotes(r.Context(), tenantID, id, 500, 0)
 			if err != nil {
 				s.logger.Warn("list soc case notes for export", zap.Error(err), zap.String("case_id", id.String()))
@@ -386,6 +410,14 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 				s.handleCreateSOCCaseNote(w, r, principal, *row)
 				return
 			}
+		case "assign":
+			if r.Method != http.MethodPost {
+				w.Header().Set("Allow", http.MethodPost)
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
+			s.handleAssignSOCCase(w, r, principal, *row)
+			return
 		default:
 			http.NotFound(w, r)
 			return
@@ -396,6 +428,8 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
+	resp := newSOCCaseResponse(*row)
+	s.hydrateCaseCollaboration(r.Context(), tenantID, *row, &resp)
 	notes, _, err := s.listSOCCaseNotes(r.Context(), tenantID, id, 100, 0)
 	if err != nil {
 		s.logger.Warn("list soc case notes for detail", zap.Error(err), zap.String("case_id", id.String()))
@@ -404,6 +438,100 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 	}
 	resp.Notes = notes
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleAssignSOCCase(w http.ResponseWriter, r *http.Request, principal *auth.Principal, row storage.AIInvestigation) {
+	var req struct {
+		AssigneeID *string `json:"assignee_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid assign payload", http.StatusBadRequest)
+		return
+	}
+
+	assigneeID := uuid.Nil
+	if req.AssigneeID != nil {
+		parsed, err := uuid.Parse(strings.TrimSpace(*req.AssigneeID))
+		if err != nil || parsed == uuid.Nil {
+			http.Error(w, "invalid assignee_id", http.StatusBadRequest)
+			return
+		}
+		assigneeID = parsed
+		users, err := s.store.ListTenantUsers(r.Context(), row.TenantID, "", 1000)
+		if err != nil {
+			s.logger.Warn("list tenant users for case assignment", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		found := false
+		for _, user := range users {
+			if user.ID == assigneeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "assignee must be a team member in this tenant", http.StatusBadRequest)
+			return
+		}
+	}
+
+	actorID, _ := s.userIDForPrincipal(r.Context(), principal)
+	currentAssigneeID, err := s.store.CaseAssignee(r.Context(), row.TenantID, row.ID)
+	if err != nil {
+		s.logger.Warn("get soc case assignee", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if currentAssigneeID != assigneeID {
+		if err := s.store.AssignCase(r.Context(), row.TenantID, row.ID, assigneeID, actorID, time.Now().UTC()); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
+			s.logger.Warn("assign soc case", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		caseID := row.ID.String()
+		metadata := map[string]any{
+			"assignee_id": nullableUUIDString(assigneeID),
+			"assigned_by": nullableUUIDString(actorID),
+			"case_id":     caseID,
+			"case_source": "ai_investigation",
+			"guardrails":  []string{"tenant_scoped", "owner_only"},
+		}
+		entry := &storage.AuditLog{
+			TenantID:     row.TenantID,
+			ActorID:      actorID,
+			ActorType:    firstNonEmptyString(strings.TrimSpace(principal.Type), "user"),
+			Action:       "soc.case.assign",
+			ResourceType: "ai_investigation",
+			ResourceID:   &caseID,
+			Metadata:     metadata,
+		}
+		if _, err := s.store.CreateAuditLog(r.Context(), entry); err != nil {
+			s.logger.Warn("audit soc case assignment", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
+		}
+		if assigneeID != uuid.Nil && assigneeID != actorID {
+			if _, err := s.store.CreateNotification(r.Context(), storage.CreateNotificationParams{
+				TenantID: row.TenantID, RecipientID: assigneeID, ActorID: actorID, Kind: "case_assigned", CaseID: row.ID, CaseTitle: newSOCCaseResponse(row).Title,
+			}); err != nil {
+				s.logger.Warn("notify case assignee", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()), zap.String("recipient_id", assigneeID.String()))
+			}
+		}
+	}
+	row.AssigneeID = uuid.NullUUID{UUID: assigneeID, Valid: assigneeID != uuid.Nil}
+	resp := newSOCCaseResponse(row)
+	s.hydrateCaseCollaboration(r.Context(), row.TenantID, row, &resp)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func nullableUUIDString(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 func newSOCCaseResponse(row storage.AIInvestigation) socCaseResponse {
@@ -952,6 +1080,7 @@ func (s *Server) handleCreateSOCCaseNote(w http.ResponseWriter, r *http.Request,
 	var req struct {
 		Note      string   `json:"note"`
 		Citations []string `json:"citations"`
+		Mentions  []string `json:"mentions"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid note payload", http.StatusBadRequest)
@@ -974,10 +1103,37 @@ func (s *Server) handleCreateSOCCaseNote(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
+	mentions := sanitizeStringSlice(req.Mentions, 8)
+	mentionedUserIDs := make([]uuid.UUID, 0, len(mentions))
+	if len(mentions) > 0 {
+		users, err := s.store.ListTenantUsers(r.Context(), row.TenantID, "", 1000)
+		if err != nil {
+			s.logger.Warn("list tenant users for case mentions", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		teamUsers := make(map[uuid.UUID]struct{}, len(users))
+		for _, user := range users {
+			teamUsers[user.ID] = struct{}{}
+		}
+		for _, mention := range mentions {
+			id, err := uuid.Parse(mention)
+			if err != nil || id == uuid.Nil {
+				http.Error(w, "mention must reference a team member in this tenant", http.StatusBadRequest)
+				return
+			}
+			if _, ok := teamUsers[id]; !ok {
+				http.Error(w, "mention must reference a team member in this tenant", http.StatusBadRequest)
+				return
+			}
+			mentionedUserIDs = append(mentionedUserIDs, id)
+		}
+	}
 	caseID := row.ID.String()
 	metadata := map[string]any{
 		"note":        note,
 		"citations":   citations,
+		"mentions":    mentions,
 		"source":      "soc_cases_api",
 		"guardrails":  []string{"tenant_scoped", "note_only", "no_enforcement_execution"},
 		"case_source": "ai_investigation",
@@ -1005,6 +1161,16 @@ func (s *Server) handleCreateSOCCaseNote(w http.ResponseWriter, r *http.Request,
 		s.logger.Warn("create soc case note", zap.Error(err), zap.String("case_id", row.ID.String()))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+	for _, mentionedUserID := range mentionedUserIDs {
+		if mentionedUserID == entry.ActorID {
+			continue
+		}
+		if _, err := s.store.CreateNotification(r.Context(), storage.CreateNotificationParams{
+			TenantID: row.TenantID, RecipientID: mentionedUserID, ActorID: entry.ActorID, Kind: "case_mentioned", CaseID: row.ID, CaseTitle: newSOCCaseResponse(row).Title,
+		}); err != nil {
+			s.logger.Warn("notify case mention", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()), zap.String("recipient_id", mentionedUserID.String()))
+		}
 	}
 	writeJSON(w, http.StatusCreated, socCaseNoteFromAudit(*created))
 }
@@ -1042,6 +1208,7 @@ func socCaseNoteFromAudit(log storage.AuditLog) socCaseNoteResponse {
 		CaseID:    caseID,
 		Note:      note,
 		Citations: refs,
+		Mentions:  stringSliceFromAny(log.Metadata["mentions"]),
 		AuditID:   log.ID.String(),
 		CreatedAt: log.CreatedAt.UTC().Format(time.RFC3339),
 		Guardrails: []string{

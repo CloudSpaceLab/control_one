@@ -47,6 +47,64 @@ func (s *Server) handleTeamUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": response})
 }
 
+// hydrateCaseCollaboration adds tenant-scoped assignee and mention references
+// without making collaboration lookup failures fatal to case reads.
+func (s *Server) hydrateCaseCollaboration(ctx context.Context, tenantID uuid.UUID, row storage.AIInvestigation, resp *socCaseResponse) {
+	users, err := s.store.ListTenantUsers(ctx, tenantID, "", 1000)
+	if err != nil {
+		s.logger.Warn("list tenant users for case collaboration", zap.Error(err), zap.String("tenant_id", tenantID.String()), zap.String("case_id", row.ID.String()))
+		return
+	}
+	s.hydrateCaseCollaborationWithUsers(ctx, tenantID, row, resp, users)
+}
+
+// hydrateCaseCollaborationWithUsers lets collection responses reuse one
+// tenant-user lookup while preserving the same tenant boundary as detail reads.
+func (s *Server) hydrateCaseCollaborationWithUsers(ctx context.Context, tenantID uuid.UUID, row storage.AIInvestigation, resp *socCaseResponse, users []storage.TeamUser) {
+	if resp == nil {
+		return
+	}
+	usersByID := make(map[uuid.UUID]storage.TeamUser, len(users))
+	for _, user := range users {
+		if user.ID != uuid.Nil {
+			usersByID[user.ID] = user
+		}
+	}
+	if row.AssigneeID.Valid {
+		if user, ok := usersByID[row.AssigneeID.UUID]; ok {
+			resp.Assignee = &socCaseUserRef{ID: user.ID.String(), Name: user.Name}
+		}
+	}
+
+	mentioned, err := s.store.CaseMentionedUsers(ctx, tenantID, row.ID)
+	if err != nil {
+		s.logger.Warn("list case mentioned users", zap.Error(err), zap.String("tenant_id", tenantID.String()), zap.String("case_id", row.ID.String()))
+		return
+	}
+	seen := make(map[uuid.UUID]struct{}, 8)
+	refs := make([]socCaseUserRef, 0, 8)
+	for _, id := range mentioned {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		user, ok := usersByID[id]
+		if !ok {
+			continue
+		}
+		refs = append(refs, socCaseUserRef{ID: user.ID.String(), Name: user.Name})
+		if len(refs) == 8 {
+			break
+		}
+	}
+	if len(refs) > 0 {
+		resp.MentionedUsers = refs
+	}
+}
+
 func (s *Server) serveNotifications(w http.ResponseWriter, r *http.Request) {
 	principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
 	if !ok {

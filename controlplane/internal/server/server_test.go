@@ -2625,6 +2625,7 @@ type fakeStore struct {
 	// after a recommendation cycle.
 	portObservations             []storage.CreatePortObservationParams
 	teamUsers                    []storage.TeamUser
+	teamUsersByTenant            map[uuid.UUID][]storage.TeamUser
 	listTenantUsersCalls         []listTenantUsersCall
 	notifications                []storage.Notification
 	markNotificationReads        []notificationReadCall
@@ -2914,8 +2915,12 @@ func (f *fakeStore) ListTenantUsers(_ context.Context, tenantID uuid.UUID, query
 	defer f.mu.Unlock()
 	f.listTenantUsersCalls = append(f.listTenantUsersCalls, listTenantUsersCall{TenantID: tenantID, Query: query, Limit: limit})
 	query = strings.ToLower(strings.TrimSpace(query))
-	users := make([]storage.TeamUser, 0, len(f.teamUsers))
-	for _, user := range f.teamUsers {
+	teamUsers := f.teamUsers
+	if f.teamUsersByTenant != nil {
+		teamUsers = f.teamUsersByTenant[tenantID]
+	}
+	users := make([]storage.TeamUser, 0, len(teamUsers))
+	for _, user := range teamUsers {
 		if query != "" && !strings.Contains(strings.ToLower(user.Name), query) && !strings.Contains(strings.ToLower(user.Email), query) {
 			continue
 		}
@@ -3022,7 +3027,32 @@ func (f *fakeStore) CaseAssignee(_ context.Context, tenantID, caseID uuid.UUID) 
 func (f *fakeStore) CaseMentionedUsers(_ context.Context, tenantID, caseID uuid.UUID) ([]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]uuid.UUID(nil), f.caseMentionedUsers[teamCollabCaseKey(tenantID, caseID)]...), nil
+	seen := make(map[uuid.UUID]struct{})
+	mentioned := make([]uuid.UUID, 0)
+	add := func(id uuid.UUID) {
+		if id == uuid.Nil {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		mentioned = append(mentioned, id)
+	}
+	for _, id := range f.caseMentionedUsers[teamCollabCaseKey(tenantID, caseID)] {
+		add(id)
+	}
+	for _, entry := range f.auditLogs {
+		if entry.TenantID != tenantID || entry.Action != "soc.case.note.add" || entry.ResourceType != "ai_investigation" || entry.ResourceID == nil || *entry.ResourceID != caseID.String() {
+			continue
+		}
+		for _, rawID := range stringSliceFromAny(entry.Metadata["mentions"]) {
+			if id, err := uuid.Parse(rawID); err == nil {
+				add(id)
+			}
+		}
+	}
+	return mentioned, nil
 }
 
 func teamCollabCaseKey(tenantID, caseID uuid.UUID) string {
@@ -8373,6 +8403,202 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 		}
 		if got := len(store.fakeStore.listTenantUsersCalls); got != 1 {
 			t.Fatalf("ListTenantUsers calls=%d, want unchanged", got)
+		}
+	})
+}
+
+func TestHandleAssignCaseValidatesAssigneeInTenant(t *testing.T) {
+	tenantID := uuid.New()
+	actorID := uuid.New()
+	foreignAssigneeID := uuid.New()
+	base := &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: actorID, ExternalID: "investigator"},
+		},
+		teamUsers: []storage.TeamUser{{ID: actorID, Name: "Investigator"}},
+	}
+	row, err := base.CreateAIInvestigation(context.Background(), storage.CreateAIInvestigationParams{
+		TenantID: tenantID, TriggerType: "alert", TriggerEventType: "alert.open", TriggerDedupKey: "assign-tenant-validation", Severity: "high", Summary: "Assignment validation", Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		t.Fatalf("seed case: %v", err)
+	}
+	store := &teamCollabTenantStore{fakeStore: base, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{"assignee_id":"`+foreignAssigneeID.String()+`"}`))
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.handleSOCCaseSubroutes(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	if !contains(rec.Body.String(), "assignee must be a team member in this tenant") {
+		t.Fatalf("body=%s, want tenant-membership error", rec.Body.String())
+	}
+	if len(base.assignCaseCalls) != 0 {
+		t.Fatalf("assign calls=%+v, want none", base.assignCaseCalls)
+	}
+}
+
+func TestHandleAssignCaseNotifiesNewAssignee(t *testing.T) {
+	tenantID := uuid.New()
+	actorID := uuid.New()
+	assigneeID := uuid.New()
+	base := &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: actorID, ExternalID: "investigator"},
+		},
+		teamUsers: []storage.TeamUser{
+			{ID: actorID, Name: "Investigator"},
+			{ID: assigneeID, Name: "Ada Lovelace"},
+		},
+	}
+	row, err := base.CreateAIInvestigation(context.Background(), storage.CreateAIInvestigationParams{
+		TenantID: tenantID, TriggerType: "alert", TriggerEventType: "alert.open", TriggerDedupKey: "assign-notification", Severity: "high", Summary: "Assignment notification", Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		t.Fatalf("seed case: %v", err)
+	}
+	store := &teamCollabTenantStore{fakeStore: base, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{"assignee_id":"`+assigneeID.String()+`"}`))
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.handleSOCCaseSubroutes(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var response socCaseResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode case response: %v", err)
+	}
+	if response.Assignee == nil || response.Assignee.ID != assigneeID.String() || response.Assignee.Name != "Ada Lovelace" {
+		t.Fatalf("assignee=%+v, want Ada", response.Assignee)
+	}
+	if len(base.assignCaseCalls) != 1 || base.assignCaseCalls[0].AssigneeID != assigneeID || base.assignCaseCalls[0].AssignedBy != actorID {
+		t.Fatalf("assign calls=%+v, want assignee=%s actor=%s", base.assignCaseCalls, assigneeID, actorID)
+	}
+	if len(base.notifications) != 1 {
+		t.Fatalf("notifications=%+v, want one", base.notifications)
+	}
+	notification := base.notifications[0]
+	if notification.TenantID != tenantID || notification.RecipientID != assigneeID || notification.ActorID != actorID || notification.Kind != "case_assigned" || notification.CaseID != row.ID {
+		t.Fatalf("notification=%+v", notification)
+	}
+
+	idempotentReq := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{"assignee_id":"`+assigneeID.String()+`"}`))
+	idempotentReq = withPrincipal(idempotentReq, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	idempotentRec := httptest.NewRecorder()
+	srv.handleSOCCaseSubroutes(idempotentRec, idempotentReq)
+	if idempotentRec.Code != http.StatusOK {
+		t.Fatalf("idempotent status=%d body=%s, want 200", idempotentRec.Code, idempotentRec.Body.String())
+	}
+	if len(base.assignCaseCalls) != 1 || len(base.notifications) != 1 || len(base.auditLogs) != 1 {
+		t.Fatalf("idempotent assign calls=%d notifications=%d audits=%d, want one each", len(base.assignCaseCalls), len(base.notifications), len(base.auditLogs))
+	}
+}
+
+func TestHandleCreateSOCCaseNoteStoresMentions(t *testing.T) {
+	tenantID := uuid.New()
+	authorID := uuid.New()
+	mentionedID := uuid.New()
+	foreignID := uuid.New()
+	foreignTenantID := uuid.New()
+	base := &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: authorID, ExternalID: "investigator"},
+		},
+		teamUsersByTenant: map[uuid.UUID][]storage.TeamUser{
+			tenantID: {
+				{ID: authorID, Name: "Investigator"},
+				{ID: mentionedID, Name: "Grace Hopper"},
+			},
+			foreignTenantID: {
+				{ID: foreignID, Name: "Foreign Tenant User"},
+			},
+		},
+	}
+	row, err := base.CreateAIInvestigation(context.Background(), storage.CreateAIInvestigationParams{
+		TenantID: tenantID, TriggerType: "alert", TriggerEventType: "alert.open", TriggerDedupKey: "note-mentions", Severity: "high", Summary: "Note mentions", Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		t.Fatalf("seed case: %v", err)
+	}
+	base.caseMentionedUsers = map[string][]uuid.UUID{
+		teamCollabCaseKey(tenantID, row.ID): {foreignID},
+	}
+	store := &teamCollabTenantStore{fakeStore: base, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+
+	t.Run("rejects foreign mentions", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/notes?tenant_id="+tenantID.String(), strings.NewReader(`{"note":"Please review this finding.","mentions":["`+foreignID.String()+`"]}`))
+		req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+		rec := httptest.NewRecorder()
+
+		srv.handleSOCCaseSubroutes(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+		}
+		if !contains(rec.Body.String(), "mention must reference a team member in this tenant") {
+			t.Fatalf("body=%s, want tenant-membership error", rec.Body.String())
+		}
+		if len(base.auditLogs) != 0 {
+			t.Fatalf("audit logs=%+v, want none", base.auditLogs)
+		}
+	})
+
+	t.Run("stores validated mentions and notifies recipients", func(t *testing.T) {
+		mentions := []string{mentionedID.String()}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/notes?tenant_id="+tenantID.String(), strings.NewReader(`{"note":"Please review this finding.","mentions":["`+mentionedID.String()+`"]}`))
+		req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+		rec := httptest.NewRecorder()
+
+		srv.handleSOCCaseSubroutes(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want 201", rec.Code, rec.Body.String())
+		}
+		if len(base.auditLogs) != 1 {
+			t.Fatalf("audit logs=%+v, want one", base.auditLogs)
+		}
+		if got := stringSliceFromAny(base.auditLogs[0].Metadata["mentions"]); strings.Join(got, ",") != strings.Join(mentions, ",") {
+			t.Fatalf("stored mentions=%v, want %v", got, mentions)
+		}
+		mentioned, err := base.CaseMentionedUsers(context.Background(), tenantID, row.ID)
+		if err != nil || len(mentioned) != 2 || mentioned[0] != foreignID || mentioned[1] != mentionedID {
+			t.Fatalf("mentioned users=%v err=%v, want foreign %s then %s", mentioned, err, foreignID, mentionedID)
+		}
+		if len(base.notifications) != 1 || base.notifications[0].RecipientID != mentionedID || base.notifications[0].ActorID != authorID || base.notifications[0].Kind != "case_mentioned" {
+			t.Fatalf("notifications=%+v", base.notifications)
+		}
+		var response struct {
+			Mentions []string `json:"mentions"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode note response: %v", err)
+		}
+		if strings.Join(response.Mentions, ",") != strings.Join(mentions, ",") {
+			t.Fatalf("response mentions=%v, want %v", response.Mentions, mentions)
+		}
+
+		detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/soc/cases/"+row.ID.String()+"?tenant_id="+tenantID.String(), nil)
+		detailReq = withPrincipal(detailReq, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+		detailRec := httptest.NewRecorder()
+		srv.handleSOCCaseSubroutes(detailRec, detailReq)
+		if detailRec.Code != http.StatusOK {
+			t.Fatalf("detail status=%d body=%s, want 200", detailRec.Code, detailRec.Body.String())
+		}
+		var detail socCaseResponse
+		if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+			t.Fatalf("decode case detail: %v", err)
+		}
+		if len(detail.MentionedUsers) != 1 || detail.MentionedUsers[0].ID != mentionedID.String() || detail.MentionedUsers[0].Name != "Grace Hopper" {
+			t.Fatalf("mentioned users=%+v, want Grace", detail.MentionedUsers)
 		}
 	})
 }
