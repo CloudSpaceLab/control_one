@@ -284,19 +284,27 @@ func (s *Store) AssignCase(ctx context.Context, tenantID, caseID, assigneeID, as
 	}
 
 	if assigneeID == uuid.Nil {
-		result, err := s.db.ExecContext(ctx, `
-			UPDATE ai_investigations
-			SET assignee_id = NULL, assigned_by = $3, assigned_at = $4, updated_at = NOW()
-			WHERE id = $1 AND tenant_id = $2
-		`, caseID, tenantID, nullableUUID(assignedBy), now)
+		var exists bool
+		err := s.db.QueryRowContext(ctx, `
+			WITH target AS (
+				SELECT id, assignee_id
+				FROM ai_investigations
+				WHERE id = $1 AND tenant_id = $2
+				FOR UPDATE
+			), updated AS (
+				UPDATE ai_investigations ai
+				SET assignee_id = NULL, assigned_by = $3, assigned_at = $4, updated_at = NOW()
+				FROM target
+				WHERE ai.id = target.id
+				  AND target.assignee_id IS NOT NULL
+				RETURNING ai.id
+			)
+			SELECT EXISTS(SELECT 1 FROM target)
+		`, caseID, tenantID, nullableUUID(assignedBy), now).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("clear case assignee: %w", err)
 		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("clear case assignee: %w", err)
-		}
-		if affected == 0 {
+		if !exists {
 			return fmt.Errorf("clear case assignee: %w", sql.ErrNoRows)
 		}
 		return nil

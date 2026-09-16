@@ -376,8 +376,22 @@ func TestAssignCaseOwnership(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uuid.Nil, gotAssignee)
 	var clearedUpdatedAt time.Time
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&clearedUpdatedAt))
+	var clearedAssignedBy uuid.UUID
+	var clearedAssignedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at, updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&clearedAssignedBy, &clearedAssignedAt, &clearedUpdatedAt))
 	require.True(t, clearedUpdatedAt.After(originalUpdatedAt))
+
+	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, uuid.Nil, reassignedBy.ID, now.Add(3*time.Minute)))
+	gotAssignee, err = store.CaseAssignee(ctx, tenantID, caseID)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Nil, gotAssignee)
+	var clearedAgainAssignedBy uuid.UUID
+	var clearedAgainAssignedAt time.Time
+	var clearedAgainUpdatedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at, updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&clearedAgainAssignedBy, &clearedAgainAssignedAt, &clearedAgainUpdatedAt))
+	require.Equal(t, clearedAssignedBy, clearedAgainAssignedBy)
+	require.Equal(t, clearedAssignedAt, clearedAgainAssignedAt)
+	require.Equal(t, clearedUpdatedAt, clearedAgainUpdatedAt)
 }
 
 func TestCaseMentionedUsers(t *testing.T) {
