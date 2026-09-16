@@ -81,11 +81,15 @@ tenant before any write.
 
 ### Endpoints
 
-- `POST /api/v1/cases/{id}/assign` `{"assignee_id": "uuid" | null}` → `AssignCase`,
+All under the existing case route group `/api/v1/soc/cases/{id}/...` or the new
+namespaces below (matching the codebase's `/api/v1/soc/cases` base, not a new
+`/api/v1/cases` prefix):
+
+- `POST /api/v1/soc/cases/{id}/assign` `{"assignee_id": "uuid" | null}` → `AssignCase`,
   audit entry `soc.case.assign` (`metadata`: `{assignee_id, assigned_by}`), and a
   `case_assigned` notification for the assignee unless it is the actor.
   Returns the updated `socCaseResponse` (assignee included).
-- `POST /api/v1/cases/{id}/notes` — extended, backwards compatible: optional
+- `POST /api/v1/soc/cases/{id}/notes` — extended, backwards compatible: optional
   `mentions: string[]` (validated: every id resolves to a `ListTenantUsers`
   member; cap 8; else 400). Stored on `metadata.mentions`. For each distinct
   mentioned user except the note author: `case_mentioned` notification.
