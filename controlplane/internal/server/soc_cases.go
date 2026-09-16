@@ -441,17 +441,25 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleAssignSOCCase(w http.ResponseWriter, r *http.Request, principal *auth.Principal, row storage.AIInvestigation) {
-	var req struct {
-		AssigneeID *string `json:"assignee_id"`
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid assign payload", http.StatusBadRequest)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	assigneeRaw, ok := payload["assignee_id"]
+	if !ok {
+		http.Error(w, "assignee_id is required", http.StatusBadRequest)
+		return
+	}
+	var requestedAssigneeID *string
+	if err := json.Unmarshal(assigneeRaw, &requestedAssigneeID); err != nil {
 		http.Error(w, "invalid assign payload", http.StatusBadRequest)
 		return
 	}
 
 	assigneeID := uuid.Nil
-	if req.AssigneeID != nil {
-		parsed, err := uuid.Parse(strings.TrimSpace(*req.AssigneeID))
+	if requestedAssigneeID != nil {
+		parsed, err := uuid.Parse(strings.TrimSpace(*requestedAssigneeID))
 		if err != nil || parsed == uuid.Nil {
 			http.Error(w, "invalid assignee_id", http.StatusBadRequest)
 			return
@@ -487,7 +495,8 @@ func (s *Server) handleAssignSOCCase(w http.ResponseWriter, r *http.Request, pri
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if currentAssigneeID != assigneeID {
+	changed := currentAssigneeID != assigneeID
+	if changed {
 		if err := s.store.AssignCase(r.Context(), row.TenantID, row.ID, assigneeID, actorID, time.Now().UTC()); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.NotFound(w, r)
@@ -497,6 +506,22 @@ func (s *Server) handleAssignSOCCase(w http.ResponseWriter, r *http.Request, pri
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
+		backend := s.aiOperatorBackend()
+		if backend == nil {
+			http.Error(w, "case store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		refreshed, err := backend.GetAIInvestigation(r.Context(), row.ID)
+		if err != nil {
+			s.logger.Warn("refresh assigned soc case", zap.Error(err), zap.String("tenant_id", row.TenantID.String()), zap.String("case_id", row.ID.String()))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if refreshed == nil || refreshed.TenantID != row.TenantID {
+			http.NotFound(w, r)
+			return
+		}
+		row = *refreshed
 		caseID := row.ID.String()
 		metadata := map[string]any{
 			"assignee_id": nullableUUIDString(assigneeID),
@@ -525,7 +550,9 @@ func (s *Server) handleAssignSOCCase(w http.ResponseWriter, r *http.Request, pri
 			}
 		}
 	}
-	row.AssigneeID = uuid.NullUUID{UUID: assigneeID, Valid: assigneeID != uuid.Nil}
+	if !changed {
+		row.AssigneeID = uuid.NullUUID{UUID: assigneeID, Valid: assigneeID != uuid.Nil}
+	}
 	resp := newSOCCaseResponse(row)
 	s.hydrateCaseCollaboration(r.Context(), row.TenantID, row, &resp)
 	writeJSON(w, http.StatusOK, resp)

@@ -3011,12 +3011,24 @@ func (f *fakeStore) MarkAllNotificationsRead(_ context.Context, tenantID, recipi
 func (f *fakeStore) AssignCase(_ context.Context, tenantID, caseID, assigneeID, assignedBy uuid.UUID, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.caseAssignees == nil {
-		f.caseAssignees = make(map[string]uuid.UUID)
+	for i := range f.aiInvestigations {
+		row := &f.aiInvestigations[i]
+		if row.ID != caseID || row.TenantID != tenantID {
+			continue
+		}
+		if f.caseAssignees == nil {
+			f.caseAssignees = make(map[string]uuid.UUID)
+		}
+		currentAssigneeID := f.caseAssignees[teamCollabCaseKey(tenantID, caseID)]
+		f.assignCaseCalls = append(f.assignCaseCalls, assignCaseCall{TenantID: tenantID, CaseID: caseID, AssigneeID: assigneeID, AssignedBy: assignedBy, Now: now})
+		f.caseAssignees[teamCollabCaseKey(tenantID, caseID)] = assigneeID
+		if currentAssigneeID != assigneeID {
+			row.AssigneeID = uuid.NullUUID{UUID: assigneeID, Valid: assigneeID != uuid.Nil}
+			row.UpdatedAt = now
+		}
+		return nil
 	}
-	f.assignCaseCalls = append(f.assignCaseCalls, assignCaseCall{TenantID: tenantID, CaseID: caseID, AssigneeID: assigneeID, AssignedBy: assignedBy, Now: now})
-	f.caseAssignees[teamCollabCaseKey(tenantID, caseID)] = assigneeID
-	return nil
+	return sql.ErrNoRows
 }
 
 func (f *fakeStore) CaseAssignee(_ context.Context, tenantID, caseID uuid.UUID) (uuid.UUID, error) {
@@ -8450,6 +8462,68 @@ func TestHandleAssignCaseValidatesAssigneeInTenant(t *testing.T) {
 	}
 }
 
+func TestHandleAssignCaseRequiresAssigneeIDAndAllowsExplicitClear(t *testing.T) {
+	tenantID := uuid.New()
+	actorID := uuid.New()
+	assigneeID := uuid.New()
+	base := &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: actorID, ExternalID: "investigator"},
+		},
+		teamUsers: []storage.TeamUser{{ID: actorID, Name: "Investigator"}, {ID: assigneeID, Name: "Assignee"}},
+	}
+	row, err := base.CreateAIInvestigation(context.Background(), storage.CreateAIInvestigationParams{
+		TenantID: tenantID, TriggerType: "alert", TriggerEventType: "alert.open", TriggerDedupKey: "assign-payload-presence", Severity: "high", Summary: "Assignment payload validation", Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		t.Fatalf("seed case: %v", err)
+	}
+	if err := base.AssignCase(context.Background(), tenantID, row.ID, assigneeID, actorID, time.Now().UTC()); err != nil {
+		t.Fatalf("seed assignment: %v", err)
+	}
+	base.assignCaseCalls = nil
+	store := &teamCollabTenantStore{fakeStore: base, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+
+	t.Run("rejects omitted assignee", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{}`))
+		req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+		rec := httptest.NewRecorder()
+
+		srv.handleSOCCaseSubroutes(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+		}
+		if len(base.assignCaseCalls) != 0 {
+			t.Fatalf("assign calls=%+v, want none", base.assignCaseCalls)
+		}
+		stored, err := base.GetAIInvestigation(context.Background(), row.ID)
+		if err != nil || stored == nil || !stored.AssigneeID.Valid || stored.AssigneeID.UUID != assigneeID {
+			t.Fatalf("stored case=%+v err=%v, want original assignee", stored, err)
+		}
+	})
+
+	t.Run("clears assignment with explicit null", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{"assignee_id":null}`))
+		req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+		rec := httptest.NewRecorder()
+
+		srv.handleSOCCaseSubroutes(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+		}
+		if len(base.assignCaseCalls) != 1 || base.assignCaseCalls[0].AssigneeID != uuid.Nil {
+			t.Fatalf("assign calls=%+v, want one clear", base.assignCaseCalls)
+		}
+		stored, err := base.GetAIInvestigation(context.Background(), row.ID)
+		if err != nil || stored == nil || stored.AssigneeID.Valid {
+			t.Fatalf("stored case=%+v err=%v, want cleared assignee", stored, err)
+		}
+	})
+}
+
 func TestHandleAssignCaseReturnsNotFoundWhenAssigneeReadSeesDeletedCase(t *testing.T) {
 	tenantID := uuid.New()
 	actorID := uuid.New()
@@ -8502,6 +8576,8 @@ func TestHandleAssignCaseNotifiesNewAssignee(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed case: %v", err)
 	}
+	row.UpdatedAt = row.UpdatedAt.Add(-time.Minute)
+	base.aiInvestigations[0].UpdatedAt = row.UpdatedAt
 	store := &teamCollabTenantStore{fakeStore: base, allowedTenants: map[uuid.UUID]bool{tenantID: true}}
 	srv := &Server{store: store, logger: zap.NewNop()}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/soc/cases/"+row.ID.String()+"/assign?tenant_id="+tenantID.String(), strings.NewReader(`{"assignee_id":"`+assigneeID.String()+`"}`))
@@ -8519,6 +8595,13 @@ func TestHandleAssignCaseNotifiesNewAssignee(t *testing.T) {
 	}
 	if response.Assignee == nil || response.Assignee.ID != assigneeID.String() || response.Assignee.Name != "Ada Lovelace" {
 		t.Fatalf("assignee=%+v, want Ada", response.Assignee)
+	}
+	stored, err := base.GetAIInvestigation(context.Background(), row.ID)
+	if err != nil || stored == nil || !stored.AssigneeID.Valid || stored.AssigneeID.UUID != assigneeID {
+		t.Fatalf("stored case=%+v err=%v, want assignee=%s", stored, err, assigneeID)
+	}
+	if response.UpdatedAt != stored.UpdatedAt.UTC().Format(time.RFC3339) || response.UpdatedAt == row.UpdatedAt.UTC().Format(time.RFC3339) {
+		t.Fatalf("response updated_at=%s stored=%s original=%s", response.UpdatedAt, stored.UpdatedAt.UTC().Format(time.RFC3339), row.UpdatedAt.UTC().Format(time.RFC3339))
 	}
 	if len(base.assignCaseCalls) != 1 || base.assignCaseCalls[0].AssigneeID != assigneeID || base.assignCaseCalls[0].AssignedBy != actorID {
 		t.Fatalf("assign calls=%+v, want assignee=%s actor=%s", base.assignCaseCalls, assigneeID, actorID)
