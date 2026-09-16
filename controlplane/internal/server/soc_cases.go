@@ -225,20 +225,26 @@ func (s *Server) handleCreateSOCCaseFromAlert(w http.ResponseWriter, r *http.Req
 		nodeID = alertRow.NodeID.UUID
 	}
 	evidence, err := json.Marshal(map[string]any{
-		"alert_id":  alertID.String(),
+		"alert_id":      alertID.String(),
 		"alert_rule_id": socCaseEvidenceRuleID(alertRow),
-		"title":     alertRow.Title,
-		"severity":  alertRow.Severity,
-		"state":     alertRow.State,
-		"source":    alertRow.Source,
-		"opened_at": formatTime(alertRow.OpenedAt),
-		"context":   alertRow.Context,
-		"collector": firstNonEmptyString(alertRow.Source, "alerts"),
+		"title":         alertRow.Title,
+		"severity":      alertRow.Severity,
+		"state":         alertRow.State,
+		"source":        alertRow.Source,
+		"opened_at":     formatTime(alertRow.OpenedAt),
+		"context":       alertRow.Context,
+		"collector":     firstNonEmptyString(alertRow.Source, "alerts"),
 	})
 	if err != nil {
 		s.logger.Warn("marshal alert case evidence", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+	var createdBy uuid.UUID
+	if principal != nil && strings.TrimSpace(principal.Subject) != "" {
+		if user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject); err == nil && user != nil {
+			createdBy = user.ID
+		}
 	}
 	row, err := backend.CreateAIInvestigation(r.Context(), storage.CreateAIInvestigationParams{
 		TenantID:         tenantID,
@@ -251,6 +257,7 @@ func (s *Server) handleCreateSOCCaseFromAlert(w http.ResponseWriter, r *http.Req
 		Summary:          summary,
 		Evidence:         evidence,
 		Status:           storage.AIInvestigationStatusOpen,
+		CreatedBy:        createdBy,
 	})
 	if err != nil {
 		s.logger.Warn("create soc case from alert", zap.Error(err), zap.String("alert_id", alertID.String()))
@@ -259,9 +266,9 @@ func (s *Server) handleCreateSOCCaseFromAlert(w http.ResponseWriter, r *http.Req
 	}
 	caseID := row.ID.String()
 	metadata := map[string]any{
-		"alert_id":  alertID.String(),
-		"case_id":   caseID,
-		"source":    "soc_cases_api",
+		"alert_id":   alertID.String(),
+		"case_id":    caseID,
+		"source":     "soc_cases_api",
 		"guardrails": []string{"tenant_scoped", "from_alert", "proposal_only"},
 	}
 	entry := &storage.AuditLog{
@@ -274,12 +281,10 @@ func (s *Server) handleCreateSOCCaseFromAlert(w http.ResponseWriter, r *http.Req
 	}
 	if principal != nil {
 		entry.ActorType = firstNonEmptyString(strings.TrimSpace(principal.Type), "user")
-		if strings.TrimSpace(principal.Subject) != "" {
-			if user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject); err == nil && user != nil {
-				entry.ActorID = user.ID
-			} else {
-				metadata["created_by_subject"] = boundedToolString(principal.Subject, 256)
-			}
+		if createdBy != uuid.Nil {
+			entry.ActorID = createdBy
+		} else if strings.TrimSpace(principal.Subject) != "" {
+			metadata["created_by_subject"] = boundedToolString(principal.Subject, 256)
 		}
 	}
 	if _, err := s.store.CreateAuditLog(r.Context(), entry); err != nil {

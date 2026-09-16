@@ -1886,6 +1886,72 @@ export interface PaginatedResponse<T> {
   pagination: PaginationMeta;
 }
 
+export interface TeamSummary {
+  alerts_reviewed: number;
+  alerts_resolved: number;
+  cases_created: number;
+  containment_actions: number;
+  notes_added: number;
+  active_analysts: number;
+  avg_time_to_investigate_seconds: number;
+  avg_time_to_resolve_seconds: number;
+}
+
+export interface TeamAnalystMetric {
+  analyst_id: string;
+  analyst_name: string;
+  alerts_reviewed: number;
+  alerts_resolved: number;
+  cases_created: number;
+  containment_actions: number;
+  notes_added: number;
+  avg_time_to_investigate_seconds: number;
+}
+
+export interface TeamTrendPoint {
+  bucket: string;
+  alerts_reviewed: number;
+  alerts_resolved: number;
+  cases_created: number;
+  containment_actions: number;
+  cases_closed: number;
+}
+
+export type TeamActivityKind =
+  | 'alert_reviewed'
+  | 'alert_resolved'
+  | 'case_created'
+  | 'containment'
+  | 'note_added';
+
+export interface TeamActivityItem {
+  timestamp: string;
+  kind: TeamActivityKind;
+  actor_id?: string;
+  actor_name?: string;
+  detail: string;
+  severity?: string;
+  link_id?: string;
+}
+
+export interface TeamCoverageGaps {
+  unreviewed_open_alerts: number;
+  open_alerts_older_than_24h: number;
+  stale_cases: number;
+  active_analysts_last_7_days: number;
+  inactive_analysts_90d: number;
+}
+
+export interface TeamMetricsResponse {
+  summary: TeamSummary;
+  analysts: TeamAnalystMetric[];
+}
+
+export interface TeamTrendsResponse {
+  granularity: string;
+  points: TeamTrendPoint[];
+}
+
 interface RawContentPackSourceProposalListResponse extends RawPaginatedResponse<ContentPackSourceProposal> {
   summary?: ContentPackSourceProposalSummary;
 }
@@ -2632,6 +2698,52 @@ export class APIClient {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
+  }
+
+  async getTeamMetrics(
+    tenantId: string,
+    params: { days?: number } = {},
+  ): Promise<TeamMetricsResponse> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.days) search.set('days', params.days.toString());
+    return this.request<TeamMetricsResponse>(`/api/v1/team/metrics?${search.toString()}`);
+  }
+
+  async getTeamTrends(
+    tenantId: string,
+    params: { days?: number; bucket?: 'day' | 'week' | 'month' } = {},
+  ): Promise<TeamTrendsResponse> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.days) search.set('days', params.days.toString());
+    if (params.bucket) search.set('bucket', params.bucket);
+    return this.request<TeamTrendsResponse>(`/api/v1/team/trends?${search.toString()}`);
+  }
+
+  async getTeamActivity(
+    tenantId: string,
+    params: {
+      days?: number;
+      analystId?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<TeamActivityItem>> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.days) search.set('days', params.days.toString());
+    if (params.analystId?.trim()) search.set('analyst_id', params.analystId.trim());
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const response = await this.request<RawPaginatedResponse<TeamActivityItem>>(
+      `/api/v1/team/activity?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getTeamCoverageGaps(tenantId: string): Promise<TeamCoverageGaps> {
+    return this.request<TeamCoverageGaps>(`/api/v1/team/gaps?tenant_id=${encodeURIComponent(tenantId)}`);
   }
 
   async getSOCCase(caseId: string, tenantId?: string | null): Promise<SOCCase> {

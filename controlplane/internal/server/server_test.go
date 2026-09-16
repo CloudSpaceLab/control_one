@@ -2825,6 +2825,52 @@ func (f *fakeStore) ListAuditLogs(_ context.Context, filter storage.AuditLogFilt
 	return filtered, total, nil
 }
 
+func (f *fakeStore) GetTeamSummary(_ context.Context, tenantID uuid.UUID, since, until time.Time) (*storage.TeamSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	summary := &storage.TeamSummary{ActiveAnalysts: 0}
+	for _, alert := range f.alerts {
+		if alert.TenantID != tenantID {
+			continue
+		}
+		if alert.AckedAt.Valid && !alert.AckedAt.Time.Before(since) && !alert.AckedAt.Time.After(until) && alert.AckedBy.Valid {
+			summary.AlertsReviewed++
+		}
+		if alert.ResolvedAt.Valid && !alert.ResolvedAt.Time.Before(since) && !alert.ResolvedAt.Time.After(until) && alert.ResolvedBy.Valid {
+			summary.AlertsResolved++
+		}
+	}
+	for _, entry := range f.auditLogs {
+		if entry.TenantID != tenantID {
+			continue
+		}
+		if entry.CreatedAt.Before(since) || entry.CreatedAt.After(until) {
+			continue
+		}
+		switch entry.Action {
+		case "soc.case.note.add":
+			summary.NotesAdded++
+		}
+	}
+	return summary, nil
+}
+
+func (f *fakeStore) GetTeamAnalystMetrics(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]storage.TeamAnalystMetric, error) {
+	return []storage.TeamAnalystMetric{}, nil
+}
+
+func (f *fakeStore) GetTeamTrends(_ context.Context, _ uuid.UUID, _, _ time.Time, _ string) ([]storage.TeamTrendPoint, error) {
+	return []storage.TeamTrendPoint{}, nil
+}
+
+func (f *fakeStore) GetTeamActivityFeed(_ context.Context, _ uuid.UUID, _, _ time.Time, _ uuid.UUID, limit, offset int) ([]storage.TeamActivityItem, int, error) {
+	return []storage.TeamActivityItem{}, 0, nil
+}
+
+func (f *fakeStore) GetTeamCoverageGaps(_ context.Context, _ uuid.UUID) (*storage.TeamCoverageGaps, error) {
+	return &storage.TeamCoverageGaps{}, nil
+}
+
 func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error) {
 	if tpl.ID == uuid.Nil {
 		tpl.ID = uuid.New()
