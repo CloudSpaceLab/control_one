@@ -25,11 +25,13 @@ import {
   KpiTile,
   Loader,
   Panel,
+  Pagination,
   SectionHeader,
   StatusTag,
   TimeRangePills,
   type TimeRangeOption,
 } from '../components/kit';
+import { AssigneePicker } from '@/components/team/AssigneePicker';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { chartColors } from '@/lib/chartTheme';
@@ -40,6 +42,9 @@ import type {
   TeamCoverageGaps,
   TeamMetricsResponse,
   TeamTrendPoint,
+  PaginatedResponse,
+  SOCCase,
+  TeamUser,
 } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -116,6 +121,10 @@ export function TeamActivity(): JSX.Element {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [openCases, setOpenCases] = useState<PaginatedResponse<SOCCase> | null>(null);
+  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
+  const [casePage, setCasePage] = useState(0);
+  const casePageSize = 25;
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
@@ -127,19 +136,28 @@ export function TeamActivity(): JSX.Element {
     setError(null);
     try {
       const parsedDays = Number(days);
-      const [metrics, trends, feed, gaps] = await Promise.all([
+      const [metrics, trends, feed, gaps, cases, users] = await Promise.all([
         api.getTeamMetrics(currentTenantId, { days: parsedDays }),
         api.getTeamTrends(currentTenantId, { days: parsedDays }),
         api.getTeamActivity(currentTenantId, { days: parsedDays, limit: 50 }),
         api.getTeamCoverageGaps(currentTenantId),
+        api.listSOCCases({
+          tenantId: currentTenantId,
+          status: 'open',
+          limit: casePageSize,
+          offset: casePage * casePageSize,
+        }),
+        api.getTeamUsers(currentTenantId),
       ]);
       setData({ metrics, trends: trends.points ?? [], feed: feed.data, gaps });
+      setOpenCases(cases);
+      setTeamUsers(users);
     } catch (err) {
       setError(errorMessage(err, 'Failed to load team activity.'));
     } finally {
       setLoading(false);
     }
-  }, [api, currentTenantId, days, tenantLoading]);
+  }, [api, currentTenantId, days, tenantLoading, casePage]);
 
   useEffect(() => {
     void refresh();
@@ -216,6 +234,45 @@ export function TeamActivity(): JSX.Element {
     ],
     [],
   );
+
+  const openCaseColumns = useMemo<ColumnDef<SOCCase, unknown>[]>(() => [
+    {
+      accessorKey: 'severity',
+      header: 'Severity',
+      cell: ({ row }) => <StatusTag tone={row.original.severity === 'critical' ? 'critical' : row.original.severity === 'high' ? 'warning' : 'info'}>{row.original.severity}</StatusTag>,
+    },
+    {
+      accessorKey: 'title',
+      header: 'Case',
+      cell: ({ row }) => <Link to="/cases" className="font-medium text-foreground hover:text-brand-400">{row.original.title}</Link>,
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ row }) => <span className="text-xs text-text-secondary">{timeAgo(row.original.created_at)}</span>,
+    },
+    {
+      id: 'assignee',
+      header: 'Owner',
+      cell: ({ row }) => (
+        <AssigneePicker
+          value={row.original.assignee ?? null}
+          options={teamUsers}
+          onChange={(user) => {
+            if (!currentTenantId) return;
+            void api.assignSOCCase(row.original.case_id, currentTenantId, {
+              assignee_id: user?.id ?? null,
+            }).then((updated) => {
+              setOpenCases((current) => current ? {
+                ...current,
+                data: current.data.map((item) => item.case_id === updated.case_id ? updated : item),
+              } : current);
+            }).catch((err) => setError(errorMessage(err, 'Unable to update assignee.')));
+          }}
+        />
+      ),
+    },
+  ], [api, currentTenantId, teamUsers]);
 
   const gapCounts = data.gaps;
   const hasGaps = gapCounts
@@ -355,6 +412,25 @@ export function TeamActivity(): JSX.Element {
                 />
               }
             />
+          </Panel>
+
+          <Panel title="Open cases" eyebrow="Cases awaiting action">
+            <DataTable
+              columns={openCaseColumns}
+              rows={openCases?.data ?? []}
+              rowKey={(row) => row.case_id}
+              loading={loading}
+              empty={<EmptyState title="No open cases" description="All cases are closed." />}
+            />
+            {openCases && openCases.pagination.total > casePageSize ? (
+              <Pagination
+                page={casePage}
+                pageSize={casePageSize}
+                total={openCases.pagination.total}
+                onPageChange={setCasePage}
+                className="mt-3"
+              />
+            ) : null}
           </Panel>
 
           <Panel title="Activity feed" eyebrow="Chronological record of analyst actions">

@@ -10,7 +10,39 @@ import type {
   TeamCoverageGaps,
   TeamMetricsResponse,
   TeamTrendPoint,
+  SOCCase,
 } from '@/lib/api';
+
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+HTMLElement.prototype.scrollIntoView = vi.fn();
+
+const openCase: SOCCase = {
+  case_id: 'case-open-1',
+  tenant_id: 'tenant-1',
+  title: 'Suspicious login',
+  status: 'open',
+  severity: 'high',
+  source: 'ai_investigation',
+  trigger_type: 'alert',
+  trigger_event_type: 'auth.failure',
+  dedup_key: 'case-open-1',
+  summary: 'Repeated failed authentication attempts.',
+  evidence: {},
+  evidence_refs: [],
+  timeline: [],
+  notes: [],
+  citations: [],
+  coverage_badges: [],
+  export_url: '',
+  created_at: '2026-06-02T09:00:00Z',
+  updated_at: '2026-06-02T09:00:00Z',
+};
 
 const metrics: TeamMetricsResponse = {
   summary: {
@@ -109,6 +141,15 @@ describe('TeamActivity', () => {
         pagination: { total: feed.length, count: feed.length, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
       }),
       getTeamCoverageGaps: vi.fn().mockResolvedValue(gaps),
+      listSOCCases: vi.fn().mockResolvedValue({
+        data: [openCase],
+        pagination: { total: 1, count: 1, limit: 25, offset: 0, nextOffset: null, prevOffset: null },
+      }),
+      getTeamUsers: vi.fn().mockResolvedValue([{ id: 'u1', name: 'Ada CISO' }]),
+      assignSOCCase: vi.fn().mockResolvedValue({
+        ...openCase,
+        assignee: { id: 'u1', name: 'Ada CISO' },
+      }),
     };
     vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
       currentTenantId: 'tenant-1',
@@ -194,6 +235,25 @@ describe('TeamActivity', () => {
     await user.click(screen.getByRole('button', { name: /retry/i }));
     await waitFor(() => {
       expect(mockApi.getTeamMetrics).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('lists open cases and assigns an owner inline', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TeamActivity />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Suspicious login')).toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: 'Assignee' }));
+    await user.click(await screen.findByText('Ada CISO'));
+
+    await waitFor(() => {
+      expect(mockApi.assignSOCCase).toHaveBeenCalledWith('case-open-1', 'tenant-1', {
+        assignee_id: 'u1',
+      });
     });
   });
 });
