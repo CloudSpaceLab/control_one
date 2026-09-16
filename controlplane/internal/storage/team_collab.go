@@ -20,7 +20,7 @@ type TeamUser struct {
 
 // ListTenantUsers returns tenant members holding investigator/operator/admin
 // roles (tenant-scoped or org-global), deduplicated, matched textually on
-// prefix, limited to `limit` (<= 0 means 50).
+// substring, limited to `limit` (<= 0 means 50).
 func (s *Store) ListTenantUsers(ctx context.Context, tenantID uuid.UUID, query string, limit int) ([]TeamUser, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
@@ -28,7 +28,7 @@ func (s *Store) ListTenantUsers(ctx context.Context, tenantID uuid.UUID, query s
 	if limit <= 0 {
 		limit = 50
 	}
-	pattern := "%" + escapeLike(strings.TrimSpace(query)) + "%"
+	pattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(query))) + "%"
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (u.id) u.id, u.display_name, u.email
 		FROM user_roles ur

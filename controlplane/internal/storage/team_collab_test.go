@@ -110,6 +110,21 @@ func TestListTenantUsersMatchingQuery(t *testing.T) {
 	require.Len(t, results, 1)
 	require.Equal(t, bob.ID, results[0].ID)
 
+	// Query: search "ADA" (upper/mixed case) — should still return Ada,
+	// matching is case-insensitive.
+	results, err = store.ListTenantUsers(ctx, tenantID, "ADA", 50)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, ada.ID, results[0].ID)
+	require.Equal(t, "Ada CISO", results[0].Name)
+	require.Equal(t, "ada@example.com", results[0].Email)
+
+	// Query: search "bOb o" (mixed case) — should still return Bob.
+	results, err = store.ListTenantUsers(ctx, tenantID, "bOb o", 50)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, bob.ID, results[0].ID)
+
 	// Query: empty query — should return both Ada and Bob (investigator/operator), no Carol.
 	results, err = store.ListTenantUsers(ctx, tenantID, "", 50)
 	require.NoError(t, err)
