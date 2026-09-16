@@ -135,3 +135,137 @@ func TestListTenantUsersMatchingQuery(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 }
+
+func TestNotificationLifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	t.Parallel()
+
+	ctx := context.Background()
+	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
+		t.Skipf("skipping: docker daemon unavailable: %v", err)
+	}
+
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
+		postgres.WithInitScripts(
+			"../migrate/sql/0001_init.up.sql",
+			"../migrate/sql/0003_auth.up.sql",
+			"../migrate/sql/0093_ai_operator_persistence.up.sql",
+			"../migrate/sql/0149_team_collaboration.up.sql",
+		),
+		postgres.WithDatabase("control_one"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Terminate(ctx)) })
+
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	store, err := New(zap.NewNop(), config.DatabaseConfig{URL: connStr}, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	// Seed a tenant so FK constraints are satisfied.
+	tenantID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, tenantID, "test-tenant")
+	require.NoError(t, err)
+
+	// Create two users: R (recipient) and A (actor).
+	recipient, err := store.EnsureUser(ctx, "recipient-ext", "recipient@example.com", "Recipient User")
+	require.NoError(t, err)
+	actor, err := store.EnsureUser(ctx, "actor-ext", "actor@example.com", "Actor User")
+	require.NoError(t, err)
+
+	// Create a case in ai_investigations so the FK is satisfied.
+	caseID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO ai_investigations (id, tenant_id, trigger_type, trigger_event_type, trigger_dedup_key, summary)
+		VALUES ($1, $2, 'manual', 'note', $3, 'test case')
+	`, caseID, tenantID, "dedup-"+caseID.String())
+	require.NoError(t, err)
+
+	// Insert two notifications for the recipient: case_assigned, case_mentioned.
+	n1, err := store.CreateNotification(ctx, Notification{
+		TenantID:    tenantID,
+		RecipientID: recipient.ID,
+		ActorID:     actor.ID,
+		Kind:        "case_assigned",
+		CaseID:      caseID,
+		CaseTitle:   "Suspicious Login",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "case_assigned", n1.Kind)
+	require.False(t, n1.CreatedAt.IsZero())
+
+	// Ensure distinct created_at so newest-first ordering is deterministic.
+	time.Sleep(2 * time.Millisecond)
+
+	n2, err := store.CreateNotification(ctx, Notification{
+		TenantID:    tenantID,
+		RecipientID: recipient.ID,
+		ActorID:     actor.ID,
+		Kind:        "case_mentioned",
+		CaseID:      caseID,
+		CaseTitle:   "Suspicious Login",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "case_mentioned", n2.Kind)
+
+	// List all: should return 2 newest-first.
+	items, total, err := store.ListNotifications(ctx, tenantID, recipient.ID, ListNotificationsFilter{Limit: 50})
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	require.Len(t, items, 2)
+	require.Equal(t, n2.ID, items[0].ID, "newest first")
+	require.Equal(t, n1.ID, items[1].ID)
+
+	// Unread-only filter.
+	items, total, err = store.ListNotifications(ctx, tenantID, recipient.ID, ListNotificationsFilter{UnreadOnly: true, Limit: 50})
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	require.Len(t, items, 2)
+
+	// Count unread: 2.
+	count, err := store.CountUnreadNotifications(ctx, tenantID, recipient.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+
+	// Mark n1 read.
+	err = store.MarkNotificationRead(ctx, tenantID, recipient.ID, n1.ID)
+	require.NoError(t, err)
+
+	// Count unread: 1.
+	count, err = store.CountUnreadNotifications(ctx, tenantID, recipient.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	// Mark all read.
+	affected, err := store.MarkAllNotificationsRead(ctx, tenantID, recipient.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected, "only the remaining unread notification should be affected")
+
+	// Count unread: 0.
+	count, err = store.CountUnreadNotifications(ctx, tenantID, recipient.ID)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+
+	// Marking a notification in a different tenant should affect 0 rows.
+	otherTenant := uuid.New()
+	_, err = store.db.ExecContext(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, otherTenant, "other-tenant")
+	require.NoError(t, err)
+	err = store.MarkNotificationRead(ctx, otherTenant, recipient.ID, n1.ID)
+	require.NoError(t, err)
+
+	// MarkAll for another tenant should return 0 affected.
+	affected, err = store.MarkAllNotificationsRead(ctx, otherTenant, recipient.ID)
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+}

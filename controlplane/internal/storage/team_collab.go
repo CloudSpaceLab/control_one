@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -62,4 +63,181 @@ func (s *Store) ListTenantUsers(ctx context.Context, tenantID uuid.UUID, query s
 		return nil, fmt.Errorf("iterate tenant users: %w", err)
 	}
 	return out, nil
+}
+
+// Notification is one inbox row for a recipient.
+type Notification struct {
+	ID          uuid.UUID  `json:"id"`
+	TenantID    uuid.UUID  `json:"tenant_id"`
+	RecipientID uuid.UUID  `json:"recipient_id"`
+	ActorID     uuid.UUID  `json:"actor_id,omitempty"`
+	ActorName   string     `json:"actor_name,omitempty"`
+	Kind        string     `json:"kind"`
+	CaseID      uuid.UUID  `json:"case_id"`
+	CaseTitle   string     `json:"case_title"`
+	ReadAt      *time.Time `json:"read_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// notificationSelect is the shared column list for notification rows, joined
+// to the actor's display name so the inbox can show who acted.
+const notificationSelect = `
+	SELECT n.id, n.tenant_id, n.recipient_id, n.actor_id,
+	       COALESCE(a.display_name, '') AS actor_name,
+	       n.kind, n.case_id, n.case_title, n.read_at, n.created_at
+	FROM notifications n
+	LEFT JOIN users a ON a.id = n.actor_id`
+
+// scanNotification decodes one notification row produced by notificationSelect.
+func scanNotification(scan func(dest ...any) error) (Notification, error) {
+	var n Notification
+	var actorID uuid.NullUUID
+	var caseID uuid.NullUUID
+	var readAt sql.NullTime
+	if err := scan(&n.ID, &n.TenantID, &n.RecipientID, &actorID, &n.ActorName, &n.Kind, &caseID, &n.CaseTitle, &readAt, &n.CreatedAt); err != nil {
+		return Notification{}, err
+	}
+	if actorID.Valid {
+		n.ActorID = actorID.UUID
+	}
+	if caseID.Valid {
+		n.CaseID = caseID.UUID
+	}
+	if readAt.Valid {
+		t := readAt.Time
+		n.ReadAt = &t
+	}
+	return n, nil
+}
+
+// CreateNotification inserts a new inbox row for a recipient and returns it.
+func (s *Store) CreateNotification(ctx context.Context, n Notification) (*Notification, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		INSERT INTO notifications (tenant_id, recipient_id, actor_id, kind, case_id, case_title)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, tenant_id, recipient_id, actor_id,
+		          COALESCE((SELECT display_name FROM users WHERE id = actor_id), '') AS actor_name,
+		          kind, case_id, case_title, read_at, created_at
+	`, n.TenantID, n.RecipientID, nullableUUID(n.ActorID), n.Kind, n.CaseID, n.CaseTitle)
+	out, err := scanNotification(row.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("insert notification: %w", err)
+	}
+	return &out, nil
+}
+
+// ListNotificationsFilter controls the tenant+recipient-scoped inbox query.
+type ListNotificationsFilter struct {
+	UnreadOnly bool
+	Offset     int
+	Limit      int
+}
+
+// ListNotifications returns a recipient's notifications for a tenant, newest
+// first, with total count and LIMIT/OFFSET paging applied to the returned
+// page.
+func (s *Store) ListNotifications(ctx context.Context, tenantID, recipientID uuid.UUID, f ListNotificationsFilter) ([]Notification, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+
+	where := " WHERE n.tenant_id = $1 AND n.recipient_id = $2"
+	args := []any{tenantID, recipientID}
+	if f.UnreadOnly {
+		where += " AND n.read_at IS NULL"
+	}
+
+	var total int
+	countQuery := "SELECT COUNT(*) FROM notifications n" + where
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count notifications: %w", err)
+	}
+
+	args = append(args, f.Limit, f.Offset)
+	rows, err := s.db.QueryContext(ctx, notificationSelect+where+`
+		ORDER BY n.created_at DESC, n.id DESC
+		LIMIT $3 OFFSET $4`, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query notifications: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Notification, 0, f.Limit)
+	for rows.Next() {
+		n, err := scanNotification(rows.Scan)
+		if err != nil {
+			return nil, 0, fmt.Errorf("scan notification: %w", err)
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate notifications: %w", err)
+	}
+	return out, total, nil
+}
+
+// CountUnreadNotifications returns the number of unread notifications for a
+// recipient within a tenant.
+func (s *Store) CountUnreadNotifications(ctx context.Context, tenantID, recipientID uuid.UUID) (int, error) {
+	if s.db == nil {
+		return 0, errors.New("store database not initialized")
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM notifications
+		WHERE tenant_id = $1 AND recipient_id = $2 AND read_at IS NULL
+	`, tenantID, recipientID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count unread notifications: %w", err)
+	}
+	return count, nil
+}
+
+// MarkNotificationRead marks a single notification read, scoped to both
+// tenant and recipient so a foreign recipient's row can't be touched. It is
+// idempotent: marking an already-read or inaccessible notification is a
+// harmless no-op that affects no rows.
+func (s *Store) MarkNotificationRead(ctx context.Context, tenantID, recipientID, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE notifications
+		SET read_at = NOW()
+		WHERE id = $1 AND tenant_id = $2 AND recipient_id = $3 AND read_at IS NULL
+	`, id, tenantID, recipientID)
+	if err != nil {
+		return fmt.Errorf("mark notification read: %w", err)
+	}
+	return nil
+}
+
+// MarkAllNotificationsRead marks every unread notification for a recipient
+// within a tenant as read, returning the number of rows affected.
+func (s *Store) MarkAllNotificationsRead(ctx context.Context, tenantID, recipientID uuid.UUID) (int64, error) {
+	if s.db == nil {
+		return 0, errors.New("store database not initialized")
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE notifications
+		SET read_at = NOW()
+		WHERE tenant_id = $1 AND recipient_id = $2 AND read_at IS NULL
+	`, tenantID, recipientID)
+	if err != nil {
+		return 0, fmt.Errorf("mark all notifications read: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected for mark all read: %w", err)
+	}
+	return affected, nil
 }
