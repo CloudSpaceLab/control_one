@@ -2623,7 +2623,24 @@ type fakeStore struct {
 	// bugs §1.3 — port observations written by the node_services -> port_observations
 	// bridge in handleNodeServicesIngest. Tests assert this slice is non-empty
 	// after a recommendation cycle.
-	portObservations []storage.CreatePortObservationParams
+	portObservations             []storage.CreatePortObservationParams
+	teamUsers                    []storage.TeamUser
+	listTenantUsersCalls         []listTenantUsersCall
+	notifications                []storage.Notification
+	markNotificationReads        []notificationReadCall
+	markNotificationReadRequests []notificationReadCall
+}
+
+type listTenantUsersCall struct {
+	TenantID uuid.UUID
+	Query    string
+	Limit    int
+}
+
+type notificationReadCall struct {
+	TenantID    uuid.UUID
+	RecipientID uuid.UUID
+	ID          uuid.UUID
 }
 
 type rolePermsCall struct {
@@ -2869,6 +2886,111 @@ func (f *fakeStore) GetTeamActivityFeed(_ context.Context, _ uuid.UUID, _, _ tim
 
 func (f *fakeStore) GetTeamCoverageGaps(_ context.Context, _ uuid.UUID) (*storage.TeamCoverageGaps, error) {
 	return &storage.TeamCoverageGaps{}, nil
+}
+
+func (f *fakeStore) ListTenantUsers(_ context.Context, tenantID uuid.UUID, query string, limit int) ([]storage.TeamUser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listTenantUsersCalls = append(f.listTenantUsersCalls, listTenantUsersCall{TenantID: tenantID, Query: query, Limit: limit})
+	query = strings.ToLower(strings.TrimSpace(query))
+	users := make([]storage.TeamUser, 0, len(f.teamUsers))
+	for _, user := range f.teamUsers {
+		if query != "" && !strings.Contains(strings.ToLower(user.Name), query) && !strings.Contains(strings.ToLower(user.Email), query) {
+			continue
+		}
+		users = append(users, user)
+		if limit > 0 && len(users) == limit {
+			break
+		}
+	}
+	return users, nil
+}
+
+func (f *fakeStore) CreateNotification(_ context.Context, p storage.CreateNotificationParams) (*storage.Notification, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := storage.Notification{ID: uuid.New(), TenantID: p.TenantID, RecipientID: p.RecipientID, ActorID: p.ActorID, Kind: p.Kind, CaseID: p.CaseID, CaseTitle: p.CaseTitle, CreatedAt: time.Now().UTC()}
+	f.notifications = append(f.notifications, n)
+	return &n, nil
+}
+
+func (f *fakeStore) ListNotifications(_ context.Context, filter storage.NotificationFilter, limit, offset int) ([]storage.Notification, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	matched := make([]storage.Notification, 0, len(f.notifications))
+	for _, n := range f.notifications {
+		if n.TenantID != filter.TenantID || n.RecipientID != filter.RecipientID || (filter.UnreadOnly && n.ReadAt != nil) {
+			continue
+		}
+		matched = append(matched, n)
+	}
+	total := len(matched)
+	if offset >= total {
+		return []storage.Notification{}, total, nil
+	}
+	matched = matched[offset:]
+	if limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+	return matched, total, nil
+}
+
+func (f *fakeStore) CountUnreadNotifications(_ context.Context, tenantID, recipientID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, n := range f.notifications {
+		if n.TenantID == tenantID && n.RecipientID == recipientID && n.ReadAt == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeStore) MarkNotificationRead(_ context.Context, tenantID, recipientID, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	request := notificationReadCall{TenantID: tenantID, RecipientID: recipientID, ID: id}
+	f.markNotificationReadRequests = append(f.markNotificationReadRequests, request)
+	for i := range f.notifications {
+		n := &f.notifications[i]
+		if n.ID != id || n.TenantID != tenantID || n.RecipientID != recipientID || n.ReadAt != nil {
+			continue
+		}
+		now := time.Now().UTC()
+		n.ReadAt = &now
+		f.markNotificationReads = append(f.markNotificationReads, request)
+		break
+	}
+	return nil
+}
+
+func (f *fakeStore) MarkAllNotificationsRead(_ context.Context, tenantID, recipientID uuid.UUID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var count int64
+	for i := range f.notifications {
+		n := &f.notifications[i]
+		if n.TenantID != tenantID || n.RecipientID != recipientID || n.ReadAt != nil {
+			continue
+		}
+		now := time.Now().UTC()
+		n.ReadAt = &now
+		count++
+	}
+	return count, nil
+}
+
+func (f *fakeStore) AssignCase(_ context.Context, _, _, _, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+
+func (f *fakeStore) CaseAssignee(_ context.Context, _, _ uuid.UUID) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
+func (f *fakeStore) CaseMentionedUsers(_ context.Context, _, _ uuid.UUID) ([]uuid.UUID, error) {
+	return []uuid.UUID{}, nil
 }
 
 func (f *fakeStore) CreateProvisioningTemplate(_ context.Context, tpl *storage.ProvisioningTemplate) (*storage.ProvisioningTemplate, error) {
@@ -8145,4 +8267,72 @@ func (f *fakeStore) CreateSavedSearch(_ context.Context, in storage.SavedSearch)
 	f.savedSearches = append(f.savedSearches, in)
 	copy := in
 	return &copy, nil
+}
+
+func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
+	tenantID := uuid.New()
+	store := &fakeStore{teamUsers: []storage.TeamUser{
+		{ID: uuid.New(), Name: "Ada Lovelace", Email: "ada@example.com"},
+		{ID: uuid.New(), Name: "Grace Hopper", Email: "grace@example.com"},
+	}}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/team/users?tenant_id="+tenantID.String()+"&q=%20ada%20", nil)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.handleTeamUsers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.listTenantUsersCalls) != 1 {
+		t.Fatalf("ListTenantUsers calls=%d, want 1", len(store.listTenantUsersCalls))
+	}
+	call := store.listTenantUsersCalls[0]
+	if call.TenantID != tenantID || call.Query != "ada" || call.Limit != 25 {
+		t.Fatalf("ListTenantUsers call=%+v, want tenant=%s query=ada limit=25", call, tenantID)
+	}
+	var body struct {
+		Users []teamMemberResponse `json:"users"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Users) != 1 || body.Users[0].Name != "Ada Lovelace" {
+		t.Fatalf("users=%+v, want Ada only", body.Users)
+	}
+}
+
+func TestHandleNotificationsReadOnlyOwnRows(t *testing.T) {
+	tenantID := uuid.New()
+	recipientID := uuid.New()
+	foreignID := uuid.New()
+	store := &fakeStore{
+		users: map[string]*storage.User{
+			"investigator": {ID: recipientID, ExternalID: "investigator"},
+		},
+		notifications: []storage.Notification{{
+			ID: foreignID, TenantID: tenantID, RecipientID: uuid.New(), Kind: "case.assigned", CreatedAt: time.Now().UTC(),
+		}},
+	}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/"+foreignID.String()+"/read?tenant_id="+tenantID.String(), nil)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.serveNotifications(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.markNotificationReads) != 0 {
+		t.Fatalf("foreign notification was marked read: %+v", store.markNotificationReads)
+	}
+	if len(store.markNotificationReadRequests) != 1 {
+		t.Fatalf("MarkNotificationRead requests=%d, want 1", len(store.markNotificationReadRequests))
+	}
+	call := store.markNotificationReadRequests[0]
+	if call.TenantID != tenantID || call.RecipientID != recipientID || call.ID != foreignID {
+		t.Fatalf("MarkNotificationRead request=%+v, want current tenant and recipient", call)
+	}
 }
