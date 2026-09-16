@@ -251,3 +251,115 @@ func (s *Store) MarkAllNotificationsRead(ctx context.Context, tenantID, recipien
 	}
 	return affected, nil
 }
+
+// CaseAssignee returns the current owner of a case. Unassigned cases return
+// uuid.Nil.
+func (s *Store) CaseAssignee(ctx context.Context, tenantID, caseID uuid.UUID) (uuid.UUID, error) {
+	if s.db == nil {
+		return uuid.Nil, errors.New("store database not initialized")
+	}
+
+	var assigneeID sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT assignee_id FROM ai_investigations WHERE id = $1 AND tenant_id = $2`, caseID, tenantID).Scan(&assigneeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return uuid.Nil, sql.ErrNoRows
+		}
+		return uuid.Nil, fmt.Errorf("get case assignee: %w", err)
+	}
+	if !assigneeID.Valid {
+		return uuid.Nil, nil
+	}
+
+	parsed, err := uuid.Parse(assigneeID.String)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("parse case assignee: %w", err)
+	}
+	return parsed, nil
+}
+
+// AssignCase sets or clears a case owner. A nil assignee clears ownership.
+func (s *Store) AssignCase(ctx context.Context, tenantID, caseID, assigneeID, assignedBy uuid.UUID, now time.Time) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+
+	if assigneeID == uuid.Nil {
+		result, err := s.db.ExecContext(ctx, `
+			UPDATE ai_investigations
+			SET assignee_id = NULL, assigned_by = $3, assigned_at = $4
+			WHERE id = $1 AND tenant_id = $2
+		`, caseID, tenantID, nullableUUID(assignedBy), now)
+		if err != nil {
+			return fmt.Errorf("clear case assignee: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("clear case assignee: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("clear case assignee: %w", sql.ErrNoRows)
+		}
+		return nil
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE ai_investigations
+		SET assignee_id = $3, assigned_by = $4, assigned_at = $5
+		WHERE id = $1 AND tenant_id = $2
+	`, caseID, tenantID, assigneeID, nullableUUID(assignedBy), now)
+	if err != nil {
+		return fmt.Errorf("assign case: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("assign case: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("assign case: %w", sql.ErrNoRows)
+	}
+	return nil
+}
+
+// CaseMentionedUsers returns distinct valid users mentioned in notes on a case.
+func (s *Store) CaseMentionedUsers(ctx context.Context, tenantID, caseID uuid.UUID) ([]uuid.UUID, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT m.value
+		FROM audit_logs al
+		CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(al.metadata->'mentions', '[]'::jsonb)) AS m(value)
+		WHERE al.tenant_id = $1
+		  AND al.action = 'soc.case.note.add'
+		  AND al.resource_type = 'ai_investigation'
+		  AND al.resource_id = $2
+		  AND m.value <> ''
+	`, tenantID, caseID.String())
+	if err != nil {
+		return nil, fmt.Errorf("query case mentioned users: %w", err)
+	}
+	defer rows.Close()
+
+	seen := make(map[uuid.UUID]struct{})
+	mentioned := []uuid.UUID{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan case mentioned user: %w", err)
+		}
+		id, err := uuid.Parse(value)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		mentioned = append(mentioned, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate case mentioned users: %w", err)
+	}
+	return mentioned, nil
+}

@@ -269,3 +269,146 @@ func TestNotificationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, affected)
 }
+
+func TestAssignCaseOwnership(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	t.Parallel()
+
+	ctx := context.Background()
+	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
+		t.Skipf("skipping: docker daemon unavailable: %v", err)
+	}
+
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
+		postgres.WithInitScripts(
+			"../migrate/sql/0001_init.up.sql",
+			"../migrate/sql/0003_auth.up.sql",
+			"../migrate/sql/0093_ai_operator_persistence.up.sql",
+			"../migrate/sql/0149_team_collaboration.up.sql",
+		),
+		postgres.WithDatabase("control_one"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Terminate(ctx)) })
+
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+	store, err := New(zap.NewNop(), config.DatabaseConfig{URL: connStr}, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	tenantID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, tenantID, "test-tenant")
+	require.NoError(t, err)
+	assignee, err := store.EnsureUser(ctx, "assignee-ext", "assignee@example.com", "Assignee")
+	require.NoError(t, err)
+	assignedBy, err := store.EnsureUser(ctx, "assigner-ext", "assigner@example.com", "Assigner")
+	require.NoError(t, err)
+	caseID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO ai_investigations (id, tenant_id, trigger_type, trigger_event_type, trigger_dedup_key, summary)
+		VALUES ($1, $2, 'manual', 'assignment', $3, 'test case')
+	`, caseID, tenantID, "dedup-"+caseID.String())
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, assignee.ID, assignedBy.ID, now))
+	gotAssignee, err := store.CaseAssignee(ctx, tenantID, caseID)
+	require.NoError(t, err)
+	require.Equal(t, assignee.ID, gotAssignee)
+
+	// Reassigning the same owner keeps the assigning user intact.
+	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, assignee.ID, assignedBy.ID, now.Add(time.Minute)))
+	var gotAssignedBy uuid.UUID
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by FROM ai_investigations WHERE id = $1`, caseID).Scan(&gotAssignedBy))
+	require.Equal(t, assignedBy.ID, gotAssignedBy)
+
+	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, uuid.Nil, assignedBy.ID, now.Add(2*time.Minute)))
+	gotAssignee, err = store.CaseAssignee(ctx, tenantID, caseID)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Nil, gotAssignee)
+}
+
+func TestCaseMentionedUsers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	t.Parallel()
+
+	ctx := context.Background()
+	if _, _, err := testcontainers.DockerImageAuth(ctx, "postgres:latest"); err != nil {
+		t.Skipf("skipping: docker daemon unavailable: %v", err)
+	}
+
+	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
+		postgres.WithInitScripts(
+			"../migrate/sql/0001_init.up.sql",
+			"../migrate/sql/0003_auth.up.sql",
+			"../migrate/sql/0093_ai_operator_persistence.up.sql",
+			"../migrate/sql/0149_team_collaboration.up.sql",
+		),
+		postgres.WithDatabase("control_one"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Terminate(ctx)) })
+
+	connStr, err := pg.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+	store, err := New(zap.NewNop(), config.DatabaseConfig{URL: connStr}, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	tenantID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, tenantID, "test-tenant")
+	require.NoError(t, err)
+	caseID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO ai_investigations (id, tenant_id, trigger_type, trigger_event_type, trigger_dedup_key, summary)
+		VALUES ($1, $2, 'manual', 'mentions', $3, 'test case')
+	`, caseID, tenantID, "dedup-"+caseID.String())
+	require.NoError(t, err)
+
+	mentionedA := uuid.New()
+	mentionedB := uuid.New()
+	resourceID := caseID.String()
+	_, err = store.CreateAuditLog(ctx, &AuditLog{
+		TenantID:     tenantID,
+		Action:       "soc.case.note.add",
+		ResourceType: "ai_investigation",
+		ResourceID:   &resourceID,
+		Metadata: map[string]any{
+			"mentions": []string{mentionedA.String(), mentionedB.String()},
+		},
+	})
+	require.NoError(t, err)
+	_, err = store.CreateAuditLog(ctx, &AuditLog{
+		TenantID:     tenantID,
+		Action:       "soc.case.note.add",
+		ResourceType: "ai_investigation",
+		ResourceID:   &resourceID,
+		Metadata: map[string]any{
+			"mentions": []string{mentionedB.String()},
+		},
+	})
+	require.NoError(t, err)
+
+	mentioned, err := store.CaseMentionedUsers(ctx, tenantID, caseID)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []uuid.UUID{mentionedA, mentionedB}, mentioned)
+}

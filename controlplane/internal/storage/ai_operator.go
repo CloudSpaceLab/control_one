@@ -33,6 +33,7 @@ type AIInvestigation struct {
 	Evidence         json.RawMessage       `json:"evidence"`
 	Status           AIInvestigationStatus `json:"status"`
 	CreatedBy        uuid.NullUUID         `json:"created_by,omitempty"`
+	AssigneeID       uuid.NullUUID         `json:"assignee_id,omitempty"`
 	CreatedAt        time.Time             `json:"created_at"`
 	UpdatedAt        time.Time             `json:"updated_at"`
 }
@@ -162,7 +163,7 @@ func (s *Store) CreateAIInvestigation(ctx context.Context, params CreateAIInvest
 			updated_at         = NOW()
 		RETURNING id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
 		          trigger_dedup_key, severity, summary, evidence, status, created_by,
-		          created_at, updated_at
+		          assignee_id, created_at, updated_at
 	`, id, params.TenantID, nullableUUID(params.NodeID), nullableUUID(params.AlertID.UUID), triggerType, eventType, dedupKey, severity, summary, []byte(evidence), string(status), nullableUUID(params.CreatedBy))
 
 	return scanAIInvestigation(row)
@@ -177,10 +178,10 @@ func (s *Store) GetAIInvestigation(ctx context.Context, id uuid.UUID) (*AIInvest
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
-		       trigger_dedup_key, severity, summary, evidence, status, created_by,
-		       created_at, updated_at
-		FROM ai_investigations
-		WHERE id = $1
+		          trigger_dedup_key, severity, summary, evidence, status, created_by,
+		          assignee_id, created_at, updated_at
+	FROM ai_investigations
+	WHERE id = $1
 	`, id)
 	investigation, err := scanAIInvestigation(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -267,7 +268,7 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
 		       trigger_dedup_key, severity, summary, evidence, status, created_by,
-		       created_at, updated_at
+		       assignee_id, created_at, updated_at
 		FROM ai_investigations
 		WHERE %s
 		ORDER BY %s %s
@@ -420,12 +421,13 @@ func scanAIInvestigation(row interface {
 	Scan(dest ...any) error
 }) (*AIInvestigation, error) {
 	var (
-		out       AIInvestigation
-		nodeID    sql.NullString
-		alertID   sql.NullString
-		createdBy sql.NullString
-		evidence  []byte
-		status    string
+		out        AIInvestigation
+		nodeID     sql.NullString
+		alertID    sql.NullString
+		createdBy  sql.NullString
+		assigneeID sql.NullString
+		evidence   []byte
+		status     string
 	)
 	if err := row.Scan(
 		&out.ID,
@@ -440,6 +442,7 @@ func scanAIInvestigation(row interface {
 		&evidence,
 		&status,
 		&createdBy,
+		&assigneeID,
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	); err != nil {
@@ -458,6 +461,11 @@ func scanAIInvestigation(row interface {
 	if createdBy.Valid {
 		if parsed, err := uuid.Parse(createdBy.String); err == nil {
 			out.CreatedBy = uuid.NullUUID{UUID: parsed, Valid: true}
+		}
+	}
+	if assigneeID.Valid {
+		if parsed, err := uuid.Parse(assigneeID.String); err == nil {
+			out.AssigneeID = uuid.NullUUID{UUID: parsed, Valid: true}
 		}
 	}
 	out.Evidence = json.RawMessage(evidence)
