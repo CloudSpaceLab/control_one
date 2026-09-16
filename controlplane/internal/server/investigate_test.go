@@ -15,6 +15,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/threatintel"
 )
@@ -276,6 +277,41 @@ func TestIPEnrich_ClassifiesPublic(t *testing.T) {
 	}
 	if !containsChip(resp.Classification, "EXTERNAL") {
 		t.Fatalf("expected EXTERNAL chip, got %+v", resp.Classification)
+	}
+}
+
+func TestIPEnrich_FillsCacheMissFromConfiguredProvider(t *testing.T) {
+	t.Parallel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/lookup/8.8.8.8" {
+			t.Fatalf("provider path = %q, want /lookup/8.8.8.8", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ip":"8.8.8.8","isp":{"asn":"AS15169","org":"Google LLC"},"location":{"country":"United States","country_code":"US","city":"Mountain View"}}`))
+	}))
+	defer upstream.Close()
+
+	srv := newInvestigateServer(t)
+	srv.ipIntel = ipintel.New(config.IPIntelConfig{
+		Enabled:        true,
+		IpqueryBaseURL: upstream.URL,
+		CacheTTL:       time.Hour,
+		HTTPTimeout:    time.Second,
+	}, ipintel.NewMemCache())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/entities/ip/8.8.8.8/enrich?tenant_id="+uuid.New().String(), nil)
+	req = withPrincipal(req, viewerPrincipal())
+	rec := httptest.NewRecorder()
+	srv.handleEntitySubroutes(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp ipEnrichResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Geo.Country != "United States" || resp.Geo.ASN != "AS15169" {
+		t.Fatalf("expected provider enrichment, got %+v", resp.Geo)
 	}
 }
 

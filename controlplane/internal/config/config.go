@@ -84,12 +84,13 @@ type PolicyConfig struct {
 	SigningKeyPath string `mapstructure:"signing_key_path"`
 }
 
-// IPIntelConfig governs external IP enrichment cache fills. Request-path
-// blacklist checks use the local threat-intel snapshot first and read only
-// cached enrichment from this service. When IpqueryBaseURL is set the service
-// can call a self-hosted akyriako/ipquery instance for combined geo + ASN +
-// risk lookups; otherwise it can fall back to AbuseIPDB-only when an API key
-// is configured. Results are cached in Postgres (ip_enrichment_cache) for
+// IPIntelConfig governs external IP enrichment cache fills. Behavioral
+// request-path blacklist checks use the local threat-intel snapshot first and
+// cached enrichment from this service. Explicit Investigate IP lookups fill a
+// cache miss from the configured provider. When IpqueryBaseURL is set the
+// service can call a self-hosted akyriako/ipquery instance for combined geo +
+// ASN + risk lookups; otherwise it can fall back to AbuseIPDB-only when an API
+// key is configured. Results are cached in Postgres (ip_enrichment_cache) for
 // CacheTTL; set to 0 to disable caching, default 1h.
 type IPIntelConfig struct {
 	Enabled          bool          `mapstructure:"enabled"`

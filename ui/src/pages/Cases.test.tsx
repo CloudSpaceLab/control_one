@@ -116,6 +116,22 @@ describe('Cases', () => {
         guardrails: ['tenant_scoped'],
       }),
       exportSOCCase: vi.fn().mockResolvedValue(exportRow),
+	  listActiveBlocks: vi.fn().mockResolvedValue({
+		blocks: [{
+		  EntityActionID: 'action-1',
+		  TenantID: 'tenant-1',
+		  EntityType: 'ip',
+		  EntityID: '203.0.113.10',
+		  Action: 'block',
+		  CreatedAt: '2026-05-21T10:03:00Z',
+		  TotalNodes: 3,
+		  NodesApplied: 2,
+		  NodesPending: 1,
+		  NodesFailed: 0,
+		  NodesRemoved: 0,
+		}],
+		generated_at: '2026-05-21T10:04:00Z',
+	  }),
     };
     vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
       currentTenantId: 'tenant-1',
@@ -150,6 +166,8 @@ describe('Cases', () => {
     expect(screen.getAllByText('ai_investigations:11111111-1111-1111-1111-111111111111').length).toBeGreaterThan(0);
     expect(screen.getByText('Timeline')).toBeInTheDocument();
     expect(screen.getByText('Source-row cited')).toBeInTheDocument();
+	  expect(await screen.findByText('Block active')).toBeInTheDocument();
+	  expect(screen.getByText('2 applied · 1 pending')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /preview export/i }));
 

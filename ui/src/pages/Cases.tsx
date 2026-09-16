@@ -36,7 +36,7 @@ import {
 import { useApiClient } from '@/hooks/useApiClient';
 import { useTenant } from '@/providers/TenantProvider';
 import { cn } from '@/lib/utils';
-import type { SOCCase, SOCCaseExport, SOCCaseEvidenceRef, SOCCaseTimelineItem } from '@/lib/api';
+import type { ActiveBlock, SOCCase, SOCCaseExport, SOCCaseEvidenceRef, SOCCaseTimelineItem } from '@/lib/api';
 import { entityRoute } from '@/lib/entity';
 
 const CASE_SEVERITIES = [
@@ -546,7 +546,49 @@ function CaseResponsePanel({
   row: SOCCase;
   onActionTaken: () => void;
 }): JSX.Element {
+  const api = useApiClient();
+  const { currentTenantId } = useTenant();
   const ip = caseSourceIP(row);
+  const [blockReceipt, setBlockReceipt] = useState<ActiveBlock | null>(null);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+  const [receiptUnavailable, setReceiptUnavailable] = useState(false);
+  const [receiptRefresh, setReceiptRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!ip || !currentTenantId) {
+      setBlockReceipt(null);
+      setReceiptLoading(false);
+      setReceiptUnavailable(false);
+      return;
+    }
+    let cancelled = false;
+    setReceiptLoading(true);
+    setReceiptUnavailable(false);
+    api.listActiveBlocks({ tenantId: currentTenantId, limit: 100, includeRemoved: true })
+      .then((response) => {
+        if (cancelled) return;
+        setBlockReceipt(response.blocks.find((block) => (
+          block.EntityType === 'ip' && block.EntityID === ip
+        )) ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBlockReceipt(null);
+          setReceiptUnavailable(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setReceiptLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, currentTenantId, ip, receiptRefresh]);
+
+  const refreshReceipts = () => {
+    setReceiptRefresh((current) => current + 1);
+    onActionTaken();
+  };
   return (
     <div className="rounded-md border border-border-subtle bg-surface p-3">
       <p className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
@@ -555,9 +597,14 @@ function CaseResponsePanel({
       </p>
       {ip ? (
         <div className="flex flex-col gap-2">
+          <CaseContainmentReceipt
+            receipt={blockReceipt}
+            loading={receiptLoading}
+            unavailable={receiptUnavailable}
+          />
           <IpActionMenu
             ip={ip}
-            onActionTaken={onActionTaken}
+            onActionTaken={refreshReceipts}
             trigger={(
               <Button type="button" variant="danger" size="sm" className="w-full justify-between">
                 Review IP block
@@ -595,6 +642,63 @@ function CaseResponsePanel({
       )}
     </div>
   );
+}
+
+function CaseContainmentReceipt({
+  receipt,
+  loading,
+  unavailable,
+}: {
+  receipt: ActiveBlock | null;
+  loading: boolean;
+  unavailable: boolean;
+}): JSX.Element {
+  const status = receipt ? blockReceiptStatus(receipt) : null;
+  return (
+    <div className="rounded-sm border border-border-subtle bg-elevated px-2.5 py-2">
+      <p className="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted">IP response state</p>
+      {loading ? (
+        <p className="mt-1 text-xs text-text-secondary">Checking enforcement receipts…</p>
+      ) : unavailable ? (
+        <p className="mt-1 text-xs text-state-warning">Enforcement receipts unavailable.</p>
+      ) : receipt && status ? (
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <StatusTag tone={status.tone} variant="outline">{status.label}</StatusTag>
+          <span className="font-mono text-xs text-text-secondary">{blockReceiptSummary(receipt)}</span>
+        </div>
+      ) : (
+        <p className="mt-1 text-xs text-text-secondary">No containment dispatch recorded.</p>
+      )}
+    </div>
+  );
+}
+
+function blockReceiptStatus(block: ActiveBlock): { label: string; tone: StateTone } {
+  const action = block.Action.toLowerCase();
+  if (block.TotalNodes > 0 && block.NodesRemoved >= block.TotalNodes) {
+    return { label: action === 'allow' ? 'Unblock complete' : 'Block removed', tone: 'info' };
+  }
+  if (block.NodesFailed > 0 && block.NodesApplied > 0) {
+    return { label: 'Block partially applied', tone: 'warning' };
+  }
+  if (block.NodesFailed > 0) {
+    return { label: 'Block failed', tone: 'critical' };
+  }
+  if (block.NodesApplied > 0) {
+    return { label: action === 'allow' ? 'Unblock active' : 'Block active', tone: 'healthy' };
+  }
+  if (block.NodesPending > 0) {
+    return { label: action === 'allow' ? 'Unblock pending' : 'Block pending', tone: 'warning' };
+  }
+  return { label: 'Response dispatched', tone: 'info' };
+}
+
+function blockReceiptSummary(block: ActiveBlock): string {
+  const parts = [`${block.NodesApplied} applied`];
+  if (block.NodesPending > 0) parts.push(`${block.NodesPending} pending`);
+  if (block.NodesFailed > 0) parts.push(`${block.NodesFailed} failed`);
+  if (block.NodesRemoved > 0) parts.push(`${block.NodesRemoved} removed`);
+  return parts.join(' · ');
 }
 
 function EvidencePanel({

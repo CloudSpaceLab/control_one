@@ -659,13 +659,13 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 		resp.Source = "threat_feeds"
 	}
 
-	// Cached geo/reputation enrichments are still useful, but this endpoint now
-	// reads only the local cache. Live provider refresh belongs in background
-	// jobs or explicit feed syncs, not the investigation request path.
+	// A case investigation is an explicit intelligence request. Fill a cache
+	// miss from the configured provider so an operator does not receive an
+	// empty panel while enrichment sources are available.
 	if s.ipIntel != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
 		defer cancel()
-		if e, ok, err := s.ipIntel.LookupCached(ctx, addr); err == nil && ok && e != nil {
+		if e, err := s.ipIntel.Lookup(ctx, addr); err == nil && e != nil {
 			resp.Geo = ipGeoBlock{
 				Country:     e.Geo.Country,
 				CountryCode: e.Geo.CountryCode,
@@ -699,7 +699,7 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 				threatFeedRows = append(threatFeedRows, TFRow{Feed: t.Feed, Severity: t.Severity})
 			}
 		} else if err != nil {
-			s.logger.Warn("ipintel cache lookup failed",
+			s.logger.Warn("ipintel lookup failed",
 				zap.String("addr", addr),
 				zap.Error(err))
 		}
