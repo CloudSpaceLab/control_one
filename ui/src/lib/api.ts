@@ -2042,12 +2042,37 @@ export interface SOCCaseCitation {
   detail?: string;
 }
 
+export interface SOCUserRef {
+  id: string;
+  name: string;
+}
+
+export interface TeamUser {
+  id: string;
+  name: string;
+  email?: string;
+}
+
+export interface Notification {
+  id: string;
+  tenant_id: string;
+  recipient_id: string;
+  actor_id?: string;
+  actor_name?: string;
+  kind: 'case_assigned' | 'case_mentioned';
+  case_id: string;
+  case_title: string;
+  read_at?: string;
+  created_at: string;
+}
+
 export interface SOCCaseNote {
   id: string;
   tenant_id: string;
   case_id: string;
   note: string;
   citations?: SOCCaseEvidenceRef[];
+  mentions?: string[];
   audit_id: string;
   created_at: string;
   created_by?: string;
@@ -2070,6 +2095,8 @@ export interface SOCCase {
   evidence_refs?: SOCCaseEvidenceRef[];
   timeline: SOCCaseTimelineItem[];
   notes?: SOCCaseNote[];
+  assignee?: SOCUserRef | null;
+  mentioned_users?: SOCUserRef[];
   citations: SOCCaseCitation[];
   coverage_badges: SOCCaseCoverageBadge[];
   export_url: string;
@@ -2763,13 +2790,79 @@ export class APIClient {
     );
   }
 
-  async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[] }): Promise<SOCCaseNote> {
+  async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[]; mentions?: string[] }): Promise<SOCCaseNote> {
     return this.request<SOCCaseNote>(
       `/api/v1/soc/cases/${encodeURIComponent(caseId)}/notes?tenant_id=${encodeURIComponent(tenantId)}`,
       {
         method: 'POST',
         body: JSON.stringify(payload),
       },
+    );
+  }
+
+  async assignSOCCase(
+    caseId: string,
+    tenantId: string,
+    payload: { assignee_id: string | null },
+  ): Promise<SOCCase> {
+    return this.request<SOCCase>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/assign?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async getTeamUsers(tenantId: string, query = ''): Promise<TeamUser[]> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (query.trim()) search.set('q', query.trim());
+    const response = await this.request<{ users: TeamUser[] }>(
+      `/api/v1/team/users?${search.toString()}`,
+    );
+    return response.users;
+  }
+
+  async listNotifications(
+    tenantId: string,
+    params: { unreadOnly?: boolean; limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<Notification>> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.unreadOnly) search.set('unread_only', 'true');
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const response = await this.request<RawPaginatedResponse<Notification>>(
+      `/api/v1/notifications?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getUnreadNotificationsCount(tenantId: string): Promise<number> {
+    const response = await this.request<{ unread: number }>(
+      `/api/v1/notifications/unread-count?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+    return response.unread;
+  }
+
+  async markNotificationRead(
+    notificationId: string,
+    tenantId: string,
+  ): Promise<{ read: boolean }> {
+    return this.request<{ read: boolean }>(
+      `/api/v1/notifications/${encodeURIComponent(notificationId)}/read?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST' },
+    );
+  }
+
+  async markAllNotificationsRead(
+    tenantId: string,
+  ): Promise<{ marked_read: boolean }> {
+    return this.request<{ marked_read: boolean }>(
+      `/api/v1/notifications/read-all?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST' },
     );
   }
 
