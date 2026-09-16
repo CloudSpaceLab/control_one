@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Alert, CorrelationRule } from '../lib/api';
-import { Alerts, alertContextPills, alertDispositionPill, alertResolutionFacts } from './Alerts';
+import { Alerts, alertAccessReviewRoute, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts } from './Alerts';
 
 const mocks = vi.hoisted(() => {
   const listAlerts = vi.fn();
@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => {
   const createCorrelationRule = vi.fn();
   const deleteCorrelationRule = vi.fn();
   const createAlertSOCCase = vi.fn();
+	const attachAlertSOCCase = vi.fn();
+	const listSOCCases = vi.fn();
   const updateAlertWorkflow = vi.fn();
   return {
     apiClient: {
@@ -23,6 +25,8 @@ const mocks = vi.hoisted(() => {
       createCorrelationRule,
       deleteCorrelationRule,
       createAlertSOCCase,
+		attachAlertSOCCase,
+		listSOCCases,
       updateAlertWorkflow,
     },
     listAlerts,
@@ -32,6 +36,8 @@ const mocks = vi.hoisted(() => {
     createCorrelationRule,
     deleteCorrelationRule,
     createAlertSOCCase,
+	attachAlertSOCCase,
+	listSOCCases,
     updateAlertWorkflow,
     currentTenantId: 'tenant-1',
     setCurrentTenantId: vi.fn(),
@@ -120,6 +126,8 @@ describe('Alerts page failure states', () => {
     mocks.createCorrelationRule.mockResolvedValue(ruleRow);
     mocks.deleteCorrelationRule.mockResolvedValue(undefined);
     mocks.createAlertSOCCase.mockResolvedValue({ case_id: 'case-1' });
+	mocks.attachAlertSOCCase.mockResolvedValue({ case_id: 'case-existing' });
+	mocks.listSOCCases.mockResolvedValue({ data: [], pagination: { total: 0, limit: 50, offset: 0 } });
     mocks.updateAlertWorkflow.mockResolvedValue(alertRow);
   });
 
@@ -304,4 +312,25 @@ describe('alertResolutionFacts', () => {
     expect(facts.map((fact) => fact.label)).toEqual(expect.arrayContaining(['Occurrences', 'First seen', 'Last seen', 'Last notification']));
     expect(facts.find((fact) => fact.label === 'Occurrences')?.value).toBe('8');
   });
+});
+
+describe('contextual alert review routes', () => {
+	it('opens the exact IP lifecycle and carries host, user, and time into access review', () => {
+		const alert: Alert = {
+			id: 'alert-1', tenant_id: 'tenant-1', node_id: 'node-1', source: 'correlation', severity: 'high',
+			title: 'SSH brute force', state: 'open', opened_at: '2026-09-16T10:00:00Z',
+			context: { src_ip: '203.0.113.25', user_name: 'root', first_seen_at: '2026-09-16T10:00:01Z', last_seen_at: '2026-09-16T10:00:20Z' },
+		};
+		expect(alertInvestigationRoute(alert)).toBe('/investigate/ip/203.0.113.25?audit=1');
+		const access = new URL(`http://local${alertAccessReviewRoute(alert)}`);
+		expect(access.pathname).toBe('/access');
+		expect(Object.fromEntries(access.searchParams)).toEqual({
+			node_id: 'node-1', user: 'root', from: '2026-09-16T10:00:01Z', to: '2026-09-16T10:00:20Z', alert_id: 'alert-1',
+		});
+	});
+
+	it('falls back to the alert lifecycle when no stronger entity is present', () => {
+		const alert: Alert = { id: 'alert-2', tenant_id: 'tenant-1', source: 'correlation', severity: 'medium', title: 'Signal', state: 'open', opened_at: '2026-09-16T10:00:00Z', context: {} };
+		expect(alertInvestigationRoute(alert)).toBe('/investigate/alert/alert-2');
+	});
 });

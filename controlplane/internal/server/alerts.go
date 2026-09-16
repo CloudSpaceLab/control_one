@@ -121,6 +121,14 @@ type alertWorkflowRequest struct {
 	Note       string `json:"note"`
 }
 
+type alertCaseRequest struct {
+	CaseID string `json:"case_id,omitempty"`
+}
+
+type alertCaseAttacher interface {
+	AttachAlertToAIInvestigation(context.Context, uuid.UUID, uuid.UUID, json.RawMessage) (*storage.AIInvestigation, error)
+}
+
 type alertWorkflowUpdater interface {
 	UpdateAlertWorkflow(context.Context, uuid.UUID, storage.UpdateAlertWorkflowParams) (*storage.Alert, error)
 }
@@ -351,6 +359,39 @@ func (s *Server) handleCreateAlertSOCCase(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		http.Error(w, "marshal alert evidence", http.StatusInternalServerError)
+		return
+	}
+	var req alertCaseRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			http.Error(w, "invalid case payload", http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.CaseID) != "" {
+		caseID, err := uuid.Parse(strings.TrimSpace(req.CaseID))
+		if err != nil {
+			http.Error(w, "invalid case_id", http.StatusBadRequest)
+			return
+		}
+		attacher, ok := s.store.(alertCaseAttacher)
+		if !ok {
+			http.Error(w, "case attachment unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		row, err := attacher.AttachAlertToAIInvestigation(r.Context(), caseID, alert.TenantID, evidence)
+		if errors.Is(err, sql.ErrNoRows) || row == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "attach alert evidence to SOC case", http.StatusInternalServerError)
+			return
+		}
+		s.recordAudit(r.Context(), principal, alert.TenantID, "alert.soc_case_attached", "alert", alert.ID.String(), map[string]any{"case_id": row.ID.String(), "correlation_id": alert.Context["correlation_id"]})
+		writeJSON(w, http.StatusOK, newSOCCaseResponse(*row))
 		return
 	}
 	nodeID := uuid.Nil

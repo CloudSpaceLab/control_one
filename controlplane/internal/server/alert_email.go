@@ -29,6 +29,9 @@ func (s *Server) createAlert(ctx context.Context, params storage.CreateAlertPara
 	}
 	if errors.Is(err, storage.ErrAlertRenotificationDue) {
 		if alert != nil {
+			if _, reopened := alert.Context["reopened_at"]; reopened {
+				s.recordAudit(ctx, s.systemActor(), alert.TenantID, "alert.reopened", "alert", alert.ID.String(), alertDeliveryAuditMetadata(*alert, nil))
+			}
 			s.dispatchAlertEmail(*alert)
 		}
 		return alert, nil

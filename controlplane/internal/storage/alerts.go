@@ -99,6 +99,13 @@ func (s *Store) CreateAlert(ctx context.Context, p CreateAlertParams) (*Alert, e
 		if existing != nil {
 			return s.updateOpenAlertOccurrence(ctx, existing, p)
 		}
+		resolved, err := s.findLatestResolvedAlertByDedup(ctx, p.TenantID, p.DedupKey)
+		if err != nil {
+			return nil, err
+		}
+		if resolved != nil {
+			return s.reopenResolvedAlert(ctx, resolved, p)
+		}
 	}
 	now := s.clock().UTC()
 	if p.Context == nil {
@@ -126,6 +133,50 @@ func (s *Store) CreateAlert(ctx context.Context, p CreateAlertParams) (*Alert, e
 		return nil, fmt.Errorf("insert alert: %w", err)
 	}
 	return s.GetAlert(ctx, id)
+}
+
+func (s *Store) reopenResolvedAlert(ctx context.Context, existing *Alert, p CreateAlertParams) (*Alert, error) {
+	now := s.clock().UTC()
+	merged := reopenedAlertContext(existing.Context, p.Context, now)
+	encoded, err := marshalJSONBMap(merged)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.db.ExecContext(ctx, `
+		UPDATE alerts
+		   SET state='open', context=$1, severity=$2,
+		       summary=COALESCE(NULLIF($3,''),summary), resolved_at=NULL, resolved_by=NULL
+		 WHERE id=$4
+	`, encoded, nonEmptyString(p.Severity, existing.Severity), p.Summary, existing.ID); err != nil {
+		return nil, fmt.Errorf("reopen resolved alert: %w", err)
+	}
+	updated, err := s.GetAlert(ctx, existing.ID)
+	if err != nil {
+		return nil, err
+	}
+	return updated, ErrAlertRenotificationDue
+}
+
+func reopenedAlertContext(existing, incoming map[string]any, now time.Time) map[string]any {
+	merged := make(map[string]any, len(existing)+len(incoming)+5)
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range incoming {
+		if key != "contributing_events" {
+			merged[key] = value
+		}
+	}
+	merged["contributing_events"] = appendEvidenceTimeline(existing["contributing_events"], incoming["contributing_events"])
+	merged["occurrence_count"] = positiveContextInt(existing, "occurrence_count", 1) + positiveContextInt(incoming, "hits", 1)
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	merged["last_seen_at"] = stamp
+	merged["last_notification_at"] = stamp
+	merged["notification_state"] = "renotification_due"
+	merged["reopened_at"] = stamp
+	merged["reopen_count"] = positiveContextInt(existing, "reopen_count", 0) + 1
+	delete(merged, "disposition")
+	return merged
 }
 
 func (s *Store) UpdateOpenAlertOccurrence(ctx context.Context, p CreateAlertParams) (*Alert, error) {
@@ -245,6 +296,11 @@ func firstContextTime(values map[string]any, key string, fallback time.Time) tim
 
 func (s *Store) findOpenAlertByDedup(ctx context.Context, tenant uuid.UUID, key string) (*Alert, error) {
 	row := s.db.QueryRowContext(ctx, alertSelectSQL+` WHERE tenant_id = $1 AND dedup_key = $2 AND state = 'open' LIMIT 1`, tenant, key)
+	return scanAlert(row)
+}
+
+func (s *Store) findLatestResolvedAlertByDedup(ctx context.Context, tenant uuid.UUID, key string) (*Alert, error) {
+	row := s.db.QueryRowContext(ctx, alertSelectSQL+` WHERE tenant_id = $1 AND dedup_key = $2 AND state = 'resolved' ORDER BY resolved_at DESC NULLS LAST LIMIT 1`, tenant, key)
 	return scanAlert(row)
 }
 

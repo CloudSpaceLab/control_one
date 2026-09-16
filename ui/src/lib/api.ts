@@ -4443,6 +4443,13 @@ export class APIClient {
     return this.request<SOCCase>(`/api/v1/alerts/${encodeURIComponent(id)}/case`, { method: "POST" });
   }
 
+	async attachAlertSOCCase(id: string, caseId: string): Promise<SOCCase> {
+		return this.request<SOCCase>(`/api/v1/alerts/${encodeURIComponent(id)}/case`, {
+			method: "POST",
+			body: JSON.stringify({ case_id: caseId }),
+		});
+	}
+
   async updateAlertWorkflow(id: string, payload: { assigned_to?: string; note?: string }): Promise<Alert> {
     return this.request<Alert>(`/api/v1/alerts/${encodeURIComponent(id)}/workflow`, { method: "POST", body: JSON.stringify(payload) });
   }

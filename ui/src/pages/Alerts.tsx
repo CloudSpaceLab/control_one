@@ -32,7 +32,7 @@ import { useTenant } from '../providers/TenantProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
 import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from '../lib/correlationTemplates';
-import type { Alert, AlertDispositionValue, CorrelationCondition, CorrelationRule, UpdateAlertDispositionPayload } from '../lib/api';
+import type { Alert, AlertDispositionValue, CorrelationCondition, CorrelationRule, SOCCase, UpdateAlertDispositionPayload } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
 
 type PageTab = 'alerts' | 'rules';
@@ -259,7 +259,17 @@ export function Alerts(): JSX.Element {
   const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
   const [resolvingAlert, setResolvingAlert] = useState(false);
   const [creatingCase, setCreatingCase] = useState(false);
+	const [availableCases, setAvailableCases] = useState<SOCCase[]>([]);
   const [savingWorkflow, setSavingWorkflow] = useState(false);
+
+	useEffect(() => {
+		if (!resolveTargetId || !currentTenantId) return;
+		let cancelled = false;
+		client.listSOCCases({ tenantId: currentTenantId, limit: 50, offset: 0 })
+			.then((response) => { if (!cancelled) setAvailableCases(response.data.filter((item) => item.status !== 'closed')); })
+			.catch(() => { if (!cancelled) setAvailableCases([]); });
+		return () => { cancelled = true; };
+	}, [client, currentTenantId, resolveTargetId]);
 
   // Correlation rules state
   const [rules, setRules] = useState<CorrelationRule[]>([]);
@@ -1294,6 +1304,7 @@ export function Alerts(): JSX.Element {
         }}
         onActionTaken={() => { void refresh(); }}
         creatingCase={creatingCase}
+		availableCases={availableCases}
         onCreateCase={async (alert) => {
           setCreatingCase(true);
           setResolveError(null);
@@ -1306,6 +1317,18 @@ export function Alerts(): JSX.Element {
             setCreatingCase(false);
           }
         }}
+		onAttachCase={async (alert, caseId) => {
+			setCreatingCase(true);
+			setResolveError(null);
+			try {
+				const attached = await client.attachAlertSOCCase(alert.id, caseId);
+				navigate(`/cases?case_id=${encodeURIComponent(attached.case_id)}`);
+			} catch (err) {
+				setResolveError(errorMessage(err, 'Case attachment failed.'));
+			} finally {
+				setCreatingCase(false);
+			}
+		}}
         savingWorkflow={savingWorkflow}
         onSaveWorkflow={async (alert, payload) => {
           setSavingWorkflow(true);
@@ -1549,6 +1572,8 @@ function ResolveAlertModal({
   onActionTaken,
   creatingCase,
   onCreateCase,
+	availableCases,
+	onAttachCase,
   savingWorkflow,
   onSaveWorkflow,
 }: {
@@ -1561,6 +1586,8 @@ function ResolveAlertModal({
   onActionTaken: () => void;
   creatingCase: boolean;
   onCreateCase: (alert: Alert) => Promise<void>;
+	availableCases: SOCCase[];
+	onAttachCase: (alert: Alert, caseId: string) => Promise<void>;
   savingWorkflow: boolean;
   onSaveWorkflow: (alert: Alert, payload: { assigned_to?: string; note?: string }) => Promise<void>;
 }) {
@@ -1571,6 +1598,7 @@ function ResolveAlertModal({
   const [suppressUntil, setSuppressUntil] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
   const [analystNote, setAnalystNote] = useState('');
+	const [caseId, setCaseId] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -1579,6 +1607,7 @@ function ResolveAlertModal({
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
     setAssignedTo(contextString(alert?.context ?? {}, 'assigned_to'));
     setAnalystNote('');
+	setCaseId('');
   }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
 
   const selectedDisposition = dispositionOption(disposition);
@@ -1774,6 +1803,16 @@ function ResolveAlertModal({
               <Button type="button" variant="outline" size="sm" className="w-full" loading={creatingCase} onClick={() => void onCreateCase(alert)}>
                 Create SOC case with evidence
               </Button>
+			  {availableCases.length > 0 ? (
+				<div className="rounded-lg border border-border-subtle bg-surface p-3">
+				  <Label htmlFor="alert-existing-case">Attach to existing case</Label>
+				  <select id="alert-existing-case" className="mt-2 w-full rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm" value={caseId} onChange={(event) => setCaseId(event.target.value)}>
+					<option value="">Select an open case</option>
+					{availableCases.map((item) => <option key={item.case_id} value={item.case_id}>{item.summary || item.trigger_event_type} · {item.case_id.slice(0, 8)}</option>)}
+				  </select>
+				  <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" loading={creatingCase} disabled={!caseId} onClick={() => void onAttachCase(alert, caseId)}>Attach alert evidence</Button>
+				</div>
+			  ) : null}
               <div className="rounded-lg border border-border-subtle bg-surface p-3">
                 <Label htmlFor="alert-assigned-to">Assigned analyst</Label>
                 <Input id="alert-assigned-to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} placeholder="Name or email" />
@@ -1837,8 +1876,8 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     actions.push({ label: 'Open IP investigation', to: `/investigate/ip/${encodeURIComponent(ip)}?audit=1` });
     actions.push({ label: 'Open active blocks', to: '/security/network?tab=blocks' });
   } else {
-    steps.push('Inspect the source event and linked entity before changing alert state.');
-    actions.push({ label: 'Open search & lifecycle', to: '/investigate' });
+	steps.push('Inspect the source event and linked entity before changing alert state.');
+	actions.push({ label: 'Open search & lifecycle', to: alertInvestigationRoute(alert) });
   }
 
   if (category === 'exfiltration') {
@@ -1847,7 +1886,7 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     actions.push({ label: 'Review exposure posture', to: '/control-room/exposure' });
   } else if (category === 'credential') {
     steps.push('Review auth failures, rotate exposed credentials if needed, and validate no successful session followed the attack window.');
-    actions.push({ label: 'Review access', to: '/access' });
+	actions.push({ label: 'Review access', to: alertAccessReviewRoute(alert) });
   } else if (category === 'exploit' || category === 'scanner') {
     steps.push('Review probed paths and webserver config, then apply capture/enforcement or patch the exposed application before closing.');
     actions.push({ label: 'Open webserver controls', to: '/security/webservers' });
@@ -1865,7 +1904,7 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     actions.push({ label: 'Review secrets', to: '/secrets' });
   } else if (category === 'access') {
     steps.push('Review privileged session, MFA, PAM, and role-change evidence; revoke or narrow access before closing the alert.');
-    actions.push({ label: 'Review access', to: '/access' });
+	actions.push({ label: 'Review access', to: alertAccessReviewRoute(alert) });
     actions.push({ label: 'Review sessions', to: '/sessions' });
   } else if (category === 'patch') {
     steps.push('Check whether the affected node should move to proxy/update-only posture, then deploy the missing fix inside the approved maintenance window.');
@@ -1894,6 +1933,32 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     actions: dedupeActions(actions),
     posture,
   };
+}
+
+export function alertInvestigationRoute(alert: Alert): string {
+	const ctx = alert.context ?? {};
+	const ip = alertSourceIP(alert);
+	if (ip) return `/investigate/ip/${encodeURIComponent(ip)}?audit=1`;
+	const host = alert.node_id || contextString(ctx, 'node_id', 'host', 'hostname');
+	if (host) return `/investigate/host/${encodeURIComponent(host)}`;
+	const user = contextString(ctx, 'user_name', 'username', 'user');
+	if (user) return `/investigate/user/${encodeURIComponent(user)}`;
+	return `/investigate/alert/${encodeURIComponent(alert.id)}`;
+}
+
+export function alertAccessReviewRoute(alert: Alert): string {
+	const ctx = alert.context ?? {};
+	const search = new URLSearchParams();
+	const host = alert.node_id || contextString(ctx, 'node_id', 'host', 'hostname');
+	const user = contextString(ctx, 'user_id', 'user_name', 'username', 'user');
+	const firstSeen = contextString(ctx, 'first_seen_at') || alert.opened_at;
+	const lastSeen = contextString(ctx, 'last_seen_at') || alert.opened_at;
+	if (host) search.set('node_id', host);
+	if (user) search.set('user', user);
+	if (firstSeen) search.set('from', firstSeen);
+	if (lastSeen) search.set('to', lastSeen);
+	search.set('alert_id', alert.id);
+	return `/access?${search.toString()}`;
 }
 
 function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
