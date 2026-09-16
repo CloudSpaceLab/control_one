@@ -105,11 +105,47 @@ func TestMiddlewareStaticTokenUsesStoredRoles(t *testing.T) {
 	}
 }
 
+func TestMiddlewarePrefersBearerSessionOverForwardedClientCertificate(t *testing.T) {
+	userID := uuid.New()
+	store := &fakeIdentityStore{
+		rolesReturn:  []string{"admin"},
+		sessionToken: "browser-session-token",
+		session:      &storage.Session{},
+		sessionUser: &storage.LocalUser{
+			ID:          userID,
+			Email:       "admin@local",
+			DisplayName: "Default Admin",
+		},
+	}
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+	req.Header.Set("Authorization", "Bearer browser-session-token")
+	req.Header.Set("X-SSL-Client-S-DN", "CN=browser-certificate,O=Example Corp")
+
+	principal, err := mw.authenticate(req)
+	if err != nil {
+		t.Fatalf("expected authenticated browser session: %v", err)
+	}
+	if principal.Type != "user" {
+		t.Fatalf("principal type = %q, want user", principal.Type)
+	}
+	if principal.Subject != userID.String() {
+		t.Fatalf("principal subject = %q, want %q", principal.Subject, userID)
+	}
+	if !equalSlices(principal.Roles, []string{"admin"}) {
+		t.Fatalf("principal roles = %v, want [admin]", principal.Roles)
+	}
+}
+
 type fakeIdentityStore struct {
 	userID           uuid.UUID
 	ensureUserCalled bool
 	assignedRoles    []string
 	rolesReturn      []string
+	sessionToken     string
+	session          *storage.Session
+	sessionUser      *storage.LocalUser
 }
 
 func (f *fakeIdentityStore) EnsureUser(_ context.Context, externalID, email, displayName string) (*storage.User, error) {
@@ -143,6 +179,9 @@ func (f *fakeIdentityStore) GetUserByExternalID(_ context.Context, externalID st
 }
 
 func (f *fakeIdentityStore) ValidateSessionToken(_ context.Context, token string) (*storage.Session, *storage.LocalUser, error) {
+	if token == f.sessionToken {
+		return f.session, f.sessionUser, nil
+	}
 	return nil, nil, nil
 }
 
