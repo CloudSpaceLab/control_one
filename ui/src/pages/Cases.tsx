@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
+  AtSign,
   ArrowRight,
   BookOpenText,
   CheckCircle2,
@@ -18,6 +19,7 @@ import {
   Server,
   Shield,
   ShieldCheck,
+  X,
 } from 'lucide-react';
 import type { ColumnDef, SortingState } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
@@ -38,6 +40,8 @@ import { useTenant } from '@/providers/TenantProvider';
 import { cn } from '@/lib/utils';
 import type { SOCCase, SOCCaseExport, SOCCaseEvidenceRef, SOCCaseTimelineItem } from '@/lib/api';
 import { entityRoute } from '@/lib/entity';
+import { AssigneePicker } from '@/components/team/AssigneePicker';
+import type { TeamUser } from '@/lib/api';
 
 const CASE_SEVERITIES = [
   { label: 'Critical', value: 'critical' },
@@ -60,6 +64,9 @@ export function Cases(): JSX.Element {
   const [noteDraft, setNoteDraft] = useState('');
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
+  const [noteMentions, setNoteMentions] = useState<string[]>([]);
+  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
@@ -144,6 +151,22 @@ export function Cases(): JSX.Element {
   }, [refresh]);
 
   useEffect(() => {
+    let cancelled = false;
+    if (!currentTenantId) {
+      setTeamUsers([]);
+      return;
+    }
+    api.getTeamUsers(currentTenantId).then((users) => {
+      if (!cancelled) setTeamUsers(users);
+    }).catch(() => {
+      if (!cancelled) setTeamUsers([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, currentTenantId]);
+
+  useEffect(() => {
     if (!selectedId || !currentTenantId) {
       setSelectedCase(null);
       setExportPreview(null);
@@ -156,6 +179,7 @@ export function Cases(): JSX.Element {
     setExportPreview(null);
     setExportError(null);
     setNoteDraft('');
+    setNoteMentions([]);
     setNoteStatus(null);
     api
       .getSOCCase(selectedId, currentTenantId)
@@ -243,14 +267,33 @@ export function Cases(): JSX.Element {
       await api.addSOCCaseNote(selectedCase.case_id, currentTenantId, {
         note: noteDraft,
         citations,
+        mentions: noteMentions,
       });
       setNoteDraft('');
+      setNoteMentions([]);
       setNoteStatus('Note added with audit guardrails.');
       setSelectedCase(await api.getSOCCase(selectedCase.case_id, currentTenantId));
     } catch (err) {
       setNoteStatus(`Note failed: ${errorMessage(err, 'Unable to add note.')}`);
     } finally {
       setNoteSaving(false);
+    }
+  };
+
+  const assignOwner = async (user: TeamUser | null) => {
+    if (!selectedCase || !currentTenantId || assignmentSaving) return;
+    setAssignmentSaving(true);
+    setError(null);
+    try {
+      const updated = await api.assignSOCCase(selectedCase.case_id, currentTenantId, {
+        assignee_id: user?.id ?? null,
+      });
+      setSelectedCase(updated);
+      setCases((current) => current.map((row) => row.case_id === updated.case_id ? updated : row));
+    } catch (err) {
+      setError(errorMessage(err, 'Unable to update assignee.'));
+    } finally {
+      setAssignmentSaving(false);
     }
   };
 
@@ -395,6 +438,24 @@ export function Cases(): JSX.Element {
             <div className="grid gap-5">
               <div className="rounded-md border border-border-subtle bg-surface p-3">
                 <p className="text-sm leading-6 text-text-secondary">{caseSummaryText(selectedCase)}</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <AssigneePicker
+                    value={selectedCase.assignee ?? null}
+                    options={teamUsers}
+                    disabled={assignmentSaving}
+                    onChange={(user) => void assignOwner(user)}
+                  />
+                  {(selectedCase.mentioned_users ?? []).map((member) => (
+                    <span
+                      key={member.id}
+                      title="Mentioned in case"
+                      className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-elevated px-2 py-1 text-xs text-text-secondary"
+                    >
+                      <AtSign className="h-3 w-3 text-brand-400" aria-hidden />
+                      {member.name}
+                    </span>
+                  ))}
+                </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {selectedCase.coverage_badges.map((badge) => (
                     <StatusTag key={badge.id} tone={normalizeTone(badge.tone)}>
@@ -420,7 +481,10 @@ export function Cases(): JSX.Element {
                   draft={noteDraft}
                   status={noteStatus}
                   saving={noteSaving}
+                  teamUsers={teamUsers}
+                  mentions={noteMentions}
                   onDraftChange={setNoteDraft}
+                  onMentionsChange={setNoteMentions}
                   onSubmit={() => void addNote()}
                 />
                 <ExportPanel
@@ -688,17 +752,38 @@ function NotesPanel({
   draft,
   status,
   saving,
+  teamUsers,
+  mentions,
   onDraftChange,
+  onMentionsChange,
   onSubmit,
 }: {
   notes: SOCCase['notes'];
   draft: string;
   status: string | null;
   saving: boolean;
+  teamUsers: TeamUser[];
+  mentions: string[];
   onDraftChange: (value: string) => void;
+  onMentionsChange: (value: string[]) => void;
   onSubmit: () => void;
 }): JSX.Element {
   const statusIsError = status?.toLowerCase().startsWith('note failed');
+  const mentionQuery = draft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
+  const suggestions = mentionQuery === undefined || mentions.length >= 8
+    ? []
+    : teamUsers.filter((user) => (
+      !mentions.includes(user.id)
+      && `${user.name} ${user.email ?? ''}`.toLowerCase().includes(mentionQuery)
+    )).slice(0, 5);
+  const mentionedUsers = mentions
+    .map((id) => teamUsers.find((user) => user.id === id))
+    .filter((user): user is TeamUser => Boolean(user));
+
+  const selectMention = (user: TeamUser) => {
+    onMentionsChange([...mentions, user.id].slice(0, 8));
+    onDraftChange(draft.replace(/(?:^|\s)@[^\s@]*$/, (match) => `${match.startsWith(' ') ? ' ' : ''}@${user.name} `));
+  };
   return (
     <div className="rounded-md border border-border-subtle bg-surface p-3">
       <p className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
@@ -724,6 +809,40 @@ function NotesPanel({
           placeholder="Add analyst decision, owner, or closure note"
           className="rounded-md border border-border-subtle bg-elevated px-3 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
         />
+        {suggestions.length > 0 ? (
+          <div className="rounded-md border border-border-subtle bg-elevated p-1" aria-label="Mention suggestions">
+            {suggestions.map((user) => (
+              <button
+                key={user.id}
+                type="button"
+                aria-label={`Mention ${user.name}`}
+                className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-hover"
+                onClick={() => selectMention(user)}
+              >
+                {user.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {mentionedUsers.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5" aria-label="Mention recipients">
+            {mentionedUsers.map((user) => (
+              <span key={user.id} className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-elevated px-2 py-1 text-xs text-text-secondary">
+                <AtSign className="h-3 w-3" aria-hidden />
+                {user.name}
+                <button
+                  type="button"
+                  aria-label={`Remove ${user.name}`}
+                  onClick={() => onMentionsChange(mentions.filter((id) => id !== user.id))}
+                  className="rounded text-text-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" aria-hidden />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {mentions.length >= 8 ? <p className="text-xs text-text-muted">Maximum 8 mentions.</p> : null}
         <Button type="button" variant="secondary" size="sm" onClick={onSubmit} disabled={!draft.trim() || saving} loading={saving}>
           <MessageSquarePlus />
           {saving ? 'Adding note...' : 'Add note'}
