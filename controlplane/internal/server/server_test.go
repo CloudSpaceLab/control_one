@@ -2518,6 +2518,30 @@ func TestAuthorizeRejectsAgentPrincipalForUserRoles(t *testing.T) {
 	}
 }
 
+func TestAuthorizeAllowsOperationalRolesForViewerAccess(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{roleOperator, roleInvestigator, "ciso"} {
+		role := role
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+
+			srv := &Server{}
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+			req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{
+				Type:    "user",
+				Subject: role + "-user",
+				Roles:   []string{role},
+			}))
+			rec := httptest.NewRecorder()
+
+			if principal, ok := srv.authorize(rec, req, roleViewer); !ok || principal == nil {
+				t.Fatalf("%s principal denied viewer access: status=%d body=%s", role, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 type fakeStore struct {
 	mu                  sync.Mutex
 	nodes               []storage.Node
@@ -8374,10 +8398,10 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-	if len(store.fakeStore.listTenantUsersCalls) != 1 {
-		t.Fatalf("ListTenantUsers calls=%d, want 1", len(store.fakeStore.listTenantUsersCalls))
+	if len(store.listTenantUsersCalls) != 1 {
+		t.Fatalf("ListTenantUsers calls=%d, want 1", len(store.listTenantUsersCalls))
 	}
-	call := store.fakeStore.listTenantUsersCalls[0]
+	call := store.listTenantUsersCalls[0]
 	if call.TenantID != tenantID || call.Query != "ada" || call.Limit != 25 {
 		t.Fatalf("ListTenantUsers call=%+v, want tenant=%s query=ada limit=25", call, tenantID)
 	}
@@ -8401,7 +8425,7 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
 		}
-		if got := len(store.fakeStore.listTenantUsersCalls); got != 1 {
+		if got := len(store.listTenantUsersCalls); got != 1 {
 			t.Fatalf("ListTenantUsers calls=%d, want unchanged", got)
 		}
 	})
@@ -8417,7 +8441,7 @@ func TestHandleListTeamUsersScopesToTenantAndRoles(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
 		}
-		if got := len(store.fakeStore.listTenantUsersCalls); got != 1 {
+		if got := len(store.listTenantUsersCalls); got != 1 {
 			t.Fatalf("ListTenantUsers calls=%d, want unchanged", got)
 		}
 	})

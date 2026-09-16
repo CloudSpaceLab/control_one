@@ -607,7 +607,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 
 	for _, role := range principal.Roles {
 		for _, allowed := range allowedRoles {
-			if strings.EqualFold(strings.TrimSpace(role), strings.TrimSpace(allowed)) {
+			role = strings.TrimSpace(role)
+			allowed = strings.TrimSpace(allowed)
+			if strings.EqualFold(role, allowed) ||
+				(strings.EqualFold(allowed, roleViewer) && isReadCapableRole(role)) {
 				return principal, true
 			}
 		}
@@ -621,6 +624,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 
 	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 	return nil, false
+}
+
+func isReadCapableRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case roleViewer, roleOperator, roleInvestigator, roleCISO:
+		return true
+	default:
+		return false
+	}
 }
 
 type registerNodeRequest struct {
@@ -789,6 +801,7 @@ const (
 	roleViewer   = "viewer"
 	roleOperator = "operator"
 	roleAdmin    = "admin"
+	roleCISO     = "ciso"
 
 	requestIDHeader = "X-Request-Id"
 )

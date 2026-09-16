@@ -46,7 +46,7 @@ func (s *Store) ListTenantUsers(ctx context.Context, tenantID uuid.UUID, query s
 	if err != nil {
 		return nil, fmt.Errorf("query tenant users: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]TeamUser, 0, limit)
 	for rows.Next() {
@@ -179,7 +179,7 @@ func (s *Store) ListNotifications(ctx context.Context, filter NotificationFilter
 	if err != nil {
 		return nil, 0, fmt.Errorf("query notifications: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]Notification, 0, limit)
 	for rows.Next() {
@@ -360,7 +360,7 @@ func (s *Store) CaseMentionedUsers(ctx context.Context, tenantID, caseID uuid.UU
 	if err != nil {
 		return nil, fmt.Errorf("query case mentioned users: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	seen := make(map[uuid.UUID]struct{})
 	mentioned := []uuid.UUID{}
