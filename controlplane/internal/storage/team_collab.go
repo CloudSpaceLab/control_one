@@ -286,7 +286,7 @@ func (s *Store) AssignCase(ctx context.Context, tenantID, caseID, assigneeID, as
 	if assigneeID == uuid.Nil {
 		result, err := s.db.ExecContext(ctx, `
 			UPDATE ai_investigations
-			SET assignee_id = NULL, assigned_by = $3, assigned_at = $4
+			SET assignee_id = NULL, assigned_by = $3, assigned_at = $4, updated_at = NOW()
 			WHERE id = $1 AND tenant_id = $2
 		`, caseID, tenantID, nullableUUID(assignedBy), now)
 		if err != nil {
@@ -311,7 +311,7 @@ func (s *Store) AssignCase(ctx context.Context, tenantID, caseID, assigneeID, as
 			FOR UPDATE
 		), updated AS (
 			UPDATE ai_investigations ai
-			SET assignee_id = $3, assigned_by = $4, assigned_at = $5
+			SET assignee_id = $3, assigned_by = $4, assigned_at = $5, updated_at = NOW()
 			FROM target
 			WHERE ai.id = target.id
 			  AND target.assignee_id IS DISTINCT FROM $3
@@ -337,7 +337,12 @@ func (s *Store) CaseMentionedUsers(ctx context.Context, tenantID, caseID uuid.UU
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT m.value
 		FROM audit_logs al
-		CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(al.metadata->'mentions', '[]'::jsonb)) AS m(value)
+		CROSS JOIN LATERAL jsonb_array_elements_text(
+			CASE
+				WHEN jsonb_typeof(al.metadata->'mentions') = 'array' THEN al.metadata->'mentions'
+				ELSE '[]'::jsonb
+			END
+		) AS m(value)
 		WHERE al.tenant_id = $1
 		  AND al.action = 'soc.case.note.add'
 		  AND al.resource_type = 'ai_investigation'

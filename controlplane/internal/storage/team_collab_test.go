@@ -285,7 +285,11 @@ func TestAssignCaseOwnership(t *testing.T) {
 		postgres.WithInitScripts(
 			"../migrate/sql/0001_init.up.sql",
 			"../migrate/sql/0003_auth.up.sql",
+			"../migrate/sql/0044_alerts.up.sql",
+			"../migrate/sql/0064_entity_tags.up.sql",
 			"../migrate/sql/0093_ai_operator_persistence.up.sql",
+			"../migrate/sql/0138_alert_cases.up.sql",
+			"../migrate/sql/0148_team_activity.up.sql",
 			"../migrate/sql/0149_team_collaboration.up.sql",
 		),
 		postgres.WithDatabase("control_one"),
@@ -321,6 +325,10 @@ func TestAssignCaseOwnership(t *testing.T) {
 		VALUES ($1, $2, 'manual', 'assignment', $3, 'test case')
 	`, caseID, tenantID, "dedup-"+caseID.String())
 	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `UPDATE ai_investigations SET updated_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, caseID)
+	require.NoError(t, err)
+	var createdUpdatedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&createdUpdatedAt))
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, assignee.ID, assignedBy.ID, now))
@@ -329,21 +337,47 @@ func TestAssignCaseOwnership(t *testing.T) {
 	require.Equal(t, assignee.ID, gotAssignee)
 	var originalAssignedBy uuid.UUID
 	var originalAssignedAt time.Time
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&originalAssignedBy, &originalAssignedAt))
+	var originalUpdatedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at, updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&originalAssignedBy, &originalAssignedAt, &originalUpdatedAt))
 	require.Equal(t, assignedBy.ID, originalAssignedBy)
+	require.True(t, originalUpdatedAt.After(createdUpdatedAt))
+
+	loaded, err := store.GetAIInvestigation(ctx, caseID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	require.Equal(t, uuid.NullUUID{UUID: assignee.ID, Valid: true}, loaded.AssigneeID)
+	items, _, err := store.ListAIInvestigations(ctx, ListAIInvestigationsFilter{TenantID: tenantID}, 50, 0)
+	require.NoError(t, err)
+	require.Contains(t, items, *loaded)
+
+	created, err := store.CreateAIInvestigation(ctx, CreateAIInvestigationParams{
+		TenantID:         tenantID,
+		TriggerType:      "manual",
+		TriggerEventType: "created",
+		TriggerDedupKey:  "created-" + uuid.NewString(),
+		Summary:          "created case",
+		CreatedBy:        assignedBy.ID,
+	})
+	require.NoError(t, err)
+	require.False(t, created.AssigneeID.Valid)
 
 	// Reassigning the same owner must preserve the original assignment attribution.
 	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, assignee.ID, reassignedBy.ID, now.Add(time.Minute)))
 	var gotAssignedBy uuid.UUID
 	var gotAssignedAt time.Time
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&gotAssignedBy, &gotAssignedAt))
+	var gotUpdatedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at, updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&gotAssignedBy, &gotAssignedAt, &gotUpdatedAt))
 	require.Equal(t, originalAssignedBy, gotAssignedBy)
 	require.Equal(t, originalAssignedAt, gotAssignedAt)
+	require.Equal(t, originalUpdatedAt, gotUpdatedAt)
 
 	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, uuid.Nil, assignedBy.ID, now.Add(2*time.Minute)))
 	gotAssignee, err = store.CaseAssignee(ctx, tenantID, caseID)
 	require.NoError(t, err)
 	require.Equal(t, uuid.Nil, gotAssignee)
+	var clearedUpdatedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT updated_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&clearedUpdatedAt))
+	require.True(t, clearedUpdatedAt.After(originalUpdatedAt))
 }
 
 func TestCaseMentionedUsers(t *testing.T) {
@@ -361,7 +395,11 @@ func TestCaseMentionedUsers(t *testing.T) {
 		postgres.WithInitScripts(
 			"../migrate/sql/0001_init.up.sql",
 			"../migrate/sql/0003_auth.up.sql",
+			"../migrate/sql/0044_alerts.up.sql",
+			"../migrate/sql/0064_entity_tags.up.sql",
 			"../migrate/sql/0093_ai_operator_persistence.up.sql",
+			"../migrate/sql/0138_alert_cases.up.sql",
+			"../migrate/sql/0148_team_activity.up.sql",
 			"../migrate/sql/0149_team_collaboration.up.sql",
 		),
 		postgres.WithDatabase("control_one"),
@@ -401,7 +439,7 @@ func TestCaseMentionedUsers(t *testing.T) {
 		ResourceType: "ai_investigation",
 		ResourceID:   &resourceID,
 		Metadata: map[string]any{
-			"mentions": []string{mentionedA.String(), mentionedB.String()},
+			"mentions": []string{mentionedA.String(), mentionedB.String(), "not-a-uuid"},
 		},
 	})
 	require.NoError(t, err)
@@ -413,6 +451,41 @@ func TestCaseMentionedUsers(t *testing.T) {
 		Metadata: map[string]any{
 			"mentions": []string{mentionedB.String()},
 		},
+	})
+	require.NoError(t, err)
+	for _, mentions := range []any{
+		"not-an-array",
+		map[string]string{"id": mentionedA.String()},
+		nil,
+	} {
+		_, err = store.CreateAuditLog(ctx, &AuditLog{
+			TenantID:     tenantID,
+			Action:       "soc.case.note.add",
+			ResourceType: "ai_investigation",
+			ResourceID:   &resourceID,
+			Metadata:     map[string]any{"mentions": mentions},
+		})
+		require.NoError(t, err)
+	}
+
+	otherTenantID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, otherTenantID, "other-tenant")
+	require.NoError(t, err)
+	_, err = store.CreateAuditLog(ctx, &AuditLog{
+		TenantID:     otherTenantID,
+		Action:       "soc.case.note.add",
+		ResourceType: "ai_investigation",
+		ResourceID:   &resourceID,
+		Metadata:     map[string]any{"mentions": []string{uuid.NewString()}},
+	})
+	require.NoError(t, err)
+	otherCaseID := uuid.New().String()
+	_, err = store.CreateAuditLog(ctx, &AuditLog{
+		TenantID:     tenantID,
+		Action:       "soc.case.note.add",
+		ResourceType: "ai_investigation",
+		ResourceID:   &otherCaseID,
+		Metadata:     map[string]any{"mentions": []string{uuid.NewString()}},
 	})
 	require.NoError(t, err)
 
