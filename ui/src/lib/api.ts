@@ -3941,11 +3941,12 @@ export class APIClient {
     );
   }
 
-  async approveBlockProposal(id: string): Promise<IPBlockProposal> {
+  async approveBlockProposal(id: string, reason: string): Promise<IPBlockProposal> {
     return this.request<IPBlockProposal>(
       `/api/v1/network/block-proposals/${encodeURIComponent(id)}/approve`,
       {
         method: "POST",
+        body: JSON.stringify({ reason }),
       },
     );
   }

@@ -2455,6 +2455,11 @@ func (s *Server) handleApproveBlockProposal(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "block proposal is not pending approval", http.StatusConflict)
 		return
 	}
+	decisionReason, err := decodeRequiredLifecycleReason(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if status, msg := s.blockProposalSafetyViolation(r.Context(), entry.TenantID, entry.ServerGroup); status != 0 {
 		s.recordAudit(r.Context(), principal, entry.TenantID, "network.block_proposal.rejected", "ip_blocklist_entry", id.String(), map[string]any{
 			"ip_cidr": entry.IPCIDR,
@@ -2560,6 +2565,7 @@ func (s *Server) handleApproveBlockProposal(w http.ResponseWriter, r *http.Reque
 		"ip_cidr":          entry.IPCIDR,
 		"target":           entry.TargetType,
 		"entity_action_id": blockAction.ID.String(),
+		"reason":           decisionReason,
 	})
 	writeJSON(w, http.StatusAccepted, newBlockProposalResponse(updated))
 }
@@ -2696,7 +2702,11 @@ func (s *Server) handleRejectBlockProposal(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "only proposed block proposals can be rejected; use rollback for dispatched blocks", http.StatusConflict)
 		return
 	}
-	reason := decodeLifecycleReason(r, "operator rejected proposal")
+	reason, err := decodeRequiredLifecycleReason(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	updated, err := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "rejected", nil, reason)
 	if err != nil {
 		s.logger.Warn("reject block proposal", zap.Error(err))
@@ -2807,6 +2817,23 @@ func decodeLifecycleReason(r *http.Request, fallback string) string {
 		reason = fallback
 	}
 	return reason
+}
+
+func decodeRequiredLifecycleReason(r *http.Request) (string, error) {
+	reason := ""
+	if r != nil && r.Body != nil {
+		var req blockProposalLifecycleRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			return "", fmt.Errorf("invalid payload: %v", err)
+		}
+		reason = strings.TrimSpace(req.Reason)
+	}
+	if reason == "" {
+		return "", errors.New("decision reason is required")
+	}
+	return reason, nil
 }
 
 func (s *Server) recordBlockProposalEntityAction(ctx context.Context, entry *storage.IPBlocklistEntry, approverID *uuid.UUID, now time.Time) (*storage.EntityAction, error) {
@@ -3476,6 +3503,23 @@ func (s *Server) protectedIPBlockReason(ctx context.Context, tenantID uuid.UUID,
 	targetNet, ok := parseIPOrCIDRNet(target)
 	if s == nil || !ok {
 		return ""
+	}
+	for _, protected := range []struct {
+		cidr   string
+		reason string
+	}{
+		{cidr: "127.0.0.0/8", reason: "IPv4 loopback range"},
+		{cidr: "::1/128", reason: "IPv6 loopback address"},
+		{cidr: "0.0.0.0/8", reason: "IPv4 current-network range"},
+		{cidr: "169.254.0.0/16", reason: "IPv4 link-local range"},
+		{cidr: "224.0.0.0/4", reason: "IPv4 multicast range"},
+		{cidr: "fe80::/10", reason: "IPv6 link-local range"},
+		{cidr: "ff00::/8", reason: "IPv6 multicast range"},
+	} {
+		_, protectedNet, err := net.ParseCIDR(protected.cidr)
+		if err == nil && cidrNetsOverlap(targetNet, protectedNet) {
+			return protected.reason + " " + protected.cidr
+		}
 	}
 	if s.store != nil {
 		if filters, err := s.store.GetTenantEventFilters(ctx, tenantID); err == nil && filters != nil {

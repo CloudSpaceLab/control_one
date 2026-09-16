@@ -409,6 +409,12 @@ func TestProtectedIPBlockReasonUsesTenantAllowlistAndAssetCIDRs(t *testing.T) {
 	if got := s.protectedIPBlockReason(context.Background(), tenantID, "192.0.2.10"); got != "" {
 		t.Fatalf("unexpected protected reason for external test IP: %q", got)
 	}
+	if got := s.protectedIPBlockReason(context.Background(), tenantID, "127.0.0.2/32"); !strings.Contains(got, "loopback") {
+		t.Fatalf("loopback protection reason = %q", got)
+	}
+	if got := s.protectedIPBlockReason(context.Background(), tenantID, "::1/128"); !strings.Contains(got, "loopback") {
+		t.Fatalf("IPv6 loopback protection reason = %q", got)
+	}
 }
 
 func TestBlockProposalSafetyStopsRateLimitAndOpenCircuit(t *testing.T) {
