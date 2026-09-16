@@ -125,6 +125,51 @@ func (s *Server) notificationsMethodNotAllowed(w http.ResponseWriter) {
 	http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 }
 
+func notificationPathGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isCanonicalNotificationPath(r) {
+			http.Error(w, "invalid notification path", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isCanonicalNotificationPath(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return true
+	}
+	const notificationPath = "/api/v1/notifications"
+	path := r.URL.Path
+	rawPath := r.URL.EscapedPath()
+	lowerRawPath := strings.ToLower(rawPath)
+	if !strings.HasPrefix(path, notificationPath) && !strings.HasPrefix(rawPath, notificationPath) && !strings.HasPrefix(lowerRawPath, notificationPath+"%2f") {
+		return true
+	}
+	if path != notificationPath && !strings.HasPrefix(path, notificationPath+"/") && rawPath != notificationPath && !strings.HasPrefix(rawPath, notificationPath+"/") && !strings.HasPrefix(lowerRawPath, notificationPath+"%2f") {
+		return true
+	}
+	if rawPath != path {
+		return false
+	}
+	switch path {
+	case notificationPath, notificationPath + "/unread-count", notificationPath + "/read-all":
+		return true
+	}
+	if !strings.HasPrefix(path, notificationPath+"/") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, notificationPath+"/"), "/")
+	if len(parts) == 2 && parts[1] == "read" {
+		parts = parts[:1]
+	}
+	if len(parts) != 1 || parts[0] == "" {
+		return false
+	}
+	id, err := uuid.Parse(parts[0])
+	return err == nil && id != uuid.Nil
+}
+
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request, tenantID, recipientID uuid.UUID) {
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
@@ -165,36 +210,10 @@ func (s *Server) handleUnreadNotificationsCount(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]int{"unread": count})
 }
 
-func (s *Server) hydrateNotificationActorNames(r *http.Request, items []storage.Notification) {
-	ids := make(map[uuid.UUID]struct{})
-	for _, item := range items {
-		if item.ActorID != uuid.Nil {
-			ids[item.ActorID] = struct{}{}
-		}
-	}
-	for id := range ids {
-		user, err := s.store.GetUser(r.Context(), id)
-		if err != nil {
-			s.logger.Warn("lookup notification actor", zap.Error(err), zap.String("actor_id", id.String()))
-			continue
-		}
-		if user == nil {
-			continue
-		}
-		name := strings.TrimSpace(user.DisplayName.String)
-		if name == "" {
-			name = strings.TrimSpace(user.Email.String)
-			if at := strings.Index(name, "@"); at > 0 {
-				name = name[:at]
-			}
-		}
-		for i := range items {
-			if items[i].ActorID == id && name != "" {
-				items[i].ActorName = name
-			}
-		}
-	}
-}
+// hydrateNotificationActorNames intentionally does not perform per-row user
+// lookups. ListNotifications joins actor display names in its storage query;
+// the server Store contract does not expose a batch lookup for blank values.
+func (s *Server) hydrateNotificationActorNames(_ *http.Request, _ []storage.Notification) {}
 
 func (s *Server) userIDForPrincipal(ctx context.Context, principal *auth.Principal) (uuid.UUID, bool) {
 	if s == nil || s.store == nil || principal == nil || strings.TrimSpace(principal.Subject) == "" {

@@ -2632,6 +2632,7 @@ type fakeStore struct {
 	caseAssignees                map[string]uuid.UUID
 	caseMentionedUsers           map[string][]uuid.UUID
 	assignCaseCalls              []assignCaseCall
+	getUserCalls                 int
 }
 
 type listTenantUsersCall struct {
@@ -3464,6 +3465,7 @@ func (f *fakeStore) ListUserRoles(_ context.Context, userID uuid.UUID) ([]string
 }
 
 func (f *fakeStore) GetUser(_ context.Context, userID uuid.UUID) (*storage.User, error) {
+	f.getUserCalls++
 	if f.usersByID == nil {
 		return nil, nil
 	}
@@ -8478,5 +8480,114 @@ func TestServeNotificationsResolvesLocalSessionPrincipal(t *testing.T) {
 	}
 	if body.Unread != 1 {
 		t.Fatalf("unread=%d, want 1", body.Unread)
+	}
+}
+
+func TestNotificationRouterRejectsNoncanonicalPathsBeforeMux(t *testing.T) {
+	tenantID := uuid.New()
+	recipientID := uuid.New()
+	notificationID := uuid.New()
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "double slash", path: "/api/v1/notifications//" + notificationID.String()},
+		{name: "trailing slash", path: "/api/v1/notifications/" + notificationID.String() + "/"},
+		{name: "dot segment", path: "/api/v1/notifications/../" + notificationID.String()},
+		{name: "encoded slash", path: "/api/v1/notifications/%2F" + notificationID.String()},
+		{name: "encoded traversal", path: "/api/v1/notifications/%2e%2e%2f" + notificationID.String()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{
+				users: map[string]*storage.User{"investigator": {ID: recipientID, ExternalID: "investigator"}},
+				notifications: []storage.Notification{{
+					ID: notificationID, TenantID: tenantID, RecipientID: recipientID, Kind: "case.assigned", CreatedAt: time.Now().UTC(),
+				}},
+			}
+			srv := New(zap.NewNop(), &config.Config{
+				HTTP: config.HTTPConfig{Address: ":0"},
+				TLS:  config.TLSConfig{RequireClientTLS: false},
+				Auth: authWithTokens(roleInvestigator, "investigator"),
+			}, store, nil)
+			defer func() { _ = srv.Stop(context.Background()) }()
+
+			req := httptest.NewRequest(http.MethodPost, tt.path+"?tenant_id="+tenantID.String(), nil)
+			req.Header.Set("Authorization", "Bearer investigator")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			if location := rec.Header().Get("Location"); location != "" {
+				t.Errorf("unexpected redirect to %q", location)
+			}
+			if len(store.markNotificationReadRequests) != 0 || len(store.markNotificationReads) != 0 {
+				t.Errorf("noncanonical path attempted notification mutation: requests=%+v mutations=%+v", store.markNotificationReadRequests, store.markNotificationReads)
+			}
+		})
+	}
+}
+
+func TestNotificationRouterAllowsCanonicalReadPath(t *testing.T) {
+	tenantID := uuid.New()
+	recipientID := uuid.New()
+	notificationID := uuid.New()
+	store := &fakeStore{
+		users: map[string]*storage.User{"investigator": {ID: recipientID, ExternalID: "investigator"}},
+		notifications: []storage.Notification{{
+			ID: notificationID, TenantID: tenantID, RecipientID: recipientID, Kind: "case.assigned", CreatedAt: time.Now().UTC(),
+		}},
+	}
+	srv := New(zap.NewNop(), &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens(roleInvestigator, "investigator"),
+	}, store, nil)
+	defer func() { _ = srv.Stop(context.Background()) }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/"+notificationID.String()+"/read?tenant_id="+tenantID.String(), nil)
+	req.Header.Set("Authorization", "Bearer investigator")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if len(store.markNotificationReads) != 1 {
+		t.Fatalf("notification mutations=%+v, want one", store.markNotificationReads)
+	}
+}
+
+func TestHandleListNotificationsPreservesActorNameWithoutUserLookup(t *testing.T) {
+	tenantID := uuid.New()
+	recipientID := uuid.New()
+	actorID := uuid.New()
+	store := &fakeStore{
+		users: map[string]*storage.User{"investigator": {ID: recipientID, ExternalID: "investigator"}},
+		notifications: []storage.Notification{{
+			ID: uuid.New(), TenantID: tenantID, RecipientID: recipientID, ActorID: actorID, ActorName: "Ada Lovelace", Kind: "case.assigned", CreatedAt: time.Now().UTC(),
+		}},
+	}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications?tenant_id="+tenantID.String(), nil)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "investigator", Roles: []string{roleInvestigator}})
+	rec := httptest.NewRecorder()
+
+	srv.serveNotifications(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if store.getUserCalls != 0 {
+		t.Fatalf("GetUser calls=%d, want 0", store.getUserCalls)
+	}
+	var body paginatedResponse[storage.Notification]
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Data) != 1 || body.Data[0].ActorName != "Ada Lovelace" {
+		t.Fatalf("notifications=%+v, want prefilled actor name", body.Data)
 	}
 }

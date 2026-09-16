@@ -2913,10 +2913,11 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	authMW := auth.NewMiddleware(logger, cfg.TLS.RequireClientTLS, cfg.Auth, identityStore)
 
+	protectedMux := notificationPathGuard(mux)
 	httpServer := &http.Server{
 		Addr: cfg.HTTP.Address,
 		Handler: loggingMiddleware(logger,
-			requestIDMiddleware(authMW.Wrap(mux))),
+			requestIDMiddleware(authMW.Wrap(protectedMux))),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
