@@ -313,6 +313,8 @@ func TestAssignCaseOwnership(t *testing.T) {
 	require.NoError(t, err)
 	assignedBy, err := store.EnsureUser(ctx, "assigner-ext", "assigner@example.com", "Assigner")
 	require.NoError(t, err)
+	reassignedBy, err := store.EnsureUser(ctx, "reassigner-ext", "reassigner@example.com", "Reassigner")
+	require.NoError(t, err)
 	caseID := uuid.New()
 	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO ai_investigations (id, tenant_id, trigger_type, trigger_event_type, trigger_dedup_key, summary)
@@ -325,12 +327,18 @@ func TestAssignCaseOwnership(t *testing.T) {
 	gotAssignee, err := store.CaseAssignee(ctx, tenantID, caseID)
 	require.NoError(t, err)
 	require.Equal(t, assignee.ID, gotAssignee)
+	var originalAssignedBy uuid.UUID
+	var originalAssignedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&originalAssignedBy, &originalAssignedAt))
+	require.Equal(t, assignedBy.ID, originalAssignedBy)
 
-	// Reassigning the same owner keeps the assigning user intact.
-	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, assignee.ID, assignedBy.ID, now.Add(time.Minute)))
+	// Reassigning the same owner must preserve the original assignment attribution.
+	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, assignee.ID, reassignedBy.ID, now.Add(time.Minute)))
 	var gotAssignedBy uuid.UUID
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by FROM ai_investigations WHERE id = $1`, caseID).Scan(&gotAssignedBy))
-	require.Equal(t, assignedBy.ID, gotAssignedBy)
+	var gotAssignedAt time.Time
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT assigned_by, assigned_at FROM ai_investigations WHERE id = $1`, caseID).Scan(&gotAssignedBy, &gotAssignedAt))
+	require.Equal(t, originalAssignedBy, gotAssignedBy)
+	require.Equal(t, originalAssignedAt, gotAssignedAt)
 
 	require.NoError(t, store.AssignCase(ctx, tenantID, caseID, uuid.Nil, assignedBy.ID, now.Add(2*time.Minute)))
 	gotAssignee, err = store.CaseAssignee(ctx, tenantID, caseID)

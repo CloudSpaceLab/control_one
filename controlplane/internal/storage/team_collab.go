@@ -302,19 +302,27 @@ func (s *Store) AssignCase(ctx context.Context, tenantID, caseID, assigneeID, as
 		return nil
 	}
 
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE ai_investigations
-		SET assignee_id = $3, assigned_by = $4, assigned_at = $5
-		WHERE id = $1 AND tenant_id = $2
-	`, caseID, tenantID, assigneeID, nullableUUID(assignedBy), now)
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		WITH target AS (
+			SELECT id, assignee_id
+			FROM ai_investigations
+			WHERE id = $1 AND tenant_id = $2
+			FOR UPDATE
+		), updated AS (
+			UPDATE ai_investigations ai
+			SET assignee_id = $3, assigned_by = $4, assigned_at = $5
+			FROM target
+			WHERE ai.id = target.id
+			  AND target.assignee_id IS DISTINCT FROM $3
+			RETURNING ai.id
+		)
+		SELECT EXISTS(SELECT 1 FROM target)
+	`, caseID, tenantID, assigneeID, nullableUUID(assignedBy), now).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("assign case: %w", err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("assign case: %w", err)
-	}
-	if affected == 0 {
+	if !exists {
 		return fmt.Errorf("assign case: %w", sql.ErrNoRows)
 	}
 	return nil
