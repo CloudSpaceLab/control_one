@@ -116,6 +116,23 @@ type alertDispositionRequest struct {
 	SuppressUntil string `json:"suppress_until,omitempty"`
 }
 
+type alertWorkflowRequest struct {
+	AssignedTo string `json:"assigned_to"`
+	Note       string `json:"note"`
+}
+
+type alertCaseRequest struct {
+	CaseID string `json:"case_id,omitempty"`
+}
+
+type alertCaseAttacher interface {
+	AttachAlertToAIInvestigation(context.Context, uuid.UUID, uuid.UUID, json.RawMessage) (*storage.AIInvestigation, error)
+}
+
+type alertWorkflowUpdater interface {
+	UpdateAlertWorkflow(context.Context, uuid.UUID, storage.UpdateAlertWorkflowParams) (*storage.Alert, error)
+}
+
 func (s *Server) handleAlertsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -275,9 +292,138 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			"reason":      reason,
 		})
 		writeJSON(w, http.StatusOK, newAlertResponse(*alert))
+	case "case":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		alert, ok := s.requireAlertTenantAccess(w, r, principal, id, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		s.handleCreateAlertSOCCase(w, r, principal, *alert)
+	case "workflow":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		alert, ok := s.requireAlertTenantAccess(w, r, principal, id, roleInvestigator, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		var req alertWorkflowRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.AssignedTo) == "" && strings.TrimSpace(req.Note) == "" {
+			http.Error(w, "assigned_to or note is required", http.StatusBadRequest)
+			return
+		}
+		updater, ok := s.store.(alertWorkflowUpdater)
+		if !ok {
+			http.Error(w, "alert workflow store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		updated, err := updater.UpdateAlertWorkflow(r.Context(), alert.ID, storage.UpdateAlertWorkflowParams{AssignedTo: req.AssignedTo, Note: req.Note, By: s.userIDForPrincipalCtx(r.Context(), principal), At: time.Now().UTC()})
+		if err != nil {
+			http.Error(w, "update alert workflow", http.StatusInternalServerError)
+			return
+		}
+		s.recordAudit(r.Context(), principal, alert.TenantID, "alert.workflow_updated", "alert", alert.ID.String(), map[string]any{"assigned_to": req.AssignedTo, "note_added": strings.TrimSpace(req.Note) != ""})
+		writeJSON(w, http.StatusOK, newAlertResponse(*updated))
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) handleCreateAlertSOCCase(w http.ResponseWriter, r *http.Request, principal *auth.Principal, alert storage.Alert) {
+	backend := s.aiOperatorBackend()
+	if backend == nil {
+		http.Error(w, "case store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"alert_id": alert.ID.String(), "rule_id": alert.RuleID.UUID.String(),
+		"correlation_id": alert.Context["correlation_id"], "alert_context": alert.Context,
+	})
+	if err != nil {
+		http.Error(w, "marshal alert evidence", http.StatusInternalServerError)
+		return
+	}
+	var req alertCaseRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			http.Error(w, "invalid case payload", http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.CaseID) != "" {
+		caseID, err := uuid.Parse(strings.TrimSpace(req.CaseID))
+		if err != nil {
+			http.Error(w, "invalid case_id", http.StatusBadRequest)
+			return
+		}
+		attacher, ok := s.store.(alertCaseAttacher)
+		if !ok {
+			http.Error(w, "case attachment unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		row, err := attacher.AttachAlertToAIInvestigation(r.Context(), caseID, alert.TenantID, evidence)
+		if errors.Is(err, sql.ErrNoRows) || row == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "attach alert evidence to SOC case", http.StatusInternalServerError)
+			return
+		}
+		s.recordAudit(r.Context(), principal, alert.TenantID, "alert.soc_case_attached", "alert", alert.ID.String(), map[string]any{"case_id": row.ID.String(), "correlation_id": alert.Context["correlation_id"]})
+		writeJSON(w, http.StatusOK, newSOCCaseResponse(*row))
+		return
+	}
+	nodeID := uuid.Nil
+	if alert.NodeID.Valid {
+		nodeID = alert.NodeID.UUID
+	}
+	row, err := backend.CreateAIInvestigation(r.Context(), storage.CreateAIInvestigationParams{
+		TenantID: alert.TenantID, NodeID: nodeID, TriggerType: "correlation_alert",
+		TriggerEventType: firstNonEmptyString(alertContextString(alert.Context, "event_type", "event_type_filter"), "alert"),
+		TriggerDedupKey:  "alert:" + alert.ID.String(), Severity: alert.Severity,
+		Summary: firstNonEmptyString(alert.Title, alert.Summary.String), Evidence: evidence,
+		Status: storage.AIInvestigationStatusOpen,
+	})
+	if err != nil {
+		http.Error(w, "create alert SOC case", http.StatusInternalServerError)
+		return
+	}
+	s.recordAudit(r.Context(), principal, alert.TenantID, "alert.soc_case_opened", "alert", alert.ID.String(), map[string]any{"case_id": row.ID.String(), "correlation_id": alert.Context["correlation_id"]})
+	writeJSON(w, http.StatusCreated, newSOCCaseResponse(*row))
+}
+
+func alertContextString(context map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := context[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text := strings.TrimSpace(fmt.Sprint(value)); text != "" && text != "<nil>" {
+			return text
+		}
+	}
+	return ""
 }
 
 func (s *Server) requireAlertTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, id uuid.UUID, roles ...string) (*storage.Alert, bool) {

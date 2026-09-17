@@ -19,8 +19,31 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
+
+func TestCorrelationResponseCreatesTraceableProposalWithoutDispatch(t *testing.T) {
+	tenantID, nodeID, ruleID, alertID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &blockProposalInvestigateStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store, logger: zap.NewNop()}
+	alert := &storage.Alert{ID: alertID, TenantID: tenantID, DedupKey: sql.NullString{String: ruleID.String() + "/192.0.2.44", Valid: true}}
+	rule := storage.CorrelationRule{ID: ruleID, TenantID: tenantID, Name: "SSH brute force", Severity: "high", ResponseMode: "require_approval", ResponseTTLSeconds: 900, ResponseScope: "affected", ResponseEnforcement: "firewall"}
+	ev := eventbus.Event{TenantID: tenantID, NodeID: &nodeID, Payload: []byte(`{"event_type":"ssh.authentication_failure","details":{"src_ip":"192.0.2.44"}}`)}
+	if err := s.handleCorrelationResponse(context.Background(), rule, alert, ev); err != nil {
+		t.Fatalf("handle correlation response: %v", err)
+	}
+	if len(store.createdBlocks) != 1 {
+		t.Fatalf("created proposals = %d, want 1", len(store.createdBlocks))
+	}
+	entry := store.createdBlocks[0]
+	if entry.Status != "proposed" || entry.IPCIDR != "192.0.2.44/32" || entry.TargetID.UUID != nodeID {
+		t.Fatalf("unexpected proposal: %+v", entry)
+	}
+	if !strings.Contains(entry.Reason, alertID.String()) || len(store.recorded) != 0 {
+		t.Fatalf("proposal should preserve alert evidence and await approval: %+v", entry)
+	}
+}
 
 func TestIPBehaviorScoringRequiresCorroboration(t *testing.T) {
 	rareCountryOnly := &ipBehaviorBucket{
@@ -385,6 +408,12 @@ func TestProtectedIPBlockReasonUsesTenantAllowlistAndAssetCIDRs(t *testing.T) {
 	}
 	if got := s.protectedIPBlockReason(context.Background(), tenantID, "192.0.2.10"); got != "" {
 		t.Fatalf("unexpected protected reason for external test IP: %q", got)
+	}
+	if got := s.protectedIPBlockReason(context.Background(), tenantID, "127.0.0.2/32"); !strings.Contains(got, "loopback") {
+		t.Fatalf("loopback protection reason = %q", got)
+	}
+	if got := s.protectedIPBlockReason(context.Background(), tenantID, "::1/128"); !strings.Contains(got, "loopback") {
+		t.Fatalf("IPv6 loopback protection reason = %q", got)
 	}
 }
 

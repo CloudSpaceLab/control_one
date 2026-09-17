@@ -37,7 +37,7 @@ import type {
 const ThreatFeeds = lazy(() => import('./ThreatFeeds').then((m) => ({ default: m.ThreatFeeds })));
 const Connections = lazy(() => import('./Connections').then((m) => ({ default: m.Connections })));
 
-const VALID_TABS = ['threats', 'connections', 'ip-behavior', 'blocks', 'firewall'] as const;
+const VALID_TABS = ['threats', 'connections', 'ip-behavior', 'approvals', 'blocks', 'firewall'] as const;
 type TabKey = (typeof VALID_TABS)[number];
 
 function isValidTab(s: string | null): s is TabKey {
@@ -68,6 +68,7 @@ export function NetworkSecurity(): JSX.Element {
           <TabsTrigger className="w-full sm:w-auto" value="threats">Threat feeds</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="ip-behavior">IP behavior</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="approvals">Approval queue</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="blocks">Active blocks</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="firewall">Firewall</TabsTrigger>
         </TabsList>
@@ -90,6 +91,10 @@ export function NetworkSecurity(): JSX.Element {
 
         <TabsContent value="blocks" className="pt-4">
           <ActiveBlocksPanel />
+        </TabsContent>
+
+        <TabsContent value="approvals" className="pt-4">
+          <BlockApprovalQueue />
         </TabsContent>
 
         <TabsContent value="firewall" className="pt-4">
@@ -366,7 +371,7 @@ function IPBehaviorPanel(): JSX.Element {
       variant: action === 'rollback' || action === 'reject' ? 'danger' : 'default',
       run: async () => {
         setProposalState(`${title}...`);
-        if (action === 'approve') await client.approveBlockProposal(proposal.id);
+        if (action === 'approve') await client.approveBlockProposal(proposal.id, 'Approved after reviewing the IP behavior evidence');
         if (action === 'promote') await client.promoteBlockProposal(proposal.id);
         if (action === 'reject') await client.rejectBlockProposal(proposal.id, 'Rejected from IP behavior profile');
         if (action === 'rollback') await client.rollbackBlockProposal(proposal.id, 'Rollback requested from IP behavior profile');
@@ -1123,6 +1128,112 @@ function formatDateTime(value?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString();
+}
+
+type ApprovalDecision = { proposal: IPBlockProposal; action: 'approve' | 'reject' };
+
+function correlationProposalEvidence(reason: string): { rule?: string; alertId?: string } {
+  if (!reason.startsWith('Correlation response:')) return {};
+  const values: Record<string, string> = {};
+  for (const part of reason.replace(/^Correlation response:\s*/, '').split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key && rest.length > 0) values[key] = rest.join('=').trim();
+  }
+  return { rule: values.rule, alertId: values.alert_id };
+}
+
+function BlockApprovalQueue(): JSX.Element {
+  const client = useApiClient();
+  const { currentTenantId } = useTenant();
+  const [proposals, setProposals] = useState<IPBlockProposal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [decision, setDecision] = useState<ApprovalDecision | null>(null);
+  const [decisionReason, setDecisionReason] = useState('');
+  const [deciding, setDeciding] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!currentTenantId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await client.listBlockProposals({ tenantId: currentTenantId, status: 'proposed', limit: 100 });
+      setProposals(response.data ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Approval queue failed to load');
+    } finally {
+      setLoading(false);
+    }
+  }, [client, currentTenantId]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const submitDecision = useCallback(async () => {
+    const reason = decisionReason.trim();
+    if (!decision || !reason) return;
+    setDeciding(true);
+    setError(null);
+    try {
+      const updated = decision.action === 'approve'
+        ? await client.approveBlockProposal(decision.proposal.id, reason)
+        : await client.rejectBlockProposal(decision.proposal.id, reason);
+      setResult(`${decision.proposal.ip_cidr} ${decision.action === 'approve' ? 'approved' : 'rejected'} (${updated.status}).`);
+      setDecision(null);
+      setDecisionReason('');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Decision failed');
+    } finally {
+      setDeciding(false);
+    }
+  }, [client, decision, decisionReason, refresh]);
+
+  if (!currentTenantId) return <EmptyState title="Select a tenant" description="Choose a tenant to review pending response proposals." />;
+
+  return (
+    <div className="space-y-4">
+      <Panel eyebrow="GOVERNED RESPONSE" title="Approval queue" toneAccent={proposals.length > 0 ? 'warning' : 'healthy'}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-text-secondary">Review alert evidence and safety scope before allowing a proposed block to reach any node.</p>
+          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
+        </div>
+      </Panel>
+      {result && <div className="rounded border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">{result}</div>}
+      {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
+      {!loading && proposals.length === 0 ? (
+        <EmptyState title="No proposals awaiting approval" description="Correlation and manually created proposals appear here before enforcement." />
+      ) : (
+        <div className="overflow-x-auto rounded border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
+              <tr><th className="px-3 py-2">Target</th><th className="px-3 py-2">Evidence</th><th className="px-3 py-2">Scope</th><th className="px-3 py-2">Expires</th><th className="px-3 py-2">Safety</th><th className="px-3 py-2">Decision</th></tr>
+            </thead>
+            <tbody>
+              {proposals.map((proposal) => {
+                const evidence = correlationProposalEvidence(proposal.reason);
+                return (
+                  <tr key={proposal.id} className="border-t border-border align-top">
+                    <td className="px-3 py-3"><div className="font-mono text-xs">{proposal.ip_cidr}</div><StatusTag tone="warning">{proposal.status}</StatusTag></td>
+                    <td className="max-w-md px-3 py-3"><div className="font-medium">{evidence.rule ?? 'Operator-created block proposal'}</div><div className="mt-1 text-xs text-text-secondary">{proposal.reason}</div>{evidence.alertId && <Link className="mt-2 inline-block text-xs text-brand-400 hover:underline" to={`/investigate/alert/${evidence.alertId}`}>View related alert evidence</Link>}</td>
+                    <td className="px-3 py-3 text-text-secondary"><div>{proposal.target_type}{proposal.target_id ? ` · ${proposal.target_id.slice(0, 8)}` : ''}</div><div>{proposal.enforcement}</div></td>
+                    <td className="px-3 py-3 text-text-secondary">{formatDateTime(proposal.expires_at)}</td>
+                    <td className="px-3 py-3"><StatusTag tone={proposal.protected_override ? 'warning' : 'healthy'}>{proposal.protected_override ? 'protected override' : 'checks run on approval'}</StatusTag></td>
+                    <td className="px-3 py-3"><div className="flex gap-2"><Button size="sm" onClick={() => { setDecision({ proposal, action: 'approve' }); setDecisionReason(''); }}>Approve</Button><Button size="sm" variant="danger" onClick={() => { setDecision({ proposal, action: 'reject' }); setDecisionReason(''); }}>Reject</Button></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ConfirmModal open={!!decision} title={decision?.action === 'approve' ? 'Approve response proposal' : 'Reject response proposal'} body={decision ? `${decision.proposal.ip_cidr} will ${decision.action === 'approve' ? 'be dispatched to the selected enforcement target' : 'remain unblocked'}.` : undefined} confirmLabel={deciding ? 'Saving...' : decision?.action === 'approve' ? 'Approve and dispatch' : 'Reject proposal'} variant={decision?.action === 'reject' ? 'danger' : 'default'} confirmDisabled={deciding || decisionReason.trim().length === 0} cancelDisabled={deciding} onConfirm={() => void submitDecision()} onCancel={() => { setDecision(null); setDecisionReason(''); }}>
+        <label className="space-y-2 text-sm"><span className="font-medium">Decision reason</span><textarea className="min-h-24 w-full rounded-md border border-border bg-surface-1 px-3 py-2" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} placeholder="Record the evidence reviewed and why this response is approved or rejected." /><span className="block text-xs text-text-secondary">Required. This reason is written to the audit trail.</span></label>
+      </ConfirmModal>
+    </div>
+  );
 }
 
 function ActiveBlocksPanel(): JSX.Element {

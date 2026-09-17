@@ -43,6 +43,10 @@ func TestValidateCorrelationRuleRequestRejectsInvalidConfiguration(t *testing.T)
 		{"sequence missing type", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", SequenceThreshold: 4}},
 		{"bad aggregate field", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", AggregateField: "password", AggregateThreshold: 100}},
 		{"aggregate missing threshold", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", AggregateField: "bytes_out"}},
+		{"unknown response", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"src_ip"}, Severity: "high", ResponseMode: "destroy"}},
+		{"auto block low severity", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"src_ip"}, Severity: "low", ResponseMode: "auto_temporary_block"}},
+		{"auto block without source grouping", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high", ResponseMode: "auto_temporary_block"}},
+		{"auto block fleet scope", createCorrelationRuleRequest{Name: "x", EventTypes: []string{"security.event"}, WindowSeconds: 20, Threshold: 1, GroupBy: []string{"src_ip"}, Severity: "critical", ResponseMode: "auto_temporary_block", ResponseScope: "fleet"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

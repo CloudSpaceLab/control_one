@@ -14,9 +14,25 @@ import (
 )
 
 type fakeStore struct {
-	mu     sync.Mutex
-	rules  []storage.CorrelationRule
-	alerts []storage.CreateAlertParams
+	mu                sync.Mutex
+	rules             []storage.CorrelationRule
+	alerts            []storage.CreateAlertParams
+	occurrenceUpdates []storage.CreateAlertParams
+	responses         []storage.CorrelationRule
+}
+
+func (f *fakeStore) HandleCorrelationResponse(_ context.Context, rule storage.CorrelationRule, _ *storage.Alert, _ eventbus.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.responses = append(f.responses, rule)
+	return nil
+}
+
+func (f *fakeStore) UpdateOpenAlertOccurrence(_ context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.occurrenceUpdates = append(f.occurrenceUpdates, p)
+	return &storage.Alert{ID: uuid.New(), TenantID: p.TenantID, Severity: p.Severity, Title: p.Title}, storage.ErrAlertDeduped
 }
 
 func TestMatchesPayloadEventTypeFromNormalizedDetails(t *testing.T) {
@@ -64,6 +80,20 @@ func TestEngineFiresAtThreshold(t *testing.T) {
 	}
 	if store.alerts[0].DedupKey != rule.ID.String()+"/"+node.String() {
 		t.Fatalf("unexpected dedup key %s", store.alerts[0].DedupKey)
+	}
+}
+
+func TestEngineRunsConfiguredResponseOnlyForNewAlert(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{ID: uuid.New(), TenantID: tenant, Name: "SSH containment", EventTypes: []string{eventbus.TopicSecurityEvent}, EventType: "ssh.authentication_failure", WindowSeconds: 60, Threshold: 1, GroupBy: []string{"src_ip", "node_id"}, Severity: "high", Enabled: true, ResponseMode: "create_proposal"}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	eng := New(store, eventbus.New(16), nil)
+	payload := []byte(`{"event_type":"ssh.authentication_failure","src_ip":"192.0.2.44","node_id":"` + node.String() + `"}`)
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: time.Now(), Payload: payload})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.responses) != 1 || store.responses[0].ID != rule.ID {
+		t.Fatalf("response calls = %#v, want rule %s", store.responses, rule.ID)
 	}
 }
 
@@ -202,6 +232,15 @@ func TestEngineMatchesSpecificTypeGroupsFieldsAndSuppressesDuplicates(t *testing
 	defer store.mu.Unlock()
 	if len(store.alerts) != 1 {
 		t.Fatalf("want exactly 1 suppressed alert, got %d", len(store.alerts))
+	}
+	if len(store.occurrenceUpdates) != 1 {
+		t.Fatalf("want 1 suppressed occurrence update, got %d", len(store.occurrenceUpdates))
+	}
+	if evidence, ok := store.alerts[0].Context["contributing_events"].([]any); !ok || len(evidence) != 3 {
+		t.Fatalf("initial contributing events = %#v, want 3", store.alerts[0].Context["contributing_events"])
+	}
+	if evidence, ok := store.occurrenceUpdates[0].Context["contributing_events"].([]any); !ok || len(evidence) != 3 {
+		t.Fatalf("suppressed contributing events = %#v, want 3", store.occurrenceUpdates[0].Context["contributing_events"])
 	}
 	wantKey := rule.ID.String() + "/src_ip=203.0.113.8|node_id=" + node.String()
 	if store.alerts[0].DedupKey != wantKey {

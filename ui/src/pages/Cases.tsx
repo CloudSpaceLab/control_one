@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   AtSign,
@@ -52,6 +52,8 @@ const CASE_SEVERITIES = [
 ];
 
 export function Cases(): JSX.Element {
+  const [searchParams] = useSearchParams();
+  const requestedCaseId = searchParams.get('case_id');
   const api = useApiClient();
   const { currentTenantId, currentTenant } = useTenant();
   const [cases, setCases] = useState<SOCCase[]>([]);
@@ -130,7 +132,7 @@ export function Cases(): JSX.Element {
       setSelectedId((current) => (
         current && response.data.some((row) => row.case_id === current)
           ? current
-          : response.data[0]?.case_id ?? null
+          : (response.data.some((row) => row.case_id === requestedCaseId) ? requestedCaseId : response.data[0]?.case_id) ?? null
       ));
     } catch (err) {
       if (seq !== requestSeq.current) return;
@@ -144,7 +146,7 @@ export function Cases(): JSX.Element {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [api, currentTenantId, statusFilter, severityFilter, debouncedSearch, sorting, page]);
+  }, [api, currentTenantId, requestedCaseId]);
 
   useEffect(() => {
     void refresh();

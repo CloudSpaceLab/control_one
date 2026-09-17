@@ -1,2 +1,2 @@
 ALTER TABLE smtp_settings
-    ADD COLUMN recipients TEXT[] NOT NULL DEFAULT '{}';
+    ADD COLUMN IF NOT EXISTS recipients TEXT[] NOT NULL DEFAULT '{}';

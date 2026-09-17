@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Access } from './Access';
 
@@ -64,6 +65,14 @@ vi.mock('../hooks/useRoles', () => ({
 
 const pagination = { total: 0, count: 0, limit: 100, offset: 0, nextOffset: null, prevOffset: null };
 
+function renderAccess() {
+  return render(
+    <MemoryRouter>
+      <Access />
+    </MemoryRouter>,
+  );
+}
+
 function pendingAccessRequest() {
   return {
     id: 'access-1',
@@ -102,7 +111,7 @@ describe('Access', () => {
   });
 
   it('requires explicit access before submitting a JIT request', async () => {
-    render(<Access />);
+    renderAccess();
 
     const requestButton = await screen.findByRole('button', { name: /request access/i });
     expect(screen.getByLabelText(/requested access/i)).toHaveValue('');
@@ -134,7 +143,7 @@ describe('Access', () => {
   it('keeps a failed JIT request visible and does not clear the form', async () => {
     const user = userEvent.setup();
     mocks.createAccessRequest.mockRejectedValueOnce(new Error('approval service unavailable'));
-    render(<Access />);
+    renderAccess();
 
     await user.type(await screen.findByLabelText(/requested access/i), 'root@prod-db-01');
     await user.type(screen.getByLabelText(/justification/i), 'Emergency rotation');
@@ -149,7 +158,7 @@ describe('Access', () => {
 
   it('blocks invalid custom TTL values before submitting', async () => {
     const user = userEvent.setup();
-    render(<Access />);
+    renderAccess();
 
     await user.type(await screen.findByLabelText(/requested access/i), 'root@prod-db-01');
     await user.click(screen.getByRole('button', { name: /^custom$/i }));
@@ -169,7 +178,7 @@ describe('Access', () => {
       pagination: { ...pagination, total: 1, count: 1 },
     });
     mocks.approveAccessRequest.mockRejectedValueOnce(new Error('approver unavailable'));
-    render(<Access />);
+    renderAccess();
 
     await screen.findByText('root@prod-db-01');
     fireEvent.click(await screen.findByRole('button', { name: /^approve$/i }));
@@ -183,7 +192,7 @@ describe('Access', () => {
 
   it('names command policy delete buttons for assistive technology', async () => {
     const user = userEvent.setup();
-    render(<Access />);
+    renderAccess();
 
     await user.click(await screen.findByRole('tab', { name: /command policy/i }));
 
@@ -195,7 +204,7 @@ describe('Access', () => {
   it('surfaces command policy load failures instead of showing a false empty state', async () => {
     const user = userEvent.setup();
     mocks.listCommandACLs.mockRejectedValueOnce(new Error('policy store unavailable'));
-    render(<Access />);
+    renderAccess();
 
     await user.click(await screen.findByRole('tab', { name: /command policy/i }));
 
@@ -208,7 +217,7 @@ describe('Access', () => {
   it('uses the canonical role API list when creating command policy rules', async () => {
     const user = userEvent.setup();
     mocks.createCommandACL.mockResolvedValue({});
-    render(<Access />);
+    renderAccess();
 
     await user.click(await screen.findByRole('tab', { name: /command policy/i }));
     await user.click(await screen.findByRole('button', { name: /new rule/i }));

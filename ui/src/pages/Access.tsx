@@ -19,6 +19,7 @@ import {
 } from '../components/kit';
 import type { AccessRequest, CreateAccessRequestPayload, CommandACL } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
+import { useSearchParams } from 'react-router-dom';
 
 type Tab = 'pending' | 'all' | 'command-policy';
 
@@ -157,6 +158,7 @@ export function Access(): JSX.Element {
   const [tenantId, setTenantId] = useState('');
   const [tab, setTab] = useState<Tab>('pending');
   const [items, setItems] = useState<AccessRequest[]>([]);
+	const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deciding, setDeciding] = useState<{ id: string; intent: 'approve' | 'deny' } | null>(null);
@@ -415,6 +417,21 @@ export function Access(): JSX.Element {
     },
   ];
 
+	const contextualItems = useMemo(() => {
+		const nodeID = searchParams.get('node_id')?.trim();
+		const user = searchParams.get('user')?.trim().toLowerCase();
+		const from = Date.parse(searchParams.get('from') ?? '');
+		const to = Date.parse(searchParams.get('to') ?? '');
+		return items.filter((item) => {
+			if (nodeID && item.target_node_id !== nodeID) return false;
+			if (user && !(item.user_id ?? '').toLowerCase().includes(user)) return false;
+			const requested = Date.parse(item.requested_at);
+			if (!Number.isNaN(from) && requested < from) return false;
+			if (!Number.isNaN(to) && requested > to) return false;
+			return true;
+		});
+	}, [items, searchParams]);
+
   const aclColumns: ColumnDef<CommandACL>[] = [
     {
       header: 'Name',
@@ -499,10 +516,15 @@ export function Access(): JSX.Element {
       )}
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+		{searchParams.get('alert_id') ? (
+			<p className="mb-3 rounded-md border border-brand-500/30 bg-brand-500/5 px-3 py-2 text-sm text-text-secondary">
+				Showing access activity related to alert <span className="font-mono text-foreground">{searchParams.get('alert_id')}</span> by host, user, and event time.
+			</p>
+		) : null}
         <TabsList>
           <TabsTrigger value="pending">
-            Pending{items.filter((i) => i.status === 'pending').length > 0
-              ? ` (${items.filter((i) => i.status === 'pending').length})`
+			Pending{contextualItems.filter((i) => i.status === 'pending').length > 0
+			  ? ` (${contextualItems.filter((i) => i.status === 'pending').length})`
               : ''}
           </TabsTrigger>
           <TabsTrigger value="all">All</TabsTrigger>
@@ -513,7 +535,7 @@ export function Access(): JSX.Element {
           <Panel padding="md" eyebrow="REQUEST ACCESS" title="New just-in-time grant" toneAccent="brand">
             <RequestForm tenantId={tenantId} onCreated={refresh} />
           </Panel>
-          <Panel padding="sm" tone="inset" eyebrow={`REQUESTS · ${items.length}`} title="Queue">
+		  <Panel padding="sm" tone="inset" eyebrow={`REQUESTS · ${contextualItems.length}`} title="Queue">
             {deciding && (() => {
               const req = items.find((i) => i.id === deciding.id);
               return req ? (
@@ -529,7 +551,7 @@ export function Access(): JSX.Element {
             })()}
             <DataTable
               columns={columns}
-              rows={items.filter((i) => i.status === 'pending')}
+			  rows={contextualItems.filter((i) => i.status === 'pending')}
               rowKey={(r) => r.id}
               loading={loading}
               compact
@@ -545,7 +567,7 @@ export function Access(): JSX.Element {
         </TabsContent>
 
         <TabsContent value="all" className="mt-4 flex flex-col gap-4">
-          <Panel padding="sm" tone="inset" eyebrow={`REQUESTS · ${items.length}`} title="All requests">
+		  <Panel padding="sm" tone="inset" eyebrow={`REQUESTS · ${contextualItems.length}`} title="All requests">
             {deciding && (() => {
               const req = items.find((i) => i.id === deciding.id);
               return req ? (
@@ -561,7 +583,7 @@ export function Access(): JSX.Element {
             })()}
             <DataTable
               columns={columns}
-              rows={items}
+			  rows={contextualItems}
               rowKey={(r) => r.id}
               loading={loading}
               compact

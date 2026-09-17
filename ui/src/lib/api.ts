@@ -4168,11 +4168,12 @@ export class APIClient {
     );
   }
 
-  async approveBlockProposal(id: string): Promise<IPBlockProposal> {
+  async approveBlockProposal(id: string, reason: string): Promise<IPBlockProposal> {
     return this.request<IPBlockProposal>(
       `/api/v1/network/block-proposals/${encodeURIComponent(id)}/approve`,
       {
         method: "POST",
+        body: JSON.stringify({ reason }),
       },
     );
   }
@@ -4672,6 +4673,21 @@ export class APIClient {
         body: JSON.stringify(payload),
       },
     );
+  }
+
+  async createAlertSOCCase(id: string): Promise<SOCCase> {
+    return this.request<SOCCase>(`/api/v1/alerts/${encodeURIComponent(id)}/case`, { method: "POST" });
+  }
+
+	async attachAlertSOCCase(id: string, caseId: string): Promise<SOCCase> {
+		return this.request<SOCCase>(`/api/v1/alerts/${encodeURIComponent(id)}/case`, {
+			method: "POST",
+			body: JSON.stringify({ case_id: caseId }),
+		});
+	}
+
+  async updateAlertWorkflow(id: string, payload: { assigned_to?: string; note?: string }): Promise<Alert> {
+    return this.request<Alert>(`/api/v1/alerts/${encodeURIComponent(id)}/workflow`, { method: "POST", body: JSON.stringify(payload) });
   }
 
   async listAccessRequests(
@@ -7362,6 +7378,10 @@ export interface CorrelationRule {
   sequence_conditions: CorrelationCondition[];
   aggregate_field: string;
   aggregate_threshold: number;
+  response_mode: 'alert_only' | 'create_proposal' | 'require_approval' | 'auto_temporary_block';
+  response_ttl_seconds: number;
+  response_scope: 'affected' | 'fleet';
+  response_enforcement: 'firewall' | 'webserver' | 'both';
   enabled: boolean;
   severity: string;
   created_at: string;
@@ -7394,6 +7414,10 @@ export interface CreateCorrelationRulePayload {
   sequence_conditions: CorrelationCondition[];
   aggregate_field: string;
   aggregate_threshold: number;
+  response_mode: 'alert_only' | 'create_proposal' | 'require_approval' | 'auto_temporary_block';
+  response_ttl_seconds: number;
+  response_scope: 'affected' | 'fleet';
+  response_enforcement: 'firewall' | 'webserver' | 'both';
   enabled?: boolean;
   severity: string;
   yaml_spec?: string;
