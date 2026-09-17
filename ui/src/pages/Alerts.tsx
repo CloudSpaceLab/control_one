@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -20,6 +20,7 @@ import {
   EmptyState,
   EntityChip,
   KpiTile,
+  Pagination,
   Panel,
   SectionHeader,
   SelectField,
@@ -33,11 +34,12 @@ import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
 import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from '../lib/correlationTemplates';
 import type { Alert, AlertDispositionValue, CorrelationCondition, CorrelationRule, SOCCase, UpdateAlertDispositionPayload } from '../lib/api';
-import type { ColumnDef } from '@tanstack/react-table';
+import type { ColumnDef, SortingState } from '@tanstack/react-table';
 
 type PageTab = 'alerts' | 'rules';
 
 const STATE_FILTERS = ['open', 'acked', 'resolved'] as const;
+const SEVERITY_FILTERS = ['critical', 'high', 'medium', 'low', 'info'] as const;
 const ALERTS_POLL_MS = 30_000;
 const CORRELATION_EVENT_TYPES = [
   { value: 'security.event', label: 'Security event' },
@@ -308,27 +310,70 @@ export function Alerts(): JSX.Element {
   const [createRuleError, setCreateRuleError] = useState<string | null>(null);
 
   const tenantId = currentTenantId ?? '';
+  const [severity, setSeverity] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'opened_at', desc: true }]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const pageSize = 25;
+  const searchTimer = useRef<number | null>(null);
+  const requestSeq = useRef(0);
+
+  useEffect(() => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    searchTimer.current = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => {
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    };
+  }, [search]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [tenantId, state, severity, debouncedSearch, sorting]);
 
   const refresh = useCallback(async () => {
     if (!tenantId) {
       setAlerts([]);
+      setTotal(0);
       setLoading(false);
       setAlertsError(null);
       setAlertActionError(null);
       return;
     }
+    const seq = ++requestSeq.current;
     setLoading(true);
     try {
-      const resp = await client.listAlerts({ tenantId, state, limit: 100, offset: 0 });
+      const resp = await client.listAlerts({
+        tenantId,
+        state,
+        severity: severity || undefined,
+        search: debouncedSearch || undefined,
+        sortBy: sorting[0]?.id,
+        sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
+        limit: pageSize,
+        offset: page * pageSize,
+      });
+      if (seq !== requestSeq.current) return;
+      const nextTotal = resp.pagination?.total ?? resp.data.length;
+      setTotal(nextTotal);
+      if (resp.data.length === 0 && nextTotal > 0 && page > 0) {
+        setPage(Math.max(0, Math.ceil(nextTotal / pageSize) - 1));
+        return;
+      }
       setAlerts(resp.data);
       setAlertsError(null);
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setAlerts([]);
+      setTotal(0);
       setAlertsError(errorMessage(err, 'Alert list failed.'));
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, [client, tenantId, state]);
+  }, [client, tenantId, state, severity, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -594,7 +639,7 @@ export function Alerts(): JSX.Element {
       ),
     },
     {
-      id: 'title',
+      accessorKey: 'title',
       header: 'Title',
       cell: ({ row }) => {
         const pills = alertContextPills(row.original);
@@ -635,7 +680,7 @@ export function Alerts(): JSX.Element {
       header: 'Opened',
       cell: ({ getValue }) => (
         <span className="font-mono text-xs tabular-nums text-text-secondary">
-          {new Date(getValue() as string).toLocaleString()}
+          {timeAgo(getValue() as string)}
         </span>
       ),
     },
@@ -656,6 +701,7 @@ export function Alerts(): JSX.Element {
     {
       id: 'actions',
       header: '',
+      enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center gap-2">
           {row.original.state === 'open' ? (
@@ -901,19 +947,41 @@ export function Alerts(): JSX.Element {
           )}
 
           <Panel padding="md" eyebrow="FILTERS" title="Refine">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-              <FilterSelect
-                label="Tenant"
-                value={tenantId}
-                onChange={(v) => setCurrentTenantId(v)}
-                options={tenants.map((t) => ({ label: t.name, value: t.id }))}
-              />
-              <FilterSelect
-                label="State"
-                value={state}
-                onChange={(v) => setState(v as typeof STATE_FILTERS[number])}
-                options={STATE_FILTERS.map((s) => ({ label: s, value: s }))}
-              />
+            <div className="flex flex-col gap-3">
+              <div className="relative max-w-md">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+                <Input
+                  id="alert-search"
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search title, summary, or source..."
+                  className="pl-9"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+                <FilterSelect
+                  label="Tenant"
+                  value={tenantId}
+                  onChange={(v) => setCurrentTenantId(v)}
+                  options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+                />
+                <FilterSelect
+                  label="State"
+                  value={state}
+                  onChange={(v) => setState(v as typeof STATE_FILTERS[number])}
+                  options={STATE_FILTERS.map((s) => ({ label: s, value: s }))}
+                />
+                <FilterSelect
+                  label="Severity"
+                  value={severity}
+                  onChange={(v) => setSeverity(v)}
+                  options={[
+                    { label: 'All severities', value: '' },
+                    ...SEVERITY_FILTERS.map((s) => ({ label: s, value: s })),
+                  ]}
+                />
+              </div>
             </div>
           </Panel>
 
@@ -929,13 +997,15 @@ export function Alerts(): JSX.Element {
             </Panel>
           )}
 
-          <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${alerts.length}`} title="Inbox">
+<Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${total}`} title="Inbox">
             <DataTable
               columns={columns}
               rows={alerts}
               rowKey={(r) => r.id}
               loading={loading}
               compact
+              sorting={sorting}
+              onSortingChange={setSorting}
               empty={
                 alertsError ? (
                   <EmptyState
@@ -948,16 +1018,23 @@ export function Alerts(): JSX.Element {
                     tone="success"
                     icon={<ShieldCheck />}
                     title="All clear"
-                    description="No open alerts. Detection rules are healthy and the inbox is empty."
+                    description="No open alerts match the current filters. Detection rules are healthy and the inbox is empty."
                   />
                 ) : (
                   <EmptyState
                     icon={<Bell />}
                     title="No alerts"
-                    description={`No alerts in state "${state}".`}
+                    description={`No alerts in state "${state}"${severity ? ` with severity "${severity}"` : ''}${debouncedSearch ? ` matching "${debouncedSearch}"` : ''}.`}
                   />
                 )
               }
+            />
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              className="mt-3"
             />
           </Panel>
         </>
@@ -1351,7 +1428,7 @@ export function Alerts(): JSX.Element {
         ) : null}
       </ConfirmModal>
 
-      <ResolveAlertModal
+<ResolveAlertModal
         alert={resolveTarget}
         open={resolveTargetId !== null && resolveTarget !== null}
         resolving={resolvingAlert}
@@ -1659,6 +1736,7 @@ function ResolveAlertModal({
   const [analystNote, setAnalystNote] = useState('');
 	const [caseId, setCaseId] = useState('');
 	const [confirmCreateCase, setConfirmCreateCase] = useState(false);
+  const [containmentTaken, setContainmentTaken] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -1669,13 +1747,15 @@ function ResolveAlertModal({
     setAnalystNote('');
 	setCaseId('');
 	setConfirmCreateCase(false);
+    setContainmentTaken(false);
   }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
 
   const selectedDisposition = dispositionOption(disposition);
   const reasonMissing = reason.trim().length === 0;
   const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
   const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
-  const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid;
+  const evidenceMissing = (disposition === 'resolved' || disposition === 'true_positive') && !containmentTaken;
+  const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid || evidenceMissing;
 
   const handleConfirm = () => {
     if (confirmDisabled) return;
@@ -1768,7 +1848,10 @@ function ResolveAlertModal({
                   </div>
                   <IpActionMenu
                     ip={ip}
-                    onActionTaken={onActionTaken}
+                    onActionTaken={() => {
+                      setContainmentTaken(true);
+                      onActionTaken();
+                    }}
                     trigger={(
                       <Button type="button" variant="danger" size="sm" className="mt-3 w-full">
                         <Shield />
@@ -1911,6 +1994,17 @@ function ResolveAlertModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  if (ms < 0) return 'just now';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 function toDateTimeLocal(value?: string): string {

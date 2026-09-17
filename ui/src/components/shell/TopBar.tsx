@@ -7,6 +7,7 @@ import { GlobalSearch } from './GlobalSearch';
 import { ProfileMenu } from './ProfileMenu';
 import { TenantSwitcher } from './TenantSwitcher';
 import { ThemeToggle } from './ThemeToggle';
+import { NotificationsBell } from './NotificationsBell';
 import type { ReactNode } from 'react';
 
 export interface TopBarProps {
@@ -47,6 +48,7 @@ export function TopBar({ liveState = 'live', mobileNav }: TopBarProps) {
         </Button>
         <TenantSwitcher />
         <LiveBadge state={liveState} />
+        <NotificationsBell />
         <div className="hidden sm:block">
           <ThemeToggle />
         </div>

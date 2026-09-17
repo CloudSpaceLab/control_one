@@ -164,13 +164,33 @@ describe('Alerts page failure states', () => {
 
     await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
     const dialog = screen.getByRole('dialog', { name: /resolve alert with evidence/i });
-    await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Blocked the source and verified no new attempts.');
+    await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'false_positive');
+    await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Confirmed scanner noise, no blast radius.');
     await user.click(within(dialog).getByRole('button', { name: /record disposition/i }));
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'Alert disposition failed: evidence gate denied',
     );
     expect(screen.getByRole('dialog', { name: /resolve alert with evidence/i })).toBeInTheDocument();
+  });
+
+  it('requires reason and evidence before recording a true_positive or resolved disposition', async () => {
+    const user = userEvent.setup();
+
+    renderAlerts();
+
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    const dialog = screen.getByRole('dialog', { name: /resolve alert with evidence/i });
+    const confirm = within(dialog).getByRole('button', { name: /record disposition/i });
+
+    expect(confirm).toBeDisabled();
+
+    await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'resolved');
+    await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Would that the evidence gate were satisfied.');
+    expect(confirm).toBeDisabled();
+
+    await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'false_positive');
+    expect(confirm).toBeEnabled();
   });
 
   it('shows the correlation activity summary and contributing events', async () => {

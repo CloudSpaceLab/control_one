@@ -7,6 +7,15 @@ import * as useApiClientModule from '@/hooks/useApiClient';
 import * as useTenantModule from '@/providers/TenantProvider';
 import type { SOCCase, SOCCaseExport } from '@/lib/api';
 
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+HTMLElement.prototype.scrollIntoView = vi.fn();
+
 const caseRow: SOCCase = {
   case_id: '11111111-1111-1111-1111-111111111111',
   tenant_id: 'tenant-1',
@@ -105,6 +114,14 @@ describe('Cases', () => {
         pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
       }),
       getSOCCase: vi.fn().mockResolvedValue(caseRow),
+      getTeamUsers: vi.fn().mockResolvedValue([
+        { id: 'u1', name: 'Ada CISO', email: 'ada@example.com' },
+        { id: 'u2', name: 'Bob Ops', email: 'bob@example.com' },
+      ]),
+      assignSOCCase: vi.fn().mockImplementation(async (_caseId: string, _tenantId: string, payload: { assignee_id: string | null }) => ({
+        ...caseRow,
+        assignee: payload.assignee_id ? { id: payload.assignee_id, name: 'Ada CISO' } : null,
+      })),
       addSOCCaseNote: vi.fn().mockResolvedValue({
         id: 'note-1',
         tenant_id: 'tenant-1',
@@ -202,7 +219,7 @@ describe('Cases', () => {
 
     expect(await screen.findByText('Evidence drawer')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /database audit gap/i }));
+    await user.click(await screen.findByText('Database audit gap'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('case detail unavailable');
     await waitFor(() => {
@@ -246,5 +263,57 @@ describe('Cases', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Note failed: audit write unavailable');
     expect(noteBox).toHaveValue('Escalate to the SOC manager before closure.');
+  });
+
+  it('assigns an owner from the case header', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('combobox', { name: 'Assignee' }));
+    await user.click(await screen.findByText('Ada CISO'));
+
+    await waitFor(() => {
+      expect(mockApi.assignSOCCase).toHaveBeenCalledWith(caseRow.case_id, 'tenant-1', {
+        assignee_id: 'u1',
+      });
+    });
+  });
+
+  it('shows mentioned users on the case header', async () => {
+    mockApi.getSOCCase.mockResolvedValueOnce({
+      ...caseRow,
+      mentioned_users: [{ id: 'u1', name: 'Ada CISO' }],
+    });
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTitle('Mentioned in case')).toHaveTextContent('Ada CISO');
+  });
+
+  it('adds mentions when posting a note with an at-sign suggestion', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    const noteBox = await screen.findByPlaceholderText(/add analyst decision/i);
+    await user.type(noteBox, 'Review with @ad');
+    await user.click(await screen.findByRole('button', { name: 'Mention Ada CISO' }));
+    await user.click(screen.getByRole('button', { name: /add note/i }));
+
+    await waitFor(() => {
+      expect(mockApi.addSOCCaseNote).toHaveBeenCalledWith(caseRow.case_id, 'tenant-1', expect.objectContaining({
+        mentions: ['u1'],
+      }));
+    });
   });
 });

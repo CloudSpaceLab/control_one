@@ -64,6 +64,7 @@ const PRIMARY_DESTINATIONS = [
   'Control Room',
   'Alerts',
   'Cases',
+  'Team activity',
   'Search & lifecycle',
   'Ask AI',
   'Servers',

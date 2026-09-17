@@ -12,6 +12,7 @@ export { TimeRangePills, DEFAULT_TIME_RANGES, EXEC_TIME_RANGES, type TimeRangePi
 export { EmptyState, type EmptyStateProps } from './EmptyState';
 export { Chart, type ChartProps } from './Chart';
 export { DataTable, type DataTableProps } from './DataTable';
+export { Pagination, type PaginationProps } from './Pagination';
 export { EntityChip, type EntityChipProps } from './EntityChip';
 export { OnboardingChecklist, type OnboardingChecklistProps, type OnboardingStep } from './OnboardingChecklist';
 export { SelectField, SELECT_CLASS, type SelectFieldProps } from './SelectField';

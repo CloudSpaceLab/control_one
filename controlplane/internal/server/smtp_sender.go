@@ -115,7 +115,7 @@ func sendSMTPContent(ctx context.Context, settings storage.SMTPSettings, passwor
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	deadline, ok := ctx.Deadline()
 	if ok {
 		_ = conn.SetDeadline(deadline)
@@ -124,7 +124,7 @@ func sendSMTPContent(ctx context.Context, settings storage.SMTPSettings, passwor
 	if err != nil {
 		return fmt.Errorf("SMTP handshake: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if settings.TLSMode == "starttls" {
 		if ok, _ := client.Extension("STARTTLS"); !ok {
 			return fmt.Errorf("server does not support STARTTLS")

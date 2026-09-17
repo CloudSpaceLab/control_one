@@ -1886,6 +1886,72 @@ export interface PaginatedResponse<T> {
   pagination: PaginationMeta;
 }
 
+export interface TeamSummary {
+  alerts_reviewed: number;
+  alerts_resolved: number;
+  cases_created: number;
+  containment_actions: number;
+  notes_added: number;
+  active_analysts: number;
+  avg_time_to_investigate_seconds: number;
+  avg_time_to_resolve_seconds: number;
+}
+
+export interface TeamAnalystMetric {
+  analyst_id: string;
+  analyst_name: string;
+  alerts_reviewed: number;
+  alerts_resolved: number;
+  cases_created: number;
+  containment_actions: number;
+  notes_added: number;
+  avg_time_to_investigate_seconds: number;
+}
+
+export interface TeamTrendPoint {
+  bucket: string;
+  alerts_reviewed: number;
+  alerts_resolved: number;
+  cases_created: number;
+  containment_actions: number;
+  cases_closed: number;
+}
+
+export type TeamActivityKind =
+  | 'alert_reviewed'
+  | 'alert_resolved'
+  | 'case_created'
+  | 'containment'
+  | 'note_added';
+
+export interface TeamActivityItem {
+  timestamp: string;
+  kind: TeamActivityKind;
+  actor_id?: string;
+  actor_name?: string;
+  detail: string;
+  severity?: string;
+  link_id?: string;
+}
+
+export interface TeamCoverageGaps {
+  unreviewed_open_alerts: number;
+  open_alerts_older_than_24h: number;
+  stale_cases: number;
+  active_analysts_last_7_days: number;
+  inactive_analysts_90d: number;
+}
+
+export interface TeamMetricsResponse {
+  summary: TeamSummary;
+  analysts: TeamAnalystMetric[];
+}
+
+export interface TeamTrendsResponse {
+  granularity: string;
+  points: TeamTrendPoint[];
+}
+
 interface RawContentPackSourceProposalListResponse extends RawPaginatedResponse<ContentPackSourceProposal> {
   summary?: ContentPackSourceProposalSummary;
 }
@@ -1976,12 +2042,37 @@ export interface SOCCaseCitation {
   detail?: string;
 }
 
+export interface SOCUserRef {
+  id: string;
+  name: string;
+}
+
+export interface TeamUser {
+  id: string;
+  name: string;
+  email?: string;
+}
+
+export interface Notification {
+  id: string;
+  tenant_id: string;
+  recipient_id: string;
+  actor_id?: string;
+  actor_name?: string;
+  kind: 'case_assigned' | 'case_mentioned';
+  case_id: string;
+  case_title: string;
+  read_at?: string;
+  created_at: string;
+}
+
 export interface SOCCaseNote {
   id: string;
   tenant_id: string;
   case_id: string;
   note: string;
   citations?: SOCCaseEvidenceRef[];
+  mentions?: string[];
   audit_id: string;
   created_at: string;
   created_by?: string;
@@ -2004,6 +2095,8 @@ export interface SOCCase {
   evidence_refs?: SOCCaseEvidenceRef[];
   timeline: SOCCaseTimelineItem[];
   notes?: SOCCaseNote[];
+  assignee?: SOCUserRef | null;
+  mentioned_users?: SOCUserRef[];
   citations: SOCCaseCitation[];
   coverage_badges: SOCCaseCoverageBadge[];
   export_url: string;
@@ -2024,9 +2117,15 @@ export interface SOCCaseExport {
 export interface ListSOCCasesParams {
   tenantId?: string | null;
   status?: string;
+  severity?: string;
   triggerType?: string;
   triggerEventType?: string;
   nodeId?: string;
+  search?: string;
+  since?: string;
+  until?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
   includeNotes?: boolean;
   limit?: number;
   offset?: number;
@@ -2602,11 +2701,17 @@ export class APIClient {
     const search = new URLSearchParams();
     if (params.tenantId) search.set("tenant_id", params.tenantId);
     if (params.status?.trim()) search.set("status", params.status.trim());
+    if (params.severity?.trim()) search.set("severity", params.severity.trim());
     if (params.triggerType?.trim())
       search.set("trigger_type", params.triggerType.trim());
     if (params.triggerEventType?.trim())
       search.set("trigger_event_type", params.triggerEventType.trim());
     if (params.nodeId?.trim()) search.set("node_id", params.nodeId.trim());
+    if (params.search?.trim()) search.set("q", params.search.trim());
+    if (params.since?.trim()) search.set("since", params.since.trim());
+    if (params.until?.trim()) search.set("until", params.until.trim());
+    if (params.sortBy?.trim()) search.set("sort_by", params.sortBy.trim());
+    if (params.sortOrder?.trim()) search.set("sort_order", params.sortOrder.trim());
     if (params.includeNotes) search.set("include_notes", "true");
     if (typeof params.limit === "number")
       search.set("limit", params.limit.toString());
@@ -2622,6 +2727,52 @@ export class APIClient {
     };
   }
 
+  async getTeamMetrics(
+    tenantId: string,
+    params: { days?: number } = {},
+  ): Promise<TeamMetricsResponse> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.days) search.set('days', params.days.toString());
+    return this.request<TeamMetricsResponse>(`/api/v1/team/metrics?${search.toString()}`);
+  }
+
+  async getTeamTrends(
+    tenantId: string,
+    params: { days?: number; bucket?: 'day' | 'week' | 'month' } = {},
+  ): Promise<TeamTrendsResponse> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.days) search.set('days', params.days.toString());
+    if (params.bucket) search.set('bucket', params.bucket);
+    return this.request<TeamTrendsResponse>(`/api/v1/team/trends?${search.toString()}`);
+  }
+
+  async getTeamActivity(
+    tenantId: string,
+    params: {
+      days?: number;
+      analystId?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PaginatedResponse<TeamActivityItem>> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.days) search.set('days', params.days.toString());
+    if (params.analystId?.trim()) search.set('analyst_id', params.analystId.trim());
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const response = await this.request<RawPaginatedResponse<TeamActivityItem>>(
+      `/api/v1/team/activity?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getTeamCoverageGaps(tenantId: string): Promise<TeamCoverageGaps> {
+    return this.request<TeamCoverageGaps>(`/api/v1/team/gaps?tenant_id=${encodeURIComponent(tenantId)}`);
+  }
+
   async getSOCCase(caseId: string, tenantId?: string | null): Promise<SOCCase> {
     const search = new URLSearchParams();
     if (tenantId) search.set('tenant_id', tenantId);
@@ -2629,13 +2780,89 @@ export class APIClient {
     return this.request<SOCCase>(`/api/v1/soc/cases/${encodeURIComponent(caseId)}${qs ? `?${qs}` : ''}`);
   }
 
-  async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[] }): Promise<SOCCaseNote> {
+  async createSOCCaseFromAlert(tenantId: string, payload: { alert_id: string; summary?: string }): Promise<SOCCase> {
+    return this.request<SOCCase>(
+      `/api/v1/soc/cases?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async addSOCCaseNote(caseId: string, tenantId: string, payload: { note: string; citations?: string[]; mentions?: string[] }): Promise<SOCCaseNote> {
     return this.request<SOCCaseNote>(
       `/api/v1/soc/cases/${encodeURIComponent(caseId)}/notes?tenant_id=${encodeURIComponent(tenantId)}`,
       {
         method: 'POST',
         body: JSON.stringify(payload),
       },
+    );
+  }
+
+  async assignSOCCase(
+    caseId: string,
+    tenantId: string,
+    payload: { assignee_id: string | null },
+  ): Promise<SOCCase> {
+    return this.request<SOCCase>(
+      `/api/v1/soc/cases/${encodeURIComponent(caseId)}/assign?tenant_id=${encodeURIComponent(tenantId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async getTeamUsers(tenantId: string, query = ''): Promise<TeamUser[]> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (query.trim()) search.set('q', query.trim());
+    const response = await this.request<{ users: TeamUser[] }>(
+      `/api/v1/team/users?${search.toString()}`,
+    );
+    return response.users;
+  }
+
+  async listNotifications(
+    tenantId: string,
+    params: { unreadOnly?: boolean; limit?: number; offset?: number } = {},
+  ): Promise<PaginatedResponse<Notification>> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    if (params.unreadOnly) search.set('unread_only', 'true');
+    if (typeof params.limit === 'number') search.set('limit', params.limit.toString());
+    if (typeof params.offset === 'number') search.set('offset', params.offset.toString());
+    const response = await this.request<RawPaginatedResponse<Notification>>(
+      `/api/v1/notifications?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
+  }
+
+  async getUnreadNotificationsCount(tenantId: string): Promise<number> {
+    const response = await this.request<{ unread: number }>(
+      `/api/v1/notifications/unread-count?tenant_id=${encodeURIComponent(tenantId)}`,
+    );
+    return response.unread;
+  }
+
+  async markNotificationRead(
+    notificationId: string,
+    tenantId: string,
+  ): Promise<{ read: boolean }> {
+    return this.request<{ read: boolean }>(
+      `/api/v1/notifications/${encodeURIComponent(notificationId)}/read?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST' },
+    );
+  }
+
+  async markAllNotificationsRead(
+    tenantId: string,
+  ): Promise<{ marked_read: boolean }> {
+    return this.request<{ marked_read: boolean }>(
+      `/api/v1/notifications/read-all?tenant_id=${encodeURIComponent(tenantId)}`,
+      { method: 'POST' },
     );
   }
 
@@ -4396,6 +4623,10 @@ export class APIClient {
       tenantId?: string;
       state?: string;
       severity?: string;
+      search?: string;
+      until?: string;
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
       limit?: number;
       offset?: number;
     } = {},
@@ -4404,6 +4635,10 @@ export class APIClient {
     if (params.tenantId) search.set("tenant_id", params.tenantId);
     if (params.state) search.set("state", params.state);
     if (params.severity) search.set("severity", params.severity);
+    if (params.search) search.set("q", params.search);
+    if (params.until) search.set("until", params.until);
+    if (params.sortBy) search.set("sort_by", params.sortBy);
+    if (params.sortOrder) search.set("sort_order", params.sortOrder);
     if (typeof params.limit === "number")
       search.set("limit", String(params.limit));
     if (typeof params.offset === "number")

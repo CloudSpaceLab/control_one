@@ -1630,16 +1630,16 @@ func (s *Server) evaluateMetricThresholds(ctx context.Context, tenantID, nodeID 
 		s.metricAlertCooldownsMu.Unlock()
 
 		payload, _ := json.Marshal(map[string]any{
-			"rule_id":      rule.ID.String(),
-			"rule_name":    rule.Name,
-			"metric_name":  rule.MetricName,
-			"operator":     rule.Operator,
-			"threshold":    rule.Threshold,
-			"window":       rule.WindowSeconds,
-			"severity":     rule.Severity,
-			"count":        count,
+			"rule_id":       rule.ID.String(),
+			"rule_name":     rule.Name,
+			"metric_name":   rule.MetricName,
+			"operator":      rule.Operator,
+			"threshold":     rule.Threshold,
+			"window":        rule.WindowSeconds,
+			"severity":      rule.Severity,
+			"count":         count,
 			"current_value": val,
-			"node_id":      nodeID.String(),
+			"node_id":       nodeID.String(),
 		})
 		if s.eventBus != nil {
 			s.eventBus.Publish(eventbus.Event{

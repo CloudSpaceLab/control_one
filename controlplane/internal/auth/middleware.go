@@ -189,31 +189,6 @@ func requestHasCollectorCredential(r *http.Request) bool {
 }
 
 func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		cert := r.TLS.PeerCertificates[0]
-		return &Principal{
-			Type:    "agent",
-			Name:    cert.Subject.CommonName,
-			Subject: cert.Subject.String(),
-			Roles:   []string{"agent"},
-		}, nil
-	}
-
-	// When the controlplane runs behind nginx (TLS terminated at the edge),
-	// nginx forwards the client cert subject DN via X-SSL-Client-S-DN.
-	// nginx always overwrites this header from the TLS negotiation result, so
-	// it cannot be forged by an external caller — an absent cert yields "".
-	if dn := strings.TrimSpace(r.Header.Get("X-SSL-Client-S-DN")); dn != "" {
-		if cn := extractCertCN(dn); cn != "" {
-			return &Principal{
-				Type:    "agent",
-				Name:    cn,
-				Subject: dn,
-				Roles:   []string{"agent"},
-			}, nil
-		}
-	}
-
 	authz := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 		token := strings.TrimSpace(authz[7:])
@@ -261,6 +236,34 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 			}
 			// Reject opaque bearer tokens when OIDC is disabled and no static token matched.
 			return nil, http.ErrNoCookie
+		}
+	}
+
+	// Browser sessions can arrive with an installed client certificate as
+	// well as a bearer token. The explicit bearer credential is authoritative;
+	// certificate identity is only the fallback for certificate-only agents.
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		cert := r.TLS.PeerCertificates[0]
+		return &Principal{
+			Type:    "agent",
+			Name:    cert.Subject.CommonName,
+			Subject: cert.Subject.String(),
+			Roles:   []string{"agent"},
+		}, nil
+	}
+
+	// When the controlplane runs behind nginx (TLS terminated at the edge),
+	// nginx forwards the client cert subject DN via X-SSL-Client-S-DN.
+	// nginx always overwrites this header from the TLS negotiation result, so
+	// it cannot be forged by an external caller — an absent cert yields "".
+	if dn := strings.TrimSpace(r.Header.Get("X-SSL-Client-S-DN")); dn != "" {
+		if cn := extractCertCN(dn); cn != "" {
+			return &Principal{
+				Type:    "agent",
+				Name:    cn,
+				Subject: dn,
+				Roles:   []string{"agent"},
+			}, nil
 		}
 	}
 

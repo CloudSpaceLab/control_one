@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
+  AtSign,
   ArrowRight,
   BookOpenText,
   CheckCircle2,
@@ -14,16 +15,23 @@ import {
   MessageSquarePlus,
   Network,
   RefreshCw,
+  Search,
   Server,
   Shield,
   ShieldCheck,
+  X,
 } from 'lucide-react';
+import type { ColumnDef, SortingState } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
+  DataTable,
   EmptyState,
   IpActionMenu,
+  Pagination,
   Panel,
   SectionHeader,
+  SelectField,
   StatusTag,
   type StateTone,
 } from '@/components/kit';
@@ -32,6 +40,16 @@ import { useTenant } from '@/providers/TenantProvider';
 import { cn } from '@/lib/utils';
 import type { SOCCase, SOCCaseExport, SOCCaseEvidenceRef, SOCCaseTimelineItem } from '@/lib/api';
 import { entityRoute } from '@/lib/entity';
+import { AssigneePicker } from '@/components/team/AssigneePicker';
+import type { TeamUser } from '@/lib/api';
+
+const CASE_SEVERITIES = [
+  { label: 'Critical', value: 'critical' },
+  { label: 'High', value: 'high' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'Low', value: 'low' },
+  { label: 'Info', value: 'info' },
+];
 
 export function Cases(): JSX.Element {
   const [searchParams] = useSearchParams();
@@ -48,8 +66,35 @@ export function Cases(): JSX.Element {
   const [noteDraft, setNoteDraft] = useState('');
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
+  const [noteMentions, setNoteMentions] = useState<string[]>([]);
+  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'updated_at', desc: true }]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const pageSize = 12;
+  const searchTimer = useRef<number | null>(null);
+  const requestSeq = useRef(0);
+
+  useEffect(() => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    searchTimer.current = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => {
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    };
+  }, [search]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [currentTenantId, statusFilter, severityFilter, debouncedSearch, sorting]);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
@@ -62,10 +107,27 @@ export function Cases(): JSX.Element {
       setLoading(false);
       return;
     }
+    const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
-      const response = await api.listSOCCases({ tenantId: currentTenantId, limit: 50 });
+      const response = await api.listSOCCases({
+        tenantId: currentTenantId,
+        limit: pageSize,
+        offset: page * pageSize,
+        status: statusFilter || undefined,
+        severity: severityFilter || undefined,
+        search: debouncedSearch || undefined,
+        sortBy: sorting[0]?.id,
+        sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
+      });
+      if (seq !== requestSeq.current) return;
+      const nextTotal = response.pagination?.total ?? response.data.length;
+      setTotal(nextTotal);
+      if (response.data.length === 0 && nextTotal > 0 && page > 0) {
+        setPage(Math.max(0, Math.ceil(nextTotal / pageSize) - 1));
+        return;
+      }
       setCases(response.data);
       setSelectedId((current) => (
         current && response.data.some((row) => row.case_id === current)
@@ -73,20 +135,38 @@ export function Cases(): JSX.Element {
           : (response.data.some((row) => row.case_id === requestedCaseId) ? requestedCaseId : response.data[0]?.case_id) ?? null
       ));
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setError(errorMessage(err, 'Failed to load SOC cases.'));
       setCases([]);
+      setTotal(0);
       setSelectedId(null);
       setSelectedCase(null);
       setExportPreview(null);
       setNoteStatus(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [api, currentTenantId, requestedCaseId]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentTenantId) {
+      setTeamUsers([]);
+      return;
+    }
+    api.getTeamUsers(currentTenantId).then((users) => {
+      if (!cancelled) setTeamUsers(users);
+    }).catch(() => {
+      if (!cancelled) setTeamUsers([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, currentTenantId]);
 
   useEffect(() => {
     if (!selectedId || !currentTenantId) {
@@ -101,6 +181,7 @@ export function Cases(): JSX.Element {
     setExportPreview(null);
     setExportError(null);
     setNoteDraft('');
+    setNoteMentions([]);
     setNoteStatus(null);
     api
       .getSOCCase(selectedId, currentTenantId)
@@ -121,6 +202,62 @@ export function Cases(): JSX.Element {
     };
   }, [api, currentTenantId, selectedId]);
 
+  const columns = useMemo<ColumnDef<SOCCase>[]>(() => [
+    {
+      accessorKey: 'severity',
+      header: 'Severity',
+      cell: ({ row }) => (
+        <StatusTag tone={severityTone(row.original.severity)} className="font-mono uppercase">
+          {row.original.severity || 'unknown'}
+        </StatusTag>
+      ),
+    },
+    {
+      accessorKey: 'title',
+      header: 'Title',
+      cell: ({ row }) => (
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium text-foreground">{row.original.title}</span>
+          <span className="truncate text-xs text-text-muted">{caseSummaryText(row.original)}</span>
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ getValue }) => (
+        <StatusTag tone={caseStatusTone(getValue() as string)} variant="outline">
+          {String(getValue())}
+        </StatusTag>
+      ),
+    },
+    {
+      id: 'refs',
+      header: 'Refs',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="tabular-nums text-xs text-text-secondary">{caseEvidenceCount(row.original)}</span>
+      ),
+    },
+    {
+      id: 'notes',
+      header: 'Notes',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="tabular-nums text-xs text-text-secondary">{row.original.notes?.length ?? 0}</span>
+      ),
+    },
+    {
+      accessorKey: 'updated_at',
+      header: 'Updated',
+      cell: ({ getValue }) => (
+        <span className="font-mono text-xs tabular-nums text-text-secondary">
+          {timeAgo(getValue() as string)}
+        </span>
+      ),
+    },
+  ], []);
+
   const statusCounts = useMemo(() => summarizeCases(cases), [cases]);
 
   const addNote = async () => {
@@ -132,14 +269,33 @@ export function Cases(): JSX.Element {
       await api.addSOCCaseNote(selectedCase.case_id, currentTenantId, {
         note: noteDraft,
         citations,
+        mentions: noteMentions,
       });
       setNoteDraft('');
+      setNoteMentions([]);
       setNoteStatus('Note added with audit guardrails.');
       setSelectedCase(await api.getSOCCase(selectedCase.case_id, currentTenantId));
     } catch (err) {
       setNoteStatus(`Note failed: ${errorMessage(err, 'Unable to add note.')}`);
     } finally {
       setNoteSaving(false);
+    }
+  };
+
+  const assignOwner = async (user: TeamUser | null) => {
+    if (!selectedCase || !currentTenantId || assignmentSaving) return;
+    setAssignmentSaving(true);
+    setError(null);
+    try {
+      const updated = await api.assignSOCCase(selectedCase.case_id, currentTenantId, {
+        assignee_id: user?.id ?? null,
+      });
+      setSelectedCase(updated);
+      setCases((current) => current.map((row) => row.case_id === updated.case_id ? updated : row));
+    } catch (err) {
+      setError(errorMessage(err, 'Unable to update assignee.'));
+    } finally {
+      setAssignmentSaving(false);
     }
   };
 
@@ -194,30 +350,75 @@ export function Cases(): JSX.Element {
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.4fr)]">
         <Panel padding="md" eyebrow="QUEUE" title="Incident packets">
-          {loading ? (
-            <p className="text-sm text-text-muted">Loading cases...</p>
-          ) : cases.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {cases.map((row) => (
-                <CaseQueueRow
-                  key={row.case_id}
-                  row={row}
-                  active={row.case_id === selectedId}
-                  onSelect={() => setSelectedId(row.case_id)}
-                />
-              ))}
+          <div className="flex flex-col gap-3">
+            <div className="relative max-w-full">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+              <Input
+                id="case-search"
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search title, summary, or trigger..."
+                className="pl-9"
+              />
             </div>
-          ) : error ? (
-            <p className="text-sm text-text-muted">
-              Case queue could not be loaded. Resolve the error above and refresh.
-            </p>
-          ) : (
-            <EmptyState
-              icon={<ShieldCheck />}
-              title="No SOC cases yet"
-              description="Cases appear after AI investigations, alerts, posture gaps, or DB audit gaps are promoted into an incident packet."
+            <div className="grid grid-cols-2 gap-3">
+              <FilterSelect
+                label="Status"
+                value={statusFilter}
+                onChange={(v) => setStatusFilter(v)}
+                options={[
+                  { label: 'All statuses', value: '' },
+                  { label: 'Open', value: 'open' },
+                  { label: 'Investigating', value: 'investigating' },
+                  { label: 'Closed', value: 'closed' },
+                ]}
+              />
+              <FilterSelect
+                label="Severity"
+                value={severityFilter}
+                onChange={(v) => setSeverityFilter(v)}
+                options={[
+                  { label: 'All severities', value: '' },
+                  ...CASE_SEVERITIES,
+                ]}
+              />
+            </div>
+          </div>
+          <div className="mt-3">
+            <DataTable
+              columns={columns}
+              rows={cases}
+              rowKey={(row) => row.case_id}
+              loading={loading}
+              compact
+              sorting={sorting}
+              onSortingChange={setSorting}
+              onRowClick={(row) => setSelectedId(row.case_id)}
+              empty={
+                error ? (
+                  <EmptyState
+                    icon={<ClipboardList />}
+                    title="Case queue could not be loaded"
+                    description="Resolve the error above and refresh."
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<ShieldCheck />}
+                    title="No SOC cases yet"
+                    description="Cases appear after AI investigations, alerts, posture gaps, or DB audit gaps are promoted into an incident packet."
+                  />
+                )
+              }
             />
-          )}
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              className="mt-3"
+            />
+          </div>
         </Panel>
 
         <Panel
@@ -239,6 +440,24 @@ export function Cases(): JSX.Element {
             <div className="grid gap-5">
               <div className="rounded-md border border-border-subtle bg-surface p-3">
                 <p className="text-sm leading-6 text-text-secondary">{caseSummaryText(selectedCase)}</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <AssigneePicker
+                    value={selectedCase.assignee ?? null}
+                    options={teamUsers}
+                    disabled={assignmentSaving}
+                    onChange={(user) => void assignOwner(user)}
+                  />
+                  {(selectedCase.mentioned_users ?? []).map((member) => (
+                    <span
+                      key={member.id}
+                      title="Mentioned in case"
+                      className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-elevated px-2 py-1 text-xs text-text-secondary"
+                    >
+                      <AtSign className="h-3 w-3 text-brand-400" aria-hidden />
+                      {member.name}
+                    </span>
+                  ))}
+                </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {selectedCase.coverage_badges.map((badge) => (
                     <StatusTag key={badge.id} tone={normalizeTone(badge.tone)}>
@@ -264,7 +483,10 @@ export function Cases(): JSX.Element {
                   draft={noteDraft}
                   status={noteStatus}
                   saving={noteSaving}
+                  teamUsers={teamUsers}
+                  mentions={noteMentions}
                   onDraftChange={setNoteDraft}
+                  onMentionsChange={setNoteMentions}
                   onSubmit={() => void addNote()}
                 />
                 <ExportPanel
@@ -302,42 +524,37 @@ function CaseMetric({ label, value, tone }: { label: string; value: number; tone
   );
 }
 
-function CaseQueueRow({
-  row,
-  active,
-  onSelect,
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
 }: {
-  row: SOCCase;
-  active: boolean;
-  onSelect: () => void;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
 }): JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        'rounded-md border border-border-subtle bg-surface p-3 text-left transition hover:border-border-strong hover:bg-hover',
-        active && 'border-brand-500/60 bg-brand-500/10',
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{row.title}</p>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-secondary">
-            {caseSummaryText(row)}
-          </p>
-        </div>
-        <StatusTag tone={severityTone(row.severity)}>{row.severity}</StatusTag>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        <StatusTag tone={caseStatusTone(row.status)} variant="outline">{row.status}</StatusTag>
-        <StatusTag tone={caseEvidenceCount(row) > 0 ? 'healthy' : 'warning'} variant="outline">
-          {caseEvidenceCount(row)} refs
-        </StatusTag>
-        <StatusTag tone="info" variant="outline">{formatShortDate(row.updated_at)}</StatusTag>
-      </div>
-    </button>
+    <SelectField label={label} value={value} onChange={(e) => onChange(e.target.value)}>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </SelectField>
   );
+}
+
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'recently';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 function CaseFactsPanel({ row }: { row: SOCCase }): JSX.Element {
@@ -537,17 +754,38 @@ function NotesPanel({
   draft,
   status,
   saving,
+  teamUsers,
+  mentions,
   onDraftChange,
+  onMentionsChange,
   onSubmit,
 }: {
   notes: SOCCase['notes'];
   draft: string;
   status: string | null;
   saving: boolean;
+  teamUsers: TeamUser[];
+  mentions: string[];
   onDraftChange: (value: string) => void;
+  onMentionsChange: (value: string[]) => void;
   onSubmit: () => void;
 }): JSX.Element {
   const statusIsError = status?.toLowerCase().startsWith('note failed');
+  const mentionQuery = draft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
+  const suggestions = mentionQuery === undefined || mentions.length >= 8
+    ? []
+    : teamUsers.filter((user) => (
+      !mentions.includes(user.id)
+      && `${user.name} ${user.email ?? ''}`.toLowerCase().includes(mentionQuery)
+    )).slice(0, 5);
+  const mentionedUsers = mentions
+    .map((id) => teamUsers.find((user) => user.id === id))
+    .filter((user): user is TeamUser => Boolean(user));
+
+  const selectMention = (user: TeamUser) => {
+    onMentionsChange([...mentions, user.id].slice(0, 8));
+    onDraftChange(draft.replace(/(?:^|\s)@[^\s@]*$/, (match) => `${match.startsWith(' ') ? ' ' : ''}@${user.name} `));
+  };
   return (
     <div className="rounded-md border border-border-subtle bg-surface p-3">
       <p className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
@@ -573,6 +811,40 @@ function NotesPanel({
           placeholder="Add analyst decision, owner, or closure note"
           className="rounded-md border border-border-subtle bg-elevated px-3 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
         />
+        {suggestions.length > 0 ? (
+          <div className="rounded-md border border-border-subtle bg-elevated p-1" aria-label="Mention suggestions">
+            {suggestions.map((user) => (
+              <button
+                key={user.id}
+                type="button"
+                aria-label={`Mention ${user.name}`}
+                className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-hover"
+                onClick={() => selectMention(user)}
+              >
+                {user.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {mentionedUsers.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5" aria-label="Mention recipients">
+            {mentionedUsers.map((user) => (
+              <span key={user.id} className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-elevated px-2 py-1 text-xs text-text-secondary">
+                <AtSign className="h-3 w-3" aria-hidden />
+                {user.name}
+                <button
+                  type="button"
+                  aria-label={`Remove ${user.name}`}
+                  onClick={() => onMentionsChange(mentions.filter((id) => id !== user.id))}
+                  className="rounded text-text-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" aria-hidden />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {mentions.length >= 8 ? <p className="text-xs text-text-muted">Maximum 8 mentions.</p> : null}
         <Button type="button" variant="secondary" size="sm" onClick={onSubmit} disabled={!draft.trim() || saving} loading={saving}>
           <MessageSquarePlus />
           {saving ? 'Adding note...' : 'Add note'}

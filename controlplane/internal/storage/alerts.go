@@ -12,6 +12,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// severitySortExpr orders severity by risk rank rather than alphabetically so
+// that e.g. "medium" sorts after "high" instead of after "info".
+const severitySortExpr = `CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END`
+
 type Alert struct {
 	ID         uuid.UUID
 	TenantID   uuid.UUID
@@ -313,11 +317,15 @@ func (s *Store) GetAlert(ctx context.Context, id uuid.UUID) (*Alert, error) {
 }
 
 type AlertFilter struct {
-	TenantID uuid.UUID
-	NodeID   uuid.UUID
-	State    string
-	Severity string
-	Since    *time.Time
+	TenantID  uuid.UUID
+	NodeID    uuid.UUID
+	State     string
+	Severity  string
+	Since     *time.Time
+	Until     *time.Time
+	Search    string
+	SortBy    string
+	SortOrder string
 }
 
 func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int) ([]Alert, int, error) {
@@ -352,6 +360,17 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		args = append(args, *f.Since)
 		idx++
 	}
+	if f.Until != nil {
+		where = append(where, fmt.Sprintf("opened_at <= $%d", idx))
+		args = append(args, *f.Until)
+		idx++
+	}
+	if search := strings.TrimSpace(f.Search); search != "" {
+		pattern := "%" + strings.ToLower(search) + "%"
+		where = append(where, fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(source) LIKE $%d OR LOWER(COALESCE(summary, '')) LIKE $%d)", idx, idx, idx))
+		args = append(args, pattern)
+		idx++
+	}
 	whereSQL := strings.Join(where, " AND ")
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alerts WHERE `+whereSQL, args...).Scan(&total); err != nil {
@@ -360,8 +379,25 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 	if limit <= 0 {
 		limit = 50
 	}
+	sortCol := "opened_at"
+	switch strings.ToLower(strings.TrimSpace(f.SortBy)) {
+	case "title":
+		sortCol = "title"
+	case "source":
+		sortCol = "source"
+	case "severity":
+		sortCol = severitySortExpr
+	case "state":
+		sortCol = "state"
+	case "opened_at":
+		sortCol = "opened_at"
+	}
+	order := "DESC"
+	if strings.EqualFold(strings.TrimSpace(f.SortOrder), "asc") {
+		order = "ASC"
+	}
 	args = append(args, limit, offset)
-	q := alertSelectSQL + ` WHERE ` + whereSQL + fmt.Sprintf(` ORDER BY opened_at DESC LIMIT $%d OFFSET $%d`, idx, idx+1)
+	q := alertSelectSQL + ` WHERE ` + whereSQL + fmt.Sprintf(` ORDER BY %s %s LIMIT $%d OFFSET $%d`, sortCol, order, idx, idx+1)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
