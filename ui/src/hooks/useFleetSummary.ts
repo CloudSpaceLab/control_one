@@ -43,6 +43,7 @@ function fallbackTotals(nodes: NodeSummary[], total: number): FleetHealthSnapsho
 export function useFleetSummary(opts: Options = {}) {
   const api = useApiClient();
   const [data, setData] = useState<FleetHealthSnapshot | null>(null);
+  const [nodes, setNodes] = useState<NodeSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -52,6 +53,7 @@ export function useFleetSummary(opts: Options = {}) {
 
     if (!opts.tenantId) {
       setData(null);
+      setNodes([]);
       setError(null);
       setLoading(false);
       return () => {
@@ -65,19 +67,18 @@ export function useFleetSummary(opts: Options = {}) {
           tenantId: opts.tenantId,
           since: opts.since,
         });
-        if ((snap.totals?.nodes ?? 0) === 0 && opts.tenantId) {
-          try {
-            const nodePage = await api.listNodes({ tenantId: opts.tenantId, limit: 500, offset: 0 });
-            if ((nodePage.pagination.total ?? 0) > 0 || nodePage.data.length > 0) {
-              snap = {
-                ...snap,
-                source: 'postgres-fallback',
-                totals: fallbackTotals(nodePage.data, nodePage.pagination.total || nodePage.data.length),
-              };
-            }
-          } catch {
-            // Keep the original health snapshot if the best-effort fallback fails.
+        try {
+          const nodePage = await api.listNodes({ tenantId: opts.tenantId, limit: 500, offset: 0 });
+          if (!cancelled) setNodes(nodePage.data);
+          if ((snap.totals?.nodes ?? 0) === 0 && ((nodePage.pagination.total ?? 0) > 0 || nodePage.data.length > 0)) {
+            snap = {
+              ...snap,
+              source: 'postgres-fallback',
+              totals: fallbackTotals(nodePage.data, nodePage.pagination.total || nodePage.data.length),
+            };
           }
+        } catch {
+          // Keep the original health snapshot if the best-effort node lookup fails.
         }
         if (!cancelled) {
           setData(snap);
@@ -102,5 +103,5 @@ export function useFleetSummary(opts: Options = {}) {
     };
   }, [api, opts.tenantId, opts.since, opts.intervalMs]);
 
-  return { data, loading, error };
+  return { data, nodes, loading, error };
 }
