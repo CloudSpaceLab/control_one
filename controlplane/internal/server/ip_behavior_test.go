@@ -527,6 +527,48 @@ func TestBlockProposalProtectedCIDRRequiresExplicitAdminOverride(t *testing.T) {
 	}
 }
 
+func TestCreateBlockProposalNormalizesSingleIPToExactCIDR(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	store := &blockProposalInvestigateStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store}
+	body := []byte(`{"tenant_id":"` + tenantID.String() + `","ip_cidr":"198.51.100.222","target_type":"tenant","scope":"tenant","enforcement":"firewall","reason":"local validation"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/network/block-proposals", bytes.NewReader(body))
+	req = withPrincipal(req, operatorPrincipal())
+	rr := httptest.NewRecorder()
+
+	s.handleBlockProposals(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%q, want accepted", rr.Code, rr.Body.String())
+	}
+	if len(store.createdBlocks) != 1 || store.createdBlocks[0].IPCIDR != "198.51.100.222/32" {
+		t.Fatalf("created block = %#v, want exact /32", store.createdBlocks)
+	}
+}
+
+func TestCreateBlockProposalRejectsEquivalentOpenProposal(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	store := &blockProposalInvestigateStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store}
+	body := []byte(`{"tenant_id":"` + tenantID.String() + `","ip_cidr":"198.51.100.222","target_type":"tenant","scope":"tenant","enforcement":"firewall","reason":"local validation"}`)
+	for attempt, expectedStatus := range []int{http.StatusAccepted, http.StatusConflict} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/network/block-proposals", bytes.NewReader(body))
+		req = withPrincipal(req, operatorPrincipal())
+		rr := httptest.NewRecorder()
+		s.handleBlockProposals(rr, req)
+		if rr.Code != expectedStatus {
+			t.Fatalf("attempt %d status = %d body=%q, want %d", attempt+1, rr.Code, rr.Body.String(), expectedStatus)
+		}
+	}
+	if len(store.createdBlocks) != 1 {
+		t.Fatalf("created blocks = %d, want exactly one", len(store.createdBlocks))
+	}
+}
+
 func TestValidateBlockProposalTTLAllowsOnlyApprovedWindows(t *testing.T) {
 	t.Parallel()
 

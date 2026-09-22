@@ -2089,6 +2089,11 @@ func (s *Server) handleCreateBlockProposal(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "ip_cidr must be an IP or CIDR", http.StatusBadRequest)
 		return
 	}
+	// A single address is always stored as its exact CIDR. This makes the
+	// requested scope explicit in the approval, enforcement, and audit views.
+	if exact := exactCIDRForIP(req.IPCIDR); exact != "" {
+		req.IPCIDR = exact
+	}
 	if err := validateBlockProposalTTL(req.TTLSeconds); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -2152,6 +2157,33 @@ func (s *Server) handleCreateBlockProposal(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		targetID = &parsed
+	}
+	if queryStore, ok := s.store.(ipBlockProposalQueryStore); ok {
+		existing, _, err := queryStore.ListIPBlocklistEntries(r.Context(), storage.IPBlocklistEntryFilter{
+			TenantID:    tenantID,
+			IPCIDR:      req.IPCIDR,
+			TargetType:  strings.TrimSpace(req.TargetType),
+			ServerGroup: serverGroup,
+			App:         strings.TrimSpace(req.App),
+			VHost:       strings.TrimSpace(req.VHost),
+		}, 100, 0)
+		if err != nil {
+			s.logger.Warn("list existing block proposals", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		for _, candidate := range existing {
+			if !blockProposalStatusOpen(candidate.Status) || !strings.EqualFold(candidate.Scope, strings.TrimSpace(req.Scope)) || !strings.EqualFold(candidate.Enforcement, strings.TrimSpace(req.Enforcement)) || !sameOptionalUUID(candidate.TargetID, targetID) {
+				continue
+			}
+			s.recordAudit(r.Context(), principal, tenantID, "network.block_proposal.rejected", "ip", req.IPCIDR, map[string]any{
+				"reason":               "an equivalent block proposal is already open",
+				"existing_proposal_id": candidate.ID.String(),
+				"stage":                "create",
+			})
+			http.Error(w, "an equivalent block proposal is already open", http.StatusConflict)
+			return
+		}
 	}
 	var expiresAt *time.Time
 	if req.TTLSeconds > 0 {
@@ -2749,23 +2781,13 @@ func (s *Server) handleRollbackBlockProposal(w http.ResponseWriter, r *http.Requ
 	if !s.requireTenantAccess(w, r, principal, entry.TenantID, roleOperator, roleAdmin) {
 		return
 	}
-	if blockProposalStatusTerminal(entry.Status) {
-		http.Error(w, "block proposal is already terminal", http.StatusConflict)
+	if !strings.EqualFold(entry.Status, "active") || !entry.EntityActionID.Valid {
+		http.Error(w, "only active dispatched blocks can be rolled back", http.StatusConflict)
 		return
 	}
-	reason := decodeLifecycleReason(r, "operator requested rollback")
-	if !entry.EntityActionID.Valid {
-		updated, err := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "rolled_back", nil, reason)
-		if err != nil {
-			s.logger.Warn("rollback pending block proposal", zap.Error(err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-		s.recordAudit(r.Context(), principal, entry.TenantID, "network.block_proposal.rolled_back", "ip_blocklist_entry", id.String(), map[string]any{
-			"ip_cidr": entry.IPCIDR,
-			"reason":  reason,
-		})
-		writeJSON(w, http.StatusAccepted, newBlockProposalResponse(updated))
+	reason, err := decodeRequiredLifecycleReason(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	updated, err := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "rolled_back", nil, reason)
@@ -3401,6 +3423,22 @@ func blockProposalStatusTerminal(status string) bool {
 	default:
 		return false
 	}
+}
+
+func blockProposalStatusOpen(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "proposed", "approved", "canary", "dispatching", "active":
+		return true
+	default:
+		return false
+	}
+}
+
+func sameOptionalUUID(value uuid.NullUUID, expected *uuid.UUID) bool {
+	if expected == nil {
+		return !value.Valid
+	}
+	return value.Valid && value.UUID == *expected
 }
 
 func (s *Server) blockProposalSafetyViolation(ctx context.Context, tenantID uuid.UUID, serverGroup string) (int, string) {
