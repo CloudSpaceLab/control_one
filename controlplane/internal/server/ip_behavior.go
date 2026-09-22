@@ -75,6 +75,14 @@ type ipBlockExpiryStore interface {
 	UpdateIPBlocklistEntryStatus(context.Context, uuid.UUID, string, *uuid.UUID, string) (*storage.IPBlocklistEntry, error)
 }
 
+// ipBlockExpiryReaperStore is deliberately narrower than ipBlockExpiryStore.
+// The scheduled reaper does not need node lookup or action-link methods, so
+// requiring them would make an otherwise valid store silently skip expiry.
+type ipBlockExpiryReaperStore interface {
+	ListExpiredIPBlocklistEntries(context.Context, time.Time, int) ([]storage.IPBlocklistEntry, error)
+	UpdateIPBlocklistEntryStatus(context.Context, uuid.UUID, string, *uuid.UUID, string) (*storage.IPBlocklistEntry, error)
+}
+
 type nodeFirewallRemovalStore interface {
 	ListNodeFirewallRulesForEntityAction(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
 	QueueNodeFirewallRuleRemoval(context.Context, uuid.UUID, uuid.UUID) error
@@ -2988,7 +2996,7 @@ func (s *Server) dispatchBlockProposalCanaryToTenantNodes(ctx context.Context, e
 }
 
 func (s *Server) expireIPBlocklistEntries(ctx context.Context, now time.Time, limit int) (int, error) {
-	store, ok := s.store.(ipBlockExpiryStore)
+	store, ok := s.store.(ipBlockExpiryReaperStore)
 	if !ok {
 		return 0, nil
 	}
