@@ -3000,37 +3000,66 @@ func (s *Server) expireIPBlocklistEntries(ctx context.Context, now time.Time, li
 	for i := range entries {
 		entry := entries[i]
 		if strings.EqualFold(entry.Status, "proposed") {
-			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, "proposal expired before approval"); err != nil {
+			const expiryReason = "proposal expired before approval"
+			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, expiryReason); err != nil {
 				return expired, err
 			}
+			s.recordIPBlockExpiryAudit(ctx, entry, expiryReason, 0, 0)
 			expired++
 			continue
 		}
 		if !entry.EntityActionID.Valid {
-			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, "expired without enforcement action link"); err != nil {
+			const expiryReason = "expired without enforcement action link"
+			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, expiryReason); err != nil {
 				return expired, err
 			}
+			s.recordIPBlockExpiryAudit(ctx, entry, expiryReason, 0, 0)
 			expired++
 			continue
 		}
+		firewallJobs := 0
+		webserverJobs := 0
 		if enforcementWantsFirewall(entry.Enforcement) {
-			if _, err := s.queueFirewallRemovalForBlockEntry(ctx, &entry, entry.EntityActionID.UUID); err != nil {
+			var err error
+			firewallJobs, err = s.queueFirewallRemovalForBlockEntry(ctx, &entry, entry.EntityActionID.UUID)
+			if err != nil {
 				_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
 				return expired, err
 			}
 		}
 		if enforcementWantsWebserver(entry.Enforcement) {
-			if _, err := s.refreshWebserverBlocklistsForExpiredEntry(ctx, &entry, now); err != nil {
+			var err error
+			webserverJobs, err = s.refreshWebserverBlocklistsForExpiredEntry(ctx, &entry, now)
+			if err != nil {
 				_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
 				return expired, err
 			}
 		}
-		if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, "ttl expired; removal dispatched"); err != nil {
+		const expiryReason = "ttl expired; removal dispatched"
+		if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, expiryReason); err != nil {
 			return expired, err
 		}
+		s.recordIPBlockExpiryAudit(ctx, entry, expiryReason, firewallJobs, webserverJobs)
 		expired++
 	}
 	return expired, nil
+}
+
+func (s *Server) recordIPBlockExpiryAudit(ctx context.Context, entry storage.IPBlocklistEntry, reason string, firewallJobs, webserverJobs int) {
+	metadata := map[string]any{
+		"ip_cidr":        entry.IPCIDR,
+		"reason":         reason,
+		"firewall_jobs":  firewallJobs,
+		"webserver_jobs": webserverJobs,
+		"stage":          "automatic_expiry",
+	}
+	if entry.EntityActionID.Valid {
+		metadata["entity_action_id"] = entry.EntityActionID.UUID.String()
+	}
+	if entry.ExpiresAt.Valid {
+		metadata["expires_at"] = entry.ExpiresAt.Time.UTC().Format(time.RFC3339)
+	}
+	s.recordAudit(ctx, s.systemActor(), entry.TenantID, "network.block_proposal.expired", "ip_blocklist_entry", entry.ID.String(), metadata)
 }
 
 func (s *Server) queueFirewallRemovalForBlockEntry(ctx context.Context, entry *storage.IPBlocklistEntry, entityActionID uuid.UUID) (int, error) {

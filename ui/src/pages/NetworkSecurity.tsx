@@ -114,6 +114,13 @@ export function NetworkSecurity(): JSX.Element {
 type TimeWindowKey = '1h' | '6h' | '24h' | '7d';
 type SeverityFilter = 'all' | 'watch' | 'suspicious' | 'high' | 'critical';
 type EnforcementTarget = 'firewall' | 'webserver' | 'combined';
+type BlockTTL = 900 | 3600 | 86400;
+
+const BLOCK_TTL_LABELS: Record<BlockTTL, string> = {
+  900: '15 minutes',
+  3600: '1 hour',
+  86400: '24 hours',
+};
 
 const WINDOW_HOURS: Record<TimeWindowKey, number> = {
   '1h': 1,
@@ -170,6 +177,7 @@ function IPBehaviorPanel(): JSX.Element {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [proposalState, setProposalState] = useState<string | null>(null);
   const [enforcement, setEnforcement] = useState<EnforcementTarget>('firewall');
+  const [blockTTL, setBlockTTL] = useState<BlockTTL>(3600);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [confirming, setConfirming] = useState(false);
 
@@ -316,7 +324,7 @@ function IPBehaviorPanel(): JSX.Element {
     const label = target === 'cidr' ? 'Block /24 CIDR' : scopedToVhost ? 'Limit to vhost' : 'Block IP';
     setConfirm({
       title: label,
-      body: `${cidr} will be proposed for ${enforcement} enforcement with a 1 hour TTL.`,
+      body: `${cidr} will be proposed for ${enforcement} enforcement with a ${BLOCK_TTL_LABELS[blockTTL]} TTL.`,
       confirmLabel: 'Create proposal',
       variant: 'danger',
       run: async () => {
@@ -327,7 +335,7 @@ function IPBehaviorPanel(): JSX.Element {
           ip_cidr: cidr,
           reason,
           score: profileScore || undefined,
-          ttl_seconds: 3600,
+          ttl_seconds: blockTTL,
           scope,
           target_type: 'tenant',
           server_group: filters.serverGroup,
@@ -339,7 +347,7 @@ function IPBehaviorPanel(): JSX.Element {
         await refreshProfileBlocks(profile.source_ip);
       },
     });
-  }, [client, currentTenantId, enforcement, filters, profile, profileBaseline, profileBlocks, profileScore, refreshProfileBlocks, selectedCountry]);
+  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileBaseline, profileBlocks, profileScore, refreshProfileBlocks, selectedCountry]);
 
   const queueASNBlockProposal = useCallback(() => {
     if (!currentTenantId || !profile?.source_ip) return;
@@ -362,7 +370,7 @@ function IPBehaviorPanel(): JSX.Element {
           limit: 25,
           reason: asnBlockReason(profile, selectedCountry, profileInsight?.description),
           score: profileScore || undefined,
-          ttl_seconds: 3600,
+          ttl_seconds: blockTTL,
           scope: filters.vhost ? 'app' : 'tenant',
           target_type: 'tenant',
           server_group: filters.serverGroup,
@@ -376,7 +384,7 @@ function IPBehaviorPanel(): JSX.Element {
         await refreshProfileBlocks(profile.source_ip);
       },
     });
-  }, [client, currentTenantId, enforcement, filters, profile, profileInsight?.description, profileScore, refreshProfileBlocks, selectedCountry, since]);
+  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileInsight?.description, profileScore, refreshProfileBlocks, selectedCountry, since]);
 
   const runConfirmed = useCallback(async () => {
     if (!confirm) return;
@@ -504,9 +512,9 @@ function IPBehaviorPanel(): JSX.Element {
               : 'No web.request rollups in this window'}
           </span>
         </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -751,6 +759,16 @@ function IPBehaviorPanel(): JSX.Element {
                     <option value="firewall">Firewall</option>
                     <option value="webserver">Webserver</option>
                     <option value="combined">Firewall + webserver</option>
+                  </SelectField>
+                  <SelectField
+                    id="ip-behavior-block-ttl"
+                    label="Block duration"
+                    value={String(blockTTL)}
+                    onChange={(e) => setBlockTTL(Number(e.target.value) as BlockTTL)}
+                  >
+                    {Object.entries(BLOCK_TTL_LABELS).map(([seconds, label]) => (
+                      <option key={seconds} value={seconds}>{label}</option>
+                    ))}
                   </SelectField>
                   <Input value={filters.vhost} onChange={(e) => setFilters({ ...filters, vhost: e.target.value })} placeholder="Vhost scope" />
                 </div>
@@ -1198,8 +1216,8 @@ function BlockApprovalQueue(): JSX.Element {
       <Panel eyebrow="GOVERNED RESPONSE" title="Approval queue" toneAccent={proposals.length > 0 ? 'warning' : 'healthy'}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-text-secondary">Review alert evidence and safety scope before allowing a proposed block to reach any node.</p>
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+	          <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
+	            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         </div>
       </Panel>
@@ -1319,9 +1337,9 @@ function ActiveBlocksPanel(): JSX.Element {
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -1516,9 +1534,9 @@ function FirewallManagementPanel(): JSX.Element {
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+          <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
+	            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	            {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         </div>
       </div>

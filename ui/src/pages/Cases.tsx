@@ -328,8 +328,8 @@ export function Cases(): JSX.Element {
               </Link>
             </Button>
             <Button type="button" variant="secondary" size="sm" onClick={() => void refresh()} loading={loading}>
-              <RefreshCw />
-              Refresh
+              <RefreshCw className={loading ? 'animate-spin' : ''} />
+              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         }

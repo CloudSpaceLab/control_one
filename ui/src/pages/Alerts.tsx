@@ -851,8 +851,8 @@ export function Alerts(): JSX.Element {
         title="Alerts"
         description="Deduped inbox from correlation, rules, and compliance."
         actions={
-          <Button variant="secondary" size="md" onClick={refresh} disabled={loading}>
-            <RefreshCw className="h-4 w-4" /> Refresh
+          <Button variant="secondary" size="md" onClick={refresh} loading={loading}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       />

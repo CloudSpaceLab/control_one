@@ -1460,8 +1460,8 @@ export function SIEMCoverage(): JSX.Element {
         description="Connector proposals, source health, and collection policy."
         actions={
           <Button variant="secondary" onClick={load} loading={loading}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       />
@@ -2214,9 +2214,9 @@ export function SIEMCoverage(): JSX.Element {
             {sourceHealthCaseTotal.toLocaleString()} SIEM source-health case
             {sourceHealthCaseTotal === 1 ? "" : "s"}
           </span>
-          <Button size="sm" variant="outline" disabled={loading} onClick={load}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
+          <Button size="sm" variant="outline" loading={loading} onClick={load}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         </div>
         {sourceHealthCases.length > 0 ? (

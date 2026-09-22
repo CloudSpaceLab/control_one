@@ -246,8 +246,8 @@ export function Tenants(): JSX.Element {
         title="Tenants"
         description="Tenants represent isolation boundaries for infrastructure, policy, and compliance scope."
         actions={
-          <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
-            <RefreshCw className="h-4 w-4" /> {loading ? 'Refreshing…' : 'Refresh'}
+          <Button variant="secondary" size="md" onClick={reload} loading={loading}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       />

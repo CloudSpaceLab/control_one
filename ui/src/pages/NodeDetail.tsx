@@ -735,8 +735,8 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
             >
               Show internal/private
             </Button>
-            <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            <Button variant="ghost" size="sm" onClick={refresh} loading={loading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         }
@@ -1719,8 +1719,8 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
         eyebrow="INVENTORY"
         title="Installed packages"
         actions={
-          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          <Button variant="ghost" size="sm" onClick={refresh} loading={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       >

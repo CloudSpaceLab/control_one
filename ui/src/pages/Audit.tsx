@@ -238,8 +238,8 @@ export function Audit(): JSX.Element {
         description="Who did what, when. Full record for SOC 2, ISO 27001, and incident review."
         actions={
           <>
-            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
-              <RefreshCw className="h-4 w-4" /> Refresh
+            <Button variant="secondary" size="md" onClick={reload} loading={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
             <Button
               variant="primary"
