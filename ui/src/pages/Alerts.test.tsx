@@ -7,6 +7,7 @@ import { Alerts, alertAccessReviewRoute, alertContextPills, alertDispositionPill
 
 const mocks = vi.hoisted(() => {
   const listAlerts = vi.fn();
+  const getAlert = vi.fn();
   const ackAlert = vi.fn();
   const updateAlertDisposition = vi.fn();
   const listCorrelationRules = vi.fn();
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => {
   return {
     apiClient: {
       listAlerts,
+      getAlert,
       ackAlert,
       updateAlertDisposition,
       listCorrelationRules,
@@ -30,6 +32,7 @@ const mocks = vi.hoisted(() => {
       updateAlertWorkflow,
     },
     listAlerts,
+    getAlert,
     ackAlert,
     updateAlertDisposition,
     listCorrelationRules,
@@ -100,9 +103,9 @@ const ruleRow = {
   updated_at: '2026-06-08T00:00:00Z',
 } as unknown as CorrelationRule;
 
-function renderAlerts() {
+function renderAlerts(initialEntry = '/alerts') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Alerts />
     </MemoryRouter>,
   );
@@ -120,6 +123,7 @@ describe('Alerts page failure states', () => {
     vi.clearAllMocks();
     mocks.currentTenantId = 'tenant-1';
     mocks.listAlerts.mockResolvedValue(paginated([alertRow]));
+    mocks.getAlert.mockResolvedValue(alertRow);
     mocks.ackAlert.mockResolvedValue(undefined);
     mocks.updateAlertDisposition.mockResolvedValue({ ...alertRow, state: 'resolved' });
     mocks.listCorrelationRules.mockResolvedValue(paginated([ruleRow]));
@@ -183,6 +187,7 @@ describe('Alerts page failure states', () => {
     const dialog = screen.getByRole('dialog', { name: /resolve alert with evidence/i });
     const confirm = within(dialog).getByRole('button', { name: /record disposition/i });
 
+    expect(within(dialog).getByLabelText(/disposition/i)).toHaveValue('true_positive');
     expect(confirm).toBeDisabled();
 
     await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'resolved');
@@ -191,6 +196,21 @@ describe('Alerts page failure states', () => {
 
     await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'false_positive');
     expect(confirm).toBeEnabled();
+  });
+
+  it('lets an existing SOC case provide evidence for a real alert after reopening', async () => {
+    const user = userEvent.setup();
+    mocks.listSOCCases.mockResolvedValue({
+      data: [{ case_id: 'case-1', status: 'open', evidence: { alert_id: 'alert-1' } }],
+      pagination: { total: 1, limit: 50, offset: 0 },
+    });
+
+    renderAlerts('/alerts?alert_id=alert-1');
+    const dialog = await screen.findByRole('dialog', { name: /resolve alert with evidence/i });
+    expect(mocks.getAlert).toHaveBeenCalledWith('alert-1');
+    expect(await within(dialog).findByText(/soc case attached as resolution evidence/i)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Investigation continues in the linked SOC case.');
+    expect(within(dialog).getByRole('button', { name: /record disposition/i })).toBeEnabled();
   });
 
   it('shows the correlation activity summary and contributing events', async () => {
@@ -352,16 +372,16 @@ describe('contextual alert review routes', () => {
 			title: 'SSH brute force', state: 'open', opened_at: '2026-09-16T10:00:00Z',
 			context: { src_ip: '203.0.113.25', user_name: 'root', first_seen_at: '2026-09-16T10:00:01Z', last_seen_at: '2026-09-16T10:00:20Z' },
 		};
-		expect(alertInvestigationRoute(alert)).toBe('/investigate/ip/203.0.113.25?audit=1');
+		expect(alertInvestigationRoute(alert)).toBe('/investigate/ip/203.0.113.25?audit=1&fromAlert=alert-1');
 		const access = new URL(`http://local${alertAccessReviewRoute(alert)}`);
 		expect(access.pathname).toBe('/access');
 		expect(Object.fromEntries(access.searchParams)).toEqual({
-			node_id: 'node-1', user: 'root', from: '2026-09-16T10:00:01Z', to: '2026-09-16T10:00:20Z', alert_id: 'alert-1',
+			node_id: 'node-1', user: 'root', from: '2026-09-16T10:00:01Z', to: '2026-09-16T10:00:20Z', alert_id: 'alert-1', fromAlert: 'alert-1',
 		});
 	});
 
 	it('falls back to the alert lifecycle when no stronger entity is present', () => {
 		const alert: Alert = { id: 'alert-2', tenant_id: 'tenant-1', source: 'correlation', severity: 'medium', title: 'Signal', state: 'open', opened_at: '2026-09-16T10:00:00Z', context: {} };
-		expect(alertInvestigationRoute(alert)).toBe('/investigate/alert/alert-2');
+		expect(alertInvestigationRoute(alert)).toBe('/investigate/alert/alert-2?fromAlert=alert-2');
 	});
 });

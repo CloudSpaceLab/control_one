@@ -4649,6 +4649,10 @@ export class APIClient {
     );
   }
 
+  async getAlert(id: string): Promise<Alert> {
+    return this.request<Alert>(`/api/v1/alerts/${encodeURIComponent(id)}`);
+  }
+
   async ackAlert(id: string): Promise<void> {
     await this.request<void>(`/api/v1/alerts/${encodeURIComponent(id)}/ack`, {
       method: "POST",

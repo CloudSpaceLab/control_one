@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -246,9 +246,18 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function caseContainsAlert(socCase: SOCCase, alertId: string): boolean {
+  const evidence = socCase.evidence ?? {};
+  if (evidence.alert_id === alertId) return true;
+  return Array.isArray(evidence.linked_alerts) && evidence.linked_alerts.some((item) =>
+    Boolean(item) && typeof item === 'object' && (item as Record<string, unknown>).alert_id === alertId,
+  );
+}
+
 export function Alerts(): JSX.Element {
   const client = useApiClient();
-  const navigate = useNavigate();
+  const location = useLocation();
+  const linkedAlertId = new URLSearchParams(location.search).get('alert_id');
   const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
   const [pageTab, setPageTab] = useState<PageTab>('alerts');
   const [state, setState] = useState<typeof STATE_FILTERS[number]>('open');
@@ -259,10 +268,28 @@ export function Alerts(): JSX.Element {
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [ackingId, setAckingId] = useState<string | null>(null);
   const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
+  const [focusedAlert, setFocusedAlert] = useState<Alert | null>(null);
   const [resolvingAlert, setResolvingAlert] = useState(false);
   const [creatingCase, setCreatingCase] = useState(false);
 	const [availableCases, setAvailableCases] = useState<SOCCase[]>([]);
   const [savingWorkflow, setSavingWorkflow] = useState(false);
+
+  useEffect(() => {
+    if (!linkedAlertId) return;
+    let cancelled = false;
+    client.getAlert(linkedAlertId)
+      .then((alert) => {
+        if (cancelled) return;
+        setFocusedAlert(alert);
+        setResolveTargetId(alert.id);
+        setPageTab('alerts');
+        setResolveError(null);
+      })
+      .catch((err) => {
+        if (!cancelled) setAlertActionError(`Could not open linked alert: ${errorMessage(err, 'Alert lookup failed.')}`);
+      });
+    return () => { cancelled = true; };
+  }, [client, linkedAlertId]);
 
 	useEffect(() => {
 		if (!resolveTargetId || !currentTenantId) return;
@@ -620,8 +647,8 @@ export function Alerts(): JSX.Element {
     return c;
   }, [alerts]);
   const resolveTarget = useMemo(
-    () => alerts.find((alert) => alert.id === resolveTargetId) ?? null,
-    [alerts, resolveTargetId],
+    () => alerts.find((alert) => alert.id === resolveTargetId) ?? (focusedAlert?.id === resolveTargetId ? focusedAlert : null),
+    [alerts, focusedAlert, resolveTargetId],
   );
   const deleteRule = useMemo(
     () => rules.find((rule) => rule.id === deleteRuleId) ?? null,
@@ -1446,9 +1473,11 @@ export function Alerts(): JSX.Element {
           setResolveError(null);
           try {
             const created = await client.createAlertSOCCase(alert.id);
-            navigate(`/cases?case_id=${encodeURIComponent(created.case_id)}`);
+            await refresh();
+            return created;
           } catch (err) {
             setResolveError(errorMessage(err, 'Case creation failed.'));
+            throw err;
           } finally {
             setCreatingCase(false);
           }
@@ -1458,9 +1487,11 @@ export function Alerts(): JSX.Element {
 			setResolveError(null);
 			try {
 				const attached = await client.attachAlertSOCCase(alert.id, caseId);
-				navigate(`/cases?case_id=${encodeURIComponent(attached.case_id)}`);
+				await refresh();
+				return attached;
 			} catch (err) {
 				setResolveError(errorMessage(err, 'Case attachment failed.'));
+				throw err;
 			} finally {
 				setCreatingCase(false);
 			}
@@ -1721,40 +1752,44 @@ function ResolveAlertModal({
   onCancel: () => void;
   onActionTaken: () => void;
   creatingCase: boolean;
-  onCreateCase: (alert: Alert) => Promise<void>;
+  onCreateCase: (alert: Alert) => Promise<SOCCase>;
 	availableCases: SOCCase[];
-	onAttachCase: (alert: Alert, caseId: string) => Promise<void>;
+	onAttachCase: (alert: Alert, caseId: string) => Promise<SOCCase>;
   savingWorkflow: boolean;
   onSaveWorkflow: (alert: Alert, payload: { assigned_to?: string; note?: string }) => Promise<void>;
 }) {
   const plan = alert ? alertResolutionPlan(alert) : null;
   const ip = alert ? alertSourceIP(alert) : '';
-  const [disposition, setDisposition] = useState<AlertDispositionValue>('resolved');
+  const alertAssignedTo = contextString(alert?.context ?? {}, 'assigned_to');
+  const [disposition, setDisposition] = useState<AlertDispositionValue>('true_positive');
   const [reason, setReason] = useState('');
   const [suppressUntil, setSuppressUntil] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
   const [analystNote, setAnalystNote] = useState('');
 	const [caseId, setCaseId] = useState('');
 	const [confirmCreateCase, setConfirmCreateCase] = useState(false);
+  const [linkedCase, setLinkedCase] = useState<SOCCase | null>(null);
   const [containmentTaken, setContainmentTaken] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setDisposition(alert?.disposition?.value ?? 'resolved');
+    setDisposition(alert?.disposition?.value ?? 'true_positive');
     setReason(alert?.disposition?.reason ?? '');
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
-    setAssignedTo(contextString(alert?.context ?? {}, 'assigned_to'));
+    setAssignedTo(alertAssignedTo);
     setAnalystNote('');
 	setCaseId('');
 	setConfirmCreateCase(false);
+    setLinkedCase(null);
     setContainmentTaken(false);
-  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until]);
+  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until, alertAssignedTo]);
 
   const selectedDisposition = dispositionOption(disposition);
+  const associatedCase = linkedCase ?? (alert ? availableCases.find((item) => caseContainsAlert(item, alert.id)) : null);
   const reasonMissing = reason.trim().length === 0;
   const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
   const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
-  const evidenceMissing = (disposition === 'resolved' || disposition === 'true_positive') && !containmentTaken;
+  const evidenceMissing = (disposition === 'resolved' || disposition === 'true_positive') && !containmentTaken && !associatedCase;
   const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid || evidenceMissing;
 
   const handleConfirm = () => {
@@ -1956,8 +1991,20 @@ function ResolveAlertModal({
 				  <p className="mt-1 text-xs leading-5 text-text-secondary">This creates a separate investigation case and copies this alert’s rule, correlation, timeline, and contributing-event evidence into it.</p>
 				  <div className="mt-3 grid grid-cols-2 gap-2">
 					<Button type="button" variant="ghost" size="sm" disabled={creatingCase} onClick={() => setConfirmCreateCase(false)}>Cancel</Button>
-					<Button type="button" variant="primary" size="sm" loading={creatingCase} onClick={() => void onCreateCase(alert)}>Confirm creation</Button>
+					<Button type="button" variant="primary" size="sm" loading={creatingCase} onClick={() => {
+						void onCreateCase(alert).then((created) => {
+							setLinkedCase(created);
+							setConfirmCreateCase(false);
+						}).catch(() => undefined);
+					}}>Confirm creation</Button>
 				  </div>
+				</div>
+			  ) : null}
+			  {associatedCase ? (
+				<div className="rounded-lg border border-state-healthy/40 bg-state-healthy/5 p-3 text-sm" role="status">
+				  <p className="font-medium text-foreground">SOC case attached as resolution evidence.</p>
+				  <p className="mt-1 text-xs text-text-secondary">You can keep the true-positive alert active while the investigation continues, or record a resolution with the required evidence reason.</p>
+				  <Link className="mt-2 inline-flex text-xs text-brand-400 hover:underline" to={`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}&fromAlert=${encodeURIComponent(alert.id)}`}>Open SOC case</Link>
 				</div>
 			  ) : null}
 			  {availableCases.length > 0 ? (
@@ -1967,7 +2014,9 @@ function ResolveAlertModal({
 					<option value="">Select an open case</option>
 					{availableCases.map((item) => <option key={item.case_id} value={item.case_id}>{item.summary || item.trigger_event_type} · {item.case_id.slice(0, 8)}</option>)}
 				  </select>
-				  <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" loading={creatingCase} disabled={!caseId} onClick={() => void onAttachCase(alert, caseId)}>Attach alert evidence</Button>
+				  <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" loading={creatingCase} disabled={!caseId} onClick={() => {
+					void onAttachCase(alert, caseId).then((attached) => setLinkedCase(attached)).catch(() => undefined);
+				  }}>Attach alert evidence</Button>
 				</div>
               ) : null}
               <div className="rounded-lg border border-border-subtle bg-surface p-3">
@@ -2038,8 +2087,8 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     steps.push('Open the IP lifecycle and verify the observed paths, country/ASN, blacklist hits, and audit history match this alert.');
     steps.push('Block the IP on affected nodes first; use fleet-wide scope when the same source is active across more than one node or server group.');
     steps.push('Confirm Active Blocks shows the rule applied or queued, then watch for repeated traffic, 4xx/5xx spikes, or outbound transfer after the block.');
-    actions.push({ label: 'Open IP investigation', to: `/investigate/ip/${encodeURIComponent(ip)}?audit=1` });
-    actions.push({ label: 'Open active blocks', to: '/security/network?tab=blocks' });
+    actions.push({ label: 'Open IP investigation', to: alertInvestigationRoute(alert) });
+    actions.push({ label: 'Open active blocks', to: withAlertReturnContext('/security/network?tab=blocks', alert.id) });
   } else {
 	steps.push('Inspect the source event and linked entity before changing alert state.');
 	actions.push({ label: 'Open search & lifecycle', to: alertInvestigationRoute(alert) });
@@ -2093,8 +2142,8 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     facts,
     steps,
     gate: ip
-      ? 'Close only after a block/allow decision, containment result, or false-positive note is visible in audit/remediation history.'
-      : 'Close only after the investigation has an owner decision and the remediation evidence is captured.',
+      ? 'Close only after containment, a linked SOC case, or a documented false-positive decision is recorded with an evidence reason.'
+      : 'Close only after the investigation has an owner decision and containment or linked SOC case evidence is captured.',
     actions: dedupeActions(actions),
     posture,
   };
@@ -2103,12 +2152,17 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
 export function alertInvestigationRoute(alert: Alert): string {
 	const ctx = alert.context ?? {};
 	const ip = alertSourceIP(alert);
-	if (ip) return `/investigate/ip/${encodeURIComponent(ip)}?audit=1`;
+	if (ip) return withAlertReturnContext(`/investigate/ip/${encodeURIComponent(ip)}?audit=1`, alert.id);
 	const host = alert.node_id || contextString(ctx, 'node_id', 'host', 'hostname');
-	if (host) return `/investigate/host/${encodeURIComponent(host)}`;
+	if (host) return withAlertReturnContext(`/investigate/host/${encodeURIComponent(host)}`, alert.id);
 	const user = contextString(ctx, 'user_name', 'username', 'user');
-	if (user) return `/investigate/user/${encodeURIComponent(user)}`;
-	return `/investigate/alert/${encodeURIComponent(alert.id)}`;
+	if (user) return withAlertReturnContext(`/investigate/user/${encodeURIComponent(user)}`, alert.id);
+	return withAlertReturnContext(`/investigate/alert/${encodeURIComponent(alert.id)}`, alert.id);
+}
+
+function withAlertReturnContext(to: string, alertID: string): string {
+	const separator = to.includes('?') ? '&' : '?';
+	return `${to}${separator}fromAlert=${encodeURIComponent(alertID)}`;
 }
 
 export function alertAccessReviewRoute(alert: Alert): string {
@@ -2123,6 +2177,7 @@ export function alertAccessReviewRoute(alert: Alert): string {
 	if (firstSeen) search.set('from', firstSeen);
 	if (lastSeen) search.set('to', lastSeen);
 	search.set('alert_id', alert.id);
+	search.set('fromAlert', alert.id);
 	return `/access?${search.toString()}`;
 }
 
@@ -2151,7 +2206,7 @@ function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
 }
 
 function alertAuditRoute(alert: Alert): string {
-  return `/audit?q=${encodeURIComponent(alert.id)}`;
+  return `/audit?q=${encodeURIComponent(alert.id)}&fromAlert=${encodeURIComponent(alert.id)}`;
 }
 
 export function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {

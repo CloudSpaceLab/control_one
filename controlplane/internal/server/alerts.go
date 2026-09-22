@@ -399,7 +399,7 @@ func (s *Server) handleCreateAlertSOCCase(w http.ResponseWriter, r *http.Request
 		nodeID = alert.NodeID.UUID
 	}
 	row, err := backend.CreateAIInvestigation(r.Context(), storage.CreateAIInvestigationParams{
-		TenantID: alert.TenantID, NodeID: nodeID, TriggerType: "correlation_alert",
+		TenantID: alert.TenantID, NodeID: nodeID, AlertID: uuid.NullUUID{UUID: alert.ID, Valid: true}, TriggerType: "correlation_alert",
 		TriggerEventType: firstNonEmptyString(alertContextString(alert.Context, "event_type", "event_type_filter"), "alert"),
 		TriggerDedupKey:  "alert:" + alert.ID.String(), Severity: alert.Severity,
 		Summary: firstNonEmptyString(alert.Title, alert.Summary.String), Evidence: evidence,

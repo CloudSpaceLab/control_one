@@ -211,8 +211,8 @@ func (s *Store) AttachAlertToAIInvestigation(ctx context.Context, id, tenantID u
 	result := s.db.QueryRowContext(ctx, `
 		UPDATE ai_investigations SET evidence=$1::jsonb, updated_at=NOW()
 		 WHERE id=$2 AND tenant_id=$3
-		 RETURNING id, tenant_id, node_id, trigger_type, trigger_event_type,
-		           trigger_dedup_key, severity, summary, evidence, status, created_at, updated_at
+		 RETURNING id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
+		           trigger_dedup_key, severity, summary, evidence, status, created_by, assignee_id, created_at, updated_at
 	`, encoded, id, tenantID)
 	return scanAIInvestigation(result)
 }
