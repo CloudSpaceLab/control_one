@@ -130,9 +130,9 @@ export function Cases(): JSX.Element {
       }
       setCases(response.data);
       setSelectedId((current) => (
-        current && response.data.some((row) => row.case_id === current)
+        current && (current === requestedCaseId || response.data.some((row) => row.case_id === current))
           ? current
-          : (response.data.some((row) => row.case_id === requestedCaseId) ? requestedCaseId : response.data[0]?.case_id) ?? null
+          : requestedCaseId ?? response.data[0]?.case_id ?? null
       ));
     } catch (err) {
       if (seq !== requestSeq.current) return;
@@ -146,7 +146,7 @@ export function Cases(): JSX.Element {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [api, currentTenantId, requestedCaseId]);
+  }, [api, currentTenantId, requestedCaseId, page, statusFilter, severityFilter, debouncedSearch, sorting]);
 
   useEffect(() => {
     void refresh();

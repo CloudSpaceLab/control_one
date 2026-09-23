@@ -2004,7 +2004,7 @@ function ResolveAlertModal({
 				<div className="rounded-lg border border-state-healthy/40 bg-state-healthy/5 p-3 text-sm" role="status">
 				  <p className="font-medium text-foreground">SOC case attached as resolution evidence.</p>
 				  <p className="mt-1 text-xs text-text-secondary">You can keep the true-positive alert active while the investigation continues, or record a resolution with the required evidence reason.</p>
-				  <Link className="mt-2 inline-flex text-xs text-brand-400 hover:underline" to={`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}&fromAlert=${encodeURIComponent(alert.id)}`}>Open SOC case</Link>
+				  <Link className="mt-2 inline-flex text-xs text-brand-400 hover:underline" to={withAlertReturnContext(`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}`, alert.id)}>Open SOC case</Link>
 				</div>
 			  ) : null}
 			  {availableCases.length > 0 ? (
@@ -2144,7 +2144,7 @@ function alertResolutionPlan(alert: Alert): AlertResolutionPlan {
     gate: ip
       ? 'Close only after containment, a linked SOC case, or a documented false-positive decision is recorded with an evidence reason.'
       : 'Close only after the investigation has an owner decision and containment or linked SOC case evidence is captured.',
-    actions: dedupeActions(actions),
+    actions: dedupeActions(actions.map((action) => ({ ...action, to: withAlertReturnContext(action.to, alert.id) }))),
     posture,
   };
 }
@@ -2160,9 +2160,11 @@ export function alertInvestigationRoute(alert: Alert): string {
 	return withAlertReturnContext(`/investigate/alert/${encodeURIComponent(alert.id)}`, alert.id);
 }
 
-function withAlertReturnContext(to: string, alertID: string): string {
-	const separator = to.includes('?') ? '&' : '?';
-	return `${to}${separator}fromAlert=${encodeURIComponent(alertID)}`;
+export function withAlertReturnContext(to: string, alertID: string): string {
+  const url = new URL(to, 'http://local');
+  url.searchParams.delete('fromAlert');
+  const query = url.searchParams.toString();
+  return `${url.pathname}?${query ? `${query}&` : ''}fromAlert=${encodeURIComponent(alertID)}${url.hash}`;
 }
 
 export function alertAccessReviewRoute(alert: Alert): string {
@@ -2177,8 +2179,7 @@ export function alertAccessReviewRoute(alert: Alert): string {
 	if (firstSeen) search.set('from', firstSeen);
 	if (lastSeen) search.set('to', lastSeen);
 	search.set('alert_id', alert.id);
-	search.set('fromAlert', alert.id);
-	return `/access?${search.toString()}`;
+	return withAlertReturnContext(`/access?${search.toString()}`, alert.id);
 }
 
 function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
@@ -2206,7 +2207,7 @@ function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
 }
 
 function alertAuditRoute(alert: Alert): string {
-  return `/audit?q=${encodeURIComponent(alert.id)}&fromAlert=${encodeURIComponent(alert.id)}`;
+  return withAlertReturnContext(`/audit?q=${encodeURIComponent(alert.id)}`, alert.id);
 }
 
 export function alertResolutionFacts(alert: Alert, category: string, scope: string, ip: string): AlertResolutionFact[] {

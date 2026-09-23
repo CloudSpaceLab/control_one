@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Alert, CorrelationRule } from '../lib/api';
-import { Alerts, alertAccessReviewRoute, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts } from './Alerts';
+import { Alerts, alertAccessReviewRoute, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts, withAlertReturnContext } from './Alerts';
 
 const mocks = vi.hoisted(() => {
   const listAlerts = vi.fn();
@@ -133,6 +133,44 @@ describe('Alerts page failure states', () => {
 	mocks.attachAlertSOCCase.mockResolvedValue({ case_id: 'case-existing' });
 	mocks.listSOCCases.mockResolvedValue({ data: [], pagination: { total: 0, limit: 50, offset: 0 } });
     mocks.updateAlertWorkflow.mockResolvedValue(alertRow);
+  });
+
+  it.each([
+    ['exfiltration', ['/security/network?tab=ip-behavior', '/control-room/exposure']],
+    ['credential', ['/access']],
+    ['exploit', ['/security/webservers']],
+    ['scanner', ['/security/webservers']],
+    ['malware', ['/nodes', '/audit']],
+    ['exposure', ['/control-room/exposure', '/security/network?tab=firewall']],
+    ['secret', ['/data-security', '/secrets']],
+    ['privilege', ['/access', '/sessions']],
+    ['patch', ['/infrastructure/patch']],
+    ['compliance', ['/compliance']],
+    ['generic', ['/control-room', '/audit']],
+  ])('preserves return context on every %s modal destination', async (category, destinations) => {
+    const id = 'alert /?&=+#é';
+    const row = { ...alertRow, id, title: category, summary: '', context: { src_ip: '203.0.113.9' } };
+    mocks.getAlert.mockResolvedValue(row);
+    mocks.listSOCCases.mockResolvedValue({ data: [{ case_id: 'case /&1', status: 'open', evidence: { alert_id: id } }] });
+    renderAlerts(`/alerts?alert_id=${encodeURIComponent(id)}`);
+    const dialog = await screen.findByRole('dialog', { name: /resolve alert with evidence/i });
+    await within(dialog).findByRole('link', { name: 'Open SOC case' });
+    const urls = within(dialog).getAllByRole('link').map((link) => new URL(link.getAttribute('href')!, 'http://local'));
+    for (const url of urls) {
+      expect(url.searchParams.getAll('fromAlert')).toEqual([id]);
+      expect(url.search).toContain(`fromAlert=${encodeURIComponent(id)}`);
+    }
+    for (const destination of [...destinations, '/security/network?tab=blocks', '/investigate/ip/203.0.113.9?audit=1', '/cases?case_id=case%20%2F%261']) {
+      const expected = new URL(destination, 'http://local');
+      expect(urls.some((url) => url.pathname === expected.pathname && [...expected.searchParams].every(([key, value]) => url.searchParams.get(key) === value))).toBe(true);
+    }
+    expect(urls.some((url) => url.pathname === '/audit' && url.searchParams.get('q') === id)).toBe(true);
+    if (category === 'credential' || category === 'privilege') {
+      const access = urls.find((url) => url.pathname === '/access')!;
+      expect(access.searchParams.get('alert_id')).toBe(id);
+      expect(access.searchParams.get('from')).toBe(row.opened_at);
+      expect(access.searchParams.get('to')).toBe(row.opened_at);
+    }
   });
 
   it('does not show all-clear or empty inbox copy when alerts fail to load', async () => {
@@ -366,6 +404,17 @@ describe('alertResolutionFacts', () => {
 });
 
 describe('contextual alert review routes', () => {
+  it.each(['/nodes', '/security/network?tab=blocks', '/audit?q=a%26b&tag=one&tag=two&fromAlert=old&fromAlert=older#events'])('adds return context idempotently to %s', (destination) => {
+    const id = 'alert /?&=+#é';
+    const result = withAlertReturnContext(withAlertReturnContext(destination, id), id);
+    const url = new URL(result, 'http://local');
+    const original = new URL(destination, 'http://local');
+    expect(url.searchParams.getAll('fromAlert')).toEqual([id]);
+    expect(result).toContain(`fromAlert=${encodeURIComponent(id)}`);
+    original.searchParams.delete('fromAlert');
+    url.searchParams.delete('fromAlert');
+    expect(url.href).toBe(original.href);
+  });
 	it('opens the exact IP lifecycle and carries host, user, and time into access review', () => {
 		const alert: Alert = {
 			id: 'alert-1', tenant_id: 'tenant-1', node_id: 'node-1', source: 'correlation', severity: 'high',
