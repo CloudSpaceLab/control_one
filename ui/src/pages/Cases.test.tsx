@@ -146,6 +146,67 @@ describe('Cases', () => {
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(mockApi);
   });
 
+  it('fetches the next page from the server', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow], pagination: { total: 25 } });
+    render(<MemoryRouter><Cases /></MemoryRouter>);
+    const pageLabel = await screen.findByText('1 / 3');
+    await user.click(pageLabel.nextElementSibling as HTMLElement);
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 12, offset: 12 })));
+  });
+
+  it.each([
+    ['status', 'closed'],
+    ['severity', 'high'],
+    ['search', 'database'],
+    ['sortBy', 'title'],
+  ])('refetches current %s and resets the page', async (field, value) => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow], pagination: { total: 25 } });
+    render(<MemoryRouter><Cases /></MemoryRouter>);
+    await user.click((await screen.findByText('1 / 3')).nextElementSibling as HTMLElement);
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 12 })));
+    if (field === 'search') {
+      await user.type(screen.getByPlaceholderText('Search title, summary, or trigger...'), value);
+    } else if (field === 'sortBy') {
+      await user.click(screen.getByRole('columnheader', { name: 'Title' }));
+    } else {
+      await user.selectOptions(screen.getByRole('option', { name: field === 'status' ? 'All statuses' : 'All severities' }).parentElement as HTMLSelectElement, value);
+    }
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({
+      offset: 0, [field]: value, ...(field === 'sortBy' ? { sortOrder: 'asc' } : {}),
+    })));
+    if (field === 'sortBy') {
+      await user.click(screen.getByRole('columnheader', { name: 'Title' }));
+      await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'title', sortOrder: 'desc' })));
+    }
+  });
+
+  it('selects the requested case instead of the first row and preserves it on refetch', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow, secondCase] });
+    mockApi.getSOCCase.mockImplementation(async (id: string) => id === secondCase.case_id ? secondCase : caseRow);
+    render(<MemoryRouter initialEntries={[`/cases?case_id=${secondCase.case_id}&fromAlert=alert-1`]}><Cases /></MemoryRouter>);
+    await waitFor(() => expect(mockApi.getSOCCase).toHaveBeenLastCalledWith(secondCase.case_id, 'tenant-1'));
+    await user.selectOptions(screen.getByRole('option', { name: 'All statuses' }).parentElement as HTMLSelectElement, 'investigating');
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'investigating' })));
+    expect(mockApi.getSOCCase).not.toHaveBeenCalledWith(caseRow.case_id, 'tenant-1');
+  });
+
+  it('loads a deep-linked case outside the current page and retains it when filtering', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow] });
+    mockApi.getSOCCase.mockResolvedValue(secondCase);
+    render(<MemoryRouter initialEntries={[`/cases?case_id=${secondCase.case_id}`]}><Cases /></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: secondCase.title })).toBeInTheDocument();
+    expect(mockApi.getSOCCase).toHaveBeenCalledWith(secondCase.case_id, 'tenant-1');
+    mockApi.listSOCCases.mockResolvedValue({ data: [] });
+    await user.selectOptions(screen.getByRole('option', { name: 'All statuses' }).parentElement as HTMLSelectElement, 'closed');
+    await screen.findByText('No SOC cases yet');
+    expect(screen.getByRole('heading', { name: secondCase.title })).toBeInTheDocument();
+    expect(mockApi.getSOCCase).not.toHaveBeenCalledWith(caseRow.case_id, 'tenant-1');
+  });
+
   it('renders cases as evidence-backed export packets', async () => {
     const user = userEvent.setup();
     render(

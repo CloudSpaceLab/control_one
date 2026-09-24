@@ -297,8 +297,8 @@ export function Users(): JSX.Element {
                 </Button>
               </>
             )}
-            <Button variant="secondary" size="md" onClick={handleRefresh}>
-              <RefreshCw className="h-4 w-4" /> Refresh
+            <Button variant="secondary" size="md" onClick={handleRefresh} loading={usersLoading || rolesLoading}>
+              <RefreshCw className={`h-4 w-4 ${usersLoading || rolesLoading ? 'animate-spin' : ''}`} /> {usersLoading || rolesLoading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </>
         }

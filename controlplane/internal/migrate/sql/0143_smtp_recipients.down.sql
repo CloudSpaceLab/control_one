@@ -1,1 +1,1 @@
-ALTER TABLE smtp_settings DROP COLUMN recipients;
+ALTER TABLE smtp_settings DROP COLUMN IF EXISTS recipients;

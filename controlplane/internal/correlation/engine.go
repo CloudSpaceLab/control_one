@@ -28,6 +28,14 @@ type AlertCreator interface {
 	CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error)
 }
 
+type alertOccurrenceUpdater interface {
+	UpdateOpenAlertOccurrence(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error)
+}
+
+type responseHandler interface {
+	HandleCorrelationResponse(context.Context, storage.CorrelationRule, *storage.Alert, eventbus.Event) error
+}
+
 type windowKey struct {
 	ruleID    uuid.UUID
 	dimension string
@@ -37,6 +45,7 @@ type windowHit struct {
 	timestamp      time.Time
 	distinctValue  string
 	aggregateValue float64
+	evidence       map[string]any
 }
 
 // Engine consumes events and opens alerts when correlation rules fire.
@@ -161,7 +170,10 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 				continue
 			}
 		}
-		hits := append(e.windows[key], windowHit{timestamp: ev.Timestamp, distinctValue: distinctValue, aggregateValue: aggregateValue})
+		hits := append(e.windows[key], windowHit{
+			timestamp: ev.Timestamp, distinctValue: distinctValue, aggregateValue: aggregateValue,
+			evidence: correlationEvidenceEvent(ev),
+		})
 		trimmed := hits[:0]
 		for _, hit := range hits {
 			if !hit.timestamp.Before(cutoff) {
@@ -178,6 +190,10 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 			hitCount = len(unique)
 		}
 		aggregateTotal := float64(0)
+		evidence := make([]any, 0, len(trimmed))
+		for _, hit := range trimmed {
+			evidence = append(evidence, hit.evidence)
+		}
 		fire := hitCount >= r.Threshold
 		if r.AggregateField != "" {
 			for _, hit := range trimmed {
@@ -185,26 +201,34 @@ func (e *Engine) handle(ctx context.Context, ev eventbus.Event) {
 			}
 			fire = aggregateTotal >= float64(r.AggregateThreshold)
 		}
+		suppressed := false
 		if fire && r.SuppressionSeconds > 0 {
 			last := e.lastFired[key]
-			fire = last.IsZero() || ev.Timestamp.Sub(last) >= time.Duration(r.SuppressionSeconds)*time.Second
+			suppressed = !last.IsZero() && ev.Timestamp.Sub(last) < time.Duration(r.SuppressionSeconds)*time.Second
+			fire = !suppressed
 		}
 		if fire {
 			e.windows[key] = nil
 			e.sequenceWindows[key] = nil
 			e.lastFired[key] = ev.Timestamp
+		} else if suppressed {
+			e.windows[key] = nil
+			e.sequenceWindows[key] = nil
 		}
 		e.mu.Unlock()
 
 		if fire {
-			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal)
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, evidence, false)
+		} else if suppressed {
+			e.openAlert(ctx, r, ev, dim, hitCount, aggregateTotal, evidence, true)
 		}
 	}
 }
 
-func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64) {
+func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev eventbus.Event, dim string, hits int, aggregateValue float64, evidence []any, updateOnly bool) {
 	title := r.Name
 	summary := "correlation rule fired"
+	dedup := r.ID.String() + "/" + dim
 	ctxPayload := map[string]any{
 		"rule_id":             r.ID.String(),
 		"dimension":           r.Dimension,
@@ -222,6 +246,15 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		"sequence_conditions": r.SequenceConditions,
 		"aggregate_field":     r.AggregateField,
 		"aggregate_threshold": r.AggregateThreshold,
+		"evidence_links":      map[string]any{"alert_inbox": "/console/alerts", "investigation": "/console/investigate"},
+		"correlation_id":      dedup,
+		"matched_event_count": hits,
+		"matched_conditions":  r.Conditions,
+		"contributing_events": evidence,
+		"notification_state":  "pending",
+	}
+	if r.SuppressionSeconds > 0 {
+		ctxPayload["suppression_expires_at"] = ev.Timestamp.Add(time.Duration(r.SuppressionSeconds) * time.Second).UTC().Format(time.RFC3339Nano)
 	}
 	if r.AggregateField != "" {
 		ctxPayload["aggregate_value"] = aggregateValue
@@ -229,14 +262,13 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 	for key, value := range eventContext(ev) {
 		ctxPayload[key] = value
 	}
-	dedup := r.ID.String() + "/" + dim
 	var nodeArg *uuid.UUID
 	if (len(r.GroupBy) == 1 && r.GroupBy[0] == "node_id") || (len(r.GroupBy) == 0 && r.Dimension == "node_id") {
 		if parsed, err := uuid.Parse(dim); err == nil {
 			nodeArg = &parsed
 		}
 	}
-	_, err := e.store.CreateAlert(ctx, storage.CreateAlertParams{
+	params := storage.CreateAlertParams{
 		TenantID: ev.TenantID,
 		NodeID:   nodeArg,
 		RuleID:   &r.ID,
@@ -246,12 +278,30 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 		Summary:  summary,
 		DedupKey: dedup,
 		Context:  ctxPayload,
-	})
+	}
+	var alert *storage.Alert
+	var err error
+	if updateOnly {
+		updater, ok := e.store.(alertOccurrenceUpdater)
+		if !ok {
+			return
+		}
+		alert, err = updater.UpdateOpenAlertOccurrence(ctx, params)
+	} else {
+		alert, err = e.store.CreateAlert(ctx, params)
+	}
 	if err != nil {
 		if e.log != nil {
 			e.log.Warn("correlation create alert", zap.Error(err))
 		}
 		return
+	}
+	if !updateOnly && alert != nil && r.ResponseMode != "" && r.ResponseMode != "alert_only" {
+		if handler, ok := e.store.(responseHandler); ok {
+			if responseErr := handler.HandleCorrelationResponse(ctx, r, alert, ev); responseErr != nil && e.log != nil {
+				e.log.Warn("correlation response action", zap.String("rule_id", r.ID.String()), zap.String("alert_id", alert.ID.String()), zap.Error(responseErr))
+			}
+		}
 	}
 	if e.bus != nil {
 		payload, mErr := json.Marshal(ctxPayload)
@@ -268,6 +318,21 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			Payload:  payload,
 		})
 	}
+}
+
+func correlationEvidenceEvent(ev eventbus.Event) map[string]any {
+	evidence := map[string]any{"timestamp": ev.Timestamp.UTC().Format(time.RFC3339Nano), "topic": ev.Topic}
+	payload := map[string]any{}
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		evidence["payload_error"] = err.Error()
+		return evidence
+	}
+	for _, field := range []string{"event_type", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "user_name", "node_id", "auth_result", "source", "path", "status_code"} {
+		if value, ok := payload[field]; ok {
+			evidence[field] = value
+		}
+	}
+	return evidence
 }
 
 func trimTimes(times []time.Time, cutoff time.Time) []time.Time {

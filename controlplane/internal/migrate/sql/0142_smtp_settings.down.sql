@@ -1,1 +1,1 @@
-DROP TABLE smtp_settings;
+DROP TABLE IF EXISTS smtp_settings;

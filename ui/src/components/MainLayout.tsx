@@ -12,7 +12,7 @@ function ReturnToAlertChip(): JSX.Element | null {
 
   return (
     <Link
-      to="/alerts"
+      to={`/alerts?alert_id=${encodeURIComponent(fromAlert)}`}
       className="fixed bottom-4 right-4 z-50 inline-flex items-center gap-2 rounded-md border border-border-strong bg-surface px-3 py-2 text-sm font-medium text-foreground shadow-lg transition hover:bg-surface-2"
     >
       <ArrowLeft className="h-4 w-4" />

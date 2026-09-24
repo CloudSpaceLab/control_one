@@ -37,7 +37,7 @@ import type {
 const ThreatFeeds = lazy(() => import('./ThreatFeeds').then((m) => ({ default: m.ThreatFeeds })));
 const Connections = lazy(() => import('./Connections').then((m) => ({ default: m.Connections })));
 
-const VALID_TABS = ['threats', 'connections', 'ip-behavior', 'blocks', 'firewall'] as const;
+const VALID_TABS = ['threats', 'connections', 'ip-behavior', 'approvals', 'blocks', 'firewall'] as const;
 type TabKey = (typeof VALID_TABS)[number];
 
 function isValidTab(s: string | null): s is TabKey {
@@ -46,8 +46,12 @@ function isValidTab(s: string | null): s is TabKey {
 
 export function NetworkSecurity(): JSX.Element {
   const [params, setParams] = useSearchParams();
-  const initial = isValidTab(params.get('tab')) ? (params.get('tab') as TabKey) : 'threats';
-  const [tab, setTab] = useState<TabKey>(initial);
+  const requestedTab = isValidTab(params.get('tab')) ? (params.get('tab') as TabKey) : 'threats';
+  const [tab, setTab] = useState<TabKey>(requestedTab);
+
+  useEffect(() => {
+    setTab(requestedTab);
+  }, [requestedTab]);
 
   const onTabChange = (next: string) => {
     if (!isValidTab(next)) return;
@@ -68,6 +72,7 @@ export function NetworkSecurity(): JSX.Element {
           <TabsTrigger className="w-full sm:w-auto" value="threats">Threat feeds</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="ip-behavior">IP behavior</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="approvals">Approval queue</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="blocks">Active blocks</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="firewall">Firewall</TabsTrigger>
         </TabsList>
@@ -92,6 +97,10 @@ export function NetworkSecurity(): JSX.Element {
           <ActiveBlocksPanel />
         </TabsContent>
 
+        <TabsContent value="approvals" className="pt-4">
+          <BlockApprovalQueue />
+        </TabsContent>
+
         <TabsContent value="firewall" className="pt-4">
           <FirewallManagementPanel />
         </TabsContent>
@@ -105,6 +114,13 @@ export function NetworkSecurity(): JSX.Element {
 type TimeWindowKey = '1h' | '6h' | '24h' | '7d';
 type SeverityFilter = 'all' | 'watch' | 'suspicious' | 'high' | 'critical';
 type EnforcementTarget = 'firewall' | 'webserver' | 'combined';
+type BlockTTL = 900 | 3600 | 86400;
+
+const BLOCK_TTL_LABELS: Record<BlockTTL, string> = {
+  900: '15 minutes',
+  3600: '1 hour',
+  86400: '24 hours',
+};
 
 const WINDOW_HOURS: Record<TimeWindowKey, number> = {
   '1h': 1,
@@ -161,6 +177,7 @@ function IPBehaviorPanel(): JSX.Element {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [proposalState, setProposalState] = useState<string | null>(null);
   const [enforcement, setEnforcement] = useState<EnforcementTarget>('firewall');
+  const [blockTTL, setBlockTTL] = useState<BlockTTL>(3600);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [confirming, setConfirming] = useState(false);
 
@@ -286,16 +303,28 @@ function IPBehaviorPanel(): JSX.Element {
 
   const queueBlockProposal = useCallback((target: 'ip' | 'cidr' | 'vhost') => {
     if (!currentTenantId || !profile?.source_ip) return;
-    const cidr = target === 'cidr' ? ipv4Cidr24(profile.source_ip) : profile.source_ip;
+    const cidr = target === 'cidr' ? ipv4Cidr24(profile.source_ip) : exactIPCIDR(profile.source_ip);
     if (!cidr) {
-      setProposalState('CIDR proposal requires an IPv4 source address');
+      setProposalState('Block proposal requires a valid IP address');
       return;
     }
     const scopedToVhost = target === 'vhost';
+    const scope = scopedToVhost ? 'app' : 'tenant';
+    const existing = profileBlocks.find((proposal) =>
+      displayIPCIDR(proposal.ip_cidr) === cidr
+      && proposal.enforcement === enforcement
+      && proposal.scope === scope
+      && proposal.vhost === (scopedToVhost ? filters.vhost : '')
+      && ['proposed', 'approved', 'canary', 'dispatching', 'active'].includes(proposal.status),
+    );
+    if (existing) {
+      setProposalState(`${cidr} already has an open ${existing.status} ${enforcement} proposal.`);
+      return;
+    }
     const label = target === 'cidr' ? 'Block /24 CIDR' : scopedToVhost ? 'Limit to vhost' : 'Block IP';
     setConfirm({
       title: label,
-      body: `${cidr} will be proposed for ${enforcement} enforcement with a 1 hour TTL.`,
+      body: `${cidr} will be proposed for ${enforcement} enforcement with a ${BLOCK_TTL_LABELS[blockTTL]} TTL.`,
       confirmLabel: 'Create proposal',
       variant: 'danger',
       run: async () => {
@@ -306,8 +335,8 @@ function IPBehaviorPanel(): JSX.Element {
           ip_cidr: cidr,
           reason,
           score: profileScore || undefined,
-          ttl_seconds: 3600,
-          scope: scopedToVhost ? 'app' : 'tenant',
+          ttl_seconds: blockTTL,
+          scope,
           target_type: 'tenant',
           server_group: filters.serverGroup,
           app: filters.app,
@@ -318,7 +347,7 @@ function IPBehaviorPanel(): JSX.Element {
         await refreshProfileBlocks(profile.source_ip);
       },
     });
-  }, [client, currentTenantId, enforcement, filters, profile, profileBaseline, profileScore, refreshProfileBlocks, selectedCountry]);
+  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileBaseline, profileBlocks, profileScore, refreshProfileBlocks, selectedCountry]);
 
   const queueASNBlockProposal = useCallback(() => {
     if (!currentTenantId || !profile?.source_ip) return;
@@ -341,7 +370,7 @@ function IPBehaviorPanel(): JSX.Element {
           limit: 25,
           reason: asnBlockReason(profile, selectedCountry, profileInsight?.description),
           score: profileScore || undefined,
-          ttl_seconds: 3600,
+          ttl_seconds: blockTTL,
           scope: filters.vhost ? 'app' : 'tenant',
           target_type: 'tenant',
           server_group: filters.serverGroup,
@@ -355,26 +384,7 @@ function IPBehaviorPanel(): JSX.Element {
         await refreshProfileBlocks(profile.source_ip);
       },
     });
-  }, [client, currentTenantId, enforcement, filters, profile, profileInsight?.description, profileScore, refreshProfileBlocks, selectedCountry, since]);
-
-  const queueProposalLifecycle = useCallback((proposal: IPBlockProposal, action: 'approve' | 'promote' | 'reject' | 'rollback') => {
-    const title = action === 'approve' ? 'Approve block proposal' : action === 'promote' ? 'Promote canary block' : action === 'rollback' ? 'Rollback block' : 'Reject block proposal';
-    setConfirm({
-      title,
-      body: `${proposal.ip_cidr} is currently ${proposal.status}.`,
-      confirmLabel: action === 'reject' ? 'Reject' : action === 'rollback' ? 'Rollback' : 'Confirm',
-      variant: action === 'rollback' || action === 'reject' ? 'danger' : 'default',
-      run: async () => {
-        setProposalState(`${title}...`);
-        if (action === 'approve') await client.approveBlockProposal(proposal.id);
-        if (action === 'promote') await client.promoteBlockProposal(proposal.id);
-        if (action === 'reject') await client.rejectBlockProposal(proposal.id, 'Rejected from IP behavior profile');
-        if (action === 'rollback') await client.rollbackBlockProposal(proposal.id, 'Rollback requested from IP behavior profile');
-        setProposalState('Enforcement workflow updated');
-        if (profile?.source_ip) await refreshProfileBlocks(profile.source_ip);
-      },
-    });
-  }, [client, profile?.source_ip, refreshProfileBlocks]);
+  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileInsight?.description, profileScore, refreshProfileBlocks, selectedCountry, since]);
 
   const runConfirmed = useCallback(async () => {
     if (!confirm) return;
@@ -502,9 +512,9 @@ function IPBehaviorPanel(): JSX.Element {
               : 'No web.request rollups in this window'}
           </span>
         </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -750,6 +760,16 @@ function IPBehaviorPanel(): JSX.Element {
                     <option value="webserver">Webserver</option>
                     <option value="combined">Firewall + webserver</option>
                   </SelectField>
+                  <SelectField
+                    id="ip-behavior-block-ttl"
+                    label="Block duration"
+                    value={String(blockTTL)}
+                    onChange={(e) => setBlockTTL(Number(e.target.value) as BlockTTL)}
+                  >
+                    {Object.entries(BLOCK_TTL_LABELS).map(([seconds, label]) => (
+                      <option key={seconds} value={seconds}>{label}</option>
+                    ))}
+                  </SelectField>
                   <Input value={filters.vhost} onChange={(e) => setFilters({ ...filters, vhost: e.target.value })} placeholder="Vhost scope" />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -808,17 +828,16 @@ function IPBehaviorPanel(): JSX.Element {
                 <tbody>
                   {profileBlocks.map((proposal) => (
                     <tr key={proposal.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-mono text-xs">{proposal.ip_cidr}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{displayIPCIDR(proposal.ip_cidr)}</td>
                       <td className="px-3 py-2">{proposal.enforcement}</td>
                       <td className="px-3 py-2"><StatusTag tone={blockStatusTone(proposal.status)}>{proposal.status}</StatusTag></td>
                       <td className="px-3 py-2 text-text-secondary">{compactList([proposal.server_group, proposal.app, proposal.vhost]) || proposal.scope}</td>
                       <td className="px-3 py-2 text-text-secondary">{proposal.expires_at ? formatDateTime(proposal.expires_at) : 'manual'}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-2">
-                          {proposal.status === 'proposed' && <Button variant="outline" size="sm" onClick={() => queueProposalLifecycle(proposal, 'approve')}>Approve</Button>}
-                          {proposal.status === 'proposed' && <Button variant="ghost" size="sm" onClick={() => queueProposalLifecycle(proposal, 'reject')}>Reject</Button>}
-                          {proposal.status === 'canary' && <Button variant="outline" size="sm" onClick={() => queueProposalLifecycle(proposal, 'promote')}>Promote</Button>}
-                          {['canary', 'dispatching', 'active', 'failed'].includes(proposal.status) && <Button variant="ghost" size="sm" onClick={() => queueProposalLifecycle(proposal, 'rollback')}>Rollback</Button>}
+                          {proposal.status === 'proposed' && <Button variant="outline" size="sm" onClick={() => navigate(`/security/network?tab=approvals&proposal_id=${encodeURIComponent(proposal.id)}`)}>Review proposal</Button>}
+                          {proposal.status === 'active' && <Button variant="outline" size="sm" onClick={() => navigate(`/security/network?tab=blocks&proposal_id=${encodeURIComponent(proposal.id)}`)}>Review active block</Button>}
+                          {['expired', 'rolled_back', 'rejected'].includes(proposal.status) && <Button variant="ghost" size="sm" onClick={() => navigate(`/audit?q=${encodeURIComponent(proposal.id)}`)}>Review audit trail</Button>}
                         </div>
                       </td>
                     </tr>
@@ -1080,6 +1099,10 @@ function exactIPCIDR(ip: string): string {
   return ip.includes(':') ? `${ip}/128` : `${ip}/32`;
 }
 
+function displayIPCIDR(ipOrCIDR: string): string {
+  return ipOrCIDR.includes('/') ? ipOrCIDR : exactIPCIDR(ipOrCIDR);
+}
+
 function scopedBlockReason(
   profile: IPBehaviorIPProfile,
   country: IPBehaviorCountrySummary | null,
@@ -1125,6 +1148,120 @@ function formatDateTime(value?: string): string {
   return date.toLocaleString();
 }
 
+type ApprovalDecision = { proposal: IPBlockProposal; action: 'approve' | 'reject' };
+
+function correlationProposalEvidence(reason: string): { rule?: string; alertId?: string } {
+  if (!reason.startsWith('Correlation response:')) return {};
+  const values: Record<string, string> = {};
+  for (const part of reason.replace(/^Correlation response:\s*/, '').split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key && rest.length > 0) values[key] = rest.join('=').trim();
+  }
+  return { rule: values.rule, alertId: values.alert_id };
+}
+
+function BlockApprovalQueue(): JSX.Element {
+  const client = useApiClient();
+  const { currentTenantId } = useTenant();
+  const [params] = useSearchParams();
+  const focusedProposalID = params.get('proposal_id');
+  const [proposals, setProposals] = useState<IPBlockProposal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [decision, setDecision] = useState<ApprovalDecision | null>(null);
+  const [decisionReason, setDecisionReason] = useState('');
+  const [deciding, setDeciding] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!currentTenantId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await client.listBlockProposals({ tenantId: currentTenantId, status: 'proposed', limit: 100 });
+      setProposals(response.data ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Approval queue failed to load');
+    } finally {
+      setLoading(false);
+    }
+  }, [client, currentTenantId]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const submitDecision = useCallback(async () => {
+    const reason = decisionReason.trim();
+    if (!decision || !reason) return;
+    setDeciding(true);
+    setError(null);
+    try {
+      const updated = decision.action === 'approve'
+        ? await client.approveBlockProposal(decision.proposal.id, reason)
+        : await client.rejectBlockProposal(decision.proposal.id, reason);
+      setResult(`${decision.proposal.ip_cidr} ${decision.action === 'approve' ? 'approved' : 'rejected'} (${updated.status}).`);
+      setDecision(null);
+      setDecisionReason('');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Decision failed');
+    } finally {
+      setDeciding(false);
+    }
+  }, [client, decision, decisionReason, refresh]);
+
+  if (!currentTenantId) return <EmptyState title="Select a tenant" description="Choose a tenant to review pending response proposals." />;
+
+  return (
+    <div className="space-y-4">
+      <Panel eyebrow="GOVERNED RESPONSE" title="Approval queue" toneAccent={proposals.length > 0 ? 'warning' : 'healthy'}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-text-secondary">Review alert evidence and safety scope before allowing a proposed block to reach any node.</p>
+	          <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
+	            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        </div>
+      </Panel>
+      {result && <div className="rounded border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">{result}</div>}
+      {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
+      {focusedProposalID && !loading && !proposals.some((proposal) => proposal.id === focusedProposalID) && (
+        <div className="rounded border border-border bg-surface-2 p-3 text-sm text-text-secondary">
+          This proposal is no longer awaiting approval. <Link className="text-brand-400 hover:underline" to={`/audit?q=${encodeURIComponent(focusedProposalID)}`}>Review its audit trail</Link>.
+        </div>
+      )}
+      {!loading && proposals.length === 0 ? (
+        <EmptyState title="No proposals awaiting approval" description="Correlation and manually created proposals appear here before enforcement." />
+      ) : (
+        <div className="overflow-x-auto rounded border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
+              <tr><th className="px-3 py-2">Target</th><th className="px-3 py-2">Evidence</th><th className="px-3 py-2">Scope</th><th className="px-3 py-2">Expires</th><th className="px-3 py-2">Safety</th><th className="px-3 py-2">Decision</th></tr>
+            </thead>
+            <tbody>
+              {[...proposals].sort((a, b) => Number(b.id === focusedProposalID) - Number(a.id === focusedProposalID)).map((proposal) => {
+                const evidence = correlationProposalEvidence(proposal.reason);
+                const focused = proposal.id === focusedProposalID;
+                return (
+                  <tr key={proposal.id} className={`border-t border-border align-top ${focused ? 'bg-brand-500/10' : ''}`}>
+                    <td className="px-3 py-3"><div className="font-mono text-xs">{displayIPCIDR(proposal.ip_cidr)}</div><StatusTag tone="warning">{proposal.status}</StatusTag>{focused && <div className="mt-1 text-xs text-brand-400">Selected from IP behavior</div>}</td>
+                    <td className="max-w-md px-3 py-3"><div className="font-medium">{evidence.rule ?? 'Operator-created block proposal'}</div><div className="mt-1 text-xs text-text-secondary">{proposal.reason}</div>{evidence.alertId && <Link className="mt-2 inline-block text-xs text-brand-400 hover:underline" to={`/investigate/alert/${evidence.alertId}`}>View related alert evidence</Link>}</td>
+                    <td className="px-3 py-3 text-text-secondary"><div>{proposal.target_type}{proposal.target_id ? ` · ${proposal.target_id.slice(0, 8)}` : ''}</div><div>{proposal.enforcement}</div></td>
+                    <td className="px-3 py-3 text-text-secondary">{formatDateTime(proposal.expires_at)}</td>
+                    <td className="px-3 py-3"><StatusTag tone={proposal.protected_override ? 'warning' : 'healthy'}>{proposal.protected_override ? 'protected override' : 'checks run on approval'}</StatusTag></td>
+                    <td className="px-3 py-3"><div className="flex gap-2"><Button size="sm" onClick={() => { setDecision({ proposal, action: 'approve' }); setDecisionReason(''); }}>Approve</Button><Button size="sm" variant="danger" onClick={() => { setDecision({ proposal, action: 'reject' }); setDecisionReason(''); }}>Reject</Button></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ConfirmModal open={!!decision} title={decision?.action === 'approve' ? 'Approve response proposal' : 'Reject response proposal'} body={decision ? `${decision.proposal.ip_cidr} will ${decision.action === 'approve' ? 'be dispatched to the selected enforcement target' : 'remain unblocked'}.` : undefined} confirmLabel={deciding ? 'Saving...' : decision?.action === 'approve' ? 'Approve and dispatch' : 'Reject proposal'} variant={decision?.action === 'reject' ? 'danger' : 'default'} confirmDisabled={deciding || decisionReason.trim().length === 0} cancelDisabled={deciding} onConfirm={() => void submitDecision()} onCancel={() => { setDecision(null); setDecisionReason(''); }}>
+        <label className="space-y-2 text-sm"><span className="font-medium">Decision reason</span><textarea className="min-h-24 w-full rounded-md border border-border bg-surface-1 px-3 py-2" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} placeholder="Record the evidence reviewed and why this response is approved or rejected." /><span className="block text-xs text-text-secondary">Required. This reason is written to the audit trail.</span></label>
+      </ConfirmModal>
+    </div>
+  );
+}
+
 function ActiveBlocksPanel(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
@@ -1132,20 +1269,45 @@ function ActiveBlocksPanel(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ActiveBlock | null>(null);
+  const [proposalsByAction, setProposalsByAction] = useState<Record<string, IPBlockProposal>>({});
+  const [rollback, setRollback] = useState<{ block: ActiveBlock; proposal: IPBlockProposal } | null>(null);
+  const [rollbackReason, setRollbackReason] = useState('');
+  const [rollingBack, setRollingBack] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) return;
     setLoading(true);
     setError(null);
     try {
-      const resp = await client.listActiveBlocks({ tenantId: currentTenantId, limit: 100 });
+      const [resp, proposals] = await Promise.all([
+        client.listActiveBlocks({ tenantId: currentTenantId, limit: 100 }),
+        client.listBlockProposals({ tenantId: currentTenantId, status: 'active', limit: 100 }),
+      ]);
       setBlocks(resp.blocks ?? []);
+      setProposalsByAction(Object.fromEntries((proposals.data ?? []).filter((proposal) => proposal.entity_action_id).map((proposal) => [proposal.entity_action_id as string, proposal])));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Active block data failed to load');
     } finally {
       setLoading(false);
     }
   }, [client, currentTenantId]);
+
+  const submitRollback = useCallback(async () => {
+    const reason = rollbackReason.trim();
+    if (!rollback || !reason) return;
+    setRollingBack(true);
+    setError(null);
+    try {
+      await client.rollbackBlockProposal(rollback.proposal.id, reason);
+      setRollback(null);
+      setRollbackReason('');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Rollback failed');
+    } finally {
+      setRollingBack(false);
+    }
+  }, [client, refresh, rollback, rollbackReason]);
 
   useEffect(() => {
     refresh();
@@ -1175,9 +1337,9 @@ function ActiveBlocksPanel(): JSX.Element {
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -1206,6 +1368,7 @@ function ActiveBlocksPanel(): JSX.Element {
               {blocks.map((b) => {
                 const tone = b.NodesFailed > 0 ? 'critical' : b.NodesPending > 0 ? 'warning' : 'healthy';
                 const status = b.NodesFailed > 0 ? 'partial' : b.NodesPending > 0 ? 'pending' : 'applied';
+                const proposal = proposalsByAction[b.EntityActionID];
                 return (
                   <tr key={b.EntityActionID} className="border-t border-border hover:bg-hover">
                     <td className="px-3 py-2 font-mono text-xs">{b.EntityID}</td>
@@ -1219,9 +1382,10 @@ function ActiveBlocksPanel(): JSX.Element {
                     <td className="px-3 py-2 text-text-secondary">{b.Reason ?? '—'}</td>
                     <td className="px-3 py-2 text-text-secondary">{new Date(b.CreatedAt).toLocaleString()}</td>
                     <td className="px-3 py-2 text-right">
-                      <Button variant="ghost" size="sm" onClick={() => setSelected(b)}>
-                        Per-node
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => setSelected(b)}>Per-node</Button>
+                        {proposal && <Button variant="danger" size="sm" onClick={() => { setRollback({ block: b, proposal }); setRollbackReason(''); }}>Rollback</Button>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1232,6 +1396,9 @@ function ActiveBlocksPanel(): JSX.Element {
       )}
 
       {selected && <BlockNodeDetail block={selected} onClose={() => setSelected(null)} />}
+      <ConfirmModal open={!!rollback} title="Rollback active block" body={rollback ? `${displayIPCIDR(rollback.proposal.ip_cidr)} will be removed from its dispatched enforcement targets.` : undefined} confirmLabel={rollingBack ? 'Rolling back...' : 'Rollback block'} variant="danger" confirmDisabled={rollingBack || rollbackReason.trim().length === 0} cancelDisabled={rollingBack} onConfirm={() => void submitRollback()} onCancel={() => { setRollback(null); setRollbackReason(''); }}>
+        <label className="space-y-2 text-sm"><span className="font-medium">Rollback reason</span><textarea className="min-h-24 w-full rounded-md border border-border bg-surface-1 px-3 py-2" value={rollbackReason} onChange={(event) => setRollbackReason(event.target.value)} placeholder="Record why this enforcement must be removed." /><span className="block text-xs text-text-secondary">Required. This reason is written to the audit trail.</span></label>
+      </ConfirmModal>
     </div>
   );
 }
@@ -1367,9 +1534,9 @@ function FirewallManagementPanel(): JSX.Element {
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+          <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
+	            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	            {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         </div>
       </div>

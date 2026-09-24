@@ -368,8 +368,8 @@ function PostureTab(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-end gap-2">
-        <Button variant="secondary" size="md" onClick={handleRefresh} disabled={summaryLoading || resultsLoading}>
-          <RefreshCw className="h-4 w-4" /> Refresh
+        <Button variant="secondary" size="md" onClick={handleRefresh} loading={summaryLoading || resultsLoading}>
+          <RefreshCw className={`h-4 w-4 ${summaryLoading || resultsLoading ? 'animate-spin' : ''}`} /> {summaryLoading || resultsLoading ? 'Refreshing…' : 'Refresh'}
         </Button>
         <Button variant="primary" size="md" onClick={() => exportToCSV(results)} disabled={results.length === 0}>
           <Download className="h-4 w-4" /> Export CSV
@@ -880,8 +880,8 @@ function PoliciesTab(): JSX.Element {
               <option value="">Current tenant</option>
               {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </SelectField>
-            <Button variant="secondary" size="sm" onClick={loadPolicies} disabled={policiesLoading}>
-              <RefreshCw className="h-3.5 w-3.5" />
+            <Button variant="secondary" size="sm" onClick={loadPolicies} loading={policiesLoading} aria-label={policiesLoading ? 'Refreshing policies' : 'Refresh policies'}>
+              <RefreshCw className={`h-3.5 w-3.5 ${policiesLoading ? 'animate-spin' : ''}`} />
             </Button>
             <Button variant="primary" size="sm" onClick={() => setShowCreate((s) => !s)}>
               <Plus className="h-3.5 w-3.5" /> New policy
@@ -1224,9 +1224,9 @@ function PolicyRow({
                 size="sm"
                 className="h-7 px-2 text-xs"
                 onClick={() => void loadAssignments()}
-                disabled={assignmentsLoading}
+                loading={assignmentsLoading}
               >
-                <RefreshCw className="h-3 w-3" />
+                <RefreshCw className={`h-3 w-3 ${assignmentsLoading ? 'animate-spin' : ''}`} />
               </Button>
             </div>
 

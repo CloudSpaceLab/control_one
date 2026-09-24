@@ -66,3 +66,5 @@ completion-plan.md
 .claude/
 .windsurf/
 scripts/test_login.spec.ts
+.pnpm-store/
+.tmp-go-cache/

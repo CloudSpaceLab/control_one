@@ -193,6 +193,54 @@ func (s *Store) GetAIInvestigation(ctx context.Context, id uuid.UUID) (*AIInvest
 	return investigation, nil
 }
 
+func (s *Store) AttachAlertToAIInvestigation(ctx context.Context, id, tenantID uuid.UUID, alertEvidence json.RawMessage) (*AIInvestigation, error) {
+	row, err := s.GetAIInvestigation(ctx, id)
+	if err != nil || row == nil {
+		return row, err
+	}
+	if row.TenantID != tenantID {
+		return nil, sql.ErrNoRows
+	}
+	encoded, changed, err := mergeAlertCaseEvidence(row.Evidence, alertEvidence)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return row, nil
+	}
+	result := s.db.QueryRowContext(ctx, `
+		UPDATE ai_investigations SET evidence=$1::jsonb, updated_at=NOW()
+		 WHERE id=$2 AND tenant_id=$3
+		 RETURNING id, tenant_id, node_id, alert_id, trigger_type, trigger_event_type,
+		           trigger_dedup_key, severity, summary, evidence, status, created_by, assignee_id, created_at, updated_at
+	`, encoded, id, tenantID)
+	return scanAIInvestigation(result)
+}
+
+func mergeAlertCaseEvidence(existing, alertEvidence json.RawMessage) ([]byte, bool, error) {
+	var evidence map[string]any
+	if err := json.Unmarshal(existing, &evidence); err != nil || evidence == nil {
+		evidence = map[string]any{}
+	}
+	var linked map[string]any
+	if err := json.Unmarshal(alertEvidence, &linked); err != nil {
+		return nil, false, fmt.Errorf("decode alert evidence: %w", err)
+	}
+	alertID := strings.TrimSpace(fmt.Sprint(linked["alert_id"]))
+	links := jsonArray(evidence["linked_alerts"])
+	for _, item := range links {
+		if values, ok := item.(map[string]any); ok && strings.TrimSpace(fmt.Sprint(values["alert_id"])) == alertID {
+			return existing, false, nil
+		}
+	}
+	evidence["linked_alerts"] = append(links, linked)
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode case evidence: %w", err)
+	}
+	return encoded, true, nil
+}
+
 func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestigationsFilter, limit, offset int) ([]AIInvestigation, int, error) {
 	if s.db == nil {
 		return nil, 0, errors.New("store database not initialized")

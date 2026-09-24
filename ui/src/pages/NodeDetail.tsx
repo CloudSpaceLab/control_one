@@ -69,13 +69,13 @@ function agentLooksDead(node: import('@/lib/api').Node): { reason: string; tone:
   if (!node.last_seen_at) {
     return { reason: 'Agent has never reported in.', tone: 'critical' };
   }
-  // 10× the default 60s heartbeat interval = 10 min stale. Anything older
-  // means the agent process is gone, the host is offline, or routing
-  // broke. Either way, the operator should know.
+  // Keep the detail page aligned with the fleet view: a heartbeat older than
+  // five minutes means the agent process is gone, the host is offline, or
+  // routing broke.
   const lastSeen = new Date(node.last_seen_at).getTime();
   if (!Number.isFinite(lastSeen)) return null;
   const stale = Date.now() - lastSeen;
-  if (stale > 10 * 60 * 1000) {
+  if (stale > 5 * 60 * 1000) {
     const minutes = Math.round(stale / 60_000);
     return {
       reason: `Agent has not reported in for ${minutes} minute${minutes === 1 ? '' : 's'}.`,
@@ -183,6 +183,13 @@ export function NodeDetail(): JSX.Element {
   const { showToast } = useToast();
   const { node, health, telemetry, loading, error, reload } = useNode(id);
   const [tab, setTab] = useState<'overview' | 'activity' | 'connections' | 'kg' | 'packages' | 'recommendations' | 'settings'>('overview');
+  const [refreshFeedback, setRefreshFeedback] = useState(false);
+  const refreshNode = useCallback(() => {
+    setRefreshFeedback(true);
+    reload();
+    window.setTimeout(() => setRefreshFeedback(false), 350);
+  }, [reload]);
+  const refreshing = loading || refreshFeedback;
 
   if (loading && !node) {
     return (
@@ -235,6 +242,7 @@ export function NodeDetail(): JSX.Element {
       : undefined;
 
   const tone = riskTone(health?.risk_level);
+  const agentStatus = agentLooksDead(node);
 
   return (
     <div className="flex min-w-0 flex-col gap-5">
@@ -257,7 +265,9 @@ export function NodeDetail(): JSX.Element {
             description={`${node.os ?? '—'} · ${node.arch ?? '—'} · agent ${node.agent_version ?? '—'}`}
           />
           <div className="flex flex-wrap items-center gap-2">
-            <StatusTag tone={tone}>{riskLabel(health?.risk_level, health?.score ?? 0, calibratingSamples)}</StatusTag>
+            <StatusTag tone={agentStatus?.tone ?? tone}>
+              {agentStatus ? 'Offline · stale heartbeat' : riskLabel(health?.risk_level, health?.score ?? 0, calibratingSamples)}
+            </StatusTag>
             <Button
               variant="ghost"
               size="sm"
@@ -265,8 +275,8 @@ export function NodeDetail(): JSX.Element {
             >
               Copy node id
             </Button>
-            <Button variant="ghost" size="sm" onClick={reload}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            <Button variant="ghost" size="sm" onClick={refreshNode} disabled={refreshing} aria-label={refreshing ? 'Refreshing node' : 'Refresh node'}>
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} /> {refreshing ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         </div>
@@ -725,8 +735,8 @@ function ConnectionsTab({ nodeId, tenantId }: { nodeId: string; tenantId: string
             >
               Show internal/private
             </Button>
-            <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            <Button variant="ghost" size="sm" onClick={refresh} loading={loading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         }
@@ -1709,8 +1719,8 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
         eyebrow="INVENTORY"
         title="Installed packages"
         actions={
-          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          <Button variant="ghost" size="sm" onClick={refresh} loading={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       >

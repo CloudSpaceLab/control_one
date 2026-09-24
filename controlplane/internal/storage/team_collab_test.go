@@ -29,7 +29,8 @@ func TestListTenantUsersMatchingQuery(t *testing.T) {
 	pg, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
 		postgres.WithInitScripts("../migrate/sql/0001_init.up.sql",
 			"../migrate/sql/0003_auth.up.sql",
-			"../migrate/sql/0005_seed_roles.up.sql"),
+			"../migrate/sql/0005_seed_roles.up.sql",
+			"../migrate/sql/0061_user_roles_nullable_tenant.up.sql"),
 		postgres.WithDatabase("control_one"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
@@ -50,6 +51,8 @@ func TestListTenantUsersMatchingQuery(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 	tenantID := uuid.New()
+	_, err = store.db.ExecContext(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, tenantID, "test-tenant")
+	require.NoError(t, err)
 
 	// Create user A: "Ada CISO"
 	ada, err := store.EnsureUser(ctx, "ada-external", "ada@example.com", "Ada CISO")
@@ -250,7 +253,7 @@ func TestNotificationLifecycle(t *testing.T) {
 	// Mark all read.
 	affected, err := store.MarkAllNotificationsRead(ctx, tenantID, recipient.ID)
 	require.NoError(t, err)
-	require.Equal(t, 1, affected, "only the remaining unread notification should be affected")
+	require.Equal(t, int64(1), affected, "only the remaining unread notification should be affected")
 
 	// Count unread: 0.
 	count, err = store.CountUnreadNotifications(ctx, tenantID, recipient.ID)
@@ -267,7 +270,7 @@ func TestNotificationLifecycle(t *testing.T) {
 	// MarkAll for another tenant should return 0 affected.
 	affected, err = store.MarkAllNotificationsRead(ctx, otherTenant, recipient.ID)
 	require.NoError(t, err)
-	require.Equal(t, 0, affected)
+	require.Equal(t, int64(0), affected)
 }
 
 func TestAssignCaseOwnership(t *testing.T) {

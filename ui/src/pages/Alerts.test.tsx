@@ -3,33 +3,45 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Alert, CorrelationRule } from '../lib/api';
-import { Alerts, alertContextPills, alertDispositionPill } from './Alerts';
+import { Alerts, alertAccessReviewRoute, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts, withAlertReturnContext } from './Alerts';
 
 const mocks = vi.hoisted(() => {
   const listAlerts = vi.fn();
+  const getAlert = vi.fn();
   const ackAlert = vi.fn();
   const updateAlertDisposition = vi.fn();
   const listCorrelationRules = vi.fn();
   const createCorrelationRule = vi.fn();
   const deleteCorrelationRule = vi.fn();
-  const createSOCCaseFromAlert = vi.fn();
+  const createAlertSOCCase = vi.fn();
+	const attachAlertSOCCase = vi.fn();
+	const listSOCCases = vi.fn();
+  const updateAlertWorkflow = vi.fn();
   return {
     apiClient: {
       listAlerts,
+      getAlert,
       ackAlert,
       updateAlertDisposition,
       listCorrelationRules,
       createCorrelationRule,
       deleteCorrelationRule,
-      createSOCCaseFromAlert,
+      createAlertSOCCase,
+		attachAlertSOCCase,
+		listSOCCases,
+      updateAlertWorkflow,
     },
     listAlerts,
+    getAlert,
     ackAlert,
     updateAlertDisposition,
     listCorrelationRules,
     createCorrelationRule,
     deleteCorrelationRule,
-    createSOCCaseFromAlert,
+    createAlertSOCCase,
+	attachAlertSOCCase,
+	listSOCCases,
+    updateAlertWorkflow,
     currentTenantId: 'tenant-1',
     setCurrentTenantId: vi.fn(),
   };
@@ -73,6 +85,10 @@ const alertRow: Alert = {
   context: {
     source_ip: '203.0.113.9',
     event_type: 'auth failure',
+    matched_event_count: 4,
+    window_s: 20,
+    notification_state: 'suppressed',
+    contributing_events: [{ timestamp: '2026-06-08T00:00:00Z', event_type: 'ssh.authentication_failure', src_ip: '203.0.113.9', user_name: 'root' }],
   },
 };
 
@@ -87,9 +103,9 @@ const ruleRow = {
   updated_at: '2026-06-08T00:00:00Z',
 } as unknown as CorrelationRule;
 
-function renderAlerts() {
+function renderAlerts(initialEntry = '/alerts') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Alerts />
     </MemoryRouter>,
   );
@@ -107,12 +123,54 @@ describe('Alerts page failure states', () => {
     vi.clearAllMocks();
     mocks.currentTenantId = 'tenant-1';
     mocks.listAlerts.mockResolvedValue(paginated([alertRow]));
+    mocks.getAlert.mockResolvedValue(alertRow);
     mocks.ackAlert.mockResolvedValue(undefined);
     mocks.updateAlertDisposition.mockResolvedValue({ ...alertRow, state: 'resolved' });
     mocks.listCorrelationRules.mockResolvedValue(paginated([ruleRow]));
     mocks.createCorrelationRule.mockResolvedValue(ruleRow);
     mocks.deleteCorrelationRule.mockResolvedValue(undefined);
-    mocks.createSOCCaseFromAlert.mockResolvedValue({ case_id: 'case-1' });
+    mocks.createAlertSOCCase.mockResolvedValue({ case_id: 'case-1' });
+	mocks.attachAlertSOCCase.mockResolvedValue({ case_id: 'case-existing' });
+	mocks.listSOCCases.mockResolvedValue({ data: [], pagination: { total: 0, limit: 50, offset: 0 } });
+    mocks.updateAlertWorkflow.mockResolvedValue(alertRow);
+  });
+
+  it.each([
+    ['exfiltration', ['/security/network?tab=ip-behavior', '/control-room/exposure']],
+    ['credential', ['/access']],
+    ['exploit', ['/security/webservers']],
+    ['scanner', ['/security/webservers']],
+    ['malware', ['/nodes', '/audit']],
+    ['exposure', ['/control-room/exposure', '/security/network?tab=firewall']],
+    ['secret', ['/data-security', '/secrets']],
+    ['privilege', ['/access', '/sessions']],
+    ['patch', ['/infrastructure/patch']],
+    ['compliance', ['/compliance']],
+    ['generic', ['/control-room', '/audit']],
+  ])('preserves return context on every %s modal destination', async (category, destinations) => {
+    const id = 'alert /?&=+#é';
+    const row = { ...alertRow, id, title: category, summary: '', context: { src_ip: '203.0.113.9' } };
+    mocks.getAlert.mockResolvedValue(row);
+    mocks.listSOCCases.mockResolvedValue({ data: [{ case_id: 'case /&1', status: 'open', evidence: { alert_id: id } }] });
+    renderAlerts(`/alerts?alert_id=${encodeURIComponent(id)}`);
+    const dialog = await screen.findByRole('dialog', { name: /resolve alert with evidence/i });
+    await within(dialog).findByRole('link', { name: 'Open SOC case' });
+    const urls = within(dialog).getAllByRole('link').map((link) => new URL(link.getAttribute('href')!, 'http://local'));
+    for (const url of urls) {
+      expect(url.searchParams.getAll('fromAlert')).toEqual([id]);
+      expect(url.search).toContain(`fromAlert=${encodeURIComponent(id)}`);
+    }
+    for (const destination of [...destinations, '/security/network?tab=blocks', '/investigate/ip/203.0.113.9?audit=1', '/cases?case_id=case%20%2F%261']) {
+      const expected = new URL(destination, 'http://local');
+      expect(urls.some((url) => url.pathname === expected.pathname && [...expected.searchParams].every(([key, value]) => url.searchParams.get(key) === value))).toBe(true);
+    }
+    expect(urls.some((url) => url.pathname === '/audit' && url.searchParams.get('q') === id)).toBe(true);
+    if (category === 'credential' || category === 'privilege') {
+      const access = urls.find((url) => url.pathname === '/access')!;
+      expect(access.searchParams.get('alert_id')).toBe(id);
+      expect(access.searchParams.get('from')).toBe(row.opened_at);
+      expect(access.searchParams.get('to')).toBe(row.opened_at);
+    }
   });
 
   it('does not show all-clear or empty inbox copy when alerts fail to load', async () => {
@@ -147,7 +205,7 @@ describe('Alerts page failure states', () => {
     renderAlerts();
 
     await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
-    const dialog = screen.getByRole('dialog', { name: /alert disposition/i });
+    const dialog = screen.getByRole('dialog', { name: /resolve alert with evidence/i });
     await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'false_positive');
     await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Confirmed scanner noise, no blast radius.');
     await user.click(within(dialog).getByRole('button', { name: /record disposition/i }));
@@ -155,7 +213,7 @@ describe('Alerts page failure states', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'Alert disposition failed: evidence gate denied',
     );
-    expect(screen.getByRole('dialog', { name: /alert disposition/i })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /resolve alert with evidence/i })).toBeInTheDocument();
   });
 
   it('requires reason and evidence before recording a true_positive or resolved disposition', async () => {
@@ -164,9 +222,10 @@ describe('Alerts page failure states', () => {
     renderAlerts();
 
     await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
-    const dialog = screen.getByRole('dialog', { name: /alert disposition/i });
+    const dialog = screen.getByRole('dialog', { name: /resolve alert with evidence/i });
     const confirm = within(dialog).getByRole('button', { name: /record disposition/i });
 
+    expect(within(dialog).getByLabelText(/disposition/i)).toHaveValue('true_positive');
     expect(confirm).toBeDisabled();
 
     await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'resolved');
@@ -177,19 +236,53 @@ describe('Alerts page failure states', () => {
     expect(confirm).toBeEnabled();
   });
 
-  it('creates an investigation case from the resolution modal', async () => {
+  it('lets an existing SOC case provide evidence for a real alert after reopening', async () => {
     const user = userEvent.setup();
-    mocks.createSOCCaseFromAlert.mockResolvedValue({ case_id: 'case-7' });
+    mocks.listSOCCases.mockResolvedValue({
+      data: [{ case_id: 'case-1', status: 'open', evidence: { alert_id: 'alert-1' } }],
+      pagination: { total: 1, limit: 50, offset: 0 },
+    });
 
+    renderAlerts('/alerts?alert_id=alert-1');
+    const dialog = await screen.findByRole('dialog', { name: /resolve alert with evidence/i });
+    expect(mocks.getAlert).toHaveBeenCalledWith('alert-1');
+    expect(await within(dialog).findByText(/soc case attached as resolution evidence/i)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Investigation continues in the linked SOC case.');
+    expect(within(dialog).getByRole('button', { name: /record disposition/i })).toBeEnabled();
+  });
+
+  it('shows the correlation activity summary and contributing events', async () => {
+    const user = userEvent.setup();
     renderAlerts();
+    expect(await screen.findByText('Activity: 4 in 20s')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /review alert critical ssh burst/i }));
+    expect(screen.getByText('Contributing events (1)')).toBeInTheDocument();
+    expect(screen.getByText(/ssh\.authentication_failure/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create soc case with evidence/i })).toBeInTheDocument();
+  });
 
+	it('requires confirmation before creating a SOC case', async () => {
+		const user = userEvent.setup();
+		renderAlerts();
+		await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+		await user.click(screen.getByRole('button', { name: /create soc case with evidence/i }));
+		expect(mocks.createAlertSOCCase).not.toHaveBeenCalled();
+		expect(screen.getByText(/create a new soc case/i)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /confirm creation/i }));
+		expect(mocks.createAlertSOCCase).toHaveBeenCalledWith('alert-1');
+	});
+
+  it('saves analyst assignment and notes from alert review', async () => {
+    const user = userEvent.setup();
+    renderAlerts();
     await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
-    const dialog = screen.getByRole('dialog', { name: /alert disposition/i });
-    await user.click(within(dialog).getByRole('button', { name: /create investigation case/i }));
-
-    expect(await within(dialog).findByText(/case created/i)).toBeInTheDocument();
-    expect(mocks.createSOCCaseFromAlert).toHaveBeenCalledWith('tenant-1', { alert_id: 'alert-1' });
-    expect(within(dialog).getByRole('link', { name: /open cases/i })).toHaveAttribute('href', '/cases');
+    await user.type(screen.getByLabelText(/assigned analyst/i), 'analyst@example.com');
+    await user.type(screen.getByLabelText(/analyst note/i), 'Validated the four failed SSH events.');
+    await user.click(screen.getByRole('button', { name: /save assignment and note/i }));
+    expect(mocks.updateAlertWorkflow).toHaveBeenCalledWith('alert-1', {
+      assigned_to: 'analyst@example.com',
+      note: 'Validated the four failed SSH events.',
+    });
   });
 
   it('does not show a false empty state when correlation rules fail to load', async () => {
@@ -295,4 +388,49 @@ describe('alertContextPills', () => {
       tone: 'warning',
     });
   });
+});
+
+describe('alertResolutionFacts', () => {
+  it('shows correlation occurrence and notification timing', () => {
+    const alert: Alert = {
+      id: 'alert-phase5', tenant_id: 'tenant-1', source: 'correlation', severity: 'high',
+      title: 'SSH brute force', state: 'open', opened_at: '2026-09-15T10:00:00Z',
+      context: { occurrence_count: 8, first_seen_at: '2026-09-15T10:00:00Z', last_seen_at: '2026-09-15T10:01:00Z', last_notification_at: '2026-09-15T10:00:00Z' },
+    };
+    const facts = alertResolutionFacts(alert, 'credential', 'node-1', '203.0.113.25');
+    expect(facts.map((fact) => fact.label)).toEqual(expect.arrayContaining(['Occurrences', 'First seen', 'Last seen', 'Last notification']));
+    expect(facts.find((fact) => fact.label === 'Occurrences')?.value).toBe('8');
+  });
+});
+
+describe('contextual alert review routes', () => {
+  it.each(['/nodes', '/security/network?tab=blocks', '/audit?q=a%26b&tag=one&tag=two&fromAlert=old&fromAlert=older#events'])('adds return context idempotently to %s', (destination) => {
+    const id = 'alert /?&=+#é';
+    const result = withAlertReturnContext(withAlertReturnContext(destination, id), id);
+    const url = new URL(result, 'http://local');
+    const original = new URL(destination, 'http://local');
+    expect(url.searchParams.getAll('fromAlert')).toEqual([id]);
+    expect(result).toContain(`fromAlert=${encodeURIComponent(id)}`);
+    original.searchParams.delete('fromAlert');
+    url.searchParams.delete('fromAlert');
+    expect(url.href).toBe(original.href);
+  });
+	it('opens the exact IP lifecycle and carries host, user, and time into access review', () => {
+		const alert: Alert = {
+			id: 'alert-1', tenant_id: 'tenant-1', node_id: 'node-1', source: 'correlation', severity: 'high',
+			title: 'SSH brute force', state: 'open', opened_at: '2026-09-16T10:00:00Z',
+			context: { src_ip: '203.0.113.25', user_name: 'root', first_seen_at: '2026-09-16T10:00:01Z', last_seen_at: '2026-09-16T10:00:20Z' },
+		};
+		expect(alertInvestigationRoute(alert)).toBe('/investigate/ip/203.0.113.25?audit=1&fromAlert=alert-1');
+		const access = new URL(`http://local${alertAccessReviewRoute(alert)}`);
+		expect(access.pathname).toBe('/access');
+		expect(Object.fromEntries(access.searchParams)).toEqual({
+			node_id: 'node-1', user: 'root', from: '2026-09-16T10:00:01Z', to: '2026-09-16T10:00:20Z', alert_id: 'alert-1', fromAlert: 'alert-1',
+		});
+	});
+
+	it('falls back to the alert lifecycle when no stronger entity is present', () => {
+		const alert: Alert = { id: 'alert-2', tenant_id: 'tenant-1', source: 'correlation', severity: 'medium', title: 'Signal', state: 'open', opened_at: '2026-09-16T10:00:00Z', context: {} };
+		expect(alertInvestigationRoute(alert)).toBe('/investigate/alert/alert-2?fromAlert=alert-2');
+	});
 });

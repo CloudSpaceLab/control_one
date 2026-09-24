@@ -302,9 +302,9 @@ export function TeamActivity(): JSX.Element {
               onChange={setDays}
               ariaLabel="Team activity window"
             />
-            <Button size="sm" variant="outline" onClick={() => void refresh()} disabled={loading}>
-              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-              Refresh
+            <Button size="sm" variant="outline" onClick={() => void refresh()} loading={loading}>
+	              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+	              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         }
