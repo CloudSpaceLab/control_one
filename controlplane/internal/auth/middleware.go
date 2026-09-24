@@ -109,6 +109,14 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 // Wrap decorates the provided handler with authentication.
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browser clients may preflight JSON/API requests.  Preflight carries no
+		// bearer/session credentials, so it must be answered before auth rather
+		// than rejected as an unauthenticated request or passed to a POST-only
+		// handler (which previously returned 405 for /auth/login).
+		if r != nil && r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if m.publicRequest(r) {
 			next.ServeHTTP(w, r)
 			return

@@ -171,6 +171,74 @@ function numericLabel(node: import('@/lib/api').Node, keys: string[]): number | 
   return null;
 }
 
+interface TelemetryCollectorState {
+  name: string;
+  state: string;
+  backend?: string;
+  backoff_reason?: string;
+}
+
+function telemetryCollectorStates(node: import('@/lib/api').Node): TelemetryCollectorState[] {
+  const raw = node.labels?.['telemetry.collectors'];
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const value = item as Record<string, unknown>;
+    const name = typeof value.name === 'string' ? value.name.trim() : '';
+    if (!name) return [];
+    return [{
+      name,
+      state: typeof value.state === 'string' ? value.state : 'unknown',
+      backend: typeof value.backend === 'string' ? value.backend : undefined,
+      backoff_reason: typeof value.backoff_reason === 'string' ? value.backoff_reason : undefined,
+    }];
+  });
+}
+
+function TelemetryReadiness({ node }: { node: import('@/lib/api').Node }): JSX.Element {
+  const collectors = telemetryCollectorStates(node);
+  const hasFailure = collectors.some((collector) => collector.state === 'stopped' && collector.backoff_reason);
+  const allRunning = collectors.length > 0 && collectors.every((collector) => collector.state === 'running');
+  const tone: StateTone = hasFailure ? 'critical' : allRunning ? 'healthy' : collectors.length > 0 ? 'warning' : 'unknown';
+  const label = hasFailure ? 'Needs attention' : allRunning ? 'Ready' : collectors.length > 0 ? 'Starting' : 'Waiting for first heartbeat';
+
+  return (
+    <div className="mt-3 border-t border-border-subtle pt-3" aria-label="Telemetry readiness">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[0.6rem] uppercase tracking-[0.18em] text-text-muted">Telemetry readiness</p>
+          <p className="mt-1 text-xs text-text-secondary">Collector health reported by the agent heartbeat.</p>
+        </div>
+        <StatusTag tone={tone}>{label}</StatusTag>
+      </div>
+      {collectors.length > 0 ? (
+        <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {collectors.map((collector) => (
+            <div key={collector.name} className="flex items-center justify-between gap-2 rounded border border-border-subtle bg-surface-2 px-2 py-1.5 text-[0.7rem]">
+              <span className="min-w-0 truncate text-text-secondary" title={collector.name}>{collector.name}</span>
+              <span className="min-w-0 text-right">
+                <span className={collector.state === 'running' ? 'text-brand-400' : collector.state === 'stopped' ? 'text-danger-300' : 'text-accent-400'}>
+                  {collector.state}
+                </span>
+                {collector.backoff_reason && collector.state !== 'running' && (
+                  <span className="mt-0.5 block max-w-[13rem] truncate text-[0.62rem] text-text-muted" title={collector.backoff_reason}>
+                    {collector.backoff_reason}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-text-muted">The agent has not reported collector state yet.</p>
+      )}
+      {hasFailure && (
+        <p className="mt-2 text-xs text-danger-300">{collectors.find((collector) => collector.state === 'stopped' && collector.backoff_reason)?.backoff_reason}</p>
+      )}
+    </div>
+  );
+}
+
 function boundedBytes(value: number | null, total: number | null): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   const floor = Math.max(0, value);
@@ -265,9 +333,12 @@ export function NodeDetail(): JSX.Element {
             description={`${node.os ?? '—'} · ${node.arch ?? '—'} · agent ${node.agent_version ?? '—'}`}
           />
           <div className="flex flex-wrap items-center gap-2">
-            <StatusTag tone={agentStatus?.tone ?? tone}>
-              {agentStatus ? 'Offline · stale heartbeat' : riskLabel(health?.risk_level, health?.score ?? 0, calibratingSamples)}
+            <StatusTag tone={agentStatus?.tone ?? (node.last_seen_at ? 'healthy' : tone)}>
+              {agentStatus ? 'Offline · stale heartbeat' : 'Connected · heartbeat current'}
             </StatusTag>
+            {!agentStatus && health?.risk_level === 'calibrating' && (
+              <span className="text-xs text-text-muted">Health calibration in progress ({calibratingSamples ?? 0}/24 samples)</span>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -387,6 +458,11 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
               updated {formatTs(health.computed_at)}
             </p>
           )}
+          {health?.risk_level === 'calibrating' && (
+            <p className="max-w-[15rem] text-center text-[0.7rem] leading-relaxed text-text-muted">
+              The agent is connected. Predictive health appears after 24 telemetry samples.
+            </p>
+          )}
         </div>
       </Panel>
 
@@ -420,6 +496,7 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
             <p className="text-[0.6rem] text-text-muted mt-1">Source: {node.classification.source} · Confidence: {node.classification.confidence}</p>
           </div>
         )}
+        <TelemetryReadiness node={node} />
       </Panel>
 
       <Panel padding="md" eyebrow="CPU" title="Last 24h" className="lg:col-span-1">
@@ -1913,6 +1990,9 @@ function SettingsTab({
 
   const agentUpdateActive = latestAgentUpdateJob?.status === 'queued' || latestAgentUpdateJob?.status === 'running';
   const agentUpdateTarget = agentUpdateTargetVersion(latestAgentUpdateJob);
+  const agentUpdateFailure = latestAgentUpdateJob?.status === 'failed'
+    ? latestAgentUpdateJob.events?.slice().reverse().find((event) => event.status === 'failed')?.message
+    : undefined;
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1953,6 +2033,11 @@ function SettingsTab({
             {agentUpdateTarget && <span className="font-mono">target {agentUpdateTarget}</span>}
             {latestAgentUpdateJob?.id && <span className="font-mono">job {latestAgentUpdateJob.id}</span>}
           </div>
+          {agentUpdateFailure && (
+            <p className="mt-2 text-xs text-state-critical" role="status">
+              {agentUpdateFailure}
+            </p>
+          )}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button

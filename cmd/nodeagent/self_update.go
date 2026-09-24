@@ -57,6 +57,7 @@ type updateManifest struct {
 	RolloutPct    int    `json:"rollout_pct"`
 	TargetVersion string `json:"target_version"`
 	Paused        bool   `json:"paused"`
+	Force         bool   `json:"force"`
 }
 
 const agentUpdateJob = "agent.update"
@@ -90,6 +91,9 @@ func rolloutBucket(nodeID string) int {
 func shouldUpdate(m updateManifest, currentReleaseSeq int, bucket int) string {
 	if m.Paused {
 		return "rollout paused by operator"
+	}
+	if m.Force {
+		return ""
 	}
 	if m.ReleaseSeq <= 0 {
 		return "no rollout configured (release_seq=0)"
@@ -231,6 +235,10 @@ func (u *DefaultSelfUpdater) CurrentReleaseSeq() int {
 }
 
 func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Client, log *zap.Logger, jobID string) {
+	force := strings.HasSuffix(jobID, ":force")
+	if force {
+		jobID = strings.TrimSuffix(jobID, ":force")
+	}
 	// Single-flight guard.
 	select {
 	case u.inFlight <- struct{}{}:
@@ -257,6 +265,9 @@ func (u *DefaultSelfUpdater) TriggerUpdate(ctx context.Context, client *api.Clie
 	manifestURL := fmt.Sprintf("/api/v1/agent/binary/manifest?os=%s&arch=%s", osName, arch)
 	if u.nodeID != "" {
 		manifestURL += "&node_id=" + u.nodeID
+	}
+	if force {
+		manifestURL += "&force=true"
 	}
 	manifestResp, err := client.Do(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {

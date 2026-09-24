@@ -327,10 +327,27 @@ func correlationEvidenceEvent(ev eventbus.Event) map[string]any {
 		evidence["payload_error"] = err.Error()
 		return evidence
 	}
-	for _, field := range []string{"event_type", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "user_name", "node_id", "auth_result", "source", "path", "status_code"} {
+	// Keep each event's own evidence together; alert-level context can contain
+	// fields retained from earlier occurrences and is not a resource snapshot.
+	details, _ := payload["details"].(map[string]any)
+	for _, field := range []string{"event_type", "original_event_type", "event_id", "source_event_id", "source_os", "source_channel", "message", "severity", "hostname", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "user_name", "auth_result", "auth_status", "auth_substatus", "credential_type", "logon_type", "sensor_name", "source", "path", "process_name", "service_name", "resource_type", "resource_id", "status_code"} {
 		if value, ok := payload[field]; ok {
 			evidence[field] = value
+		} else if value, ok := details[field]; ok {
+			evidence[field] = value
 		}
+	}
+	if value, ok := details["event_type"].(string); ok && value != "" {
+		evidence["event_type"] = value
+	}
+	if timestamp, ok := payload["ts"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339Nano, timestamp); err == nil && !parsed.IsZero() {
+			evidence["timestamp"] = parsed.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	evidence["tenant_id"] = ev.TenantID.String()
+	if ev.NodeID != nil {
+		evidence["node_id"] = ev.NodeID.String()
 	}
 	return evidence
 }

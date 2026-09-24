@@ -743,7 +743,6 @@ export function Alerts(): JSX.Element {
               Ack
             </Button>
           ) : null}
-          {row.original.state !== 'resolved' ? (
             <Button
               variant="primary"
               size="sm"
@@ -756,7 +755,6 @@ export function Alerts(): JSX.Element {
             >
               Review
             </Button>
-          ) : null}
         </div>
       ),
     },
@@ -1759,6 +1757,27 @@ function ResolveAlertModal({
   onSaveWorkflow: (alert: Alert, payload: { assigned_to?: string; note?: string }) => Promise<void>;
 }) {
   const plan = alert ? alertResolutionPlan(alert) : null;
+  const client = useApiClient();
+  const [systemNames, setSystemNames] = useState<Record<string, string>>({});
+  const systemIDs = alert ? alertSystemIDs(alert) : [];
+  const systemKey = JSON.stringify(systemIDs);
+  useEffect(() => {
+    let active = true;
+    setSystemNames({});
+    if (open) {
+      void Promise.all((JSON.parse(systemKey) as string[]).map(async (id) => {
+        try {
+          const node = await client.getNode(id);
+          if (node.tenant_id !== alert?.tenant_id) return [id, `${id} (name unavailable)`] as const;
+          return [id, node.hostname || `${id} (name unavailable)`] as const;
+        } catch {
+          return [id, `${id} (name unavailable)`] as const;
+        }
+      })).then((entries) => { if (active) setSystemNames(Object.fromEntries(entries)); });
+    }
+    return () => { active = false; };
+  }, [client, open, alert?.id, alert?.tenant_id, systemKey]);
+  const recordedSystems = systemIDs.map((id) => systemNames[id] || `${id} (loading name)`).join(', ') || 'Unavailable — no node recorded';
   const ip = alert ? alertSourceIP(alert) : '';
   const alertAssignedTo = contextString(alert?.context ?? {}, 'assigned_to');
   const [disposition, setDisposition] = useState<AlertDispositionValue>('true_positive');
@@ -1830,9 +1849,9 @@ function ResolveAlertModal({
                   <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {plan.facts.map((fact) => (
                       <div key={`${fact.label}:${fact.value}`} className="rounded-md border border-border-subtle bg-surface px-2.5 py-2">
-                        <p className="text-[0.68rem] uppercase tracking-wide text-text-muted">{fact.label}</p>
-                        <StatusTag tone={fact.tone} className="mt-1 max-w-full truncate">
-                          {fact.value}
+                        <p className="text-[0.68rem] uppercase tracking-wide text-text-muted">{fact.label === 'Scope' ? 'Systems in evidence' : fact.label}</p>
+                        <StatusTag tone={fact.tone} className="mt-1 max-w-full whitespace-normal break-words">
+                          {fact.label === 'Scope' ? recordedSystems : fact.value}
                         </StatusTag>
                       </div>
                     ))}
@@ -2192,6 +2211,7 @@ function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
         <ListChecks className="h-4 w-4 text-brand-400" />
         Contributing events ({events.length})
       </div>
+      <p className="mb-2 text-xs text-text-secondary">Rule monitoring scope: {contextListString(alert.context ?? {}, 'group_by') || contextString(alert.context ?? {}, 'dimension') || 'Unavailable'}. This does not mean every resource in that scope was affected. Details below belong to each recorded event.</p>
       <ol className="max-h-56 space-y-2 overflow-y-auto">
         {events.map((event, index) => (
           <li key={`${String(event.timestamp ?? '')}:${index}`} className="rounded-md border border-border-subtle bg-elevated p-2 text-xs text-text-secondary">
@@ -2199,11 +2219,38 @@ function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
             <span className="ml-2">{String(event.event_type ?? event.topic ?? 'security event')}</span>
             {event.src_ip ? <span className="ml-2 font-mono">from {String(event.src_ip)}</span> : null}
             {event.user_name ? <span className="ml-2">user {String(event.user_name)}</span> : null}
+            <p className="mt-1">{contextString(event, 'message') || 'Event message unavailable'}</p>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              {eventEvidenceFacts(event).map(([label, value]) => <div key={label} className="contents"><dt>{label}</dt><dd className="break-all">{value}</dd></div>)}
+            </dl>
           </li>
         ))}
       </ol>
     </div>
   );
+}
+
+export function eventEvidenceFacts(event: Record<string, unknown>): [string, string][] {
+  const value = (...keys: string[]) => contextString(event, ...keys);
+  const resources = [
+    value('resource_id') && `${value('resource_type') || 'Resource'}: ${value('resource_id')}`,
+    value('dst_ip') && `Destination: ${value('dst_ip')}${value('dst_port') ? ` port ${value('dst_port')}` : ''}${value('protocol') ? ` (${value('protocol')})` : ''}`,
+    value('path') && `Path: ${value('path')}`,
+    value('service_name') && `Service: ${value('service_name')}`,
+    value('process_name') && `Process: ${value('process_name')}`,
+    value('sensor_name') && `Sensor: ${value('sensor_name')}`,
+    value('user_name') && `Account: ${value('user_name')}`,
+  ].filter(Boolean).join('; ');
+  return [
+    ['Tenant', value('tenant_id') || 'Unavailable'],
+    ['Host', [value('hostname'), value('node_id')].filter(Boolean).join(' / ') || 'Unavailable'],
+    ['Observed resource', resources || 'Unavailable — not recorded in this event'],
+    ['Source OS', value('source_os') || 'Unavailable'],
+    ['Source channel', value('source_channel') || 'Unavailable'],
+    ['Source event ID', value('source_event_id') || 'Unavailable'],
+    ['Event severity', value('severity') || 'Unavailable'],
+    ['Event reference', value('event_id', 'source_event_id') || 'Unavailable'],
+  ];
 }
 
 function alertAuditRoute(alert: Alert): string {
@@ -2275,10 +2322,21 @@ function titleCase(value: string): string {
     .join(' ');
 }
 
-function alertCategory(alert: Alert): string {
+export function alertCategory(alert: Alert): string {
   const haystack = `${alert.source} ${alert.title} ${alert.summary ?? ''} ${JSON.stringify(alert.context ?? {})}`.toLowerCase();
   if (haystack.includes('exfil')) return 'exfiltration';
-  if (haystack.includes('credential') || haystack.includes('auth failure') || haystack.includes('brute')) return 'credential';
+  if (
+    haystack.includes('credential') ||
+    haystack.includes('auth failure') ||
+    haystack.includes('authentication failure') ||
+    haystack.includes('authentication_failure') ||
+    haystack.includes('login failure') ||
+    haystack.includes('login_failure') ||
+    haystack.includes('failed login') ||
+    haystack.includes('biometric') ||
+    haystack.includes('windows hello') ||
+    haystack.includes('brute')
+  ) return 'credential';
   if (haystack.includes('exploit') || haystack.includes('rce') || haystack.includes('injection')) return 'exploit';
   if (haystack.includes('scanner') || haystack.includes('probe')) return 'scanner';
   if (haystack.includes('malware') || haystack.includes('tamper') || haystack.includes('shutdown') || haystack.includes('service stop')) return 'malware';
@@ -2290,9 +2348,35 @@ function alertCategory(alert: Alert): string {
   return 'generic';
 }
 
-function alertScope(alert: Alert): string {
+export function alertSystemIDs(alert: Alert): string[] {
+  const events = alert.context?.contributing_events;
+  return [...new Set([
+    alert.node_id,
+    ...(Array.isArray(events) ? events.map((event) => event && typeof event === 'object' ? contextString(event as Record<string, unknown>, 'node_id') : '') : []),
+  ].filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))];
+}
+
+function nodeScopeLabel(value: Record<string, unknown>): string {
+  const hostname = contextString(value, 'hostname', 'host_name', 'computer_name');
+  const nodeID = contextString(value, 'node_id', 'host');
+  if (hostname && nodeID && hostname !== nodeID) return `node ${hostname} (${nodeID})`;
+  if (hostname) return `node ${hostname}`;
+  if (nodeID) return `node ${nodeID}`;
+  return '';
+}
+
+export function alertScope(alert: Alert): string {
   const ctx = alert.context ?? {};
-  const node = alert.node_id || contextString(ctx, 'node_id', 'hostname', 'host');
+  const node = nodeScopeLabel({ ...ctx, node_id: alert.node_id || ctx.node_id });
+  if (node) return node;
+  const events = alert.context?.contributing_events;
+  if (Array.isArray(events)) {
+    for (const event of events) {
+      if (!event || typeof event !== 'object') continue;
+      const eventNode = nodeScopeLabel(event as Record<string, unknown>);
+      if (eventNode) return eventNode;
+    }
+  }
   const group = contextString(ctx, 'server_group', 'group', 'cluster');
   const region = contextString(ctx, 'region', 'country_code', 'country');
   const app = contextString(ctx, 'application_name', 'app', 'vhost');

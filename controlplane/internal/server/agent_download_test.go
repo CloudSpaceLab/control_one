@@ -80,6 +80,53 @@ func newAgentTestServer(t *testing.T, binaryDir, signingKey, signingPub string) 
 	return New(zap.NewNop(), cfg, nil, nil)
 }
 
+func TestDeriveControlPlaneURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		address   string
+		host      string
+		forwarded string
+		want      string
+	}{
+		{
+			name:    "configured production URL wins",
+			address: "https://control.example.com/",
+			host:    "127.0.0.1:4173",
+			want:    "https://control.example.com",
+		},
+		{
+			name:      "reverse proxy preserves HTTPS",
+			address:   ":8443",
+			host:      "control.example.com",
+			forwarded: "https",
+			want:      "https://control.example.com",
+		},
+		{
+			name:    "local development uses request scheme",
+			address: ":4173",
+			host:    "127.0.0.1:4173",
+			want:    "http://127.0.0.1:4173",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{HTTP: config.HTTPConfig{Address: tt.address}}
+			s := New(zap.NewNop(), cfg, nil, nil)
+			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/v1/agent/install-script", nil)
+			req.Host = tt.host
+			if tt.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwarded)
+			}
+			if got := s.deriveControlPlaneURL(req); got != tt.want {
+				t.Fatalf("deriveControlPlaneURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInstallScriptRenders(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +244,8 @@ func TestInstallScriptWindowsHandlesHostAndPowerShellVariants(t *testing.T) {
 	for _, want := range []string{
 		"$env:PROCESSOR_ARCHITEW6432",
 		"Invoke-ControlOneDownload",
+		"$ProgressPreference = 'SilentlyContinue'",
+		"TimeoutSec = 600",
 		"$PSVersionTable.PSVersion.Major -lt 6",
 		"SecurityProtocolType]::Tls12",
 		"WindowsPrincipal",

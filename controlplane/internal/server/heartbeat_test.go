@@ -832,7 +832,7 @@ func TestHeartbeatDispatchesAgentUpdateJobIDForCapableAgent(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]any{
 		"agent_version": "dev",
-		"capabilities":  []string{agentCapabilityUpdateJobStatus},
+		"capabilities":  []string{agentCapabilityUpdateJobStatus, agentCapabilityUpdateForce},
 	})
 	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
 	req.Body = io.NopCloser(bytes.NewReader(body))
@@ -847,7 +847,7 @@ func TestHeartbeatDispatchesAgentUpdateJobIDForCapableAgent(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	want := JobTypeAgentUpdate + ":" + jobID.String()
+	want := JobTypeAgentUpdate + ":" + jobID.String() + ":force"
 	if len(resp.PendingActions) != 1 || resp.PendingActions[0] != want {
 		t.Fatalf("pending_actions = %#v, want [%s]", resp.PendingActions, want)
 	}
