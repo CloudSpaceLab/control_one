@@ -21,9 +21,15 @@ function fallbackTotals(nodes: NodeSummary[], total: number): FleetHealthSnapsho
   };
 
   for (const node of nodes) {
+    // Lifecycle state only says that a node is registered.  A node that has
+    // stopped heartbeating must not be counted as healthy just because its
+    // lifecycle state is still `active`.
+    const lastSeen = node.last_seen_at ? new Date(node.last_seen_at).getTime() : Number.NaN;
+    const online = Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60 * 1000;
     switch ((node.state ?? '').toLowerCase()) {
       case 'active':
-        totals.healthy += 1;
+        if (online) totals.healthy += 1;
+        else totals.warning += 1;
         break;
       case 'enrollment_pending':
         totals.warning += 1;
@@ -38,6 +44,12 @@ function fallbackTotals(nodes: NodeSummary[], total: number): FleetHealthSnapsho
   }
 
   return totals;
+}
+
+function hasConsistentTotals(snapshot: FleetHealthSnapshot, nodeCount: number): boolean {
+  const totals = snapshot.totals;
+  const classified = totals.healthy + totals.warning + totals.degraded + totals.critical + totals.unknown;
+  return totals.nodes === nodeCount && classified === nodeCount;
 }
 
 export function useFleetSummary(opts: Options = {}) {
@@ -70,11 +82,12 @@ export function useFleetSummary(opts: Options = {}) {
         try {
           const nodePage = await api.listNodes({ tenantId: opts.tenantId, limit: 500, offset: 0 });
           if (!cancelled) setNodes(nodePage.data);
-          if ((snap.totals?.nodes ?? 0) === 0 && ((nodePage.pagination.total ?? 0) > 0 || nodePage.data.length > 0)) {
+          const nodeCount = nodePage.pagination.total || nodePage.data.length;
+          if (!hasConsistentTotals(snap, nodeCount) && nodeCount > 0) {
             snap = {
               ...snap,
               source: 'postgres-fallback',
-              totals: fallbackTotals(nodePage.data, nodePage.pagination.total || nodePage.data.length),
+              totals: fallbackTotals(nodePage.data, nodeCount),
             };
           }
         } catch {

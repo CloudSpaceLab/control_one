@@ -10,7 +10,7 @@ describe('NotificationsBell', () => {
   it('shows the unread count and marks all notifications read', async () => {
     const user = userEvent.setup();
     const api = {
-      getUnreadNotificationsCount: vi.fn().mockResolvedValueOnce(2).mockResolvedValue(0),
+      getUnreadNotificationsCount: vi.fn().mockResolvedValue(2),
       listNotifications: vi.fn().mockResolvedValue({
         data: [{
           id: 'notification-1',

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
 // TestWindowsServiceConstantsExposed confirms the symbols installService and
@@ -56,5 +57,34 @@ func TestWindowsErrorSentinelsDistinct(t *testing.T) {
 	// installService compares them.
 	if !errors.Is(windows.ERROR_SERVICE_ALREADY_RUNNING, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 		t.Fatal("errors.Is broken against syscall.Errno — idempotency branch will misfire")
+	}
+}
+
+func TestRefreshedWindowsServiceConfigPreservesSCMFields(t *testing.T) {
+	existing := mgr.Config{
+		ServiceType:      windows.SERVICE_WIN32_OWN_PROCESS,
+		StartType:        mgr.StartManual,
+		ErrorControl:     mgr.ErrorIgnore,
+		LoadOrderGroup:   "group",
+		Dependencies:     []string{"Tcpip"},
+		ServiceStartName: `NT AUTHORITY\LocalService`,
+		SidType:          windows.SERVICE_SID_TYPE_UNRESTRICTED,
+		DelayedAutoStart: true,
+	}
+	updated := refreshedWindowsServiceConfig(existing, `C:\Program Files\Control One\ControlOneAgent\controlone-agent.exe`, `C:\ProgramData\ControlOne\nodeagent.yaml`)
+
+	if updated.ServiceType != existing.ServiceType || updated.LoadOrderGroup != existing.LoadOrderGroup ||
+		updated.ServiceStartName != existing.ServiceStartName || updated.SidType != existing.SidType ||
+		!updated.DelayedAutoStart || len(updated.Dependencies) != 1 || updated.Dependencies[0] != "Tcpip" {
+		t.Fatalf("SCM-owned fields were not preserved: %#v", updated)
+	}
+	if updated.StartType != mgr.StartAutomatic || updated.ErrorControl != mgr.ErrorNormal {
+		t.Fatalf("service startup metadata not refreshed: %#v", updated)
+	}
+	if updated.BinaryPathName != `"C:\Program Files\Control One\ControlOneAgent\controlone-agent.exe" --config "C:\ProgramData\ControlOne\nodeagent.yaml"` {
+		t.Fatalf("BinaryPathName = %q", updated.BinaryPathName)
+	}
+	if updated.DisplayName != windowsServiceDisplayName || updated.Description != windowsServiceDescription {
+		t.Fatalf("display metadata not refreshed: %#v", updated)
 	}
 }

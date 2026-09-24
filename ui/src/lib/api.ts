@@ -1,8 +1,7 @@
-// Default to same-origin (empty string) for production builds,
-// localhost:8443 for local development
-const DEFAULT_API_BASE_URL = import.meta.env.PROD
-  ? ""
-  : "http://localhost:8443";
+// Use the same-origin Vite /api proxy in local development as well as in
+// production.  Direct browser calls to localhost:8443 from a 127.0.0.1:4173
+// page trigger CORS preflights before login and surface as "Failed to fetch".
+const DEFAULT_API_BASE_URL = "";
 const HTTP_STATUS_UNAUTHORIZED = 401;
 
 export type HypervisorProvider = "aws" | "azure" | "vmware" | "libvirt";
