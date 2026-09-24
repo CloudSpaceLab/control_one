@@ -77,6 +77,13 @@ func TestShouldUpdateRejections(t *testing.T) {
 			wantSubstr: "paused",
 		},
 		{
+			name:      "explicit node update bypasses rollout wave",
+			manifest:  updateManifest{Force: true, ReleaseSeq: 0, RolloutPct: 0},
+			current:   99,
+			bucket:    99,
+			wantEmpty: true,
+		},
+		{
 			name:       "no rollout configured",
 			manifest:   updateManifest{ReleaseSeq: 0, RolloutPct: 100},
 			current:    0,

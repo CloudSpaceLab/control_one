@@ -5,7 +5,7 @@ describe('correlation rule templates', () => {
   it('defines the Phase 3A and 3B templates with valid threshold rule values', () => {
     expect(CORRELATION_RULE_TEMPLATES.map((template) => template.id)).toEqual([
       'ssh-brute-force',
-      'windows-repeated-login-failures',
+      'repeated-authentication-failures',
       'repeated-web-server-errors',
       'database-authentication-failures',
       'web-request-flood',
@@ -74,7 +74,7 @@ describe('correlation rule templates', () => {
   });
 
   it.each([
-    ['windows-repeated-login-failures', 'windows.authentication_failure', 5, ['user_name', 'node_id'], 'auth_result', 'eq', 'failure'],
+    ['repeated-authentication-failures', 'authentication.failure', 5, ['user_name', 'node_id'], 'auth_result', 'eq', 'failure'],
     ['repeated-web-server-errors', 'web.request', 10, ['node_id'], 'status_code', 'gte', '500'],
     ['database-authentication-failures', 'database.authentication_failure', 5, ['user_name', 'node_id'], 'auth_result', 'eq', 'failure'],
   ])('configures %s with its intended event and condition', (id, eventType, threshold, groupBy, field, operator, value) => {

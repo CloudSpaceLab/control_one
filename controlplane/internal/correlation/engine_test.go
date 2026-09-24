@@ -21,6 +21,22 @@ type fakeStore struct {
 	responses         []storage.CorrelationRule
 }
 
+func TestCorrelationEvidencePreservesObservedScopeAndResource(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	evidence := correlationEvidenceEvent(eventbus.Event{
+		TenantID: tenant, NodeID: &node, Topic: "security.event", Timestamp: time.Now(),
+		Payload: json.RawMessage(`{"ts":"2026-09-23T10:00:00Z","tenant_id":"untrusted","message":"Connection observed","severity":"warning","details":{"event_type":"network.connection","dst_ip":"192.0.2.1","dst_port":443,"protocol":"tcp","source_event_id":"original-1","source_os":"windows","source_channel":"Security","sensor_name":"ELAN WBF Fingerprint Sensor"}}`),
+	})
+	for key, want := range map[string]any{"tenant_id": tenant.String(), "node_id": node.String(), "timestamp": "2026-09-23T10:00:00Z", "event_type": "network.connection", "dst_ip": "192.0.2.1", "dst_port": float64(443), "source_event_id": "original-1", "source_os": "windows", "source_channel": "Security", "sensor_name": "ELAN WBF Fingerprint Sensor", "message": "Connection observed", "severity": "warning"} {
+		if evidence[key] != want {
+			t.Errorf("%s = %v, want %v", key, evidence[key], want)
+		}
+	}
+	if _, exists := evidence["src_ip"]; exists {
+		t.Fatal("missing source must not be inferred")
+	}
+}
+
 func (f *fakeStore) HandleCorrelationResponse(_ context.Context, rule storage.CorrelationRule, _ *storage.Alert, _ eventbus.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

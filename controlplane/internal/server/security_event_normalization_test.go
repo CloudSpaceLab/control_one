@@ -18,8 +18,10 @@ func TestNormalizeSecurityEventsRepresentativeSources(t *testing.T) {
 		wantTypes []string
 		want      map[string]any
 	}{
-		{name: "linux sshd failure", event: logEvent("sshd", "/var/log/auth.log", "Failed password for invalid user root from 203.0.113.25 port 54321 ssh2", nil), wantTypes: []string{"ssh.authentication_failure", "authentication.failure"}, want: map[string]any{"src_ip": "203.0.113.25", "src_port": 54321, "dst_port": 22, "user_name": "root", "auth_result": "failure"}},
-		{name: "windows security failure", event: logEvent("Microsoft-Windows-Security-Auditing", "Security", "An account failed to log on", map[string]any{"EventID": "4625", "IpAddress": "198.51.100.9", "IpPort": "51514", "TargetUserName": "BANK\\alice"}), wantTypes: []string{"windows.authentication_failure", "authentication.failure"}, want: map[string]any{"src_ip": "198.51.100.9", "src_port": 51514, "user_name": "BANK\\alice", "auth_result": "failure"}},
+		{name: "linux sshd failure", event: logEvent("sshd", "/var/log/auth.log", "Failed password for invalid user root from 203.0.113.25 port 54321 ssh2", nil), wantTypes: []string{"ssh.authentication_failure", "authentication.failure"}, want: map[string]any{"src_ip": "203.0.113.25", "src_port": 54321, "dst_port": 22, "user_name": "root", "auth_result": "failure", "source_os": "linux", "source_channel": "/var/log/auth.log"}},
+		{name: "windows security failure", event: logEvent("Microsoft-Windows-Security-Auditing", "Security", "An account failed to log on", map[string]any{"EventID": "4625", "IpAddress": "198.51.100.9", "IpPort": "51514", "TargetUserName": "BANK\\alice"}), wantTypes: []string{"windows.authentication_failure", "authentication.failure"}, want: map[string]any{"src_ip": "198.51.100.9", "src_port": 51514, "user_name": "BANK\\alice", "auth_result": "failure", "source_os": "windows", "source_channel": "Security", "source_event_id": "4625"}},
+		{name: "windows hello failure", event: logEvent("Microsoft-Windows-HelloForBusiness", "Microsoft-Windows-HelloForBusiness/Operational", "A user failed to sign into the device with the following information:\n\nUsername: SYSTEM\nCredential Type: Software Key\nAuthentication Error Status: 0xC000006D\nAuthentication Error Substatus: 0xC0000380", map[string]any{"EventID": 7001}), wantTypes: []string{"windows.authentication_failure", "authentication.failure"}, want: map[string]any{"user_name": "SYSTEM", "auth_status": "0xC000006D", "auth_substatus": "0xC0000380", "credential_type": "Software Key", "auth_result": "failure", "source_os": "windows", "source_channel": "Microsoft-Windows-HelloForBusiness/Operational", "source_event_id": "7001"}},
+		{name: "windows biometric mismatch", event: logEvent("Microsoft-Windows-Biometrics", "Microsoft-Windows-Biometrics/Operational", "The Windows Biometric Service could not determine the identity of the sample from sensor: ELAN WBF Fingerprint Sensor", map[string]any{"EventID": 1005}), wantTypes: []string{"windows.authentication_failure", "authentication.failure"}, want: map[string]any{"user_name": "unknown", "auth_result": "failure", "source_os": "windows", "source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "sensor_name": "ELAN WBF Fingerprint Sensor"}},
 		{name: "nginx access", event: logEvent("nginx", "/var/log/nginx/access.log", `192.0.2.4 - - [15/Sep/2026:10:00:00 +0100] "GET /.env HTTP/1.1" 404 123`, nil), wantTypes: []string{"web.request"}, want: map[string]any{"src_ip": "192.0.2.4", "path": "/.env", "status_code": 404, "dst_port": 80}},
 		{name: "apache access", event: logEvent("apache2", "/var/log/apache2/access.log", `192.0.2.5 - - [15/Sep/2026:10:00:00 +0100] "POST /login HTTP/1.1" 503 42`, nil), wantTypes: []string{"web.request"}, want: map[string]any{"http_method": "POST", "status_code": 503}},
 		{name: "iis access", event: logEvent("iis", "W3SVC1", `2026-09-15 10:00:00 10.0.0.5 GET /health - 443 - 192.0.2.6 Mozilla/5.0 - 200 0 0 12`, nil), wantTypes: []string{"web.request"}, want: map[string]any{"src_ip": "192.0.2.6", "path": "/health", "dst_port": 443}},
@@ -50,6 +52,31 @@ func TestNormalizeSecurityEventsRepresentativeSources(t *testing.T) {
 				t.Error("normalized canonical fields missing")
 			}
 		})
+	}
+}
+
+func TestWindowsSecurityMessageFieldsAreExtractedWithoutStructuredFields(t *testing.T) {
+	event := logEvent("Microsoft-Windows-Security-Auditing", "Security", `An account failed to log on.
+
+Account For Which Logon Failed:
+    Account Name: alice
+
+Failure Information:
+    Status: 0xC000006D
+
+Network Information:
+    Source Network Address: 192.0.2.55
+    Source Port: 51514
+
+Logon Type: 3`, map[string]any{"EventID": 4625})
+	got := normalizeSecurityEvents(uuid.New(), uuid.New(), []IngestedEvent{event})
+	if len(got) != 2 || got[0].Details["event_type"] != "windows.authentication_failure" {
+		t.Fatalf("normalized events = %#v", got)
+	}
+	for field, want := range map[string]any{"user_name": "alice", "src_ip": "192.0.2.55", "src_port": 51514, "logon_type": "3", "auth_result": "failure"} {
+		if got[0].Details[field] != want {
+			t.Errorf("details[%s] = %#v, want %#v", field, got[0].Details[field], want)
+		}
 	}
 }
 

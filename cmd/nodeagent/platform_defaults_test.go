@@ -1,6 +1,41 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDefaultTelemetryConfigYAMLForOS(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		goos     string
+		contains []string
+		absent   []string
+	}{
+		{name: "windows", goos: "windows", contains: []string{"collect_logs: true", "- Security", "Microsoft-Windows-HelloForBusiness/Operational", "Microsoft-Windows-Biometrics/Operational"}},
+		{name: "linux", goos: "linux", contains: []string{"type: journald", "ssh.service", "sshd.service"}, absent: []string{"collect_logs: false"}},
+		{name: "darwin", goos: "darwin", contains: []string{"type: unified", `process == "authd" OR process == "loginwindow"`}, absent: []string{"collect_logs: false"}},
+		{name: "other", goos: "freebsd", contains: []string{"collect_logs: false", "auto_discover_log_sources: true"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := defaultTelemetryConfigYAMLForOS(tc.goos)
+			for _, want := range tc.contains {
+				if !strings.Contains(got, want) {
+					t.Fatalf("config for %s missing %q: %s", tc.goos, want, got)
+				}
+			}
+			for _, unwanted := range tc.absent {
+				if strings.Contains(got, unwanted) {
+					t.Fatalf("config for %s unexpectedly contains %q: %s", tc.goos, unwanted, got)
+				}
+			}
+		})
+	}
+}
 
 func TestPlatformDataDirectories(t *testing.T) {
 	t.Parallel()

@@ -3,7 +3,50 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Alert, CorrelationRule } from '../lib/api';
-import { Alerts, alertAccessReviewRoute, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts, withAlertReturnContext } from './Alerts';
+import { Alerts, alertAccessReviewRoute, alertCategory, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts, alertScope, eventEvidenceFacts, withAlertReturnContext } from './Alerts';
+
+it('describes recorded event resources and marks missing evidence unavailable', () => {
+  const facts = Object.fromEntries(eventEvidenceFacts({ tenant_id: 'tenant-1', node_id: 'node-1', dst_ip: '192.0.2.1', dst_port: 443, protocol: 'tcp', path: '/etc/example', severity: 'warning', source_os: 'windows', source_channel: 'Microsoft-Windows-Biometrics/Operational', source_event_id: '1005', event_id: 'evt-1', sensor_name: 'ELAN WBF Fingerprint Sensor' }));
+  expect(facts.Tenant).toBe('tenant-1');
+  expect(facts.Host).toBe('node-1');
+  expect(facts['Observed resource']).toContain('Destination: 192.0.2.1 port 443 (tcp)');
+  expect(facts['Observed resource']).toContain('Path: /etc/example');
+  expect(facts['Observed resource']).toContain('Sensor: ELAN WBF Fingerprint Sensor');
+  expect(facts['Source OS']).toBe('windows');
+  expect(facts['Source channel']).toContain('Biometrics');
+  expect(facts['Source event ID']).toBe('1005');
+  expect(facts['Event reference']).toBe('evt-1');
+  expect(Object.fromEntries(eventEvidenceFacts({}))['Observed resource']).toContain('not recorded');
+});
+
+it('classifies Windows authentication failures as credential alerts', () => {
+  const alert = {
+    ...({} as Alert),
+    source: 'correlation',
+    title: 'Phase 3 demo - Windows repeated login failures',
+    summary: 'correlation rule fired',
+    context: {
+      event_type: 'security.event',
+      contributing_events: [{
+        event_type: 'windows.authentication_failure',
+        message: 'The Windows Biometric Service could not determine the identity of the sample',
+      }],
+    },
+  } as Alert;
+
+  expect(alertCategory(alert)).toBe('credential');
+});
+
+it('shows the affected node name and id when only event evidence identifies it', () => {
+  const alert = {
+    ...({} as Alert),
+    context: {
+      contributing_events: [{ hostname: 'Cloudspace', node_id: 'node-1' }],
+    },
+  } as Alert;
+
+  expect(alertScope(alert)).toBe('node Cloudspace (node-1)');
+});
 
 const mocks = vi.hoisted(() => {
   const listAlerts = vi.fn();
@@ -19,6 +62,7 @@ const mocks = vi.hoisted(() => {
   const updateAlertWorkflow = vi.fn();
   return {
     apiClient: {
+      getNode: vi.fn().mockResolvedValue({ id: 'node-1', tenant_id: 'tenant-1', hostname: 'demo-system.local' }),
       listAlerts,
       getAlert,
       ackAlert,
@@ -121,6 +165,7 @@ function paginated<T>(data: T[]) {
 describe('Alerts page failure states', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.apiClient.getNode.mockReset().mockResolvedValue({ id: 'node-1', tenant_id: 'tenant-1', hostname: 'demo-system.local' });
     mocks.currentTenantId = 'tenant-1';
     mocks.listAlerts.mockResolvedValue(paginated([alertRow]));
     mocks.getAlert.mockResolvedValue(alertRow);
@@ -414,6 +459,43 @@ describe('contextual alert review routes', () => {
     original.searchParams.delete('fromAlert');
     url.searchParams.delete('fromAlert');
     expect(url.href).toBe(original.href);
+  });
+
+  it('resolves the recorded node to its system name in the summary card', async () => {
+    mocks.listAlerts.mockResolvedValue({ data: [{ ...alertRow, node_id: 'node-1' }], total: 1 });
+    const user = userEvent.setup();
+    renderAlerts();
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    expect(await screen.findByText('demo-system.local')).toBeInTheDocument();
+    expect(screen.getByText('Systems in evidence')).toBeInTheDocument();
+  });
+
+  it('opens resolved alert evidence without changing its disposition', async () => {
+    mocks.listAlerts.mockResolvedValue(paginated([{ ...alertRow, state: 'resolved' }]));
+    const user = userEvent.setup();
+    renderAlerts();
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    expect(screen.getByText('Contributing events (1)')).toBeInTheDocument();
+    expect(mocks.updateAlertDisposition).not.toHaveBeenCalled();
+    expect(mocks.ackAlert).not.toHaveBeenCalled();
+  });
+
+  it('resolves distinct contributing systems even for tenant-wide alerts', async () => {
+    mocks.apiClient.getNode.mockImplementation(async (id: string) => ({ id, tenant_id: 'tenant-1', hostname: `${id}.local` }));
+    mocks.listAlerts.mockResolvedValue({ data: [{ ...alertRow, context: { contributing_events: [{ node_id: 'alpha' }, { node_id: 'beta' }, { node_id: 'alpha' }] } }], total: 1 });
+    const user = userEvent.setup();
+    renderAlerts();
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    expect(await screen.findByText('alpha.local, beta.local')).toBeInTheDocument();
+  });
+
+  it('keeps the node ID when its name lookup fails', async () => {
+    mocks.apiClient.getNode.mockRejectedValue(new Error('Unavailable'));
+    mocks.listAlerts.mockResolvedValue({ data: [{ ...alertRow, node_id: 'missing-node' }], total: 1 });
+    const user = userEvent.setup();
+    renderAlerts();
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    expect(await screen.findByText('missing-node (name unavailable)')).toBeInTheDocument();
   });
 	it('opens the exact IP lifecycle and carries host, user, and time into access review', () => {
 		const alert: Alert = {
