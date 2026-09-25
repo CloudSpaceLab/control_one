@@ -170,7 +170,7 @@ func newNormalizedSecurityEvent(tenantID, nodeID uuid.UUID, source *IngestedEven
 	sourceChannel := normalizedSourceChannel(source)
 	details := map[string]any{
 		"event_type": eventType, "event_category": category, "event_action": action, "outcome": outcome,
-		"original_event_type": source.Type, "source_event_id": nativeSourceEventID(source), "source": normalizedSource,
+		"original_event_type": source.Type, "source_event_id": nativeSourceEventID(source), "source_record_id": nativeSourceRecordID(source), "source": normalizedSource,
 		"source_os": normalizedSourceOS(source, normalizedSource), "source_channel": sourceChannel,
 		"node_id": nodeID.String(), "timestamp": source.TS.UTC().Format(time.RFC3339Nano),
 	}
@@ -274,7 +274,7 @@ func validateNormalizedSecurityEvent(ev *IngestedEvent) error {
 
 func normalizationErrorEvent(tenantID, nodeID uuid.UUID, source *IngestedEvent, cause error) IngestedEvent {
 	sourceName := normalizedEventSource(source)
-	details := map[string]any{"event_type": "security.normalization_error", "source": sourceName, "source_os": normalizedSourceOS(source, sourceName), "source_channel": normalizedSourceChannel(source), "node_id": nodeID.String(), "timestamp": source.TS.UTC().Format(time.RFC3339Nano), "outcome": "failure", "error": cause.Error(), "original_event_type": source.Type, "source_event_id": nativeSourceEventID(source)}
+	details := map[string]any{"event_type": "security.normalization_error", "source": sourceName, "source_os": normalizedSourceOS(source, sourceName), "source_channel": normalizedSourceChannel(source), "node_id": nodeID.String(), "timestamp": source.TS.UTC().Format(time.RFC3339Nano), "outcome": "failure", "error": cause.Error(), "original_event_type": source.Type, "source_event_id": nativeSourceEventID(source), "source_record_id": nativeSourceRecordID(source)}
 	if strings.TrimSpace(source.EventID) != "" {
 		details["event_id"] = source.EventID
 	}
@@ -354,6 +354,17 @@ func nativeSourceEventID(ev *IngestedEvent) string {
 	// Collectors place native IDs in Details. IngestedEvent.EventID is the
 	// Control One event identity and is retained separately as event_id.
 	return firstNonEmpty(detailStringAny(ev, "source_event_id", "event_code", "event.code", "EventID", "event_id", "id"))
+}
+
+// nativeSourceRecordID is the stable per-record identity supplied by native
+// collectors. It is deliberately separate from source_event_id: Windows
+// Event ID 1005/4625 identifies an event type, while RecordId identifies the
+// individual occurrence and is safe to use for replay de-duplication.
+func nativeSourceRecordID(ev *IngestedEvent) string {
+	if ev == nil {
+		return ""
+	}
+	return firstNonEmpty(detailStringAny(ev, "source_record_id", "record_id", "RecordId", "event.record_id"))
 }
 
 func copyEventAlias(dst map[string]any, ev *IngestedEvent, normalized string, aliases ...string) {

@@ -2203,7 +2203,7 @@ export function alertAccessReviewRoute(alert: Alert): string {
 
 function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
   const raw = alert.context?.contributing_events;
-  const events = Array.isArray(raw) ? raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : [];
+  const events = sortContributingEvents(Array.isArray(raw) ? raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : []);
   if (events.length === 0) return null;
   return (
     <div className="rounded-lg border border-border-subtle bg-surface p-3">
@@ -2230,6 +2230,21 @@ function ContributingEvents({ alert }: { alert: Alert }): JSX.Element | null {
   );
 }
 
+/** Keep the newest evidence visible first while preserving input order for invalid timestamps. */
+export function sortContributingEvents(events: Record<string, unknown>[]): Record<string, unknown>[] {
+  return events
+    .map((event, index) => ({ event, index, timestamp: Date.parse(String(event.timestamp ?? '')) }))
+    .sort((left, right) => {
+      const leftValid = Number.isFinite(left.timestamp);
+      const rightValid = Number.isFinite(right.timestamp);
+      if (leftValid && rightValid) return right.timestamp - left.timestamp || left.index - right.index;
+      if (leftValid) return -1;
+      if (rightValid) return 1;
+      return left.index - right.index;
+    })
+    .map(({ event }) => event);
+}
+
 export function eventEvidenceFacts(event: Record<string, unknown>): [string, string][] {
   const value = (...keys: string[]) => contextString(event, ...keys);
   const resources = [
@@ -2248,6 +2263,7 @@ export function eventEvidenceFacts(event: Record<string, unknown>): [string, str
     ['Source OS', value('source_os') || 'Unavailable'],
     ['Source channel', value('source_channel') || 'Unavailable'],
     ['Source event ID', value('source_event_id') || 'Unavailable'],
+    ['Source record ID', value('source_record_id') || 'Unavailable'],
     ['Event severity', value('severity') || 'Unavailable'],
     ['Event reference', value('event_id', 'source_event_id') || 'Unavailable'],
   ];

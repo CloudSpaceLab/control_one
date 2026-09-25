@@ -149,9 +149,10 @@ func (s *Store) reopenResolvedAlert(ctx context.Context, existing *Alert, p Crea
 	if _, err = s.db.ExecContext(ctx, `
 		UPDATE alerts
 		   SET state='open', context=$1, severity=$2,
-		       summary=COALESCE(NULLIF($3,''),summary), resolved_at=NULL, resolved_by=NULL
-		 WHERE id=$4
-	`, encoded, nonEmptyString(p.Severity, existing.Severity), p.Summary, existing.ID); err != nil {
+		       title=COALESCE(NULLIF($3,''),title),
+		       summary=COALESCE(NULLIF($4,''),summary), resolved_at=NULL, resolved_by=NULL
+		 WHERE id=$5
+	`, encoded, nonEmptyString(p.Severity, existing.Severity), p.Title, p.Summary, existing.ID); err != nil {
 		return nil, fmt.Errorf("reopen resolved alert: %w", err)
 	}
 	updated, err := s.GetAlert(ctx, existing.ID)
@@ -239,12 +240,47 @@ func (s *Store) updateOpenAlertOccurrence(ctx context.Context, existing *Alert, 
 }
 
 func appendEvidenceTimeline(existing, incoming any) []any {
-	timeline := jsonArray(existing)
-	timeline = append(timeline, jsonArray(incoming)...)
+	timeline := make([]any, 0, len(jsonArray(existing))+len(jsonArray(incoming)))
+	seen := map[string]struct{}{}
+	appendEvent := func(event any) {
+		identity := evidenceRecordIdentity(event)
+		if identity != "" {
+			if _, exists := seen[identity]; exists {
+				return
+			}
+			seen[identity] = struct{}{}
+		}
+		timeline = append(timeline, event)
+	}
+	for _, event := range jsonArray(existing) {
+		appendEvent(event)
+	}
+	for _, event := range jsonArray(incoming) {
+		appendEvent(event)
+	}
 	if len(timeline) > 50 {
 		timeline = timeline[len(timeline)-50:]
 	}
 	return timeline
+}
+
+// evidenceRecordIdentity returns an identity only when it is safe to dedupe.
+// Native event IDs such as Windows Event ID 4625 are type IDs, not occurrence
+// IDs, so source_event_id alone must never collapse separate attempts.
+func evidenceRecordIdentity(event any) string {
+	values, ok := event.(map[string]any)
+	if !ok {
+		return ""
+	}
+	recordID := strings.TrimSpace(fmt.Sprint(values["source_record_id"]))
+	if recordID == "" || recordID == "<nil>" {
+		return ""
+	}
+	channel := strings.TrimSpace(fmt.Sprint(values["source_channel"]))
+	if channel == "" || channel == "<nil>" {
+		channel = strings.TrimSpace(fmt.Sprint(values["source"]))
+	}
+	return "native-record:" + channel + ":" + recordID
 }
 
 func jsonArray(value any) []any {

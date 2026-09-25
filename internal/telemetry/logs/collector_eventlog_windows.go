@@ -75,9 +75,10 @@ func (c *eventLogCollector) Run(ctx context.Context, out chan<- RawLog) error {
 				Hostname:  evt.Computer,
 				Labels:    map[string]string{},
 				Fields: map[string]any{
-					"event_id": evt.EventID,
-					"keywords": evt.Keywords,
-					"task":     evt.Task,
+					"event_id":  evt.EventID,
+					"record_id": evt.RecordID,
+					"keywords":  evt.Keywords,
+					"task":      evt.Task,
 				},
 			}
 			for k, v := range c.cfg.Labels {
@@ -123,7 +124,7 @@ func buildPowerShellScript(channels []string) string {
 	// access looked healthy while silently collecting zero events.
 	return "$channels = @(" + strings.Join(quoted, ",") + "); foreach ($channel in $channels) { try { @(Get-WinEvent -LogName $channel -MaxEvents 1 -ErrorAction Stop) | Out-Null } catch { [Console]::Error.WriteLine(('eventlog channel {0} unavailable: {1}' -f $channel, $_.Exception.Message)); exit 1 } }; $seen = @{}; while ($true) {" +
 		"foreach ($channel in $channels) {" +
-		"try { $events = @(Get-WinEvent -LogName $channel -MaxEvents 25 -ErrorAction Stop); foreach ($evt in ($events | Sort-Object RecordId)) { $key = ($channel + ':' + $evt.RecordId); if ($seen.ContainsKey($key)) { continue }; $seen[$key] = $true; $data = @{ 'Timestamp' = $evt.TimeCreated.ToUniversalTime().ToString('o'); 'Provider' = $evt.ProviderName; 'Channel' = $evt.LogName; 'Message' = $evt.FormatDescription(); 'Level' = $evt.LevelDisplayName; 'EventID' = $evt.Id; 'Computer' = $evt.MachineName; 'Keywords' = $evt.KeywordsDisplayNames; 'Task' = $evt.TaskDisplayName }; [Console]::Out.WriteLine(($data | ConvertTo-Json -Compress)) } } catch {} }" +
+		"try { $events = @(Get-WinEvent -LogName $channel -MaxEvents 25 -ErrorAction Stop); foreach ($evt in ($events | Sort-Object RecordId)) { $key = ($channel + ':' + $evt.RecordId); if ($seen.ContainsKey($key)) { continue }; $seen[$key] = $true; $data = @{ 'Timestamp' = $evt.TimeCreated.ToUniversalTime().ToString('o'); 'Provider' = $evt.ProviderName; 'Channel' = $evt.LogName; 'Message' = $evt.FormatDescription(); 'Level' = $evt.LevelDisplayName; 'EventID' = $evt.Id; 'RecordId' = [int64]$evt.RecordId; 'Computer' = $evt.MachineName; 'Keywords' = $evt.KeywordsDisplayNames; 'Task' = $evt.TaskDisplayName }; [Console]::Out.WriteLine(($data | ConvertTo-Json -Compress)) } } catch {} }" +
 		"; Start-Sleep -Seconds 5 }"
 }
 
@@ -134,6 +135,7 @@ type eventRecord struct {
 	Message   string
 	Level     string
 	EventID   int
+	RecordID  int64
 	Computer  string
 	Keywords  any
 	Task      any

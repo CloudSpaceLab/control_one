@@ -30,6 +30,34 @@ func TestReopenedAlertContextPreservesEvidenceAndClearsDisposition(t *testing.T)
 	}
 }
 
+func TestAppendEvidenceTimelineDeduplicatesNativeRecordReplay(t *testing.T) {
+	existing := []any{
+		map[string]any{"source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "41", "timestamp": "2026-09-25T09:34:22Z"},
+	}
+	incoming := []any{
+		map[string]any{"source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "41", "timestamp": "2026-09-25T09:34:22Z"},
+		map[string]any{"source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "42", "timestamp": "2026-09-25T09:34:24Z"},
+	}
+
+	got := appendEvidenceTimeline(existing, incoming)
+	if len(got) != 2 {
+		t.Fatalf("evidence timeline length = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].(map[string]any)["source_record_id"] != "41" || got[1].(map[string]any)["source_record_id"] != "42" {
+		t.Fatalf("unexpected retained records: %#v", got)
+	}
+}
+
+func TestAppendEvidenceTimelineDoesNotUseNativeEventTypeAsIdentity(t *testing.T) {
+	events := appendEvidenceTimeline(nil, []any{
+		map[string]any{"source_channel": "Security", "source_event_id": "4625", "source_record_id": "10"},
+		map[string]any{"source_channel": "Security", "source_event_id": "4625", "source_record_id": "11"},
+	})
+	if len(events) != 2 {
+		t.Fatalf("distinct Windows records were collapsed: %#v", events)
+	}
+}
+
 func TestMergeAlertCaseEvidenceAppendsOnce(t *testing.T) {
 	existing := json.RawMessage(`{"owner":"soc"}`)
 	alert := json.RawMessage(`{"alert_id":"alert-1","correlation_id":"corr-1"}`)

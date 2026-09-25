@@ -330,7 +330,7 @@ func correlationEvidenceEvent(ev eventbus.Event) map[string]any {
 	// Keep each event's own evidence together; alert-level context can contain
 	// fields retained from earlier occurrences and is not a resource snapshot.
 	details, _ := payload["details"].(map[string]any)
-	for _, field := range []string{"event_type", "original_event_type", "event_id", "source_event_id", "source_os", "source_channel", "message", "severity", "hostname", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "user_name", "auth_result", "auth_status", "auth_substatus", "credential_type", "logon_type", "sensor_name", "source", "path", "process_name", "service_name", "resource_type", "resource_id", "status_code"} {
+	for _, field := range []string{"event_type", "original_event_type", "event_id", "source_event_id", "source_record_id", "source_os", "source_channel", "message", "severity", "hostname", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "user_name", "auth_result", "auth_status", "auth_substatus", "credential_type", "logon_type", "sensor_name", "source", "path", "process_name", "service_name", "resource_type", "resource_id", "status_code"} {
 		if value, ok := payload[field]; ok {
 			evidence[field] = value
 		} else if value, ok := details[field]; ok {
