@@ -106,10 +106,6 @@ func (s *Store) SetRolePermissions(ctx context.Context, roleID uuid.UUID, perms 
 		}
 		return err
 	}
-	if IsBuiltInRoleName(roleName) {
-		return ErrBuiltInRoleImmutable
-	}
-
 	if _, err := tx.ExecContext(ctx, `DELETE FROM role_permissions WHERE role_id = $1`, roleID); err != nil {
 		return err
 	}

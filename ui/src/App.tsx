@@ -185,6 +185,19 @@ function loginReturnState(location: ReturnType<typeof useLocation>): { from: str
   return { from: from || '/' };
 }
 
+function AdminOnly({ children }: { children: ReactNode }): JSX.Element {
+  const { profile, loading, error } = useAuth();
+
+  // Wait for the profile before deciding whether a deep link is allowed. This
+  // avoids redirecting a valid admin while the initial profile request is in flight.
+  if (loading || (!profile && !error)) {
+    return <PageFallback />;
+  }
+
+  const isAdmin = profile?.roles?.some((role) => role.trim().toLowerCase() === 'admin') ?? false;
+  return isAdmin ? <>{children}</> : <Navigate to="/control-room" replace />;
+}
+
 export function App(): JSX.Element {
   const { isAuthenticated } = useAuth();
   const location = useLocation();
@@ -272,7 +285,7 @@ export function App(): JSX.Element {
                 <Route path="connections" element={<Navigate to="/security/network?tab=connections" replace />} />
                 <Route path="sessions" element={<Sessions />} />
                 <Route path="dashboards" element={<Navigate to="/control-room" replace />} />
-                <Route path="roles" element={<Roles />} />
+                <Route path="roles" element={<AdminOnly><Roles /></AdminOnly>} />
                 <Route path="audit" element={<Audit />} />
                 <Route path="users" element={<Users />} />
                 <Route path="telemetry" element={<Telemetry />} />

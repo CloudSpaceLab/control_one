@@ -273,7 +273,11 @@ function caseContainsAlert(socCase: SOCCase, alertId: string): boolean {
 export function Alerts(): JSX.Element {
   const client = useApiClient();
   const { profile } = useAuth();
-  const canReviewAlerts = Boolean(profile?.roles?.includes('admin'));
+  const canManageAlerts = Boolean(
+    profile?.roles?.some((role) => ['admin', 'operator'].includes(role.toLowerCase()))
+      || profile?.permissions?.some((permission) => permission.toLowerCase() === 'alerts.acknowledge'),
+  );
+  const canReviewAlerts = Boolean(profile?.roles?.some((role) => role.toLowerCase() === 'admin'));
   const location = useLocation();
   const linkedAlertId = new URLSearchParams(location.search).get('alert_id');
   const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
@@ -850,7 +854,7 @@ export function Alerts(): JSX.Element {
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center gap-2">
-          {row.original.state === 'open' ? (
+          {canManageAlerts && row.original.state === 'open' ? (
             <Button
               variant="secondary"
               size="sm"
@@ -862,6 +866,7 @@ export function Alerts(): JSX.Element {
               Ack
             </Button>
           ) : null}
+          {canManageAlerts ? (
             <Button
               variant="primary"
               size="sm"
@@ -874,10 +879,11 @@ export function Alerts(): JSX.Element {
             >
               Review
             </Button>
+          ) : null}
         </div>
       ),
     },
-  ], [ack, ackingId, alerts, resolvingAlert, selectedAlertIds]);
+  ], [ack, ackingId, alerts, canManageAlerts, resolvingAlert, selectedAlertIds]);
 
   const ruleColumns: ColumnDef<CorrelationRule>[] = [
     {

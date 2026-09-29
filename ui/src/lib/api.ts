@@ -1503,6 +1503,7 @@ export interface Profile {
   type: string;
   roles: string[];
   groups: string[];
+  permissions?: string[];
   stored_roles?: string[];
   user?: ProfileUserDetails;
 }

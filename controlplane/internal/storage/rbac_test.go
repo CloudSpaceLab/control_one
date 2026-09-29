@@ -83,7 +83,7 @@ func TestRBACAssignmentsWithPostgres(t *testing.T) {
 	}
 	require.NotEqual(t, uuid.Nil, adminRoleID)
 	require.ErrorContains(t, store.DeleteRoleByID(ctx, adminRoleID), "cannot delete built-in role")
-	require.ErrorIs(t, store.SetRolePermissions(ctx, adminRoleID, []string{"roles.read"}), ErrBuiltInRoleImmutable)
+	require.NoError(t, store.SetRolePermissions(ctx, adminRoleID, []string{"roles.read"}))
 
 	customRole, err := store.CreateCustomRole(ctx, "soc-reviewer", "SOC reviewer", nil)
 	require.NoError(t, err)

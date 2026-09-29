@@ -1,13 +1,14 @@
 import { useMemo } from 'react';
 import { useAuth } from '@/providers/AuthProvider';
 
-export type RoleName = 'admin' | 'operator' | 'viewer';
+export type RoleName = 'admin' | 'ciso' | 'operator' | 'viewer';
 
-const PRIORITY: RoleName[] = ['admin', 'operator', 'viewer'];
+const PRIORITY: RoleName[] = ['admin', 'ciso', 'operator', 'viewer'];
 
 function normalize(role: string): RoleName | null {
   const r = role.toLowerCase();
   if (r === 'admin' || r.endsWith(':admin')) return 'admin';
+  if (r === 'ciso' || r.endsWith(':ciso')) return 'ciso';
   if (r === 'operator' || r.endsWith(':operator')) return 'operator';
   if (r === 'viewer' || r.endsWith(':viewer')) return 'viewer';
   return null;
@@ -16,6 +17,7 @@ function normalize(role: string): RoleName | null {
 export function useRolePick(): {
   role: RoleName;
   isAdmin: boolean;
+  isCISO: boolean;
   isOperator: boolean;
   isViewer: boolean;
   hasRole: (r: RoleName) => boolean;
@@ -31,6 +33,7 @@ export function useRolePick(): {
     return {
       role,
       isAdmin: set.has('admin'),
+      isCISO: set.has('ciso'),
       isOperator: set.has('operator'),
       isViewer: set.has('viewer'),
       hasRole: (r: RoleName) => set.has(r),

@@ -77,6 +77,7 @@ const PRIMARY_DESTINATIONS = [
   'Compliance',
   'Access',
   'Audit log',
+  'Roles & permissions',
 ];
 
 const GLOBAL_SEARCH_DESTINATIONS = [
@@ -111,7 +112,6 @@ const DRILLDOWN_ONLY_LABELS = [
   'Templates',
   'Jobs',
   'Users',
-  'Roles',
 ];
 
 function navLinkName(label: string): RegExp {
@@ -147,6 +147,32 @@ describe('navigation scope', () => {
 
     const nav = screen.getByRole('navigation');
     expect(within(nav).getByRole('link', { name: /ask ai/i })).toHaveAttribute('href', '/ask');
+  });
+
+  it('uses effective permissions for CISO read navigation', () => {
+    render(
+      <MemoryRouter>
+        <Sidebar userRoles={['ciso']} userPermissions={['alerts.read', 'cases.read', 'audit.read']} />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation');
+    expect(within(nav).getByRole('link', { name: navLinkName('Alerts') })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: navLinkName('Cases') })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: navLinkName('Audit log') })).toBeInTheDocument();
+  });
+
+  it('hides read destinations when the assigned role lacks their permissions', () => {
+    render(
+      <MemoryRouter>
+        <Sidebar userRoles={['viewer']} userPermissions={['alerts.read']} />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation');
+    expect(within(nav).getByRole('link', { name: navLinkName('Alerts') })).toBeInTheDocument();
+    expect(within(nav).queryByRole('link', { name: navLinkName('Cases') })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole('link', { name: navLinkName('Audit log') })).not.toBeInTheDocument();
   });
 
   it('keeps global search quick navigation aligned with the primary IA', async () => {
@@ -212,6 +238,7 @@ describe('navigation scope', () => {
     expectMenuLink('Bulk server enrollment', '/fleet-enroll');
     expectMenuLink('Hypervisors and cloud', '/hypervisors');
     expectMenuLink('Offline bundles', '/offline-bundle');
+    expectMenuLink('Roles & permissions', '/roles');
   });
 });
 
