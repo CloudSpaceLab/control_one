@@ -42,9 +42,10 @@ type Tool struct {
 }
 
 type ToolCall struct {
-	ID    string         `json:"id"`
-	Name  string         `json:"name"`
-	Input map[string]any `json:"input"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Input            map[string]any `json:"input"`
+	ThoughtSignature string         `json:"thought_signature,omitempty"`
 }
 
 type ToolResult struct {

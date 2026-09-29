@@ -153,7 +153,8 @@ func TestGeminiClientEncodesToolsAndParsesFunctionCalls(t *testing.T) {
 						"functionCall": {
 							"name": "node_health",
 							"args": {"node_id": "node-1"}
-						}
+						},
+						"thoughtSignature": "gemini-signed-call"
 					}]
 				}
 			}]
@@ -180,8 +181,15 @@ func TestGeminiClientEncodesToolsAndParsesFunctionCalls(t *testing.T) {
 		t.Fatalf("StopReason = %q", resp.StopReason)
 	}
 	calls := ToolCalls(resp.Message)
-	if len(calls) != 1 || calls[0].ID != "node_health" || calls[0].Name != "node_health" || calls[0].Input["node_id"] != "node-1" {
+	if len(calls) != 1 || calls[0].ID != "node_health" || calls[0].Name != "node_health" || calls[0].Input["node_id"] != "node-1" || calls[0].ThoughtSignature != "gemini-signed-call" {
 		t.Fatalf("unexpected tool calls: %+v", calls)
+	}
+	encodedCall, err := json.Marshal(toGeminiParts(resp.Message.Content))
+	if err != nil {
+		t.Fatalf("marshal returned function call: %v", err)
+	}
+	if !strings.Contains(string(encodedCall), `"thoughtSignature":"gemini-signed-call"`) {
+		t.Fatalf("Gemini thought signature was not preserved in returned call: %s", encodedCall)
 	}
 }
 

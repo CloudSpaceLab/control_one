@@ -353,15 +353,16 @@ func (s *Store) GetAlert(ctx context.Context, id uuid.UUID) (*Alert, error) {
 }
 
 type AlertFilter struct {
-	TenantID  uuid.UUID
-	NodeID    uuid.UUID
-	State     string
-	Severity  string
-	Since     *time.Time
-	Until     *time.Time
-	Search    string
-	SortBy    string
-	SortOrder string
+	TenantID          uuid.UUID
+	NodeID            uuid.UUID
+	IncludeUnresolved bool
+	State             string
+	Severity          string
+	Since             *time.Time
+	Until             *time.Time
+	Search            string
+	SortBy            string
+	SortOrder         string
 }
 
 func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int) ([]Alert, int, error) {
@@ -377,7 +378,7 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		idx++
 	}
 	if f.NodeID != uuid.Nil {
-		where = append(where, fmt.Sprintf("node_id = $%d", idx))
+		where = append(where, fmt.Sprintf(`(node_id = $%d OR context->'contributing_events' @> jsonb_build_array(jsonb_build_object('node_id', $%d::text)))`, idx, idx))
 		args = append(args, f.NodeID)
 		idx++
 	}
@@ -392,7 +393,11 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		idx++
 	}
 	if f.Since != nil {
-		where = append(where, fmt.Sprintf("opened_at >= $%d", idx))
+		if f.IncludeUnresolved {
+			where = append(where, fmt.Sprintf("(opened_at >= $%d OR state IN ('open', 'acked'))", idx))
+		} else {
+			where = append(where, fmt.Sprintf("opened_at >= $%d", idx))
+		}
 		args = append(args, *f.Since)
 		idx++
 	}
@@ -433,7 +438,11 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		order = "ASC"
 	}
 	args = append(args, limit, offset)
-	q := alertSelectSQL + ` WHERE ` + whereSQL + fmt.Sprintf(` ORDER BY %s %s LIMIT $%d OFFSET $%d`, sortCol, order, idx, idx+1)
+	orderBy := fmt.Sprintf(`%s %s`, sortCol, order)
+	if f.IncludeUnresolved {
+		orderBy = `CASE WHEN state IN ('open', 'acked') THEN 0 ELSE 1 END, ` + orderBy
+	}
+	q := alertSelectSQL + ` WHERE ` + whereSQL + fmt.Sprintf(` ORDER BY %s LIMIT $%d OFFSET $%d`, orderBy, idx, idx+1)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err

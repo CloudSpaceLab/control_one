@@ -6162,8 +6162,21 @@ func (f *fakeStore) ListAlerts(_ context.Context, filter storage.AlertFilter, li
 		if filter.TenantID != uuid.Nil && alert.TenantID != filter.TenantID {
 			continue
 		}
-		if filter.NodeID != uuid.Nil && (!alert.NodeID.Valid || alert.NodeID.UUID != filter.NodeID) {
-			continue
+		if filter.NodeID != uuid.Nil {
+			matchesNode := alert.NodeID.Valid && alert.NodeID.UUID == filter.NodeID
+			if !matchesNode {
+				if events, ok := alert.Context["contributing_events"].([]any); ok {
+					for _, raw := range events {
+						if event, ok := raw.(map[string]any); ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(event["node_id"])), filter.NodeID.String()) {
+							matchesNode = true
+							break
+						}
+					}
+				}
+			}
+			if !matchesNode {
+				continue
+			}
 		}
 		if filter.State != "" && alert.State != filter.State {
 			continue

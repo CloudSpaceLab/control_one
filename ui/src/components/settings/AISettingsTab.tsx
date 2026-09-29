@@ -26,7 +26,7 @@ const PROVIDERS = [
   {
     value: 'google',
     label: 'Google Gemini',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: 'gemini-3.5-flash-lite',
     basePlaceholder: 'https://generativelanguage.googleapis.com',
     keyPlaceholder: 'AIza...',
   },
@@ -55,8 +55,9 @@ export function AISettingsTab(): JSX.Element {
       .then((c) => {
         if (cancelled) return;
         setCfg(c);
-        setProvider(c.provider || 'anthropic');
-        setModel(c.model || 'claude-sonnet-4-6');
+        const configuredProvider = PROVIDERS.find((item) => item.value === c.provider) ?? PROVIDERS[0];
+        setProvider(configuredProvider.value);
+        setModel(c.model || configuredProvider.defaultModel);
         setBaseUrl(c.base_url || '');
       })
       .catch(() => {

@@ -16,6 +16,79 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestRiskNotableInfersUniqueNodeFromContributingEvidence(t *testing.T) {
+	tenantID, nodeID, alertID := uuid.New(), uuid.New(), uuid.New()
+	node := storage.Node{ID: nodeID, TenantID: tenantID, Hostname: "Cloudspace"}
+	alert := storage.Alert{
+		ID: alertID, TenantID: tenantID, Source: "correlation", Severity: "high",
+		Title: "Repeated login failures", State: "open",
+		Context: map[string]any{"contributing_events": []any{
+			map[string]any{"node_id": nodeID.String(), "event_type": "authentication.failure"},
+		}},
+	}
+
+	notable, _ := riskNotableFromAlert(alert, map[uuid.UUID]storage.Node{nodeID: node}, uuid.Nil)
+	if notable.NodeID != nodeID.String() || notable.EntityLabel != "Cloudspace" {
+		t.Fatalf("node association from contributing evidence = (%q, %q), want (%q, Cloudspace)", notable.NodeID, notable.EntityLabel, nodeID)
+	}
+
+	alert.Context["contributing_events"] = []any{
+		map[string]any{"node_id": nodeID.String()},
+		map[string]any{"node_id": uuid.NewString()},
+	}
+	notable, _ = riskNotableFromAlert(alert, map[uuid.UUID]storage.Node{nodeID: node}, uuid.Nil)
+	if notable.NodeID != "" {
+		t.Fatalf("ambiguous contributing nodes should not be attributed to one node: %#v", notable)
+	}
+	alert.Context["contributing_events"] = []any{
+		map[string]any{"node_id": nodeID.String()},
+		map[string]any{"event_type": "authentication.failure"},
+	}
+	notable, _ = riskNotableFromAlert(alert, map[uuid.UUID]storage.Node{nodeID: node}, uuid.Nil)
+	if notable.NodeID != "" {
+		t.Fatalf("incomplete contributing node evidence should not be attributed: %#v", notable)
+	}
+}
+
+func TestIsUnresolvedAlertState(t *testing.T) {
+	for _, state := range []string{"open", "acked", "OPEN", " acked "} {
+		if !isUnresolvedAlertState(state) {
+			t.Errorf("isUnresolvedAlertState(%q) = false, want true", state)
+		}
+	}
+	for _, state := range []string{"resolved", "closed", ""} {
+		if isUnresolvedAlertState(state) {
+			t.Errorf("isUnresolvedAlertState(%q) = true, want false", state)
+		}
+	}
+}
+
+func TestNodeAlertsToolIncludesAlertLinkedByContributingEvidence(t *testing.T) {
+	tenantID, nodeID, alertID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeStore{
+		nodes: []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "Cloudspace"}},
+		alerts: []storage.Alert{{
+			ID: alertID, TenantID: tenantID, Source: "correlation", Severity: "high",
+			Title: "Repeated login failures", State: "open",
+			Context: map[string]any{"contributing_events": []any{
+				map[string]any{"node_id": nodeID.String(), "event_type": "authentication.failure"},
+			}},
+		}},
+	}
+	srv := buildHeartbeatServer(t, store)
+	execution, err := srv.runNodeAlertsTool(context.Background(), aiToolContext{TenantID: tenantID}, map[string]any{"node_id": nodeID.String()})
+	if err != nil {
+		t.Fatalf("runNodeAlertsTool: %v", err)
+	}
+	alerts, ok := execution.Payload.([]alertResponse)
+	if !ok {
+		t.Fatalf("node alerts payload has type %T, want []alertResponse", execution.Payload)
+	}
+	if len(alerts) != 1 || alerts[0].ID != alertID.String() {
+		t.Fatalf("node alert evidence results = %#v, want alert %s", alerts, alertID)
+	}
+}
+
 func TestRiskNotablesAggregatesExistingRiskEvidence(t *testing.T) {
 	t.Parallel()
 
