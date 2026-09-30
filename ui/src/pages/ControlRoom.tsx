@@ -329,8 +329,8 @@ export function ControlRoom(): JSX.Element {
               {overview && overview.isolation.airgapped > 0 ? <WifiOff /> : overview && overview.isolation.whitelist > 0 ? <LockKeyhole /> : <Wifi />}
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
-              <RefreshCw />
-              Refresh
+              <RefreshCw className={loading ? 'animate-spin' : ''} />
+              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         }

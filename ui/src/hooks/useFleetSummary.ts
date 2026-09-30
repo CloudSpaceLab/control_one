@@ -21,9 +21,15 @@ function fallbackTotals(nodes: NodeSummary[], total: number): FleetHealthSnapsho
   };
 
   for (const node of nodes) {
+    // Lifecycle state only says that a node is registered.  A node that has
+    // stopped heartbeating must not be counted as healthy just because its
+    // lifecycle state is still `active`.
+    const lastSeen = node.last_seen_at ? new Date(node.last_seen_at).getTime() : Number.NaN;
+    const online = Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60 * 1000;
     switch ((node.state ?? '').toLowerCase()) {
       case 'active':
-        totals.healthy += 1;
+        if (online) totals.healthy += 1;
+        else totals.warning += 1;
         break;
       case 'enrollment_pending':
         totals.warning += 1;
@@ -40,9 +46,16 @@ function fallbackTotals(nodes: NodeSummary[], total: number): FleetHealthSnapsho
   return totals;
 }
 
+function hasConsistentTotals(snapshot: FleetHealthSnapshot, nodeCount: number): boolean {
+  const totals = snapshot.totals;
+  const classified = totals.healthy + totals.warning + totals.degraded + totals.critical + totals.unknown;
+  return totals.nodes === nodeCount && classified === nodeCount;
+}
+
 export function useFleetSummary(opts: Options = {}) {
   const api = useApiClient();
   const [data, setData] = useState<FleetHealthSnapshot | null>(null);
+  const [nodes, setNodes] = useState<NodeSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -52,6 +65,7 @@ export function useFleetSummary(opts: Options = {}) {
 
     if (!opts.tenantId) {
       setData(null);
+      setNodes([]);
       setError(null);
       setLoading(false);
       return () => {
@@ -65,19 +79,19 @@ export function useFleetSummary(opts: Options = {}) {
           tenantId: opts.tenantId,
           since: opts.since,
         });
-        if ((snap.totals?.nodes ?? 0) === 0 && opts.tenantId) {
-          try {
-            const nodePage = await api.listNodes({ tenantId: opts.tenantId, limit: 500, offset: 0 });
-            if ((nodePage.pagination.total ?? 0) > 0 || nodePage.data.length > 0) {
-              snap = {
-                ...snap,
-                source: 'postgres-fallback',
-                totals: fallbackTotals(nodePage.data, nodePage.pagination.total || nodePage.data.length),
-              };
-            }
-          } catch {
-            // Keep the original health snapshot if the best-effort fallback fails.
+        try {
+          const nodePage = await api.listNodes({ tenantId: opts.tenantId, limit: 500, offset: 0 });
+          if (!cancelled) setNodes(nodePage.data);
+          const nodeCount = nodePage.pagination.total || nodePage.data.length;
+          if (!hasConsistentTotals(snap, nodeCount) && nodeCount > 0) {
+            snap = {
+              ...snap,
+              source: 'postgres-fallback',
+              totals: fallbackTotals(nodePage.data, nodeCount),
+            };
           }
+        } catch {
+          // Keep the original health snapshot if the best-effort node lookup fails.
         }
         if (!cancelled) {
           setData(snap);
@@ -102,5 +116,5 @@ export function useFleetSummary(opts: Options = {}) {
     };
   }, [api, opts.tenantId, opts.since, opts.intervalMs]);
 
-  return { data, loading, error };
+  return { data, nodes, loading, error };
 }

@@ -224,9 +224,9 @@ export function AuditReports(): JSX.Element {
             </option>
           ))}
         </select>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={!selectedTenant || loading}>
-          <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-          Refresh
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={!selectedTenant} loading={loading}>
+          <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
+          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
       {loadError && (

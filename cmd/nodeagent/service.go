@@ -7,6 +7,9 @@ import (
 	"runtime"
 )
 
+// runAsWindowsService is a no-op on non-Windows platforms.
+func runAsWindowsService() bool { return false }
+
 func init() {
 	uninstallServiceHook = uninstallService
 }

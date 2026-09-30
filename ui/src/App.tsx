@@ -22,6 +22,7 @@ const KnowledgeGraph = lazy(() => import('./pages/investigate/KnowledgeGraph').t
 const IpCompare = lazy(() => import('./pages/investigate/IpCompare').then((m) => ({ default: m.IpCompare })));
 const Ask = lazy(() => import('./pages/Ask').then((m) => ({ default: m.Ask })));
 const Cases = lazy(() => import('./pages/Cases').then((m) => ({ default: m.Cases })));
+const TeamActivity = lazy(() => import('./pages/TeamActivity').then((m) => ({ default: m.TeamActivity })));
 const Observability = lazy(() => import('./pages/Observability').then((m) => ({ default: m.Observability })));
 
 const Tenants = lazy(() => import('./pages/Tenants').then((m) => ({ default: m.Tenants })));
@@ -242,6 +243,7 @@ export function App(): JSX.Element {
                 <Route path="investigate/ip/:id/compare" element={<IpCompare />} />
                 <Route path="ask" element={<Ask />} />
                 <Route path="cases" element={<Cases />} />
+                <Route path="team-activity" element={<TeamActivity />} />
                 <Route path="tenants" element={<Tenants />} />
                 <Route path="nodes" element={<Nodes />} />
                 <Route path="nodes/:id" element={<NodeDetail />} />

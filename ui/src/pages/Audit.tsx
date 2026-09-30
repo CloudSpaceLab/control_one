@@ -93,7 +93,7 @@ export function Audit(): JSX.Element {
   const [actorTypeFilter, setActorTypeFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('');
   const [resourceTypeFilter, setResourceTypeFilter] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => params.get('q') ?? '');
   const [limit] = useState(100);
   const [offset, setOffset] = useState(0);
 
@@ -105,6 +105,7 @@ export function Audit(): JSX.Element {
     actor_type: actorTypeFilter || undefined,
     action: actionFilter || undefined,
     resource_type: resourceTypeFilter || undefined,
+    resource_id: exactResourceID(search),
     limit,
     offset,
   });
@@ -203,17 +204,7 @@ export function Audit(): JSX.Element {
     },
   ], []);
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return logs;
-    const q = search.toLowerCase();
-    return logs.filter(
-      (l) =>
-        l.action.toLowerCase().includes(q) ||
-        l.resource_type.toLowerCase().includes(q) ||
-        (l.resource_id ?? '').toLowerCase().includes(q) ||
-        (l.actor_id ?? '').toLowerCase().includes(q),
-    );
-  }, [logs, search]);
+  const filtered = useMemo(() => logs.filter((log) => matchesAuditSearch(log, search)), [logs, search]);
 
   const userCount = logs.filter((l) => l.actor_type === 'user').length;
   const systemCount = logs.filter((l) => l.actor_type === 'system').length;
@@ -247,8 +238,8 @@ export function Audit(): JSX.Element {
         description="Who did what, when. Full record for SOC 2, ISO 27001, and incident review."
         actions={
           <>
-            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
-              <RefreshCw className="h-4 w-4" /> Refresh
+            <Button variant="secondary" size="md" onClick={reload} loading={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
             <Button
               variant="primary"
@@ -423,6 +414,25 @@ export function Audit(): JSX.Element {
       </Tabs>
     </div>
   );
+}
+
+function exactResourceID(search: string): string | undefined {
+  const value = search.trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : undefined;
+}
+
+export function matchesAuditSearch(log: AuditLog, search: string): boolean {
+  const q = search.trim().toLowerCase();
+  if (!q) return true;
+  return [
+    log.action,
+    log.resource_type,
+    log.resource_id ?? '',
+    log.actor_id ?? '',
+    JSON.stringify(log.metadata ?? {}),
+  ].some((value) => value.toLowerCase().includes(q));
 }
 
 function FilterSelect({

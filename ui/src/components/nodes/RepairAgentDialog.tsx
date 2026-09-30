@@ -39,7 +39,7 @@ export function RepairAgentDialog({ open, node, onOpenChange }: RepairAgentDialo
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl min-w-0">
         <DialogHeader>
           <DialogTitle>Repair / re-enroll {node.hostname || 'this node'}</DialogTitle>
         </DialogHeader>
@@ -388,8 +388,13 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
   };
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const installPlatform = /windows/i.test(node.os ?? '') ? 'windows' : /darwin|macos|mac/i.test(node.os ?? '') ? 'darwin' : 'linux';
   const installCmd = token?.token
-    ? `curl -fsSL '${origin}/api/v1/agent/install-script?token=${encodeURIComponent(token.token)}&platform=linux' | sudo bash`
+    ? installPlatform === 'windows'
+      ? `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod -Uri '${origin}/api/v1/agent/install-script?token=${encodeURIComponent(token.token)}&platform=windows' | Invoke-Expression"`
+      : installPlatform === 'darwin'
+        ? `curl -fsSL '${origin}/api/v1/agent/install-script?token=${encodeURIComponent(token.token)}&platform=darwin' | bash`
+        : `curl -fsSL '${origin}/api/v1/agent/install-script?token=${encodeURIComponent(token.token)}&platform=linux' | sudo bash`
     : '';
 
   const copy = async (label: string, value: string) => {
@@ -402,7 +407,7 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-text-secondary">
-          One-shot 24h enrollment token and installer command for firewalled,
+          One-shot 24h enrollment token and {installPlatform === 'windows' ? 'PowerShell' : 'shell'} installer command for firewalled,
           air-gapped, roaming, or outbound-only machines.
         </p>
         <DialogFooter>
@@ -418,15 +423,15 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
-        <div className="flex items-center justify-between">
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-w-0 flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <Eyebrow>Run on target</Eyebrow>
           <Button variant="secondary" size="sm" onClick={() => copy('Install command', installCmd)}>
             Copy command
           </Button>
         </div>
-        <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed text-text-secondary">
+        <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-2 p-2 font-mono text-[0.7rem] leading-relaxed text-text-secondary">
           <code>{installCmd}</code>
         </pre>
         <p className="text-xs text-text-muted">
@@ -434,8 +439,8 @@ function ManualRepair({ node, onClose }: { node: Node; onClose: () => void }) {
           via the labeled token.
         </p>
       </div>
-      <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
-        <div className="flex items-center justify-between">
+      <div className="flex min-w-0 flex-col gap-2 rounded-md border border-border-subtle bg-surface p-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <Eyebrow>Bootstrap token</Eyebrow>
           <Button variant="ghost" size="sm" onClick={() => copy('Token', token.token ?? '')}>
             Copy token

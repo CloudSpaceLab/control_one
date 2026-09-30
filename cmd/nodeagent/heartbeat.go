@@ -325,6 +325,7 @@ func heartbeatAgentCapabilities() []string {
 		"connection_lifecycle_headers.v1",
 		"app_dependency_inventory.v1",
 		"agent_update_job_status.v1",
+		"agent_update_force.v1",
 	}
 	return append(base, heartbeatRuntimeCapabilities()...)
 }

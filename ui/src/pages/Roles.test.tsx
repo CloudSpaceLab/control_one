@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Roles } from './Roles';
@@ -62,9 +62,7 @@ describe('Roles', () => {
 
     render(<Roles />);
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: /roles & permissions/i })).toBeInTheDocument());
-
-    expect(screen.getAllByText('built-in')).toHaveLength(5);
+    expect(await screen.findAllByText('built-in')).toHaveLength(5);
     expect(screen.getAllByRole('button', { name: /delete/i })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: /delete/i })[0]).toHaveTextContent('delete');
   });
@@ -77,9 +75,7 @@ describe('Roles', () => {
 
     render(<Roles />);
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: /roles & permissions/i })).toBeInTheDocument());
-
-    expect(screen.getAllByText('built-in')).toHaveLength(2);
+    expect(await screen.findAllByText('built-in')).toHaveLength(2);
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
   });
 

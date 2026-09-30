@@ -403,9 +403,9 @@ export function ThreatFeeds(): JSX.Element {
             variant="ghost"
             size="sm"
             onClick={() => refresh(summary?.lookup?.ip)}
-            disabled={summaryLoading}
+            loading={summaryLoading}
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${summaryLoading ? 'animate-spin' : ''}`} /> Refresh
+            <RefreshCw className={`h-3.5 w-3.5 ${summaryLoading ? 'animate-spin' : ''}`} /> {summaryLoading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       >

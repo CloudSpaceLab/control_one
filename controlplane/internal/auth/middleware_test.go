@@ -70,6 +70,33 @@ func TestMiddlewareStaticTokenAuthentication(t *testing.T) {
 	}
 }
 
+func TestMiddlewareBearerAuthenticationTakesPrecedenceOverForwardedClientCertificate(t *testing.T) {
+	store := &fakeIdentityStore{}
+	cfg := config.AuthConfig{
+		OIDC: config.OIDCConfig{
+			StaticTokens: map[string]config.StaticPrincipalConfig{
+				"browser-token": {
+					Subject: "browser-user",
+					Roles:   []string{"admin"},
+				},
+			},
+		},
+	}
+	mw := NewMiddleware(zap.NewNop(), false, cfg, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer browser-token")
+	req.Header.Set("X-SSL-Client-S-DN", "CN=installed-browser-certificate")
+
+	principal, err := mw.authenticate(req)
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	if principal.Type != "user" || principal.Subject != "browser-user" {
+		t.Fatalf("principal=%+v, want bearer user", principal)
+	}
+}
+
 func TestMiddlewareStaticTokenUsesStoredRoles(t *testing.T) {
 	store := &fakeIdentityStore{
 		rolesReturn: []string{"operator", "admin"},

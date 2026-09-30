@@ -15,31 +15,35 @@ import (
 )
 
 type correlationRuleResponse struct {
-	ID                 string                                `json:"id"`
-	TenantID           string                                `json:"tenant_id"`
-	Name               string                                `json:"name"`
-	Description        *string                               `json:"description,omitempty"`
-	EventTypes         []string                              `json:"event_types"`
-	EventType          string                                `json:"event_type"`
-	WindowSeconds      int                                   `json:"window_seconds"`
-	Threshold          int                                   `json:"threshold"`
-	Dimension          string                                `json:"dimension"`
-	GroupBy            []string                              `json:"group_by"`
-	SuppressionSeconds int                                   `json:"suppression_seconds"`
-	Conditions         []storage.CorrelationCondition        `json:"conditions"`
-	ConditionGroups    [][]storage.CorrelationCondition      `json:"condition_groups"`
-	DistinctField      string                                `json:"distinct_field"`
-	SequenceEventType  string                                `json:"sequence_event_type"`
-	SequenceThreshold  int                                   `json:"sequence_threshold"`
-	SequenceConditions []storage.CorrelationCondition        `json:"sequence_conditions"`
-	AggregateField     string                                `json:"aggregate_field"`
-	AggregateThreshold int64                                 `json:"aggregate_threshold"`
-	Severity           string                                `json:"severity"`
-	NotificationPolicy storage.CorrelationNotificationPolicy `json:"notification_policy"`
-	Enabled            bool                                  `json:"enabled"`
-	YAMLSpec           *string                               `json:"yaml_spec,omitempty"`
-	CreatedAt          string                                `json:"created_at"`
-	UpdatedAt          string                                `json:"updated_at"`
+	ID                  string                                `json:"id"`
+	TenantID            string                                `json:"tenant_id"`
+	Name                string                                `json:"name"`
+	Description         *string                               `json:"description,omitempty"`
+	EventTypes          []string                              `json:"event_types"`
+	EventType           string                                `json:"event_type"`
+	WindowSeconds       int                                   `json:"window_seconds"`
+	Threshold           int                                   `json:"threshold"`
+	Dimension           string                                `json:"dimension"`
+	GroupBy             []string                              `json:"group_by"`
+	SuppressionSeconds  int                                   `json:"suppression_seconds"`
+	Conditions          []storage.CorrelationCondition        `json:"conditions"`
+	ConditionGroups     [][]storage.CorrelationCondition      `json:"condition_groups"`
+	DistinctField       string                                `json:"distinct_field"`
+	SequenceEventType   string                                `json:"sequence_event_type"`
+	SequenceThreshold   int                                   `json:"sequence_threshold"`
+	SequenceConditions  []storage.CorrelationCondition        `json:"sequence_conditions"`
+	AggregateField      string                                `json:"aggregate_field"`
+	AggregateThreshold  int64                                 `json:"aggregate_threshold"`
+	ResponseMode        string                                `json:"response_mode"`
+	ResponseTTLSeconds  int                                   `json:"response_ttl_seconds"`
+	ResponseScope       string                                `json:"response_scope"`
+	ResponseEnforcement string                                `json:"response_enforcement"`
+	Severity            string                                `json:"severity"`
+	NotificationPolicy  storage.CorrelationNotificationPolicy `json:"notification_policy"`
+	Enabled             bool                                  `json:"enabled"`
+	YAMLSpec            *string                               `json:"yaml_spec,omitempty"`
+	CreatedAt           string                                `json:"created_at"`
+	UpdatedAt           string                                `json:"updated_at"`
 }
 
 func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleResponse {
@@ -51,8 +55,8 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 		SuppressionSeconds: r.SuppressionSeconds, Conditions: r.Conditions, ConditionGroups: r.ConditionGroups, DistinctField: r.DistinctField,
 		SequenceEventType: r.SequenceEventType, SequenceThreshold: r.SequenceThreshold, SequenceConditions: r.SequenceConditions,
 		AggregateField: r.AggregateField, AggregateThreshold: r.AggregateThreshold, Severity: r.Severity, Enabled: r.Enabled,
-		NotificationPolicy: r.NotificationPolicy,
-		CreatedAt:          formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
+		ResponseMode: r.ResponseMode, ResponseTTLSeconds: r.ResponseTTLSeconds, ResponseScope: r.ResponseScope, ResponseEnforcement: r.ResponseEnforcement,
+		NotificationPolicy: r.NotificationPolicy, CreatedAt: formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
 	}
 	if out.EventTypes == nil {
 		out.EventTypes = []string{}
@@ -81,28 +85,32 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 }
 
 type createCorrelationRuleRequest struct {
-	TenantID           string                                `json:"tenant_id"`
-	Name               string                                `json:"name"`
-	Description        string                                `json:"description"`
-	EventTypes         []string                              `json:"event_types"`
-	EventType          string                                `json:"event_type"`
-	WindowSeconds      int                                   `json:"window_seconds"`
-	Threshold          int                                   `json:"threshold"`
-	Dimension          string                                `json:"dimension"`
-	GroupBy            []string                              `json:"group_by"`
-	SuppressionSeconds int                                   `json:"suppression_seconds"`
-	Conditions         []storage.CorrelationCondition        `json:"conditions"`
-	ConditionGroups    [][]storage.CorrelationCondition      `json:"condition_groups"`
-	DistinctField      string                                `json:"distinct_field"`
-	SequenceEventType  string                                `json:"sequence_event_type"`
-	SequenceThreshold  int                                   `json:"sequence_threshold"`
-	SequenceConditions []storage.CorrelationCondition        `json:"sequence_conditions"`
-	AggregateField     string                                `json:"aggregate_field"`
-	AggregateThreshold int64                                 `json:"aggregate_threshold"`
-	Severity           string                                `json:"severity"`
-	NotificationPolicy storage.CorrelationNotificationPolicy `json:"notification_policy"`
-	Enabled            *bool                                 `json:"enabled"`
-	YAMLSpec           string                                `json:"yaml_spec"`
+	TenantID            string                                `json:"tenant_id"`
+	Name                string                                `json:"name"`
+	Description         string                                `json:"description"`
+	EventTypes          []string                              `json:"event_types"`
+	EventType           string                                `json:"event_type"`
+	WindowSeconds       int                                   `json:"window_seconds"`
+	Threshold           int                                   `json:"threshold"`
+	Dimension           string                                `json:"dimension"`
+	GroupBy             []string                              `json:"group_by"`
+	SuppressionSeconds  int                                   `json:"suppression_seconds"`
+	Conditions          []storage.CorrelationCondition        `json:"conditions"`
+	ConditionGroups     [][]storage.CorrelationCondition      `json:"condition_groups"`
+	DistinctField       string                                `json:"distinct_field"`
+	SequenceEventType   string                                `json:"sequence_event_type"`
+	SequenceThreshold   int                                   `json:"sequence_threshold"`
+	SequenceConditions  []storage.CorrelationCondition        `json:"sequence_conditions"`
+	AggregateField      string                                `json:"aggregate_field"`
+	AggregateThreshold  int64                                 `json:"aggregate_threshold"`
+	ResponseMode        string                                `json:"response_mode"`
+	ResponseTTLSeconds  int                                   `json:"response_ttl_seconds"`
+	ResponseScope       string                                `json:"response_scope"`
+	ResponseEnforcement string                                `json:"response_enforcement"`
+	Severity            string                                `json:"severity"`
+	NotificationPolicy  storage.CorrelationNotificationPolicy `json:"notification_policy"`
+	Enabled             *bool                                 `json:"enabled"`
+	YAMLSpec            string                                `json:"yaml_spec"`
 }
 
 var correlationTopics = map[string]bool{
@@ -110,6 +118,10 @@ var correlationTopics = map[string]bool{
 	"compliance.fired": true, "health.incident": true, "remediation.applied": true,
 }
 var correlationSeverities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
+var correlationResponseModes = map[string]bool{"alert_only": true, "create_proposal": true, "require_approval": true, "auto_temporary_block": true}
+var correlationResponseTTLs = map[int]bool{900: true, 3600: true, 86400: true}
+var correlationResponseScopes = map[string]bool{"affected": true, "fleet": true}
+var correlationResponseEnforcements = map[string]bool{"firewall": true, "webserver": true, "both": true}
 var correlationConditionFields = map[string]bool{
 	"node_id": true, "tenant_id": true,
 	"event_type": true, "message": true, "correlation_id": true, "dedup_key": true,
@@ -228,6 +240,41 @@ func validateCorrelationRuleRequest(req *createCorrelationRuleRequest) error {
 		return err
 	}
 	req.NotificationPolicy = policy
+	if req.ResponseMode == "" {
+		req.ResponseMode = "alert_only"
+	}
+	if !correlationResponseModes[req.ResponseMode] {
+		return fmt.Errorf("unsupported response_mode %q", req.ResponseMode)
+	}
+	if req.ResponseTTLSeconds == 0 {
+		req.ResponseTTLSeconds = 3600
+	}
+	if !correlationResponseTTLs[req.ResponseTTLSeconds] {
+		return fmt.Errorf("response_ttl_seconds must be 900, 3600, or 86400")
+	}
+	if req.ResponseScope == "" {
+		req.ResponseScope = "affected"
+	}
+	if !correlationResponseScopes[req.ResponseScope] {
+		return fmt.Errorf("response_scope must be affected or fleet")
+	}
+	if req.ResponseEnforcement == "" {
+		req.ResponseEnforcement = "firewall"
+	}
+	if !correlationResponseEnforcements[req.ResponseEnforcement] {
+		return fmt.Errorf("response_enforcement must be firewall, webserver, or both")
+	}
+	if req.ResponseMode == "auto_temporary_block" {
+		if req.Severity != "high" && req.Severity != "critical" {
+			return fmt.Errorf("automatic temporary blocking requires high or critical severity")
+		}
+		if !containsCorrelationField(req.GroupBy, "src_ip") {
+			return fmt.Errorf("automatic temporary blocking requires src_ip in group_by")
+		}
+		if req.ResponseScope != "affected" {
+			return fmt.Errorf("automatic temporary blocking requires affected scope")
+		}
+	}
 	return nil
 }
 
@@ -238,8 +285,9 @@ func validateCorrelationNotificationPolicy(policy storage.CorrelationNotificatio
 	emails := make([]string, 0, len(policy.EmailRecipients))
 	seenEmails := make(map[string]struct{}, len(policy.EmailRecipients))
 	for _, raw := range policy.EmailRecipients {
-		address, err := mail.ParseAddress(strings.TrimSpace(raw))
-		if err != nil || address.Address != strings.TrimSpace(raw) {
+		trimmed := strings.TrimSpace(raw)
+		address, err := mail.ParseAddress(trimmed)
+		if err != nil || address.Address != trimmed {
 			return storage.CorrelationNotificationPolicy{}, fmt.Errorf("invalid notification email recipient")
 		}
 		email := strings.ToLower(address.Address)
@@ -269,6 +317,15 @@ func validateCorrelationNotificationPolicy(policy storage.CorrelationNotificatio
 	return storage.CorrelationNotificationPolicy{EmailRecipients: emails, WebhookIDs: webhooks, MinimumSeverity: severity}, nil
 }
 
+func containsCorrelationField(fields []string, wanted string) bool {
+	for _, field := range fields {
+		if field == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func validateCorrelationCondition(condition *storage.CorrelationCondition, label string) error {
 	condition.Field = strings.TrimSpace(condition.Field)
 	condition.Operator = strings.TrimSpace(condition.Operator)
@@ -290,7 +347,9 @@ func correlationParams(tenantID uuid.UUID, req createCorrelationRuleRequest, ena
 		Threshold: req.Threshold, Dimension: req.Dimension, GroupBy: req.GroupBy,
 		SuppressionSeconds: req.SuppressionSeconds, Conditions: req.Conditions, ConditionGroups: req.ConditionGroups, DistinctField: req.DistinctField,
 		SequenceEventType: req.SequenceEventType, SequenceThreshold: req.SequenceThreshold, SequenceConditions: req.SequenceConditions,
-		AggregateField: req.AggregateField, AggregateThreshold: req.AggregateThreshold, Severity: req.Severity, NotificationPolicy: req.NotificationPolicy, Enabled: enabled, YAMLSpec: req.YAMLSpec}
+		AggregateField: req.AggregateField, AggregateThreshold: req.AggregateThreshold,
+		ResponseMode: req.ResponseMode, ResponseTTLSeconds: req.ResponseTTLSeconds, ResponseScope: req.ResponseScope, ResponseEnforcement: req.ResponseEnforcement,
+		Severity: req.Severity, NotificationPolicy: req.NotificationPolicy, Enabled: enabled, YAMLSpec: req.YAMLSpec}
 }
 
 func (s *Server) handleCorrelationRulesCollection(w http.ResponseWriter, r *http.Request) {

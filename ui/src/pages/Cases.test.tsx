@@ -7,6 +7,15 @@ import * as useApiClientModule from '@/hooks/useApiClient';
 import * as useTenantModule from '@/providers/TenantProvider';
 import type { SOCCase, SOCCaseExport } from '@/lib/api';
 
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+HTMLElement.prototype.scrollIntoView = vi.fn();
+
 const caseRow: SOCCase = {
   case_id: '11111111-1111-1111-1111-111111111111',
   tenant_id: 'tenant-1',
@@ -105,6 +114,14 @@ describe('Cases', () => {
         pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
       }),
       getSOCCase: vi.fn().mockResolvedValue(caseRow),
+      getTeamUsers: vi.fn().mockResolvedValue([
+        { id: 'u1', name: 'Ada CISO', email: 'ada@example.com' },
+        { id: 'u2', name: 'Bob Ops', email: 'bob@example.com' },
+      ]),
+      assignSOCCase: vi.fn().mockImplementation(async (_caseId: string, _tenantId: string, payload: { assignee_id: string | null }) => ({
+        ...caseRow,
+        assignee: payload.assignee_id ? { id: payload.assignee_id, name: 'Ada CISO' } : null,
+      })),
       addSOCCaseNote: vi.fn().mockResolvedValue({
         id: 'note-1',
         tenant_id: 'tenant-1',
@@ -143,6 +160,67 @@ describe('Cases', () => {
       refresh: vi.fn(),
     });
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(mockApi);
+  });
+
+  it('fetches the next page from the server', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow], pagination: { total: 25 } });
+    render(<MemoryRouter><Cases /></MemoryRouter>);
+    const pageLabel = await screen.findByText('1 / 3');
+    await user.click(pageLabel.nextElementSibling as HTMLElement);
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 12, offset: 12 })));
+  });
+
+  it.each([
+    ['status', 'closed'],
+    ['severity', 'high'],
+    ['search', 'database'],
+    ['sortBy', 'title'],
+  ])('refetches current %s and resets the page', async (field, value) => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow], pagination: { total: 25 } });
+    render(<MemoryRouter><Cases /></MemoryRouter>);
+    await user.click((await screen.findByText('1 / 3')).nextElementSibling as HTMLElement);
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 12 })));
+    if (field === 'search') {
+      await user.type(screen.getByPlaceholderText('Search title, summary, or trigger...'), value);
+    } else if (field === 'sortBy') {
+      await user.click(screen.getByRole('columnheader', { name: 'Title' }));
+    } else {
+      await user.selectOptions(screen.getByRole('option', { name: field === 'status' ? 'All statuses' : 'All severities' }).parentElement as HTMLSelectElement, value);
+    }
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({
+      offset: 0, [field]: value, ...(field === 'sortBy' ? { sortOrder: 'asc' } : {}),
+    })));
+    if (field === 'sortBy') {
+      await user.click(screen.getByRole('columnheader', { name: 'Title' }));
+      await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'title', sortOrder: 'desc' })));
+    }
+  });
+
+  it('selects the requested case instead of the first row and preserves it on refetch', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow, secondCase] });
+    mockApi.getSOCCase.mockImplementation(async (id: string) => id === secondCase.case_id ? secondCase : caseRow);
+    render(<MemoryRouter initialEntries={[`/cases?case_id=${secondCase.case_id}&fromAlert=alert-1`]}><Cases /></MemoryRouter>);
+    await waitFor(() => expect(mockApi.getSOCCase).toHaveBeenLastCalledWith(secondCase.case_id, 'tenant-1'));
+    await user.selectOptions(screen.getByRole('option', { name: 'All statuses' }).parentElement as HTMLSelectElement, 'investigating');
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'investigating' })));
+    expect(mockApi.getSOCCase).not.toHaveBeenCalledWith(caseRow.case_id, 'tenant-1');
+  });
+
+  it('loads a deep-linked case outside the current page and retains it when filtering', async () => {
+    const user = userEvent.setup();
+    mockApi.listSOCCases.mockResolvedValue({ data: [caseRow] });
+    mockApi.getSOCCase.mockResolvedValue(secondCase);
+    render(<MemoryRouter initialEntries={[`/cases?case_id=${secondCase.case_id}`]}><Cases /></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: secondCase.title })).toBeInTheDocument();
+    expect(mockApi.getSOCCase).toHaveBeenCalledWith(secondCase.case_id, 'tenant-1');
+    mockApi.listSOCCases.mockResolvedValue({ data: [] });
+    await user.selectOptions(screen.getByRole('option', { name: 'All statuses' }).parentElement as HTMLSelectElement, 'closed');
+    await screen.findByText('No SOC cases yet');
+    expect(screen.getByRole('heading', { name: secondCase.title })).toBeInTheDocument();
+    expect(mockApi.getSOCCase).not.toHaveBeenCalledWith(caseRow.case_id, 'tenant-1');
   });
 
   it('renders cases as evidence-backed export packets', async () => {
@@ -264,5 +342,57 @@ describe('Cases', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Note failed: audit write unavailable');
     expect(noteBox).toHaveValue('Escalate to the SOC manager before closure.');
+  });
+
+  it('assigns an owner from the case header', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('combobox', { name: 'Assignee' }));
+    await user.click(await screen.findByText('Ada CISO'));
+
+    await waitFor(() => {
+      expect(mockApi.assignSOCCase).toHaveBeenCalledWith(caseRow.case_id, 'tenant-1', {
+        assignee_id: 'u1',
+      });
+    });
+  });
+
+  it('shows mentioned users on the case header', async () => {
+    mockApi.getSOCCase.mockResolvedValueOnce({
+      ...caseRow,
+      mentioned_users: [{ id: 'u1', name: 'Ada CISO' }],
+    });
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTitle('Mentioned in case')).toHaveTextContent('Ada CISO');
+  });
+
+  it('adds mentions when posting a note with an at-sign suggestion', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Cases />
+      </MemoryRouter>,
+    );
+
+    const noteBox = await screen.findByPlaceholderText(/add analyst decision/i);
+    await user.type(noteBox, 'Review with @ad');
+    await user.click(await screen.findByRole('button', { name: 'Mention Ada CISO' }));
+    await user.click(screen.getByRole('button', { name: /add note/i }));
+
+    await waitFor(() => {
+      expect(mockApi.addSOCCaseNote).toHaveBeenCalledWith(caseRow.case_id, 'tenant-1', expect.objectContaining({
+        mentions: ['u1'],
+      }));
+    });
   });
 });

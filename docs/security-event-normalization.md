@@ -8,6 +8,7 @@ Control One converts collector-specific telemetry into a stable `security.event`
 | --- | --- | --- |
 | Linux `sshd` / systemd journal | OpenSSH accepted and failed authentication messages | `ssh.authentication_failure`, `authentication.failure`, `authentication.success` |
 | Windows Security Event Log | Event IDs 4625 and 4624 | `windows.authentication_failure`, `authentication.failure`, `authentication.success` |
+| Windows Hello / Biometrics | Hello Event ID 7001 and Biometrics Event ID 1005 | `windows.authentication_failure`, `authentication.failure` |
 | Nginx and Apache | Structured request fields or Common/Combined access-log lines | `web.request` |
 | IIS | Structured W3C fields or the default W3C access-log field order | `web.request` |
 | Reverse proxies and WAFs | Structured HTTP fields or Common/Combined access-log lines | `web.request` |
@@ -34,15 +35,33 @@ Rules use the flat fields below so administrators can build expressions without 
   "user_name": "root",
   "node_id": "af52be71-4d94-466b-86ed-ab2559e15c35",
   "timestamp": "2026-09-15T10:00:00Z",
-  "source": "linux.sshd"
+  "source": "linux.sshd",
+  "source_os": "linux",
+  "source_channel": "/var/log/auth.log"
 }
 ```
 
 Translators accept common source aliases including `source_ip`, `destination_ip`, `source_port`, `destination_port`, `username`, and `outcome`. Normalized output always uses `src_ip`, `dst_ip`, `src_port`, `dst_port`, `user_name`, and `auth_result`.
 
-Each event also includes the nested `normalized` object defined by `controlone.security_event` schema version 1. This carries portable ECS-aligned fields such as `event.category`, `event.action`, `event.outcome`, `source.ip`, `destination.port`, `user.name`, `host.hostname`, and `network.protocol`.
+`source_os`, `source_channel`, and `source_event_id` are evidence fields. They identify the platform, native log stream, and native record ID without making correlation rules depend on vendor IDs. The Control One `event_id` remains the unique event reference. For example, a Windows Security 4625 record has `source_os: windows`, `source_channel: Security`, and `source_event_id: 4625`, while a Linux SSH record may have `source_channel: /var/log/auth.log` and no native numeric ID.
+
+Each event also includes the nested `normalized` object defined by `controlone.security_event` schema version 1. This carries portable ECS-aligned fields such as `event.category`, `event.action`, `event.outcome`, `source.ip`, `destination.port`, `user.name`, `host.hostname`, and `network.protocol`. Platform-specific aliases such as `windows.authentication_failure` and `ssh.authentication_failure` are emitted alongside the portable `authentication.failure` event so existing rules continue to work during migration.
 
 ## Validation and parser errors
+
+### Alert scope and resource evidence
+
+Correlation alerts retain event-specific tenant and node scope, message, severity,
+source event reference, and recorded resources in their contributing events.
+Resources can include destination endpoints, paths, services, processes,
+sensor names, and accounts. A Windows biometric mismatch (Event ID 1005) does
+not contain a username, so its resource is shown as `Sensor: <name>` and the
+account remains an explicit `unknown` bucket for same-node correlation. The
+alert review shows these independently from the rule's grouping
+scope: a tenant-wide rule does not establish that every resource was affected.
+These are observed resources, not proof of compromise. Missing fields remain
+unavailable; historical evidence without these fields is not reconstructed from
+the alert's merged context. Newly captured details require the updated backend.
 
 Every normalized event requires `event_type`, `source`, `node_id`, `timestamp`, and `outcome`. Detection-specific requirements are also enforced:
 

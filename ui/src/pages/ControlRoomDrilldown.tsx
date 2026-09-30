@@ -141,8 +141,8 @@ export function ControlRoomDrilldown(): JSX.Element {
           <div className="flex flex-wrap items-center justify-end gap-2">
             <TimeRangePills value={period} options={CONTROL_ROOM_RANGES} onChange={setPeriod} />
             <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
-              <RefreshCw />
-              Refresh
+              <RefreshCw className={loading ? 'animate-spin' : ''} />
+              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
             <Button asChild variant="ghost" size="sm">
               <Link to="/control-room">

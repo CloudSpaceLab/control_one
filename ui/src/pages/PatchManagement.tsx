@@ -135,9 +135,9 @@ export function PatchManagement(): JSX.Element {
         description="Direct, proxy and airgapped OS-package upgrades fanned out per node. Every deploy passes through the same opt-out / change-window / circuit-breaker / approval gates the compliance remediation engine uses."
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+            <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
             <Button size="sm" onClick={() => setShowDeployForm(true)}>
               <ShieldAlert className="mr-2 h-4 w-4" />

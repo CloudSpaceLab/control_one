@@ -109,6 +109,14 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 // Wrap decorates the provided handler with authentication.
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browser clients may preflight JSON/API requests.  Preflight carries no
+		// bearer/session credentials, so it must be answered before auth rather
+		// than rejected as an unauthenticated request or passed to a POST-only
+		// handler (which previously returned 405 for /auth/login).
+		if r != nil && r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if m.publicRequest(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -239,9 +247,9 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 		}
 	}
 
-	// A browser can present a client certificate while using a bearer-backed
-	// operator session. Bearer identities take precedence so that optional
-	// client TLS cannot replace the operator with the certificate's agent role.
+	// Browser sessions can arrive with an installed client certificate as
+	// well as a bearer token. The explicit bearer credential is authoritative;
+	// certificate identity is only the fallback for certificate-only agents.
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cert := r.TLS.PeerCertificates[0]
 		return &Principal{

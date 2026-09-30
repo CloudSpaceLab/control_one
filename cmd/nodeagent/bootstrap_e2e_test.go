@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -271,5 +272,23 @@ func TestRunJoinEmitsParseableYAML(t *testing.T) {
 	}
 	if !strings.Contains(cfg.PolicyDir, dataDir[:1]) && !strings.Contains(filepath.ToSlash(cfg.PolicyDir), filepath.ToSlash(dataDir)[:1]) {
 		t.Errorf("policy_dir = %q, expected to be rooted under dataDir %q", cfg.PolicyDir, dataDir)
+	}
+	if runtime.GOOS == "windows" {
+		if !cfg.TelemetryPrefs.CollectLogs {
+			t.Error("Windows enrollment must enable log collection")
+		}
+		if len(cfg.TelemetryPrefs.LogSources) != 1 || cfg.TelemetryPrefs.LogSources[0].Type != "eventlog" {
+			t.Errorf("Windows enrollment log source = %#v, want eventlog", cfg.TelemetryPrefs.LogSources)
+		}
+		wantChannels := []string{"Security", "Microsoft-Windows-HelloForBusiness/Operational", "Microsoft-Windows-Biometrics/Operational"}
+		if got := cfg.TelemetryPrefs.LogSources[0].EventChannels; len(got) != len(wantChannels) {
+			t.Errorf("Windows enrollment event channels = %#v, want %#v", got, wantChannels)
+		} else {
+			for i, want := range wantChannels {
+				if got[i] != want {
+					t.Errorf("Windows enrollment event channel %d = %q, want %q", i, got[i], want)
+				}
+			}
+		}
 	}
 }

@@ -202,9 +202,9 @@ export function Coverage(): JSX.Element {
                 {data.catalog_version}
               </StatusTag>
             )}
-            <Button type="button" variant="secondary" size="md" onClick={reload} disabled={loading}>
-              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-              Refresh
+            <Button type="button" variant="secondary" size="md" onClick={reload} loading={loading}>
+	              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+	              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
         }

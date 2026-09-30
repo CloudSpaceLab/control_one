@@ -271,8 +271,8 @@ export function Telemetry(): JSX.Element {
                 Logs
               </Button>
             </div>
-            <Button variant="secondary" size="md" onClick={handleRefresh} disabled={currentLoading}>
-              <RefreshCw className="h-4 w-4" /> Refresh
+            <Button variant="secondary" size="md" onClick={handleRefresh} loading={currentLoading}>
+              <RefreshCw className={`h-4 w-4 ${currentLoading ? 'animate-spin' : ''}`} /> {currentLoading ? 'Refreshing…' : 'Refresh'}
             </Button>
           </>
         }

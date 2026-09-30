@@ -75,6 +75,14 @@ type ipBlockExpiryStore interface {
 	UpdateIPBlocklistEntryStatus(context.Context, uuid.UUID, string, *uuid.UUID, string) (*storage.IPBlocklistEntry, error)
 }
 
+// ipBlockExpiryReaperStore is deliberately narrower than ipBlockExpiryStore.
+// The scheduled reaper does not need node lookup or action-link methods, so
+// requiring them would make an otherwise valid store silently skip expiry.
+type ipBlockExpiryReaperStore interface {
+	ListExpiredIPBlocklistEntries(context.Context, time.Time, int) ([]storage.IPBlocklistEntry, error)
+	UpdateIPBlocklistEntryStatus(context.Context, uuid.UUID, string, *uuid.UUID, string) (*storage.IPBlocklistEntry, error)
+}
+
 type nodeFirewallRemovalStore interface {
 	ListNodeFirewallRulesForEntityAction(context.Context, uuid.UUID) ([]storage.NodeFirewallRule, error)
 	QueueNodeFirewallRuleRemoval(context.Context, uuid.UUID, uuid.UUID) error
@@ -2089,6 +2097,11 @@ func (s *Server) handleCreateBlockProposal(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "ip_cidr must be an IP or CIDR", http.StatusBadRequest)
 		return
 	}
+	// A single address is always stored as its exact CIDR. This makes the
+	// requested scope explicit in the approval, enforcement, and audit views.
+	if exact := exactCIDRForIP(req.IPCIDR); exact != "" {
+		req.IPCIDR = exact
+	}
 	if err := validateBlockProposalTTL(req.TTLSeconds); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -2152,6 +2165,33 @@ func (s *Server) handleCreateBlockProposal(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		targetID = &parsed
+	}
+	if queryStore, ok := s.store.(ipBlockProposalQueryStore); ok {
+		existing, _, err := queryStore.ListIPBlocklistEntries(r.Context(), storage.IPBlocklistEntryFilter{
+			TenantID:    tenantID,
+			IPCIDR:      req.IPCIDR,
+			TargetType:  strings.TrimSpace(req.TargetType),
+			ServerGroup: serverGroup,
+			App:         strings.TrimSpace(req.App),
+			VHost:       strings.TrimSpace(req.VHost),
+		}, 100, 0)
+		if err != nil {
+			s.logger.Warn("list existing block proposals", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		for _, candidate := range existing {
+			if !blockProposalStatusOpen(candidate.Status) || !strings.EqualFold(candidate.Scope, strings.TrimSpace(req.Scope)) || !strings.EqualFold(candidate.Enforcement, strings.TrimSpace(req.Enforcement)) || !sameOptionalUUID(candidate.TargetID, targetID) {
+				continue
+			}
+			s.recordAudit(r.Context(), principal, tenantID, "network.block_proposal.rejected", "ip", req.IPCIDR, map[string]any{
+				"reason":               "an equivalent block proposal is already open",
+				"existing_proposal_id": candidate.ID.String(),
+				"stage":                "create",
+			})
+			http.Error(w, "an equivalent block proposal is already open", http.StatusConflict)
+			return
+		}
 	}
 	var expiresAt *time.Time
 	if req.TTLSeconds > 0 {
@@ -2455,6 +2495,11 @@ func (s *Server) handleApproveBlockProposal(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "block proposal is not pending approval", http.StatusConflict)
 		return
 	}
+	decisionReason, err := decodeRequiredLifecycleReason(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if status, msg := s.blockProposalSafetyViolation(r.Context(), entry.TenantID, entry.ServerGroup); status != 0 {
 		s.recordAudit(r.Context(), principal, entry.TenantID, "network.block_proposal.rejected", "ip_blocklist_entry", id.String(), map[string]any{
 			"ip_cidr": entry.IPCIDR,
@@ -2560,6 +2605,7 @@ func (s *Server) handleApproveBlockProposal(w http.ResponseWriter, r *http.Reque
 		"ip_cidr":          entry.IPCIDR,
 		"target":           entry.TargetType,
 		"entity_action_id": blockAction.ID.String(),
+		"reason":           decisionReason,
 	})
 	writeJSON(w, http.StatusAccepted, newBlockProposalResponse(updated))
 }
@@ -2696,7 +2742,11 @@ func (s *Server) handleRejectBlockProposal(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "only proposed block proposals can be rejected; use rollback for dispatched blocks", http.StatusConflict)
 		return
 	}
-	reason := decodeLifecycleReason(r, "operator rejected proposal")
+	reason, err := decodeRequiredLifecycleReason(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	updated, err := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "rejected", nil, reason)
 	if err != nil {
 		s.logger.Warn("reject block proposal", zap.Error(err))
@@ -2739,23 +2789,13 @@ func (s *Server) handleRollbackBlockProposal(w http.ResponseWriter, r *http.Requ
 	if !s.requireTenantAccess(w, r, principal, entry.TenantID, roleOperator, roleAdmin) {
 		return
 	}
-	if blockProposalStatusTerminal(entry.Status) {
-		http.Error(w, "block proposal is already terminal", http.StatusConflict)
+	if !strings.EqualFold(entry.Status, "active") || !entry.EntityActionID.Valid {
+		http.Error(w, "only active dispatched blocks can be rolled back", http.StatusConflict)
 		return
 	}
-	reason := decodeLifecycleReason(r, "operator requested rollback")
-	if !entry.EntityActionID.Valid {
-		updated, err := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "rolled_back", nil, reason)
-		if err != nil {
-			s.logger.Warn("rollback pending block proposal", zap.Error(err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-		s.recordAudit(r.Context(), principal, entry.TenantID, "network.block_proposal.rolled_back", "ip_blocklist_entry", id.String(), map[string]any{
-			"ip_cidr": entry.IPCIDR,
-			"reason":  reason,
-		})
-		writeJSON(w, http.StatusAccepted, newBlockProposalResponse(updated))
+	reason, err := decodeRequiredLifecycleReason(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	updated, err := store.UpdateIPBlocklistEntryStatus(r.Context(), id, "rolled_back", nil, reason)
@@ -2807,6 +2847,23 @@ func decodeLifecycleReason(r *http.Request, fallback string) string {
 		reason = fallback
 	}
 	return reason
+}
+
+func decodeRequiredLifecycleReason(r *http.Request) (string, error) {
+	reason := ""
+	if r != nil && r.Body != nil {
+		var req blockProposalLifecycleRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			return "", fmt.Errorf("invalid payload: %v", err)
+		}
+		reason = strings.TrimSpace(req.Reason)
+	}
+	if reason == "" {
+		return "", errors.New("decision reason is required")
+	}
+	return reason, nil
 }
 
 func (s *Server) recordBlockProposalEntityAction(ctx context.Context, entry *storage.IPBlocklistEntry, approverID *uuid.UUID, now time.Time) (*storage.EntityAction, error) {
@@ -2939,7 +2996,7 @@ func (s *Server) dispatchBlockProposalCanaryToTenantNodes(ctx context.Context, e
 }
 
 func (s *Server) expireIPBlocklistEntries(ctx context.Context, now time.Time, limit int) (int, error) {
-	store, ok := s.store.(ipBlockExpiryStore)
+	store, ok := s.store.(ipBlockExpiryReaperStore)
 	if !ok {
 		return 0, nil
 	}
@@ -2951,37 +3008,66 @@ func (s *Server) expireIPBlocklistEntries(ctx context.Context, now time.Time, li
 	for i := range entries {
 		entry := entries[i]
 		if strings.EqualFold(entry.Status, "proposed") {
-			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, "proposal expired before approval"); err != nil {
+			const expiryReason = "proposal expired before approval"
+			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, expiryReason); err != nil {
 				return expired, err
 			}
+			s.recordIPBlockExpiryAudit(ctx, entry, expiryReason, 0, 0)
 			expired++
 			continue
 		}
 		if !entry.EntityActionID.Valid {
-			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, "expired without enforcement action link"); err != nil {
+			const expiryReason = "expired without enforcement action link"
+			if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, expiryReason); err != nil {
 				return expired, err
 			}
+			s.recordIPBlockExpiryAudit(ctx, entry, expiryReason, 0, 0)
 			expired++
 			continue
 		}
+		firewallJobs := 0
+		webserverJobs := 0
 		if enforcementWantsFirewall(entry.Enforcement) {
-			if _, err := s.queueFirewallRemovalForBlockEntry(ctx, &entry, entry.EntityActionID.UUID); err != nil {
+			var err error
+			firewallJobs, err = s.queueFirewallRemovalForBlockEntry(ctx, &entry, entry.EntityActionID.UUID)
+			if err != nil {
 				_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
 				return expired, err
 			}
 		}
 		if enforcementWantsWebserver(entry.Enforcement) {
-			if _, err := s.refreshWebserverBlocklistsForExpiredEntry(ctx, &entry, now); err != nil {
+			var err error
+			webserverJobs, err = s.refreshWebserverBlocklistsForExpiredEntry(ctx, &entry, now)
+			if err != nil {
 				_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
 				return expired, err
 			}
 		}
-		if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, "ttl expired; removal dispatched"); err != nil {
+		const expiryReason = "ttl expired; removal dispatched"
+		if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "expired", nil, expiryReason); err != nil {
 			return expired, err
 		}
+		s.recordIPBlockExpiryAudit(ctx, entry, expiryReason, firewallJobs, webserverJobs)
 		expired++
 	}
 	return expired, nil
+}
+
+func (s *Server) recordIPBlockExpiryAudit(ctx context.Context, entry storage.IPBlocklistEntry, reason string, firewallJobs, webserverJobs int) {
+	metadata := map[string]any{
+		"ip_cidr":        entry.IPCIDR,
+		"reason":         reason,
+		"firewall_jobs":  firewallJobs,
+		"webserver_jobs": webserverJobs,
+		"stage":          "automatic_expiry",
+	}
+	if entry.EntityActionID.Valid {
+		metadata["entity_action_id"] = entry.EntityActionID.UUID.String()
+	}
+	if entry.ExpiresAt.Valid {
+		metadata["expires_at"] = entry.ExpiresAt.Time.UTC().Format(time.RFC3339)
+	}
+	s.recordAudit(ctx, s.systemActor(), entry.TenantID, "network.block_proposal.expired", "ip_blocklist_entry", entry.ID.String(), metadata)
 }
 
 func (s *Server) queueFirewallRemovalForBlockEntry(ctx context.Context, entry *storage.IPBlocklistEntry, entityActionID uuid.UUID) (int, error) {
@@ -3376,6 +3462,22 @@ func blockProposalStatusTerminal(status string) bool {
 	}
 }
 
+func blockProposalStatusOpen(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "proposed", "approved", "canary", "dispatching", "active":
+		return true
+	default:
+		return false
+	}
+}
+
+func sameOptionalUUID(value uuid.NullUUID, expected *uuid.UUID) bool {
+	if expected == nil {
+		return !value.Valid
+	}
+	return value.Valid && value.UUID == *expected
+}
+
 func (s *Server) blockProposalSafetyViolation(ctx context.Context, tenantID uuid.UUID, serverGroup string) (int, string) {
 	if reason := s.openEnforcementCircuitReason(ctx, tenantID, networkBlockCircuitRuleID); reason != "" {
 		return http.StatusConflict, "network block enforcement circuit breaker is open: " + reason
@@ -3476,6 +3578,23 @@ func (s *Server) protectedIPBlockReason(ctx context.Context, tenantID uuid.UUID,
 	targetNet, ok := parseIPOrCIDRNet(target)
 	if s == nil || !ok {
 		return ""
+	}
+	for _, protected := range []struct {
+		cidr   string
+		reason string
+	}{
+		{cidr: "127.0.0.0/8", reason: "IPv4 loopback range"},
+		{cidr: "::1/128", reason: "IPv6 loopback address"},
+		{cidr: "0.0.0.0/8", reason: "IPv4 current-network range"},
+		{cidr: "169.254.0.0/16", reason: "IPv4 link-local range"},
+		{cidr: "224.0.0.0/4", reason: "IPv4 multicast range"},
+		{cidr: "fe80::/10", reason: "IPv6 link-local range"},
+		{cidr: "ff00::/8", reason: "IPv6 multicast range"},
+	} {
+		_, protectedNet, err := net.ParseCIDR(protected.cidr)
+		if err == nil && cidrNetsOverlap(targetNet, protectedNet) {
+			return protected.reason + " " + protected.cidr
+		}
 	}
 	if s.store != nil {
 		if filters, err := s.store.GetTenantEventFilters(ctx, tenantID); err == nil && filters != nil {

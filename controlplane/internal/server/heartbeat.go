@@ -37,16 +37,18 @@ const (
 	EventEnrollmentTimedOut  = "enrollment.timed_out"
 
 	agentCapabilityUpdateJobStatus = "agent_update_job_status.v1"
+	agentCapabilityUpdateForce     = "agent_update_force.v1"
 )
 
 // heartbeatRequest is the body of POST /api/v1/nodes/:id/heartbeat.
 // Everything is optional — the essential signal is that the agent called us,
 // using a client cert whose CN matches the node id.
 type heartbeatRequest struct {
-	AgentVersion    string   `json:"agent_version"`
-	Capabilities    []string `json:"capabilities,omitempty"`
-	AgentReleaseSeq int      `json:"agent_release_seq,omitempty"`
-	RuntimeProfile  string   `json:"agent_runtime_profile,omitempty"`
+	AgentVersion    string                    `json:"agent_version"`
+	Capabilities    []string                  `json:"capabilities,omitempty"`
+	AgentReleaseSeq int                       `json:"agent_release_seq,omitempty"`
+	RuntimeProfile  string                    `json:"agent_runtime_profile,omitempty"`
+	CollectorState  []heartbeatCollectorState `json:"collector_state,omitempty"`
 
 	AgentSelfMetrics *heartbeatAgentSelfMetrics `json:"agent_self_metrics,omitempty"`
 
@@ -89,6 +91,17 @@ type heartbeatAgentSelfMetrics struct {
 	LogSpoolBytes      int64  `json:"log_spool_bytes,omitempty"`
 	LogSpoolMaxBytes   int64  `json:"log_spool_max_bytes,omitempty"`
 	LogSpoolDropped    uint64 `json:"log_spool_dropped,omitempty"`
+}
+
+// heartbeatCollectorState is the agent's local view of each configured
+// collector. It is persisted on the node so onboarding and operations can
+// distinguish a live heartbeat from a live telemetry pipeline.
+type heartbeatCollectorState struct {
+	Name          string `json:"name"`
+	State         string `json:"state"`
+	Backend       string `json:"backend,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	BackoffReason string `json:"backoff_reason,omitempty"`
 }
 
 // heartbeatCompletedAction is one row in completed_actions[]. Status is
@@ -266,6 +279,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	} else if updated != nil {
 		node = updated
 	}
+	if updated, cerr := s.updateNodeCollectorState(r.Context(), node, body.CollectorState); cerr != nil {
+		s.logger.Warn("update collector state", zap.Error(cerr))
+	} else if updated != nil {
+		node = updated
+	}
 
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
@@ -333,8 +351,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 	// Check for queued self-update and signal the agent.
 	if pendingJob, jerr := s.store.GetPendingAgentUpdateJob(r.Context(), nodeID); jerr == nil && pendingJob != nil {
+		// A node-scoped update is an explicit operator request, so it must not
+		// get stranded behind a tenant rollout wave. The agent still validates
+		// the manifest checksum and refuses the update while rollout is paused.
 		action := JobTypeAgentUpdate
-		if nodeAdvertisesCapability(node, agentCapabilityUpdateJobStatus) {
+		if nodeAdvertisesCapability(node, agentCapabilityUpdateForce) {
+			action = JobTypeAgentUpdate + ":" + pendingJob.ID.String() + ":force"
+		} else if nodeAdvertisesCapability(node, agentCapabilityUpdateJobStatus) {
 			action += ":" + pendingJob.ID.String()
 		}
 		resp.PendingActions = append(resp.PendingActions, action)
@@ -442,6 +465,52 @@ func (s *Server) updateNodeAgentCapabilities(ctx context.Context, node *storage.
 		labels[k] = v
 	}
 	labels["agent.capabilities"] = normalized
+	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
+		return node, err
+	}
+	updated := *node
+	updated.Labels = labels
+	return &updated, nil
+}
+
+func (s *Server) updateNodeCollectorState(ctx context.Context, node *storage.Node, states []heartbeatCollectorState) (*storage.Node, error) {
+	if s == nil || s.store == nil || node == nil || node.ID == uuid.Nil || len(states) == 0 {
+		return node, nil
+	}
+	normalized := make([]map[string]any, 0, len(states))
+	seen := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		name := strings.TrimSpace(state.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		item := map[string]any{
+			"name":  name,
+			"state": strings.TrimSpace(state.State),
+		}
+		if backend := strings.TrimSpace(state.Backend); backend != "" {
+			item["backend"] = backend
+		}
+		if startedAt := strings.TrimSpace(state.StartedAt); startedAt != "" {
+			item["started_at"] = startedAt
+		}
+		if reason := strings.TrimSpace(state.BackoffReason); reason != "" {
+			item["backoff_reason"] = reason
+		}
+		normalized = append(normalized, item)
+	}
+	if len(normalized) == 0 {
+		return node, nil
+	}
+	labels := map[string]any{}
+	for k, v := range node.Labels {
+		labels[k] = v
+	}
+	labels["telemetry.collectors"] = normalized
 	if err := s.store.UpdateNodeLabels(ctx, node.ID, labels); err != nil {
 		return node, err
 	}

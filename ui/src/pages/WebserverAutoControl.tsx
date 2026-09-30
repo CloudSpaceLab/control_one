@@ -186,8 +186,8 @@ export function WebserverAutoControl(): JSX.Element {
         }
         actions={
           <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
-            <RefreshCw />
-            Refresh
+            <RefreshCw className={loading ? 'animate-spin' : ''} />
+            {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       />

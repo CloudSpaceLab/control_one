@@ -1,4 +1,4 @@
-CREATE TABLE smtp_settings (
+CREATE TABLE IF NOT EXISTS smtp_settings (
     tenant_id UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
     host TEXT NOT NULL,
     port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),

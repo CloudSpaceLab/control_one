@@ -125,8 +125,8 @@ export function Sessions(): JSX.Element {
         title="Recorded SSH & RDP sessions"
         description="Replay any privileged session to verify what happened. Search commands, scrub timeline, export transcript."
         actions={
-          <Button variant="secondary" size="md" onClick={refresh} disabled={loading}>
-            <RefreshCw className="h-4 w-4" /> {loading ? 'Loading…' : 'Refresh'}
+          <Button variant="secondary" size="md" onClick={refresh} loading={loading}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }
       />

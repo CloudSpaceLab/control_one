@@ -47,6 +47,7 @@ func (f *alertEmailFakeStore) CreateAlert(_ context.Context, params storage.Crea
 		Severity: params.Severity,
 		Title:    params.Title,
 		Summary:  sql.NullString{String: params.Summary, Valid: params.Summary != ""},
+		Context:  params.Context,
 		OpenedAt: time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC),
 	}
 	return f.created, nil
@@ -81,7 +82,7 @@ func TestCreateAlertSendsConfiguredEmail(t *testing.T) {
 			if settings.TenantID != tenantID || password != "saved-password" || len(recipients) != 2 {
 				t.Fatalf("unexpected SMTP delivery arguments")
 			}
-			for _, want := range []string{"Control One alert", "Suspicious login", "HIGH", "identity", "Repeated failed authentication"} {
+			for _, want := range []string{"Control One alert", "Suspicious login", "HIGH", "identity", "Occurrences: 4", "First seen:", "Last seen:", "Investigation: /console/investigate", "Repeated failed authentication"} {
 				if !strings.Contains(message, want) {
 					t.Fatalf("message missing %q:\n%s", want, message)
 				}
@@ -91,7 +92,7 @@ func TestCreateAlertSendsConfiguredEmail(t *testing.T) {
 	}
 	alert, err := s.createAlert(context.Background(), storage.CreateAlertParams{
 		TenantID: tenantID, Source: "identity", Severity: "high",
-		Title: "Suspicious login", Summary: "Repeated failed authentication",
+		Title: "Suspicious login", Summary: "Repeated failed authentication", Context: map[string]any{"occurrence_count": 4, "first_seen_at": "2026-09-14T12:00:00Z", "last_seen_at": "2026-09-14T12:00:10Z", "evidence_links": map[string]any{"investigation": "/console/investigate"}},
 	})
 	if err != nil || alert == nil || !called {
 		t.Fatalf("alert=%v err=%v email_called=%v", alert, err, called)
@@ -131,11 +132,14 @@ func TestSendAlertEmailToRecipientsUsesRuleRecipients(t *testing.T) {
 			return nil
 		},
 	}
-	err := s.sendAlertEmailToRecipients(context.Background(), storage.Alert{
+	delivered, err := s.sendAlertEmailToRecipients(context.Background(), storage.Alert{
 		ID: uuid.New(), TenantID: tenantID, Severity: "high", Title: "Correlation alert",
 	}, []string{"rule@example.com"})
 	if err != nil {
 		t.Fatalf("send rule email: %v", err)
+	}
+	if !delivered {
+		t.Fatal("rule email was not delivered")
 	}
 	if len(got) != 1 || got[0] != "rule@example.com" {
 		t.Fatalf("recipients = %#v, want only rule recipient", got)

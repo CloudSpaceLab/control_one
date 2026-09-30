@@ -99,6 +99,20 @@ type Store interface {
 	ListProvisioningTemplateVersions(context.Context, uuid.UUID, int, int) ([]storage.ProvisioningTemplateVersion, int, error)
 	CreateAuditLog(context.Context, *storage.AuditLog) (*storage.AuditLog, error)
 	ListAuditLogs(context.Context, storage.AuditLogFilter, int, int) ([]storage.AuditLog, int, error)
+	GetTeamSummary(context.Context, uuid.UUID, time.Time, time.Time) (*storage.TeamSummary, error)
+	GetTeamAnalystMetrics(context.Context, uuid.UUID, time.Time, time.Time) ([]storage.TeamAnalystMetric, error)
+	GetTeamTrends(context.Context, uuid.UUID, time.Time, time.Time, string) ([]storage.TeamTrendPoint, error)
+	GetTeamActivityFeed(context.Context, uuid.UUID, time.Time, time.Time, uuid.UUID, int, int) ([]storage.TeamActivityItem, int, error)
+	GetTeamCoverageGaps(context.Context, uuid.UUID) (*storage.TeamCoverageGaps, error)
+	AssignCase(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error
+	CaseAssignee(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, error)
+	CaseMentionedUsers(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error)
+	ListTenantUsers(context.Context, uuid.UUID, string, int) ([]storage.TeamUser, error)
+	CreateNotification(context.Context, storage.CreateNotificationParams) (*storage.Notification, error)
+	ListNotifications(context.Context, storage.NotificationFilter, int, int) ([]storage.Notification, int, error)
+	CountUnreadNotifications(context.Context, uuid.UUID, uuid.UUID) (int, error)
+	MarkNotificationRead(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	MarkAllNotificationsRead(context.Context, uuid.UUID, uuid.UUID) (int64, error)
 	ListPolicies(context.Context, storage.PolicyFilter, int, int) ([]storage.Policy, int, error)
 	GetPolicy(context.Context, uuid.UUID) (*storage.Policy, error)
 	CreatePolicy(context.Context, storage.CreatePolicyParams) (*storage.Policy, error)
@@ -262,6 +276,7 @@ type Store interface {
 	CountRemediationsSince(context.Context, uuid.UUID, time.Time, time.Time) (int, error)
 	// Alerts.
 	CreateAlert(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
+	UpdateOpenAlertOccurrence(context.Context, storage.CreateAlertParams) (*storage.Alert, error)
 	GetAlert(context.Context, uuid.UUID) (*storage.Alert, error)
 	ListAlerts(context.Context, storage.AlertFilter, int, int) ([]storage.Alert, int, error)
 	AckAlert(context.Context, uuid.UUID, uuid.UUID) error
@@ -593,7 +608,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 
 	for _, role := range principal.Roles {
 		for _, allowed := range allowedRoles {
-			if strings.EqualFold(strings.TrimSpace(role), strings.TrimSpace(allowed)) {
+			role = strings.TrimSpace(role)
+			allowed = strings.TrimSpace(allowed)
+			if strings.EqualFold(role, allowed) ||
+				(strings.EqualFold(allowed, roleViewer) && isReadCapableRole(role)) {
 				return principal, true
 			}
 		}
@@ -607,6 +625,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 
 	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 	return nil, false
+}
+
+func isReadCapableRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case roleViewer, roleOperator, roleInvestigator, roleCISO:
+		return true
+	default:
+		return false
+	}
 }
 
 type registerNodeRequest struct {
@@ -775,6 +802,7 @@ const (
 	roleViewer   = "viewer"
 	roleOperator = "operator"
 	roleAdmin    = "admin"
+	roleCISO     = "ciso"
 
 	requestIDHeader = "X-Request-Id"
 )
@@ -1050,6 +1078,21 @@ func (a correlationStoreAdapter) ListCorrelationRules(ctx context.Context, tenan
 func (a correlationStoreAdapter) CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
 	return a.server.createAlert(ctx, p)
 }
+func (a correlationStoreAdapter) UpdateOpenAlertOccurrence(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error) {
+	alert, err := a.server.store.UpdateOpenAlertOccurrence(ctx, p)
+	if errors.Is(err, storage.ErrAlertRenotificationDue) {
+		a.server.dispatchAlertEmail(*alert)
+		return alert, nil
+	}
+	if errors.Is(err, storage.ErrAlertDeduped) {
+		a.server.recordAudit(ctx, a.server.systemActor(), alert.TenantID, "alert.occurrence_suppressed", "alert", alert.ID.String(), alertDeliveryAuditMetadata(*alert, nil))
+		return alert, nil
+	}
+	return alert, err
+}
+func (a correlationStoreAdapter) HandleCorrelationResponse(ctx context.Context, rule storage.CorrelationRule, alert *storage.Alert, ev eventbus.Event) error {
+	return a.server.handleCorrelationResponse(ctx, rule, alert, ev)
+}
 
 // publishEvent fan-outs a realtime event to SSE subscribers. Safe to call
 // when the bus is not configured (no-op).
@@ -1190,6 +1233,13 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/private-access/exposure/reconcile", s.handlePrivateAccessExposureReconcile)
 	s.baseRouter.HandleFunc("/api/v1/soc/cases", s.handleSOCCasesCollection)
 	s.baseRouter.HandleFunc("/api/v1/soc/cases/", s.handleSOCCaseSubroutes)
+	s.baseRouter.HandleFunc("/api/v1/team/metrics", s.handleTeamMetrics)
+	s.baseRouter.HandleFunc("/api/v1/team/trends", s.handleTeamTrends)
+	s.baseRouter.HandleFunc("/api/v1/team/activity", s.handleTeamActivityFeed)
+	s.baseRouter.HandleFunc("/api/v1/team/gaps", s.handleTeamCoverageGaps)
+	s.baseRouter.HandleFunc("/api/v1/team/users", s.handleTeamUsers)
+	s.baseRouter.HandleFunc("/api/v1/notifications", s.serveNotifications)
+	s.baseRouter.HandleFunc("/api/v1/notifications/", s.serveNotifications)
 	s.baseRouter.HandleFunc("/api/v1/metrics/risk-score", s.handleMetricsRiskScore)
 	s.baseRouter.HandleFunc("/api/v1/metrics/mttd", s.handleMetricsMTTD)
 	s.baseRouter.HandleFunc("/api/v1/metrics/mttr", s.handleMetricsMTTR)
@@ -2893,10 +2943,11 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 	authMW := auth.NewMiddleware(logger, cfg.TLS.RequireClientTLS, cfg.Auth, identityStore)
 
+	protectedMux := notificationPathGuard(mux)
 	httpServer := &http.Server{
 		Addr: cfg.HTTP.Address,
 		Handler: loggingMiddleware(logger,
-			requestIDMiddleware(authMW.Wrap(mux))),
+			requestIDMiddleware(authMW.Wrap(protectedMux))),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}

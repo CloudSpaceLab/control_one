@@ -154,8 +154,8 @@ export function KnowledgeGraph(): JSX.Element {
         description="What's listening on every enrolled node — process, port, service kind, and (when probed) URL + page title. The same data flows into a per-tenant markdown document an LLM can ground answers against."
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            <Button variant="ghost" size="sm" onClick={refresh} loading={loading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
             <Button variant="secondary" size="sm" onClick={downloadMd} disabled={!currentTenantId}>
               <Download className="h-4 w-4" /> Download .md

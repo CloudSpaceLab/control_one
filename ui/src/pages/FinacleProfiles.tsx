@@ -174,9 +174,9 @@ function ConnectionPanel(): JSX.Element {
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -310,9 +310,9 @@ function ShiftsPanel(): JSX.Element {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -553,9 +553,9 @@ function ProfilesPanel(): JSX.Element {
             </Button>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+        <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
+	          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+	          {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
       {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}

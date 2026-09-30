@@ -1273,16 +1273,17 @@ export function Nodes(): JSX.Element {
   type NodeRow = (typeof nodes)[number];
   const tableColumns: ColumnDef<NodeRow>[] = [
     {
-      header: 'Status',
+      header: 'Health',
       id: 'status',
       cell: ({ row }) => {
         const h = healthMap[row.original.id];
         const state: NodeState = h ? riskToState(h.risk_level) : isOnline(row.original) ? 'healthy' : 'unknown';
-        return <PulsingDot state={state} size={8} />;
+        const healthLabel = state === 'healthy' ? 'Healthy' : state === 'unknown' ? 'Health unknown or awaiting telemetry' : String(state);
+        return <span title={healthLabel}><PulsingDot state={state} size={8} /></span>;
       },
     },
     {
-      header: 'Lifecycle',
+      header: 'Lifecycle (registered)',
       id: 'lifecycle',
       cell: ({ row }) => {
         const state = row.original.state as LifecycleState;

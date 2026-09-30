@@ -35,6 +35,7 @@ type Service struct {
 	logsMu     sync.Mutex
 	logsActive bool
 	logSources map[string]struct{}
+	logStates  map[string]LogSourceState
 
 	triggerMu sync.Mutex
 	triggers  []*compiledTrigger
@@ -44,6 +45,15 @@ type Service struct {
 
 	logSpool     *durablespool.Spool
 	logCursorDir string
+}
+
+// LogSourceState is the agent's readiness view for one configured log source.
+// It is intentionally small so it can be reported with the node heartbeat.
+type LogSourceState struct {
+	Name          string
+	State         string
+	Backend       string
+	BackoffReason string
 }
 
 type DurabilityOptions struct {
@@ -112,7 +122,22 @@ func (s *Service) SendHeartbeat(ctx context.Context, nodeID, heartbeatID string)
 
 // New creates a telemetry service.
 func New(client *api.Client, log *zap.Logger, hooks hooks.Publisher) *Service {
-	return &Service{client: client, log: log, hooks: hooks, spike: newLogSpikeDetector()}
+	return &Service{client: client, log: log, hooks: hooks, spike: newLogSpikeDetector(), logStates: map[string]LogSourceState{}}
+}
+
+// LogSourceStates returns a snapshot of configured log-source readiness.
+func (s *Service) LogSourceStates() []LogSourceState {
+	if s == nil {
+		return nil
+	}
+	s.logsMu.Lock()
+	defer s.logsMu.Unlock()
+	out := make([]LogSourceState, 0, len(s.logStates))
+	for _, state := range s.logStates {
+		out = append(out, state)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // LoadTriggers compiles and stores log triggers.
@@ -230,6 +255,11 @@ func (s *Service) AddLogSources(ctx context.Context, nodeID string, sources []co
 			continue
 		}
 		s.logSources[key] = struct{}{}
+		name := strings.TrimSpace(src.Program)
+		if name == "" {
+			name = key
+		}
+		s.logStates[key] = LogSourceState{Name: name, State: "starting", Backend: strings.TrimSpace(src.Type)}
 		toStart = append(toStart, src)
 	}
 	if len(toStart) > 0 {
@@ -303,6 +333,7 @@ func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source co
 
 		collector, err := logs.NewCollector(source, s.log)
 		if err != nil {
+			s.updateLogSourceState(source, "stopped", err.Error())
 			s.log.Warn("log collector init failed", zap.String("program", source.Program), zap.String("type", source.Type), zap.Error(err))
 			s.publishHook(ctx, "telemetry.logs.collector.failed", nodeID, map[string]any{
 				"program": source.Program,
@@ -318,8 +349,10 @@ func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source co
 			}
 			continue
 		}
+		s.updateLogSourceState(source, "running", "")
 
 		if err := collector.Run(ctx, out); err != nil && ctx.Err() == nil {
+			s.updateLogSourceState(source, "stopped", err.Error())
 			s.log.Warn("log collector exited", zap.String("program", source.Program), zap.Error(err))
 			s.publishHook(ctx, "telemetry.logs.collector.exited", nodeID, map[string]any{
 				"program": source.Program,
@@ -334,9 +367,29 @@ func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source co
 			}
 			continue
 		}
+		if ctx.Err() == nil {
+			s.updateLogSourceState(source, "stopped", "collector exited")
+		}
 
 		return
 	}
+}
+
+func (s *Service) updateLogSourceState(source config.LogSourceConfig, state, reason string) {
+	if s == nil {
+		return
+	}
+	key := logSourceRuntimeKey(source)
+	name := strings.TrimSpace(source.Program)
+	if name == "" {
+		name = key
+	}
+	s.logsMu.Lock()
+	defer s.logsMu.Unlock()
+	if s.logStates == nil {
+		s.logStates = map[string]LogSourceState{}
+	}
+	s.logStates[key] = LogSourceState{Name: name, State: state, Backend: strings.TrimSpace(source.Type), BackoffReason: reason}
 }
 
 func (s *Service) sleepWithBackoff(ctx context.Context, d time.Duration) {

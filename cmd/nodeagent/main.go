@@ -51,6 +51,9 @@ import (
 )
 
 func main() {
+	if runAsWindowsService() {
+		return
+	}
 	// Subcommand dispatch. We keep flag-style invocation for backwards compatibility
 	// (`--join`, `--install-service`, etc.) but also accept simple subcommands like
 	// `controlone-agent uninstall` and `controlone-agent verify-binary ...`.
@@ -331,7 +334,19 @@ func main() {
 		collectors.MarkDisabled("app-dependencies", "app dependency inventory disabled", func() string { return "manifest-sbom" })
 	}
 
-	configureHeartbeatRuntime(runtimeSettings, eventStream, collectors.Snapshot, func() (int, uint64) {
+	collectorStateSnapshot := func() []collectorStateReport {
+		states := collectors.Snapshot()
+		for _, state := range telemetrySvc.LogSourceStates() {
+			states = append(states, collectorStateReport{
+				Name:          "logs/" + state.Name,
+				State:         state.State,
+				Backend:       state.Backend,
+				BackoffReason: state.BackoffReason,
+			})
+		}
+		return states
+	}
+	configureHeartbeatRuntime(runtimeSettings, eventStream, collectorStateSnapshot, func() (int, uint64) {
 		stats := netflowMgr.Stats()
 		return stats.SummaryBuckets, stats.SummaryEvicted
 	}, func() agentSpoolRuntimeStats {

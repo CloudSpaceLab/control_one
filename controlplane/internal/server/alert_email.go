@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"mime"
 	"strings"
@@ -21,9 +22,25 @@ type smtpSettingsReader interface {
 
 func (s *Server) createAlert(ctx context.Context, params storage.CreateAlertParams) (*storage.Alert, error) {
 	alert, err := s.store.CreateAlert(ctx, params)
+	if errors.Is(err, storage.ErrAlertDeduped) {
+		if alert != nil {
+			s.recordAudit(ctx, s.systemActor(), alert.TenantID, "alert.occurrence_suppressed", "alert", alert.ID.String(), alertDeliveryAuditMetadata(*alert, nil))
+		}
+		return alert, nil
+	}
+	if errors.Is(err, storage.ErrAlertRenotificationDue) {
+		if alert != nil {
+			if _, reopened := alert.Context["reopened_at"]; reopened {
+				s.recordAudit(ctx, s.systemActor(), alert.TenantID, "alert.reopened", "alert", alert.ID.String(), alertDeliveryAuditMetadata(*alert, nil))
+			}
+			s.dispatchAlertEmail(*alert)
+		}
+		return alert, nil
+	}
 	if err != nil || alert == nil {
 		return alert, err
 	}
+	s.recordAudit(ctx, s.systemActor(), alert.TenantID, "alert.created", "alert", alert.ID.String(), alertDeliveryAuditMetadata(*alert, nil))
 	s.dispatchAlertEmail(*alert)
 	return alert, nil
 }
@@ -36,8 +53,14 @@ func (s *Server) dispatchAlertEmailToRecipients(alert storage.Alert, recipients 
 	run := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), alertEmailTimeout)
 		defer cancel()
-		if err := s.sendAlertEmailToRecipients(ctx, alert, recipients); err != nil && s.logger != nil {
-			s.logger.Warn("send alert email", zap.String("alert_id", alert.ID.String()), zap.String("tenant_id", alert.TenantID.String()), zap.Error(err))
+		delivered, err := s.sendAlertEmailToRecipients(ctx, alert, recipients)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("send alert email", zap.String("alert_id", alert.ID.String()), zap.String("tenant_id", alert.TenantID.String()), zap.Error(err))
+			}
+			s.recordAudit(ctx, s.systemActor(), alert.TenantID, "alert.notification_failed", "alert", alert.ID.String(), alertDeliveryAuditMetadata(alert, err))
+		} else if delivered {
+			s.recordAudit(ctx, s.systemActor(), alert.TenantID, "alert.notification_delivered", "alert", alert.ID.String(), alertDeliveryAuditMetadata(alert, nil))
 		}
 	}
 	if s.alertEmailDispatch != nil {
@@ -119,39 +142,47 @@ func severityAtLeast(actual, minimum string) bool {
 	return actualRank >= minimumRank
 }
 
-func (s *Server) sendAlertEmail(ctx context.Context, alert storage.Alert) error {
+func alertDeliveryAuditMetadata(alert storage.Alert, deliveryErr error) map[string]any {
+	metadata := map[string]any{"source": alert.Source, "severity": alert.Severity, "occurrence_count": alert.Context["occurrence_count"], "first_seen_at": alert.Context["first_seen_at"], "last_seen_at": alert.Context["last_seen_at"]}
+	if deliveryErr != nil {
+		metadata["error"] = deliveryErr.Error()
+	}
+	return metadata
+}
+
+func (s *Server) sendAlertEmail(ctx context.Context, alert storage.Alert) (bool, error) {
 	return s.sendAlertEmailToRecipients(ctx, alert, nil)
 }
 
 // sendAlertEmailToRecipients sends an alert with the tenant SMTP settings. A
-// nil recipient slice uses the tenant's global recipients; a non-empty slice
-// is used for an explicit correlation-rule delivery policy.
-func (s *Server) sendAlertEmailToRecipients(ctx context.Context, alert storage.Alert, recipients []string) error {
+// nil recipient slice uses tenant-wide recipients; a non-empty slice is an
+// explicit correlation-rule delivery policy.
+func (s *Server) sendAlertEmailToRecipients(ctx context.Context, alert storage.Alert, recipients []string) (bool, error) {
 	store, ok := s.store.(smtpSettingsReader)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	settings, err := store.GetSMTPSettings(ctx, alert.TenantID)
 	if err != nil {
-		return fmt.Errorf("load SMTP settings: %w", err)
+		return false, fmt.Errorf("load SMTP settings: %w", err)
 	}
 	if settings == nil || !settings.Enabled {
-		return nil
+		return false, nil
 	}
 	if len(recipients) == 0 {
 		recipients = settings.Recipients
 	}
 	if len(recipients) == 0 {
-		return nil
+		return false, nil
 	}
 	password := ""
 	if settings.AuthEnabled {
 		if s.sealer == nil || len(settings.PasswordCiphertext) == 0 {
-			return fmt.Errorf("SMTP credentials are unavailable")
+			return false, fmt.Errorf("SMTP credentials are unavailable")
 		}
 		plaintext, err := s.sealer.Open(settings.PasswordCiphertext, settings.PasswordNonce)
 		if err != nil {
-			return fmt.Errorf("decrypt SMTP credentials: %w", err)
+			return false, fmt.Errorf("decrypt SMTP credentials: %w", err)
 		}
 		password = string(plaintext)
 		defer func() {
@@ -162,9 +193,9 @@ func (s *Server) sendAlertEmailToRecipients(ctx context.Context, alert storage.A
 	}
 	message := smtpAlertMessage(*settings, alert)
 	if s.smtpAlertSend != nil {
-		return s.smtpAlertSend(ctx, *settings, password, recipients, message)
+		return true, s.smtpAlertSend(ctx, *settings, password, recipients, message)
 	}
-	return sendSMTPContent(ctx, *settings, password, recipients, message)
+	return true, sendSMTPContent(ctx, *settings, password, recipients, message)
 }
 
 func smtpAlertMessage(settings storage.SMTPSettings, alert storage.Alert) string {
@@ -192,6 +223,18 @@ func smtpAlertMessage(settings storage.SMTPSettings, alert storage.Alert) string
 		"Alert ID: " + alert.ID.String(),
 		"Opened: " + openedAt.UTC().Format(time.RFC3339),
 	}
+	if count := fmt.Sprint(alert.Context["occurrence_count"]); count != "<nil>" && count != "" {
+		body = append(body, "Occurrences: "+count)
+	}
+	if first := strings.TrimSpace(fmt.Sprint(alert.Context["first_seen_at"])); first != "" && first != "<nil>" {
+		body = append(body, "First seen: "+first)
+	}
+	if last := strings.TrimSpace(fmt.Sprint(alert.Context["last_seen_at"])); last != "" && last != "<nil>" {
+		body = append(body, "Last seen: "+last)
+	}
+	if link := alertEvidenceLink(alert.Context); link != "" {
+		body = append(body, "Investigation: "+link)
+	}
 	if alert.Summary.Valid && strings.TrimSpace(alert.Summary.String) != "" {
 		body = append(body, "", "Summary:", strings.TrimSpace(alert.Summary.String))
 	}
@@ -207,4 +250,12 @@ func smtpAlertMessage(settings storage.SMTPSettings, alert storage.Alert) string
 		strings.Join(body, "\r\n"),
 		"",
 	}, "\r\n")
+}
+
+func alertEvidenceLink(contextMap map[string]any) string {
+	links, ok := contextMap["evidence_links"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(links["investigation"]))
 }

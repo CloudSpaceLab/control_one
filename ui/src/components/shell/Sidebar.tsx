@@ -15,6 +15,7 @@ import {
   ShieldAlert,
   ShieldQuestion,
   Sparkles,
+  Users,
   type LucideIcon,
 } from 'lucide-react';
 import { Link, NavLink } from 'react-router-dom';
@@ -53,6 +54,12 @@ const NAV_GROUPS: NavGroupDef[] = [
       { to: '/', label: 'Control Room', icon: Activity },
       { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: <AlertStatusBadge /> },
       { to: '/cases', label: 'Cases', icon: ClipboardList },
+      {
+        to: '/team-activity',
+        label: 'Team activity',
+        icon: Users,
+        roles: ['investigator', 'operator', 'admin'],
+      },
     ],
   },
   {

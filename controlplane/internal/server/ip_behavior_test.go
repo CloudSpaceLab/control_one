@@ -19,8 +19,31 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
+
+func TestCorrelationResponseCreatesTraceableProposalWithoutDispatch(t *testing.T) {
+	tenantID, nodeID, ruleID, alertID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &blockProposalInvestigateStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store, logger: zap.NewNop()}
+	alert := &storage.Alert{ID: alertID, TenantID: tenantID, DedupKey: sql.NullString{String: ruleID.String() + "/192.0.2.44", Valid: true}}
+	rule := storage.CorrelationRule{ID: ruleID, TenantID: tenantID, Name: "SSH brute force", Severity: "high", ResponseMode: "require_approval", ResponseTTLSeconds: 900, ResponseScope: "affected", ResponseEnforcement: "firewall"}
+	ev := eventbus.Event{TenantID: tenantID, NodeID: &nodeID, Payload: []byte(`{"event_type":"ssh.authentication_failure","details":{"src_ip":"192.0.2.44"}}`)}
+	if err := s.handleCorrelationResponse(context.Background(), rule, alert, ev); err != nil {
+		t.Fatalf("handle correlation response: %v", err)
+	}
+	if len(store.createdBlocks) != 1 {
+		t.Fatalf("created proposals = %d, want 1", len(store.createdBlocks))
+	}
+	entry := store.createdBlocks[0]
+	if entry.Status != "proposed" || entry.IPCIDR != "192.0.2.44/32" || entry.TargetID.UUID != nodeID {
+		t.Fatalf("unexpected proposal: %+v", entry)
+	}
+	if !strings.Contains(entry.Reason, alertID.String()) || len(store.recorded) != 0 {
+		t.Fatalf("proposal should preserve alert evidence and await approval: %+v", entry)
+	}
+}
 
 func TestIPBehaviorScoringRequiresCorroboration(t *testing.T) {
 	rareCountryOnly := &ipBehaviorBucket{
@@ -356,6 +379,60 @@ func TestQueueFirewallRemovalUsesOriginalBlockRuleShape(t *testing.T) {
 	}
 }
 
+func TestExpireIPBlocklistEntriesRecordsAutomaticExpiryAudit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 22, 13, 0, 0, 0, time.UTC)
+	tenantID := uuid.New()
+	entryID := uuid.New()
+	actionID := uuid.New()
+	ruleID := uuid.New()
+	store := &blockProposalExpiryStore{
+		fakeStore: &fakeStore{},
+		entries: []storage.IPBlocklistEntry{{
+			ID:             entryID,
+			TenantID:       tenantID,
+			IPCIDR:         "198.51.100.223/32",
+			Status:         "active",
+			Enforcement:    "firewall",
+			Reason:         "temporary expiry validation",
+			EntityActionID: uuid.NullUUID{UUID: actionID, Valid: true},
+			ExpiresAt:      sql.NullTime{Time: now.Add(-time.Minute), Valid: true},
+		}},
+		rules: []storage.NodeFirewallRule{{
+			ID:             ruleID,
+			EntityActionID: actionID,
+			NodeID:         uuid.New(),
+			TenantID:       tenantID,
+			Action:         "block",
+			Direction:      "in",
+			Status:         "applied",
+		}},
+	}
+	s := &Server{store: store, auditAsync: false}
+
+	expired, err := s.expireIPBlocklistEntries(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("expire entries: %v", err)
+	}
+	if expired != 1 || store.entries[0].Status != "expired" {
+		t.Fatalf("expired/status = %d/%s, want 1/expired", expired, store.entries[0].Status)
+	}
+	if len(store.queued) != 1 {
+		t.Fatalf("queued removal jobs = %d, want 1", len(store.queued))
+	}
+	if len(store.auditLogs) != 1 {
+		t.Fatalf("audit records = %d, want 1", len(store.auditLogs))
+	}
+	audit := store.auditLogs[0]
+	if audit.Action != "network.block_proposal.expired" || audit.ResourceID == nil || *audit.ResourceID != entryID.String() {
+		t.Fatalf("unexpected expiry audit: %#v", audit)
+	}
+	if audit.Metadata["ip_cidr"] != "198.51.100.223/32" || audit.Metadata["stage"] != "automatic_expiry" {
+		t.Fatalf("missing expiry audit metadata: %#v", audit.Metadata)
+	}
+}
+
 func TestProtectedIPBlockReasonUsesTenantAllowlistAndAssetCIDRs(t *testing.T) {
 	t.Parallel()
 
@@ -385,6 +462,12 @@ func TestProtectedIPBlockReasonUsesTenantAllowlistAndAssetCIDRs(t *testing.T) {
 	}
 	if got := s.protectedIPBlockReason(context.Background(), tenantID, "192.0.2.10"); got != "" {
 		t.Fatalf("unexpected protected reason for external test IP: %q", got)
+	}
+	if got := s.protectedIPBlockReason(context.Background(), tenantID, "127.0.0.2/32"); !strings.Contains(got, "loopback") {
+		t.Fatalf("loopback protection reason = %q", got)
+	}
+	if got := s.protectedIPBlockReason(context.Background(), tenantID, "::1/128"); !strings.Contains(got, "loopback") {
+		t.Fatalf("IPv6 loopback protection reason = %q", got)
 	}
 }
 
@@ -495,6 +578,48 @@ func TestBlockProposalProtectedCIDRRequiresExplicitAdminOverride(t *testing.T) {
 	}
 	if !foundAudit {
 		t.Fatalf("expected protected override audit, got %#v", store.auditLogs)
+	}
+}
+
+func TestCreateBlockProposalNormalizesSingleIPToExactCIDR(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	store := &blockProposalInvestigateStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store}
+	body := []byte(`{"tenant_id":"` + tenantID.String() + `","ip_cidr":"198.51.100.222","target_type":"tenant","scope":"tenant","enforcement":"firewall","reason":"local validation"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/network/block-proposals", bytes.NewReader(body))
+	req = withPrincipal(req, operatorPrincipal())
+	rr := httptest.NewRecorder()
+
+	s.handleBlockProposals(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%q, want accepted", rr.Code, rr.Body.String())
+	}
+	if len(store.createdBlocks) != 1 || store.createdBlocks[0].IPCIDR != "198.51.100.222/32" {
+		t.Fatalf("created block = %#v, want exact /32", store.createdBlocks)
+	}
+}
+
+func TestCreateBlockProposalRejectsEquivalentOpenProposal(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	store := &blockProposalInvestigateStore{fakeStore: &fakeStore{}}
+	s := &Server{store: store}
+	body := []byte(`{"tenant_id":"` + tenantID.String() + `","ip_cidr":"198.51.100.222","target_type":"tenant","scope":"tenant","enforcement":"firewall","reason":"local validation"}`)
+	for attempt, expectedStatus := range []int{http.StatusAccepted, http.StatusConflict} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/network/block-proposals", bytes.NewReader(body))
+		req = withPrincipal(req, operatorPrincipal())
+		rr := httptest.NewRecorder()
+		s.handleBlockProposals(rr, req)
+		if rr.Code != expectedStatus {
+			t.Fatalf("attempt %d status = %d body=%q, want %d", attempt+1, rr.Code, rr.Body.String(), expectedStatus)
+		}
+	}
+	if len(store.createdBlocks) != 1 {
+		t.Fatalf("created blocks = %d, want exactly one", len(store.createdBlocks))
 	}
 }
 
@@ -1039,8 +1164,9 @@ func (f *ipBehaviorAPIStore) ListIPBehaviorBaselines(_ context.Context, _ uuid.U
 
 type blockProposalExpiryStore struct {
 	*fakeStore
-	rules  []storage.NodeFirewallRule
-	queued map[uuid.UUID]uuid.UUID
+	entries []storage.IPBlocklistEntry
+	rules   []storage.NodeFirewallRule
+	queued  map[uuid.UUID]uuid.UUID
 }
 
 type blockProposalCanaryStore struct {
@@ -1104,6 +1230,33 @@ func (f *blockProposalExpiryStore) QueueNodeFirewallRuleRemoval(_ context.Contex
 	}
 	f.queued[ruleID] = jobID
 	return nil
+}
+
+func (f *blockProposalExpiryStore) ListExpiredIPBlocklistEntries(_ context.Context, now time.Time, limit int) ([]storage.IPBlocklistEntry, error) {
+	entries := make([]storage.IPBlocklistEntry, 0, len(f.entries))
+	for _, entry := range f.entries {
+		if entry.ExpiresAt.Valid && !entry.ExpiresAt.Time.After(now) && !strings.EqualFold(entry.Status, "expired") {
+			entries = append(entries, entry)
+		}
+	}
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
+}
+
+func (f *blockProposalExpiryStore) UpdateIPBlocklistEntryStatus(_ context.Context, id uuid.UUID, status string, _ *uuid.UUID, errMsg string) (*storage.IPBlocklistEntry, error) {
+	for i := range f.entries {
+		if f.entries[i].ID == id {
+			f.entries[i].Status = status
+			if strings.TrimSpace(errMsg) != "" {
+				f.entries[i].LastError = sql.NullString{String: errMsg, Valid: true}
+			}
+			entry := f.entries[i]
+			return &entry, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *blockProposalInvestigateStore) CreateSavedSearch(context.Context, storage.SavedSearch) (*storage.SavedSearch, error) {

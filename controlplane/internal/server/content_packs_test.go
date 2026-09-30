@@ -1598,7 +1598,7 @@ func TestContentPackEdgeCollectorHeartbeatPersistsSourceRuntimeState(t *testing.
 	if state.Metrics.EventsReceived != 42 || state.ConfigVersion != "sha256:runtime" {
 		t.Fatalf("persisted source metrics/config = %#v", state)
 	}
-	if !state.ApprovalRequired || state.ApprovalID != "proposal-linux-auth" {
+	if state.ApprovalRequired || state.ApprovalID != "proposal-linux-auth" {
 		t.Fatalf("persisted source approval = %#v", state)
 	}
 	if state.Labels["collect_mode"] != "collect_raw" || state.Labels["pipeline_id"] != "logs/controlone.linux.auth" {

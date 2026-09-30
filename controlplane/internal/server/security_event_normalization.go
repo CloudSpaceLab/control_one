@@ -13,10 +13,20 @@ import (
 )
 
 var (
-	sshdFailurePattern  = regexp.MustCompile(`(?i)failed (?:password|publickey|keyboard-interactive)(?: for (?:invalid user )?)(\S+) from ([0-9a-f:.]+) port (\d+)`)
-	sshdSuccessPattern  = regexp.MustCompile(`(?i)accepted (?:password|publickey|keyboard-interactive) for (\S+) from ([0-9a-f:.]+) port (\d+)`)
-	commonWebPattern    = regexp.MustCompile(`^(\S+)\s+\S+\s+\S+\s+\[[^]]+\]\s+"([A-Z]+)\s+(\S+)(?:\s+HTTP/[^\"]+)?"\s+(\d{3})\s+(\d+|-)`)
-	databaseUserPattern = regexp.MustCompile(`(?i)(?:user|login|role|username)[= :'\"]+([A-Za-z0-9_.@\\-]+)`)
+	sshdFailurePattern           = regexp.MustCompile(`(?i)failed (?:password|publickey|keyboard-interactive)(?: for (?:invalid user )?)(\S+) from ([0-9a-f:.]+) port (\d+)`)
+	sshdSuccessPattern           = regexp.MustCompile(`(?i)accepted (?:password|publickey|keyboard-interactive) for (\S+) from ([0-9a-f:.]+) port (\d+)`)
+	commonWebPattern             = regexp.MustCompile(`^(\S+)\s+\S+\s+\S+\s+\[[^]]+\]\s+"([A-Z]+)\s+(\S+)(?:\s+HTTP/[^\"]+)?"\s+(\d{3})\s+(\d+|-)`)
+	databaseUserPattern          = regexp.MustCompile(`(?i)(?:user|login|role|username)[= :'\"]+([A-Za-z0-9_.@\\-]+)`)
+	windowsFailedAccountPattern  = regexp.MustCompile(`(?ims)Account For Which Logon Failed:.*?^\s*Account Name:\s*(\S+)`)
+	windowsSubjectAccountPattern = regexp.MustCompile(`(?ims)Subject:.*?^\s*Account Name:\s*(\S+)`)
+	windowsHelloUserPattern      = regexp.MustCompile(`(?mi)^\s*(?:Username|TargetUserName|Target User Name):\s*(\S+)`)
+	windowsSourceIPPattern       = regexp.MustCompile(`(?mi)^\s*Source Network Address:\s*(\S+)`)
+	windowsSourcePortPattern     = regexp.MustCompile(`(?mi)^\s*Source Port:\s*(\S+)`)
+	windowsLogonTypePattern      = regexp.MustCompile(`(?mi)^\s*Logon Type:\s*(\S+)`)
+	windowsAuthStatusPattern     = regexp.MustCompile(`(?mi)^\s*Authentication Error Status:\s*(\S+)`)
+	windowsAuthSubstatusPattern  = regexp.MustCompile(`(?mi)^\s*Authentication Error Substatus:\s*(\S+)`)
+	windowsCredentialTypePattern = regexp.MustCompile(`(?mi)^\s*Credential Type:\s*(.+?)\s*$`)
+	windowsSensorPattern         = regexp.MustCompile(`(?i)\bsensor:\s*(.+?)(?:\r?\n|$)`)
 )
 
 // normalizeSecurityEvents converts collector-specific events into the stable
@@ -82,6 +92,19 @@ func normalizeSecurityEvent(tenantID, nodeID uuid.UUID, ev *IngestedEvent) []Ing
 	if eventCode == "4624" {
 		return authenticationEvents(tenantID, nodeID, ev, "authentication.success", windowsUser(ev), "windows_security", windowsAuthenticationFields(ev))
 	}
+	// Windows Hello for Business records failed PIN/biometric sign-in in its
+	// own Operational channel (for example Event ID 7001), rather than always
+	// emitting Security/4625. Treat the authenticated failure as the same
+	// stable contract so existing correlation rules cover both paths.
+	if eventCode == "7001" {
+		return authenticationEvents(tenantID, nodeID, ev, "windows.authentication_failure", windowsAuthenticationUser(ev), "windows_hello", windowsAuthenticationFields(ev))
+	}
+	// Biometrics/1005 means the sensor could not match the sample to an
+	// enrolled identity. Windows does not include a username in this record,
+	// so use a stable unknown bucket for same-node correlation.
+	if eventCode == "1005" {
+		return authenticationEvents(tenantID, nodeID, ev, "windows.authentication_failure", windowsAuthenticationUser(ev), "windows_biometrics", windowsAuthenticationFields(ev))
+	}
 
 	if isWebSource(program, source) {
 		if extra, ok := webFieldsFromEvent(ev); ok {
@@ -144,10 +167,15 @@ func authenticationEvents(tenantID, nodeID uuid.UUID, ev *IngestedEvent, specifi
 
 func newNormalizedSecurityEvent(tenantID, nodeID uuid.UUID, source *IngestedEvent, eventType, category, action, outcome string, extra map[string]any) IngestedEvent {
 	normalizedSource := normalizedEventSource(source)
+	sourceChannel := normalizedSourceChannel(source)
 	details := map[string]any{
 		"event_type": eventType, "event_category": category, "event_action": action, "outcome": outcome,
-		"original_event_type": source.Type, "source_event_id": source.EventID, "source": normalizedSource,
+		"original_event_type": source.Type, "source_event_id": nativeSourceEventID(source), "source": normalizedSource,
+		"source_os": normalizedSourceOS(source, normalizedSource), "source_channel": sourceChannel,
 		"node_id": nodeID.String(), "timestamp": source.TS.UTC().Format(time.RFC3339Nano),
+	}
+	if strings.TrimSpace(source.EventID) != "" {
+		details["event_id"] = source.EventID
 	}
 	copyEventField(details, "src_ip", source.SrcIP)
 	copyEventField(details, "src_port", source.SrcPort)
@@ -246,7 +274,10 @@ func validateNormalizedSecurityEvent(ev *IngestedEvent) error {
 
 func normalizationErrorEvent(tenantID, nodeID uuid.UUID, source *IngestedEvent, cause error) IngestedEvent {
 	sourceName := normalizedEventSource(source)
-	details := map[string]any{"event_type": "security.normalization_error", "source": sourceName, "node_id": nodeID.String(), "timestamp": source.TS.UTC().Format(time.RFC3339Nano), "outcome": "failure", "error": cause.Error(), "original_event_type": source.Type, "source_event_id": source.EventID}
+	details := map[string]any{"event_type": "security.normalization_error", "source": sourceName, "source_os": normalizedSourceOS(source, sourceName), "source_channel": normalizedSourceChannel(source), "node_id": nodeID.String(), "timestamp": source.TS.UTC().Format(time.RFC3339Nano), "outcome": "failure", "error": cause.Error(), "original_event_type": source.Type, "source_event_id": nativeSourceEventID(source)}
+	if strings.TrimSpace(source.EventID) != "" {
+		details["event_id"] = source.EventID
+	}
 	return IngestedEvent{Type: "security.event", TS: source.TS, TenantID: tenantID.String(), NodeID: nodeID.String(), Severity: "warning", Parser: source.Parser, ParserStatus: "error", Message: "Security event normalization failed: " + cause.Error(), Details: details, DedupKey: strings.TrimSpace(source.DedupKey) + ":normalization-error"}
 }
 
@@ -280,6 +311,49 @@ func normalizedEventSource(ev *IngestedEvent) string {
 	default:
 		return firstNonEmpty(strings.TrimSpace(ev.Collector), "unknown")
 	}
+}
+
+// normalizedSourceChannel preserves the native collector channel or stream so
+// operators can tell where a normalized event came from without parsing the
+// raw message. It is evidence only; correlation rules continue to match the
+// normalized event type.
+func normalizedSourceChannel(ev *IngestedEvent) string {
+	if ev == nil {
+		return "unknown"
+	}
+	return firstNonEmpty(
+		detailStringAny(ev, "source_channel", "channel", "event.channel", "source", "collector_type", "event.dataset"),
+		ev.Collector,
+		"unknown",
+	)
+}
+
+func normalizedSourceOS(ev *IngestedEvent, normalizedSource string) string {
+	if ev == nil {
+		return "unknown"
+	}
+	channel := normalizedSourceChannel(ev)
+	program := detailStringAny(ev, "program", "provider", "event.provider")
+	combined := strings.ToLower(strings.Join([]string{normalizedSource, channel, program, ev.Collector}, " "))
+	switch {
+	case strings.Contains(combined, "windows") || strings.Contains(combined, "security-auditing") || strings.Contains(combined, "hello") || strings.Contains(combined, "biometric"):
+		return "windows"
+	case strings.Contains(combined, "darwin") || strings.Contains(combined, "macos") || strings.Contains(combined, "unified") || strings.Contains(combined, "authd") || strings.Contains(combined, "loginwindow"):
+		return "macos"
+	case strings.Contains(combined, "linux") || strings.Contains(combined, "sshd") || strings.Contains(combined, "journald") || strings.Contains(combined, "auth.log") || strings.Contains(combined, "/secure"):
+		return "linux"
+	default:
+		return "unknown"
+	}
+}
+
+func nativeSourceEventID(ev *IngestedEvent) string {
+	if ev == nil {
+		return ""
+	}
+	// Collectors place native IDs in Details. IngestedEvent.EventID is the
+	// Control One event identity and is retained separately as event_id.
+	return firstNonEmpty(detailStringAny(ev, "source_event_id", "event_code", "event.code", "EventID", "event_id", "id"))
 }
 
 func copyEventAlias(dst map[string]any, ev *IngestedEvent, normalized string, aliases ...string) {
@@ -359,7 +433,31 @@ func detailStringAny(ev *IngestedEvent, keys ...string) string {
 }
 
 func windowsUser(ev *IngestedEvent) string {
-	return detailStringAny(ev, "TargetUserName", "target_user_name", "user_name", "SubjectUserName")
+	if user := cleanWindowsUser(detailStringAny(ev, "TargetUserName", "target_user_name", "user_name", "SubjectUserName", "Username", "username")); user != "" {
+		return user
+	}
+	message := ev.Message
+	if match := windowsFailedAccountPattern.FindStringSubmatch(message); len(match) == 2 {
+		if user := cleanWindowsUser(match[1]); user != "" {
+			return user
+		}
+	}
+	if match := windowsHelloUserPattern.FindStringSubmatch(message); len(match) == 2 {
+		if user := cleanWindowsUser(match[1]); user != "" {
+			return user
+		}
+	}
+	if match := windowsSubjectAccountPattern.FindStringSubmatch(message); len(match) == 2 {
+		return cleanWindowsUser(match[1])
+	}
+	return ""
+}
+
+func windowsAuthenticationUser(ev *IngestedEvent) string {
+	if user := windowsUser(ev); user != "" {
+		return user
+	}
+	return "unknown"
 }
 
 func windowsAuthenticationFields(ev *IngestedEvent) map[string]any {
@@ -375,7 +473,47 @@ func windowsAuthenticationFields(ev *IngestedEvent) map[string]any {
 	if logonType := detailStringAny(ev, "LogonType", "logon_type"); logonType != "" {
 		out["logon_type"] = logonType
 	}
+	message := ev.Message
+	if _, ok := out["src_ip"]; !ok {
+		if match := windowsSourceIPPattern.FindStringSubmatch(message); len(match) == 2 && net.ParseIP(strings.TrimSpace(match[1])) != nil {
+			out["src_ip"] = strings.TrimSpace(match[1])
+		}
+	}
+	if _, ok := out["src_port"]; !ok {
+		if match := windowsSourcePortPattern.FindStringSubmatch(message); len(match) == 2 {
+			if value, err := strconv.Atoi(strings.TrimSpace(match[1])); err == nil && value > 0 {
+				out["src_port"] = value
+			}
+		}
+	}
+	if _, ok := out["logon_type"]; !ok {
+		if match := windowsLogonTypePattern.FindStringSubmatch(message); len(match) == 2 {
+			out["logon_type"] = strings.TrimSpace(match[1])
+		}
+	}
+	if match := windowsAuthStatusPattern.FindStringSubmatch(message); len(match) == 2 {
+		out["auth_status"] = strings.TrimSpace(match[1])
+	}
+	if match := windowsAuthSubstatusPattern.FindStringSubmatch(message); len(match) == 2 {
+		out["auth_substatus"] = strings.TrimSpace(match[1])
+	}
+	if match := windowsCredentialTypePattern.FindStringSubmatch(message); len(match) == 2 {
+		out["credential_type"] = strings.TrimSpace(match[1])
+	}
+	if match := windowsSensorPattern.FindStringSubmatch(message); len(match) == 2 {
+		if sensor := strings.TrimSpace(match[1]); sensor != "" {
+			out["sensor_name"] = sensor
+		}
+	}
 	return out
+}
+
+func cleanWindowsUser(value string) string {
+	value = strings.TrimSpace(strings.Trim(value, "\r\n\t\"'"))
+	if value == "" || value == "-" || value == "<nil>" {
+		return ""
+	}
+	return value
 }
 
 func webFieldsFromEvent(ev *IngestedEvent) (map[string]any, bool) {

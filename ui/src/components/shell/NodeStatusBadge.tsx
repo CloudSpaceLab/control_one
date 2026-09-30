@@ -27,7 +27,7 @@ const TONE_CLASS: Record<Tone, string> = {
 
 export function NodeStatusBadge() {
   const { currentTenantId } = useTenant();
-  const { data, loading } = useFleetSummary({ tenantId: currentTenantId ?? undefined });
+  const { data, nodes, loading } = useFleetSummary({ tenantId: currentTenantId ?? undefined });
 
   if (loading) {
     return (
@@ -48,9 +48,21 @@ export function NodeStatusBadge() {
     critical: 0,
     unknown: 0,
   };
-  const online = totals.healthy + totals.warning;
-  const tone = pickTone(totals);
-  const tooltip = `${totals.healthy} healthy · ${totals.warning} warning · ${totals.degraded} degraded · ${totals.critical} critical · ${totals.unknown} unknown`;
+  // The node list is the source of truth for agent connectivity. Fleet health
+  // can remain healthy after an agent stops, so do not use it to report online nodes.
+  const hasCompleteNodeList = Array.isArray(nodes);
+  const nodeList = nodes ?? [];
+  const online = hasCompleteNodeList
+    ? nodeList.filter((node) => {
+        if (!node.last_seen_at) return false;
+        const lastSeen = new Date(node.last_seen_at).getTime();
+        return Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60 * 1000;
+      }).length
+    : totals.healthy + totals.warning;
+  const total = hasCompleteNodeList ? nodeList.length : totals.nodes;
+  const offline = Math.max(0, total - online);
+  const tone = offline > 0 ? 'warning' : pickTone(totals);
+  const tooltip = `${online} online · ${offline} offline · ${totals.warning} warning · ${totals.degraded} degraded · ${totals.critical} critical`;
 
   return (
     <Tooltip>
@@ -62,7 +74,7 @@ export function NodeStatusBadge() {
           />
           <span>
             {online}
-            <span className="text-text-muted/60"> / {totals.nodes}</span>
+            <span className="text-text-muted/60"> / {total}</span>
           </span>
         </span>
       </TooltipTrigger>
