@@ -2437,7 +2437,7 @@ func contentPackSourceRuntimeStateFromEvidence(item tenantSourceHealthEvidence) 
 	}
 	sourceInstanceID := strings.TrimSpace(item.SourceInstanceID)
 	if sourceInstanceID == "" {
-		sourceInstanceID = contentPackSourceInstanceID(item.CollectorID, sourceID)
+		sourceInstanceID = contentPackSourceInstanceIDForNode(item.NodeID, item.CollectorID, sourceID)
 	}
 	labels := mergeHealthLabels(item.Labels, map[string]string{
 		"receiver_id": strings.TrimSpace(item.ReceiverID),
@@ -2557,6 +2557,14 @@ func contentPackSourceInstanceID(collectorID, sourceID string) string {
 		return sourceID
 	}
 	return collectorID + "/" + sourceID
+}
+
+func contentPackSourceInstanceIDForNode(nodeID, collectorID, sourceID string) string {
+	instanceID := contentPackSourceInstanceID(collectorID, sourceID)
+	if nodeID = strings.TrimSpace(nodeID); nodeID != "" {
+		return "node:" + nodeID + "/" + instanceID
+	}
+	return instanceID
 }
 
 func contentPackEdgeCollectorTokenFromRequest(r *http.Request) string {

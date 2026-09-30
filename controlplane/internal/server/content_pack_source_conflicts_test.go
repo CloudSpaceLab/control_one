@@ -116,3 +116,49 @@ func TestSourceHealthEvidenceWithCollectionConflictsIgnoresSameOwner(t *testing.
 		}
 	}
 }
+
+func TestMergeSourceHealthEvidenceKeepsSameSourceSeparatePerNode(t *testing.T) {
+	evidence := map[string]tenantSourceHealthEvidence{}
+	mergeSourceHealthEvidence(evidence, tenantSourceHealthEvidence{
+		CollectorID: "otelcol", NodeID: "node-a", SourceID: "windows.security",
+		State: contentpacks.CoverageState(contentpacks.CoverageCollecting), ApprovalID: "approved-a",
+	})
+	mergeSourceHealthEvidence(evidence, tenantSourceHealthEvidence{
+		CollectorID: "otelcol", NodeID: "node-b", SourceID: "windows.security",
+		State: contentpacks.CoverageState(contentpacks.CoverageApprovalRequired), ApprovalRequired: true,
+	})
+
+	if len(evidence) != 2 {
+		t.Fatalf("source health records merged across nodes: %+v", evidence)
+	}
+	for _, item := range evidence {
+		if item.NodeID == "node-a" && (item.ApprovalRequired || item.ApprovalID != "approved-a") {
+			t.Fatalf("node-a approval evidence was overwritten: %+v", item)
+		}
+		if item.NodeID == "node-b" && (!item.ApprovalRequired || item.ApprovalID != "") {
+			t.Fatalf("node-b approval evidence was overwritten: %+v", item)
+		}
+	}
+}
+
+func TestContentPackSourceRuntimeStateFromEvidenceScopesFallbackInstanceToNode(t *testing.T) {
+	base := tenantSourceHealthEvidence{
+		CollectorID: "otelcol", SourceID: "windows.security",
+		State: contentpacks.CoverageState(contentpacks.CoverageCollecting),
+	}
+	first, ok := contentPackSourceRuntimeStateFromEvidence(tenantSourceHealthEvidence{
+		NodeID: "node-a", CollectorID: base.CollectorID, SourceID: base.SourceID, State: base.State,
+	})
+	if !ok {
+		t.Fatal("expected node-a runtime state")
+	}
+	second, ok := contentPackSourceRuntimeStateFromEvidence(tenantSourceHealthEvidence{
+		NodeID: "node-b", CollectorID: base.CollectorID, SourceID: base.SourceID, State: base.State,
+	})
+	if !ok {
+		t.Fatal("expected node-b runtime state")
+	}
+	if first.SourceInstanceID == second.SourceInstanceID {
+		t.Fatalf("fallback runtime IDs collide across nodes: %q", first.SourceInstanceID)
+	}
+}

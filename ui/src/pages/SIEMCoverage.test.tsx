@@ -521,6 +521,32 @@ describe("SIEMCoverage", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not attach source health from another node to a proposal", async () => {
+    mocks.getContentPackSourceHealth.mockResolvedValue({
+      ...sampleHealth,
+      items: [
+        {
+          ...sampleHealth.items[0],
+          source_instance_id: "node-2/nginx.access",
+          node_id: "node-2",
+          display_name: "NGINX access on node 2",
+          coverage_state: "parser_failed",
+          approval_required: true,
+          approval_id: "proposal-node-2",
+          last_error: "node 2 parser failure",
+        },
+      ],
+    });
+
+    render(<SIEMCoverage />);
+
+    const proposal = await screen.findByText("nginx");
+    const proposalRow = proposal.closest("tr");
+    expect(proposalRow).not.toBeNull();
+    expect(within(proposalRow as HTMLElement).queryByText(/parser failed/i)).not.toBeInTheDocument();
+    expect(within(proposalRow as HTMLElement).queryByText("approval required: proposal-node-2")).not.toBeInTheDocument();
+  });
+
   it("adds a cited note to a source health investigation case", async () => {
     const user = userEvent.setup();
     render(<SIEMCoverage />);

@@ -1114,7 +1114,7 @@ func sourceHealthEvidenceFromValue(collector storage.ContentPackEdgeCollector, s
 		return tenantSourceHealthEvidence{}, false
 	}
 	if item.SourceInstanceID == "" {
-		item.SourceInstanceID = contentPackSourceInstanceID(item.CollectorID, item.SourceID)
+		item.SourceInstanceID = contentPackSourceInstanceIDForNode(item.NodeID, item.CollectorID, item.SourceID)
 	}
 	return item, true
 }
@@ -1127,7 +1127,7 @@ func sourceHealthEvidenceApplyFreshness(item tenantSourceHealthEvidence, now tim
 }
 
 func mergeSourceHealthEvidence(out map[string]tenantSourceHealthEvidence, next tenantSourceHealthEvidence) {
-	key := next.CollectorID + "/" + next.SourceID
+	key := sourceHealthEvidenceKey(next)
 	current, ok := out[key]
 	if !ok {
 		out[key] = next
@@ -1164,6 +1164,17 @@ func mergeSourceHealthEvidence(out map[string]tenantSourceHealthEvidence, next t
 	current.LastParsedAt = newestTime(current.LastParsedAt, next.LastParsedAt)
 	current.LastHealthAt = newestTime(current.LastHealthAt, next.LastHealthAt)
 	out[key] = current
+}
+
+func sourceHealthEvidenceKey(item tenantSourceHealthEvidence) string {
+	// A collector name can be reused on multiple nodes. Source-health evidence
+	// therefore needs the node as part of its identity before receiver-level
+	// reports are merged.
+	return strings.Join([]string{
+		strings.TrimSpace(item.NodeID),
+		strings.TrimSpace(item.CollectorID),
+		strings.TrimSpace(item.SourceID),
+	}, "\x00")
 }
 
 func sourceHealthStateFromStatus(status string, metrics contentpacks.SourceRuntimeMetrics) contentpacks.CoverageState {

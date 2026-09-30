@@ -588,7 +588,7 @@ export function SIEMCoverage(): JSX.Element {
         item.source_id,
       );
       if (nodeScopedKey) out.set(nodeScopedKey, item);
-      if (item.source_id && !out.has(item.source_id)) {
+      if (!item.node_id && item.source_id && !out.has(item.source_id)) {
         out.set(item.source_id, item);
       }
     }
@@ -1039,7 +1039,7 @@ export function SIEMCoverage(): JSX.Element {
             p.source_id || p.labels?.content_pack_source_id || p.program;
           const sourceHealth =
             healthBySource.get(sourceHealthMapKey(p.node_id, sourceID)) ||
-            healthBySource.get(sourceID);
+            (!p.node_id ? healthBySource.get(sourceID) : undefined);
           const evidenceLine = sourceHealth
             ? sourceHealthEvidenceLine(sourceHealth)
             : "";
