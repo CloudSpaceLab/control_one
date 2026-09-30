@@ -28,6 +28,13 @@ type AlertCreator interface {
 	CreateAlert(ctx context.Context, p storage.CreateAlertParams) (*storage.Alert, error)
 }
 
+// CorrelationAlertDispatcher receives a newly persisted correlation alert.
+// Implementations must isolate delivery errors so alert creation remains the
+// source of truth when a destination is unavailable.
+type CorrelationAlertDispatcher interface {
+	DispatchCorrelationAlert(ctx context.Context, rule storage.CorrelationRule, alert *storage.Alert)
+}
+
 type windowKey struct {
 	ruleID    uuid.UUID
 	dimension string
@@ -50,6 +57,16 @@ type Engine struct {
 	lastFired       map[windowKey]time.Time
 	cache           sync.Map // tenantID -> []storage.CorrelationRule
 	cacheTTL        time.Duration
+	dispatcher      CorrelationAlertDispatcher
+}
+
+// SetNotificationDispatcher enables optional delivery after correlation alert
+// persistence. It is configured during server construction before Run starts.
+func (e *Engine) SetNotificationDispatcher(dispatcher CorrelationAlertDispatcher) {
+	if e == nil {
+		return
+	}
+	e.dispatcher = dispatcher
 }
 
 func New(store AlertCreator, bus *eventbus.Bus, log *zap.Logger) *Engine {
@@ -236,7 +253,7 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			nodeArg = &parsed
 		}
 	}
-	_, err := e.store.CreateAlert(ctx, storage.CreateAlertParams{
+	alert, err := e.store.CreateAlert(ctx, storage.CreateAlertParams{
 		TenantID: ev.TenantID,
 		NodeID:   nodeArg,
 		RuleID:   &r.ID,
@@ -252,6 +269,9 @@ func (e *Engine) openAlert(ctx context.Context, r storage.CorrelationRule, ev ev
 			e.log.Warn("correlation create alert", zap.Error(err))
 		}
 		return
+	}
+	if e.dispatcher != nil && alert != nil && (len(r.NotificationPolicy.EmailRecipients) > 0 || len(r.NotificationPolicy.WebhookIDs) > 0) {
+		e.dispatcher.DispatchCorrelationAlert(ctx, r, alert)
 	}
 	if e.bus != nil {
 		payload, mErr := json.Marshal(ctxPayload)

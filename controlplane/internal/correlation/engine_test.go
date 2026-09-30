@@ -19,6 +19,37 @@ type fakeStore struct {
 	alerts []storage.CreateAlertParams
 }
 
+type recordingNotificationDispatcher struct {
+	calls []string
+}
+
+func (d *recordingNotificationDispatcher) DispatchCorrelationAlert(_ context.Context, rule storage.CorrelationRule, alert *storage.Alert) {
+	d.calls = append(d.calls, "dispatch:"+rule.ID.String()+":"+alert.ID.String())
+}
+
+func TestEngineDispatchesNotificationAfterCreatingAlert(t *testing.T) {
+	tenant, node := uuid.New(), uuid.New()
+	rule := storage.CorrelationRule{
+		ID: uuid.New(), TenantID: tenant, Name: "Notify on correlation",
+		EventTypes: []string{eventbus.TopicSecurityEvent}, WindowSeconds: 60,
+		Threshold: 1, Dimension: "node_id", Severity: "high", Enabled: true,
+		NotificationPolicy: storage.CorrelationNotificationPolicy{EmailRecipients: []string{"soc@example.test"}, MinimumSeverity: "high"},
+	}
+	store := &fakeStore{rules: []storage.CorrelationRule{rule}}
+	dispatcher := &recordingNotificationDispatcher{}
+	eng := New(store, eventbus.New(4), nil)
+	eng.dispatcher = dispatcher
+
+	eng.handle(context.Background(), eventbus.Event{Topic: eventbus.TopicSecurityEvent, TenantID: tenant, NodeID: &node, Timestamp: time.Now()})
+
+	if len(store.alerts) != 1 {
+		t.Fatalf("alerts = %d, want 1", len(store.alerts))
+	}
+	if len(dispatcher.calls) != 1 {
+		t.Fatalf("dispatch calls = %#v, want one after alert creation", dispatcher.calls)
+	}
+}
+
 func TestMatchesPayloadEventTypeFromNormalizedDetails(t *testing.T) {
 	payload := []byte(`{"type":"security.event","details":{"event_type":"ssh.authentication_failure"}}`)
 	if !matchesPayloadEventType("ssh.authentication_failure", payload) {
