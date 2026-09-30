@@ -4,7 +4,51 @@ import (
 	"testing"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/google/uuid"
 )
+
+func TestValidateCorrelationNotificationPolicy(t *testing.T) {
+	webhookID := uuid.New()
+	tests := []struct {
+		name    string
+		policy  storage.CorrelationNotificationPolicy
+		wantErr bool
+	}{
+		{
+			name: "normalizes supported channels",
+			policy: storage.CorrelationNotificationPolicy{
+				EmailRecipients: []string{"SOC@Example.test", "soc@example.test"},
+				WebhookIDs:      []uuid.UUID{webhookID, webhookID},
+				MinimumSeverity: "HIGH",
+			},
+		},
+		{name: "rejects invalid email", policy: storage.CorrelationNotificationPolicy{EmailRecipients: []string{"not-an-email"}}, wantErr: true},
+		{name: "rejects invalid severity", policy: storage.CorrelationNotificationPolicy{MinimumSeverity: "urgent"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy, err := validateCorrelationNotificationPolicy(tt.policy)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate policy: %v", err)
+			}
+			if policy.MinimumSeverity != "high" {
+				t.Fatalf("minimum severity = %q, want high", policy.MinimumSeverity)
+			}
+			if len(policy.EmailRecipients) != 1 || policy.EmailRecipients[0] != "soc@example.test" {
+				t.Fatalf("email recipients = %#v", policy.EmailRecipients)
+			}
+			if len(policy.WebhookIDs) != 1 || policy.WebhookIDs[0] != webhookID {
+				t.Fatalf("webhook ids = %#v", policy.WebhookIDs)
+			}
+		})
+	}
+}
 
 func TestValidateCorrelationRuleRequest(t *testing.T) {
 	req := createCorrelationRuleRequest{

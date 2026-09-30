@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"strings"
 
 	"github.com/google/uuid"
@@ -13,30 +14,31 @@ import (
 )
 
 type correlationRuleResponse struct {
-	ID                 string                           `json:"id"`
-	TenantID           string                           `json:"tenant_id"`
-	Name               string                           `json:"name"`
-	Description        *string                          `json:"description,omitempty"`
-	EventTypes         []string                         `json:"event_types"`
-	EventType          string                           `json:"event_type"`
-	WindowSeconds      int                              `json:"window_seconds"`
-	Threshold          int                              `json:"threshold"`
-	Dimension          string                           `json:"dimension"`
-	GroupBy            []string                         `json:"group_by"`
-	SuppressionSeconds int                              `json:"suppression_seconds"`
-	Conditions         []storage.CorrelationCondition   `json:"conditions"`
-	ConditionGroups    [][]storage.CorrelationCondition `json:"condition_groups"`
-	DistinctField      string                           `json:"distinct_field"`
-	SequenceEventType  string                           `json:"sequence_event_type"`
-	SequenceThreshold  int                              `json:"sequence_threshold"`
-	SequenceConditions []storage.CorrelationCondition   `json:"sequence_conditions"`
-	AggregateField     string                           `json:"aggregate_field"`
-	AggregateThreshold int64                            `json:"aggregate_threshold"`
-	Severity           string                           `json:"severity"`
-	Enabled            bool                             `json:"enabled"`
-	YAMLSpec           *string                          `json:"yaml_spec,omitempty"`
-	CreatedAt          string                           `json:"created_at"`
-	UpdatedAt          string                           `json:"updated_at"`
+	ID                 string                                `json:"id"`
+	TenantID           string                                `json:"tenant_id"`
+	Name               string                                `json:"name"`
+	Description        *string                               `json:"description,omitempty"`
+	EventTypes         []string                              `json:"event_types"`
+	EventType          string                                `json:"event_type"`
+	WindowSeconds      int                                   `json:"window_seconds"`
+	Threshold          int                                   `json:"threshold"`
+	Dimension          string                                `json:"dimension"`
+	GroupBy            []string                              `json:"group_by"`
+	SuppressionSeconds int                                   `json:"suppression_seconds"`
+	Conditions         []storage.CorrelationCondition        `json:"conditions"`
+	ConditionGroups    [][]storage.CorrelationCondition      `json:"condition_groups"`
+	DistinctField      string                                `json:"distinct_field"`
+	SequenceEventType  string                                `json:"sequence_event_type"`
+	SequenceThreshold  int                                   `json:"sequence_threshold"`
+	SequenceConditions []storage.CorrelationCondition        `json:"sequence_conditions"`
+	AggregateField     string                                `json:"aggregate_field"`
+	AggregateThreshold int64                                 `json:"aggregate_threshold"`
+	Severity           string                                `json:"severity"`
+	NotificationPolicy storage.CorrelationNotificationPolicy `json:"notification_policy"`
+	Enabled            bool                                  `json:"enabled"`
+	YAMLSpec           *string                               `json:"yaml_spec,omitempty"`
+	CreatedAt          string                                `json:"created_at"`
+	UpdatedAt          string                                `json:"updated_at"`
 }
 
 func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleResponse {
@@ -48,7 +50,8 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 		SuppressionSeconds: r.SuppressionSeconds, Conditions: r.Conditions, ConditionGroups: r.ConditionGroups, DistinctField: r.DistinctField,
 		SequenceEventType: r.SequenceEventType, SequenceThreshold: r.SequenceThreshold, SequenceConditions: r.SequenceConditions,
 		AggregateField: r.AggregateField, AggregateThreshold: r.AggregateThreshold, Severity: r.Severity, Enabled: r.Enabled,
-		CreatedAt: formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
+		NotificationPolicy: r.NotificationPolicy,
+		CreatedAt:          formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
 	}
 	if out.EventTypes == nil {
 		out.EventTypes = []string{}
@@ -77,27 +80,28 @@ func newCorrelationRuleResponse(r storage.CorrelationRule) correlationRuleRespon
 }
 
 type createCorrelationRuleRequest struct {
-	TenantID           string                           `json:"tenant_id"`
-	Name               string                           `json:"name"`
-	Description        string                           `json:"description"`
-	EventTypes         []string                         `json:"event_types"`
-	EventType          string                           `json:"event_type"`
-	WindowSeconds      int                              `json:"window_seconds"`
-	Threshold          int                              `json:"threshold"`
-	Dimension          string                           `json:"dimension"`
-	GroupBy            []string                         `json:"group_by"`
-	SuppressionSeconds int                              `json:"suppression_seconds"`
-	Conditions         []storage.CorrelationCondition   `json:"conditions"`
-	ConditionGroups    [][]storage.CorrelationCondition `json:"condition_groups"`
-	DistinctField      string                           `json:"distinct_field"`
-	SequenceEventType  string                           `json:"sequence_event_type"`
-	SequenceThreshold  int                              `json:"sequence_threshold"`
-	SequenceConditions []storage.CorrelationCondition   `json:"sequence_conditions"`
-	AggregateField     string                           `json:"aggregate_field"`
-	AggregateThreshold int64                            `json:"aggregate_threshold"`
-	Severity           string                           `json:"severity"`
-	Enabled            *bool                            `json:"enabled"`
-	YAMLSpec           string                           `json:"yaml_spec"`
+	TenantID           string                                `json:"tenant_id"`
+	Name               string                                `json:"name"`
+	Description        string                                `json:"description"`
+	EventTypes         []string                              `json:"event_types"`
+	EventType          string                                `json:"event_type"`
+	WindowSeconds      int                                   `json:"window_seconds"`
+	Threshold          int                                   `json:"threshold"`
+	Dimension          string                                `json:"dimension"`
+	GroupBy            []string                              `json:"group_by"`
+	SuppressionSeconds int                                   `json:"suppression_seconds"`
+	Conditions         []storage.CorrelationCondition        `json:"conditions"`
+	ConditionGroups    [][]storage.CorrelationCondition      `json:"condition_groups"`
+	DistinctField      string                                `json:"distinct_field"`
+	SequenceEventType  string                                `json:"sequence_event_type"`
+	SequenceThreshold  int                                   `json:"sequence_threshold"`
+	SequenceConditions []storage.CorrelationCondition        `json:"sequence_conditions"`
+	AggregateField     string                                `json:"aggregate_field"`
+	AggregateThreshold int64                                 `json:"aggregate_threshold"`
+	Severity           string                                `json:"severity"`
+	NotificationPolicy storage.CorrelationNotificationPolicy `json:"notification_policy"`
+	Enabled            *bool                                 `json:"enabled"`
+	YAMLSpec           string                                `json:"yaml_spec"`
 }
 
 var correlationTopics = map[string]bool{
@@ -218,7 +222,50 @@ func validateCorrelationRuleRequest(req *createCorrelationRuleRequest) error {
 	} else if req.AggregateThreshold != 0 {
 		return fmt.Errorf("aggregate_field is required for aggregate_threshold")
 	}
+	policy, err := validateCorrelationNotificationPolicy(req.NotificationPolicy)
+	if err != nil {
+		return err
+	}
+	req.NotificationPolicy = policy
 	return nil
+}
+
+func validateCorrelationNotificationPolicy(policy storage.CorrelationNotificationPolicy) (storage.CorrelationNotificationPolicy, error) {
+	if len(policy.EmailRecipients) > 20 || len(policy.WebhookIDs) > 20 {
+		return storage.CorrelationNotificationPolicy{}, fmt.Errorf("notification policy cannot contain more than 20 recipients or webhooks")
+	}
+	emails := make([]string, 0, len(policy.EmailRecipients))
+	seenEmails := make(map[string]struct{}, len(policy.EmailRecipients))
+	for _, raw := range policy.EmailRecipients {
+		address, err := mail.ParseAddress(strings.TrimSpace(raw))
+		if err != nil || address.Address != strings.TrimSpace(raw) {
+			return storage.CorrelationNotificationPolicy{}, fmt.Errorf("invalid notification email recipient")
+		}
+		email := strings.ToLower(address.Address)
+		if _, found := seenEmails[email]; !found {
+			seenEmails[email] = struct{}{}
+			emails = append(emails, email)
+		}
+	}
+	webhooks := make([]uuid.UUID, 0, len(policy.WebhookIDs))
+	seenWebhooks := make(map[uuid.UUID]struct{}, len(policy.WebhookIDs))
+	for _, id := range policy.WebhookIDs {
+		if id == uuid.Nil {
+			return storage.CorrelationNotificationPolicy{}, fmt.Errorf("notification webhook id is required")
+		}
+		if _, found := seenWebhooks[id]; !found {
+			seenWebhooks[id] = struct{}{}
+			webhooks = append(webhooks, id)
+		}
+	}
+	severity := strings.ToLower(strings.TrimSpace(policy.MinimumSeverity))
+	if severity == "" && (len(emails) > 0 || len(webhooks) > 0) {
+		severity = "low"
+	}
+	if severity != "" && !correlationSeverities[severity] {
+		return storage.CorrelationNotificationPolicy{}, fmt.Errorf("notification minimum_severity must be low, medium, high, or critical")
+	}
+	return storage.CorrelationNotificationPolicy{EmailRecipients: emails, WebhookIDs: webhooks, MinimumSeverity: severity}, nil
 }
 
 func validateCorrelationCondition(condition *storage.CorrelationCondition, label string) error {
@@ -242,7 +289,7 @@ func correlationParams(tenantID uuid.UUID, req createCorrelationRuleRequest, ena
 		Threshold: req.Threshold, Dimension: req.Dimension, GroupBy: req.GroupBy,
 		SuppressionSeconds: req.SuppressionSeconds, Conditions: req.Conditions, ConditionGroups: req.ConditionGroups, DistinctField: req.DistinctField,
 		SequenceEventType: req.SequenceEventType, SequenceThreshold: req.SequenceThreshold, SequenceConditions: req.SequenceConditions,
-		AggregateField: req.AggregateField, AggregateThreshold: req.AggregateThreshold, Severity: req.Severity, Enabled: enabled, YAMLSpec: req.YAMLSpec}
+		AggregateField: req.AggregateField, AggregateThreshold: req.AggregateThreshold, Severity: req.Severity, NotificationPolicy: req.NotificationPolicy, Enabled: enabled, YAMLSpec: req.YAMLSpec}
 }
 
 func (s *Server) handleCorrelationRulesCollection(w http.ResponseWriter, r *http.Request) {

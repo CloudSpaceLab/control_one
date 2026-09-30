@@ -19,6 +19,15 @@ type CorrelationCondition struct {
 	Value    any    `json:"value"`
 }
 
+// CorrelationNotificationPolicy describes the explicit delivery targets for
+// alerts opened by a correlation rule. An empty policy intentionally means no
+// additional delivery beyond alert persistence.
+type CorrelationNotificationPolicy struct {
+	EmailRecipients []string    `json:"email_recipients,omitempty"`
+	WebhookIDs      []uuid.UUID `json:"webhook_ids,omitempty"`
+	MinimumSeverity string      `json:"minimum_severity,omitempty"`
+}
+
 type CorrelationRule struct {
 	ID                 uuid.UUID
 	TenantID           uuid.UUID
@@ -40,6 +49,7 @@ type CorrelationRule struct {
 	AggregateField     string
 	AggregateThreshold int64
 	Severity           string
+	NotificationPolicy CorrelationNotificationPolicy
 	Enabled            bool
 	YAMLSpec           sql.NullString
 	CreatedAt          time.Time
@@ -66,6 +76,7 @@ type CreateCorrelationRuleParams struct {
 	AggregateField     string
 	AggregateThreshold int64
 	Severity           string
+	NotificationPolicy CorrelationNotificationPolicy
 	Enabled            bool
 	YAMLSpec           string
 }
@@ -111,11 +122,15 @@ func (s *Store) CreateCorrelationRule(ctx context.Context, p CreateCorrelationRu
 	if p.YAMLSpec != "" {
 		spec = p.YAMLSpec
 	}
+	notificationPolicy, err := json.Marshal(p.NotificationPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("encode correlation notification policy: %w", err)
+	}
 	id := uuid.New()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO correlation_rules (id, tenant_id, name, description, event_types, event_type, window_seconds, threshold, dimension, group_by, suppression_seconds, conditions, condition_groups, distinct_field, sequence_event_type, sequence_threshold, sequence_conditions, aggregate_field, aggregate_threshold, severity, enabled, yaml_spec, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$23)
-	`, id, p.TenantID, p.Name, desc, pq.Array(p.EventTypes), p.EventType, p.WindowSeconds, p.Threshold, p.Dimension, pq.Array(p.GroupBy), p.SuppressionSeconds, conditions, conditionGroups, p.DistinctField, p.SequenceEventType, p.SequenceThreshold, sequenceConditions, p.AggregateField, p.AggregateThreshold, p.Severity, p.Enabled, spec, s.clock())
+		INSERT INTO correlation_rules (id, tenant_id, name, description, event_types, event_type, window_seconds, threshold, dimension, group_by, suppression_seconds, conditions, condition_groups, distinct_field, sequence_event_type, sequence_threshold, sequence_conditions, aggregate_field, aggregate_threshold, severity, notification_policy, enabled, yaml_spec, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$24)
+	`, id, p.TenantID, p.Name, desc, pq.Array(p.EventTypes), p.EventType, p.WindowSeconds, p.Threshold, p.Dimension, pq.Array(p.GroupBy), p.SuppressionSeconds, conditions, conditionGroups, p.DistinctField, p.SequenceEventType, p.SequenceThreshold, sequenceConditions, p.AggregateField, p.AggregateThreshold, p.Severity, notificationPolicy, p.Enabled, spec, s.clock())
 	if err != nil {
 		return nil, fmt.Errorf("insert correlation rule: %w", err)
 	}
@@ -177,12 +192,16 @@ func (s *Store) UpdateCorrelationRule(ctx context.Context, tenantID, id uuid.UUI
 	if p.YAMLSpec != "" {
 		spec = p.YAMLSpec
 	}
+	notificationPolicy, err := json.Marshal(p.NotificationPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("encode correlation notification policy: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `UPDATE correlation_rules SET name=$3, description=$4, event_types=$5,
 		event_type=$6, window_seconds=$7, threshold=$8, dimension=$9, group_by=$10,
-		suppression_seconds=$11, conditions=$12, condition_groups=$13, distinct_field=$14, sequence_event_type=$15, sequence_threshold=$16, sequence_conditions=$17, aggregate_field=$18, aggregate_threshold=$19, severity=$20, enabled=$21, yaml_spec=$22, updated_at=$23
+		suppression_seconds=$11, conditions=$12, condition_groups=$13, distinct_field=$14, sequence_event_type=$15, sequence_threshold=$16, sequence_conditions=$17, aggregate_field=$18, aggregate_threshold=$19, severity=$20, notification_policy=$21, enabled=$22, yaml_spec=$23, updated_at=$24
 		WHERE tenant_id=$1 AND id=$2`, tenantID, id, p.Name, desc, pq.Array(p.EventTypes), p.EventType,
 		p.WindowSeconds, p.Threshold, p.Dimension, pq.Array(p.GroupBy), p.SuppressionSeconds, conditions,
-		conditionGroups, p.DistinctField, p.SequenceEventType, p.SequenceThreshold, sequenceConditions, p.AggregateField, p.AggregateThreshold, p.Severity, p.Enabled, spec, s.clock())
+		conditionGroups, p.DistinctField, p.SequenceEventType, p.SequenceThreshold, sequenceConditions, p.AggregateField, p.AggregateThreshold, p.Severity, notificationPolicy, p.Enabled, spec, s.clock())
 	if err != nil {
 		return nil, fmt.Errorf("update correlation rule: %w", err)
 	}
@@ -204,7 +223,7 @@ func (s *Store) DeleteCorrelationRule(ctx context.Context, tenantID, id uuid.UUI
 }
 
 const correlationRuleSelectSQL = `
-	SELECT id, tenant_id, name, description, event_types, event_type, window_seconds, threshold, dimension, group_by, suppression_seconds, conditions, condition_groups, distinct_field, sequence_event_type, sequence_threshold, sequence_conditions, aggregate_field, aggregate_threshold, severity, enabled, yaml_spec, created_at, updated_at
+	SELECT id, tenant_id, name, description, event_types, event_type, window_seconds, threshold, dimension, group_by, suppression_seconds, conditions, condition_groups, distinct_field, sequence_event_type, sequence_threshold, sequence_conditions, aggregate_field, aggregate_threshold, severity, notification_policy, enabled, yaml_spec, created_at, updated_at
 	FROM correlation_rules
 `
 
@@ -213,11 +232,17 @@ func scanCorrelationRule(sc scanner) (*CorrelationRule, error) {
 	var conditions []byte
 	var conditionGroups []byte
 	var sequenceConditions []byte
-	if err := sc.Scan(&r.ID, &r.TenantID, &r.Name, &r.Description, pq.Array(&r.EventTypes), &r.EventType, &r.WindowSeconds, &r.Threshold, &r.Dimension, pq.Array(&r.GroupBy), &r.SuppressionSeconds, &conditions, &conditionGroups, &r.DistinctField, &r.SequenceEventType, &r.SequenceThreshold, &sequenceConditions, &r.AggregateField, &r.AggregateThreshold, &r.Severity, &r.Enabled, &r.YAMLSpec, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	var notificationPolicy []byte
+	if err := sc.Scan(&r.ID, &r.TenantID, &r.Name, &r.Description, pq.Array(&r.EventTypes), &r.EventType, &r.WindowSeconds, &r.Threshold, &r.Dimension, pq.Array(&r.GroupBy), &r.SuppressionSeconds, &conditions, &conditionGroups, &r.DistinctField, &r.SequenceEventType, &r.SequenceThreshold, &sequenceConditions, &r.AggregateField, &r.AggregateThreshold, &r.Severity, &notificationPolicy, &r.Enabled, &r.YAMLSpec, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if len(notificationPolicy) > 0 && string(notificationPolicy) != "{}" && string(notificationPolicy) != "null" {
+		if err := json.Unmarshal(notificationPolicy, &r.NotificationPolicy); err != nil {
+			return nil, fmt.Errorf("decode correlation notification policy: %w", err)
+		}
 	}
 	if len(sequenceConditions) > 0 {
 		if err := json.Unmarshal(sequenceConditions, &r.SequenceConditions); err != nil {
