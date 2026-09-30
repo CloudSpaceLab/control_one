@@ -223,6 +223,21 @@ describe('Alerts page failure states', () => {
     expect(screen.getByLabelText(/name/i)).toHaveValue('SSH brute force');
   });
 
+  it('offers process name when authoring a correlation condition', async () => {
+    const user = userEvent.setup();
+
+    renderAlerts();
+
+    await user.click(screen.getByRole('button', { name: /correlation rules/i }));
+    await user.click(await screen.findByRole('button', { name: /new rule/i }));
+    await user.click(screen.getByRole('button', { name: /add condition/i }));
+
+    expect(screen.getAllByRole('option', { name: 'Process name' }).length).toBeGreaterThanOrEqual(2);
+    expect(
+      within(screen.getByRole('listbox', { name: 'Group events by' })).getByRole('option', { name: 'Process name' }),
+    ).toBeInTheDocument();
+  });
+
   it('keeps failed correlation rule deletes visible in the confirmation modal', async () => {
     const user = userEvent.setup();
     mocks.deleteCorrelationRule.mockRejectedValueOnce(new Error('rule still in use'));

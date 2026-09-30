@@ -49,29 +49,60 @@ const CORRELATION_EVENT_TYPES = [
   { value: 'health.incident', label: 'Health incident' },
   { value: 'remediation.applied', label: 'Remediation applied' },
 ] as const;
-const CORRELATION_DIMENSIONS = [
-  { value: 'node_id', label: 'Host / node' },
-  { value: 'tenant_id', label: 'Entire tenant' },
-  { value: 'src_ip', label: 'Source IP' },
-  { value: 'dst_ip', label: 'Destination IP' },
-  { value: 'user_name', label: 'User name' },
-  { value: 'correlation_id', label: 'Correlation ID' },
-] as const;
 const CORRELATION_CONDITION_FIELDS = [
+  { value: 'node_id', label: 'Host / node' }, { value: 'tenant_id', label: 'Tenant' },
+  { value: 'event_type', label: 'Event type' }, { value: 'message', label: 'Event message' },
+  { value: 'correlation_id', label: 'Correlation ID' }, { value: 'dedup_key', label: 'Deduplication key' },
   { value: 'src_ip', label: 'Source IP' }, { value: 'dst_ip', label: 'Destination IP' },
   { value: 'src_port', label: 'Source port' }, { value: 'dst_port', label: 'Destination port' },
-  { value: 'protocol', label: 'Protocol' }, { value: 'user_name', label: 'User name' },
+  { value: 'protocol', label: 'Protocol' }, { value: 'direction', label: 'Traffic direction' },
+  { value: 'process_name', label: 'Process name' }, { value: 'user_name', label: 'User name' },
   { value: 'auth_result', label: 'Authentication result' }, { value: 'status_code', label: 'HTTP status' },
   { value: 'http_method', label: 'HTTP method' }, { value: 'path', label: 'Request path' },
   { value: 'source', label: 'Event source' }, { value: 'severity', label: 'Event severity' },
-  { value: 'direction', label: 'Traffic direction' }, { value: 'bytes_out', label: 'Outbound bytes' },
+  { value: 'bytes_in', label: 'Inbound bytes' }, { value: 'bytes_out', label: 'Outbound bytes' },
+  { value: 'duration_ms', label: 'Duration (ms)' }, { value: 'threat_score', label: 'Threat score' },
+  { value: 'parser_profile', label: 'Parser profile' }, { value: 'source_file', label: 'Source file' },
+  { value: 'program', label: 'Program' }, { value: 'collector_type', label: 'Collector type' },
+  { value: 'app', label: 'Application' }, { value: 'vhost', label: 'Virtual host' },
+  { value: 'server_group', label: 'Server group' }, { value: 'webserver_kind', label: 'Web server kind' },
+  { value: 'country_code', label: 'Country code' }, { value: 'country', label: 'Country' },
+  { value: 'asn', label: 'ASN' }, { value: 'application_type', label: 'Application type' },
+  { value: 'application_name', label: 'Application name' }, { value: 'application_category', label: 'Application category' },
+  { value: 'application_root', label: 'Application root' }, { value: 'coverage_state', label: 'Coverage state' },
+  { value: 'request_id', label: 'Request ID' }, { value: 'traceparent', label: 'Trace parent' },
+  { value: 'score', label: 'Score' },
 ] as const;
+const CORRELATION_DIMENSIONS = CORRELATION_CONDITION_FIELDS;
 const CORRELATION_OPERATORS = [
   { value: 'eq', label: 'equals' }, { value: 'neq', label: 'does not equal' },
   { value: 'contains', label: 'contains' }, { value: 'gt', label: 'greater than' },
   { value: 'gte', label: 'greater than or equal' }, { value: 'lt', label: 'less than' },
   { value: 'lte', label: 'less than or equal' },
 ] as const;
+
+function CorrelationFieldSelect({
+  ariaLabel,
+  value,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+}): JSX.Element {
+  return (
+    <select
+      aria-label={ariaLabel}
+      className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {CORRELATION_CONDITION_FIELDS.map((field) => (
+        <option key={field.value} value={field.value}>{field.label}</option>
+      ))}
+    </select>
+  );
+}
 
 const ALERT_DISPOSITION_OPTIONS: Array<{
   value: AlertDispositionValue;
@@ -1125,14 +1156,11 @@ export function Alerts(): JSX.Element {
                   </div>
                   {newRuleConditions.map((condition, index) => (
                     <div className="grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" key={index}>
-                      <select
-                        aria-label={`Condition ${index + 1} field`}
-                        className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
+                      <CorrelationFieldSelect
+                        ariaLabel={`Condition ${index + 1} field`}
                         value={condition.field}
-                        onChange={(e) => updateCondition(index, { field: e.target.value })}
-                      >
-                        {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
-                      </select>
+                        onChange={(field) => updateCondition(index, { field })}
+                      />
                       <select
                         aria-label={`Condition ${index + 1} operator`}
                         className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground"
@@ -1186,9 +1214,7 @@ export function Alerts(): JSX.Element {
                       </div>
                       {group.map((condition, conditionIndex) => (
                         <div className="mb-2 grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" key={conditionIndex}>
-                          <select aria-label={`Group ${groupIndex + 1} condition ${conditionIndex + 1} field`} className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={condition.field} onChange={(e) => updateConditionGroup(groupIndex, conditionIndex, { field: e.target.value })}>
-                            {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
-                          </select>
+                          <CorrelationFieldSelect ariaLabel={`Group ${groupIndex + 1} condition ${conditionIndex + 1} field`} value={condition.field} onChange={(field) => updateConditionGroup(groupIndex, conditionIndex, { field })} />
                           <select aria-label={`Group ${groupIndex + 1} condition ${conditionIndex + 1} operator`} className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={condition.operator} onChange={(e) => updateConditionGroup(groupIndex, conditionIndex, { operator: e.target.value as CorrelationCondition['operator'] })}>
                             {CORRELATION_OPERATORS.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
                           </select>
@@ -1224,9 +1250,7 @@ export function Alerts(): JSX.Element {
                   </div>
                   {newRuleSequenceConditions.map((condition, index) => (
                     <div className="grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" key={index}>
-                      <select aria-label={`Prerequisite condition ${index + 1} field`} className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={condition.field} onChange={(e) => updateSequenceCondition(index, { field: e.target.value })}>
-                        {CORRELATION_CONDITION_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
-                      </select>
+                      <CorrelationFieldSelect ariaLabel={`Prerequisite condition ${index + 1} field`} value={condition.field} onChange={(field) => updateSequenceCondition(index, { field })} />
                       <select aria-label={`Prerequisite condition ${index + 1} operator`} className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={condition.operator} onChange={(e) => updateSequenceCondition(index, { operator: e.target.value as CorrelationCondition['operator'] })}>
                         {CORRELATION_OPERATORS.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
                       </select>
@@ -1238,7 +1262,7 @@ export function Alerts(): JSX.Element {
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="rule-aggregate-field">Aggregate numeric field</Label>
                   <select id="rule-aggregate-field" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={newRuleAggregateField} onChange={(e) => setNewRuleAggregateField(e.target.value)}>
-                    <option value="">No aggregate</option><option value="bytes_out">Outbound bytes</option><option value="bytes_in">Inbound bytes</option>
+                    <option value="">No aggregate</option><option value="bytes_out">Outbound bytes</option><option value="bytes_in">Inbound bytes</option><option value="duration_ms">Duration (ms)</option><option value="threat_score">Threat score</option><option value="score">Score</option>
                   </select>
                 </div>
                 <div className="flex flex-col gap-1">

@@ -25,6 +25,42 @@ func TestValidateCorrelationRuleRequest(t *testing.T) {
 	}
 }
 
+func TestValidateCorrelationRuleRequestAcceptsExpandedLogFields(t *testing.T) {
+	fields := []string{
+		"node_id", "tenant_id", "event_type", "message", "correlation_id", "dedup_key",
+		"src_ip", "dst_ip", "src_port", "dst_port", "protocol", "direction", "process_name", "user_name",
+		"auth_result", "status_code", "http_method", "path", "source", "severity", "bytes_in", "bytes_out",
+		"duration_ms", "threat_score", "parser_profile", "source_file", "program", "collector_type", "app", "vhost",
+		"server_group", "webserver_kind", "country_code", "country", "asn", "application_type", "application_name",
+		"application_category", "application_root", "coverage_state", "request_id", "traceparent", "score",
+	}
+	for _, field := range fields {
+		t.Run(field, func(t *testing.T) {
+			req := createCorrelationRuleRequest{
+				Name: "Expanded log field", EventTypes: []string{"security.event"},
+				WindowSeconds: 60, Threshold: 1, GroupBy: []string{field}, Severity: "high",
+				Conditions:    []storage.CorrelationCondition{{Field: field, Operator: "contains", Value: "value"}},
+				DistinctField: field,
+			}
+			if err := validateCorrelationRuleRequest(&req); err != nil {
+				t.Fatalf("field %q rejected: %v", field, err)
+			}
+		})
+	}
+	for _, field := range []string{"bytes_in", "bytes_out", "duration_ms", "threat_score", "score"} {
+		t.Run("aggregate_"+field, func(t *testing.T) {
+			req := createCorrelationRuleRequest{
+				Name: "Numeric aggregation", EventTypes: []string{"security.event"},
+				WindowSeconds: 60, Threshold: 1, GroupBy: []string{"node_id"}, Severity: "high",
+				AggregateField: field, AggregateThreshold: 1,
+			}
+			if err := validateCorrelationRuleRequest(&req); err != nil {
+				t.Fatalf("aggregate field %q rejected: %v", field, err)
+			}
+		})
+	}
+}
+
 func TestValidateCorrelationRuleRequestRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct {
 		name string

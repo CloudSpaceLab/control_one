@@ -104,16 +104,25 @@ var correlationTopics = map[string]bool{
 	"security.event": true, "events.anomaly": true, "rule.triggered": true,
 	"compliance.fired": true, "health.incident": true, "remediation.applied": true,
 }
-var correlationDimensions = map[string]bool{
-	"node_id": true, "tenant_id": true, "src_ip": true, "dst_ip": true, "user_name": true, "correlation_id": true,
-}
 var correlationSeverities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
 var correlationConditionFields = map[string]bool{
-	"src_ip": true, "dst_ip": true, "src_port": true, "dst_port": true, "protocol": true,
-	"user_name": true, "auth_result": true, "status_code": true, "http_method": true,
-	"path": true, "source": true, "severity": true, "direction": true, "bytes_out": true,
+	"node_id": true, "tenant_id": true,
+	"event_type": true, "message": true, "correlation_id": true, "dedup_key": true,
+	"src_ip": true, "dst_ip": true, "src_port": true, "dst_port": true,
+	"protocol": true, "direction": true, "process_name": true, "user_name": true,
+	"auth_result": true, "status_code": true, "http_method": true, "path": true,
+	"source": true, "severity": true, "bytes_in": true, "bytes_out": true,
+	"duration_ms": true, "threat_score": true, "parser_profile": true, "source_file": true,
+	"program": true, "collector_type": true, "app": true, "vhost": true,
+	"server_group": true, "webserver_kind": true, "country_code": true, "country": true,
+	"asn": true, "application_type": true, "application_name": true, "application_category": true,
+	"application_root": true, "coverage_state": true, "request_id": true, "traceparent": true,
+	"score": true,
 }
-var correlationAggregateFields = map[string]bool{"bytes_out": true, "bytes_in": true}
+var correlationDimensions = correlationConditionFields
+var correlationAggregateFields = map[string]bool{
+	"bytes_out": true, "bytes_in": true, "duration_ms": true, "threat_score": true, "score": true,
+}
 var correlationConditionOperators = map[string]bool{
 	"eq": true, "neq": true, "contains": true, "gt": true, "gte": true, "lt": true, "lte": true,
 }
