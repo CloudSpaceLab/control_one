@@ -97,6 +97,54 @@ func TestCreateAlertDoesNotFailWhenEmailDeliveryFails(t *testing.T) {
 	}
 }
 
+func TestSendAlertEmailToRecipientsUsesRuleRecipients(t *testing.T) {
+	tenantID := uuid.New()
+	store := &alertEmailFakeStore{smtpFakeStore: smtpFakeStore{config: &storage.SMTPSettings{
+		TenantID: tenantID, Host: "smtp.example.com", Port: 25, TLSMode: "none",
+		SenderEmail: "alerts@example.com", Recipients: []string{"global@example.com"}, Enabled: true,
+	}}}
+	var got []string
+	s := &Server{
+		store: store,
+		smtpAlertSend: func(_ context.Context, _ storage.SMTPSettings, _ string, recipients []string, _ string) error {
+			got = recipients
+			return nil
+		},
+	}
+	err := s.sendAlertEmailToRecipients(context.Background(), storage.Alert{
+		ID: uuid.New(), TenantID: tenantID, Severity: "high", Title: "Correlation alert",
+	}, []string{"rule@example.com"})
+	if err != nil {
+		t.Fatalf("send rule email: %v", err)
+	}
+	if len(got) != 1 || got[0] != "rule@example.com" {
+		t.Fatalf("recipients = %#v, want only rule recipient", got)
+	}
+}
+
+func TestDispatchCorrelationAlertUsesPolicyRecipients(t *testing.T) {
+	tenantID := uuid.New()
+	store := &alertEmailFakeStore{smtpFakeStore: smtpFakeStore{config: &storage.SMTPSettings{
+		TenantID: tenantID, Host: "smtp.example.com", Port: 25, TLSMode: "none",
+		SenderEmail: "alerts@example.com", Enabled: true,
+	}}}
+	var got []string
+	s := &Server{
+		store:              store,
+		alertEmailDispatch: func(run func()) { run() },
+		smtpAlertSend: func(_ context.Context, _ storage.SMTPSettings, _ string, recipients []string, _ string) error {
+			got = recipients
+			return nil
+		},
+	}
+	s.DispatchCorrelationAlert(context.Background(), storage.CorrelationRule{
+		NotificationPolicy: storage.CorrelationNotificationPolicy{EmailRecipients: []string{"rule@example.com"}, MinimumSeverity: "high"},
+	}, &storage.Alert{ID: uuid.New(), TenantID: tenantID, Severity: "critical", Title: "Correlation alert"})
+	if len(got) != 1 || got[0] != "rule@example.com" {
+		t.Fatalf("recipients = %#v, want only rule recipient", got)
+	}
+}
+
 func TestAlertEmailSkipsDisabledSettings(t *testing.T) {
 	tenantID := uuid.New()
 	store := &alertEmailFakeStore{smtpFakeStore: smtpFakeStore{config: &storage.SMTPSettings{

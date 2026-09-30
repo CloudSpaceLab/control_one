@@ -997,6 +997,7 @@ func (s *Server) startCorrelationEngine() {
 		return
 	}
 	s.correlationEng = correlation.New(correlationStoreAdapter{s}, s.eventBus, s.logger)
+	s.correlationEng.SetNotificationDispatcher(s)
 	s.correlationCtx, s.correlationStop = context.WithCancel(context.Background())
 	go s.correlationEng.Run(s.correlationCtx)
 }

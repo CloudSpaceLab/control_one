@@ -28,10 +28,14 @@ func (s *Server) createAlert(ctx context.Context, params storage.CreateAlertPara
 }
 
 func (s *Server) dispatchAlertEmail(alert storage.Alert) {
+	s.dispatchAlertEmailToRecipients(alert, nil)
+}
+
+func (s *Server) dispatchAlertEmailToRecipients(alert storage.Alert, recipients []string) {
 	run := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), alertEmailTimeout)
 		defer cancel()
-		if err := s.sendAlertEmail(ctx, alert); err != nil && s.logger != nil {
+		if err := s.sendAlertEmailToRecipients(ctx, alert, recipients); err != nil && s.logger != nil {
 			s.logger.Warn("send alert email", zap.String("alert_id", alert.ID.String()), zap.String("tenant_id", alert.TenantID.String()), zap.Error(err))
 		}
 	}
@@ -42,7 +46,40 @@ func (s *Server) dispatchAlertEmail(alert storage.Alert) {
 	go run()
 }
 
+// DispatchCorrelationAlert implements correlation.CorrelationAlertDispatcher.
+// Delivery is asynchronous and isolated from alert persistence.
+func (s *Server) DispatchCorrelationAlert(_ context.Context, rule storage.CorrelationRule, alert *storage.Alert) {
+	if s == nil || alert == nil {
+		return
+	}
+	policy := rule.NotificationPolicy
+	if !severityAtLeast(alert.Severity, policy.MinimumSeverity) || len(policy.EmailRecipients) == 0 {
+		return
+	}
+	s.dispatchAlertEmailToRecipients(*alert, policy.EmailRecipients)
+}
+
+func severityAtLeast(actual, minimum string) bool {
+	ranks := map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 4}
+	actualRank, ok := ranks[strings.ToLower(strings.TrimSpace(actual))]
+	if !ok {
+		return false
+	}
+	minimumRank, ok := ranks[strings.ToLower(strings.TrimSpace(minimum))]
+	if !ok || minimumRank == 0 {
+		return false
+	}
+	return actualRank >= minimumRank
+}
+
 func (s *Server) sendAlertEmail(ctx context.Context, alert storage.Alert) error {
+	return s.sendAlertEmailToRecipients(ctx, alert, nil)
+}
+
+// sendAlertEmailToRecipients sends an alert with the tenant SMTP settings. A
+// nil recipient slice uses the tenant's global recipients; a non-empty slice
+// is used for an explicit correlation-rule delivery policy.
+func (s *Server) sendAlertEmailToRecipients(ctx context.Context, alert storage.Alert, recipients []string) error {
 	store, ok := s.store.(smtpSettingsReader)
 	if !ok {
 		return nil
@@ -51,7 +88,13 @@ func (s *Server) sendAlertEmail(ctx context.Context, alert storage.Alert) error 
 	if err != nil {
 		return fmt.Errorf("load SMTP settings: %w", err)
 	}
-	if settings == nil || !settings.Enabled || len(settings.Recipients) == 0 {
+	if settings == nil || !settings.Enabled {
+		return nil
+	}
+	if len(recipients) == 0 {
+		recipients = settings.Recipients
+	}
+	if len(recipients) == 0 {
 		return nil
 	}
 	password := ""
@@ -72,9 +115,9 @@ func (s *Server) sendAlertEmail(ctx context.Context, alert storage.Alert) error 
 	}
 	message := smtpAlertMessage(*settings, alert)
 	if s.smtpAlertSend != nil {
-		return s.smtpAlertSend(ctx, *settings, password, settings.Recipients, message)
+		return s.smtpAlertSend(ctx, *settings, password, recipients, message)
 	}
-	return sendSMTPContent(ctx, *settings, password, settings.Recipients, message)
+	return sendSMTPContent(ctx, *settings, password, recipients, message)
 }
 
 func smtpAlertMessage(settings storage.SMTPSettings, alert storage.Alert) string {
