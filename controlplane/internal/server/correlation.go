@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -327,13 +328,17 @@ func (s *Server) handleCorrelationRulesCollection(w http.ResponseWriter, r *http
 			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
 			return
 		}
+		tenantID, err := uuid.Parse(req.TenantID)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
 		if err := validateCorrelationRuleRequest(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		tenantID, err := uuid.Parse(req.TenantID)
-		if err != nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		if err := s.validateCorrelationNotificationWebhookTargets(r.Context(), tenantID, req.NotificationPolicy); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		enabled := true
@@ -412,6 +417,10 @@ func (s *Server) handleCorrelationRuleSubroutes(w http.ResponseWriter, r *http.R
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := s.validateCorrelationNotificationWebhookTargets(r.Context(), tenantID, req.NotificationPolicy); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		enabled := true
 		if req.Enabled != nil {
 			enabled = *req.Enabled
@@ -433,4 +442,23 @@ func (s *Server) handleCorrelationRuleSubroutes(w http.ResponseWriter, r *http.R
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) validateCorrelationNotificationWebhookTargets(ctx context.Context, tenantID uuid.UUID, policy storage.CorrelationNotificationPolicy) error {
+	if len(policy.WebhookIDs) == 0 {
+		return nil
+	}
+	if s == nil || s.store == nil || tenantID == uuid.Nil {
+		return fmt.Errorf("notification webhook validation unavailable")
+	}
+	for _, webhookID := range policy.WebhookIDs {
+		webhook, err := s.store.GetWebhook(ctx, webhookID)
+		if err != nil {
+			return fmt.Errorf("load notification webhook: %w", err)
+		}
+		if webhook == nil || !webhook.TenantID.Valid || webhook.TenantID.UUID != tenantID {
+			return fmt.Errorf("notification webhook does not belong to tenant")
+		}
+	}
+	return nil
 }

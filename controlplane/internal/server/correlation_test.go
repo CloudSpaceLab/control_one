@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"testing"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
@@ -47,6 +48,19 @@ func TestValidateCorrelationNotificationPolicy(t *testing.T) {
 				t.Fatalf("webhook ids = %#v", policy.WebhookIDs)
 			}
 		})
+	}
+}
+
+func TestValidateCorrelationNotificationWebhookTargetsRejectsDifferentTenant(t *testing.T) {
+	tenantID, otherTenantID, webhookID := uuid.New(), uuid.New(), uuid.New()
+	store := &correlationWebhookStore{
+		alertEmailFakeStore: &alertEmailFakeStore{},
+		webhook:             &storage.Webhook{ID: webhookID, TenantID: uuid.NullUUID{UUID: otherTenantID, Valid: true}, Enabled: true},
+	}
+	s := &Server{store: store}
+	err := s.validateCorrelationNotificationWebhookTargets(context.Background(), tenantID, storage.CorrelationNotificationPolicy{WebhookIDs: []uuid.UUID{webhookID}})
+	if err == nil {
+		t.Fatal("expected cross-tenant webhook rejection")
 	}
 }
 
