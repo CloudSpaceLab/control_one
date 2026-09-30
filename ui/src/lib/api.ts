@@ -7159,9 +7159,16 @@ export interface CorrelationRule {
   aggregate_threshold: number;
   enabled: boolean;
   severity: string;
+  notification_policy: CorrelationNotificationPolicy;
   created_at: string;
   updated_at: string;
   yaml_spec?: string;
+}
+
+export interface CorrelationNotificationPolicy {
+  email_recipients: string[];
+  webhook_ids: string[];
+  minimum_severity: string;
 }
 
 export interface CorrelationCondition {
@@ -7191,6 +7198,7 @@ export interface CreateCorrelationRulePayload {
   aggregate_threshold: number;
   enabled?: boolean;
   severity: string;
+  notification_policy?: CorrelationNotificationPolicy;
   yaml_spec?: string;
 }
 

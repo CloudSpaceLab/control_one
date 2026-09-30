@@ -238,6 +238,28 @@ describe('Alerts page failure states', () => {
     ).toBeInTheDocument();
   });
 
+  it('saves rule-specific email delivery settings', async () => {
+    const user = userEvent.setup();
+    mocks.listCorrelationRules.mockResolvedValueOnce(paginated([]));
+
+    renderAlerts();
+
+    await user.click(screen.getByRole('button', { name: /correlation rules/i }));
+    await user.click(await screen.findByRole('button', { name: /new rule/i }));
+    await user.type(screen.getByLabelText(/name/i), 'AnyDesk connection');
+    await user.type(screen.getByLabelText(/alert delivery/i), 'soc@example.test');
+    await user.selectOptions(screen.getByLabelText(/minimum severity/i), 'critical');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    expect(mocks.createCorrelationRule).toHaveBeenCalledWith(expect.objectContaining({
+      notification_policy: {
+        email_recipients: ['soc@example.test'],
+        webhook_ids: [],
+        minimum_severity: 'critical',
+      },
+    }));
+  });
+
   it('keeps failed correlation rule deletes visible in the confirmation modal', async () => {
     const user = userEvent.setup();
     mocks.deleteCorrelationRule.mockRejectedValueOnce(new Error('rule still in use'));

@@ -313,6 +313,8 @@ export function Alerts(): JSX.Element {
   const [newRuleSequenceConditions, setNewRuleSequenceConditions] = useState<CorrelationCondition[]>([]);
   const [newRuleAggregateField, setNewRuleAggregateField] = useState('');
   const [newRuleAggregateThreshold, setNewRuleAggregateThreshold] = useState(0);
+  const [newRuleEmailRecipients, setNewRuleEmailRecipients] = useState('');
+  const [newRuleNotificationSeverity, setNewRuleNotificationSeverity] = useState('high');
   const [newRuleTemplateId, setNewRuleTemplateId] = useState('');
   const [creatingRule, setCreatingRule] = useState(false);
   const [createRuleError, setCreateRuleError] = useState<string | null>(null);
@@ -476,6 +478,7 @@ export function Alerts(): JSX.Element {
     setNewRuleDistinctField('');
     setNewRuleSequenceEventType(''); setNewRuleSequenceThreshold(0); setNewRuleSequenceConditions([]);
     setNewRuleAggregateField(''); setNewRuleAggregateThreshold(0);
+    setNewRuleEmailRecipients(''); setNewRuleNotificationSeverity('high');
     setNewRuleTemplateId('');
   };
 
@@ -521,6 +524,8 @@ export function Alerts(): JSX.Element {
     setNewRuleSequenceEventType(rule.sequence_event_type ?? ''); setNewRuleSequenceThreshold(rule.sequence_threshold ?? 0);
     setNewRuleSequenceConditions(rule.sequence_conditions ?? []);
     setNewRuleAggregateField(rule.aggregate_field ?? ''); setNewRuleAggregateThreshold(rule.aggregate_threshold ?? 0);
+    setNewRuleEmailRecipients((rule.notification_policy?.email_recipients ?? []).join(', '));
+    setNewRuleNotificationSeverity(rule.notification_policy?.minimum_severity ?? 'high');
     setShowCreateRule(true);
   };
 
@@ -562,6 +567,10 @@ export function Alerts(): JSX.Element {
         aggregate_threshold: newRuleAggregateThreshold,
         severity: newRuleSeverity,
         enabled: newRuleEnabled,
+        notification_policy: (() => {
+          const recipients = newRuleEmailRecipients.split(',').map((email) => email.trim()).filter(Boolean);
+          return recipients.length > 0 ? { email_recipients: recipients, webhook_ids: [], minimum_severity: newRuleNotificationSeverity } : undefined;
+        })(),
       };
       if (editRuleId) await client.updateCorrelationRule(editRuleId, tenantId, payload);
       else await client.createCorrelationRule(payload);
@@ -1306,6 +1315,17 @@ export function Alerts(): JSX.Element {
                     onChange={(e) => setNewRuleSuppressionSeconds(Math.max(0, Number(e.target.value) || 0))}
                     className="h-8"
                   />
+                </div>
+                <div className="flex flex-col gap-1 md:col-span-2">
+                  <Label htmlFor="rule-email-recipients">Alert delivery</Label>
+                  <Input id="rule-email-recipients" value={newRuleEmailRecipients} onChange={(e) => setNewRuleEmailRecipients(e.target.value)} placeholder="Email recipients, separated by commas" className="h-8" />
+                  <span className="text-xs text-text-muted">Minimum severity applies to rule-specific email delivery.</span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="rule-notification-severity">Minimum severity</Label>
+                  <select id="rule-notification-severity" className="h-8 rounded-md border border-border-subtle bg-surface px-2 text-sm text-foreground" value={newRuleNotificationSeverity} onChange={(e) => setNewRuleNotificationSeverity(e.target.value)} disabled={!newRuleEmailRecipients.trim()}>
+                    {['low', 'medium', 'high', 'critical'].map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
                 </div>
                 <label className="flex items-center gap-2 text-sm text-foreground">
                   <input type="checkbox" checked={newRuleEnabled} onChange={(e) => setNewRuleEnabled(e.target.checked)} />
