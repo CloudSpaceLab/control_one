@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,24 @@ import (
 type alertEmailFakeStore struct {
 	smtpFakeStore
 	created *storage.Alert
+}
+
+type correlationWebhookStore struct {
+	*alertEmailFakeStore
+	webhook    *storage.Webhook
+	deliveries []storage.WebhookDelivery
+}
+
+func (f *correlationWebhookStore) GetWebhook(_ context.Context, id uuid.UUID) (*storage.Webhook, error) {
+	if f.webhook != nil && f.webhook.ID == id {
+		return f.webhook, nil
+	}
+	return nil, nil
+}
+
+func (f *correlationWebhookStore) RecordWebhookDelivery(_ context.Context, delivery storage.WebhookDelivery) error {
+	f.deliveries = append(f.deliveries, delivery)
+	return nil
 }
 
 func (f *alertEmailFakeStore) CreateAlert(_ context.Context, params storage.CreateAlertParams) (*storage.Alert, error) {
@@ -142,6 +162,33 @@ func TestDispatchCorrelationAlertUsesPolicyRecipients(t *testing.T) {
 	}, &storage.Alert{ID: uuid.New(), TenantID: tenantID, Severity: "critical", Title: "Correlation alert"})
 	if len(got) != 1 || got[0] != "rule@example.com" {
 		t.Fatalf("recipients = %#v, want only rule recipient", got)
+	}
+}
+
+func TestDeliverCorrelationWebhookRecordsTenantScopedDelivery(t *testing.T) {
+	tenantID, webhookID := uuid.New(), uuid.New()
+	received := make(chan struct{}, 1)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Webhook-Event") != "correlation.alert.opened" {
+			t.Errorf("event header = %q", r.Header.Get("X-Webhook-Event"))
+		}
+		received <- struct{}{}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer endpoint.Close()
+	store := &correlationWebhookStore{
+		alertEmailFakeStore: &alertEmailFakeStore{},
+		webhook:             &storage.Webhook{ID: webhookID, TenantID: uuid.NullUUID{UUID: tenantID, Valid: true}, URL: endpoint.URL, Enabled: true, VerifySSL: true, TimeoutSeconds: 2},
+	}
+	s := &Server{store: store}
+	s.deliverCorrelationWebhook(context.Background(), storage.CorrelationRule{ID: uuid.New()}, &storage.Alert{ID: uuid.New(), TenantID: tenantID, Severity: "high"}, webhookID)
+	select {
+	case <-received:
+	case <-time.After(time.Second):
+		t.Fatal("webhook did not receive correlation event")
+	}
+	if len(store.deliveries) != 1 || store.deliveries[0].Status != "success" || !store.deliveries[0].EventID.Valid {
+		t.Fatalf("deliveries = %#v", store.deliveries)
 	}
 }
 
