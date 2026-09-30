@@ -2451,6 +2451,10 @@ func contentPackSourceRuntimeStateFromEvidence(item tenantSourceHealthEvidence) 
 	if strings.TrimSpace(labels[contentPackCollectionIdentityLabel]) == "" {
 		labels[contentPackCollectionIdentityLabel] = contentPackSourceCollectionIdentity(item)
 	}
+	// A source can retain an approval reference after the decision is made.
+	// Coverage state is authoritative: only approval_required represents a
+	// pending approval, regardless of a stale collector boolean.
+	approvalRequired := item.ApprovalRequired && state == contentpacks.CoverageState(contentpacks.CoverageApprovalRequired)
 	return contentpacks.SourceRuntimeState{
 		SourceInstanceID: sourceInstanceID,
 		PackID:           strings.TrimSpace(item.PackID),
@@ -2462,7 +2466,7 @@ func contentPackSourceRuntimeStateFromEvidence(item tenantSourceHealthEvidence) 
 		CollectorMode:    strings.TrimSpace(item.CollectorMode),
 		ParserID:         strings.TrimSpace(item.ParserID),
 		CoverageState:    state,
-		ApprovalRequired: item.ApprovalRequired,
+		ApprovalRequired: approvalRequired,
 		ApprovalID:       strings.TrimSpace(item.ApprovalID),
 		ConfigVersion:    strings.TrimSpace(item.ConfigVersion),
 		ContentVersion:   strings.TrimSpace(item.ContentVersion),

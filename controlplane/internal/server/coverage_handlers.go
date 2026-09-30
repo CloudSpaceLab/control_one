@@ -1116,6 +1116,10 @@ func sourceHealthEvidenceFromValue(collector storage.ContentPackEdgeCollector, s
 	if item.SourceInstanceID == "" {
 		item.SourceInstanceID = contentPackSourceInstanceIDForNode(item.NodeID, item.CollectorID, item.SourceID)
 	}
+	// A stored approval reference is historical evidence once a source is
+	// deployed or healthy. Only the approval_required coverage state is an
+	// outstanding approval gate.
+	item.ApprovalRequired = item.ApprovalRequired && item.State == contentpacks.CoverageState(contentpacks.CoverageApprovalRequired)
 	return item, true
 }
 
