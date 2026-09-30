@@ -220,7 +220,7 @@ const sampleHealth: ContentPackSourceHealthResponse = {
       node_id: "node-1",
       display_name: "NGINX access",
       coverage_state: "collecting",
-      approval_required: true,
+      approval_required: false,
       approval_id: "proposal-row-1",
       metrics: {
         events_received: 120,
@@ -502,7 +502,8 @@ describe("SIEMCoverage", () => {
       screen.getAllByText("Collect parsed only / raw retained: false").length,
     ).toBeGreaterThan(0);
     expect(screen.getByText("node-1/nginx.access")).toBeInTheDocument();
-    expect(screen.getByText("approval: proposal-row-1")).toBeInTheDocument();
+    expect(screen.getByText("approved proposal: proposal-row-1")).toBeInTheDocument();
+    expect(screen.getAllByText(/node: node-1/i).length).toBeGreaterThan(0);
     expect(screen.getByText("otelcol-1")).toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: /edge otel 1/i }),

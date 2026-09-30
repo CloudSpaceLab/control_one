@@ -1310,8 +1310,31 @@ func TestContentPackSourceHealthAPIListsCollectorEvidence(t *testing.T) {
 	if linuxAuth.SourceID == "" || linuxAuth.Labels["collect_mode"] != "collect_parsed" || linuxAuth.Labels["raw_message_retained"] != "false" {
 		t.Fatalf("linux.auth labels = %#v", linuxAuth.Labels)
 	}
-	if linuxAuth.SourceInstanceID != "edge-health-1/linux.auth" || !linuxAuth.ApprovalRequired || linuxAuth.ApprovalID != "proposal-linux-auth" {
+	if linuxAuth.SourceInstanceID != "edge-health-1/linux.auth" || linuxAuth.ApprovalRequired || linuxAuth.ApprovalID != "proposal-linux-auth" {
 		t.Fatalf("linux.auth approval/source instance = %#v", linuxAuth)
+	}
+}
+
+func TestContentPackSourceRuntimeStateFromProposal_ApprovedProposalIsNotPendingApproval(t *testing.T) {
+	proposal := storage.ContentPackSourceProposalRecord{
+		ID:               uuid.New(),
+		TenantID:         uuid.New(),
+		NodeID:           uuid.New(),
+		SourceID:         "linux.auth",
+		Status:           storage.ContentPackSourceProposalStatusApproved,
+		RequiresApproval: true,
+		LastSeenAt:       time.Now().UTC(),
+	}
+
+	state, ok := contentPackSourceRuntimeStateFromProposal(proposal)
+	if !ok {
+		t.Fatal("expected approved proposal runtime state")
+	}
+	if state.ApprovalRequired {
+		t.Fatalf("approved proposal remained pending approval: %+v", state)
+	}
+	if state.ApprovalID != proposal.ID.String() {
+		t.Fatalf("approval reference = %q, want %q", state.ApprovalID, proposal.ID)
 	}
 }
 
@@ -1596,7 +1619,7 @@ func TestContentPackEdgeCollectorHeartbeatPersistsSourceRuntimeState(t *testing.
 	if resp.Totals.Sources != 1 || resp.Items[0].ConfigVersion != "sha256:runtime" || resp.Items[0].ParserID != "linux.auth.syslog" {
 		t.Fatalf("source health response = %#v", resp)
 	}
-	if resp.Items[0].SourceInstanceID != "edge-persist-1/linux.auth" || !resp.Items[0].ApprovalRequired || resp.Items[0].ApprovalID != "proposal-linux-auth" {
+	if resp.Items[0].SourceInstanceID != "edge-persist-1/linux.auth" || resp.Items[0].ApprovalRequired || resp.Items[0].ApprovalID != "proposal-linux-auth" {
 		t.Fatalf("source health approval/source instance = %#v", resp.Items[0])
 	}
 	if resp.Items[0].Labels["collect_mode"] != "collect_raw" || resp.Items[0].Labels["pipeline_id"] != "logs/controlone.linux.auth" {

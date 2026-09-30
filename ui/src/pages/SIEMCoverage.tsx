@@ -311,7 +311,11 @@ function sourceHealthEvidenceLine(row: ContentPackSourceHealth): string {
 
 function sourceHealthApprovalLine(row: ContentPackSourceHealth): string {
   const approvalId = (row.approval_id ?? "").trim();
-  if (approvalId) return `approval: ${approvalId}`;
+  if (approvalId) {
+    return row.approval_required
+      ? `approval required: ${approvalId}`
+      : `approved proposal: ${approvalId}`;
+  }
   return row.approval_required ? "approval required" : "";
 }
 
@@ -1045,6 +1049,11 @@ export function SIEMCoverage(): JSX.Element {
               <span className="font-mono text-xs text-text-muted">
                 {sourceID}
               </span>
+              {p.node_id && (
+                <span className="font-mono text-xs text-text-muted">
+                  node: {p.node_id}
+                </span>
+              )}
               {sourceHealth && (
                 <StatusTag
                   tone={statusTone(sourceHealth.coverage_state)}
@@ -1217,6 +1226,11 @@ export function SIEMCoverage(): JSX.Element {
               <span className="font-mono text-xs text-text-muted">
                 {row.original.source_id}
               </span>
+              {(row.original.node_id || row.original.collector_id) && (
+                <span className="font-mono text-xs text-text-muted">
+                  node: {row.original.node_id || row.original.collector_id}
+                </span>
+              )}
               {instanceLine && (
                 <span className="font-mono text-xs text-text-muted">
                   {instanceLine}

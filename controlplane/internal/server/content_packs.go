@@ -2304,7 +2304,9 @@ func (s *Server) persistContentPackSourceRuntimeStatesFromOTelPlan(ctx context.C
 			CollectorID:      strings.TrimSpace(collectorID),
 			CollectorMode:    strings.TrimSpace(source.Mode),
 			CoverageState:    coverageState,
-			ApprovalRequired: strings.TrimSpace(source.ApprovalRef) != "",
+			// ApprovalRef is evidence that an approval already occurred; it is
+			// not a pending approval requirement for this rendered configuration.
+			ApprovalRequired: false,
 			ApprovalID:       strings.TrimSpace(source.ApprovalRef),
 			ConfigVersion:    strings.TrimSpace(configVersion),
 			LastHealthAt:     &now,
@@ -2373,7 +2375,9 @@ func contentPackSourceRuntimeStateFromProposal(proposal storage.ContentPackSourc
 		CollectorMode:    contentPackProposalCollectorMode(proposal),
 		ParserID:         strings.TrimSpace(sourceID),
 		CoverageState:    coverageState,
-		ApprovalRequired: proposal.RequiresApproval,
+		// A proposal may require an approval as a policy condition, but it is
+		// only pending while its decision status is approval_required.
+		ApprovalRequired: proposal.Status == storage.ContentPackSourceProposalStatusApprovalRequired,
 		ApprovalID:       contentPackProposalApprovalID(proposal),
 		LastHealthAt:     &lastHealthAt,
 		LastError:        contentPackProposalLastError(proposal),
@@ -2760,7 +2764,10 @@ func tenantSourceHealthEvidenceFromRuntimeState(state contentpacks.SourceRuntime
 		ContentVersion:   state.ContentVersion,
 		DisplayName:      state.DisplayName,
 		State:            state.CoverageState,
-		ApprovalRequired: state.ApprovalRequired,
+		// Older persisted runtime states recorded a proposal reference as an
+		// approval requirement. The coverage state is the durable decision
+		// state, so normalize historical rows at the API boundary as well.
+		ApprovalRequired: state.CoverageState == contentpacks.CoverageState(contentpacks.CoverageApprovalRequired),
 		ApprovalID:       state.ApprovalID,
 		Metrics:          state.Metrics,
 		LastEventAt:      state.LastEventAt,

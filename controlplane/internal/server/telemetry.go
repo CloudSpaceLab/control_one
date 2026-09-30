@@ -551,7 +551,9 @@ func (s *Server) persistContentPackSourceRuntimeStateFromAgentLogs(ctx context.C
 		CollectorMode:    contentpacks.CollectorNodeFileLog,
 		ParserID:         sourceID,
 		CoverageState:    contentpacks.CoverageState(contentpacks.CoverageCollecting),
-		ApprovalRequired: strings.TrimSpace(labels["control_one.source_proposal_id"]) != "",
+		// A source-proposal label is the approved proposal reference carried
+		// with deployed collection, not evidence of a still-pending decision.
+		ApprovalRequired: false,
 		ApprovalID:       strings.TrimSpace(labels["control_one.source_proposal_id"]),
 		LastEventAt:      &latestEventAt,
 		LastParsedAt:     lastParsedAt,
