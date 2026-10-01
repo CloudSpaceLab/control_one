@@ -392,8 +392,10 @@ func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA st
 		return false, fmt.Errorf("begin log dump chunk tx: %w", err)
 	}
 	defer tx.Rollback()
-	var expiresAt, claimExpires time.Time
-	var status, storedToken string
+	var expiresAt time.Time
+	var claimExpires sql.NullTime
+	var status string
+	var storedToken sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT status, expires_at, claim_expires_at, claim_token_sha256
 		FROM agent_log_dumps WHERE tenant_id=$1 AND node_id=$2 AND id=$3 AND job_id=$4 FOR UPDATE`,
 		c.TenantID, c.NodeID, c.DumpID, c.JobID.UUID).Scan(&status, &expiresAt, &claimExpires, &storedToken); err != nil {
@@ -402,7 +404,8 @@ func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA st
 	if !now.Before(expiresAt) {
 		return false, ErrLogDumpExpired
 	}
-	if status != LogDumpStatusCapturing || storedToken != tokenSHA || !now.Before(claimExpires) {
+	if status != LogDumpStatusCapturing || !storedToken.Valid || storedToken.String != tokenSHA ||
+		!claimExpires.Valid || !now.Before(claimExpires.Time) {
 		return false, ErrLogDumpClaimInvalid
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO agent_log_dump_chunks
@@ -474,8 +477,9 @@ func (s *Store) CompleteLogDumpAndJob(ctx context.Context, tenantID, nodeID, dum
 	}
 	defer tx.Rollback()
 	var status string
-	var expiresAt, claimExpires time.Time
-	var storedToken string
+	var expiresAt time.Time
+	var claimExpires sql.NullTime
+	var storedToken sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT status, expires_at, claim_expires_at, claim_token_sha256
 		FROM agent_log_dumps WHERE tenant_id=$1 AND node_id=$2 AND id=$3 AND job_id=$4 FOR UPDATE`, tenantID, nodeID, dumpID, jobID).Scan(&status, &expiresAt, &claimExpires, &storedToken); err != nil {
 		return err
@@ -486,7 +490,8 @@ func (s *Store) CompleteLogDumpAndJob(ctx context.Context, tenantID, nodeID, dum
 	if status == LogDumpStatusCaptured {
 		return nil
 	}
-	if status != LogDumpStatusCapturing || storedToken != tokenSHA || !now.Before(claimExpires) {
+	if status != LogDumpStatusCapturing || !storedToken.Valid || storedToken.String != tokenSHA ||
+		!claimExpires.Valid || !now.Before(claimExpires.Time) {
 		return ErrLogDumpClaimInvalid
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_log_dumps SET status='captured',artifact_path=$5,artifact_sha256=$6,row_count=$7,size_bytes=$8,truncated=$9,
