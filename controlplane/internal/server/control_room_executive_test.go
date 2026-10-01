@@ -445,7 +445,7 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 		CreatedAt:    futureAt,
 	}}
 
-	got, failed, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
+	got, failed, handledAlertIDs, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
 	if !available {
 		t.Fatal("automatic response aggregation should be available")
 	}
@@ -454,6 +454,9 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 	}
 	if len(failed) != 0 {
 		t.Fatalf("unexpected failed automatic plans: %#v", failed)
+	}
+	if len(handledAlertIDs) != 0 {
+		t.Fatalf("unexpected handled alert provenance: %#v", handledAlertIDs)
 	}
 }
 
@@ -510,6 +513,11 @@ func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) 
 	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	now := time.Now().UTC()
+	alertID := uuid.New()
+	base.alerts = []storage.Alert{{
+		ID: alertID, TenantID: tenantID, Source: "correlation", Severity: "critical",
+		Title: "Known malicious source", State: "open", OpenedAt: now.Add(-45 * time.Minute),
+	}}
 
 	successID := uuid.New()
 	failedID := uuid.New()
@@ -517,14 +525,17 @@ func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) 
 		successID: {
 			ID:         successID,
 			TenantID:   tenantID,
-			Domain:     "remediation",
-			ActionKind: "remediation.execute",
+			Domain:     "firewall",
+			ActionKind: "block",
 			State:      storage.ActionPlanStateSucceeded,
 			Risk:       "medium",
-			Diff:       map[string]any{"auto_triggered": true},
-			SourceRef:  map[string]any{},
-			CreatedAt:  now.Add(-time.Hour),
-			UpdatedAt:  now.Add(-30 * time.Minute),
+			Diff: map[string]any{
+				"auto_triggered": true,
+				"reason":         "Correlation response: rule=Known malicious source; alert_id=" + alertID.String() + "; mode=auto_temporary_block",
+			},
+			SourceRef: map[string]any{},
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now.Add(-30 * time.Minute),
 		},
 		failedID: {
 			ID:         failedID,
@@ -569,14 +580,14 @@ func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) 
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode executive overview: %v", err)
 	}
-	if resp.Response.HandledAutomatically != 1 || resp.Response.Remediated != 1 {
-		t.Fatalf("verified response counts=%+v, want one automatic remediation", resp.Response)
+	if resp.Response.HandledAutomatically != 1 || resp.Response.Blocked != 1 {
+		t.Fatalf("verified response counts=%+v, want one automatic block", resp.Response)
 	}
 	if resp.Response.Failed != 1 {
 		t.Fatalf("failed automatic responses=%d, want 1", resp.Response.Failed)
 	}
-	if resp.Attention.Interventions != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 1 {
-		t.Fatalf("failed critical automation must surface as one critical intervention: %+v", resp.Attention)
+	if resp.Attention.Reviews != 0 || resp.Attention.Interventions != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 1 {
+		t.Fatalf("verified auto-handled alert must not remain human review work: %+v", resp.Attention)
 	}
 	if len(resp.Attention.Items) != 1 || resp.Attention.Items[0].Kind != "intervention" {
 		t.Fatalf("unexpected intervention sample: %+v", resp.Attention.Items)
