@@ -234,7 +234,7 @@ func (s *executiveRuleSummaryStore) GetExecutiveAttentionSummary(
 			ID: approval.ID, Kind: "approval", Source: "patch",
 			Severity: "medium", Domain: "patch",
 			NodeHostname: fakeExecutiveNodeHostname(s.fakeStore, tenantID, approval.NodeID),
-			Mode: approval.Mode, CreatedAt: approval.CreatedAt,
+			Mode:         approval.Mode, CreatedAt: approval.CreatedAt,
 		})
 	}
 	for _, approval := range s.remediationApprovals {
@@ -250,7 +250,7 @@ func (s *executiveRuleSummaryStore) GetExecutiveAttentionSummary(
 			ID: approval.ID, Kind: "approval", Source: "remediation",
 			Severity: severity, Domain: "compliance",
 			NodeHostname: fakeExecutiveNodeHostname(s.fakeStore, tenantID, approval.NodeID),
-			RuleID: approval.RuleID, CreatedAt: approval.CreatedAt,
+			RuleID:       approval.RuleID, CreatedAt: approval.CreatedAt,
 		})
 	}
 	for _, proposal := range s.blockProposals {
@@ -1154,9 +1154,9 @@ func TestControlRoomExecutivePredictiveHealthDoesNotChangeStateWhenNotActionable
 			wantState: "stale",
 		},
 		{
-			name: "unavailable",
+			name:         "unavailable",
 			availability: storage.PredictiveHealthAvailability{},
-			wantState: "unavailable",
+			wantState:    "unavailable",
 		},
 	}
 
@@ -1165,7 +1165,7 @@ func TestControlRoomExecutivePredictiveHealthDoesNotChangeStateWhenNotActionable
 			srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 			base.tenants[0].ID = tenantID
 			store := &executiveRuleSummaryStore{
-				fakeStore: base,
+				fakeStore:              base,
 				predictiveAvailability: tc.availability,
 				atRiskNodes: []storage.AtRiskNodeRow{{
 					NodeID: nodeID, TenantID: tenantID, Hostname: "app-01",
