@@ -181,12 +181,12 @@ function PredictiveHealthSummary({
       </div>
       <p className="mt-2 text-xs text-text-muted">
         {predictive.state === 'available'
-          ? `${predictive.fresh_nodes} fresh scores · ${predictive.stale_nodes} stale`
+          ? `${predictive.fresh_nodes} fresh · ${predictive.stale_nodes} stale · ${predictive.unscored_nodes} unscored`
           : predictive.state === 'calibrating'
-            ? `${predictive.calibrating_nodes} nodes calibrating`
+            ? `${predictive.calibrating_nodes} calibrating · ${predictive.unscored_nodes} unscored`
             : predictive.state === 'stale'
-              ? `${predictive.stale_nodes} stale scores`
-              : 'No current predictive scores'}
+              ? `${predictive.stale_nodes} stale · ${predictive.unscored_nodes} unscored`
+              : `${predictive.unscored_nodes} unscored`}
       </p>
     </div>
   );
