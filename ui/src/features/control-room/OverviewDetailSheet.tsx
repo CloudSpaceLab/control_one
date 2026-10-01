@@ -45,7 +45,9 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
         title: CONTROL_ROOM_COPY.infrastructureHealth,
         description: `${overview.estate.groups_healthy} of ${overview.estate.groups_total} groups healthy.`,
         body: (
-          <div className="space-y-2">
+          <div className="space-y-3">
+            <PredictiveHealthSummary predictive={overview.estate.predictive} />
+            <div className="space-y-2">
             {overview.estate.groups.map((group) => (
               <Link
                 key={group.name}
@@ -57,12 +59,14 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
                   <p className="mt-1 text-xs text-text-muted">
                     {group.nodes_healthy}/{group.nodes_total} healthy
                     {group.intentionally_isolated > 0 ? ` · ${group.intentionally_isolated} intentionally isolated` : ''}
+                    {group.predictive_risk ? ` · predictive ${group.predictive_risk}` : ''}
                   </p>
                 </div>
                 <StatusTag tone={groupStateTone(group.state)}>{group.state}</StatusTag>
               </Link>
             ))}
             <DetailLink to="/nodes" label="View infrastructure" />
+            </div>
           </div>
         ),
       };
@@ -152,6 +156,47 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
         ),
       };
   }
+}
+
+function PredictiveHealthSummary({
+  predictive,
+}: {
+  predictive: ControlRoomExecutiveOverview['estate']['predictive'];
+}) {
+  const stateLabel = predictive.state === 'available'
+    ? predictive.at_risk_nodes > 0
+      ? `${predictive.at_risk_nodes} at-risk ${predictive.at_risk_nodes === 1 ? 'node' : 'nodes'}`
+      : 'No predictive risks'
+    : predictive.state === 'calibrating'
+      ? 'Calibrating'
+      : predictive.state === 'stale'
+        ? 'Stale'
+        : 'Unavailable';
+
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface p-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">Predictive health</span>
+        <StatusTag tone={predictiveStateTone(predictive.state)} variant="outline">{stateLabel}</StatusTag>
+      </div>
+      <p className="mt-2 text-xs text-text-muted">
+        {predictive.state === 'available'
+          ? `${predictive.fresh_nodes} fresh · ${predictive.stale_nodes} stale · ${predictive.unscored_nodes} unscored`
+          : predictive.state === 'calibrating'
+            ? `${predictive.calibrating_nodes} calibrating · ${predictive.unscored_nodes} unscored`
+            : predictive.state === 'stale'
+              ? `${predictive.stale_nodes} stale · ${predictive.unscored_nodes} unscored`
+              : `${predictive.unscored_nodes} unscored`}
+      </p>
+    </div>
+  );
+}
+
+function predictiveStateTone(state: string): 'healthy' | 'warning' | 'info' | 'unknown' {
+  if (state === 'available') return 'info';
+  if (state === 'calibrating') return 'info';
+  if (state === 'stale') return 'warning';
+  return 'unknown';
 }
 
 function ResponseRow({ label, value, critical }: { label: string; value: number; critical?: boolean }) {

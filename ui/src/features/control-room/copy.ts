@@ -21,6 +21,11 @@ export function executiveHeadline(overview: ControlRoomExecutiveOverview): strin
   if (overview.attention.critical > 0) {
     return `${overview.attention.critical} critical ${overview.attention.critical === 1 ? 'item needs' : 'items need'} attention`;
   }
+  if (overview.estate.groups_critical > 0) {
+    return overview.estate.groups_critical === 1
+      ? '1 infrastructure group is critical'
+      : `${overview.estate.groups_critical} infrastructure groups are critical`;
+  }
   if (overview.attention.total > 0) {
     return `${overview.attention.total} ${overview.attention.total === 1 ? 'item needs' : 'items need'} attention`;
   }

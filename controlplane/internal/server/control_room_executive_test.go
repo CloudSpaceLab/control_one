@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -42,10 +44,12 @@ func controlRoomExecutiveHarness(t *testing.T, role, token string) (*Server, *fa
 
 type executiveRuleSummaryStore struct {
 	*fakeStore
-	summary        storage.RuleViolationSummary
-	err            error
-	blockProposals []storage.IPBlocklistEntry
-	portRule       *storage.PortMonitoringRule
+	summary                storage.RuleViolationSummary
+	err                    error
+	blockProposals         []storage.IPBlocklistEntry
+	portRule               *storage.PortMonitoringRule
+	predictiveAvailability storage.PredictiveHealthAvailability
+	atRiskNodes            []storage.AtRiskNodeRow
 }
 
 func (s *executiveRuleSummaryStore) GetPortRule(_ context.Context, _ uuid.UUID) (*storage.PortMonitoringRule, error) {
@@ -78,12 +82,8 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 	tenantID uuid.UUID,
 	since time.Time,
 	until time.Time,
-	failedLimit int,
 ) (storage.AutomaticResponseSummary, error) {
-	out := storage.AutomaticResponseSummary{FailedPlans: []storage.ActionPlan{}}
-	if failedLimit <= 0 {
-		failedLimit = 8
-	}
+	var out storage.AutomaticResponseSummary
 	for _, plan := range s.actionPlans {
 		if plan.TenantID != tenantID {
 			continue
@@ -100,9 +100,6 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 			if strings.EqualFold(strings.TrimSpace(plan.Risk), "critical") {
 				out.FailedCritical++
 			}
-			if len(out.FailedPlans) < failedLimit {
-				out.FailedPlans = append(out.FailedPlans, plan)
-			}
 			continue
 		}
 		if plan.State != storage.ActionPlanStateSucceeded && plan.State != storage.ActionPlanStateVerified {
@@ -112,13 +109,6 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 			continue
 		}
 		out.HandledAutomatically++
-		reason := strings.TrimSpace(fmt.Sprint(plan.Diff["reason"]))
-		if reason == "" {
-			reason = strings.TrimSpace(fmt.Sprint(plan.SourceRef["reason"]))
-		}
-		if alertID, ok := controlRoomExecutiveProposalAlertID(reason); ok {
-			out.HandledAlertIDs = append(out.HandledAlertIDs, alertID)
-		}
 		domain := strings.ToLower(strings.TrimSpace(plan.Domain))
 		action := strings.ToLower(strings.TrimSpace(plan.ActionKind))
 		switch {
@@ -162,6 +152,228 @@ func fakeSuccessfulAutomaticReceipt(receipts []storage.ActionReceipt, since, unt
 		return receipt.State == storage.ActionPlanStateSucceeded || receipt.State == storage.ActionPlanStateVerified
 	}
 	return false
+}
+
+func (s *executiveRuleSummaryStore) GetExecutiveAttentionSummary(
+	_ context.Context,
+	tenantID uuid.UUID,
+	since time.Time,
+	until time.Time,
+	itemLimit int,
+) (storage.ExecutiveAttentionSummary, error) {
+	out := storage.ExecutiveAttentionSummary{Items: []storage.ExecutiveAttentionItem{}}
+	if itemLimit <= 0 {
+		itemLimit = 8
+	}
+	excluded := map[uuid.UUID]struct{}{}
+	linkedAlerts := map[uuid.UUID]storage.Alert{}
+
+	for _, proposal := range s.blockProposals {
+		if proposal.TenantID != tenantID || proposal.Status != "proposed" {
+			continue
+		}
+		if alertID, ok := fakeExecutiveAlertIDFromReason(proposal.Reason); ok {
+			excluded[alertID] = struct{}{}
+			for _, alert := range s.alerts {
+				if alert.ID == alertID && alert.TenantID == tenantID {
+					linkedAlerts[alertID] = alert
+					break
+				}
+			}
+		}
+	}
+	for _, plan := range s.actionPlans {
+		if plan.TenantID != tenantID || !fakeAutomaticResponsePlan(plan) {
+			continue
+		}
+		changedAt := plan.UpdatedAt
+		if changedAt.IsZero() {
+			changedAt = plan.CreatedAt
+		}
+		if changedAt.Before(since) || !changedAt.Before(until) {
+			continue
+		}
+		if plan.State == storage.ActionPlanStateSucceeded || plan.State == storage.ActionPlanStateVerified {
+			if fakeSuccessfulAutomaticReceipt(s.actionReceipts[plan.ID], since, until) {
+				reason := strings.TrimSpace(fmt.Sprint(plan.Diff["reason"]))
+				if reason == "" {
+					reason = strings.TrimSpace(fmt.Sprint(plan.SourceRef["reason"]))
+				}
+				if alertID, ok := fakeExecutiveAlertIDFromReason(reason); ok {
+					excluded[alertID] = struct{}{}
+				}
+			}
+		}
+	}
+
+	for _, alert := range s.alerts {
+		if alert.TenantID != tenantID || (alert.State != "open" && alert.State != "acked") {
+			continue
+		}
+		if _, skip := excluded[alert.ID]; skip {
+			continue
+		}
+		out.Reviews++
+		if strings.EqualFold(alert.Severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: alert.ID, Kind: "review", Source: "alert",
+			Severity: alert.Severity, Domain: "alerts",
+			AlertTitle: alert.Title, AlertSummary: alert.Summary.String,
+			CreatedAt: alert.OpenedAt,
+		})
+	}
+
+	for _, approval := range s.patchApprovals {
+		if approval.TenantID != tenantID || approval.Status != storage.ApprovalStatusPending {
+			continue
+		}
+		out.Approvals++
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: approval.ID, Kind: "approval", Source: "patch",
+			Severity: "medium", Domain: "patch",
+			NodeHostname: fakeExecutiveNodeHostname(s.fakeStore, tenantID, approval.NodeID),
+			Mode:         approval.Mode, CreatedAt: approval.CreatedAt,
+		})
+	}
+	for _, approval := range s.remediationApprovals {
+		if approval.TenantID != tenantID || approval.Status != storage.ApprovalStatusPending {
+			continue
+		}
+		severity := firstNonEmptyIPBehavior(approval.Severity, "high")
+		out.Approvals++
+		if strings.EqualFold(severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: approval.ID, Kind: "approval", Source: "remediation",
+			Severity: severity, Domain: "compliance",
+			NodeHostname: fakeExecutiveNodeHostname(s.fakeStore, tenantID, approval.NodeID),
+			RuleID:       approval.RuleID, CreatedAt: approval.CreatedAt,
+		})
+	}
+	for _, proposal := range s.blockProposals {
+		if proposal.TenantID != tenantID || proposal.Status != "proposed" {
+			continue
+		}
+		severity := fakeExecutiveScoreSeverity(proposal.Score)
+		if alertID, ok := fakeExecutiveAlertIDFromReason(proposal.Reason); ok {
+			if alert, exists := linkedAlerts[alertID]; exists &&
+				controlRoomSeverityRank(alert.Severity) > controlRoomSeverityRank(severity) {
+				severity = alert.Severity
+			}
+		}
+		out.Approvals++
+		if strings.EqualFold(severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: proposal.ID, Kind: "approval", Source: "network",
+			Severity: severity, Domain: "network",
+			IPCIDR: proposal.IPCIDR, Reason: proposal.Reason, CreatedAt: proposal.CreatedAt,
+		})
+	}
+	for _, plan := range s.actionPlans {
+		if plan.TenantID != tenantID || plan.State != storage.ActionPlanStateFailed || !fakeAutomaticResponsePlan(plan) {
+			continue
+		}
+		changedAt := plan.UpdatedAt
+		if changedAt.IsZero() {
+			changedAt = plan.CreatedAt
+		}
+		if changedAt.Before(since) || !changedAt.Before(until) {
+			continue
+		}
+		severity := firstNonEmptyIPBehavior(plan.Risk, "medium")
+		out.Interventions++
+		if strings.EqualFold(severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: plan.ID, Kind: "intervention", Source: "automatic_response",
+			Severity: severity, Domain: firstNonEmptyIPBehavior(plan.Domain, "automation"),
+			ActionDomain: plan.Domain, ActionKind: plan.ActionKind, CreatedAt: changedAt,
+		})
+	}
+
+	out.Total = out.Reviews + out.Approvals + out.Interventions
+	sort.SliceStable(out.Items, func(i, j int) bool {
+		left := controlRoomSeverityRank(out.Items[i].Severity)
+		right := controlRoomSeverityRank(out.Items[j].Severity)
+		if left == right {
+			return out.Items[i].CreatedAt.After(out.Items[j].CreatedAt)
+		}
+		return left > right
+	})
+	if len(out.Items) > itemLimit {
+		out.Items = out.Items[:itemLimit]
+	}
+	return out, nil
+}
+
+func (s *executiveRuleSummaryStore) GetPredictiveHealthAvailability(
+	_ context.Context,
+	_ uuid.UUID,
+	_ time.Time,
+) (storage.PredictiveHealthAvailability, error) {
+	return s.predictiveAvailability, nil
+}
+
+func (s *executiveRuleSummaryStore) ListAtRiskNodes(
+	_ context.Context,
+	tenantID uuid.UUID,
+	_ int,
+) ([]storage.AtRiskNodeRow, error) {
+	out := make([]storage.AtRiskNodeRow, 0, len(s.atRiskNodes))
+	for _, row := range s.atRiskNodes {
+		if row.TenantID == tenantID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func fakeExecutiveAlertIDFromReason(reason string) (uuid.UUID, bool) {
+	if !strings.HasPrefix(strings.TrimSpace(reason), "Correlation response:") {
+		return uuid.Nil, false
+	}
+	const marker = "alert_id="
+	index := strings.Index(reason, marker)
+	if index < 0 {
+		return uuid.Nil, false
+	}
+	value := reason[index+len(marker):]
+	if end := strings.IndexByte(value, ';'); end >= 0 {
+		value = value[:end]
+	}
+	id, err := uuid.Parse(strings.TrimSpace(value))
+	return id, err == nil && id != uuid.Nil
+}
+
+func fakeExecutiveNodeHostname(store *fakeStore, tenantID, nodeID uuid.UUID) string {
+	if store == nil {
+		return ""
+	}
+	for _, node := range store.nodes {
+		if node.ID == nodeID && node.TenantID == tenantID {
+			return node.Hostname
+		}
+	}
+	return ""
+}
+
+func fakeExecutiveScoreSeverity(score int) string {
+	switch {
+	case score >= 100:
+		return "critical"
+	case score >= 80:
+		return "high"
+	case score >= 50:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func (s *executiveRuleSummaryStore) ListIPBlocklistEntries(
@@ -639,18 +851,12 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 	}}
 	srv.store = &executiveRuleSummaryStore{fakeStore: base}
 
-	got, failed, handledAlertIDs, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
+	got, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
 	if !available {
 		t.Fatal("automatic response aggregation should be available")
 	}
 	if got.HandledAutomatically != 30 || got.Remediated != 30 {
 		t.Fatalf("automatic response counts=%+v, want 30 verified remediations", got)
-	}
-	if len(failed) != 0 {
-		t.Fatalf("unexpected failed automatic plans: %#v", failed)
-	}
-	if len(handledAlertIDs) != 0 {
-		t.Fatalf("unexpected handled alert provenance: %#v", handledAlertIDs)
 	}
 }
 
@@ -831,6 +1037,158 @@ func TestControlRoomExecutiveEstateGroupsAndIntentionalIsolation(t *testing.T) {
 	}
 	if vault == nil || vault.State != "healthy" || vault.IntentionallyIsolated != 1 || vault.NodesOffline != 0 {
 		t.Fatalf("intentional isolation should remain healthy, got %+v", vault)
+	}
+}
+
+func TestControlRoomExecutivePredictiveHealthElevatesFreshRiskOnly(t *testing.T) {
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	now := time.Now().UTC()
+	paymentsID := uuid.New()
+	edgeID := uuid.New()
+	vaultID := uuid.New()
+	old := now.Add(-2 * time.Hour)
+
+	base.nodes = []storage.Node{
+		{
+			ID: paymentsID, TenantID: tenantID, Hostname: "payments-01", LastSeenAt: &now,
+			Labels: map[string]any{"dashboard_group": "Payments"},
+		},
+		{
+			ID: edgeID, TenantID: tenantID, Hostname: "edge-01", LastSeenAt: &now,
+			Labels: map[string]any{"dashboard_group": "Web Edge"},
+		},
+		{
+			ID: vaultID, TenantID: tenantID, Hostname: "vault-01", LastSeenAt: &old,
+			Labels: map[string]any{
+				"dashboard_group":  "Vault",
+				isolationModeLabel: isolationModeAirgapped,
+			},
+		},
+	}
+	store := &executiveRuleSummaryStore{
+		fakeStore: base,
+		predictiveAvailability: storage.PredictiveHealthAvailability{
+			ScoredNodes: 3, FreshNodes: 3, FreshActionableNodes: 2,
+			FreshCalibratingNodes: 1, StaleNodes: 0,
+			LatestComputedAt: sql.NullTime{Time: now.Add(-10 * time.Minute), Valid: true},
+		},
+		atRiskNodes: []storage.AtRiskNodeRow{
+			{
+				NodeID: paymentsID, TenantID: tenantID, Hostname: "payments-01",
+				Score: 20, RiskLevel: "critical", ComputedAt: now.Add(-10 * time.Minute),
+			},
+			{
+				NodeID: edgeID, TenantID: tenantID, Hostname: "edge-01",
+				Score: 40, RiskLevel: "high", ComputedAt: now.Add(-15 * time.Minute),
+			},
+			{
+				NodeID: uuid.New(), TenantID: uuid.New(), Hostname: "other-tenant",
+				Score: 1, RiskLevel: "critical", ComputedAt: now,
+			},
+		},
+	}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Estate.Predictive.State != "available" || resp.Estate.Predictive.AtRiskNodes != 2 {
+		t.Fatalf("unexpected predictive state: %+v", resp.Estate.Predictive)
+	}
+	if resp.Estate.GroupsCritical != 1 || resp.Estate.GroupsDegraded != 1 || resp.Estate.GroupsHealthy != 1 {
+		t.Fatalf("unexpected predictive group totals: %+v", resp.Estate)
+	}
+
+	states := map[string]controlRoomExecutiveGroup{}
+	for _, group := range resp.Estate.Groups {
+		states[group.Name] = group
+	}
+	if states["Payments"].State != "critical" || states["Payments"].PredictiveRisk != "critical" {
+		t.Fatalf("payments predictive critical risk not applied: %+v", states["Payments"])
+	}
+	if states["Web Edge"].State != "degraded" || states["Web Edge"].PredictiveRisk != "high" {
+		t.Fatalf("web edge predictive high risk not applied: %+v", states["Web Edge"])
+	}
+	if states["Vault"].State != "healthy" || states["Vault"].IntentionallyIsolated != 1 {
+		t.Fatalf("intentional isolation should remain healthy: %+v", states["Vault"])
+	}
+}
+
+func TestControlRoomExecutivePredictiveHealthDoesNotChangeStateWhenNotActionable(t *testing.T) {
+	now := time.Now().UTC()
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	nodes := []storage.Node{{
+		ID: nodeID, TenantID: tenantID, Hostname: "app-01", LastSeenAt: &now,
+		Labels: map[string]any{"dashboard_group": "Application"},
+	}}
+
+	cases := []struct {
+		name         string
+		availability storage.PredictiveHealthAvailability
+		wantState    string
+	}{
+		{
+			name: "calibrating",
+			availability: storage.PredictiveHealthAvailability{
+				ScoredNodes: 1, FreshNodes: 1, FreshCalibratingNodes: 1,
+				LatestComputedAt: sql.NullTime{Time: now, Valid: true},
+			},
+			wantState: "calibrating",
+		},
+		{
+			name: "stale",
+			availability: storage.PredictiveHealthAvailability{
+				ScoredNodes: 1, StaleNodes: 1,
+				LatestComputedAt: sql.NullTime{Time: now.Add(-6 * time.Hour), Valid: true},
+			},
+			wantState: "stale",
+		},
+		{
+			name:         "unavailable",
+			availability: storage.PredictiveHealthAvailability{},
+			wantState:    "unavailable",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
+			base.tenants[0].ID = tenantID
+			store := &executiveRuleSummaryStore{
+				fakeStore:              base,
+				predictiveAvailability: tc.availability,
+				atRiskNodes: []storage.AtRiskNodeRow{{
+					NodeID: nodeID, TenantID: tenantID, Hostname: "app-01",
+					Score: 10, RiskLevel: "critical", ComputedAt: now,
+				}},
+			}
+			srv.store = store
+			estate := buildControlRoomExecutiveEstate(nodes, now)
+			predictive := srv.controlRoomExecutivePredictiveHealth(context.Background(), tenantID, nodes, &estate, now)
+
+			if predictive.State != tc.wantState {
+				t.Fatalf("predictive state=%q, want %q", predictive.State, tc.wantState)
+			}
+			if estate.Groups[0].State != "healthy" {
+				t.Fatalf("non-actionable predictive state changed liveness health: %+v", estate.Groups[0])
+			}
+			if estate.Groups[0].PredictiveRisk != "" || estate.Groups[0].PredictiveNodesAtRisk != 0 {
+				t.Fatalf("non-actionable predictive risk leaked into group: %+v", estate.Groups[0])
+			}
+		})
 	}
 }
 
