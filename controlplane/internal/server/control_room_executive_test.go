@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -76,6 +77,13 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 			continue
 		}
 		out.HandledAutomatically++
+		reason := strings.TrimSpace(fmt.Sprint(plan.Diff["reason"]))
+		if reason == "" {
+			reason = strings.TrimSpace(fmt.Sprint(plan.SourceRef["reason"]))
+		}
+		if alertID, ok := controlRoomExecutiveProposalAlertID(reason); ok {
+			out.HandledAlertIDs = append(out.HandledAlertIDs, alertID)
+		}
 		domain := strings.ToLower(strings.TrimSpace(plan.Domain))
 		action := strings.ToLower(strings.TrimSpace(plan.ActionKind))
 		switch {
@@ -245,6 +253,66 @@ func TestControlRoomExecutiveRuleViolationSummaryIsIndependentOfTopRules(t *test
 	}
 	if resp.Violations.Total == resp.Violations.TopRules[0].Count {
 		t.Fatalf("total must be independent of bounded top rules: %+v", resp.Violations)
+	}
+}
+
+func TestControlRoomExecutiveVerifiedAutomaticResponseRemovesLinkedAlertFromReview(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	now := time.Now().UTC()
+	alertID := uuid.New()
+	base.alerts = []storage.Alert{{
+		ID: alertID, TenantID: tenantID, Source: "correlation", Severity: "critical",
+		Title: "Known malicious source", State: "open", OpenedAt: now.Add(-20 * time.Minute),
+	}}
+
+	planID := uuid.New()
+	base.actionPlans = map[uuid.UUID]storage.ActionPlan{
+		planID: {
+			ID: planID, TenantID: tenantID, Domain: "firewall", ActionKind: "block",
+			State: storage.ActionPlanStateSucceeded, Risk: "high",
+			Diff: map[string]any{
+				"auto_triggered": true,
+				"reason": "Correlation response: rule=Known bad source; alert_id=" + alertID.String() + "; mode=auto_temporary_block",
+			},
+			SourceRef: map[string]any{},
+			CreatedAt: now.Add(-15 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
+		},
+	}
+	base.actionReceipts = map[uuid.UUID][]storage.ActionReceipt{
+		planID: {{
+			ID: uuid.New(), ActionPlanID: planID, TenantID: tenantID,
+			State: storage.ActionPlanStateSucceeded,
+			Receipt: map[string]any{"success": true},
+			Verification: map[string]any{"firewall": "applied"},
+			CreatedAt: now.Add(-10 * time.Minute),
+		}},
+	}
+
+	store := &executiveRuleSummaryStore{fakeStore: base}
+	srv.store = store
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Response.HandledAutomatically != 1 || resp.Response.Blocked != 1 {
+		t.Fatalf("expected one verified automatic block, got %+v", resp.Response)
+	}
+	if resp.Attention.Reviews != 0 || resp.Attention.Total != 0 || resp.Attention.Critical != 0 {
+		t.Fatalf("verified handled source alert must not remain executive review work: %+v", resp.Attention)
+	}
+	if len(resp.Attention.Items) != 0 {
+		t.Fatalf("handled alert leaked into attention sample: %+v", resp.Attention.Items)
 	}
 }
 
