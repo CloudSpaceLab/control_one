@@ -5,6 +5,7 @@ import { useApiErrorHandler } from './useApiErrorHandler';
 
 export interface UseNodesParams extends ListNodesParams {
   pollIntervalMs?: number;
+  enabled?: boolean;
 }
 
 interface NodeState extends PaginatedResponse<NodeSummary> {
@@ -27,7 +28,7 @@ export function useNodes(params: UseNodesParams = {}): UseNodesResult {
   });
   const [reloadToken, setReloadToken] = useState(0);
 
-  const { pollIntervalMs = 10_000, ...queryParams } = params;
+  const { pollIntervalMs = 10_000, enabled = true, ...queryParams } = params;
 
   const normalizedParams = useMemo(
     () => ({
@@ -42,6 +43,18 @@ export function useNodes(params: UseNodesParams = {}): UseNodesResult {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | undefined;
+
+    if (!enabled) {
+      setState({
+        data: [],
+        pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
+        loading: false,
+        error: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const fetchNodes = async () => {
       try {
@@ -74,7 +87,7 @@ export function useNodes(params: UseNodesParams = {}): UseNodesResult {
         clearInterval(timer);
       }
     };
-  }, [api, normalizedParams, pollIntervalMs, reloadToken, handleError]);
+  }, [api, normalizedParams, pollIntervalMs, reloadToken, handleError, enabled]);
 
   return {
     ...state,
