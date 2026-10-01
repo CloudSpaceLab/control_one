@@ -23,7 +23,7 @@ export function AttentionQueue({ attention, available }: AttentionQueueProps) {
           tone="success"
           icon={<ShieldCheck />}
           title="No items need attention"
-          description="Nothing requires review or approval."
+          description="Nothing requires review, approval, or intervention."
         />
       ) : (
         <div className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
@@ -65,9 +65,8 @@ function attentionSummary(attention: ControlRoomExecutiveAttention): string {
   return `${attention.total} ${attention.total === 1 ? 'item' : 'items'} require action`;
 }
 
-function kindTone(kind: string): 'info' | 'warning' | 'critical' {
-  if (kind === 'approval') return 'warning';
-  if (kind === 'intervention') return 'critical';
+function kindTone(kind: string): 'info' | 'warning' {
+  if (kind === 'approval' || kind === 'intervention') return 'warning';
   return 'info';
 }
 
