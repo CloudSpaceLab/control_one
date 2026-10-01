@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -38,38 +39,6 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	externalOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("external_only")), "true")
 	since, until := parseTimeWindow(r, 24*time.Hour)
 	limit := parseLimitDefault(r, 100, 1000)
-	if !s.usesDorisAnalytics() {
-		if s.localAnalytics != nil {
-			var rows []doris.ConnectionRow
-			var source string
-			if nodeID != "" {
-				if _, err := uuid.Parse(nodeID); err != nil {
-					http.Error(w, "invalid node_id", http.StatusBadRequest)
-					return
-				}
-				openOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("open_only")), "true")
-				rows, source, err = s.listAnalyticsConnectionsForNode(r.Context(), tenantID.String(), nodeID, since, until, limit, openOnly, externalOnly)
-			} else if ip != "" {
-				rows, source, err = s.listAnalyticsConnectionsForIP(r.Context(), tenantID.String(), ip, since, until, limit)
-			} else {
-				rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
-			}
-			if err != nil {
-				s.logger.Warn("small analytics list connections", zap.Error(err))
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-			rows = sanitizeConnectionThreatRows(rows)
-			writeJSON(w, http.StatusOK, map[string]any{"data": rows, "source": source})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"data":       []doris.ConnectionRow{},
-			"source":     analyticsSourceSmallPending,
-			"guardrails": []string{"Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up."},
-		})
-		return
-	}
 
 	var rows []doris.ConnectionRow
 	var source string
@@ -86,16 +55,59 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 	}
 	if err != nil {
-		s.logger.Warn("doris list connections", zap.Error(err))
+		if ip != "" {
+			s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
+			return
+		}
+		if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if s != nil && s.logger != nil {
+			s.logger.Warn("analytics list connections",
+				zap.String("source", source),
+				zap.String("tenant_id", tenantID.String()),
+				zap.String("node_id", nodeID),
+				zap.Error(err),
+			)
+		}
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	if source == analyticsSourceSmallPending {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data":       []doris.ConnectionRow{},
+			"source":     source,
+			"degraded":   true,
+			"guardrails": []string{"Connection evidence is not ready yet. Retry shortly."},
+		})
+		return
+	}
+
 	rows = sanitizeConnectionThreatRows(rows)
 	resp := map[string]any{"data": rows}
 	if source != analyticsSourceDoris {
 		resp["source"] = source
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) writeConnectionsReadUnavailable(w http.ResponseWriter, source, tenantID, ip, nodeID string, err error) {
+	if s != nil && s.logger != nil {
+		s.logger.Warn("connection analytics read unavailable",
+			zap.String("source", source),
+			zap.String("tenant_id", tenantID),
+			zap.String("ip", ip),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":       []doris.ConnectionRow{},
+		"source":     source,
+		"degraded":   true,
+		"guardrails": []string{"Connection evidence unavailable. Check analytics health and retry."},
+	})
 }
 
 // handleConnectionDetail returns the connection-level record + correlated

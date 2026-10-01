@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useApiClient } from './useApiClient';
-import type { ConnectionDetail, ConnectionRow } from '../lib/api';
+import type { ConnectionDetail, ConnectionListResult } from '../lib/api';
 
 export interface UseConnectionsByIpParams {
   tenantId?: string;
@@ -18,10 +18,11 @@ export function useConnectionsByIp({
   limit = 250,
 }: UseConnectionsByIpParams) {
   const api = useApiClient();
-  return useQuery<ConnectionRow[]>({
+  return useQuery<ConnectionListResult>({
     queryKey: ['connections.ip', tenantId, ip, since, until, limit],
-    queryFn: () => api.listConnections({ tenantId, ip, since, until, limit }),
-    enabled: !!ip,
+    queryFn: () => api.listConnectionsDetailed({ tenantId, ip, since, until, limit }),
+    enabled: !!tenantId && !!ip,
+    retry: false,
   });
 }
 

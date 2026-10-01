@@ -68,6 +68,7 @@ export function EntityDetail(): JSX.Element {
   useEffect(() => {
     setAccumulated([]);
     setCursor(undefined);
+    setTab(safeType === 'ip' ? 'connections' : 'timeline');
   }, [safeType, id]);
 
   // Accumulate lifecycle items as pages arrive.
@@ -91,8 +92,13 @@ export function EntityDetail(): JSX.Element {
         since: ipTimelineSince,
         limit: 100,
       }),
-    enabled: safeType === 'ip' && !!id && !!currentTenantId,
+    enabled:
+      safeType === 'ip' &&
+      !!id &&
+      !!currentTenantId &&
+      (tab === 'timeline' || tab === 'raw'),
     staleTime: 30_000,
+    retry: false,
   });
 
   const relatedQ = useQuery<EntityRelated>({
@@ -130,6 +136,14 @@ export function EntityDetail(): JSX.Element {
   const lifecycleLoading =
     lifecycleQ.isLoading ||
     (safeType === 'ip' && ipTimelineQ.isLoading && lifecycleItems.length === 0);
+  const ipTimelineNotice =
+    safeType === 'ip'
+      ? ipTimelineQ.error
+        ? ipTimelineErrorMessage(ipTimelineQ.error)
+        : ipTimelineQ.data?.degraded
+          ? ipTimelineQ.data.guardrails?.slice(-1)[0] ?? 'Timeline evidence unavailable.'
+          : null
+      : null;
   const headerDetail = useMemo(
     () => detailWithLifecycleEventCount(detailQ.data, lifecycleItems),
     [detailQ.data, lifecycleItems],
@@ -236,9 +250,9 @@ export function EntityDetail(): JSX.Element {
                 </TabsContent>
               )}
               <TabsContent value="timeline">
-                {safeType === 'ip' && ipTimelineQ.error ? (
+                {ipTimelineNotice ? (
                   <Alert variant="warning" className="mb-3">
-                    {ipTimelineErrorMessage(ipTimelineQ.error)}
+                    {ipTimelineNotice}
                   </Alert>
                 ) : null}
                 <InvestigateTimeline
@@ -249,9 +263,9 @@ export function EntityDetail(): JSX.Element {
                 />
               </TabsContent>
               <TabsContent value="raw">
-                {safeType === 'ip' && ipTimelineQ.error ? (
+                {ipTimelineNotice ? (
                   <Alert variant="warning" className="mb-3">
-                    {ipTimelineErrorMessage(ipTimelineQ.error)}
+                    {ipTimelineNotice}
                   </Alert>
                 ) : null}
                 {lifecycleItems.length === 0 ? (

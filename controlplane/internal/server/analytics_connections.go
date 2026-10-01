@@ -21,6 +21,9 @@ func (s *Server) listAnalyticsConnectionsForIP(ctx context.Context, tenantID, ip
 		rows, err := s.dorisClient.ListConnectionsForIP(ctx, tenantID, ip, since, until, limit)
 		return rows, analyticsSourceDoris, err
 	}
+	if effectiveAnalyticsMode(s.cfg) == analyticsModeOLAP {
+		return nil, analyticsSourceDoris, errInvestigationAnalyticsUnavailable
+	}
 	if s.localAnalytics != nil {
 		rows, err := s.localAnalytics.ListConnectionsForIP(ctx, tenantID, ip, since, until, limit)
 		return rows, analyticsSourceSmall, err
@@ -36,6 +39,9 @@ func (s *Server) listAnalyticsConnectionsForNode(ctx context.Context, tenantID, 
 		rows, err := s.dorisClient.ListConnectionsForNode(ctx, tenantID, nodeID, since, until, limit, openOnly, externalOnly)
 		return rows, analyticsSourceDoris, err
 	}
+	if effectiveAnalyticsMode(s.cfg) == analyticsModeOLAP {
+		return nil, analyticsSourceDoris, errInvestigationAnalyticsUnavailable
+	}
 	if s.localAnalytics != nil {
 		rows, err := s.localAnalytics.ListConnectionsForNode(ctx, tenantID, nodeID, since, until, limit, openOnly, externalOnly)
 		return rows, analyticsSourceSmall, err
@@ -50,6 +56,9 @@ func (s *Server) listAnalyticsConnectionsForTenant(ctx context.Context, tenantID
 	if s.usesDorisAnalytics() {
 		rows, err := s.dorisClient.ListConnectionsForTenant(ctx, tenantID, since, until, limit, externalOnly)
 		return rows, analyticsSourceDoris, err
+	}
+	if effectiveAnalyticsMode(s.cfg) == analyticsModeOLAP {
+		return nil, analyticsSourceDoris, errInvestigationAnalyticsUnavailable
 	}
 	if s.localAnalytics != nil {
 		rows, err := s.localAnalytics.ListConnectionsForTenant(ctx, tenantID, since, until, limit, externalOnly)

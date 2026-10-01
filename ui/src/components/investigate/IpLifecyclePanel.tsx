@@ -38,9 +38,20 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const query = useConnectionsByIp({ tenantId: currentTenantId ?? undefined, ip, since });
-  const rows = useMemo(() => query.data ?? [], [query.data]);
+  const rows = useMemo(() => query.data?.rows ?? [], [query.data?.rows]);
+  const degradedMessage = query.data?.degraded
+    ? query.data.guardrails.slice(-1)[0] ?? 'Connection evidence unavailable.'
+    : null;
+  const waitingForTenant = !currentTenantId;
+  const loading = waitingForTenant || query.isLoading;
+  const evidenceUnavailable = Boolean(query.error || query.data?.degraded);
 
-  const { data: allNodes } = useNodes({ tenantId: currentTenantId ?? undefined, limit: 500, offset: 0 });
+  const { data: allNodes } = useNodes({
+    tenantId: currentTenantId ?? undefined,
+    limit: 500,
+    offset: 0,
+    enabled: !!currentTenantId,
+  });
   const nodesById = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);
 
   const totals = useMemo(() => {
@@ -106,13 +117,29 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile label="Lifecycles" value={String(totals.total)} tone="brand" />
-        <KpiTile label="Distinct nodes" value={String(totals.nodes)} tone="info" />
-        <KpiTile label="Bytes in / out" value={`${formatBytes(totals.bytesIn)} / ${formatBytes(totals.bytesOut)}`} tone="accent" />
+        <KpiTile
+          label="Lifecycles"
+          value={evidenceUnavailable ? '—' : String(totals.total)}
+          tone="brand"
+          loading={loading}
+        />
+        <KpiTile
+          label="Distinct nodes"
+          value={evidenceUnavailable ? '—' : String(totals.nodes)}
+          tone="info"
+          loading={loading}
+        />
+        <KpiTile
+          label="Bytes in / out"
+          value={evidenceUnavailable ? '—' : `${formatBytes(totals.bytesIn)} / ${formatBytes(totals.bytesOut)}`}
+          tone="accent"
+          loading={loading}
+        />
         <KpiTile
           label="Threat hits"
-          value={String(totals.threats)}
-          tone={totals.threats > 0 ? 'critical' : 'healthy'}
+          value={evidenceUnavailable ? '—' : String(totals.threats)}
+          tone={evidenceUnavailable ? 'unknown' : totals.threats > 0 ? 'critical' : 'healthy'}
+          loading={loading}
         />
       </div>
 
@@ -146,14 +173,15 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
           </div>
         }
       >
-        {query.isLoading && <Loader size="md" label="Loading lifecycles…" />}
+        {loading && <Loader size="md" label="Loading lifecycles…" />}
         {query.error && <Alert variant="critical">{(query.error as Error).message}</Alert>}
-        {!query.isLoading && !query.error && rows.length === 0 ? (
+        {degradedMessage && <Alert variant="warning">{degradedMessage}</Alert>}
+        {!loading && !query.error && !query.data?.degraded && rows.length === 0 ? (
           <EmptyState
             title="No lifecycles found"
             description={`No connections involving ${ip} in the selected time window.`}
           />
-        ) : !query.error ? (
+        ) : !loading && !query.error && !query.data?.degraded ? (
           <>
             <TimelineStrip groupedByNode={groupedByNode} nodesById={nodesById} since={since} />
             <table className="mt-4 w-full text-left text-sm">

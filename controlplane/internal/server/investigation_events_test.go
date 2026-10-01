@@ -145,8 +145,68 @@ func TestTimelineBuildHandlerSmallAnalyticsPending(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode pending timeline: %v", err)
 	}
-	if resp.Source != "small-analytics-pending" || len(resp.Items) != 0 || len(resp.Guardrails) == 0 {
+	if !resp.Degraded || resp.Source != analyticsSourceSmallPending || len(resp.Items) != 0 || len(resp.Guardrails) == 0 {
 		t.Fatalf("unexpected pending timeline: %+v", resp)
+	}
+}
+
+func TestTimelineBuildKeepsNonIPOLAPUnavailableLoud(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	srv := &Server{cfg: &config.Config{Analytics: config.AnalyticsConfig{Mode: "olap"}}}
+	body := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"process",
+		"entity_id":"nginx"
+	}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", body)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	srv.handleTimelineBuild(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected non-IP OLAP unavailable 503 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTimelineBuildReturnsDegradedResponseWhenAnalyticsReadFails(t *testing.T) {
+	t.Parallel()
+
+	store, err := smallanalytics.Open(context.Background(), smallanalytics.Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open small analytics: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close small analytics: %v", err)
+	}
+
+	tenantID := uuid.New()
+	srv := &Server{
+		cfg:            &config.Config{Analytics: config.AnalyticsConfig{Mode: "small"}},
+		localAnalytics: store,
+	}
+	body := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"ip",
+		"entity_id":"8.8.8.8"
+	}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", body)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	srv.handleTimelineBuild(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected degraded 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timelineBuildResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Degraded || resp.Source != analyticsSourceSmall || len(resp.Items) != 0 || len(resp.Guardrails) == 0 {
+		t.Fatalf("unexpected degraded timeline response: %+v", resp)
 	}
 }
 

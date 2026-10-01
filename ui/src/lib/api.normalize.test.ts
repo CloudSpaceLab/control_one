@@ -191,6 +191,31 @@ describe('APIClient.listConnectionsDetailed', () => {
       guardrails: ['Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up.'],
     });
   });
+
+  it('preserves degraded evidence metadata', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [],
+          source: 'small-analytics',
+          degraded: true,
+          guardrails: ['Connection evidence unavailable. Check analytics health and retry.'],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new APIClient({ baseUrl: 'https://cp.example.com', token: 'session-token' });
+    const result = await client.listConnectionsDetailed({ tenantId: 'tenant-1', ip: '203.0.113.10' });
+
+    expect(result).toEqual({
+      rows: [],
+      source: 'small-analytics',
+      degraded: true,
+      guardrails: ['Connection evidence unavailable. Check analytics health and retry.'],
+    });
+  });
 });
 
 describe('APIClient.buildInvestigationTimeline', () => {

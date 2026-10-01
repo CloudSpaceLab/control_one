@@ -861,6 +861,7 @@ export interface InvestigationTimelineResult {
   items: InvestigationTimelineItem[];
   citations?: Array<Record<string, unknown>>;
   guardrails?: string[];
+  degraded?: boolean;
 }
 
 export interface RelatedEntity {
@@ -5361,6 +5362,7 @@ export class APIClient {
         data?: Array<ConnectionRow | RawConnectionRow>;
         source?: string;
         guardrails?: string[];
+        degraded?: boolean;
       }
     >(`/api/v1/connections${q ? `?${q}` : ""}`);
     const rows = Array.isArray(resp) ? resp : resp.data ?? [];
@@ -5368,6 +5370,7 @@ export class APIClient {
       rows: rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id)),
       source: Array.isArray(resp) ? undefined : resp.source,
       guardrails: Array.isArray(resp) ? [] : resp.guardrails ?? [],
+      degraded: Array.isArray(resp) ? undefined : resp.degraded || undefined,
     };
   }
 
@@ -7111,6 +7114,7 @@ export interface ConnectionListResult {
   rows: ConnectionRow[];
   source?: string;
   guardrails: string[];
+  degraded?: boolean;
 }
 
 interface RawConnectionDetail {

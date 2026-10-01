@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 )
@@ -161,6 +162,7 @@ type timelineBuildResponse struct {
 	Items      []timelineItemResponse `json:"items"`
 	Citations  []eventCitation        `json:"citations"`
 	Guardrails []string               `json:"guardrails,omitempty"`
+	Degraded   bool                   `json:"degraded,omitempty"`
 }
 
 func (s *Server) handleEventsQuery(w http.ResponseWriter, r *http.Request) {
@@ -283,6 +285,18 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	responseScope := map[string]string{}
+	for key, value := range map[string]string{
+		"correlation_id": strings.TrimSpace(req.CorrelationID),
+		"conn_id":        strings.TrimSpace(req.ConnID),
+		"node_id":        strings.TrimSpace(req.NodeID),
+		"entity_type":    entityType,
+		"entity_id":      entityID,
+	} {
+		if value != "" {
+			responseScope[key] = value
+		}
+	}
 	rows, source, backendGuardrails, err := s.buildInvestigationTimeline(r.Context(), doris.TimelineBuildParams{
 		TenantID:      scope.TenantID.String(),
 		CorrelationID: strings.TrimSpace(req.CorrelationID),
@@ -295,11 +309,36 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Limit:         scope.Limit,
 	})
 	if err != nil {
-		if errors.Is(err, errInvestigationAnalyticsUnavailable) {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		if entityType != "ip" {
+			if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if s != nil && s.logger != nil {
+			s.logger.Warn("timeline analytics read unavailable",
+				zap.String("source", source),
+				zap.String("tenant_id", scope.TenantID.String()),
+				zap.String("entity_type", entityType),
+				zap.String("entity_id", entityID),
+				zap.Error(err),
+			)
+		}
+		guardrails = append(guardrails, backendGuardrails...)
+		guardrails = append(guardrails, "Timeline evidence unavailable. Check analytics health and retry.")
+		writeJSON(w, http.StatusOK, timelineBuildResponse{
+			Source:     source,
+			TenantID:   scope.TenantID.String(),
+			Since:      scope.Since,
+			Until:      scope.Until,
+			Scope:      responseScope,
+			Items:      []timelineItemResponse{},
+			Citations:  []eventCitation{},
+			Guardrails: guardrails,
+			Degraded:   true,
+		})
 		return
 	}
 	guardrails = append(guardrails, backendGuardrails...)
@@ -316,18 +355,6 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 			guardrails = append(guardrails, "db query text redacted by tenant capture policy")
 		}
 	}
-	responseScope := map[string]string{}
-	for key, value := range map[string]string{
-		"correlation_id": strings.TrimSpace(req.CorrelationID),
-		"conn_id":        strings.TrimSpace(req.ConnID),
-		"node_id":        strings.TrimSpace(req.NodeID),
-		"entity_type":    entityType,
-		"entity_id":      entityID,
-	} {
-		if value != "" {
-			responseScope[key] = value
-		}
-	}
 	writeJSON(w, http.StatusOK, timelineBuildResponse{
 		Source:     source,
 		TenantID:   scope.TenantID.String(),
@@ -337,6 +364,7 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Items:      items,
 		Citations:  citations,
 		Guardrails: guardrails,
+		Degraded:   source == analyticsSourceSmallPending,
 	})
 }
 
