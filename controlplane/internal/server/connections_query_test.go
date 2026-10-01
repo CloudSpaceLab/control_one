@@ -50,7 +50,6 @@ func TestSanitizeConnectionThreatRowClearsInternalBogonLabels(t *testing.T) {
 	}
 }
 
-
 func TestConnectionsListReturnsDegradedResponseWhenAnalyticsReadFails(t *testing.T) {
 	t.Parallel()
 
