@@ -1028,11 +1028,15 @@ func (s *Server) handleIPBlockStatus(w http.ResponseWriter, r *http.Request, ip 
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	tenantID, ok := tenantFromQuery(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	store, ok := s.store.(ipResponseStore)
@@ -1206,6 +1210,9 @@ func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, ent
 
 	tenantID, ok := tenantFromQuery(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	if entityType == "ip" && action == "block" {
