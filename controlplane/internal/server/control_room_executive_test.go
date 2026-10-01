@@ -216,6 +216,66 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 	}
 }
 
+func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	now := time.Now().UTC()
+	base.actionPlans = map[uuid.UUID]storage.ActionPlan{}
+	base.actionReceipts = map[uuid.UUID][]storage.ActionReceipt{}
+
+	for i := 0; i < 30; i++ {
+		planID := uuid.New()
+		createdAt := now.Add(-time.Duration(i+1) * time.Minute)
+		base.actionPlans[planID] = storage.ActionPlan{
+			ID:         planID,
+			TenantID:   tenantID,
+			Domain:     "remediation",
+			ActionKind: "remediation.execute",
+			State:      storage.ActionPlanStateSucceeded,
+			Risk:       "medium",
+			Diff:       map[string]any{"auto_triggered": true},
+			SourceRef:  map[string]any{},
+			CreatedAt:  createdAt,
+			UpdatedAt:  createdAt,
+		}
+		base.actionReceipts[planID] = []storage.ActionReceipt{{
+			ID:           uuid.New(),
+			ActionPlanID: planID,
+			TenantID:     tenantID,
+			State:        storage.ActionPlanStateSucceeded,
+			Receipt:      map[string]any{"success": true},
+			Verification: map[string]any{"script_success": true},
+			CreatedAt:    createdAt,
+		}}
+	}
+
+	// Manual success is deliberately excluded from the automatic metric.
+	manualID := uuid.New()
+	base.actionPlans[manualID] = storage.ActionPlan{
+		ID:         manualID,
+		TenantID:   tenantID,
+		Domain:     "remediation",
+		ActionKind: "remediation.execute",
+		State:      storage.ActionPlanStateSucceeded,
+		Risk:       "medium",
+		Diff:       map[string]any{"auto_triggered": false},
+		SourceRef:  map[string]any{},
+		CreatedAt:  now.Add(-time.Minute),
+		UpdatedAt:  now.Add(-time.Minute),
+	}
+
+	got, failed, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour))
+	if !available {
+		t.Fatal("automatic response aggregation should be available")
+	}
+	if got.HandledAutomatically != 30 || got.Remediated != 30 {
+		t.Fatalf("automatic response counts=%+v, want 30 verified remediations", got)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("unexpected failed automatic plans: %#v", failed)
+	}
+}
+
 func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) {
 	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
