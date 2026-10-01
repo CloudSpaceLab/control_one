@@ -313,6 +313,8 @@ func (s *Store) GetExecutiveAttentionSummary(
 				b.score,
 				b.created_at,
 				CASE
+					WHEN b.reason NOT LIKE 'Correlation response:%'
+						THEN NULL
 					WHEN substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
 						THEN NULL
 					ELSE substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
@@ -324,6 +326,9 @@ func (s *Store) GetExecutiveAttentionSummary(
 		verified_handled_alerts AS (
 			SELECT DISTINCT
 				CASE
+					WHEN COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+						NOT LIKE 'Correlation response:%'
+						THEN NULL
 					WHEN substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
 						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
 						THEN NULL
