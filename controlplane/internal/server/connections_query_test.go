@@ -50,6 +50,38 @@ func TestSanitizeConnectionThreatRowClearsInternalBogonLabels(t *testing.T) {
 	}
 }
 
+func TestConnectionsListMarksPendingProjectionDegraded(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	srv := &Server{cfg: &config.Config{Analytics: config.AnalyticsConfig{Mode: "small"}}}
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/connections?tenant_id="+tenantID.String()+"&ip=8.8.8.8",
+		nil,
+	)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	srv.handleConnectionsList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected pending 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data       []doris.ConnectionRow `json:"data"`
+		Source     string                `json:"source"`
+		Degraded   bool                  `json:"degraded"`
+		Guardrails []string              `json:"guardrails"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Degraded || resp.Source != analyticsSourceSmallPending || len(resp.Data) != 0 || len(resp.Guardrails) == 0 {
+		t.Fatalf("unexpected pending response: %+v", resp)
+	}
+}
+
 func TestConnectionsListReturnsDegradedResponseWhenAnalyticsReadFails(t *testing.T) {
 	t.Parallel()
 
