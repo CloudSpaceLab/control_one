@@ -19,6 +19,7 @@ func TestGetRuleViolationSummaryUsesExactTenantScopedTotals(t *testing.T) {
 	require.NoError(t, err)
 
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	until := since.Add(24 * time.Hour)
 	prevSince := since.Add(-24 * time.Hour)
 	prevUntil := since
 	ruleCritical := uuid.New()
@@ -44,8 +45,10 @@ func TestGetRuleViolationSummaryUsesExactTenantScopedTotals(t *testing.T) {
 
 	// A noisy second tenant must never inflate the executive total.
 	insert(otherTenant.ID, uuid.New(), "log", "critical", 40, since.Add(time.Hour))
+	// A future-skewed row for the same tenant must not leak into the selected period.
+	insert(tenant.ID, uuid.New(), "log", "critical", 1, until.Add(time.Minute))
 
-	summary, err := store.GetRuleViolationSummary(ctx, tenant.ID, since, prevSince, prevUntil, 2)
+	summary, err := store.GetRuleViolationSummary(ctx, tenant.ID, since, until, prevSince, prevUntil, 2)
 	require.NoError(t, err)
 	require.Equal(t, 30, summary.Total)
 	require.Equal(t, 14, summary.Critical)
