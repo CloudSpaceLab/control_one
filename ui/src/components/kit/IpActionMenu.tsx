@@ -132,6 +132,7 @@ export function IpActionMenu({
     }
   };
 
+  const unblockInProgress = status?.state === 'unblocking';
   const effectiveBlocked = !!status?.active && status.state !== 'failed';
 
   return (
@@ -169,7 +170,12 @@ export function IpActionMenu({
 
         <DropdownMenuSeparator />
 
-        {!effectiveBlocked ? (
+        {unblockInProgress ? (
+          <DropdownMenuItem disabled>
+            <ShieldOff className="mr-2 h-4 w-4" />
+            <span>Allow in progress</span>
+          </DropdownMenuItem>
+        ) : !effectiveBlocked ? (
           <>
             <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(BLOCK_AFFECTED)}>
               <Shield className="mr-2 h-4 w-4" />
@@ -237,6 +243,8 @@ function blockStatusLabel(status: IPBlockStatus): string {
       return 'Blocking';
     case 'blocked':
       return 'Blocked';
+    case 'unblocking':
+      return 'Unblocking';
     case 'partial':
       return 'Partial';
     case 'failed':
@@ -252,6 +260,7 @@ function blockStatusTone(status: IPBlockStatus): StateTone {
     case 'blocked':
       return 'critical';
     case 'blocking':
+    case 'unblocking':
       return 'warning';
     case 'partial':
     case 'failed':
@@ -267,6 +276,7 @@ function blockStatusDetail(status: IPBlockStatus): string {
   const scope = status.scope === 'fleet' ? 'Fleet-wide' : 'Affected nodes';
   const coverage = `${status.nodes_applied}/${status.target_nodes} applied`;
   const pending = status.nodes_pending > 0 ? ` · ${status.nodes_pending} pending` : '';
+  const removing = status.nodes_removing > 0 ? ` · ${status.nodes_removing} removing` : '';
   const failed = status.nodes_failed > 0 ? ` · ${status.nodes_failed} failed` : '';
-  return `${scope} · ${coverage}${pending}${failed}`;
+  return `${scope} · ${coverage}${pending}${removing}${failed}`;
 }
