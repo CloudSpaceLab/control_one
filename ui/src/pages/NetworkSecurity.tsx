@@ -390,7 +390,7 @@ function IPBehaviorPanel(): JSX.Element {
           <div className="rounded border border-border p-3">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-medium">Unusual now</div>
+                <div className="text-sm font-medium">Current findings</div>
                 <div className="text-xs text-text-muted">100% confidence findings open critical alerts automatically.</div>
               </div>
               <StatusTag tone={rankedCountries.some((row) => row.score >= 100) ? 'critical' : rankedCountries.some((row) => row.score >= 70) ? 'warning' : 'healthy'}>
