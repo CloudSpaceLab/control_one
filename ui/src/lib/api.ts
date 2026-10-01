@@ -5225,6 +5225,7 @@ export class APIClient {
         data?: Array<ConnectionRow | RawConnectionRow>;
         source?: string;
         guardrails?: string[];
+        degraded?: boolean;
       }
     >(`/api/v1/connections${q ? `?${q}` : ""}`);
     const rows = Array.isArray(resp) ? resp : resp.data ?? [];
@@ -5232,6 +5233,7 @@ export class APIClient {
       rows: rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id)),
       source: Array.isArray(resp) ? undefined : resp.source,
       guardrails: Array.isArray(resp) ? [] : resp.guardrails ?? [],
+      degraded: Array.isArray(resp) ? false : resp.degraded ?? false,
     };
   }
 
