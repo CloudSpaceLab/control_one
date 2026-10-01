@@ -168,7 +168,7 @@ export function WebserverAutoControl(): JSX.Element {
   const cancelPendingAction = () => setPendingAction(null);
 
   if (!currentTenantId) {
-    return <EmptyState title="Select a tenant" description="Choose a tenant to view webserver auto-control." />;
+    return <EmptyState title="Select a tenant" description="Choose a tenant to view webserver controls." />;
   }
 
   const pendingKey = pendingAction ? webserverActionKey(pendingAction.instance, pendingAction.mode) : '';
