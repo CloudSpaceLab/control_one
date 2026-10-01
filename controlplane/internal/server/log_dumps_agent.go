@@ -162,6 +162,11 @@ func (s *Server) handleAgentLogDumpChunk(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
+	generation, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-Log-Dump-Claim-Generation")), 10, 64)
+	if err != nil || generation < 1 {
+		http.Error(w, "valid X-Log-Dump-Claim-Generation header is required", http.StatusBadRequest)
+		return
+	}
 	expectedSHA := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Chunk-SHA256")))
 	if len(expectedSHA) != sha256.Size*2 {
 		http.Error(w, "valid X-Chunk-SHA256 header is required", http.StatusBadRequest)
@@ -186,7 +191,7 @@ func (s *Server) handleAgentLogDumpChunk(w http.ResponseWriter, r *http.Request,
 	}()
 	idempotent, err := store.PutLogDumpChunk(r.Context(), storage.LogDumpChunk{
 		DumpID: dumpID, TenantID: tenantID, NodeID: nodeID,
-		JobID: uuid.NullUUID{UUID: jobID, Valid: true}, Ordinal: ordinal,
+		JobID: uuid.NullUUID{UUID: jobID, Valid: true}, ClaimGeneration: generation, Ordinal: ordinal,
 		SHA256: actualSHA, SizeBytes: size, TempPath: path, CreatedAt: now,
 	}, tokenSHA, now)
 	if err != nil {

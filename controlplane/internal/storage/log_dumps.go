@@ -313,7 +313,8 @@ func (s *Store) ListPendingNodeLogDumps(ctx context.Context, nodeID uuid.UUID, n
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+logDumpSelect+`
 		FROM agent_log_dumps
-		WHERE node_id=$1 AND source='node_agent' AND status='requested' AND expires_at>$2
+		WHERE node_id=$1 AND source='node_agent' AND expires_at>$2
+		  AND (status='requested' OR (status='capturing' AND claim_expires_at<=$2))
 		ORDER BY created_at ASC LIMIT $3`, nodeID, now, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list pending node log dumps: %w", err)
