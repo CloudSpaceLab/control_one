@@ -38,7 +38,10 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const query = useConnectionsByIp({ tenantId: currentTenantId ?? undefined, ip, since });
-  const rows = useMemo(() => query.data ?? [], [query.data]);
+  const rows = useMemo(() => query.data?.rows ?? [], [query.data?.rows]);
+  const degradedMessage = query.data?.degraded
+    ? query.data.guardrails.slice(-1)[0] ?? 'Connection evidence unavailable.'
+    : null;
 
   const { data: allNodes } = useNodes({ tenantId: currentTenantId ?? undefined, limit: 500, offset: 0 });
   const nodesById = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);
@@ -148,12 +151,13 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
       >
         {query.isLoading && <Loader size="md" label="Loading lifecycles…" />}
         {query.error && <Alert variant="critical">{(query.error as Error).message}</Alert>}
-        {!query.isLoading && !query.error && rows.length === 0 ? (
+        {degradedMessage && <Alert variant="warning">{degradedMessage}</Alert>}
+        {!query.isLoading && !query.error && !query.data?.degraded && rows.length === 0 ? (
           <EmptyState
             title="No lifecycles found"
             description={`No connections involving ${ip} in the selected time window.`}
           />
-        ) : !query.error ? (
+        ) : !query.error && !query.data?.degraded ? (
           <>
             <TimelineStrip groupedByNode={groupedByNode} nodesById={nodesById} since={since} />
             <table className="mt-4 w-full text-left text-sm">
