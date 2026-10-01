@@ -504,7 +504,25 @@ func (s *Server) controlRoomExecutiveAttention(
 		available = false
 		s.logger.Warn("control room executive acked alerts", zap.Error(err))
 	}
-	out.Reviews = controlRoomNonNegative(openTotal + ackedTotal - len(linkedReviewAlerts))
+	excludedReviewAlerts := make(map[uuid.UUID]storage.Alert, len(linkedReviewAlerts)+len(handledAlertIDs))
+	for id, alert := range linkedReviewAlerts {
+		excludedReviewAlerts[id] = alert
+	}
+	for id := range handledAlertIDs {
+		if _, exists := excludedReviewAlerts[id]; exists {
+			continue
+		}
+		alert, err := s.store.GetAlert(ctx, id)
+		if err != nil {
+			available = false
+			s.logger.Warn("control room executive handled alert", zap.Error(err), zap.String("alert_id", id.String()))
+			continue
+		}
+		if alert != nil && (alert.State == "open" || alert.State == "acked") {
+			excludedReviewAlerts[id] = *alert
+		}
+	}
+	out.Reviews = controlRoomNonNegative(openTotal + ackedTotal - len(excludedReviewAlerts))
 
 	_, openCritical, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "open", Severity: "critical"}, 1, 0)
 	if err != nil {
@@ -515,7 +533,7 @@ func (s *Server) controlRoomExecutiveAttention(
 		available = false
 	}
 	linkedCritical := 0
-	for _, alert := range linkedReviewAlerts {
+	for _, alert := range excludedReviewAlerts {
 		if strings.EqualFold(strings.TrimSpace(alert.Severity), "critical") {
 			linkedCritical++
 		}
@@ -523,7 +541,7 @@ func (s *Server) controlRoomExecutiveAttention(
 	out.Critical = controlRoomNonNegative(openCritical + ackedCritical - linkedCritical)
 
 	for _, alert := range append(openRows, ackedRows...) {
-		if _, linked := linkedReviewAlerts[alert.ID]; linked {
+		if _, excluded := excludedReviewAlerts[alert.ID]; excluded {
 			continue
 		}
 		out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
