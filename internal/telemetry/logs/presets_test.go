@@ -90,7 +90,6 @@ func TestExplicitOfflineCatalogPresetResolvesWithoutPackageInit(t *testing.T) {
 	}
 }
 
-
 func TestExplicitAWSCloudTrailPresetCarriesContentPackMetadata(t *testing.T) {
 	sources := PrepareSources([]config.LogSourceConfig{{Program: "aws-cloudtrail"}})
 	if len(sources) != 1 {
