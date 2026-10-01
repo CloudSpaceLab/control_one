@@ -391,6 +391,12 @@ export interface ControlRoomOverview {
 export type ExecutiveHealthState = "healthy" | "degraded" | "critical" | "unknown";
 export type ExecutiveAttentionKind = "review" | "approval" | "intervention";
 
+export type ExecutivePredictiveHealthState =
+  | "available"
+  | "calibrating"
+  | "stale"
+  | "unavailable";
+
 export interface ControlRoomExecutiveGroup {
   name: string;
   state: ExecutiveHealthState;
@@ -399,7 +405,20 @@ export interface ControlRoomExecutiveGroup {
   nodes_stale: number;
   nodes_offline: number;
   intentionally_isolated: number;
+  predictive_risk?: "high" | "critical" | string;
+  predictive_nodes_at_risk: number;
   drilldown: string;
+}
+
+export interface ControlRoomExecutivePredictiveHealth {
+  state: ExecutivePredictiveHealthState;
+  freshness_sla_seconds: number;
+  scored_nodes: number;
+  fresh_nodes: number;
+  calibrating_nodes: number;
+  stale_nodes: number;
+  at_risk_nodes: number;
+  latest_computed_at?: string;
 }
 
 export interface ControlRoomExecutiveEstate {
@@ -410,6 +429,7 @@ export interface ControlRoomExecutiveEstate {
   groups_unknown: number;
   nodes_total: number;
   nodes_healthy: number;
+  predictive: ControlRoomExecutivePredictiveHealth;
   groups: ControlRoomExecutiveGroup[];
 }
 
