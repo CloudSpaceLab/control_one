@@ -181,7 +181,7 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
             title="No lifecycles found"
             description={`No connections involving ${ip} in the selected time window.`}
           />
-        ) : !query.error && !query.data?.degraded ? (
+        ) : !loading && !query.error && !query.data?.degraded ? (
           <>
             <TimelineStrip groupedByNode={groupedByNode} nodesById={nodesById} since={since} />
             <table className="mt-4 w-full text-left text-sm">
