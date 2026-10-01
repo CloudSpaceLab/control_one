@@ -1362,16 +1362,20 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 		}
 		return
 	}
-	if status, msg := s.blockProposalSafetyViolation(ctx, tenantID, b.serverGroup); status != 0 {
-		if s.logger != nil {
-			s.logger.Warn("skip automatic IP block: safety gate", zap.Int("status", status), zap.String("reason", msg), zap.String("ip_cidr", cidr))
-		}
-		return
-	}
 
 	scope := strings.ToLower(strings.TrimSpace(cfg.DefaultIPBlockScope))
 	if scope != "fleet" {
 		scope = "affected"
+	}
+	policyServerGroup := strings.TrimSpace(b.serverGroup)
+	if scope == "fleet" {
+		policyServerGroup = ""
+	}
+	if status, msg := s.blockProposalSafetyViolation(ctx, tenantID, policyServerGroup); status != 0 {
+		if s.logger != nil {
+			s.logger.Warn("skip automatic IP block: safety gate", zap.Int("status", status), zap.String("reason", msg), zap.String("ip_cidr", cidr))
+		}
+		return
 	}
 	ttlSeconds := cfg.DefaultIPBlockTTLSeconds
 	if ttlSeconds <= 0 {
@@ -1442,7 +1446,7 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 		IPCIDR:      cidr,
 		Scope:       scope,
 		TargetType:  targetType,
-		ServerGroup: b.serverGroup,
+		ServerGroup: policyServerGroup,
 		App:         b.app,
 		Enforcement: "firewall",
 		Reason:      reason,
@@ -1515,11 +1519,11 @@ func (s *Server) autoBlockTargets(ctx context.Context, tenantID, nodeID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
-	entry := &storage.IPBlocklistEntry{ServerGroup: serverGroup}
-	active = filterNodesForBlockProposalServerGroup(active, entry)
 	if scope == "fleet" {
 		return active, nil
 	}
+	entry := &storage.IPBlocklistEntry{ServerGroup: serverGroup}
+	active = filterNodesForBlockProposalServerGroup(active, entry)
 
 	affectedIDs, err := s.resolveAffectedNodesForIP(ctx, tenantID.String(), ip)
 	if err != nil {
