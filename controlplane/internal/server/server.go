@@ -1225,6 +1225,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/rule-triggers", s.handleRuleTriggersCollection)
 	s.baseRouter.HandleFunc("/api/v1/dashboard/overview", s.handleDashboardOverview)
 	s.baseRouter.HandleFunc("/api/v1/control-room/overview", s.handleControlRoomOverview)
+	s.baseRouter.HandleFunc("/api/v1/control-room/executive-overview", s.handleControlRoomExecutiveOverview)
 	s.baseRouter.HandleFunc("/api/v1/coverage/", s.handleCoverageSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/content-packs", s.handleContentPacksCollection)
 	s.baseRouter.HandleFunc("/api/v1/content-packs/", s.handleContentPackSubroutes)
