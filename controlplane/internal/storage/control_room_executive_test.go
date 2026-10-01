@@ -162,7 +162,7 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	proposal, err := store.CreateIPBlocklistEntry(ctx, CreateIPBlocklistEntryParams{
 		TenantID: tenant.ID, IPCIDR: "203.0.113.10/32",
 		Reason: "Correlation response: rule=Known bad source; alert_id=" + pendingAlert.ID.String() + "; mode=proposal",
-		Score: 80,
+		Score:  80,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "proposed", proposal.Status)
@@ -177,14 +177,14 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 		State: ActionPlanStateProposed, Risk: "high",
 		Diff: map[string]any{
 			"auto_triggered": true,
-			"reason": "Correlation response: rule=Auto block; alert_id=" + handledAlert.ID.String() + "; mode=auto_temporary_block",
+			"reason":         "Correlation response: rule=Auto block; alert_id=" + handledAlert.ID.String() + "; mode=auto_temporary_block",
 		},
 	})
 	require.NoError(t, err)
 	_, err = store.CreateActionReceipt(ctx, CreateActionReceiptParams{
 		ActionPlanID: handledPlan.ID, TenantID: tenant.ID,
-		State: ActionPlanStateSucceeded,
-		Receipt: map[string]any{"success": true},
+		State:        ActionPlanStateSucceeded,
+		Receipt:      map[string]any{"success": true},
 		Verification: map[string]any{"applied": true},
 	})
 	require.NoError(t, err)
