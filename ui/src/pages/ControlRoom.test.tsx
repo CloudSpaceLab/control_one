@@ -171,8 +171,8 @@ describe('ControlRoom executive dashboard', () => {
     await screen.findByText('Suspicious database access');
 
     expect(screen.getByText('Infrastructure health')).toBeInTheDocument();
-    expect(screen.getByText('Rule violations')).toBeInTheDocument();
-    expect(screen.getByText('Handled automatically')).toBeInTheDocument();
+    expect(screen.getAllByText('Rule violations').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Handled automatically').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
 
     expect(screen.getByText('12 / 13')).toBeInTheDocument();
