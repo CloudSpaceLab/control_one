@@ -6610,6 +6610,7 @@ export interface ActiveBlock {
   NodesApplied: number;
   NodesFailed: number;
   NodesPending: number;
+  NodesRemoving: number;
   NodesRemoved: number;
 }
 
