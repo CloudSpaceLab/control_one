@@ -1496,7 +1496,7 @@ function ApprovalQueue({
   if (approvals.length === 0) {
     return (
       <EmptyState
-        title="No pending approvals"
+        title="No approvals waiting"
         description="No patch approvals waiting."
       />
     );
