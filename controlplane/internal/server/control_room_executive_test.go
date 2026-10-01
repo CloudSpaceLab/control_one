@@ -167,12 +167,20 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 	tenantID := base.tenants[0].ID
 	now := time.Now().UTC()
 	proposalID := uuid.New()
+	alertID := uuid.New()
+	base.alerts = []storage.Alert{
+		{
+			ID: alertID, TenantID: tenantID, Source: "correlation", Severity: "critical",
+			Title: "Malicious source detected", State: "open", OpenedAt: now.Add(-15 * time.Minute),
+		},
+	}
 	store := &executiveRuleSummaryStore{
 		fakeStore: base,
 		blockProposals: []storage.IPBlocklistEntry{
 			{
 				ID: proposalID, TenantID: tenantID, IPCIDR: "203.0.113.10/32",
-				Status: "proposed", Score: 100, Reason: "Critical source requires approval",
+				Status: "proposed", Score: 100,
+				Reason: "Correlation response: rule=Known bad source; alert_id=" + alertID.String() + "; mode=proposal",
 				CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
 			},
 		},
@@ -193,8 +201,8 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode executive overview: %v", err)
 	}
-	if resp.Attention.Approvals != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 1 {
-		t.Fatalf("unexpected network approval totals: %+v", resp.Attention)
+	if resp.Attention.Reviews != 0 || resp.Attention.Approvals != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 1 {
+		t.Fatalf("linked alert should collapse into the pending approval: %+v", resp.Attention)
 	}
 	if len(resp.Attention.Items) != 1 {
 		t.Fatalf("attention sample=%+v, want one network approval", resp.Attention.Items)
