@@ -96,4 +96,3 @@ func TestStreamLogDumpStopsWhenExpiryCrossesMidDownload(t *testing.T) {
 	require.ErrorIs(t, err, errLogDumpDownloadExpired)
 	require.Len(t, dst.Bytes(), 64<<10)
 }
-
