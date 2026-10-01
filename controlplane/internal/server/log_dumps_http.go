@@ -413,22 +413,28 @@ func (s *Server) handleLogDumpDownload(w http.ResponseWriter, r *http.Request, d
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="control-one-log-dump-%s.ndjson"`, dump.ID.String()))
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	_ = streamLogDumpUntilExpiry(w, f, dump.ExpiresAt, s.logDumpNow)
+}
+
+var errLogDumpDownloadExpired = errors.New("log dump expired during download")
+
+func streamLogDumpUntilExpiry(dst io.Writer, src io.Reader, expiresAt time.Time, now func() time.Time) error {
 	buf := make([]byte, 64<<10)
 	for {
-		if !s.logDumpNow().Before(dump.ExpiresAt) {
-			return
+		if !now().Before(expiresAt) {
+			return errLogDumpDownloadExpired
 		}
-		n, readErr := f.Read(buf)
+		n, readErr := src.Read(buf)
 		if n > 0 {
-			if _, err := w.Write(buf[:n]); err != nil {
-				return
+			if _, err := dst.Write(buf[:n]); err != nil {
+				return err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
-			return
+			return nil
 		}
 		if readErr != nil {
-			return
+			return readErr
 		}
 	}
 }

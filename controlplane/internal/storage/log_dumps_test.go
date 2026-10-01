@@ -105,9 +105,18 @@ func TestLogDumpClaimChunkAndTerminalJobLifecycle(t *testing.T) {
 	_, err = store.PutLogDumpChunk(ctx, conflict, newToken, takeoverAt)
 	require.ErrorIs(t, err, ErrLogDumpChunkConflict)
 
+	expiredChunk := chunk
+	expiredChunk.Ordinal = 1
+	_, err = store.PutLogDumpChunk(ctx, expiredChunk, newToken, dump.ExpiresAt)
+	require.ErrorIs(t, err, ErrLogDumpExpired)
+
 	available := true
 	artifactSHA := shaHex("artifact")
 	completeAt := takeoverAt.Add(15 * time.Second)
+	err = store.CompleteLogDumpAndJob(ctx, tenant.ID, node.ID, dump.ID, job.ID, newToken,
+		"/var/lib/control-one/log-dumps/dump.ndjson", artifactSHA, 1, 7, false, &available, "", dump.ExpiresAt)
+	require.ErrorIs(t, err, ErrLogDumpExpired)
+
 	err = store.CompleteLogDumpAndJob(ctx, tenant.ID, node.ID, dump.ID, job.ID, newToken,
 		"/var/lib/control-one/log-dumps/dump.ndjson", artifactSHA, 1, 7, false, &available, "", completeAt)
 	require.NoError(t, err)

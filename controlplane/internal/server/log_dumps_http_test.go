@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"net/http/httptest"
 	"strings"
@@ -76,3 +77,23 @@ func TestLogDumpResponseHeadersDisableCaching(t *testing.T) {
 	require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 	require.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 }
+
+func TestStreamLogDumpStopsWhenExpiryCrossesMidDownload(t *testing.T) {
+	expiresAt := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	calls := 0
+	now := func() time.Time {
+		calls++
+		if calls == 1 {
+			return expiresAt.Add(-time.Second)
+		}
+		return expiresAt
+	}
+	payload := bytes.Repeat([]byte("x"), 128<<10)
+	var dst bytes.Buffer
+
+	err := streamLogDumpUntilExpiry(&dst, bytes.NewReader(payload), expiresAt, now)
+
+	require.ErrorIs(t, err, errLogDumpDownloadExpired)
+	require.Len(t, dst.Bytes(), 64<<10)
+}
+
