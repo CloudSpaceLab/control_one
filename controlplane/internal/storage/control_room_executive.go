@@ -39,6 +39,7 @@ func (s *Store) GetRuleViolationSummary(
 	ctx context.Context,
 	tenantID uuid.UUID,
 	since time.Time,
+	until time.Time,
 	prevSince time.Time,
 	prevUntil time.Time,
 	topLimit int,
@@ -50,7 +51,7 @@ func (s *Store) GetRuleViolationSummary(
 	if tenantID == uuid.Nil {
 		return out, errors.New("tenant id is required")
 	}
-	if since.IsZero() || prevSince.IsZero() || prevUntil.IsZero() {
+	if since.IsZero() || until.IsZero() || prevSince.IsZero() || prevUntil.IsZero() {
 		return out, errors.New("rule violation windows are required")
 	}
 	if topLimit <= 0 {
@@ -72,8 +73,10 @@ func (s *Store) GetRuleViolationSummary(
 			),
 			COUNT(*)
 		FROM rule_trigger_log
-		WHERE tenant_id = $1 AND triggered_at >= $2
-	`, tenantID, since).Scan(
+		WHERE tenant_id = $1
+		  AND triggered_at >= $2
+		  AND triggered_at < $3
+	`, tenantID, since, until).Scan(
 		&out.Critical,
 		&out.High,
 		&out.Medium,
@@ -119,11 +122,13 @@ func (s *Store) GetRuleViolationSummary(
 			END AS severity,
 			COUNT(*) AS trigger_count
 		FROM rule_trigger_log
-		WHERE tenant_id = $1 AND triggered_at >= $2
+		WHERE tenant_id = $1
+		  AND triggered_at >= $2
+		  AND triggered_at < $3
 		GROUP BY rule_id, rule_type
 		ORDER BY trigger_count DESC, rule_id
-		LIMIT $3
-	`, tenantID, since, topLimit)
+		LIMIT $4
+	`, tenantID, since, until, topLimit)
 	if err != nil {
 		return out, fmt.Errorf("query top rule violations: %w", err)
 	}
