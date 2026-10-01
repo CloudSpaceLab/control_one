@@ -200,3 +200,28 @@ container/image replacement without making the directory world-writable. The ngi
 uploads at 4 MiB; do not raise that independently of the server limit.
 
 See `docs/raw-log-dumps.md` for retention, access and cleanup behavior.
+
+
+## Offline IP enrichment
+
+Control One resolves public-IP country/city and ASN data directly from local
+MMDB files. The control plane does not require the former `ipquery` sidecar.
+
+Production paths:
+
+- `/opt/control-one/deploy/ip-intel/dbip-city-lite.mmdb`
+- `/opt/control-one/deploy/ip-intel/dbip-asn-lite.mmdb`
+
+The directory is root-owned with group `65532` and mode `750`, then mounted
+read-only into the distroless control-plane container. The deploy workflow runs
+`scripts/update_dbip_lite.sh`; it refreshes files atomically and retains an
+existing usable copy if DB-IP is temporarily unreachable.
+
+DB-IP Lite is CC BY 4.0. Investigate displays the required DB-IP attribution
+when those files supplied the enrichment.
+
+For an air-gapped deployment, place approved MMDB files at the paths above
+before starting the control plane. They can also be carried as signed offline
+bundle artifacts and `IP_INTEL_CITY_MMDB` / `IP_INTEL_ASN_MMDB` pointed at
+the activated bundle paths. No network provider is needed for geo/ASN.
+AbuseIPDB remains optional reputation augmentation only.

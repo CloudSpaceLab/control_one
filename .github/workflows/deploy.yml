@@ -108,9 +108,10 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
-            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps'
+            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps' '$DEPLOY_DIR/ip-intel'
             chown 65532:65532 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps'
-            chmod 750 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps'
+            chown 0:65532 '$DEPLOY_DIR/ip-intel'
+            chmod 750 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps' '$DEPLOY_DIR/ip-intel'
           "
 
       - name: Ensure Doris host prerequisites
@@ -204,6 +205,25 @@ jobs:
             mkdir -p '$DEPLOY_UI_DIR'
             tar -C '$DEPLOY_UI_DIR' --strip-components=1 -xzf '$DEPLOY_DIR/ui-dist.tar.gz'
             rm '$DEPLOY_DIR/ui-dist.tar.gz'
+          "
+
+      - name: Refresh offline IP intelligence
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          scp -P "${SSH_PORT:-22}" scripts/update_dbip_lite.sh             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/update_dbip_lite.sh"
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
+            set -e
+            chmod 0750 '$DEPLOY_DIR/update_dbip_lite.sh'
+            if ! DBIP_LICENSE_ACCEPTED=1 IP_INTEL_GID=65532               '$DEPLOY_DIR/update_dbip_lite.sh' '$DEPLOY_DIR/ip-intel'; then
+              if [ ! -s '$DEPLOY_DIR/ip-intel/dbip-city-lite.mmdb' ] || [ ! -s '$DEPLOY_DIR/ip-intel/dbip-asn-lite.mmdb' ]; then
+                echo 'DB-IP refresh failed and no usable local MMDB fallback exists'
+                exit 1
+              fi
+              echo 'DB-IP refresh failed; keeping the existing offline databases'
+            fi
           "
 
       - name: Build images and restart services
