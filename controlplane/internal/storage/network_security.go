@@ -265,7 +265,7 @@ func (s *Store) ListActiveNodeFirewallRulesForIP(ctx context.Context, tenantID u
 		  AND ea.entity_id = $2
 		  AND ea.action = 'block'
 		  AND r.status IN ('pending','applied','failed')
-		  AND NOT (r.status = 'pending' AND j.type = 'firewall.rule_delete')
+		  AND NOT (r.status = 'pending' AND COALESCE(j.type, '') = 'firewall.rule_delete')
 		ORDER BY r.requested_at ASC
 	`, tenantID, strings.TrimSpace(ip))
 	if err != nil {
