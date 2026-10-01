@@ -39,6 +39,7 @@ type AutomaticResponseSummary struct {
 	Contained            int
 	Remediated           int
 	Failed               int
+	FailedCritical       int
 	FailedPlans          []ActionPlan
 }
 
@@ -193,6 +194,7 @@ func (s *Store) GetAutomaticResponseSummary(
 				LOWER(p.domain) AS domain,
 				LOWER(p.action_kind) AS action_kind,
 				p.state,
+				p.risk,
 				r.state AS receipt_state,
 				COALESCE(r.error, '') AS receipt_error
 			FROM action_plans p
@@ -238,7 +240,8 @@ func (s *Store) GetAutomaticResponseSummary(
 			COUNT(*) FILTER (WHERE handled AND is_blocked),
 			COUNT(*) FILTER (WHERE handled AND is_contained),
 			COUNT(*) FILTER (WHERE handled AND is_remediated),
-			COUNT(*) FILTER (WHERE state = 'failed')
+			COUNT(*) FILTER (WHERE state = 'failed'),
+			COUNT(*) FILTER (WHERE state = 'failed' AND LOWER(COALESCE(risk, '')) = 'critical')
 		FROM classified
 	`, tenantID, since, until).Scan(
 		&out.HandledAutomatically,
@@ -246,6 +249,7 @@ func (s *Store) GetAutomaticResponseSummary(
 		&out.Contained,
 		&out.Remediated,
 		&out.Failed,
+		&out.FailedCritical,
 	)
 	if err != nil {
 		return out, fmt.Errorf("count automatic responses: %w", err)
