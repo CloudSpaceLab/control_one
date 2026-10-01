@@ -824,9 +824,7 @@ func (s *Server) controlRoomExecutiveProtection(
 		out.Gaps++
 		gaps[controlRoomExecutiveProtectionGapLabel(listener.ExposureState)]++
 	}
-	if out.Total == 0 {
-		out.Percentage = 100
-	} else {
+	if out.Total > 0 {
 		out.Percentage = float64(out.Protected) / float64(out.Total) * 100
 	}
 	for label, count := range gaps {
