@@ -106,7 +106,7 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: >-
           go test -v ./controlplane/internal/storage
-          -run 'Test(JobLifecycleWithPostgres|LogDump)'
+          -run 'Test(JobLifecycleWithPostgres|LogDump|GetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated|GetPredictiveHealthAvailabilityIsTenantScopedAndFreshnessAware)'
           -count=1
 
       - name: Raw-log agent integration tests
