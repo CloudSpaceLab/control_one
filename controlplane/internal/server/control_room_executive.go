@@ -25,6 +25,13 @@ type controlRoomExecutiveAttentionStore interface {
 	GetExecutiveAttentionSummary(context.Context, uuid.UUID, time.Time, time.Time, int) (storage.ExecutiveAttentionSummary, error)
 }
 
+type controlRoomExecutivePredictiveHealthStore interface {
+	GetPredictiveHealthAvailability(context.Context, uuid.UUID, time.Time) (storage.PredictiveHealthAvailability, error)
+	ListAtRiskNodes(context.Context, uuid.UUID, int) ([]storage.AtRiskNodeRow, error)
+}
+
+const controlRoomPredictiveFreshnessSLA = 3 * time.Hour
+
 type controlRoomExecutiveOverviewResponse struct {
 	TenantID     string                           `json:"tenant_id"`
 	GeneratedAt  string                           `json:"generated_at"`
@@ -48,14 +55,15 @@ type controlRoomExecutiveAvailability struct {
 }
 
 type controlRoomExecutiveEstate struct {
-	GroupsTotal    int                         `json:"groups_total"`
-	GroupsHealthy  int                         `json:"groups_healthy"`
-	GroupsDegraded int                         `json:"groups_degraded"`
-	GroupsCritical int                         `json:"groups_critical"`
-	GroupsUnknown  int                         `json:"groups_unknown"`
-	NodesTotal     int                         `json:"nodes_total"`
-	NodesHealthy   int                         `json:"nodes_healthy"`
-	Groups         []controlRoomExecutiveGroup `json:"groups"`
+	GroupsTotal    int                                  `json:"groups_total"`
+	GroupsHealthy  int                                  `json:"groups_healthy"`
+	GroupsDegraded int                                  `json:"groups_degraded"`
+	GroupsCritical int                                  `json:"groups_critical"`
+	GroupsUnknown  int                                  `json:"groups_unknown"`
+	NodesTotal     int                                  `json:"nodes_total"`
+	NodesHealthy   int                                  `json:"nodes_healthy"`
+	Predictive     controlRoomExecutivePredictiveHealth `json:"predictive"`
+	Groups         []controlRoomExecutiveGroup          `json:"groups"`
 }
 
 type controlRoomExecutiveGroup struct {
@@ -66,7 +74,20 @@ type controlRoomExecutiveGroup struct {
 	NodesStale            int    `json:"nodes_stale"`
 	NodesOffline          int    `json:"nodes_offline"`
 	IntentionallyIsolated int    `json:"intentionally_isolated"`
+	PredictiveRisk        string `json:"predictive_risk,omitempty"`
+	PredictiveNodesAtRisk int    `json:"predictive_nodes_at_risk"`
 	Drilldown             string `json:"drilldown"`
+}
+
+type controlRoomExecutivePredictiveHealth struct {
+	State              string `json:"state"`
+	FreshnessSLASeconds int    `json:"freshness_sla_seconds"`
+	ScoredNodes        int    `json:"scored_nodes"`
+	FreshNodes         int    `json:"fresh_nodes"`
+	CalibratingNodes   int    `json:"calibrating_nodes"`
+	StaleNodes         int    `json:"stale_nodes"`
+	AtRiskNodes        int    `json:"at_risk_nodes"`
+	LatestComputedAt   string `json:"latest_computed_at,omitempty"`
 }
 
 type controlRoomExecutiveViolations struct {
@@ -189,7 +210,9 @@ func (s *Server) buildControlRoomExecutiveOverview(
 	if err != nil {
 		s.logger.Warn("control room executive nodes", zap.Error(err))
 	} else {
-		resp.Estate = buildControlRoomExecutiveEstate(nodes, now)
+		estate := buildControlRoomExecutiveEstate(nodes, now)
+		estate.Predictive = s.controlRoomExecutivePredictiveHealth(ctx, tenantID, nodes, &estate, now)
+		resp.Estate = estate
 		resp.Availability.Estate = true
 	}
 
@@ -330,6 +353,130 @@ func buildControlRoomExecutiveEstate(nodes []storage.Node, now time.Time) contro
 		return left > right
 	})
 	return out
+}
+
+func (s *Server) controlRoomExecutivePredictiveHealth(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	nodes []storage.Node,
+	estate *controlRoomExecutiveEstate,
+	now time.Time,
+) controlRoomExecutivePredictiveHealth {
+	out := controlRoomExecutivePredictiveHealth{
+		State:               "unavailable",
+		FreshnessSLASeconds: int(controlRoomPredictiveFreshnessSLA / time.Second),
+	}
+	store, ok := s.store.(controlRoomExecutivePredictiveHealthStore)
+	if !ok {
+		return out
+	}
+	freshSince := now.Add(-controlRoomPredictiveFreshnessSLA)
+	availability, err := store.GetPredictiveHealthAvailability(ctx, tenantID, freshSince)
+	if err != nil {
+		s.logger.Warn("control room predictive health availability", zap.Error(err))
+		return out
+	}
+	out.ScoredNodes = availability.ScoredNodes
+	out.FreshNodes = availability.FreshNodes
+	out.CalibratingNodes = availability.FreshCalibratingNodes
+	out.StaleNodes = availability.StaleNodes
+	if availability.LatestComputedAt.Valid {
+		out.LatestComputedAt = formatTime(availability.LatestComputedAt.Time)
+	}
+	switch {
+	case availability.ScoredNodes == 0:
+		out.State = "unavailable"
+		return out
+	case availability.FreshActionableNodes > 0:
+		out.State = "available"
+	case availability.FreshCalibratingNodes > 0:
+		out.State = "calibrating"
+		return out
+	default:
+		out.State = "stale"
+		return out
+	}
+
+	atRisk, err := store.ListAtRiskNodes(ctx, tenantID, 49)
+	if err != nil {
+		s.logger.Warn("control room predictive at-risk nodes", zap.Error(err))
+		out.State = "unavailable"
+		return out
+	}
+	groupByNode := make(map[uuid.UUID]string, len(nodes))
+	for _, node := range nodes {
+		groupByNode[node.ID] = controlRoomExecutiveGroupName(node)
+	}
+	groupIndex := make(map[string]int, len(estate.Groups))
+	for i := range estate.Groups {
+		groupIndex[estate.Groups[i].Name] = i
+	}
+	for _, row := range atRisk {
+		if row.TenantID != tenantID || row.ComputedAt.Before(freshSince) {
+			continue
+		}
+		risk := strings.ToLower(strings.TrimSpace(row.RiskLevel))
+		if risk != "critical" && risk != "high" {
+			continue
+		}
+		name, ok := groupByNode[row.NodeID]
+		if !ok {
+			continue
+		}
+		index, ok := groupIndex[name]
+		if !ok {
+			continue
+		}
+		group := &estate.Groups[index]
+		group.PredictiveNodesAtRisk++
+		if controlRoomExecutivePredictiveRiskRank(risk) > controlRoomExecutivePredictiveRiskRank(group.PredictiveRisk) {
+			group.PredictiveRisk = risk
+		}
+		out.AtRiskNodes++
+		switch risk {
+		case "critical":
+			group.State = "critical"
+		case "high":
+			if group.State == "healthy" {
+				group.State = "degraded"
+			}
+		}
+	}
+	controlRoomExecutiveRecountGroups(estate)
+	return out
+}
+
+func controlRoomExecutivePredictiveRiskRank(risk string) int {
+	switch strings.ToLower(strings.TrimSpace(risk)) {
+	case "critical":
+		return 2
+	case "high":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func controlRoomExecutiveRecountGroups(estate *controlRoomExecutiveEstate) {
+	if estate == nil {
+		return
+	}
+	estate.GroupsHealthy = 0
+	estate.GroupsDegraded = 0
+	estate.GroupsCritical = 0
+	estate.GroupsUnknown = 0
+	for _, group := range estate.Groups {
+		switch group.State {
+		case "critical":
+			estate.GroupsCritical++
+		case "degraded":
+			estate.GroupsDegraded++
+		case "healthy":
+			estate.GroupsHealthy++
+		default:
+			estate.GroupsUnknown++
+		}
+	}
 }
 
 func controlRoomExecutiveGroupName(node storage.Node) string {
