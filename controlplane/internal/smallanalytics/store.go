@@ -316,9 +316,40 @@ func (s *Store) ListConnectionsForNode(ctx context.Context, tenantID, nodeID str
 }
 
 func (s *Store) ListConnectionsForIP(ctx context.Context, tenantID, ip string, since, until time.Time, limit int) ([]doris.ConnectionRow, error) {
-	where := "tenant_id = ? AND (src_ip = ? OR dst_ip = ?) AND started_at_ms <= ? AND (ended_at_ms IS NULL OR ended_at_ms >= ?)"
-	args := []any{tenantID, ip, ip, timeMillis(until), timeMillis(since)}
-	return s.queryConnections(ctx, where, args, limit, false)
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	// Keep each lookup aligned with the dedicated (tenant, src/dst_ip,
+	// started_at_ms) indexes. A single OR across src_ip/dst_ip forces SQLite
+	// to merge two index scans and materialize the ORDER BY, which becomes
+	// expensive on multi-day forensic windows.
+	out := make([]doris.ConnectionRow, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	for _, peerColumn := range []string{"src_ip", "dst_ip"} {
+		where := "tenant_id = ? AND " + peerColumn + " = ? AND started_at_ms <= ? AND (ended_at_ms IS NULL OR ended_at_ms >= ?)"
+		args := []any{tenantID, ip, timeMillis(until), timeMillis(since)}
+		rows, err := s.queryConnections(ctx, where, args, limit, false)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			key := connectionDedupeKey(row)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, row)
+		}
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (s *Store) ListConnectionsForTenant(ctx context.Context, tenantID string, since, until time.Time, limit int, externalOnly bool) ([]doris.ConnectionRow, error) {
