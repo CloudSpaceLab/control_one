@@ -58,6 +58,7 @@ type IPBlockStatus struct {
 	State           string     `json:"state"`
 	Scope           string     `json:"scope"`
 	FleetNodes      int        `json:"fleet_nodes"`
+	FleetTargetNodes int       `json:"fleet_target_nodes"`
 	TargetNodes     int        `json:"target_nodes"`
 	NodesApplied    int        `json:"nodes_applied"`
 	NodesPending    int        `json:"nodes_pending"`
@@ -65,7 +66,6 @@ type IPBlockStatus struct {
 	NodesFailed     int        `json:"nodes_failed"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 }
-
 
 // NodeFirewallRuleInsert is the payload for CreateNodeFirewallRule.
 type NodeFirewallRuleInsert struct {
@@ -259,11 +259,13 @@ func (s *Store) ListActiveNodeFirewallRulesForIP(ctx context.Context, tenantID u
 		       r.requested_at, r.applied_at, r.removed_at
 		FROM node_firewall_rules r
 		JOIN entity_actions ea ON ea.id = r.entity_action_id
+		LEFT JOIN jobs j ON j.id = r.job_id
 		WHERE ea.tenant_id = $1
 		  AND ea.entity_type = 'ip'
 		  AND ea.entity_id = $2
 		  AND ea.action = 'block'
 		  AND r.status IN ('pending','applied','failed')
+		  AND NOT (r.status = 'pending' AND j.type = 'firewall.rule_delete')
 		ORDER BY r.requested_at ASC
 	`, tenantID, strings.TrimSpace(ip))
 	if err != nil {
@@ -279,17 +281,14 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 		return nil, errors.New("store database not initialized")
 	}
 	status := &IPBlockStatus{State: "unblocked", Scope: "affected"}
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM nodes
-		WHERE tenant_id = $1 AND state = 'active'
-	`, tenantID).Scan(&status.FleetNodes); err != nil {
-		return nil, fmt.Errorf("count active tenant nodes: %w", err)
-	}
-
 	var expires sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		WITH per_node AS (
+		WITH active_nodes AS (
+			SELECT id
+			FROM nodes
+			WHERE tenant_id = $1 AND state = 'active'
+		),
+		per_node AS (
 			SELECT
 				r.node_id,
 				BOOL_OR(r.status = 'applied') AS applied,
@@ -307,6 +306,8 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			GROUP BY r.node_id
 		)
 		SELECT
+			(SELECT COUNT(*) FROM active_nodes) AS fleet_nodes,
+			COUNT(*) FILTER (WHERE node_id IN (SELECT id FROM active_nodes)) AS fleet_target_nodes,
 			COUNT(*) AS target_nodes,
 			COUNT(*) FILTER (WHERE applied) AS nodes_applied,
 			COUNT(*) FILTER (WHERE NOT applied AND pending) AS nodes_pending,
@@ -322,6 +323,8 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			) AS expires_at
 		FROM per_node
 	`, tenantID, strings.TrimSpace(ip)).Scan(
+		&status.FleetNodes,
+		&status.FleetTargetNodes,
 		&status.TargetNodes,
 		&status.NodesApplied,
 		&status.NodesPending,
@@ -340,7 +343,7 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 	if !status.Active {
 		return status, nil
 	}
-	if status.FleetNodes > 0 && status.TargetNodes >= status.FleetNodes {
+	if status.FleetNodes > 0 && status.FleetTargetNodes == status.FleetNodes {
 		status.Scope = "fleet"
 	}
 	switch {
