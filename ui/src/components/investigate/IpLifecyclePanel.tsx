@@ -110,17 +110,29 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile label="Lifecycles" value={evidenceUnavailable ? '—' : String(totals.total)} tone="brand" />
-        <KpiTile label="Distinct nodes" value={evidenceUnavailable ? '—' : String(totals.nodes)} tone="info" />
+        <KpiTile
+          label="Lifecycles"
+          value={evidenceUnavailable ? '—' : String(totals.total)}
+          tone="brand"
+          loading={query.isLoading}
+        />
+        <KpiTile
+          label="Distinct nodes"
+          value={evidenceUnavailable ? '—' : String(totals.nodes)}
+          tone="info"
+          loading={query.isLoading}
+        />
         <KpiTile
           label="Bytes in / out"
           value={evidenceUnavailable ? '—' : `${formatBytes(totals.bytesIn)} / ${formatBytes(totals.bytesOut)}`}
           tone="accent"
+          loading={query.isLoading}
         />
         <KpiTile
           label="Threat hits"
           value={evidenceUnavailable ? '—' : String(totals.threats)}
           tone={evidenceUnavailable ? 'unknown' : totals.threats > 0 ? 'critical' : 'healthy'}
+          loading={query.isLoading}
         />
       </div>
 
