@@ -39,7 +39,7 @@ func mtlsRequest(method, path, cn string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, principal))
 }
 
-func buildHeartbeatServer(t *testing.T, store *fakeStore) *Server {
+func buildHeartbeatServer(t *testing.T, store Store) *Server {
 	t.Helper()
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{Address: ":0"},
@@ -1292,8 +1292,7 @@ func TestHeartbeatLogDumpCompatibilityRequiresAdvertisedCapability(t *testing.T)
 			Status:   storage.LogDumpStatusRequested,
 		}},
 	}
-	srv := buildHeartbeatServer(t, base)
-	srv.store = store
+	srv := buildHeartbeatServer(t, store)
 
 	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
 	rec := httptest.NewRecorder()
