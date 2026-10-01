@@ -51,13 +51,13 @@ func TestAWSCloudAuditParsersNormalizeExpectedFields(t *testing.T) {
 	samples := awsCloudSamples()
 	want := map[string]map[string]any{
 		"aws.cloudtrail.root.sample": {
-			"event.action":     "ConsoleLogin",
-			"event.provider":   "signin.amazonaws.com",
-			"user.name":        "arn:aws:iam::123456789012:root",
-			"source.ip":        "203.0.113.10",
-			"event.dataset":    "aws.cloudtrail",
-			"cloud.provider":   "aws",
-			"aws.mfa_used":     "No",
+			"event.action":   "ConsoleLogin",
+			"event.provider": "signin.amazonaws.com",
+			"user.name":      "arn:aws:iam::123456789012:root",
+			"source.ip":      "203.0.113.10",
+			"event.dataset":  "aws.cloudtrail",
+			"cloud.provider": "aws",
+			"aws.mfa_used":   "No",
 		},
 		"aws.cloudtrail.insight.sample": {
 			"event.action":      "RunInstances",
