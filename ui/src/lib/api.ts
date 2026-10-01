@@ -4430,6 +4430,13 @@ export class APIClient {
     );
   }
 
+  async getIPBlockStatus(ip: string, tenantId: string): Promise<IPBlockStatus> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<IPBlockStatus>(
+      `/api/v1/entities/ip/${encodeURIComponent(ip)}/block-status?${search.toString()}`,
+    );
+  }
+
   async listBlockNodes(
     entityActionId: string,
   ): Promise<{ rules: NodeFirewallRule[] }> {
@@ -6603,6 +6610,18 @@ export interface ActiveBlock {
   NodesFailed: number;
   NodesPending: number;
   NodesRemoved: number;
+}
+
+export interface IPBlockStatus {
+  active: boolean;
+  state: "unblocked" | "blocking" | "blocked" | "partial" | "failed";
+  scope: "affected" | "fleet";
+  fleet_nodes: number;
+  target_nodes: number;
+  nodes_applied: number;
+  nodes_pending: number;
+  nodes_failed: number;
+  expires_at?: string;
 }
 
 export interface IPBlockProposal {
