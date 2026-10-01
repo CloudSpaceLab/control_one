@@ -23,6 +23,7 @@ import {
   CONTROL_ROOM_COPY,
   executiveDescription,
   executiveHeadline,
+  formatPeriodDelta,
 } from '@/features/control-room/copy';
 import { useExecutiveOverview } from '@/features/control-room/useExecutiveOverview';
 
@@ -116,7 +117,11 @@ export function ControlRoom(): JSX.Element {
           value={overview?.availability.violations ? overview.violations.total : 'N/A'}
           hint={
             overview?.availability.violations
-              ? `${overview.violations.critical} critical · ${overview.violations.high} high`
+              ? compactMetricHint([
+                  `${overview.violations.critical} critical`,
+                  `${overview.violations.high} high`,
+                  formatPeriodDelta(overview.violations.delta_pct, overview.violations.previous_total),
+                ])
               : metricHint(loading)
           }
           tone={overview ? violationTone(overview) : 'unknown'}
@@ -198,6 +203,10 @@ export function ControlRoom(): JSX.Element {
 
 function metricHint(loading: boolean): string {
   return loading ? 'Loading…' : CONTROL_ROOM_COPY.dataUnavailable;
+}
+
+function compactMetricHint(values: string[]): string {
+  return values.filter(Boolean).join(' · ');
 }
 
 function estateTone(overview: NonNullable<ReturnType<typeof useExecutiveOverview>['overview']>): StateTone {
