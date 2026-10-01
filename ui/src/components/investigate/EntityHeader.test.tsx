@@ -79,7 +79,8 @@ describe('EntityHeader', () => {
     );
 
     await user.click(screen.getByRole('button', { name: /ip response actions/i }));
-    await user.click(await screen.findByText('Block IP'));
+    await screen.findByText('Affected · 1h');
+    await user.click(screen.getByText('Block IP'));
 
     expect(entityActionMock).toHaveBeenCalledWith(
       'ip',
