@@ -75,6 +75,14 @@ func (s *Service) InitError() error {
 	return s.initErr
 }
 
+func (s *Service) OfflineGeoEnabled() bool {
+	if s == nil || s.primary == nil {
+		return false
+	}
+	provider, ok := s.primary.(interface{ Offline() bool })
+	return ok && provider.Offline()
+}
+
 // LookupGeoLocal performs only an offline geo/ASN lookup. It never consults
 // Postgres and never calls a network provider, making it safe for event ingest.
 func (s *Service) LookupGeoLocal(ctx context.Context, ip string) (*Enrichment, error) {
