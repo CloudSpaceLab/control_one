@@ -110,15 +110,7 @@ func (p *dbIPMMDBProvider) Lookup(_ context.Context, ip string) (*Enrichment, er
 			if err := result.Decode(&record); err != nil {
 				return nil, fmt.Errorf("decode DB-IP city record: %w", err)
 			}
-			out.Geo.CountryCode = strings.ToUpper(record.Country.ISOCode)
-			out.Geo.Country = localizedName(record.Country.Names)
-			out.Geo.City = localizedName(record.City.Names)
-			if len(record.Subdivisions) > 0 {
-				out.Geo.Region = localizedName(record.Subdivisions[0].Names)
-			}
-			out.Geo.Latitude = record.Location.Latitude
-			out.Geo.Longitude = record.Location.Longitude
-			out.Geo.Timezone = record.Location.Timezone
+			applyDBIPCityRecord(out, record)
 		}
 	}
 	if p.asn != nil {
@@ -131,10 +123,7 @@ func (p *dbIPMMDBProvider) Lookup(_ context.Context, ip string) (*Enrichment, er
 			if err := result.Decode(&record); err != nil {
 				return nil, fmt.Errorf("decode DB-IP ASN record: %w", err)
 			}
-			if record.ASN > 0 {
-				out.Geo.ASN = fmt.Sprintf("AS%d", record.ASN)
-			}
-			out.Geo.Org = strings.TrimSpace(record.Org)
+			applyDBIPASNRecord(out, record)
 		}
 	}
 	return out, nil
@@ -154,6 +143,31 @@ func (p *dbIPMMDBProvider) Close() error {
 		p.asn = nil
 	}
 	return errors.Join(errs...)
+}
+
+func applyDBIPCityRecord(out *Enrichment, record dbIPCityRecord) {
+	if out == nil {
+		return
+	}
+	out.Geo.CountryCode = strings.ToUpper(strings.TrimSpace(record.Country.ISOCode))
+	out.Geo.Country = localizedName(record.Country.Names)
+	out.Geo.City = localizedName(record.City.Names)
+	if len(record.Subdivisions) > 0 {
+		out.Geo.Region = localizedName(record.Subdivisions[0].Names)
+	}
+	out.Geo.Latitude = record.Location.Latitude
+	out.Geo.Longitude = record.Location.Longitude
+	out.Geo.Timezone = strings.TrimSpace(record.Location.Timezone)
+}
+
+func applyDBIPASNRecord(out *Enrichment, record dbIPASNRecord) {
+	if out == nil {
+		return
+	}
+	if record.ASN > 0 {
+		out.Geo.ASN = fmt.Sprintf("AS%d", record.ASN)
+	}
+	out.Geo.Org = strings.TrimSpace(record.Org)
 }
 
 func localizedName(names map[string]string) string {
