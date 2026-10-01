@@ -33,6 +33,7 @@ import {
   SectionHeader,
   SelectField,
   StatusTag,
+  severityTone,
   type StateTone,
 } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
@@ -1161,22 +1162,6 @@ function normalizeTone(tone?: string): StateTone {
     case 'info':
     case 'unknown':
       return normalized as StateTone;
-    default:
-      return 'unknown';
-  }
-}
-
-function severityTone(severity?: string): StateTone {
-  switch ((severity ?? '').toLowerCase()) {
-    case 'critical':
-      return 'critical';
-    case 'high':
-      return 'degraded';
-    case 'medium':
-      return 'warning';
-    case 'low':
-    case 'info':
-      return 'info';
     default:
       return 'unknown';
   }
