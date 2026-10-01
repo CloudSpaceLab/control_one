@@ -408,7 +408,7 @@ function IPBehaviorPanel(): JSX.Element {
                       key={`${country.country_code}-${country.last_seen_at}`}
                       type="button"
                       className="w-full rounded border border-border bg-elevated p-3 text-left transition hover:border-border-strong hover:bg-hover"
-                      onClick={() => selectCountry(country)}
+                      onClick={() => finding?.source_ip ? openIPInvestigation(finding.source_ip) : selectCountry(country)}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
