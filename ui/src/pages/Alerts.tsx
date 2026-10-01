@@ -30,6 +30,7 @@ import {
 import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
+import { useAuth } from '../providers/AuthProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
 import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from '../lib/correlationTemplates';
@@ -287,6 +288,8 @@ function caseContainsAlert(socCase: SOCCase, alertId: string): boolean {
 
 export function Alerts(): JSX.Element {
   const client = useApiClient();
+  const { profile } = useAuth();
+  const canReviewAlerts = Boolean(profile?.roles?.includes('admin'));
   const location = useLocation();
   const linkedAlertId = new URLSearchParams(location.search).get('alert_id');
   const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
@@ -371,11 +374,16 @@ export function Alerts(): JSX.Element {
 
   const tenantId = currentTenantId ?? '';
   const [severity, setSeverity] = useState('');
+  const [sinceDate, setSinceDate] = useState('');
+  const [untilDate, setUntilDate] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sorting, setSorting] = useState<SortingState>([{ id: 'opened_at', desc: true }]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
+  const [selectedAlertIds, setSelectedAlertIds] = useState<Set<string>>(() => new Set());
+  const [bulkReason, setBulkReason] = useState('');
+  const [bulkWorking, setBulkWorking] = useState(false);
   const pageSize = 25;
   const searchTimer = useRef<number | null>(null);
   const requestSeq = useRef(0);
@@ -392,7 +400,12 @@ export function Alerts(): JSX.Element {
 
   useEffect(() => {
     setPage(0);
-  }, [tenantId, state, severity, debouncedSearch, sorting]);
+  }, [tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting]);
+
+  useEffect(() => {
+    setSelectedAlertIds(new Set());
+    setBulkReason('');
+  }, [tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
 
   const refresh = useCallback(async () => {
     if (!tenantId) {
@@ -411,6 +424,8 @@ export function Alerts(): JSX.Element {
         state,
         severity: severity || undefined,
         search: debouncedSearch || undefined,
+        since: dateBoundaryISO(sinceDate, false),
+        until: dateBoundaryISO(untilDate, true),
         sortBy: sorting[0]?.id,
         sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
         limit: pageSize,
@@ -433,7 +448,7 @@ export function Alerts(): JSX.Element {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [client, tenantId, state, severity, debouncedSearch, sorting, page]);
+  }, [client, tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -458,6 +473,43 @@ export function Alerts(): JSX.Element {
       setAckingId(null);
     }
   }, [ackingId, client, refresh, resolvingAlert]);
+
+  const bulkAck = useCallback(async () => {
+    const targets = alerts.filter((alert) => selectedAlertIds.has(alert.id) && alert.state === 'open');
+    if (targets.length === 0 || bulkWorking) return;
+    setBulkWorking(true);
+    setAlertActionError(null);
+    try {
+      await Promise.all(targets.map((alert) => client.ackAlert(alert.id)));
+      setSelectedAlertIds(new Set());
+      await refresh();
+    } catch (err) {
+      setAlertActionError(errorMessage(err, 'Bulk acknowledgement failed.'));
+    } finally {
+      setBulkWorking(false);
+    }
+  }, [alerts, bulkWorking, client, refresh, selectedAlertIds]);
+
+  const bulkResolveFalsePositive = useCallback(async () => {
+    const targets = alerts.filter((alert) => selectedAlertIds.has(alert.id));
+    const reason = bulkReason.trim();
+    if (targets.length === 0 || !reason || bulkWorking) return;
+    setBulkWorking(true);
+    setAlertActionError(null);
+    try {
+      await Promise.all(targets.map((alert) => client.updateAlertDisposition(alert.id, {
+        disposition: 'false_positive',
+        reason,
+      })));
+      setSelectedAlertIds(new Set());
+      setBulkReason('');
+      await refresh();
+    } catch (err) {
+      setAlertActionError(errorMessage(err, 'Bulk resolution failed.'));
+    } finally {
+      setBulkWorking(false);
+    }
+  }, [alerts, bulkReason, bulkWorking, client, refresh, selectedAlertIds]);
 
   const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     setResolvingAlert(true);
@@ -698,6 +750,33 @@ export function Alerts(): JSX.Element {
 
   const columns = useMemo<ColumnDef<Alert>[]>(() => [
     {
+      id: 'select',
+      header: () => (
+        <input
+          type="checkbox"
+          aria-label="Select all alerts on page"
+          checked={alerts.length > 0 && alerts.every((alert) => selectedAlertIds.has(alert.id))}
+          onChange={(event) => setSelectedAlertIds(event.target.checked ? new Set(alerts.map((alert) => alert.id)) : new Set())}
+        />
+      ),
+      enableSorting: false,
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          aria-label={`Select alert ${row.original.title}`}
+          checked={selectedAlertIds.has(row.original.id)}
+          onChange={(event) => {
+            setSelectedAlertIds((current) => {
+              const next = new Set(current);
+              if (event.target.checked) next.add(row.original.id);
+              else next.delete(row.original.id);
+              return next;
+            });
+          }}
+        />
+      ),
+    },
+    {
       accessorKey: 'severity',
       header: 'Severity',
       cell: ({ row }) => (
@@ -799,7 +878,7 @@ export function Alerts(): JSX.Element {
         </div>
       ),
     },
-  ], [ack, ackingId, resolvingAlert]);
+  ], [ack, ackingId, alerts, resolvingAlert, selectedAlertIds]);
 
   const ruleColumns: ColumnDef<CorrelationRule>[] = [
     {
@@ -1025,7 +1104,7 @@ export function Alerts(): JSX.Element {
                   className="pl-9"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                 <FilterSelect
                   label="Tenant"
                   value={tenantId}
@@ -1047,6 +1126,14 @@ export function Alerts(): JSX.Element {
                     ...SEVERITY_FILTERS.map((s) => ({ label: s, value: s })),
                   ]}
                 />
+                <label className="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+                  From
+                  <Input type="date" value={sinceDate} onChange={(event) => setSinceDate(event.target.value)} aria-label="Alerts from date" />
+                </label>
+                <label className="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+                  To
+                  <Input type="date" value={untilDate} min={sinceDate || undefined} onChange={(event) => setUntilDate(event.target.value)} aria-label="Alerts to date" />
+                </label>
               </div>
             </div>
           </Panel>
@@ -1064,6 +1151,24 @@ export function Alerts(): JSX.Element {
           )}
 
 <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${total}`} title="Inbox">
+            {selectedAlertIds.size > 0 ? (
+              <div className="mb-3 flex flex-wrap items-end gap-2 rounded-md border border-border-subtle bg-surface p-3">
+                <span className="mr-auto text-sm font-medium text-foreground">{selectedAlertIds.size} selected</span>
+                <Input
+                  value={bulkReason}
+                  onChange={(event) => setBulkReason(event.target.value)}
+                  placeholder="Reason for false-positive resolution"
+                  aria-label="Bulk resolution reason"
+                  className="min-w-[18rem] flex-1"
+                />
+                <Button type="button" variant="secondary" size="sm" disabled={bulkWorking || !alerts.some((alert) => selectedAlertIds.has(alert.id) && alert.state === 'open')} onClick={() => void bulkAck()}>
+                  Ack selected
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={bulkWorking || !bulkReason.trim()} onClick={() => void bulkResolveFalsePositive()}>
+                  Resolve selected as false positive
+                </Button>
+              </div>
+            ) : null}
             <DataTable
               columns={columns}
               rows={alerts}
@@ -2106,6 +2211,12 @@ function ResolveAlertModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+function dateBoundaryISO(value: string, endOfDay: boolean): string | undefined {
+  if (!value) return undefined;
+  const suffix = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
+  return new Date(`${value}${suffix}`).toISOString();
 }
 
 function timeAgo(dateStr: string): string {
