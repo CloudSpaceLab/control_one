@@ -1216,9 +1216,13 @@ func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, ent
 		return
 	}
 	if entityType == "ip" && action == "block" {
-		cfg := storage.DefaultTenantRemediationConfig(tenantID)
-		if stored, err := s.store.GetTenantRemediationConfig(r.Context(), tenantID); err == nil && stored != nil {
-			cfg = *stored
+		cfg, err := s.store.GetTenantRemediationConfig(r.Context(), tenantID)
+		if err != nil || cfg == nil {
+			if err != nil {
+				s.logger.Warn("load IP response policy", zap.Error(err), zap.String("tenant_id", tenantID.String()))
+			}
+			http.Error(w, "IP response policy unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		if strings.TrimSpace(p.Scope) == "" {
 			p.Scope = cfg.DefaultIPBlockScope
