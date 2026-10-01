@@ -2,7 +2,7 @@ export { Eyebrow, type EyebrowProps } from './Eyebrow';
 export { Panel, type PanelProps } from './Panel';
 export { SectionHeader, type SectionHeaderProps } from './SectionHeader';
 export { StatusDot, type StatusDotProps } from './StatusDot';
-export { StatusTag, type StatusTagProps } from './StatusTag';
+export { StatusTag, severityTone, type StatusTagProps } from './StatusTag';
 export { LiveBadge, type LiveBadgeProps, type LiveState } from './LiveBadge';
 export { KpiTile, type KpiTileProps } from './KpiTile';
 export { Sparkline, type SparklineProps } from './Sparkline';
