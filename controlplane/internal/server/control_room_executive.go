@@ -482,6 +482,14 @@ func controlRoomExecutiveRecountGroups(estate *controlRoomExecutiveEstate) {
 			estate.GroupsUnknown++
 		}
 	}
+	sort.SliceStable(estate.Groups, func(i, j int) bool {
+		left := controlRoomExecutiveStateRank(estate.Groups[i].State)
+		right := controlRoomExecutiveStateRank(estate.Groups[j].State)
+		if left == right {
+			return estate.Groups[i].Name < estate.Groups[j].Name
+		}
+		return left > right
+	})
 }
 
 func controlRoomExecutiveGroupName(node storage.Node) string {
