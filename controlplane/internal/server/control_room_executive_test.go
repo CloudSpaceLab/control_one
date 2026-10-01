@@ -277,6 +277,55 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 	}
 }
 
+func TestControlRoomExecutiveIncludesRemediationApprovals(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	nodeID := uuid.New()
+	now := time.Now().UTC()
+	base.nodes = []storage.Node{{
+		ID: nodeID, TenantID: tenantID, Hostname: "payments-api-01", LastSeenAt: &now,
+	}}
+	approvalID := uuid.New()
+	base.remediationApprovals = map[uuid.UUID]storage.RemediationApproval{
+		approvalID: {
+			ID: approvalID, TenantID: tenantID, NodeID: nodeID,
+			RuleID: "cis-1.1", ScriptID: uuid.New(), Severity: "high",
+			Status: storage.ApprovalStatusPending, CreatedAt: now.Add(-10 * time.Minute),
+			ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	store := &executiveRuleSummaryStore{fakeStore: base}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Attention.Approvals != 1 || resp.Attention.Total != 1 {
+		t.Fatalf("remediation approval totals=%+v, want one approval", resp.Attention)
+	}
+	if len(resp.Attention.Items) != 1 {
+		t.Fatalf("attention sample=%+v, want one remediation approval", resp.Attention.Items)
+	}
+	item := resp.Attention.Items[0]
+	if item.Kind != "approval" || item.Domain != "compliance" || item.Title != "Remediate payments-api-01" {
+		t.Fatalf("unexpected remediation approval item: %+v", item)
+	}
+	if item.Severity != "high" || item.Reason != "cis-1.1" || item.Drilldown != "/compliance" {
+		t.Fatalf("unexpected remediation approval detail: %+v", item)
+	}
+}
+
 func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) {
 	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
