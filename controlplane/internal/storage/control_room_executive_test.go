@@ -67,3 +67,67 @@ func TestGetRuleViolationSummaryUsesExactTenantScopedTotals(t *testing.T) {
 	require.Equal(t, "high", summary.TopRules[1].Severity)
 	require.Greater(t, summary.Total, summary.TopRules[0].Count+summary.TopRules[1].Count)
 }
+
+
+func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
+	ctx := context.Background()
+	store := setupPostgresStoreFull(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "executive-auto-summary-" + uuid.NewString()[:6]})
+	require.NoError(t, err)
+
+	since := time.Now().UTC().Add(-time.Hour)
+	until := time.Now().UTC().Add(time.Hour)
+
+	createPlan := func(domain, action string, automatic bool, state ActionPlanState) *ActionPlan {
+		t.Helper()
+		plan, err := store.CreateActionPlan(ctx, CreateActionPlanParams{
+			TenantID:   tenant.ID,
+			Domain:     domain,
+			ActionKind: action,
+			State:      state,
+			Risk:       "high",
+			Diff:       map[string]any{"auto_triggered": automatic},
+			SourceRef:  map[string]any{},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		return plan
+	}
+	succeed := func(plan *ActionPlan) {
+		t.Helper()
+		_, err := store.CreateActionReceipt(ctx, CreateActionReceiptParams{
+			ActionPlanID: plan.ID,
+			TenantID:     tenant.ID,
+			State:        ActionPlanStateSucceeded,
+			Receipt:      map[string]any{"success": true},
+			Verification: map[string]any{"verified": true},
+		})
+		require.NoError(t, err)
+	}
+
+	blocked := createPlan("firewall", "block", true, ActionPlanStateQueued)
+	succeed(blocked)
+	remediated := createPlan("remediation", "remediation.execute", true, ActionPlanStateQueued)
+	succeed(remediated)
+	contained := createPlan("network", "contain", true, ActionPlanStateQueued)
+	succeed(contained)
+
+	manual := createPlan("remediation", "remediation.execute", false, ActionPlanStateQueued)
+	succeed(manual)
+
+	// A succeeded plan without a receipt is not verified and must not count.
+	_ = createPlan("remediation", "remediation.execute", true, ActionPlanStateSucceeded)
+
+	failed := createPlan("firewall", "block", true, ActionPlanStateFailed)
+
+	summary, err := store.GetAutomaticResponseSummary(ctx, tenant.ID, since, until, 1)
+	require.NoError(t, err)
+	require.Equal(t, 3, summary.HandledAutomatically)
+	require.Equal(t, 1, summary.Blocked)
+	require.Equal(t, 1, summary.Contained)
+	require.Equal(t, 1, summary.Remediated)
+	require.Equal(t, 1, summary.Failed)
+	require.Len(t, summary.FailedPlans, 1)
+	require.Equal(t, failed.ID, summary.FailedPlans[0].ID)
+}
