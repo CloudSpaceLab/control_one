@@ -530,17 +530,48 @@ func (s *Server) controlRoomExecutiveAttention(
 	out := controlRoomExecutiveAttention{Items: []controlRoomExecutiveAttentionItem{}}
 	available := true
 
-	openRows, openTotal, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "open"}, 5, 0)
+	blockProposals := []storage.IPBlocklistEntry{}
+	blockProposalTotal := 0
+	linkedReviewAlerts := map[uuid.UUID]storage.Alert{}
+	if store, ok := s.store.(ipBlockProposalQueryStore); ok {
+		proposals, total, err := controlRoomExecutiveProposedBlocks(ctx, store, tenantID)
+		if err != nil {
+			available = false
+			s.logger.Warn("control room executive block approvals", zap.Error(err))
+		} else {
+			blockProposals = proposals
+			blockProposalTotal = total
+			for _, proposal := range proposals {
+				alertID, ok := controlRoomExecutiveProposalAlertID(proposal.Reason)
+				if !ok {
+					continue
+				}
+				alert, err := s.store.GetAlert(ctx, alertID)
+				if err != nil {
+					available = false
+					s.logger.Warn("control room executive linked alert", zap.Error(err), zap.String("alert_id", alertID.String()))
+					continue
+				}
+				if alert != nil && (alert.State == "open" || alert.State == "acked") {
+					linkedReviewAlerts[alert.ID] = *alert
+				}
+			}
+		}
+	} else {
+		available = false
+	}
+
+	openRows, openTotal, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "open"}, 8, 0)
 	if err != nil {
 		available = false
 		s.logger.Warn("control room executive open alerts", zap.Error(err))
 	}
-	ackedRows, ackedTotal, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "acked"}, 5, 0)
+	ackedRows, ackedTotal, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "acked"}, 8, 0)
 	if err != nil {
 		available = false
 		s.logger.Warn("control room executive acked alerts", zap.Error(err))
 	}
-	out.Reviews = openTotal + ackedTotal
+	out.Reviews = maxInt(0, openTotal+ackedTotal-len(linkedReviewAlerts))
 
 	_, openCritical, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "open", Severity: "critical"}, 1, 0)
 	if err != nil {
@@ -550,9 +581,18 @@ func (s *Server) controlRoomExecutiveAttention(
 	if err != nil {
 		available = false
 	}
-	out.Critical = openCritical + ackedCritical
+	linkedCritical := 0
+	for _, alert := range linkedReviewAlerts {
+		if strings.EqualFold(strings.TrimSpace(alert.Severity), "critical") {
+			linkedCritical++
+		}
+	}
+	out.Critical = maxInt(0, openCritical+ackedCritical-linkedCritical)
 
 	for _, alert := range append(openRows, ackedRows...) {
+		if _, linked := linkedReviewAlerts[alert.ID]; linked {
+			continue
+		}
 		out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
 			ID:        alert.ID.String(),
 			Kind:      "review",
@@ -594,35 +634,25 @@ func (s *Server) controlRoomExecutiveAttention(
 		}
 	}
 
-	if store, ok := s.store.(ipBlockProposalQueryStore); ok {
-		proposals, proposalTotal, err := store.ListIPBlocklistEntries(
-			ctx,
-			storage.IPBlocklistEntryFilter{TenantID: tenantID, Status: "proposed"},
-			4,
-			0,
-		)
-		if err != nil {
-			available = false
-			s.logger.Warn("control room executive block approvals", zap.Error(err))
-		} else {
-			out.Approvals += proposalTotal
-			for _, proposal := range proposals {
-				severity := controlRoomExecutiveScoreSeverity(proposal.Score)
-				if severity == "critical" {
-					out.Critical++
-				}
-				out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
-					ID:        proposal.ID.String(),
-					Kind:      "approval",
-					Severity:  severity,
-					Domain:    "network",
-					Title:     "Block " + proposal.IPCIDR,
-					Reason:    strings.TrimSpace(proposal.Reason),
-					CreatedAt: formatTime(proposal.CreatedAt),
-					Drilldown: "/security/network?tab=approvals&proposal_id=" + proposal.ID.String(),
-				})
-			}
+	out.Approvals += blockProposalTotal
+	for index, proposal := range blockProposals {
+		severity := controlRoomExecutiveScoreSeverity(proposal.Score)
+		if severity == "critical" {
+			out.Critical++
 		}
+		if index >= 4 {
+			continue
+		}
+		out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
+			ID:        proposal.ID.String(),
+			Kind:      "approval",
+			Severity:  severity,
+			Domain:    "network",
+			Title:     "Block " + proposal.IPCIDR,
+			Reason:    strings.TrimSpace(proposal.Reason),
+			CreatedAt: formatTime(proposal.CreatedAt),
+			Drilldown: "/security/network?tab=approvals&proposal_id=" + proposal.ID.String(),
+		})
 	}
 
 	out.Interventions = len(failedAutomaticPlans)
@@ -656,6 +686,53 @@ func (s *Server) controlRoomExecutiveAttention(
 		out.Items = out.Items[:8]
 	}
 	return out, available
+}
+
+func controlRoomExecutiveProposedBlocks(
+	ctx context.Context,
+	store ipBlockProposalQueryStore,
+	tenantID uuid.UUID,
+) ([]storage.IPBlocklistEntry, int, error) {
+	const pageSize = 500
+	var out []storage.IPBlocklistEntry
+	total := 0
+	for offset := 0; ; offset += pageSize {
+		rows, count, err := store.ListIPBlocklistEntries(
+			ctx,
+			storage.IPBlocklistEntryFilter{TenantID: tenantID, Status: "proposed"},
+			pageSize,
+			offset,
+		)
+		if err != nil {
+			return nil, 0, err
+		}
+		if offset == 0 {
+			total = count
+		}
+		out = append(out, rows...)
+		if len(out) >= total || len(rows) == 0 {
+			return out, total, nil
+		}
+	}
+}
+
+func controlRoomExecutiveProposalAlertID(reason string) (uuid.UUID, bool) {
+	reason = strings.TrimSpace(reason)
+	if !strings.HasPrefix(reason, "Correlation response:") {
+		return uuid.Nil, false
+	}
+	for _, part := range strings.Split(strings.TrimPrefix(reason, "Correlation response:"), ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || strings.TrimSpace(key) != "alert_id" {
+			continue
+		}
+		id, err := uuid.Parse(strings.TrimSpace(value))
+		if err != nil || id == uuid.Nil {
+			return uuid.Nil, false
+		}
+		return id, true
+	}
+	return uuid.Nil, false
 }
 
 func controlRoomExecutiveScoreSeverity(score int) string {
