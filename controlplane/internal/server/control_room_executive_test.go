@@ -10,9 +10,35 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
+
+func controlRoomExecutiveHarness(t *testing.T, role, token string) (*Server, *fakeStore) {
+	t.Helper()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{Address: ":0"},
+		TLS:  config.TLSConfig{RequireClientTLS: false},
+		Auth: authWithTokens(role, token),
+	}
+	store := &fakeStore{
+		userRoles: map[uuid.UUID][]string{},
+		tenants: []storage.Tenant{
+			{ID: uuid.New(), Name: "Acme"},
+		},
+	}
+
+	// Construct without a store so New does not start retention, replay,
+	// expiry, reminder or health schedulers against the mutable fake.
+	// Handlers read s.store at request time, so attaching it afterwards
+	// preserves the production route/auth stack without background readers.
+	srv := New(logger, cfg, nil, &stubQueue{})
+	srv.store = store
+	return srv, store
+}
 
 type executiveRuleSummaryStore struct {
 	*fakeStore
@@ -166,7 +192,7 @@ func (s *executiveRuleSummaryStore) ListIPBlocklistEntries(
 }
 
 func TestControlRoomExecutiveAttentionUsesExactAlertTotals(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	store := &executiveRuleSummaryStore{fakeStore: base}
 	srv.store = store
 
@@ -218,7 +244,7 @@ func TestControlRoomExecutiveAttentionUsesExactAlertTotals(t *testing.T) {
 }
 
 func TestControlRoomExecutiveRuleViolationSummaryIsIndependentOfTopRules(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	topRuleID := uuid.New()
 	store := &executiveRuleSummaryStore{
@@ -266,7 +292,7 @@ func TestControlRoomExecutiveRuleViolationSummaryIsIndependentOfTopRules(t *test
 }
 
 func TestControlRoomExecutiveRejectsCrossTenantRuleEnrichment(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	otherTenantID := uuid.New()
 	ruleID := uuid.New()
@@ -308,7 +334,7 @@ func TestControlRoomExecutiveRejectsCrossTenantRuleEnrichment(t *testing.T) {
 }
 
 func TestControlRoomExecutiveIgnoresCrossTenantLinkedAlert(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	otherTenantID := uuid.New()
 	now := time.Now().UTC()
@@ -363,7 +389,7 @@ func TestControlRoomExecutiveIgnoresCrossTenantLinkedAlert(t *testing.T) {
 }
 
 func TestControlRoomExecutiveIgnoresCrossTenantHandledAlert(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	otherTenantID := uuid.New()
 	now := time.Now().UTC()
@@ -426,7 +452,7 @@ func TestControlRoomExecutiveIgnoresCrossTenantHandledAlert(t *testing.T) {
 }
 
 func TestControlRoomExecutiveDoesNotExposeCrossTenantApprovalNodeName(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	otherTenantID := uuid.New()
 	now := time.Now().UTC()
@@ -484,7 +510,7 @@ func TestControlRoomExecutiveDoesNotExposeCrossTenantApprovalNodeName(t *testing
 }
 
 func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	now := time.Now().UTC()
 	proposalID := uuid.New()
@@ -541,7 +567,7 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 }
 
 func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	now := time.Now().UTC()
 	base.actionPlans = map[uuid.UUID]storage.ActionPlan{}
@@ -629,7 +655,7 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 }
 
 func TestControlRoomExecutiveIncludesRemediationApprovals(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	nodeID := uuid.New()
 	now := time.Now().UTC()
@@ -678,7 +704,7 @@ func TestControlRoomExecutiveIncludesRemediationApprovals(t *testing.T) {
 }
 
 func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	now := time.Now().UTC()
 	alertID := uuid.New()
@@ -809,7 +835,7 @@ func TestControlRoomExecutiveEstateGroupsAndIntentionalIsolation(t *testing.T) {
 }
 
 func TestControlRoomExecutiveProtectionUsesVerifiedListenerEvidence(t *testing.T) {
-	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
 	nodeID := uuid.New()
 	now := time.Now().UTC()
