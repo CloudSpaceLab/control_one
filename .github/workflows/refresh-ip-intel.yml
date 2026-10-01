@@ -1,0 +1,79 @@
+name: refresh-ip-intel
+
+on:
+  schedule:
+    # DB-IP publishes Lite databases monthly. Run after the first few days of
+    # the month; the updater falls back to the previous release if necessary.
+    - cron: '17 3 5 * *'
+  workflow_dispatch:
+
+concurrency:
+  group: refresh-ip-intel-prod
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  DEPLOY_DIR: /opt/control-one/deploy
+
+jobs:
+  refresh:
+    name: Refresh offline IP databases
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Trust SSH host
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Refresh DB-IP Lite and reload control plane
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          scp -P "${SSH_PORT:-22}" scripts/update_dbip_lite.sh             "$SSH_USERNAME@$SSH_HOST:$DEPLOY_DIR/update_dbip_lite.sh"
+          ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" '
+            set -euo pipefail
+            cd /opt/control-one/deploy
+            chmod 0750 ./update_dbip_lite.sh
+            mkdir -p ./ip-intel
+            chown 0:65532 ./ip-intel
+            chmod 0750 ./ip-intel
+
+            old_city=$(sha256sum ./ip-intel/dbip-city-lite.mmdb 2>/dev/null | awk "{print \$1}" || true)
+            old_asn=$(sha256sum ./ip-intel/dbip-asn-lite.mmdb 2>/dev/null | awk "{print \$1}" || true)
+
+            DBIP_LICENSE_ACCEPTED=1 IP_INTEL_GID=65532               ./update_dbip_lite.sh ./ip-intel
+
+            new_city=$(sha256sum ./ip-intel/dbip-city-lite.mmdb | awk "{print \$1}")
+            new_asn=$(sha256sum ./ip-intel/dbip-asn-lite.mmdb | awk "{print \$1}")
+            if [ "$old_city" != "$new_city" ] || [ "$old_asn" != "$new_asn" ]; then
+              docker compose up -d --force-recreate --no-deps controlplane
+            else
+              echo "IP intelligence databases unchanged; restart not required"
+            fi
+
+            for i in $(seq 1 24); do
+              if curl -fsS --max-time 5 http://127.0.0.1:8443/healthz >/dev/null 2>&1; then
+                echo "controlplane /healthz OK"
+                exit 0
+              fi
+              sleep 5
+            done
+            docker logs deploy-controlplane-1 --tail 40 || true
+            exit 1
+          '

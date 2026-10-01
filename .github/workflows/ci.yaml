@@ -90,6 +90,8 @@ jobs:
           ! grep -Fq 'akyriako78/ipquery' deploy/docker-compose.yaml
           grep -Fq "chown 0:65532 '\$DEPLOY_DIR/ip-intel'" .github/workflows/deploy.yml
           bash -n scripts/update_dbip_lite.sh
+          grep -Fq "cron: '17 3 5 * *'" .github/workflows/refresh-ip-intel.yml
+          grep -Fq 'docker compose up -d --force-recreate --no-deps controlplane' .github/workflows/refresh-ip-intel.yml
 
       - name: Storage integration tests
         if: matrix.os == 'ubuntu-latest'
