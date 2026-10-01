@@ -991,9 +991,9 @@ export function Alerts(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="VISIBILITY / ALERTS"
+        eyebrow="SECURITY"
         title="Alerts"
-        description="Deduped inbox from correlation, rules, and compliance."
+        description="Alerts requiring review or follow-up."
         actions={
           <Button variant="secondary" size="md" onClick={refresh} loading={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
@@ -1090,7 +1090,7 @@ export function Alerts(): JSX.Element {
             </div>
           )}
 
-          <Panel padding="md" eyebrow="FILTERS" title="Refine">
+          <Panel padding="md" eyebrow="FILTERS" title="Filters">
             <div className="flex flex-col gap-3">
               <div className="relative max-w-md">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
@@ -1181,14 +1181,14 @@ export function Alerts(): JSX.Element {
                   <EmptyState
                     icon={<Bell />}
                     title="Alerts could not be loaded"
-                    description="Resolve the error above and refresh."
+                    description="Retry the alert list."
                   />
                 ) : allClear ? (
                   <EmptyState
                     tone="success"
                     icon={<ShieldCheck />}
                     title="All clear"
-                    description="No open alerts match the current filters. Detection rules are healthy and the inbox is empty."
+                    description="No open alerts match the current filters."
                   />
                 ) : (
                   <EmptyState
@@ -1566,7 +1566,7 @@ export function Alerts(): JSX.Element {
                 <EmptyState
                   icon={<ShieldCheck />}
                   title="Correlation rules could not be loaded"
-                  description="Resolve the error above and refresh."
+                  description="Retry the alert list."
                 />
               ) : (
                 <EmptyState
@@ -1671,8 +1671,8 @@ function CriticalResponseCenter({
   return (
     <Panel
       padding="md"
-      eyebrow="SMART RESPONSE"
-      title="Critical response center"
+      eyebrow="CRITICAL ALERTS"
+      title="Containment required"
       toneAccent="critical"
       actions={
         <Button asChild variant="outline" size="sm">
