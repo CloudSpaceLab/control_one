@@ -55,8 +55,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 				rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 			}
 			if err != nil {
-				s.logger.Warn("small analytics list connections", zap.Error(err))
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				s.writeConnectionsReadUnavailable(w, source, err)
 				return
 			}
 			rows = sanitizeConnectionThreatRows(rows)
@@ -86,8 +85,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 	}
 	if err != nil {
-		s.logger.Warn("doris list connections", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		s.writeConnectionsReadUnavailable(w, source, err)
 		return
 	}
 	rows = sanitizeConnectionThreatRows(rows)
@@ -96,6 +94,22 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		resp["source"] = source
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+
+func (s *Server) writeConnectionsReadUnavailable(w http.ResponseWriter, source string, err error) {
+	if s != nil && s.logger != nil {
+		s.logger.Warn("connection analytics read unavailable",
+			zap.String("source", source),
+			zap.Error(err),
+		)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":       []doris.ConnectionRow{},
+		"source":     source,
+		"degraded":   true,
+		"guardrails": []string{"Connection evidence unavailable. Check analytics health and retry."},
+	})
 }
 
 // handleConnectionDetail returns the connection-level record + correlated
