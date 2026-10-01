@@ -1244,7 +1244,6 @@ func TestHeartbeatNetworkObservationsStayBounded(t *testing.T) {
 	}
 }
 
-
 type logDumpPendingHeartbeatStore struct {
 	*fakeStore
 	pending []storage.LogDump
