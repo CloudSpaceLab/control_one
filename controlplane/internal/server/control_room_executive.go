@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +17,10 @@ import (
 
 type controlRoomExecutiveRuleViolationStore interface {
 	GetRuleViolationSummary(context.Context, uuid.UUID, time.Time, time.Time, time.Time, time.Time, int) (storage.RuleViolationSummary, error)
+}
+
+type controlRoomExecutiveAutomaticResponseStore interface {
+	GetAutomaticResponseSummary(context.Context, uuid.UUID, time.Time, time.Time, int) (storage.AutomaticResponseSummary, error)
 }
 
 type controlRoomExecutiveOverviewResponse struct {
@@ -203,7 +206,7 @@ func (s *Server) buildControlRoomExecutiveOverview(
 	resp.Response = response
 	resp.Availability.Response = responseAvailable
 
-	attention, attentionAvailable := s.controlRoomExecutiveAttention(ctx, tenantID, failedAutomaticPlans)
+	attention, attentionAvailable := s.controlRoomExecutiveAttention(ctx, tenantID, failedAutomaticPlans, response.Failed)
 	resp.Attention = attention
 	resp.Availability.Attention = attentionAvailable
 
@@ -423,110 +426,30 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 	until time.Time,
 ) (controlRoomExecutiveResponse, []storage.ActionPlan, bool) {
 	var out controlRoomExecutiveResponse
-	store, ok := s.store.(actionPlanStore)
+	store, ok := s.store.(controlRoomExecutiveAutomaticResponseStore)
 	if !ok {
 		return out, nil, false
 	}
-
-	plans, err := controlRoomExecutiveActionPlans(ctx, store, tenantID)
+	summary, err := store.GetAutomaticResponseSummary(ctx, tenantID, since, until, 8)
 	if err != nil {
-		s.logger.Warn("control room executive action plans", zap.Error(err))
+		s.logger.Warn("control room executive automatic responses", zap.Error(err))
 		return out, nil, false
 	}
-	failed := make([]storage.ActionPlan, 0)
-	for _, plan := range plans {
-		changedAt := plan.UpdatedAt
-		if changedAt.IsZero() {
-			changedAt = plan.CreatedAt
-		}
-		if changedAt.Before(since) || !changedAt.Before(until) || !controlRoomExecutiveAutomaticPlan(plan) {
-			continue
-		}
-		switch plan.State {
-		case storage.ActionPlanStateSucceeded, storage.ActionPlanStateVerified:
-			receipts, err := store.ListActionReceipts(ctx, plan.ID)
-			if err != nil || !controlRoomExecutiveSuccessfulReceipt(receipts, since, until) {
-				continue
-			}
-			out.HandledAutomatically++
-			switch {
-			case plan.Domain == "firewall" && strings.Contains(strings.ToLower(plan.ActionKind), "block"):
-				out.Blocked++
-			case plan.Domain == "remediation":
-				out.Remediated++
-			case strings.Contains(strings.ToLower(plan.ActionKind), "contain"),
-				strings.Contains(strings.ToLower(plan.ActionKind), "isolation"),
-				strings.Contains(strings.ToLower(plan.ActionKind), "quarantine"):
-				out.Contained++
-			}
-		case storage.ActionPlanStateFailed:
-			out.Failed++
-			failed = append(failed, plan)
-		}
+	out = controlRoomExecutiveResponse{
+		HandledAutomatically: summary.HandledAutomatically,
+		Blocked:              summary.Blocked,
+		Contained:            summary.Contained,
+		Remediated:           summary.Remediated,
+		Failed:               summary.Failed,
 	}
-	return out, failed, true
-}
-
-func controlRoomExecutiveActionPlans(
-	ctx context.Context,
-	store actionPlanStore,
-	tenantID uuid.UUID,
-) ([]storage.ActionPlan, error) {
-	const pageSize = 500
-	var out []storage.ActionPlan
-	for offset := 0; ; offset += pageSize {
-		rows, total, err := store.ListActionPlans(ctx, storage.ListActionPlansFilter{TenantID: tenantID}, pageSize, offset)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rows...)
-		if len(out) >= total || len(rows) == 0 {
-			return out, nil
-		}
-	}
-}
-
-func controlRoomExecutiveAutomaticPlan(plan storage.ActionPlan) bool {
-	return controlRoomExecutiveBool(plan.Diff["auto_triggered"]) ||
-		controlRoomExecutiveBool(plan.SourceRef["auto_triggered"])
-}
-
-func controlRoomExecutiveBool(value any) bool {
-	switch v := value.(type) {
-	case bool:
-		return v
-	case string:
-		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
-		return err == nil && parsed
-	case int:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	default:
-		return false
-	}
-}
-
-func controlRoomExecutiveSuccessfulReceipt(receipts []storage.ActionReceipt, since, until time.Time) bool {
-	for i := len(receipts) - 1; i >= 0; i-- {
-		receipt := receipts[i]
-		if receipt.CreatedAt.Before(since) || !receipt.CreatedAt.Before(until) {
-			continue
-		}
-		if strings.TrimSpace(receipt.Error) != "" {
-			return false
-		}
-		return receipt.State == storage.ActionPlanStateSucceeded || receipt.State == storage.ActionPlanStateVerified
-	}
-	return false
+	return out, summary.FailedPlans, true
 }
 
 func (s *Server) controlRoomExecutiveAttention(
 	ctx context.Context,
 	tenantID uuid.UUID,
 	failedAutomaticPlans []storage.ActionPlan,
+	failedAutomaticTotal int,
 ) (controlRoomExecutiveAttention, bool) {
 	out := controlRoomExecutiveAttention{Items: []controlRoomExecutiveAttentionItem{}}
 	available := true
@@ -689,7 +612,7 @@ func (s *Server) controlRoomExecutiveAttention(
 		})
 	}
 
-	out.Interventions = len(failedAutomaticPlans)
+	out.Interventions = failedAutomaticTotal
 	for _, plan := range failedAutomaticPlans {
 		severity := controlRoomExecutiveRiskSeverity(plan.Risk)
 		if severity == "critical" {
