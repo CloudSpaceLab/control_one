@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bell, ExternalLink, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -2095,23 +2095,6 @@ function ResolveAlertModal({
                 ) : null}
               </div>
 
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ListChecks className="h-4 w-4 text-brand-400" />
-                  Recommended resolution actions
-                </div>
-                <ol className="space-y-2">
-                  {plan.steps.map((step, index) => (
-                    <li key={step} className="flex gap-2 text-sm text-text-secondary">
-                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-500/15 font-mono text-[0.7rem] text-brand-400">
-                        {index + 1}
-                      </span>
-                      <span>{step}</span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-
               <ContributingEvents alert={alert} />
 
               <div className="grid gap-2 sm:grid-cols-2">
@@ -2151,33 +2134,6 @@ function ResolveAlertModal({
                   />
                 </div>
               ) : null}
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ShieldCheck className="h-4 w-4 text-brand-400" />
-                  Posture recommendation
-                </div>
-                <div className="space-y-2">
-                  {plan.posture.map((item) => (
-                    <div key={`${item.mode}:${item.scope}`} className="rounded-md border border-border-subtle bg-elevated p-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusTag tone={item.tone}>{item.mode}</StatusTag>
-                        <span className="text-xs text-text-muted">{item.scope}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-text-secondary">{item.reason}</p>
-                      <p className="mt-1 text-xs text-text-muted">{item.equivalent}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <CheckCircle2 className="h-4 w-4 text-state-healthy" />
-                  Resolution gate
-                </div>
-                <p className="text-sm text-text-secondary">{plan.gate}</p>
-              </div>
 
               <div className="rounded-lg border border-border-subtle bg-surface p-3">
                 <SelectField
