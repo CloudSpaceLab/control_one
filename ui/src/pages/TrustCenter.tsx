@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Shield, CheckCircle, AlertTriangle, FileText, Users, HelpCircle, Clock } from 'lucide-react';
-import { Panel, EmptyState, StatusTag } from '../components/kit';
+import { Panel, EmptyState, StatusTag, severityTone } from '../components/kit';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 
@@ -82,16 +82,6 @@ function formatDate(v?: string): string {
   if (!v) return '—';
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString();
-}
-
-function severityTone(sev: string): 'critical' | 'warning' | 'healthy' | 'info' | 'unknown' {
-  switch (sev.toLowerCase()) {
-    case 'critical': return 'critical';
-    case 'high': return 'critical';
-    case 'medium': return 'warning';
-    case 'low': return 'info';
-    default: return 'unknown';
-  }
 }
 
 export function TrustCenter(): JSX.Element {

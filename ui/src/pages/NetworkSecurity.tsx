@@ -8,7 +8,7 @@ import { Input } from '../components/ui/input';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
-import { ArrowRight, Ban, Download, Filter, Globe2, Network, RefreshCw, Search, ShieldAlert, ShieldCheck, Sparkles, XCircle } from 'lucide-react';
+import { ArrowRight, Filter, Globe2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { describeIPBehaviorFinding, ipBehaviorConfidence } from '../lib/ipBehaviorPresentation';
 import type {
   ActiveBlock,
@@ -17,9 +17,7 @@ import type {
   ControlRoomOverview,
   IPBehaviorBaseline,
   IPBehaviorCountrySummary,
-  IPBehaviorIPProfile,
   IPBlockProposal,
-  IpEnrichment,
   NodeFirewallRule,
   WebserverInstance,
 } from '../lib/api';
@@ -113,15 +111,6 @@ export function NetworkSecurity(): JSX.Element {
 
 type TimeWindowKey = '1h' | '6h' | '24h' | '7d';
 type SeverityFilter = 'all' | 'watch' | 'suspicious' | 'high' | 'critical';
-type EnforcementTarget = 'firewall' | 'webserver' | 'combined';
-type BlockTTL = 900 | 3600 | 86400;
-
-const BLOCK_TTL_LABELS: Record<BlockTTL, string> = {
-  900: '15 minutes',
-  3600: '1 hour',
-  86400: '24 hours',
-};
-
 const WINDOW_HOURS: Record<TimeWindowKey, number> = {
   '1h': 1,
   '6h': 6,
@@ -136,15 +125,6 @@ interface IPBehaviorFilters {
   criticality: string;
   serverGroup: string;
   app: string;
-  vhost: string;
-}
-
-interface ConfirmState {
-  title: string;
-  body?: string;
-  confirmLabel?: string;
-  variant?: 'default' | 'danger';
-  run: () => Promise<void>;
 }
 
 function IPBehaviorPanel(): JSX.Element {
@@ -165,21 +145,10 @@ function IPBehaviorPanel(): JSX.Element {
     criticality: 'all',
     serverGroup: '',
     app: '',
-    vhost: '',
   });
   const [selectedCountryCode, setSelectedCountryCode] = useState('');
   const [selectedCountryDetail, setSelectedCountryDetail] = useState<IPBehaviorCountrySummary | null>(null);
   const [ipQuery, setIpQuery] = useState('');
-  const [profile, setProfile] = useState<IPBehaviorIPProfile | null>(null);
-  const [profileBlocks, setProfileBlocks] = useState<IPBlockProposal[]>([]);
-  const [profileFindings, setProfileFindings] = useState<BehavioralAnomaly[]>([]);
-  const [ipEnrichment, setIpEnrichment] = useState<IpEnrichment | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [proposalState, setProposalState] = useState<string | null>(null);
-  const [enforcement, setEnforcement] = useState<EnforcementTarget>('firewall');
-  const [blockTTL, setBlockTTL] = useState<BlockTTL>(3600);
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  const [confirming, setConfirming] = useState(false);
 
   const since = useMemo(() => windowSince(filters.timeWindow), [filters.timeWindow]);
 
@@ -243,9 +212,6 @@ function IPBehaviorPanel(): JSX.Element {
   const status = overview?.status_counts ?? {};
   const authFailures = (status['401'] ?? 0) + (status['403'] ?? 0);
   const serverErrors = (status['500'] ?? 0) + (status['502'] ?? 0) + (status['503'] ?? 0) + (status['5xx'] ?? 0);
-  const profileBaseline = profile ? findIPBaseline(profile, baselines, filters) : null;
-  const profileInsight = profile ? profileBaselineInsight(profile, profileBaseline) : null;
-  const profileScore = profile ? maxBackendScore(profileFindings) : 0;
 
   const selectCountry = useCallback(async (country: IPBehaviorCountrySummary) => {
     setSelectedCountryCode(country.country_code);
@@ -259,195 +225,11 @@ function IPBehaviorPanel(): JSX.Element {
     }
   }, [client, currentTenantId, since]);
 
-  const refreshProfileBlocks = useCallback(async (sourceIP: string) => {
-    if (!currentTenantId || !sourceIP) return;
-    const cidr = ipv4Cidr24(sourceIP);
-    const exact = exactIPCIDR(sourceIP);
-    const targets = Array.from(new Set([sourceIP, exact, cidr].filter((value): value is string => !!value)));
-    const pages = await Promise.all(
-      targets.map((ipCidr) => client.listBlockProposals({ tenantId: currentTenantId, ipCidr, limit: 20 })),
-    );
-    const merged = new Map<string, IPBlockProposal>();
-    for (const page of pages) {
-      for (const proposal of page.data ?? []) merged.set(proposal.id, proposal);
-    }
-    setProfileBlocks([...merged.values()]);
-  }, [client, currentTenantId]);
-
-  const inspectIP = useCallback(async (overrideIP?: string) => {
+  const openIPInvestigation = useCallback((overrideIP?: string) => {
     const target = (overrideIP ?? ipQuery).trim();
-    if (!currentTenantId || !target) return;
-    setIpQuery(target);
-    setProfile(null);
-    setProfileBlocks([]);
-    setProfileFindings([]);
-    setIpEnrichment(null);
-    setProfileError(null);
-    setProposalState(null);
-    try {
-      const [nextProfile, enrichment] = await Promise.all([
-        client.getIPBehaviorIPProfile({ tenantId: currentTenantId, ip: target, since }),
-        client.enrichIp(target, currentTenantId).catch(() => null),
-      ]);
-      setProfile(nextProfile);
-      setIpEnrichment(enrichment);
-      const [, findings] = await Promise.all([
-        refreshProfileBlocks(nextProfile.source_ip),
-        client.listAnomalies({ tenantId: currentTenantId, sourceIp: nextProfile.source_ip, resolved: false, limit: 10 }),
-      ]);
-      setProfileFindings(findings.data ?? []);
-    } catch (err) {
-      setProfileError(err instanceof Error ? err.message : 'IP profile failed to load');
-    }
-  }, [client, currentTenantId, ipQuery, refreshProfileBlocks, since]);
-
-  const queueBlockProposal = useCallback((target: 'ip' | 'cidr' | 'vhost') => {
-    if (!currentTenantId || !profile?.source_ip) return;
-    const cidr = target === 'cidr' ? ipv4Cidr24(profile.source_ip) : exactIPCIDR(profile.source_ip);
-    if (!cidr) {
-      setProposalState('Block proposal requires a valid IP address');
-      return;
-    }
-    const scopedToVhost = target === 'vhost';
-    const scope = scopedToVhost ? 'app' : 'tenant';
-    const existing = profileBlocks.find((proposal) =>
-      displayIPCIDR(proposal.ip_cidr) === cidr
-      && proposal.enforcement === enforcement
-      && proposal.scope === scope
-      && proposal.vhost === (scopedToVhost ? filters.vhost : '')
-      && ['proposed', 'approved', 'canary', 'dispatching', 'active'].includes(proposal.status),
-    );
-    if (existing) {
-      setProposalState(`${cidr} already has an open ${existing.status} ${enforcement} proposal.`);
-      return;
-    }
-    const label = target === 'cidr' ? 'Block /24 CIDR' : scopedToVhost ? 'Limit to vhost' : 'Block IP';
-    setConfirm({
-      title: label,
-      body: `${cidr} will be proposed for ${enforcement} enforcement with a ${BLOCK_TTL_LABELS[blockTTL]} TTL.`,
-      confirmLabel: 'Create proposal',
-      variant: 'danger',
-      run: async () => {
-        setProposalState('Creating proposal...');
-        const reason = scopedBlockReason(profile, selectedCountry, profileBaseline, filters, target);
-        await client.createBlockProposal({
-          tenant_id: currentTenantId,
-          ip_cidr: cidr,
-          reason,
-          score: profileScore || undefined,
-          ttl_seconds: blockTTL,
-          scope,
-          target_type: 'tenant',
-          server_group: filters.serverGroup,
-          app: filters.app,
-          vhost: scopedToVhost ? filters.vhost : '',
-          enforcement,
-        });
-        setProposalState('Proposal queued for approval');
-        await refreshProfileBlocks(profile.source_ip);
-      },
-    });
-  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileBaseline, profileBlocks, profileScore, refreshProfileBlocks, selectedCountry]);
-
-  const queueASNBlockProposal = useCallback(() => {
-    if (!currentTenantId || !profile?.source_ip) return;
-    const asn = profile.asns?.[0];
-    if (!asn) {
-      setProposalState('ASN proposal requires ASN data for this IP');
-      return;
-    }
-    setConfirm({
-      title: 'Block observed ASN sources',
-      body: `${asn} will create capped per-IP block proposals for observed sources in the selected window. Approval is still required before enforcement.`,
-      confirmLabel: 'Create proposals',
-      variant: 'danger',
-      run: async () => {
-        setProposalState('Creating ASN proposals...');
-        const response = await client.createASNBlockProposals({
-          tenant_id: currentTenantId,
-          asn,
-          since,
-          limit: 25,
-          reason: asnBlockReason(profile, selectedCountry, profileInsight?.description),
-          score: profileScore || undefined,
-          ttl_seconds: blockTTL,
-          scope: filters.vhost ? 'app' : 'tenant',
-          target_type: 'tenant',
-          server_group: filters.serverGroup,
-          app: filters.app,
-          vhost: filters.vhost,
-          enforcement,
-        });
-        const created = response.created?.length ?? 0;
-        const skipped = response.skipped?.length ?? 0;
-        setProposalState(`${created} ASN source proposal${created === 1 ? '' : 's'} queued${skipped > 0 ? `, ${skipped} skipped by safety checks` : ''}`);
-        await refreshProfileBlocks(profile.source_ip);
-      },
-    });
-  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileInsight?.description, profileScore, refreshProfileBlocks, selectedCountry, since]);
-
-  const runConfirmed = useCallback(async () => {
-    if (!confirm) return;
-    setConfirming(true);
-    try {
-      await confirm.run();
-    } catch (err) {
-      setProposalState(err instanceof Error ? err.message : 'action failed');
-    } finally {
-      setConfirming(false);
-      setConfirm(null);
-    }
-  }, [confirm]);
-
-  const collectEvidence = useCallback(() => {
-    if (!profile) return;
-    const blob = new Blob([JSON.stringify({ profile, enrichment: ipEnrichment, baseline: profileBaseline, blocks: profileBlocks, findings: profileFindings }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `control-one-ip-${profile.source_ip}-evidence.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setProposalState('Evidence pack generated');
-  }, [ipEnrichment, profile, profileBaseline, profileBlocks, profileFindings]);
-
-  const suppressProfileFindings = useCallback(() => {
-    if (!profile?.source_ip) return;
-    if (profileFindings.length === 0) {
-      setProposalState('No open findings for this IP');
-      return;
-    }
-    setConfirm({
-      title: 'Suppress IP findings',
-      body: `${profileFindings.length} open finding${profileFindings.length === 1 ? '' : 's'} for ${profile.source_ip} will be marked suppressed.`,
-      confirmLabel: 'Suppress',
-      variant: 'danger',
-      run: async () => {
-        setProposalState('Suppressing findings...');
-        await Promise.all(profileFindings.map((finding) => client.suppressAnomaly(finding.id)));
-        setProfileFindings([]);
-        setFindings((current) => current.filter((finding) => !profileFindings.some((profileFinding) => profileFinding.id === finding.id)));
-        setProposalState('Findings suppressed');
-      },
-    });
-  }, [client, profile?.source_ip, profileFindings]);
-
-  const allowlistPartner = useCallback(() => {
-    if (!currentTenantId || !profile?.source_ip) return;
-    const cidr = exactIPCIDR(profile.source_ip);
-    setConfirm({
-      title: 'Allowlist partner IP',
-      body: `${cidr} will be added to the tenant allowlist used by capture and enforcement safety checks.`,
-      confirmLabel: 'Allowlist',
-      run: async () => {
-        setProposalState('Updating tenant allowlist...');
-        const filters = await client.getTenantEventFilters(currentTenantId);
-        const allowlist = Array.from(new Set([...(filters.allowlist_cidrs ?? []), cidr]));
-        await client.updateTenantEventFilters(currentTenantId, { allowlist_cidrs: allowlist });
-        setProposalState('Tenant allowlist updated');
-      },
-    });
-  }, [client, currentTenantId, profile?.source_ip]);
+    if (!target) return;
+    navigate(`/investigate/ip/${encodeURIComponent(target)}`);
+  }, [ipQuery, navigate]);
 
   if (!currentTenantId) {
     return <EmptyState title="Select a tenant" description="Choose a tenant from the header to view IP behavior." />;
@@ -626,7 +408,7 @@ function IPBehaviorPanel(): JSX.Element {
                       key={`${country.country_code}-${country.last_seen_at}`}
                       type="button"
                       className="w-full rounded border border-border bg-elevated p-3 text-left transition hover:border-border-strong hover:bg-hover"
-                      onClick={() => selectCountry(country)}
+                      onClick={() => finding?.source_ip ? openIPInvestigation(finding.source_ip) : selectCountry(country)}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -683,171 +465,25 @@ function IPBehaviorPanel(): JSX.Element {
           )}
 
           <div className="rounded border border-border p-3">
-            <div className="mb-3 text-sm font-medium">IP profile</div>
+            <div className="mb-1 text-sm font-medium">IP investigation</div>
+            <p className="mb-3 text-xs leading-5 text-text-secondary">
+              IP lifecycle, enrichment, evidence, containment, allowlisting, and response actions live in the investigation workspace.
+            </p>
             <div className="flex gap-2">
-              <Input value={ipQuery} onChange={(e) => setIpQuery(e.target.value)} placeholder="203.0.113.10" onKeyDown={(e) => { if (e.key === 'Enter') void inspectIP(); }} />
-              <Button variant="outline" size="icon" onClick={() => void inspectIP()} aria-label="Inspect IP">
-                <Search className="h-4 w-4" />
+              <Input
+                value={ipQuery}
+                onChange={(e) => setIpQuery(e.target.value)}
+                placeholder="203.0.113.10"
+                onKeyDown={(e) => { if (e.key === 'Enter') openIPInvestigation(); }}
+              />
+              <Button variant="outline" onClick={() => openIPInvestigation()} disabled={!ipQuery.trim()}>
+                Open investigation
+                <ArrowRight className="ml-1 h-3.5 w-3.5" />
               </Button>
             </div>
-            {profileError && <p className="mt-2 text-sm text-destructive">{profileError}</p>}
-            {profile && profileInsight && (
-              <div className="mt-3 space-y-3 text-sm">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono">{profile.source_ip}</span>
-                  <StatusTag tone={riskTone(profileScore)}>{profileScore}% confidence</StatusTag>
-                </div>
-                <div className="rounded border border-border p-2">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="font-medium">Baseline explanation</span>
-                    <StatusTag tone={profileInsight.tone}>{profileInsight.label}</StatusTag>
-                  </div>
-                  <p className="text-xs text-text-secondary">{profileInsight.description}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-text-secondary">
-                  <span>{formatNumber(profile.request_count)} requests</span>
-                  <span>{formatBytes(profile.bytes_out)} out</span>
-                  <span>{formatNumber(authCount(profile.status_counts))} auth failures</span>
-                  <span>{formatNumber(serverErrorCount(profile.status_counts))} 5xx</span>
-                  <span>{compactList(profile.countries) || 'country unknown'}</span>
-                  <span>{compactList(profile.asns) || 'ASN unknown'}</span>
-                  <span>{compactList(profile.isps) || ipEnrichment?.geo?.isp || 'ISP unknown'}</span>
-                  <span>{ipEnrichment?.reputation_score !== undefined ? `reputation ${ipEnrichment.reputation_score}/100` : 'reputation unknown'}</span>
-                  <span>{compactList(profile.server_groups) || 'groups unknown'}</span>
-                  <span>{formatNumber(profile.node_ids?.length ?? 0)} servers</span>
-                  <span>{formatDateTime(profile.first_seen_at)} first seen</span>
-                  <span>{formatDateTime(profile.last_seen_at)} last seen</span>
-                </div>
-                <div className="rounded border border-border p-2">
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">Status mix</div>
-                  <div className="grid grid-cols-4 gap-2 text-xs text-text-secondary">
-                    {['2xx', '301', '401', '403', '404', '429', '500', '5xx'].map((code) => (
-                      <div key={code} className="rounded bg-surface-2 px-2 py-1">
-                        <span className="font-mono text-foreground">{formatNumber(profile.status_counts?.[code] ?? 0)}</span> {code}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                {profile.history && profile.history.length > 0 && (
-                  <div className="rounded border border-border p-2">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">Request and bytes trend</div>
-                    <div className="flex h-20 items-end gap-1">
-                      {profile.history.slice(-24).map((point) => {
-                        const maxReq = Math.max(...(profile.history ?? []).map((row) => row.request_count), 1);
-                        const height = Math.max(8, Math.round((point.request_count / maxReq) * 72));
-                        return (
-                          <div key={point.hour_ts} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                            <div
-                              className="w-full rounded-t bg-brand-500/70"
-                              style={{ height }}
-                              title={`${formatDateTime(point.hour_ts)}: ${formatNumber(point.request_count)} requests, ${formatBytes(point.bytes_out)} out`}
-                            />
-                            <span className="hidden text-[10px] text-text-muted sm:block">{new Date(point.hour_ts).getHours()}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <SelectField
-                    id="ip-behavior-enforcement"
-                    label="Enforcement"
-                    value={enforcement}
-                    onChange={(e) => setEnforcement(e.target.value as EnforcementTarget)}
-                  >
-                    <option value="firewall">Firewall</option>
-                    <option value="webserver">Webserver</option>
-                    <option value="combined">Firewall + webserver</option>
-                  </SelectField>
-                  <SelectField
-                    id="ip-behavior-block-ttl"
-                    label="Block duration"
-                    value={String(blockTTL)}
-                    onChange={(e) => setBlockTTL(Number(e.target.value) as BlockTTL)}
-                  >
-                    {Object.entries(BLOCK_TTL_LABELS).map(([seconds, label]) => (
-                      <option key={seconds} value={seconds}>{label}</option>
-                    ))}
-                  </SelectField>
-                  <Input value={filters.vhost} onChange={(e) => setFilters({ ...filters, vhost: e.target.value })} placeholder="Vhost scope" />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => queueBlockProposal('ip')}><Ban className="h-4 w-4" />Block IP</Button>
-                  <Button variant="outline" size="sm" onClick={() => queueBlockProposal('cidr')}><ShieldAlert className="h-4 w-4" />Block /24</Button>
-                  <Button variant="outline" size="sm" onClick={queueASNBlockProposal} disabled={!profile.asns?.length}><Network className="h-4 w-4" />Block ASN</Button>
-                  <Button variant="outline" size="sm" onClick={() => queueBlockProposal('vhost')} disabled={!filters.vhost.trim()}><ShieldCheck className="h-4 w-4" />Limit to vhost</Button>
-                  <Button variant="outline" size="sm" onClick={collectEvidence}><Download className="h-4 w-4" />Evidence</Button>
-                  <Button variant="outline" size="sm" onClick={() => navigate(`/ask?q=${encodeURIComponent(askAIPrompt(profile, profileInsight.description))}`)}><Sparkles className="h-4 w-4" />Ask AI</Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="ghost" size="sm" onClick={suppressProfileFindings} disabled={profileFindings.length === 0}><XCircle className="h-4 w-4" />Suppress</Button>
-                  <Button variant="ghost" size="sm" onClick={allowlistPartner}><ShieldCheck className="h-4 w-4" />Allowlist partner</Button>
-                </div>
-                {profileFindings.length > 0 && (
-                  <div className="rounded border border-border p-2">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">Open findings</div>
-                    <div className="space-y-2">
-                      {profileFindings.map((finding) => (
-                        <div key={finding.id} className="flex items-start justify-between gap-2 text-xs">
-                          <div className="min-w-0">
-                            <div className="truncate font-medium">{finding.reason || finding.metric}</div>
-                            <div className="text-text-secondary">{formatDateTime(finding.last_seen_at ?? finding.created_at)}</div>
-                          </div>
-                          <StatusTag tone={findingSeverityTone(finding.severity)}>{finding.severity || finding.status || 'open'}</StatusTag>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {proposalState && <p className="text-xs text-text-secondary">{proposalState}</p>}
-              </div>
-            )}
           </div>
         </div>
       </div>
-
-      {profile && (
-        <div className="rounded border border-border">
-          <div className="border-b border-border px-3 py-2 text-sm font-medium">Enforcement status for {profile.source_ip}</div>
-          {profileBlocks.length === 0 ? (
-            <EmptyState title="No block proposals" description="No block proposals target this IP." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
-                  <tr>
-                    <th className="px-3 py-2">Target</th>
-                    <th className="px-3 py-2">Enforcement</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2">Scope</th>
-                    <th className="px-3 py-2">Expires</th>
-                    <th className="px-3 py-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {profileBlocks.map((proposal) => (
-                    <tr key={proposal.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-mono text-xs">{displayIPCIDR(proposal.ip_cidr)}</td>
-                      <td className="px-3 py-2">{proposal.enforcement}</td>
-                      <td className="px-3 py-2"><StatusTag tone={blockStatusTone(proposal.status)}>{proposal.status}</StatusTag></td>
-                      <td className="px-3 py-2 text-text-secondary">{compactList([proposal.server_group, proposal.app, proposal.vhost]) || proposal.scope}</td>
-                      <td className="px-3 py-2 text-text-secondary">{proposal.expires_at ? formatDateTime(proposal.expires_at) : 'manual'}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-2">
-                          {proposal.status === 'proposed' && <Button variant="outline" size="sm" onClick={() => navigate(`/security/network?tab=approvals&proposal_id=${encodeURIComponent(proposal.id)}`)}>Review proposal</Button>}
-                          {proposal.status === 'active' && <Button variant="outline" size="sm" onClick={() => navigate(`/security/network?tab=blocks&proposal_id=${encodeURIComponent(proposal.id)}`)}>Review active block</Button>}
-                          {['expired', 'rolled_back', 'rejected'].includes(proposal.status) && <Button variant="ghost" size="sm" onClick={() => navigate(`/audit?q=${encodeURIComponent(proposal.id)}`)}>Review audit trail</Button>}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
 
       {webservers.length > 0 && (
         <div className="rounded border border-border">
@@ -885,15 +521,6 @@ function IPBehaviorPanel(): JSX.Element {
         </div>
       )}
 
-      <ConfirmModal
-        open={!!confirm}
-        title={confirm?.title ?? ''}
-        body={confirm?.body}
-        confirmLabel={confirming ? 'Working...' : confirm?.confirmLabel}
-        variant={confirm?.variant}
-        onConfirm={() => void runConfirmed()}
-        onCancel={() => confirming ? undefined : setConfirm(null)}
-      />
     </div>
   );
 }
@@ -912,10 +539,6 @@ function countryTopFinding(country: IPBehaviorCountrySummary, findings: Behavior
       return false;
     })
     .sort((a, b) => findingScore(b) - findingScore(a))[0];
-}
-
-function maxBackendScore(findings: BehavioralAnomaly[]): number {
-  return Math.max(0, ...findings.map((finding) => findingScore(finding)));
 }
 
 function findingScore(finding?: BehavioralAnomaly): number {
@@ -951,28 +574,6 @@ function countryBaselineInsight(country: IPBehaviorCountrySummary, baseline?: IP
   };
 }
 
-function profileBaselineInsight(profile: IPBehaviorIPProfile, baseline?: IPBehaviorBaseline | null): { tone: StateTone; label: string; description: string } {
-  const samples = baseline ? baselineSampleCount(baseline) : 0;
-  if (!baseline || samples < 5) {
-    return {
-      tone: 'unknown',
-      label: 'Insufficient baseline',
-      description: `${profile.source_ip} has ${formatNumber(profile.request_count)} requests and ${formatBytes(profile.bytes_out)} out, but only ${formatNumber(samples)} matching source-IP baseline samples are available.`,
-    };
-  }
-  const reqP99 = baselineMetric(baseline, 'request_count', 'p99');
-  const bytesP99 = baselineMetric(baseline, 'bytes_out', 'p99');
-  const overReq = reqP99 > 0 && profile.request_count > reqP99;
-  const overBytes = bytesP99 > 0 && profile.bytes_out > bytesP99;
-  const tone: StateTone = overBytes ? 'critical' : overReq || authCount(profile.status_counts) > 0 ? 'warning' : 'healthy';
-  const label = tone === 'healthy' ? 'Inside baseline' : tone === 'critical' ? 'Exfiltration risk' : 'Behavior shift';
-  return {
-    tone,
-    label,
-    description: `${profile.source_ip} has ${formatNumber(profile.request_count)} requests against source/app p99 ${formatNumber(Math.round(reqP99))}; bytes out is ${formatBytes(profile.bytes_out)} against p99 ${formatBytes(Math.round(bytesP99))}; affected servers ${formatNumber(profile.node_ids?.length ?? 0)}.`,
-  };
-}
-
 function findCountryBaseline(country: IPBehaviorCountrySummary, baselines: IPBehaviorBaseline[], filters: IPBehaviorFilters): IPBehaviorBaseline | null {
   const code = (country.country_code || '').toUpperCase();
   if (!code) return null;
@@ -981,17 +582,6 @@ function findCountryBaseline(country: IPBehaviorCountrySummary, baselines: IPBeh
     const key = baselineDimensionKey(row);
     if (!dim.includes('country_app') || !key.toUpperCase().endsWith(`|${code}`)) return false;
     if (filters.serverGroup && !includesFold(key, filters.serverGroup)) return false;
-    if (filters.app && !includesFold(key, filters.app)) return false;
-    return true;
-  }));
-}
-
-function findIPBaseline(profile: IPBehaviorIPProfile, baselines: IPBehaviorBaseline[], filters: IPBehaviorFilters): IPBehaviorBaseline | null {
-  const ip = profile.source_ip;
-  return bestBaseline(baselines.filter((row) => {
-    const dim = baselineDimension(row);
-    const key = baselineDimensionKey(row);
-    if (!dim.includes('source_ip_app') || !key.endsWith(`|${ip}`)) return false;
     if (filters.app && !includesFold(key, filters.app)) return false;
     return true;
   }));
@@ -1048,22 +638,6 @@ function riskTone(score: number): StateTone {
   return 'healthy';
 }
 
-function blockStatusTone(status: IPBlockProposal['status']): StateTone {
-  if (status === 'active') return 'healthy';
-  if (status === 'failed' || status === 'denied') return 'critical';
-  if (status === 'dispatching' || status === 'canary' || status === 'approved') return 'warning';
-  if (status === 'expired' || status === 'removed' || status === 'rolled_back' || status === 'rejected') return 'unknown';
-  return 'info';
-}
-
-function findingSeverityTone(severity?: string): StateTone {
-  if (severity === 'critical') return 'critical';
-  if (severity === 'high') return 'degraded';
-  if (severity === 'medium') return 'warning';
-  if (severity === 'low') return 'info';
-  return 'unknown';
-}
-
 function severityLabel(score: number, finding?: BehavioralAnomaly): string {
   if (finding?.severity) return finding.severity;
   if (score <= 0) return 'normal';
@@ -1089,40 +663,12 @@ function windowSince(windowKey: TimeWindowKey): string {
   return new Date(Date.now() - (WINDOW_HOURS[windowKey] || 1) * 60 * 60 * 1000).toISOString();
 }
 
-function ipv4Cidr24(ip: string): string | null {
-  const parts = ip.split('.');
-  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part) || Number(part) < 0 || Number(part) > 255)) return null;
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-}
-
 function exactIPCIDR(ip: string): string {
   return ip.includes(':') ? `${ip}/128` : `${ip}/32`;
 }
 
 function displayIPCIDR(ipOrCIDR: string): string {
   return ipOrCIDR.includes('/') ? ipOrCIDR : exactIPCIDR(ipOrCIDR);
-}
-
-function scopedBlockReason(
-  profile: IPBehaviorIPProfile,
-  country: IPBehaviorCountrySummary | null,
-  baseline: IPBehaviorBaseline | null,
-  filters: IPBehaviorFilters,
-  target: 'ip' | 'cidr' | 'vhost',
-): string {
-  const insight = profileBaselineInsight(profile, baseline).description;
-  const scope = target === 'vhost' ? ` scoped to vhost ${filters.vhost}` : target === 'cidr' ? ' for source /24' : '';
-  return `IP behavior proposal${scope}: ${profile.source_ip}; ${insight}; country=${country ? countryLabel(country) : compactList(profile.countries)}; app=${filters.app || compactList(profile.apps)}; server_group=${filters.serverGroup || compactList(profile.server_groups)}.`;
-}
-
-function asnBlockReason(profile: IPBehaviorIPProfile, country: IPBehaviorCountrySummary | null, explanation?: string): string {
-  const asn = profile.asns?.[0] || 'unknown ASN';
-  const context = explanation || `${formatNumber(profile.request_count)} requests and ${formatBytes(profile.bytes_out)} out`;
-  return `IP behavior ASN proposal: ${asn}; seed_ip=${profile.source_ip}; ${context}; country=${country ? countryLabel(country) : compactList(profile.countries)}; apps=${compactList(profile.apps)}; server_groups=${compactList(profile.server_groups)}.`;
-}
-
-function askAIPrompt(profile: IPBehaviorIPProfile, explanation: string): string {
-  return `Analyze IP behavior for ${profile.source_ip}. ${explanation} Status counts: ${JSON.stringify(profile.status_counts)}. Recommend evidence to review before containment.`;
 }
 
 function formatBytes(value: number): string {

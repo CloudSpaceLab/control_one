@@ -17,6 +17,7 @@ import {
   SectionHeader,
   SelectField,
   StatusTag,
+  severityTone,
   type StateTone,
 } from '../components/kit';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
@@ -131,16 +132,6 @@ function formatDate(value?: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
-}
-
-function severityTone(severity?: string): StateTone {
-  switch ((severity ?? '').toLowerCase()) {
-    case 'critical': return 'critical';
-    case 'high': return 'degraded';
-    case 'medium': return 'warning';
-    case 'low': return 'info';
-    default: return 'unknown';
-  }
 }
 
 function exportToCSV(results: ComplianceResult[]): void {

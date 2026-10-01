@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
+  ScanSearch,
   Server,
   ShieldAlert,
   ShieldQuestion,
@@ -81,6 +82,7 @@ const NAV_GROUPS: NavGroupDef[] = [
       { to: '/security/network', label: 'Network & exposure', icon: Network },
       { to: '/observability', label: 'Observability', icon: Database },
       { to: '/security/siem', label: 'SIEM coverage', icon: DatabaseZap },
+      { to: '/rules', label: 'Detection rules', icon: ScanSearch },
       {
         to: '/infrastructure/patch',
         label: 'Patch posture',

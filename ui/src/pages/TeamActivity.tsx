@@ -28,6 +28,7 @@ import {
   Pagination,
   SectionHeader,
   StatusTag,
+  severityTone,
   TimeRangePills,
   type TimeRangeOption,
 } from '../components/kit';
@@ -451,17 +452,6 @@ export function TeamActivity(): JSX.Element {
       )}
     </div>
   );
-}
-
-function severityTone(severity: string) {
-  switch (severity.toLowerCase()) {
-    case 'critical':
-      return 'critical';
-    case 'high':
-      return 'warning';
-    default:
-      return 'info';
-  }
 }
 
 function FeedRow({ item }: { item: TeamActivityItem }): JSX.Element {

@@ -10,6 +10,7 @@ import {
   Panel,
   SectionHeader,
   StatusTag,
+  severityTone,
   type StateTone,
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
@@ -24,21 +25,6 @@ import type {
 import type { ColumnDef } from '@tanstack/react-table';
 
 // ---- helper tone maps -------------------------------------------------------
-
-function severityTone(severity: string | undefined): StateTone {
-  switch ((severity ?? '').toLowerCase()) {
-    case 'critical':
-      return 'critical';
-    case 'high':
-      return 'degraded';
-    case 'medium':
-      return 'warning';
-    case 'low':
-      return 'info';
-    default:
-      return 'unknown';
-  }
-}
 
 function encryptionTone(kind: string | undefined): StateTone {
   switch (kind) {

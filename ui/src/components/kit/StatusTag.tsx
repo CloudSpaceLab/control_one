@@ -3,6 +3,23 @@ import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { type StateTone } from './types';
 
+export function severityTone(severity?: string): StateTone {
+  switch ((severity ?? '').toLowerCase()) {
+    case 'critical':
+      return 'critical';
+    case 'high':
+      return 'degraded';
+    case 'medium':
+    case 'warning':
+      return 'warning';
+    case 'low':
+    case 'info':
+      return 'info';
+    default:
+      return 'unknown';
+  }
+}
+
 export interface StatusTagProps extends Omit<BadgeProps, 'tone' | 'children'> {
   tone: StateTone;
   variant?: BadgeProps['variant'];

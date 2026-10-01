@@ -11,7 +11,7 @@ import {
   Panel,
   SectionHeader,
   StatusTag,
-  type StateTone,
+  severityTone,
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenants } from '../hooks/useTenants';
@@ -36,14 +36,6 @@ const RuleBuilder = lazy(() => import('./RuleBuilder').then((m) => ({ default: m
 
 type Tab = 'port' | 'log' | 'builder' | 'templates' | 'drafts';
 const RULES_POLL_MS = 30_000;
-
-function severityTone(severity: string): StateTone {
-  const s = severity.toLowerCase();
-  if (s === 'critical') return 'critical';
-  if (s === 'high') return 'warning';
-  if (s === 'medium') return 'info';
-  return 'unknown';
-}
 
 export function Rules(): JSX.Element {
   const client = useApiClient();
