@@ -602,15 +602,15 @@ type ipGeoBlock struct {
 }
 
 type ipEnrichResponse struct {
-	Address         string                  `json:"addr"`
-	Classification  []ClassificationChip    `json:"classification"`
-	Geo             ipGeoBlock              `json:"geo"`
-	ThreatFeeds     []ipintel.ThreatFeedHit `json:"threat_feeds"`
-	ReputationScore int                     `json:"reputation_score"`
-	UsageType       string                  `json:"usage_type,omitempty"`
-	IsTor           bool                    `json:"is_tor,omitempty"`
-	TotalReports    int                     `json:"total_reports,omitempty"`
-	LastReportedAt  string                  `json:"last_reported_at,omitempty"`
+	Address           string                  `json:"addr"`
+	Classification    []ClassificationChip    `json:"classification"`
+	Geo               ipGeoBlock              `json:"geo"`
+	ThreatFeeds       []ipintel.ThreatFeedHit `json:"threat_feeds"`
+	ReputationScore   int                     `json:"reputation_score"`
+	UsageType         string                  `json:"usage_type,omitempty"`
+	IsTor             bool                    `json:"is_tor,omitempty"`
+	TotalReports      int                     `json:"total_reports,omitempty"`
+	LastReportedAt    string                  `json:"last_reported_at,omitempty"`
 	Source            string                  `json:"source,omitempty"`
 	GeoDatasetVersion string                  `json:"geo_dataset_version,omitempty"`
 	ASNDatasetVersion string                  `json:"asn_dataset_version,omitempty"`

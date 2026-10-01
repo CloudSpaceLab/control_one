@@ -30,7 +30,7 @@ func TestEnrichConnectionGeoWithLookupAddsSourceAndDestinationMetadata(t *testin
 		case "1.1.1.1":
 			return &ipintel.Enrichment{
 				Source: "dbip-lite",
-				Geo: ipintel.GeoInfo{Country: "Australia", CountryCode: "AU", ASN: "AS13335", Org: "Cloudflare, Inc."},
+				Geo:    ipintel.GeoInfo{Country: "Australia", CountryCode: "AU", ASN: "AS13335", Org: "Cloudflare, Inc."},
 			}, nil
 		default:
 			return nil, nil
@@ -72,7 +72,7 @@ func TestEnrichConnectionGeoDoesNotOverwriteParserMetadataOrLookupPrivateIPs(t *
 		calls++
 		return &ipintel.Enrichment{
 			Source: "dbip-lite",
-			Geo: ipintel.GeoInfo{Country: "United States", CountryCode: "US", ASN: "AS15169"},
+			Geo:    ipintel.GeoInfo{Country: "United States", CountryCode: "US", ASN: "AS15169"},
 		}, nil
 	}
 

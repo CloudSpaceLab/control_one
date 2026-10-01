@@ -18,10 +18,10 @@ const (
 )
 
 type dbIPMMDBProvider struct {
-	city       *maxminddb.Reader
-	asn        *maxminddb.Reader
-	cityBuild  string
-	asnBuild   string
+	city      *maxminddb.Reader
+	asn       *maxminddb.Reader
+	cityBuild string
+	asnBuild  string
 }
 
 type dbIPCityRecord struct {
@@ -82,7 +82,7 @@ func NewDBIPMMDBProvider(cityPath, asnPath string) (Provider, error) {
 	return provider, errors.Join(errs...)
 }
 
-func (p *dbIPMMDBProvider) Name() string { return dbIPSource }
+func (p *dbIPMMDBProvider) Name() string  { return dbIPSource }
 func (p *dbIPMMDBProvider) Offline() bool { return true }
 
 func (p *dbIPMMDBProvider) Lookup(_ context.Context, ip string) (*Enrichment, error) {

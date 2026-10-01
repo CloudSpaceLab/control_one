@@ -120,7 +120,7 @@ func (s *Service) Close() error {
 // ErrDisabled is returned when no provider is configured. Callers should
 // surface a friendly empty enrichment, not a 500.
 var (
-	ErrDisabled            = errors.New("ipintel: disabled (no provider configured)")
+	ErrDisabled              = errors.New("ipintel: disabled (no provider configured)")
 	ErrOfflineGeoUnavailable = errors.New("ipintel: offline geo provider unavailable")
 )
 
