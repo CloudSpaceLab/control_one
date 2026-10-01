@@ -593,6 +593,37 @@ func (s *Server) controlRoomExecutiveAttention(
 		}
 	}
 
+	if store, ok := s.store.(ipBlockProposalQueryStore); ok {
+		proposals, proposalTotal, err := store.ListIPBlocklistEntries(
+			ctx,
+			storage.IPBlocklistEntryFilter{TenantID: tenantID, Status: "proposed"},
+			4,
+			0,
+		)
+		if err != nil {
+			available = false
+			s.logger.Warn("control room executive block approvals", zap.Error(err))
+		} else {
+			out.Approvals += proposalTotal
+			for _, proposal := range proposals {
+				severity := controlRoomExecutiveScoreSeverity(proposal.Score)
+				if severity == "critical" {
+					out.Critical++
+				}
+				out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
+					ID:        proposal.ID.String(),
+					Kind:      "approval",
+					Severity:  severity,
+					Domain:    "network",
+					Title:     "Block " + proposal.IPCIDR,
+					Reason:    strings.TrimSpace(proposal.Reason),
+					CreatedAt: formatTime(proposal.CreatedAt),
+					Drilldown: "/security/network?tab=approvals&proposal_id=" + proposal.ID.String(),
+				})
+			}
+		}
+	}
+
 	out.Interventions = len(failedAutomaticPlans)
 	for _, plan := range failedAutomaticPlans {
 		severity := controlRoomExecutiveRiskSeverity(plan.Risk)
@@ -624,6 +655,19 @@ func (s *Server) controlRoomExecutiveAttention(
 		out.Items = out.Items[:8]
 	}
 	return out, available
+}
+
+func controlRoomExecutiveScoreSeverity(score int) string {
+	switch {
+	case score >= 100:
+		return "critical"
+	case score >= 80:
+		return "high"
+	case score >= 50:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func controlRoomExecutiveRiskSeverity(risk string) string {
