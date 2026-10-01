@@ -21,7 +21,7 @@ import { useTenant } from '../../providers/TenantProvider';
 import { entityRoute } from '../../lib/entity';
 import { toast } from 'sonner';
 import { StatusTag } from './StatusTag';
-import type { IPBlockStatus } from '../../lib/api';
+import type { IPBlockStatus, TenantRemediationConfig } from '../../lib/api';
 import type { StateTone } from './types';
 
 export interface IpActionMenuProps {
@@ -33,37 +33,19 @@ export interface IpActionMenuProps {
   showCopyAction?: boolean;
 }
 
+type BlockScope = 'affected' | 'fleet';
+
 type IpResponseIntent = {
-  id: 'block-affected' | 'block-fleet' | 'allow';
+  id: 'block-default' | 'block-affected' | 'block-fleet' | 'allow';
   action: 'block' | 'allow';
-  scope?: 'affected' | 'fleet';
+  scope?: BlockScope;
   ttlSeconds?: number;
-  label: string;
   reason: string;
-};
-
-const BLOCK_AFFECTED: IpResponseIntent = {
-  id: 'block-affected',
-  action: 'block',
-  scope: 'affected',
-  ttlSeconds: 86400,
-  label: 'Block IP',
-  reason: 'Manual IP block',
-};
-
-const BLOCK_FLEET: IpResponseIntent = {
-  id: 'block-fleet',
-  action: 'block',
-  scope: 'fleet',
-  ttlSeconds: 86400,
-  label: 'Block fleet-wide',
-  reason: 'Manual fleet-wide IP block',
 };
 
 const ALLOW: IpResponseIntent = {
   id: 'allow',
   action: 'allow',
-  label: 'Allow IP',
   reason: 'Manual IP allow',
 };
 
@@ -78,23 +60,31 @@ export function IpActionMenu({
   const { currentTenantId } = useTenant();
   const [busy, setBusy] = useState<null | IpResponseIntent['id']>(null);
   const [status, setStatus] = useState<IPBlockStatus | null>(null);
-  const [statusLoading, setStatusLoading] = useState(false);
+  const [policy, setPolicy] = useState<TenantRemediationConfig | null>(null);
+  const [stateLoading, setStateLoading] = useState(false);
   const [statusError, setStatusError] = useState(false);
 
-  const loadStatus = useCallback(async () => {
+  const loadState = useCallback(async () => {
     if (!currentTenantId) {
       setStatus(null);
+      setPolicy(null);
       return;
     }
-    setStatusLoading(true);
+    setStateLoading(true);
     setStatusError(false);
-    try {
-      setStatus(await client.getIPBlockStatus(ip, currentTenantId));
-    } catch {
+    const [statusResult, policyResult] = await Promise.allSettled([
+      client.getIPBlockStatus(ip, currentTenantId),
+      client.getTenantRemediationConfig(currentTenantId),
+    ]);
+    if (statusResult.status === 'fulfilled') {
+      setStatus(statusResult.value);
+    } else {
       setStatusError(true);
-    } finally {
-      setStatusLoading(false);
     }
+    if (policyResult.status === 'fulfilled') {
+      setPolicy(policyResult.value);
+    }
+    setStateLoading(false);
   }, [client, currentTenantId, ip]);
 
   const dispatch = async (intent: IpResponseIntent) => {
@@ -123,7 +113,7 @@ export function IpActionMenu({
           `${intent.action === 'block' ? 'Block' : 'Allow'} queued · ${dispatched} node${dispatched === 1 ? '' : 's'}`,
         );
       }
-      await loadStatus();
+      await loadState();
       onActionTaken?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'IP action failed');
@@ -132,12 +122,41 @@ export function IpActionMenu({
     }
   };
 
+  const defaultScope = policy?.DefaultIPBlockScope;
+  const defaultTTL = policy?.DefaultIPBlockTTLSeconds;
+  const defaultBlock: IpResponseIntent = {
+    id: 'block-default',
+    action: 'block',
+    scope: defaultScope,
+    ttlSeconds: defaultTTL,
+    reason: 'Manual IP block',
+  };
+  const alternateScope: BlockScope | null = policy
+    ? (defaultScope === 'fleet' ? 'affected' : 'fleet')
+    : null;
+  const alternateBlock: IpResponseIntent | null = alternateScope
+    ? {
+        id: alternateScope === 'fleet' ? 'block-fleet' : 'block-affected',
+        action: 'block',
+        scope: alternateScope,
+        ttlSeconds: defaultTTL,
+        reason: alternateScope === 'fleet' ? 'Manual fleet-wide IP block' : 'Manual affected-node IP block',
+      }
+    : null;
+  const extendFleet: IpResponseIntent = {
+    id: 'block-fleet',
+    action: 'block',
+    scope: 'fleet',
+    ttlSeconds: defaultTTL,
+    reason: 'Manual fleet-wide IP block',
+  };
+
   const unblockInProgress = status?.state === 'unblocking';
   const effectiveBlocked = !!status?.active && status.state !== 'failed';
 
   return (
     <DropdownMenu onOpenChange={(open) => {
-      if (open) void loadStatus();
+      if (open) void loadState();
     }}>
       <DropdownMenuTrigger asChild>
         {trigger ?? (
@@ -151,14 +170,14 @@ export function IpActionMenu({
         <DropdownMenuLabel className="space-y-2">
           <div className="flex items-center justify-between gap-3">
             <span className="truncate font-mono text-xs">{ip}</span>
-            {!statusLoading && status && (
+            {!stateLoading && status && (
               <StatusTag tone={blockStatusTone(status)}>
                 {blockStatusLabel(status)}
               </StatusTag>
             )}
           </div>
           <div className="text-[0.7rem] font-normal normal-case tracking-normal text-text-muted">
-            {statusLoading
+            {stateLoading
               ? 'Checking block status…'
               : statusError
                 ? 'Block status unavailable'
@@ -177,33 +196,37 @@ export function IpActionMenu({
           </DropdownMenuItem>
         ) : !effectiveBlocked ? (
           <>
-            <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(BLOCK_AFFECTED)}>
+            <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(defaultBlock)}>
               <Shield className="mr-2 h-4 w-4" />
               <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                <span>{BLOCK_AFFECTED.label}</span>
-                <span className="text-[0.68rem] text-text-muted">Affected · 24h</span>
+                <span>Block IP</span>
+                <span className="text-[0.68rem] text-text-muted">
+                  {policy ? `${scopeShortLabel(defaultScope!)} · ${ttlLabel(defaultTTL)}` : 'Tenant default'}
+                </span>
               </span>
             </DropdownMenuItem>
-            <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(BLOCK_FLEET)}>
-              <Shield className="mr-2 h-4 w-4" />
-              <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                <span>{BLOCK_FLEET.label}</span>
-                <span className="text-[0.68rem] text-text-muted">24h</span>
-              </span>
-            </DropdownMenuItem>
+            {alternateBlock && (
+              <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(alternateBlock)}>
+                <Shield className="mr-2 h-4 w-4" />
+                <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                  <span>{alternateScope === 'fleet' ? 'Block fleet-wide' : 'Block affected nodes'}</span>
+                  <span className="text-[0.68rem] text-text-muted">{ttlLabel(defaultTTL)}</span>
+                </span>
+              </DropdownMenuItem>
+            )}
           </>
         ) : (
           <>
             <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(ALLOW)}>
               <ShieldOff className="mr-2 h-4 w-4" />
-              <span>{ALLOW.label}</span>
+              <span>Allow IP</span>
             </DropdownMenuItem>
             {status?.scope !== 'fleet' && (
-              <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(BLOCK_FLEET)}>
+              <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(extendFleet)}>
                 <Shield className="mr-2 h-4 w-4" />
                 <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
                   <span>Extend to fleet</span>
-                  <span className="text-[0.68rem] text-text-muted">24h</span>
+                  <span className="text-[0.68rem] text-text-muted">{policy ? ttlLabel(defaultTTL) : 'Tenant default'}</span>
                 </span>
               </DropdownMenuItem>
             )}
@@ -273,10 +296,27 @@ function blockStatusTone(status: IPBlockStatus): StateTone {
 
 function blockStatusDetail(status: IPBlockStatus): string {
   if (!status.active) return 'No active Control One block';
+  const provenance = status.provenance === 'auto' ? 'Auto-blocked' : 'Manually blocked';
   const scope = status.scope === 'fleet' ? 'Fleet-wide' : 'Affected nodes';
   const coverage = `${status.nodes_applied}/${status.target_nodes} applied`;
   const pending = status.nodes_pending > 0 ? ` · ${status.nodes_pending} pending` : '';
   const removing = status.nodes_removing > 0 ? ` · ${status.nodes_removing} removing` : '';
   const failed = status.nodes_failed > 0 ? ` · ${status.nodes_failed} failed` : '';
-  return `${scope} · ${coverage}${pending}${removing}${failed}`;
+  return `${provenance} · ${scope} · ${coverage}${pending}${removing}${failed}`;
+}
+
+function scopeShortLabel(scope: BlockScope): string {
+  return scope === 'fleet' ? 'Fleet' : 'Affected';
+}
+
+function ttlLabel(seconds?: number): string {
+  switch (seconds) {
+    case 900:
+      return '15m';
+    case 86400:
+      return '24h';
+    case 3600:
+    default:
+      return '1h';
+  }
 }
