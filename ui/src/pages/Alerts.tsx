@@ -25,6 +25,7 @@ import {
   SectionHeader,
   SelectField,
   StatusTag,
+  severityTone,
   type StateTone,
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
@@ -161,23 +162,6 @@ interface AlertResolutionPlan {
   gate: string;
   actions: Array<{ label: string; to: string }>;
   posture: Array<{ mode: string; scope: string; reason: string; equivalent: string; tone: StateTone }>;
-}
-
-function severityTone(sev: string | undefined): StateTone {
-  switch ((sev ?? '').toLowerCase()) {
-    case 'critical':
-      return 'critical';
-    case 'high':
-      return 'degraded';
-    case 'medium':
-      return 'warning';
-    case 'low':
-      return 'info';
-    case 'info':
-      return 'info';
-    default:
-      return 'unknown';
-  }
 }
 
 function stateTone(state: string): StateTone {
