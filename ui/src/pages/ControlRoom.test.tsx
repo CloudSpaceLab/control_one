@@ -163,7 +163,7 @@ describe('ControlRoom executive dashboard', () => {
       expect(getExecutiveOverviewMock).toHaveBeenCalledWith('tenant-1', '7d');
     });
     expect(await screen.findByRole('heading', { name: '2 critical items need attention' })).toBeInTheDocument();
-    expect(screen.getByText('12 of 13 infrastructure groups healthy · 94% protection coverage')).toBeInTheDocument();
+    expect(screen.getByText('Bank Tenant · 12 of 13 infrastructure groups healthy · 94% protection coverage')).toBeInTheDocument();
   });
 
   it('shows the four canonical decision metrics', async () => {
