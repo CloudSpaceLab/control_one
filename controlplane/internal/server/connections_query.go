@@ -55,7 +55,12 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 				rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 			}
 			if err != nil {
-				s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
+				if ip != "" {
+					s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
+					return
+				}
+				s.logger.Warn("small analytics list connections", zap.Error(err))
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 			rows = sanitizeConnectionThreatRows(rows)
@@ -86,7 +91,12 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 	}
 	if err != nil {
-		s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
+		if ip != "" {
+			s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
+			return
+		}
+		s.logger.Warn("doris list connections", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	rows = sanitizeConnectionThreatRows(rows)
