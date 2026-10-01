@@ -13,9 +13,9 @@ import (
 
 const (
 	logDumpMaintenanceInterval = time.Hour
-	logDumpCaptureTimeout       = 30 * time.Minute
-	logDumpMaintenanceBatch     = 100
-	logDumpCleanupRetryMax      = 30 * time.Minute
+	logDumpCaptureTimeout      = 30 * time.Minute
+	logDumpMaintenanceBatch    = 100
+	logDumpCleanupRetryMax     = 30 * time.Minute
 )
 
 type logDumpMaintenanceStore interface {

@@ -68,7 +68,7 @@ func TestRunLogDumpMaintenanceOnceTimesOutAndDeletesExpiredArtifacts(t *testing.
 	store := &fakeLogDumpMaintenanceStore{
 		timedOut: []storage.LogDump{{
 			ID: timedOutID, TenantID: tenantID, NodeID: nodeID,
-			JobID: uuid.NullUUID{UUID: jobID, Valid: true},
+			JobID:  uuid.NullUUID{UUID: jobID, Valid: true},
 			Status: storage.LogDumpStatusCapturing,
 		}},
 		candidates: []storage.LogDump{{
@@ -97,7 +97,7 @@ func TestRunLogDumpMaintenanceOnceRetriesUnsafeArtifactPath(t *testing.T) {
 	store := &fakeLogDumpMaintenanceStore{candidates: []storage.LogDump{{
 		ID: dumpID, TenantID: uuid.New(), NodeID: uuid.New(),
 		ArtifactPath: filepath.Join(t.TempDir(), "outside.ndjson"),
-		Status: storage.LogDumpStatusExpired,
+		Status:       storage.LogDumpStatusExpired,
 	}}}
 	runLogDumpMaintenanceOnce(context.Background(), nil, store, time.Now().UTC())
 	require.Equal(t, []uuid.UUID{dumpID}, store.deleting)
