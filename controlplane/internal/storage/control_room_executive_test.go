@@ -106,16 +106,6 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	}
 
 	blocked := createPlan("firewall", "block", true, ActionPlanStateQueued)
-	handledAlertID := uuid.New()
-	_, err = store.db.ExecContext(ctx, `
-		UPDATE action_plans
-		SET diff = diff || jsonb_build_object(
-			'reason',
-			'Correlation response: rule=Known bad source; alert_id=' || $2 || '; mode=auto_temporary_block'
-		)
-		WHERE id = $1
-	`, blocked.ID, handledAlertID.String())
-	require.NoError(t, err)
 	succeed(blocked)
 	remediated := createPlan("remediation", "remediation.execute", true, ActionPlanStateQueued)
 	succeed(remediated)
@@ -142,9 +132,7 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	require.Equal(t, 1, summary.FailedCritical)
 	require.Len(t, summary.FailedPlans, 1)
 	require.Equal(t, failed.ID, summary.FailedPlans[0].ID)
-	require.Equal(t, []uuid.UUID{handledAlertID}, summary.HandledAlertIDs)
 }
-
 
 func TestGetAutomaticResponseSummaryRetainsHandledAlertProvenance(t *testing.T) {
 	ctx := context.Background()
