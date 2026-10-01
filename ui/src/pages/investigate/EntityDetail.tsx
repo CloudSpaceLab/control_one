@@ -21,7 +21,7 @@ import { toast } from 'sonner';
 import { ENTITY_TYPE_LABELS } from '@/lib/entity';
 import { describeIPBehaviorFinding, ipBehaviorConfidence } from '@/lib/ipBehaviorPresentation';
 import { formatBytes, formatTs } from '@/lib/format';
-import type { EntityType } from '@/components/kit';
+import type { EntityType, StateTone } from '@/components/kit';
 import type {
   BehavioralAnomaly,
   EntityDetail as EntityDetailData,
