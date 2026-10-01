@@ -132,7 +132,7 @@ export function PatchManagement(): JSX.Element {
     <div className="space-y-6">
       <SectionHeader
         title="Patch management"
-        description="Direct, proxy and airgapped OS-package upgrades fanned out per node. Every deploy passes through the same opt-out / change-window / circuit-breaker / approval gates the compliance remediation engine uses."
+        description="Deploy and track OS package updates across the fleet."
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
@@ -316,7 +316,7 @@ function DeploymentsPanel({
     return (
       <EmptyState
         title="No deployments yet"
-        description="Click Deploy patches… to pick a node subset and dispatch apt-get / dnf / winget upgrade. Each node passes through the 4 safety gates."
+        description="Deploy patches to a selected node group."
       />
     );
   }
@@ -607,7 +607,7 @@ function WindowsPanel({
       ) : windows.length === 0 ? (
         <EmptyState
           title="No maintenance windows"
-          description="Schedule a window to open allow-repo firewall rules during a defined timespan for airgapped or proxy-mode patch deploys."
+          description="Create a maintenance window for scheduled patch access."
         />
       ) : (
         <div className="overflow-x-auto rounded border border-border">
@@ -1497,7 +1497,7 @@ function ApprovalQueue({
     return (
       <EmptyState
         title="No pending approvals"
-        description="When a tenant has patch_requires_approval=true, parked deployments show up here for an operator to approve or deny."
+        description="No patch approvals waiting."
       />
     );
   }
