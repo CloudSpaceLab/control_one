@@ -634,6 +634,39 @@ func (s *Server) controlRoomExecutiveAttention(
 		}
 	}
 
+	remediationApprovals, remediationApprovalTotal, err := s.store.ListRemediationApprovals(
+		ctx,
+		storage.ListRemediationApprovalsFilter{TenantID: tenantID, Status: storage.ApprovalStatusPending},
+		4,
+		0,
+	)
+	if err != nil {
+		available = false
+		s.logger.Warn("control room executive remediation approvals", zap.Error(err))
+	} else {
+		out.Approvals += remediationApprovalTotal
+		for _, approval := range remediationApprovals {
+			severity := firstNonEmptyIPBehavior(approval.Severity, "high")
+			if strings.EqualFold(severity, "critical") {
+				out.Critical++
+			}
+			title := "Remediation approval"
+			if node, err := s.store.GetNode(ctx, approval.NodeID); err == nil && node != nil && strings.TrimSpace(node.Hostname) != "" {
+				title = "Remediate " + node.Hostname
+			}
+			out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
+				ID:        approval.ID.String(),
+				Kind:      "approval",
+				Severity:  severity,
+				Domain:    "compliance",
+				Title:     title,
+				Reason:    strings.TrimSpace(approval.RuleID),
+				CreatedAt: formatTime(approval.CreatedAt),
+				Drilldown: "/compliance",
+			})
+		}
+	}
+
 	out.Approvals += blockProposalTotal
 	for index, proposal := range blockProposals {
 		severity := controlRoomExecutiveScoreSeverity(proposal.Score)
