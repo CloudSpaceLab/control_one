@@ -65,7 +65,8 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data":       []doris.ConnectionRow{},
 			"source":     analyticsSourceSmallPending,
-			"guardrails": []string{"Recent connection evidence projection is not ready yet; fleet health and rollups remain available while projection catches up."},
+			"degraded":   true,
+			"guardrails": []string{"Connection evidence is not ready yet. Retry shortly."},
 		})
 		return
 	}
