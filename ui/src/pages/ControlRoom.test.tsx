@@ -24,6 +24,7 @@ const executiveOverview: ControlRoomExecutiveOverview = {
       freshness_sla_seconds: 10800,
       scored_nodes: 180,
       fresh_nodes: 176,
+      unscored_nodes: 7,
       calibrating_nodes: 2,
       stale_nodes: 4,
       at_risk_nodes: 1,
