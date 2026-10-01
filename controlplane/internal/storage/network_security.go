@@ -61,7 +61,7 @@ type IPBlockStatus struct {
 	State            string     `json:"state"`
 	Scope            string     `json:"scope"`
 	FleetNodes       int        `json:"fleet_nodes"`
-	FleetTargetNodes int       `json:"fleet_target_nodes"`
+	FleetTargetNodes int        `json:"fleet_target_nodes"`
 	TargetNodes      int        `json:"target_nodes"`
 	Provenance       string     `json:"provenance"`
 	NodesApplied     int        `json:"nodes_applied"`
