@@ -61,6 +61,9 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 		}
 		if plan.State == storage.ActionPlanStateFailed {
 			out.Failed++
+			if strings.EqualFold(strings.TrimSpace(plan.Risk), "critical") {
+				out.FailedCritical++
+			}
 			if len(out.FailedPlans) < failedLimit {
 				out.FailedPlans = append(out.FailedPlans, plan)
 			}
@@ -461,7 +464,7 @@ func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) 
 			Domain:     "firewall",
 			ActionKind: "block",
 			State:      storage.ActionPlanStateFailed,
-			Risk:       "high",
+			Risk:       "critical",
 			Diff:       map[string]any{"auto_triggered": true},
 			SourceRef:  map[string]any{},
 			CreatedAt:  now.Add(-40 * time.Minute),
@@ -504,8 +507,8 @@ func TestControlRoomExecutiveCountsOnlyVerifiedAutomaticResponses(t *testing.T) 
 	if resp.Response.Failed != 1 {
 		t.Fatalf("failed automatic responses=%d, want 1", resp.Response.Failed)
 	}
-	if resp.Attention.Interventions != 1 || resp.Attention.Total != 1 {
-		t.Fatalf("failed automation must surface as intervention: %+v", resp.Attention)
+	if resp.Attention.Interventions != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 1 {
+		t.Fatalf("failed critical automation must surface as one critical intervention: %+v", resp.Attention)
 	}
 	if len(resp.Attention.Items) != 1 || resp.Attention.Items[0].Kind != "intervention" {
 		t.Fatalf("unexpected intervention sample: %+v", resp.Attention.Items)
