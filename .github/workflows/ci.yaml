@@ -92,6 +92,8 @@ jobs:
           bash -n scripts/update_dbip_lite.sh
           grep -Fq "cron: '17 3 5 * *'" .github/workflows/refresh-ip-intel.yml
           grep -Fq 'docker compose up -d --force-recreate --no-deps controlplane' .github/workflows/refresh-ip-intel.yml
+          grep -Fq 'offline DB-IP geo/ASN provider loaded' .github/workflows/deploy.yml
+          grep -Fq 'offline DB-IP geo/ASN provider loaded' .github/workflows/refresh-ip-intel.yml
 
       - name: Storage integration tests
         if: matrix.os == 'ubuntu-latest'

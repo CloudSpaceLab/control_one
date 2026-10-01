@@ -314,6 +314,11 @@ jobs:
               if curl -fsS --max-time 5 http://127.0.0.1:8443/healthz 2>/dev/null; then
                 echo
                 echo "✓ controlplane /healthz OK"
+                ipintel_logs=$(docker logs deploy-controlplane-1 --tail 500 2>&1 || true)
+                printf "%s\n" "$ipintel_logs" | grep -Fq "ipintel enabled"
+                printf "%s\n" "$ipintel_logs" | grep -Fq "dbip-lite"
+                printf "%s\n" "$ipintel_logs" | grep -Eq "offline_geo[^[:alnum:]]+true"
+                echo "✓ offline DB-IP geo/ASN provider loaded"
                 break
               fi
               echo "... attempt $i: waiting 5s"
