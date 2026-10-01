@@ -131,6 +131,7 @@ func TestConnectionsListNonIPOLAPUnavailableReturns503(t *testing.T) {
 		t.Fatalf("expected unavailable OLAP connections 503 got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
 func TestConnectionsListKeepsNonIPAnalyticsFailuresLoud(t *testing.T) {
 	t.Parallel()
 
