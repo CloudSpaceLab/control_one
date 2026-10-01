@@ -179,11 +179,11 @@ func claimAgentLogDump(ctx context.Context, client *api.Client, jobID, dumpID st
 
 func uploadAgentLogDumpChunk(ctx context.Context, client *api.Client, claim *agentLogDumpClaim, ordinal int, chunk []byte, chunkSHA string) error {
 	headers := map[string]string{
-		"Content-Type":                  "application/octet-stream",
-		"X-Log-Dump-Job-ID":            claim.JobID,
-		"X-Log-Dump-Token":             claim.UploadToken,
-		"X-Log-Dump-Claim-Generation":  strconv.FormatInt(claim.ClaimGeneration, 10),
-		"X-Chunk-SHA256":                chunkSHA,
+		"Content-Type":                "application/octet-stream",
+		"X-Log-Dump-Job-ID":           claim.JobID,
+		"X-Log-Dump-Token":            claim.UploadToken,
+		"X-Log-Dump-Claim-Generation": strconv.FormatInt(claim.ClaimGeneration, 10),
+		"X-Chunk-SHA256":              chunkSHA,
 	}
 	path := "/api/v1/agent/log-dumps/" + claim.DumpID + "/chunks/" + strconv.Itoa(ordinal)
 	resp, err := client.DoWithHeaders(ctx, http.MethodPut, path, chunk, headers)
@@ -204,7 +204,7 @@ func completeAgentLogDump(ctx context.Context, client *api.Client, claim *agentL
 		"source_available": sourceAvailable, "source_reason": sourceReason,
 	})
 	headers := map[string]string{
-		"Content-Type":       "application/json",
+		"Content-Type":      "application/json",
 		"X-Log-Dump-Job-ID": claim.JobID,
 		"X-Log-Dump-Token":  claim.UploadToken,
 	}
@@ -225,7 +225,7 @@ func failAgentLogDump(ctx context.Context, client *api.Client, claim *agentLogDu
 		"source_available": sourceAvailable, "source_reason": sourceReason,
 	})
 	headers := map[string]string{
-		"Content-Type":       "application/json",
+		"Content-Type":      "application/json",
 		"X-Log-Dump-Job-ID": claim.JobID,
 		"X-Log-Dump-Token":  claim.UploadToken,
 	}

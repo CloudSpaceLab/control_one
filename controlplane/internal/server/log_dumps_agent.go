@@ -139,15 +139,15 @@ func (s *Server) handleAgentLogDumpClaim(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"dump_id":          dump.ID.String(),
-		"job_id":           jobID.String(),
-		"upload_token":     token,
-		"claim_generation": dump.ClaimGeneration,
-		"claim_expires_at": leaseUntil.Format(time.RFC3339Nano),
-		"window_start":     dump.WindowStart.UTC().Format(time.RFC3339Nano),
-		"window_end":       dump.WindowEnd.UTC().Format(time.RFC3339Nano),
-		"entity_filter":    dump.EntityFilter,
-		"max_chunk_bytes":  maxLogDumpChunkBytes,
+		"dump_id":            dump.ID.String(),
+		"job_id":             jobID.String(),
+		"upload_token":       token,
+		"claim_generation":   dump.ClaimGeneration,
+		"claim_expires_at":   leaseUntil.Format(time.RFC3339Nano),
+		"window_start":       dump.WindowStart.UTC().Format(time.RFC3339Nano),
+		"window_end":         dump.WindowEnd.UTC().Format(time.RFC3339Nano),
+		"entity_filter":      dump.EntityFilter,
+		"max_chunk_bytes":    maxLogDumpChunkBytes,
 		"max_artifact_bytes": maxLogDumpArtifactBytes,
 	})
 }

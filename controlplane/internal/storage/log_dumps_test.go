@@ -77,15 +77,15 @@ func TestLogDumpClaimChunkAndTerminalJobLifecycle(t *testing.T) {
 	require.Equal(t, int64(2), claimed.ClaimGeneration)
 
 	chunk := LogDumpChunk{
-		DumpID:    dump.ID,
-		TenantID:  tenant.ID,
-		NodeID:    node.ID,
-		JobID:     uuid.NullUUID{UUID: job.ID, Valid: true},
+		DumpID:          dump.ID,
+		TenantID:        tenant.ID,
+		NodeID:          node.ID,
+		JobID:           uuid.NullUUID{UUID: job.ID, Valid: true},
 		ClaimGeneration: 2,
 		Ordinal:         0,
-		SHA256:    shaHex("chunk-0"),
-		SizeBytes: 7,
-		TempPath:  "/tmp/log-dump/chunk-0",
+		SHA256:          shaHex("chunk-0"),
+		SizeBytes:       7,
+		TempPath:        "/tmp/log-dump/chunk-0",
 	}
 	_, err = store.PutLogDumpChunk(ctx, chunk, winner, takeoverAt)
 	require.ErrorIs(t, err, ErrLogDumpClaimInvalid)

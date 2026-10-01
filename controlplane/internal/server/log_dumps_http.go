@@ -317,7 +317,7 @@ func (s *Server) handleListLogDumps(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, s.logDumpResponse(d))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data": resp,
+		"data":       resp,
 		"pagination": map[string]any{"limit": limit, "offset": offset, "total": total},
 	})
 }
@@ -598,10 +598,4 @@ func nullUUIDString(v uuid.NullUUID) any {
 	return v.UUID.String()
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 

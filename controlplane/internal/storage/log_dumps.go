@@ -82,14 +82,14 @@ type LogDumpFilter struct {
 type LogDumpChunk struct {
 	DumpID          uuid.UUID
 	ClaimGeneration int64
-	TenantID  uuid.UUID
-	NodeID    uuid.UUID
-	JobID     uuid.NullUUID
-	Ordinal   int
-	SHA256    string
-	SizeBytes int64
-	TempPath  string
-	CreatedAt time.Time
+	TenantID        uuid.UUID
+	NodeID          uuid.UUID
+	JobID           uuid.NullUUID
+	Ordinal         int
+	SHA256          string
+	SizeBytes       int64
+	TempPath        string
+	CreatedAt       time.Time
 }
 
 const logDumpSelect = `id, tenant_id, node_id, job_id, source, entity_filter,

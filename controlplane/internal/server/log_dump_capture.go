@@ -51,14 +51,14 @@ func (s *Server) captureControlPlaneLogDump(ctx context.Context, dump *storage.L
 					continue
 				}
 				record := map[string]any{
-					"id":          entry.ID.String(),
-					"tenant_id":   entry.TenantID.String(),
-					"node_id":     entry.NodeID.String(),
-					"level":       entry.LogLevel,
-					"message":     entry.LogMessage,
-					"labels":      entry.Labels,
-					"timestamp":   entry.Timestamp.UTC(),
-					"created_at":  entry.CreatedAt.UTC(),
+					"id":         entry.ID.String(),
+					"tenant_id":  entry.TenantID.String(),
+					"node_id":    entry.NodeID.String(),
+					"level":      entry.LogLevel,
+					"message":    entry.LogMessage,
+					"labels":     entry.Labels,
+					"timestamp":  entry.Timestamp.UTC(),
+					"created_at": entry.CreatedAt.UTC(),
 				}
 				if entry.LogSource.Valid {
 					record["source"] = entry.LogSource.String

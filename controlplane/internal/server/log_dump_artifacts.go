@@ -22,8 +22,8 @@ const (
 )
 
 type logDumpArtifactResult struct {
-	Path       string
-	SHA256     string
+	Path      string
+	SHA256    string
 	SizeBytes int64
 }
 
@@ -91,8 +91,8 @@ func writeLogDumpArtifactAtomic(tenantID, nodeID, dumpID uuid.UUID, write func(i
 	}
 	committed = true
 	return logDumpArtifactResult{
-		Path:       finalPath,
-		SHA256:     hex.EncodeToString(h.Sum(nil)),
+		Path:      finalPath,
+		SHA256:    hex.EncodeToString(h.Sum(nil)),
 		SizeBytes: maxLogDumpArtifactBytes - limited.remaining,
 	}, nil
 }
