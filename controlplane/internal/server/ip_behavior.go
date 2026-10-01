@@ -1328,7 +1328,10 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 }
 
 func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID uuid.UUID, b *ipBehaviorBucket, score int, category string) {
-	if s == nil || s.store == nil || tenantID == uuid.Nil || b == nil {
+	if s == nil || s.store == nil || tenantID == uuid.Nil || b == nil || score < 70 {
+		return
+	}
+	if strings.TrimSpace(b.srcIP) == "" || net.ParseIP(b.srcIP) == nil {
 		return
 	}
 	cfg, err := s.store.GetTenantRemediationConfig(ctx, tenantID)
@@ -1342,9 +1345,6 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 		return
 	}
 	if cfg.RequireCorroboratingThreatIntel && b.threatScore <= 0 {
-		return
-	}
-	if strings.TrimSpace(b.srcIP) == "" || net.ParseIP(b.srcIP) == nil {
 		return
 	}
 
