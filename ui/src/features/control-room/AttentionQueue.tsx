@@ -17,7 +17,7 @@ export function AttentionQueue({ attention, available }: AttentionQueueProps) {
       toneAccent={attention.critical > 0 ? 'critical' : attention.total > 0 ? 'warning' : 'healthy'}
     >
       {!available ? (
-        <EmptyState title="Attention queue unavailable" description="Retry the dashboard." />
+        <EmptyState title="Needs attention unavailable" description="Retry the dashboard." />
       ) : attention.items.length === 0 ? (
         <EmptyState
           tone="success"
