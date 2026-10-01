@@ -304,7 +304,7 @@ func (s *Store) GetExecutiveAttentionSummary(
 		itemLimit = 50
 	}
 
-	const query = \`
+	const query = `
 		WITH proposed_blocks AS (
 			SELECT
 				b.id,
@@ -651,7 +651,7 @@ func (s *Store) GetExecutiveAttentionSummary(
 			LIMIT $4
 		) i ON TRUE
 		ORDER BY i.severity_rank DESC NULLS LAST, i.created_at DESC NULLS LAST, i.id
-	\`
+	`
 	rows, err := s.db.QueryContext(ctx, query, tenantID, since, until, itemLimit)
 	if err != nil {
 		return out, fmt.Errorf("query executive attention summary: %w", err)
