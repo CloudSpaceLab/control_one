@@ -1378,6 +1378,16 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 		ttlSeconds = 3600
 	}
 
+	// Never race an explicit operator allow that is still removing rules.
+	// Once removal completes, new qualifying evidence may be evaluated again.
+	var currentState *storage.IPBlockStatus
+	if stateStore, ok := s.store.(ipBlockCurrentStateStore); ok {
+		currentState, _ = stateStore.GetIPBlockStatus(ctx, tenantID, b.srcIP)
+		if currentState != nil && currentState.State == "unblocking" {
+			return
+		}
+	}
+
 	// Fleet policy is a single tenant-wide intent; do not start another
 	// while one is already active or in flight. Affected scope is incremental:
 	// later observations may add newly affected nodes, so rule-level coverage
@@ -1400,12 +1410,10 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 				}
 			}
 		}
-		if stateStore, ok := s.store.(ipBlockCurrentStateStore); ok {
-			if current, stateErr := stateStore.GetIPBlockStatus(ctx, tenantID, b.srcIP); stateErr == nil && current != nil {
-				if (current.State == "blocked" || current.State == "blocking") && current.Scope == "fleet" {
-					return
-				}
-			}
+		if currentState != nil &&
+			(currentState.State == "blocked" || currentState.State == "blocking") &&
+			currentState.Scope == "fleet" {
+			return
 		}
 	}
 
