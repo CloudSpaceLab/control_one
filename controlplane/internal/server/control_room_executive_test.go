@@ -19,6 +19,15 @@ type executiveRuleSummaryStore struct {
 	summary        storage.RuleViolationSummary
 	err            error
 	blockProposals []storage.IPBlocklistEntry
+	portRule       *storage.PortMonitoringRule
+}
+
+func (s *executiveRuleSummaryStore) GetPortRule(_ context.Context, _ uuid.UUID) (*storage.PortMonitoringRule, error) {
+	if s.portRule == nil {
+		return nil, nil
+	}
+	copy := *s.portRule
+	return &copy, nil
 }
 
 func (s *executiveRuleSummaryStore) GetRuleViolationSummary(
