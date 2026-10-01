@@ -17,9 +17,7 @@ import type {
   ControlRoomOverview,
   IPBehaviorBaseline,
   IPBehaviorCountrySummary,
-  IPBehaviorIPProfile,
   IPBlockProposal,
-  IpEnrichment,
   NodeFirewallRule,
   WebserverInstance,
 } from '../lib/api';
@@ -113,15 +111,6 @@ export function NetworkSecurity(): JSX.Element {
 
 type TimeWindowKey = '1h' | '6h' | '24h' | '7d';
 type SeverityFilter = 'all' | 'watch' | 'suspicious' | 'high' | 'critical';
-type EnforcementTarget = 'firewall' | 'webserver' | 'combined';
-type BlockTTL = 900 | 3600 | 86400;
-
-const BLOCK_TTL_LABELS: Record<BlockTTL, string> = {
-  900: '15 minutes',
-  3600: '1 hour',
-  86400: '24 hours',
-};
-
 const WINDOW_HOURS: Record<TimeWindowKey, number> = {
   '1h': 1,
   '6h': 6,
@@ -137,14 +126,6 @@ interface IPBehaviorFilters {
   serverGroup: string;
   app: string;
   vhost: string;
-}
-
-interface ConfirmState {
-  title: string;
-  body?: string;
-  confirmLabel?: string;
-  variant?: 'default' | 'danger';
-  run: () => Promise<void>;
 }
 
 function IPBehaviorPanel(): JSX.Element {
@@ -562,10 +543,6 @@ function countryTopFinding(country: IPBehaviorCountrySummary, findings: Behavior
     .sort((a, b) => findingScore(b) - findingScore(a))[0];
 }
 
-function maxBackendScore(findings: BehavioralAnomaly[]): number {
-  return Math.max(0, ...findings.map((finding) => findingScore(finding)));
-}
-
 function findingScore(finding?: BehavioralAnomaly): number {
   return ipBehaviorConfidence(finding);
 }
@@ -599,28 +576,6 @@ function countryBaselineInsight(country: IPBehaviorCountrySummary, baseline?: IP
   };
 }
 
-function profileBaselineInsight(profile: IPBehaviorIPProfile, baseline?: IPBehaviorBaseline | null): { tone: StateTone; label: string; description: string } {
-  const samples = baseline ? baselineSampleCount(baseline) : 0;
-  if (!baseline || samples < 5) {
-    return {
-      tone: 'unknown',
-      label: 'Insufficient baseline',
-      description: `${profile.source_ip} has ${formatNumber(profile.request_count)} requests and ${formatBytes(profile.bytes_out)} out, but only ${formatNumber(samples)} matching source-IP baseline samples are available.`,
-    };
-  }
-  const reqP99 = baselineMetric(baseline, 'request_count', 'p99');
-  const bytesP99 = baselineMetric(baseline, 'bytes_out', 'p99');
-  const overReq = reqP99 > 0 && profile.request_count > reqP99;
-  const overBytes = bytesP99 > 0 && profile.bytes_out > bytesP99;
-  const tone: StateTone = overBytes ? 'critical' : overReq || authCount(profile.status_counts) > 0 ? 'warning' : 'healthy';
-  const label = tone === 'healthy' ? 'Inside baseline' : tone === 'critical' ? 'Exfiltration risk' : 'Behavior shift';
-  return {
-    tone,
-    label,
-    description: `${profile.source_ip} has ${formatNumber(profile.request_count)} requests against source/app p99 ${formatNumber(Math.round(reqP99))}; bytes out is ${formatBytes(profile.bytes_out)} against p99 ${formatBytes(Math.round(bytesP99))}; affected servers ${formatNumber(profile.node_ids?.length ?? 0)}.`,
-  };
-}
-
 function findCountryBaseline(country: IPBehaviorCountrySummary, baselines: IPBehaviorBaseline[], filters: IPBehaviorFilters): IPBehaviorBaseline | null {
   const code = (country.country_code || '').toUpperCase();
   if (!code) return null;
@@ -629,17 +584,6 @@ function findCountryBaseline(country: IPBehaviorCountrySummary, baselines: IPBeh
     const key = baselineDimensionKey(row);
     if (!dim.includes('country_app') || !key.toUpperCase().endsWith(`|${code}`)) return false;
     if (filters.serverGroup && !includesFold(key, filters.serverGroup)) return false;
-    if (filters.app && !includesFold(key, filters.app)) return false;
-    return true;
-  }));
-}
-
-function findIPBaseline(profile: IPBehaviorIPProfile, baselines: IPBehaviorBaseline[], filters: IPBehaviorFilters): IPBehaviorBaseline | null {
-  const ip = profile.source_ip;
-  return bestBaseline(baselines.filter((row) => {
-    const dim = baselineDimension(row);
-    const key = baselineDimensionKey(row);
-    if (!dim.includes('source_ip_app') || !key.endsWith(`|${ip}`)) return false;
     if (filters.app && !includesFold(key, filters.app)) return false;
     return true;
   }));
@@ -704,14 +648,6 @@ function blockStatusTone(status: IPBlockProposal['status']): StateTone {
   return 'info';
 }
 
-function findingSeverityTone(severity?: string): StateTone {
-  if (severity === 'critical') return 'critical';
-  if (severity === 'high') return 'degraded';
-  if (severity === 'medium') return 'warning';
-  if (severity === 'low') return 'info';
-  return 'unknown';
-}
-
 function severityLabel(score: number, finding?: BehavioralAnomaly): string {
   if (finding?.severity) return finding.severity;
   if (score <= 0) return 'normal';
@@ -737,40 +673,12 @@ function windowSince(windowKey: TimeWindowKey): string {
   return new Date(Date.now() - (WINDOW_HOURS[windowKey] || 1) * 60 * 60 * 1000).toISOString();
 }
 
-function ipv4Cidr24(ip: string): string | null {
-  const parts = ip.split('.');
-  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part) || Number(part) < 0 || Number(part) > 255)) return null;
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-}
-
 function exactIPCIDR(ip: string): string {
   return ip.includes(':') ? `${ip}/128` : `${ip}/32`;
 }
 
 function displayIPCIDR(ipOrCIDR: string): string {
   return ipOrCIDR.includes('/') ? ipOrCIDR : exactIPCIDR(ipOrCIDR);
-}
-
-function scopedBlockReason(
-  profile: IPBehaviorIPProfile,
-  country: IPBehaviorCountrySummary | null,
-  baseline: IPBehaviorBaseline | null,
-  filters: IPBehaviorFilters,
-  target: 'ip' | 'cidr' | 'vhost',
-): string {
-  const insight = profileBaselineInsight(profile, baseline).description;
-  const scope = target === 'vhost' ? ` scoped to vhost ${filters.vhost}` : target === 'cidr' ? ' for source /24' : '';
-  return `IP behavior proposal${scope}: ${profile.source_ip}; ${insight}; country=${country ? countryLabel(country) : compactList(profile.countries)}; app=${filters.app || compactList(profile.apps)}; server_group=${filters.serverGroup || compactList(profile.server_groups)}.`;
-}
-
-function asnBlockReason(profile: IPBehaviorIPProfile, country: IPBehaviorCountrySummary | null, explanation?: string): string {
-  const asn = profile.asns?.[0] || 'unknown ASN';
-  const context = explanation || `${formatNumber(profile.request_count)} requests and ${formatBytes(profile.bytes_out)} out`;
-  return `IP behavior ASN proposal: ${asn}; seed_ip=${profile.source_ip}; ${context}; country=${country ? countryLabel(country) : compactList(profile.countries)}; apps=${compactList(profile.apps)}; server_groups=${compactList(profile.server_groups)}.`;
-}
-
-function askAIPrompt(profile: IPBehaviorIPProfile, explanation: string): string {
-  return `Analyze IP behavior for ${profile.source_ip}. ${explanation} Status counts: ${JSON.stringify(profile.status_counts)}. Recommend evidence to review before containment.`;
 }
 
 function formatBytes(value: number): string {
