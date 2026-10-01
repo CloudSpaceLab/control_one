@@ -572,7 +572,7 @@ func (s *Server) controlRoomExecutiveAttention(
 		available = false
 		s.logger.Warn("control room executive acked alerts", zap.Error(err))
 	}
-	out.Reviews = maxInt(0, openTotal+ackedTotal-len(linkedReviewAlerts))
+	out.Reviews = controlRoomNonNegative(openTotal + ackedTotal - len(linkedReviewAlerts))
 
 	_, openCritical, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tenantID, State: "open", Severity: "critical"}, 1, 0)
 	if err != nil {
@@ -588,7 +588,7 @@ func (s *Server) controlRoomExecutiveAttention(
 			linkedCritical++
 		}
 	}
-	out.Critical = maxInt(0, openCritical+ackedCritical-linkedCritical)
+	out.Critical = controlRoomNonNegative(openCritical + ackedCritical - linkedCritical)
 
 	for _, alert := range append(openRows, ackedRows...) {
 		if _, linked := linkedReviewAlerts[alert.ID]; linked {
@@ -787,6 +787,13 @@ func controlRoomExecutiveProposalSeverity(
 		return alertSeverity
 	}
 	return severity
+}
+
+func controlRoomNonNegative(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func controlRoomExecutiveScoreSeverity(score int) string {
