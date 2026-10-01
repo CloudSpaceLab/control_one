@@ -7,9 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -358,4 +356,3 @@ func writeAgentLogDumpError(w http.ResponseWriter, err error) {
 	}
 }
 
-var _ = json.Valid
