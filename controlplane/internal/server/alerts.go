@@ -137,6 +137,10 @@ type alertWorkflowUpdater interface {
 	UpdateAlertWorkflow(context.Context, uuid.UUID, storage.UpdateAlertWorkflowParams) (*storage.Alert, error)
 }
 
+type alertReopener interface {
+	ReopenAlert(context.Context, uuid.UUID) error
+}
+
 func (s *Server) handleAlertsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -338,7 +342,12 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "only resolved alerts can be reopened", http.StatusBadRequest)
 				return
 			}
-			if err := s.store.ReopenAlert(r.Context(), id); err != nil {
+			reopener, ok := s.store.(alertReopener)
+			if !ok {
+				http.Error(w, "alert reopen store unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if err := reopener.ReopenAlert(r.Context(), id); err != nil {
 				http.Error(w, fmt.Sprintf("reopen failed: %v", err), http.StatusBadRequest)
 				return
 			}
