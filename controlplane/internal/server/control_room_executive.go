@@ -42,14 +42,14 @@ type controlRoomExecutiveAvailability struct {
 }
 
 type controlRoomExecutiveEstate struct {
-	GroupsTotal    int                              `json:"groups_total"`
-	GroupsHealthy  int                              `json:"groups_healthy"`
-	GroupsDegraded int                              `json:"groups_degraded"`
-	GroupsCritical int                              `json:"groups_critical"`
-	GroupsUnknown  int                              `json:"groups_unknown"`
-	NodesTotal     int                              `json:"nodes_total"`
-	NodesHealthy   int                              `json:"nodes_healthy"`
-	Groups         []controlRoomExecutiveGroup      `json:"groups"`
+	GroupsTotal    int                         `json:"groups_total"`
+	GroupsHealthy  int                         `json:"groups_healthy"`
+	GroupsDegraded int                         `json:"groups_degraded"`
+	GroupsCritical int                         `json:"groups_critical"`
+	GroupsUnknown  int                         `json:"groups_unknown"`
+	NodesTotal     int                         `json:"nodes_total"`
+	NodesHealthy   int                         `json:"nodes_healthy"`
+	Groups         []controlRoomExecutiveGroup `json:"groups"`
 }
 
 type controlRoomExecutiveGroup struct {
@@ -64,16 +64,16 @@ type controlRoomExecutiveGroup struct {
 }
 
 type controlRoomExecutiveViolations struct {
-	Total         int                               `json:"total"`
-	Critical      int                               `json:"critical"`
-	High          int                               `json:"high"`
-	Medium        int                               `json:"medium"`
-	Low           int                               `json:"low"`
-	Info          int                               `json:"info"`
-	Other         int                               `json:"other"`
-	PreviousTotal int                               `json:"previous_total"`
-	DeltaPct      float64                           `json:"delta_pct"`
-	TopRules      []controlRoomExecutiveTopRule     `json:"top_rules"`
+	Total         int                           `json:"total"`
+	Critical      int                           `json:"critical"`
+	High          int                           `json:"high"`
+	Medium        int                           `json:"medium"`
+	Low           int                           `json:"low"`
+	Info          int                           `json:"info"`
+	Other         int                           `json:"other"`
+	PreviousTotal int                           `json:"previous_total"`
+	DeltaPct      float64                       `json:"delta_pct"`
+	TopRules      []controlRoomExecutiveTopRule `json:"top_rules"`
 }
 
 type controlRoomExecutiveTopRule struct {
@@ -94,11 +94,11 @@ type controlRoomExecutiveResponse struct {
 }
 
 type controlRoomExecutiveAttention struct {
-	Total         int                            `json:"total"`
-	Critical      int                            `json:"critical"`
-	Reviews       int                            `json:"reviews"`
-	Approvals     int                            `json:"approvals"`
-	Interventions int                            `json:"interventions"`
+	Total         int                                 `json:"total"`
+	Critical      int                                 `json:"critical"`
+	Reviews       int                                 `json:"reviews"`
+	Approvals     int                                 `json:"approvals"`
+	Interventions int                                 `json:"interventions"`
 	Items         []controlRoomExecutiveAttentionItem `json:"items"`
 }
 
@@ -114,10 +114,10 @@ type controlRoomExecutiveAttentionItem struct {
 }
 
 type controlRoomExecutiveProtection struct {
-	Protected  int                                `json:"protected"`
-	Total      int                                `json:"total"`
-	Percentage float64                            `json:"percentage"`
-	Gaps       int                                `json:"gaps"`
+	Protected  int                                 `json:"protected"`
+	Total      int                                 `json:"total"`
+	Percentage float64                             `json:"percentage"`
+	Gaps       int                                 `json:"gaps"`
 	GapTypes   []controlRoomExecutiveProtectionGap `json:"gap_types"`
 }
 
