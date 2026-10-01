@@ -84,6 +84,7 @@ type controlRoomExecutivePredictiveHealth struct {
 	FreshnessSLASeconds int    `json:"freshness_sla_seconds"`
 	ScoredNodes        int    `json:"scored_nodes"`
 	FreshNodes         int    `json:"fresh_nodes"`
+	UnscoredNodes      int    `json:"unscored_nodes"`
 	CalibratingNodes   int    `json:"calibrating_nodes"`
 	StaleNodes         int    `json:"stale_nodes"`
 	AtRiskNodes        int    `json:"at_risk_nodes"`
@@ -378,6 +379,10 @@ func (s *Server) controlRoomExecutivePredictiveHealth(
 	}
 	out.ScoredNodes = availability.ScoredNodes
 	out.FreshNodes = availability.FreshNodes
+	out.UnscoredNodes = len(nodes) - availability.ScoredNodes
+	if out.UnscoredNodes < 0 {
+		out.UnscoredNodes = 0
+	}
 	out.CalibratingNodes = availability.FreshCalibratingNodes
 	out.StaleNodes = availability.StaleNodes
 	if availability.LatestComputedAt.Valid {
