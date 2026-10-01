@@ -96,6 +96,7 @@ describe('IpLifecyclePanel', () => {
 
     expect(screen.getByText('Loading lifecycles…')).toBeInTheDocument();
     expect(screen.queryByText('No lifecycles found')).not.toBeInTheDocument();
+    expect(screen.queryByText('Started')).not.toBeInTheDocument();
     expect(useNodesMock).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: false, tenantId: undefined }),
     );
