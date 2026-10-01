@@ -5233,7 +5233,7 @@ export class APIClient {
       rows: rows.map(normalizeConnectionRow).filter((row) => Boolean(row.conn_id)),
       source: Array.isArray(resp) ? undefined : resp.source,
       guardrails: Array.isArray(resp) ? [] : resp.guardrails ?? [],
-      degraded: Array.isArray(resp) ? false : resp.degraded ?? false,
+      degraded: Array.isArray(resp) ? undefined : resp.degraded || undefined,
     };
   }
 
