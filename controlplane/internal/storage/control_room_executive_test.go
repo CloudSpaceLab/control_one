@@ -122,7 +122,7 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	_, err = store.db.ExecContext(ctx, `UPDATE action_plans SET risk = 'critical' WHERE id = $1`, failed.ID)
 	require.NoError(t, err)
 
-	summary, err := store.GetAutomaticResponseSummary(ctx, tenant.ID, since, until, 1)
+	summary, err := store.GetAutomaticResponseSummary(ctx, tenant.ID, since, until)
 	require.NoError(t, err)
 	require.Equal(t, 3, summary.HandledAutomatically)
 	require.Equal(t, 1, summary.Blocked)
@@ -130,8 +130,6 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	require.Equal(t, 1, summary.Remediated)
 	require.Equal(t, 1, summary.Failed)
 	require.Equal(t, 1, summary.FailedCritical)
-	require.Len(t, summary.FailedPlans, 1)
-	require.Equal(t, failed.ID, summary.FailedPlans[0].ID)
 }
 
 func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T) {
