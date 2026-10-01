@@ -218,7 +218,7 @@ describe('Cases', () => {
     expect(mockApi.getSOCCase).toHaveBeenCalledWith(secondCase.case_id, 'tenant-1');
     mockApi.listSOCCases.mockResolvedValue({ data: [] });
     await user.selectOptions(screen.getByRole('option', { name: 'All statuses' }).parentElement as HTMLSelectElement, 'closed');
-    await screen.findByText('No SOC cases yet');
+    await screen.findByText('No cases yet');
     expect(screen.getByRole('heading', { name: secondCase.title })).toBeInTheDocument();
     expect(mockApi.getSOCCase).not.toHaveBeenCalledWith(caseRow.case_id, 'tenant-1');
   });
@@ -274,7 +274,7 @@ describe('Cases', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('case store unavailable');
     expect(screen.getByText(/case queue could not be loaded/i)).toBeInTheDocument();
-    expect(screen.queryByText('No SOC cases yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('No cases yet')).not.toBeInTheDocument();
   });
 
   it('clears stale case detail when the selected case detail fails', async () => {
