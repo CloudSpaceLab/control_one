@@ -638,14 +638,6 @@ function riskTone(score: number): StateTone {
   return 'healthy';
 }
 
-function blockStatusTone(status: IPBlockProposal['status']): StateTone {
-  if (status === 'active') return 'healthy';
-  if (status === 'failed' || status === 'denied') return 'critical';
-  if (status === 'dispatching' || status === 'canary' || status === 'approved') return 'warning';
-  if (status === 'expired' || status === 'removed' || status === 'rolled_back' || status === 'rejected') return 'unknown';
-  return 'info';
-}
-
 function severityLabel(score: number, finding?: BehavioralAnomaly): string {
   if (finding?.severity) return finding.severity;
   if (score <= 0) return 'normal';
