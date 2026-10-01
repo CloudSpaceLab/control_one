@@ -69,6 +69,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run test --prefix ui
 
+      - name: Frontend production build
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run build --prefix ui
+
       - name: Raw-log deployment contract
         if: matrix.os == 'ubuntu-latest'
         shell: bash
@@ -88,6 +92,7 @@ jobs:
           grep -Fq 'IP_INTEL_ASN_MMDB: "/var/lib/control-one/ip-intel/dbip-asn-lite.mmdb"' deploy/docker-compose.yaml
           grep -Fq './ip-intel:/var/lib/control-one/ip-intel:ro' deploy/docker-compose.yaml
           ! grep -Fq 'akyriako78/ipquery' deploy/docker-compose.yaml
+          grep -Fq 'docker rm -f deploy-ipq-1' .github/workflows/deploy.yml
           grep -Fq "chown 0:65532 '\$DEPLOY_DIR/ip-intel'" .github/workflows/deploy.yml
           bash -n scripts/update_dbip_lite.sh
           grep -Fq "cron: '17 3 5 * *'" .github/workflows/refresh-ip-intel.yml

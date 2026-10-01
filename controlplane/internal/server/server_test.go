@@ -2029,7 +2029,9 @@ func TestRBACAuthorization(t *testing.T) {
 	}
 
 	tenantID := uuid.New()
+	store.mu.Lock()
 	store.tenants = []storage.Tenant{{ID: tenantID, Name: "Tenant A", CreatedAt: time.Unix(1700000000, 0)}}
+	store.mu.Unlock()
 	store.jobs = map[uuid.UUID]*storage.Job{}
 	store.events = map[uuid.UUID][]storage.JobEvent{}
 	templateID := uuid.New()
