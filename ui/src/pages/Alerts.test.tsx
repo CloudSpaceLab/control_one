@@ -3,7 +3,16 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Alert, CorrelationRule } from '../lib/api';
-import { Alerts, alertAccessReviewRoute, alertCategory, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts, alertScope, eventEvidenceFacts, withAlertReturnContext } from './Alerts';
+import { Alerts, alertAccessReviewRoute, alertCategory, alertContextPills, alertDispositionPill, alertInvestigationRoute, alertResolutionFacts, alertScope, eventEvidenceFacts, sortContributingEvents, withAlertReturnContext } from './Alerts';
+
+it('sorts contributing evidence newest first and keeps undated events last', () => {
+  const events = sortContributingEvents([
+    { timestamp: '2026-09-25T09:34:21Z', event_id: 'old' },
+    { timestamp: '2026-09-25T09:34:26Z', event_id: 'new' },
+    { event_id: 'undated' },
+  ]);
+  expect(events.map((event) => event.event_id)).toEqual(['new', 'old', 'undated']);
+});
 
 it('describes recorded event resources and marks missing evidence unavailable', () => {
   const facts = Object.fromEntries(eventEvidenceFacts({ tenant_id: 'tenant-1', node_id: 'node-1', dst_ip: '192.0.2.1', dst_port: 443, protocol: 'tcp', path: '/etc/example', severity: 'warning', source_os: 'windows', source_channel: 'Microsoft-Windows-Biometrics/Operational', source_event_id: '1005', event_id: 'evt-1', sensor_name: 'ELAN WBF Fingerprint Sensor' }));

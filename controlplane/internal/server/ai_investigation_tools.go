@@ -569,7 +569,7 @@ func (s *Server) runNodeAlertsTool(ctx context.Context, tc aiToolContext, input 
 	if err != nil {
 		return aiToolExecution{}, err
 	}
-	alerts, _, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tc.TenantID, NodeID: nodeID}, 10, 0)
+	alerts, _, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: tc.TenantID, NodeID: nodeID, IncludeUnresolved: true}, 10, 0)
 	if err != nil {
 		return aiToolExecution{}, err
 	}

@@ -183,16 +183,16 @@ func (s *Server) buildRiskNotables(ctx context.Context, q riskNotablesQuery, gua
 		nodeByID[node.ID] = node
 	}
 
-	alerts, _, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: q.TenantID, NodeID: q.NodeID, Since: &q.Since}, q.Limit, 0)
+	alerts, _, err := s.store.ListAlerts(ctx, storage.AlertFilter{TenantID: q.TenantID, NodeID: q.NodeID, Since: &q.Since, IncludeUnresolved: true}, q.Limit, 0)
 	if err != nil {
 		resp.DependencyHealth = append(resp.DependencyHealth, riskDependencyHealth{Source: "alerts", Status: "unavailable", Detail: err.Error()})
 	} else {
 		resp.DependencyHealth = append(resp.DependencyHealth, riskDependencyHealth{Source: "alerts", Status: "available"})
 		for _, alert := range alerts {
-			if alert.OpenedAt.Before(q.Since) || alert.OpenedAt.After(q.Until) {
+			if (alert.OpenedAt.Before(q.Since) && !isUnresolvedAlertState(alert.State)) || alert.OpenedAt.After(q.Until) {
 				continue
 			}
-			notable, citation := riskNotableFromAlert(alert, nodeByID)
+			notable, citation := riskNotableFromAlert(alert, nodeByID, q.NodeID)
 			resp.Notables = append(resp.Notables, notable)
 			resp.Citations = append(resp.Citations, citation)
 		}
@@ -273,8 +273,15 @@ func (s *Server) buildRiskNotables(ctx context.Context, q riskNotablesQuery, gua
 	return resp, nil
 }
 
-func riskNotableFromAlert(alert storage.Alert, nodes map[uuid.UUID]storage.Node) (riskNotable, riskCitation) {
+func riskNotableFromAlert(alert storage.Alert, nodes map[uuid.UUID]storage.Node, scopedNodeID uuid.UUID) (riskNotable, riskCitation) {
 	nodeID, nodeLabel := nullNode(alert.NodeID, nodes)
+	if scopedNodeID != uuid.Nil {
+		nodeID, nodeLabel = nullNode(uuid.NullUUID{UUID: scopedNodeID, Valid: true}, nodes)
+	} else if !alert.NodeID.Valid {
+		if evidenceNodeID, ok := uniqueContributingNodeID(alert.Context); ok {
+			nodeID, nodeLabel = nullNode(uuid.NullUUID{UUID: evidenceNodeID, Valid: true}, nodes)
+		}
+	}
 	sourceID := alert.ID.String()
 	severity := normalizeRiskSeverity(alert.Severity)
 	entityType, entityID := entityFromAlert(alert, nodeID)
@@ -305,6 +312,43 @@ func riskNotableFromAlert(alert storage.Alert, nodes map[uuid.UUID]storage.Node)
 		UpdatedAt:          alert.OpenedAt,
 	}
 	return notable, riskCitation{ID: notable.CitationIDs[0], Kind: "alert", Table: "alerts", SourceRecordID: "alerts:" + sourceID}
+}
+
+func isUnresolvedAlertState(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "open", "acked":
+		return true
+	default:
+		return false
+	}
+}
+
+func uniqueContributingNodeID(alertContext map[string]any) (uuid.UUID, bool) {
+	events, ok := alertContext["contributing_events"].([]any)
+	if !ok || len(events) == 0 {
+		return uuid.Nil, false
+	}
+	var nodeID uuid.UUID
+	for _, raw := range events {
+		event, ok := raw.(map[string]any)
+		if !ok {
+			return uuid.Nil, false
+		}
+		value, ok := event["node_id"].(string)
+		value = strings.TrimSpace(value)
+		if !ok || value == "" {
+			return uuid.Nil, false
+		}
+		parsed, err := uuid.Parse(value)
+		if err != nil {
+			return uuid.Nil, false
+		}
+		if nodeID != uuid.Nil && nodeID != parsed {
+			return uuid.Nil, false
+		}
+		nodeID = parsed
+	}
+	return nodeID, nodeID != uuid.Nil
 }
 
 func riskNotableFromSecurityEvent(event storage.SecurityEvent, nodes map[uuid.UUID]storage.Node) (riskNotable, riskCitation) {

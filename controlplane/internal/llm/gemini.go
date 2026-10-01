@@ -37,6 +37,7 @@ type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 }
 
 type geminiFunctionCall struct {
@@ -80,7 +81,7 @@ func (c *GeminiClient) Generate(ctx context.Context, req Request) (Response, err
 	}
 	model := strings.TrimPrefix(c.Config.Model, "models/")
 	if model == "" {
-		model = "gemini-2.5-flash"
+		model = "gemini-3.5-flash-lite"
 	}
 
 	payload := geminiRequest{
@@ -145,8 +146,6 @@ func toGeminiContents(messages []Message) []geminiContent {
 		switch msg.Role {
 		case RoleAssistant:
 			content.Role = "model"
-		case RoleTool:
-			content.Role = "function"
 		}
 		content.Parts = toGeminiParts(msg.Content)
 		if len(content.Parts) > 0 {
@@ -162,7 +161,10 @@ func toGeminiParts(blocks []ContentBlock) []geminiPart {
 		switch block.Type {
 		case ContentToolCall:
 			if block.ToolCall != nil {
-				out = append(out, geminiPart{FunctionCall: &geminiFunctionCall{Name: block.ToolCall.Name, Args: block.ToolCall.Input}})
+				out = append(out, geminiPart{
+					FunctionCall:     &geminiFunctionCall{Name: block.ToolCall.Name, Args: block.ToolCall.Input},
+					ThoughtSignature: block.ToolCall.ThoughtSignature,
+				})
 			}
 		case ContentToolResult:
 			if block.ToolResult != nil {
@@ -201,9 +203,10 @@ func fromGeminiParts(parts []geminiPart) []ContentBlock {
 	for _, part := range parts {
 		if part.FunctionCall != nil {
 			out = append(out, ContentBlock{Type: ContentToolCall, ToolCall: &ToolCall{
-				ID:    part.FunctionCall.Name,
-				Name:  part.FunctionCall.Name,
-				Input: part.FunctionCall.Args,
+				ID:               part.FunctionCall.Name,
+				Name:             part.FunctionCall.Name,
+				Input:            part.FunctionCall.Args,
+				ThoughtSignature: part.ThoughtSignature,
 			}})
 			continue
 		}

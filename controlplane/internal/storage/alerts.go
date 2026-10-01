@@ -149,9 +149,10 @@ func (s *Store) reopenResolvedAlert(ctx context.Context, existing *Alert, p Crea
 	if _, err = s.db.ExecContext(ctx, `
 		UPDATE alerts
 		   SET state='open', context=$1, severity=$2,
-		       summary=COALESCE(NULLIF($3,''),summary), resolved_at=NULL, resolved_by=NULL
-		 WHERE id=$4
-	`, encoded, nonEmptyString(p.Severity, existing.Severity), p.Summary, existing.ID); err != nil {
+		       title=COALESCE(NULLIF($3,''),title),
+		       summary=COALESCE(NULLIF($4,''),summary), resolved_at=NULL, resolved_by=NULL
+		 WHERE id=$5
+	`, encoded, nonEmptyString(p.Severity, existing.Severity), p.Title, p.Summary, existing.ID); err != nil {
 		return nil, fmt.Errorf("reopen resolved alert: %w", err)
 	}
 	updated, err := s.GetAlert(ctx, existing.ID)
@@ -239,12 +240,59 @@ func (s *Store) updateOpenAlertOccurrence(ctx context.Context, existing *Alert, 
 }
 
 func appendEvidenceTimeline(existing, incoming any) []any {
-	timeline := jsonArray(existing)
-	timeline = append(timeline, jsonArray(incoming)...)
+	timeline := make([]any, 0, len(jsonArray(existing))+len(jsonArray(incoming)))
+	seen := map[string]struct{}{}
+	appendEvent := func(event any) {
+		identity := evidenceRecordIdentity(event)
+		if identity != "" {
+			if _, exists := seen[identity]; exists {
+				return
+			}
+			seen[identity] = struct{}{}
+		}
+		timeline = append(timeline, event)
+	}
+	for _, event := range jsonArray(existing) {
+		appendEvent(event)
+	}
+	for _, event := range jsonArray(incoming) {
+		appendEvent(event)
+	}
 	if len(timeline) > 50 {
 		timeline = timeline[len(timeline)-50:]
 	}
 	return timeline
+}
+
+// evidenceRecordIdentity returns an identity only when it is safe to dedupe.
+// Native event IDs such as Windows Event ID 4625 are type IDs, not occurrence
+// IDs. Windows record IDs are scoped to a machine/log, so include node, channel,
+// record ID and event timestamp before treating evidence as a replay.
+func evidenceRecordIdentity(event any) string {
+	values, ok := event.(map[string]any)
+	if !ok {
+		return ""
+	}
+	recordID := strings.TrimSpace(fmt.Sprint(values["source_record_id"]))
+	if recordID == "" || recordID == "<nil>" {
+		return ""
+	}
+	nodeID := strings.TrimSpace(fmt.Sprint(values["node_id"]))
+	if nodeID == "" || nodeID == "<nil>" {
+		return ""
+	}
+	channel := strings.TrimSpace(fmt.Sprint(values["source_channel"]))
+	if channel == "" || channel == "<nil>" {
+		channel = strings.TrimSpace(fmt.Sprint(values["source"]))
+	}
+	if channel == "" || channel == "<nil>" {
+		return ""
+	}
+	timestamp := strings.TrimSpace(fmt.Sprint(values["timestamp"]))
+	if timestamp == "" || timestamp == "<nil>" {
+		return ""
+	}
+	return "native-record:" + nodeID + ":" + channel + ":" + recordID + ":" + timestamp
 }
 
 func jsonArray(value any) []any {
@@ -317,15 +365,16 @@ func (s *Store) GetAlert(ctx context.Context, id uuid.UUID) (*Alert, error) {
 }
 
 type AlertFilter struct {
-	TenantID  uuid.UUID
-	NodeID    uuid.UUID
-	State     string
-	Severity  string
-	Since     *time.Time
-	Until     *time.Time
-	Search    string
-	SortBy    string
-	SortOrder string
+	TenantID          uuid.UUID
+	NodeID            uuid.UUID
+	IncludeUnresolved bool
+	State             string
+	Severity          string
+	Since             *time.Time
+	Until             *time.Time
+	Search            string
+	SortBy            string
+	SortOrder         string
 }
 
 func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int) ([]Alert, int, error) {
@@ -341,7 +390,7 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		idx++
 	}
 	if f.NodeID != uuid.Nil {
-		where = append(where, fmt.Sprintf("node_id = $%d", idx))
+		where = append(where, fmt.Sprintf(`(node_id = $%d OR context @> jsonb_build_object('contributing_events', jsonb_build_array(jsonb_build_object('node_id', $%d::text))))`, idx, idx))
 		args = append(args, f.NodeID)
 		idx++
 	}
@@ -356,7 +405,11 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		idx++
 	}
 	if f.Since != nil {
-		where = append(where, fmt.Sprintf("opened_at >= $%d", idx))
+		if f.IncludeUnresolved {
+			where = append(where, fmt.Sprintf("(opened_at >= $%d OR state IN ('open', 'acked'))", idx))
+		} else {
+			where = append(where, fmt.Sprintf("opened_at >= $%d", idx))
+		}
 		args = append(args, *f.Since)
 		idx++
 	}
@@ -397,7 +450,11 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		order = "ASC"
 	}
 	args = append(args, limit, offset)
-	q := alertSelectSQL + ` WHERE ` + whereSQL + fmt.Sprintf(` ORDER BY %s %s LIMIT $%d OFFSET $%d`, sortCol, order, idx, idx+1)
+	orderBy := fmt.Sprintf(`%s %s`, sortCol, order)
+	if f.IncludeUnresolved {
+		orderBy = `CASE WHEN state IN ('open', 'acked') THEN 0 ELSE 1 END, ` + orderBy
+	}
+	q := alertSelectSQL + ` WHERE ` + whereSQL + fmt.Sprintf(` ORDER BY %s LIMIT $%d OFFSET $%d`, orderBy, idx, idx+1)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
