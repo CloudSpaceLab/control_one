@@ -115,7 +115,15 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: >-
           go test ./controlplane/internal/storage
-          -run '^
+          -run BenchmarkNoTests
+          -bench BenchmarkExecutiveAttentionSummary100k
+          -benchtime=1x
+          -count=1
+
+      - name: Raw-log agent integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -v ./cmd/nodeagent -run 'Test.*LogDump' -count=1
+
       - name: Migration integration test
         if: matrix.os == 'ubuntu-latest'
         env:
