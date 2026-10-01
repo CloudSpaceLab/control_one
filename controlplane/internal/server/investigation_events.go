@@ -353,6 +353,7 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Items:      items,
 		Citations:  citations,
 		Guardrails: guardrails,
+		Degraded:   source == analyticsSourceSmallPending,
 	})
 }
 
