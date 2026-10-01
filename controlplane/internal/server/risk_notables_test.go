@@ -48,6 +48,14 @@ func TestRiskNotableInfersUniqueNodeFromContributingEvidence(t *testing.T) {
 	if notable.NodeID != "" {
 		t.Fatalf("incomplete contributing node evidence should not be attributed: %#v", notable)
 	}
+	alert.Context["contributing_events"] = []any{
+		map[string]any{"node_id": nodeID.String()},
+		map[string]any{"node_id": "not-a-uuid"},
+	}
+	notable, _ = riskNotableFromAlert(alert, map[uuid.UUID]storage.Node{nodeID: node}, uuid.Nil)
+	if notable.NodeID != "" {
+		t.Fatalf("malformed contributing node evidence should not be attributed: %#v", notable)
+	}
 }
 
 func TestIsUnresolvedAlertState(t *testing.T) {

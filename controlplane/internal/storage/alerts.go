@@ -266,7 +266,8 @@ func appendEvidenceTimeline(existing, incoming any) []any {
 
 // evidenceRecordIdentity returns an identity only when it is safe to dedupe.
 // Native event IDs such as Windows Event ID 4625 are type IDs, not occurrence
-// IDs, so source_event_id alone must never collapse separate attempts.
+// IDs. Windows record IDs are scoped to a machine/log, so include node, channel,
+// record ID and event timestamp before treating evidence as a replay.
 func evidenceRecordIdentity(event any) string {
 	values, ok := event.(map[string]any)
 	if !ok {
@@ -276,11 +277,22 @@ func evidenceRecordIdentity(event any) string {
 	if recordID == "" || recordID == "<nil>" {
 		return ""
 	}
+	nodeID := strings.TrimSpace(fmt.Sprint(values["node_id"]))
+	if nodeID == "" || nodeID == "<nil>" {
+		return ""
+	}
 	channel := strings.TrimSpace(fmt.Sprint(values["source_channel"]))
 	if channel == "" || channel == "<nil>" {
 		channel = strings.TrimSpace(fmt.Sprint(values["source"]))
 	}
-	return "native-record:" + channel + ":" + recordID
+	if channel == "" || channel == "<nil>" {
+		return ""
+	}
+	timestamp := strings.TrimSpace(fmt.Sprint(values["timestamp"]))
+	if timestamp == "" || timestamp == "<nil>" {
+		return ""
+	}
+	return "native-record:" + nodeID + ":" + channel + ":" + recordID + ":" + timestamp
 }
 
 func jsonArray(value any) []any {

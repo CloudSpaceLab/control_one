@@ -341,7 +341,7 @@ func uniqueContributingNodeID(alertContext map[string]any) (uuid.UUID, bool) {
 		}
 		parsed, err := uuid.Parse(value)
 		if err != nil {
-			continue
+			return uuid.Nil, false
 		}
 		if nodeID != uuid.Nil && nodeID != parsed {
 			return uuid.Nil, false

@@ -70,11 +70,11 @@ func TestReopenedAlertContextPreservesEvidenceAndClearsDisposition(t *testing.T)
 
 func TestAppendEvidenceTimelineDeduplicatesNativeRecordReplay(t *testing.T) {
 	existing := []any{
-		map[string]any{"source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "41", "timestamp": "2026-09-25T09:34:22Z"},
+		map[string]any{"node_id": "node-1", "source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "41", "timestamp": "2026-09-25T09:34:22Z"},
 	}
 	incoming := []any{
-		map[string]any{"source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "41", "timestamp": "2026-09-25T09:34:22Z"},
-		map[string]any{"source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "42", "timestamp": "2026-09-25T09:34:24Z"},
+		map[string]any{"node_id": "node-1", "source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "41", "timestamp": "2026-09-25T09:34:22Z"},
+		map[string]any{"node_id": "node-1", "source_channel": "Microsoft-Windows-Biometrics/Operational", "source_event_id": "1005", "source_record_id": "42", "timestamp": "2026-09-25T09:34:24Z"},
 	}
 
 	got := appendEvidenceTimeline(existing, incoming)
@@ -88,11 +88,21 @@ func TestAppendEvidenceTimelineDeduplicatesNativeRecordReplay(t *testing.T) {
 
 func TestAppendEvidenceTimelineDoesNotUseNativeEventTypeAsIdentity(t *testing.T) {
 	events := appendEvidenceTimeline(nil, []any{
-		map[string]any{"source_channel": "Security", "source_event_id": "4625", "source_record_id": "10"},
-		map[string]any{"source_channel": "Security", "source_event_id": "4625", "source_record_id": "11"},
+		map[string]any{"node_id": "node-1", "source_channel": "Security", "source_event_id": "4625", "source_record_id": "10", "timestamp": "2026-09-25T09:34:22Z"},
+		map[string]any{"node_id": "node-1", "source_channel": "Security", "source_event_id": "4625", "source_record_id": "11", "timestamp": "2026-09-25T09:34:24Z"},
 	})
 	if len(events) != 2 {
 		t.Fatalf("distinct Windows records were collapsed: %#v", events)
+	}
+}
+
+func TestAppendEvidenceTimelineKeepsSameNativeRecordAcrossNodes(t *testing.T) {
+	events := appendEvidenceTimeline(nil, []any{
+		map[string]any{"node_id": "node-1", "source_channel": "Security", "source_record_id": "10", "timestamp": "2026-09-25T09:34:22Z"},
+		map[string]any{"node_id": "node-2", "source_channel": "Security", "source_record_id": "10", "timestamp": "2026-09-25T09:34:22Z"},
+	})
+	if len(events) != 2 {
+		t.Fatalf("same native record number from different nodes was collapsed: %#v", events)
 	}
 }
 
