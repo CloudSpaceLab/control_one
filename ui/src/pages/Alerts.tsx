@@ -526,6 +526,21 @@ export function Alerts(): JSX.Element {
     }
   };
 
+  const reviewAlert = async (id: string, action: 'approve_close' | 'reopen') => {
+    setResolvingAlert(true);
+    setResolveError(null);
+    setAlertActionError(null);
+    try {
+      await client.reviewAlert(id, action);
+      setResolveTargetId(null);
+      await refresh();
+    } catch (err) {
+      setResolveError(errorMessage(err, action === 'reopen' ? 'Reopen failed.' : 'Approval failed.'));
+    } finally {
+      setResolvingAlert(false);
+    }
+  };
+
   // Correlation rules
   useEffect(() => {
     let cancelled = false;
@@ -1608,6 +1623,8 @@ export function Alerts(): JSX.Element {
         resolving={resolvingAlert}
         error={resolveError}
         onConfirm={(payload) => { if (resolveTarget) void resolve(resolveTarget.id, payload); }}
+        canReview={canReviewAlerts}
+        onReview={(action) => { if (resolveTarget) void reviewAlert(resolveTarget.id, action); }}
         onCancel={() => {
           setResolveTargetId(null);
           setResolveError(null);
@@ -1882,6 +1899,8 @@ function ResolveAlertModal({
   resolving,
   error,
   onConfirm,
+  canReview,
+  onReview,
   onCancel,
   onActionTaken,
   creatingCase,
@@ -1896,6 +1915,8 @@ function ResolveAlertModal({
   resolving: boolean;
   error?: string | null;
   onConfirm: (payload: UpdateAlertDispositionPayload) => void;
+  canReview: boolean;
+  onReview: (action: 'approve_close' | 'reopen') => void;
   onCancel: () => void;
   onActionTaken: () => void;
   creatingCase: boolean;
@@ -1938,9 +1959,11 @@ function ResolveAlertModal({
 	const [confirmCreateCase, setConfirmCreateCase] = useState(false);
   const [linkedCase, setLinkedCase] = useState<SOCCase | null>(null);
   const [containmentTaken, setContainmentTaken] = useState(false);
+  const [mode, setMode] = useState<'engineer' | 'review'>('engineer');
 
   useEffect(() => {
     if (!open) return;
+    setMode(canReview ? 'review' : 'engineer');
     setDisposition(alert?.disposition?.value ?? 'true_positive');
     setReason(alert?.disposition?.reason ?? '');
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
@@ -1950,15 +1973,17 @@ function ResolveAlertModal({
 	setConfirmCreateCase(false);
     setLinkedCase(null);
     setContainmentTaken(false);
-  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until, alertAssignedTo]);
+  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until, alertAssignedTo, canReview]);
 
   const selectedDisposition = dispositionOption(disposition);
   const associatedCase = linkedCase ?? (alert ? availableCases.find((item) => caseContainsAlert(item, alert.id)) : null);
   const reasonMissing = reason.trim().length === 0;
   const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
   const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
-  const evidenceMissing = (disposition === 'resolved' || disposition === 'true_positive') && !containmentTaken && !associatedCase;
+  const evidenceMissing = disposition !== 'false_positive' && !containmentTaken && !associatedCase;
   const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid || evidenceMissing;
+  const reviewReady = Boolean(alert?.disposition?.value && alert.disposition.reason?.trim());
+  const reviewActor = alertAssignedTo || alert?.acked_by || 'Unassigned analyst';
 
   const handleConfirm = () => {
     if (confirmDisabled) return;
@@ -1976,13 +2001,75 @@ function ResolveAlertModal({
     <Dialog open={open} onOpenChange={(next) => { if (!next && !resolving) onCancel(); }}>
       <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Resolve alert with evidence</DialogTitle>
+          <DialogTitle>{mode === 'review' && canReview ? 'Review alert disposition' : 'Resolve alert with evidence'}</DialogTitle>
           <DialogDescription>
-            Resolve should mean containment or a documented false-positive decision exists, not just inbox cleanup.
+            {mode === 'review' && canReview
+              ? 'Confirm the analyst decision or return the alert for more investigation.'
+              : 'Record what happened, what was done, and the evidence for the disposition.'}
           </DialogDescription>
         </DialogHeader>
 
-        {alert && plan ? (
+        {canReview && alert ? (
+          <div className="inline-flex w-fit rounded-md border border-border-subtle bg-surface p-1" aria-label="Alert workflow mode">
+            <Button type="button" size="sm" variant={mode === 'review' ? 'primary' : 'ghost'} onClick={() => setMode('review')}>Supervisor review</Button>
+            <Button type="button" size="sm" variant={mode === 'engineer' ? 'primary' : 'ghost'} onClick={() => setMode('engineer')}>Engineer view</Button>
+          </div>
+        ) : null}
+
+        {alert && plan ? mode === 'review' && canReview ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border-subtle bg-elevated p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-text-muted">{alert.severity} alert</p>
+                  <h3 className="mt-1 text-base font-semibold text-foreground">{alert.title}</h3>
+                </div>
+                <StatusTag tone={stateTone(alert.state)}>{alert.state}</StatusTag>
+              </div>
+              <p className="mt-2 text-sm text-text-secondary">
+                Investigated by {reviewActor}{alert.acked_at ? ` on ${formatAlertContextTime(alert.acked_at)}` : ''}.
+              </p>
+              {ip ? <p className="mt-1 font-mono text-xs text-text-muted">Source IP: {ip}</p> : null}
+            </div>
+
+            <div className="rounded-lg border border-border-subtle bg-surface p-4">
+              <p className="text-xs uppercase tracking-wide text-text-muted">Recorded evidence</p>
+              {alert.disposition ? (
+                <>
+                  <div className="mt-2">
+                    <StatusTag tone={dispositionTone(alert.disposition.value)}>{dispositionLabel(alert.disposition.value)}</StatusTag>
+                  </div>
+                  <p className="mt-3 whitespace-pre-wrap text-sm text-text-secondary">
+                    {alert.disposition.reason || 'No evidence reason recorded.'}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-state-warning">No analyst disposition has been recorded yet.</p>
+              )}
+            </div>
+
+            {associatedCase ? (
+              <Button asChild variant="outline" size="sm">
+                <Link to={withAlertReturnContext(`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}`, alert.id)}>
+                  Open linked SOC case
+                  <ExternalLink />
+                </Link>
+              </Button>
+            ) : null}
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button type="button" variant="primary" loading={resolving} disabled={!reviewReady || resolving} onClick={() => onReview('approve_close')}>
+                Approve & close
+              </Button>
+              <Button type="button" variant="outline" disabled={alert.state !== 'resolved' || resolving} onClick={() => onReview('reopen')}>
+                Reopen for further investigation
+              </Button>
+            </div>
+            {!reviewReady ? (
+              <p className="text-xs text-state-warning">An analyst disposition and evidence reason are required before approval.</p>
+            ) : null}
+          </div>
+        ) : (
           <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
             <div className="space-y-3">
               <div className="rounded-lg border border-border-subtle bg-elevated p-3">
