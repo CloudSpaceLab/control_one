@@ -55,7 +55,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 				rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 			}
 			if err != nil {
-				s.writeConnectionsReadUnavailable(w, source, err)
+				s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
 				return
 			}
 			rows = sanitizeConnectionThreatRows(rows)
@@ -86,7 +86,7 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 		rows, source, err = s.listAnalyticsConnectionsForTenant(r.Context(), tenantID.String(), since, until, limit, externalOnly)
 	}
 	if err != nil {
-		s.writeConnectionsReadUnavailable(w, source, err)
+		s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
 		return
 	}
 	rows = sanitizeConnectionThreatRows(rows)
@@ -97,10 +97,13 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) writeConnectionsReadUnavailable(w http.ResponseWriter, source string, err error) {
+func (s *Server) writeConnectionsReadUnavailable(w http.ResponseWriter, source, tenantID, ip, nodeID string, err error) {
 	if s != nil && s.logger != nil {
 		s.logger.Warn("connection analytics read unavailable",
 			zap.String("source", source),
+			zap.String("tenant_id", tenantID),
+			zap.String("ip", ip),
+			zap.String("node_id", nodeID),
 			zap.Error(err),
 		)
 	}
