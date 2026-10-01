@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,87 @@ func (s *executiveRuleSummaryStore) GetRuleViolationSummary(
 	out := s.summary
 	out.TopRules = append([]storage.RuleViolationTopRule(nil), s.summary.TopRules...)
 	return out, nil
+}
+
+func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
+	_ context.Context,
+	tenantID uuid.UUID,
+	since time.Time,
+	until time.Time,
+	failedLimit int,
+) (storage.AutomaticResponseSummary, error) {
+	out := storage.AutomaticResponseSummary{FailedPlans: []storage.ActionPlan{}}
+	if failedLimit <= 0 {
+		failedLimit = 8
+	}
+	for _, plan := range s.actionPlans {
+		if plan.TenantID != tenantID {
+			continue
+		}
+		changedAt := plan.UpdatedAt
+		if changedAt.IsZero() {
+			changedAt = plan.CreatedAt
+		}
+		if changedAt.Before(since) || !changedAt.Before(until) || !fakeAutomaticResponsePlan(plan) {
+			continue
+		}
+		if plan.State == storage.ActionPlanStateFailed {
+			out.Failed++
+			if len(out.FailedPlans) < failedLimit {
+				out.FailedPlans = append(out.FailedPlans, plan)
+			}
+			continue
+		}
+		if plan.State != storage.ActionPlanStateSucceeded && plan.State != storage.ActionPlanStateVerified {
+			continue
+		}
+		if !fakeSuccessfulAutomaticReceipt(s.actionReceipts[plan.ID], since, until) {
+			continue
+		}
+		out.HandledAutomatically++
+		domain := strings.ToLower(strings.TrimSpace(plan.Domain))
+		action := strings.ToLower(strings.TrimSpace(plan.ActionKind))
+		switch {
+		case domain == "firewall" && strings.Contains(action, "block"):
+			out.Blocked++
+		case domain == "remediation":
+			out.Remediated++
+		case strings.Contains(action, "contain"), strings.Contains(action, "isolation"), strings.Contains(action, "quarantine"):
+			out.Contained++
+		}
+	}
+	return out, nil
+}
+
+func fakeAutomaticResponsePlan(plan storage.ActionPlan) bool {
+	for _, source := range []map[string]any{plan.Diff, plan.SourceRef} {
+		switch value := source["auto_triggered"].(type) {
+		case bool:
+			if value {
+				return true
+			}
+		case string:
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "true", "1", "yes":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func fakeSuccessfulAutomaticReceipt(receipts []storage.ActionReceipt, since, until time.Time) bool {
+	for i := len(receipts) - 1; i >= 0; i-- {
+		receipt := receipts[i]
+		if receipt.CreatedAt.Before(since) || !receipt.CreatedAt.Before(until) {
+			continue
+		}
+		if strings.TrimSpace(receipt.Error) != "" {
+			return false
+		}
+		return receipt.State == storage.ActionPlanStateSucceeded || receipt.State == storage.ActionPlanStateVerified
+	}
+	return false
 }
 
 func (s *executiveRuleSummaryStore) ListIPBlocklistEntries(
