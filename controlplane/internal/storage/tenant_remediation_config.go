@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrInvalidTenantRemediationConfig = errors.New("invalid tenant remediation config")
+
 // ChangeWindow describes a single recurring window during which auto-remediation
 // is allowed to run. Semantics are intentionally simple: a window is active if
 // "now" falls within any interval that overlaps `Days` of the week (0=Sunday)
@@ -164,7 +166,7 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 	case "":
 		minSev = "high"
 	default:
-		return nil, fmt.Errorf("invalid min_approval_severity %q (must be low|medium|high|critical)", cfg.MinApprovalSeverity)
+		return nil, fmt.Errorf("%w: invalid min_approval_severity %q (must be low|medium|high|critical)", ErrInvalidTenantRemediationConfig, cfg.MinApprovalSeverity)
 	}
 	cfg.MinApprovalSeverity = minSev
 
@@ -172,7 +174,7 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		cfg.CircuitBreakerWindowMin = 15
 	}
 	if cfg.CircuitBreakerFailPct < 0 || cfg.CircuitBreakerFailPct > 100 {
-		return nil, errors.New("circuit_breaker_fail_pct must be between 0 and 100")
+		return nil, fmt.Errorf("%w: circuit_breaker_fail_pct must be between 0 and 100", ErrInvalidTenantRemediationConfig)
 	}
 	if cfg.CircuitBreakerMinSamples <= 0 {
 		cfg.CircuitBreakerMinSamples = 5
@@ -181,14 +183,14 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		cfg.AutoBlockMinConfidence = 100
 	}
 	if cfg.AutoBlockMinConfidence < 70 || cfg.AutoBlockMinConfidence > 100 {
-		return nil, errors.New("auto_block_min_confidence must be between 70 and 100")
+		return nil, fmt.Errorf("%w: auto_block_min_confidence must be between 70 and 100", ErrInvalidTenantRemediationConfig)
 	}
 	cfg.DefaultIPBlockScope = strings.ToLower(strings.TrimSpace(cfg.DefaultIPBlockScope))
 	if cfg.DefaultIPBlockScope == "" {
 		cfg.DefaultIPBlockScope = "affected"
 	}
 	if cfg.DefaultIPBlockScope != "affected" && cfg.DefaultIPBlockScope != "fleet" {
-		return nil, errors.New("default_ip_block_scope must be affected or fleet")
+		return nil, fmt.Errorf("%w: default_ip_block_scope must be affected or fleet", ErrInvalidTenantRemediationConfig)
 	}
 	if cfg.DefaultIPBlockTTLSeconds == 0 {
 		cfg.DefaultIPBlockTTLSeconds = 3600
@@ -196,7 +198,7 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 	switch cfg.DefaultIPBlockTTLSeconds {
 	case 900, 3600, 86400:
 	default:
-		return nil, errors.New("default_ip_block_ttl_seconds must be 900, 3600, or 86400")
+		return nil, fmt.Errorf("%w: default_ip_block_ttl_seconds must be 900, 3600, or 86400", ErrInvalidTenantRemediationConfig)
 	}
 
 	if cfg.ChangeWindows == nil {
