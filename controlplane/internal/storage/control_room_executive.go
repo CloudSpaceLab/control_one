@@ -33,6 +33,15 @@ type RuleViolationSummary struct {
 	TopRules      []RuleViolationTopRule
 }
 
+type AutomaticResponseSummary struct {
+	HandledAutomatically int
+	Blocked              int
+	Contained            int
+	Remediated           int
+	Failed               int
+	FailedPlans          []ActionPlan
+}
+
 // GetRuleViolationSummary returns exact tenant-scoped rule violation counts for
 // the current and previous windows plus a bounded top-rule sample.
 func (s *Store) GetRuleViolationSummary(
@@ -143,6 +152,134 @@ func (s *Store) GetRuleViolationSummary(
 		row.RuleType = strings.ToLower(strings.TrimSpace(row.RuleType))
 		row.Severity = strings.ToLower(strings.TrimSpace(row.Severity))
 		out.TopRules = append(out.TopRules, row)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// GetAutomaticResponseSummary returns exact verified automatic-response counts
+// for one selected period. The failed-plan list is a bounded sample; Failed is
+// always the exact total.
+func (s *Store) GetAutomaticResponseSummary(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	since time.Time,
+	until time.Time,
+	failedLimit int,
+) (AutomaticResponseSummary, error) {
+	var out AutomaticResponseSummary
+	if s.db == nil {
+		return out, errors.New("store database not initialized")
+	}
+	if tenantID == uuid.Nil {
+		return out, errors.New("tenant id is required")
+	}
+	if since.IsZero() || until.IsZero() || !since.Before(until) {
+		return out, errors.New("automatic response window is invalid")
+	}
+	if failedLimit <= 0 {
+		failedLimit = 8
+	}
+	if failedLimit > 50 {
+		failedLimit = 50
+	}
+
+	err := s.db.QueryRowContext(ctx, `
+		WITH candidates AS (
+			SELECT
+				p.id,
+				LOWER(p.domain) AS domain,
+				LOWER(p.action_kind) AS action_kind,
+				p.state,
+				r.state AS receipt_state,
+				COALESCE(r.error, '') AS receipt_error
+			FROM action_plans p
+			LEFT JOIN LATERAL (
+				SELECT ar.state, ar.error
+				FROM action_receipts ar
+				WHERE ar.action_plan_id = p.id
+				  AND ar.created_at >= $2
+				  AND ar.created_at < $3
+				ORDER BY ar.created_at DESC
+				LIMIT 1
+			) r ON TRUE
+			WHERE p.tenant_id = $1
+			  AND p.updated_at >= $2
+			  AND p.updated_at < $3
+			  AND (
+				LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
+				OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
+			  )
+		),
+		classified AS (
+			SELECT *,
+				(
+					state IN ('succeeded', 'verified')
+					AND receipt_state IN ('succeeded', 'verified')
+					AND receipt_error = ''
+				) AS handled,
+				(domain = 'firewall' AND action_kind LIKE '%block%') AS is_blocked,
+				(domain = 'remediation') AS is_remediated,
+				(
+					domain <> 'remediation'
+					AND NOT (domain = 'firewall' AND action_kind LIKE '%block%')
+					AND (
+						action_kind LIKE '%contain%'
+						OR action_kind LIKE '%isolation%'
+						OR action_kind LIKE '%quarantine%'
+					)
+				) AS is_contained
+			FROM candidates
+		)
+		SELECT
+			COUNT(*) FILTER (WHERE handled),
+			COUNT(*) FILTER (WHERE handled AND is_blocked),
+			COUNT(*) FILTER (WHERE handled AND is_contained),
+			COUNT(*) FILTER (WHERE handled AND is_remediated),
+			COUNT(*) FILTER (WHERE state = 'failed')
+		FROM classified
+	`, tenantID, since, until).Scan(
+		&out.HandledAutomatically,
+		&out.Blocked,
+		&out.Contained,
+		&out.Remediated,
+		&out.Failed,
+	)
+	if err != nil {
+		return out, fmt.Errorf("count automatic responses: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tenant_id, node_id, domain, action_kind, state, risk,
+		       scope, diff, required_approvals, maintenance_window,
+		       rollback_plan, verification_plan, idempotency_key, created_by,
+		       source_ref, created_at, updated_at
+		FROM action_plans p
+		WHERE p.tenant_id = $1
+		  AND p.updated_at >= $2
+		  AND p.updated_at < $3
+		  AND p.state = 'failed'
+		  AND (
+			LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
+			OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
+		  )
+		ORDER BY p.updated_at DESC
+		LIMIT $4
+	`, tenantID, since, until, failedLimit)
+	if err != nil {
+		return out, fmt.Errorf("query failed automatic responses: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out.FailedPlans = make([]ActionPlan, 0, failedLimit)
+	for rows.Next() {
+		plan, err := scanActionPlan(rows)
+		if err != nil {
+			return out, fmt.Errorf("scan failed automatic response: %w", err)
+		}
+		out.FailedPlans = append(out.FailedPlans, *plan)
 	}
 	if err := rows.Err(); err != nil {
 		return out, err
