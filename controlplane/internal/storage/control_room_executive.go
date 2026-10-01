@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,7 +41,6 @@ type AutomaticResponseSummary struct {
 	Remediated           int
 	Failed               int
 	FailedCritical       int
-	FailedPlans          []ActionPlan
 }
 
 type ExecutiveAttentionItem struct {
@@ -195,7 +195,6 @@ func (s *Store) GetAutomaticResponseSummary(
 	tenantID uuid.UUID,
 	since time.Time,
 	until time.Time,
-	failedLimit int,
 ) (AutomaticResponseSummary, error) {
 	var out AutomaticResponseSummary
 	if s.db == nil {
@@ -207,13 +206,6 @@ func (s *Store) GetAutomaticResponseSummary(
 	if since.IsZero() || until.IsZero() || !since.Before(until) {
 		return out, errors.New("automatic response window is invalid")
 	}
-	if failedLimit <= 0 {
-		failedLimit = 8
-	}
-	if failedLimit > 50 {
-		failedLimit = 50
-	}
-
 	err := s.db.QueryRowContext(ctx, `
 		WITH candidates AS (
 			SELECT
@@ -280,40 +272,6 @@ func (s *Store) GetAutomaticResponseSummary(
 	)
 	if err != nil {
 		return out, fmt.Errorf("count automatic responses: %w", err)
-	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, tenant_id, node_id, domain, action_kind, state, risk,
-		       scope, diff, required_approvals, maintenance_window,
-		       rollback_plan, verification_plan, idempotency_key, created_by,
-		       source_ref, created_at, updated_at
-		FROM action_plans p
-		WHERE p.tenant_id = $1
-		  AND p.updated_at >= $2
-		  AND p.updated_at < $3
-		  AND p.state = 'failed'
-		  AND (
-			LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
-			OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
-		  )
-		ORDER BY p.updated_at DESC, p.id DESC
-		LIMIT $4
-	`, tenantID, since, until, failedLimit)
-	if err != nil {
-		return out, fmt.Errorf("query failed automatic responses: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out.FailedPlans = make([]ActionPlan, 0, failedLimit)
-	for rows.Next() {
-		plan, err := scanActionPlan(rows)
-		if err != nil {
-			return out, fmt.Errorf("scan failed automatic response: %w", err)
-		}
-		out.FailedPlans = append(out.FailedPlans, *plan)
-	}
-	if err := rows.Err(); err != nil {
-		return out, err
 	}
 
 	return out, nil
