@@ -40,13 +40,13 @@ func (s *Server) createFirewallActionPlan(ctx context.Context, tenantID, nodeID,
 			"tag":                   payload.Tag,
 		},
 		Diff: map[string]any{
-			"summary":     "host firewall rule change",
-			"action":      payload.Action,
-			"direction":   payload.Direction,
-			"source":      payload.Source,
-			"dest":        payload.Dest,
-			"port":        payload.Port,
-			"protocol":    payload.Protocol,
+			"summary":        "host firewall rule change",
+			"action":         payload.Action,
+			"direction":      payload.Direction,
+			"source":         payload.Source,
+			"dest":           payload.Dest,
+			"port":           payload.Port,
+			"protocol":       payload.Protocol,
 			"ttl_seconds":    payload.TTLSeconds,
 			"reason":         payload.Reason,
 			"auto_triggered": autoTriggered,
@@ -144,7 +144,6 @@ func (s *Server) recordFirewallActionReceipt(ctx context.Context, planID uuid.UU
 		)
 	}
 }
-
 
 func controlRoomAutomaticFirewallReason(reason string) bool {
 	reason = strings.TrimSpace(reason)
