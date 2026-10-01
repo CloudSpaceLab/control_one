@@ -27,6 +27,16 @@ const overview: ControlRoomExecutiveOverview = {
     groups_unknown: 0,
     nodes_total: 12,
     nodes_healthy: 11,
+    predictive: {
+      state: 'calibrating',
+      freshness_sla_seconds: 10800,
+      scored_nodes: 12,
+      fresh_nodes: 12,
+      calibrating_nodes: 12,
+      stale_nodes: 0,
+      at_risk_nodes: 0,
+      latest_computed_at: '2026-10-01T16:55:00Z',
+    },
     groups: [
       {
         name: 'Payments',
@@ -36,6 +46,7 @@ const overview: ControlRoomExecutiveOverview = {
         nodes_stale: 0,
         nodes_offline: 0,
         intentionally_isolated: 0,
+        predictive_nodes_at_risk: 0,
         drilldown: '/nodes',
       },
       {
@@ -46,6 +57,7 @@ const overview: ControlRoomExecutiveOverview = {
         nodes_stale: 1,
         nodes_offline: 0,
         intentionally_isolated: 0,
+        predictive_nodes_at_risk: 0,
         drilldown: '/nodes',
       },
     ],
