@@ -42,9 +42,16 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   const degradedMessage = query.data?.degraded
     ? query.data.guardrails.slice(-1)[0] ?? 'Connection evidence unavailable.'
     : null;
+  const waitingForTenant = !currentTenantId;
+  const loading = waitingForTenant || query.isLoading;
   const evidenceUnavailable = Boolean(query.error || query.data?.degraded);
 
-  const { data: allNodes } = useNodes({ tenantId: currentTenantId ?? undefined, limit: 500, offset: 0 });
+  const { data: allNodes } = useNodes({
+    tenantId: currentTenantId ?? undefined,
+    limit: 500,
+    offset: 0,
+    enabled: !!currentTenantId,
+  });
   const nodesById = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);
 
   const totals = useMemo(() => {
@@ -114,25 +121,25 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
           label="Lifecycles"
           value={evidenceUnavailable ? '—' : String(totals.total)}
           tone="brand"
-          loading={query.isLoading}
+          loading={loading}
         />
         <KpiTile
           label="Distinct nodes"
           value={evidenceUnavailable ? '—' : String(totals.nodes)}
           tone="info"
-          loading={query.isLoading}
+          loading={loading}
         />
         <KpiTile
           label="Bytes in / out"
           value={evidenceUnavailable ? '—' : `${formatBytes(totals.bytesIn)} / ${formatBytes(totals.bytesOut)}`}
           tone="accent"
-          loading={query.isLoading}
+          loading={loading}
         />
         <KpiTile
           label="Threat hits"
           value={evidenceUnavailable ? '—' : String(totals.threats)}
           tone={evidenceUnavailable ? 'unknown' : totals.threats > 0 ? 'critical' : 'healthy'}
-          loading={query.isLoading}
+          loading={loading}
         />
       </div>
 
@@ -166,10 +173,10 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
           </div>
         }
       >
-        {query.isLoading && <Loader size="md" label="Loading lifecycles…" />}
+        {loading && <Loader size="md" label="Loading lifecycles…" />}
         {query.error && <Alert variant="critical">{(query.error as Error).message}</Alert>}
         {degradedMessage && <Alert variant="warning">{degradedMessage}</Alert>}
-        {!query.isLoading && !query.error && !query.data?.degraded && rows.length === 0 ? (
+        {!loading && !query.error && !query.data?.degraded && rows.length === 0 ? (
           <EmptyState
             title="No lifecycles found"
             description={`No connections involving ${ip} in the selected time window.`}
