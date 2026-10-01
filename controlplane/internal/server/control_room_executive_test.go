@@ -232,7 +232,7 @@ func TestControlRoomExecutiveEstateGroupsAndIntentionalIsolation(t *testing.T) {
 		{
 			ID: airgappedID, TenantID: tenantID, Hostname: "vault-01", LastSeenAt: &old,
 			Labels: map[string]any{
-				"dashboard_group":   "Vault",
+				"dashboard_group":  "Vault",
 				isolationModeLabel: isolationModeAirgapped,
 			},
 		},
@@ -275,7 +275,7 @@ func TestControlRoomExecutiveProtectionUsesVerifiedListenerEvidence(t *testing.T
 	base.firewallStates = map[uuid.UUID]storage.NodeFirewallState{
 		nodeID: {
 			NodeID: nodeID, FirewallType: "ufw", Enabled: true,
-			Rules: []storage.FirewallRule{{Raw: "Default: deny (incoming), allow (outgoing)"}},
+			Rules:      []storage.FirewallRule{{Raw: "Default: deny (incoming), allow (outgoing)"}},
 			ObservedAt: now,
 		},
 	}
