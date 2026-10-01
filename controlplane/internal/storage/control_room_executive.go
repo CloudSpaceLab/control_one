@@ -188,8 +188,7 @@ func (s *Store) GetRuleViolationSummary(
 }
 
 // GetAutomaticResponseSummary returns exact verified automatic-response counts
-// for one selected period. The failed-plan list is a bounded sample; Failed is
-// always the exact total.
+// for one selected period. Attention samples are aggregated separately.
 func (s *Store) GetAutomaticResponseSummary(
 	ctx context.Context,
 	tenantID uuid.UUID,
