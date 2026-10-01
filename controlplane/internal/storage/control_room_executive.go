@@ -356,10 +356,10 @@ func (s *Store) GetExecutiveAttentionSummary(
 				OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
 			  )
 		),
-		auto_failed AS (
+		auto_failed_raw AS (
 			SELECT
 				p.id,
-				LOWER(COALESCE(NULLIF(p.risk, ''), 'medium')) AS severity,
+				LOWER(COALESCE(NULLIF(p.risk, ''), 'medium')) AS plan_severity,
 				p.domain,
 				p.action_kind,
 				p.updated_at AS created_at,
@@ -382,6 +382,43 @@ func (s *Store) GetExecutiveAttentionSummary(
 				LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
 				OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
 			  )
+		),
+		auto_failed AS (
+			SELECT
+				f.id,
+				CASE GREATEST(
+						CASE f.plan_severity
+							WHEN 'critical' THEN 5
+							WHEN 'high' THEN 4
+							WHEN 'medium' THEN 3
+							WHEN 'low' THEN 2
+							WHEN 'info' THEN 1
+							ELSE 0
+						END,
+						CASE LOWER(COALESCE(a.severity, ''))
+							WHEN 'critical' THEN 5
+							WHEN 'high' THEN 4
+							WHEN 'medium' THEN 3
+							WHEN 'low' THEN 2
+							WHEN 'info' THEN 1
+							ELSE 0
+						END
+					)
+					WHEN 5 THEN 'critical'
+					WHEN 4 THEN 'high'
+					WHEN 3 THEN 'medium'
+					WHEN 2 THEN 'low'
+					WHEN 1 THEN 'info'
+					ELSE 'medium'
+				END AS severity,
+				f.domain,
+				f.action_kind,
+				f.created_at,
+				f.alert_id
+			FROM auto_failed_raw f
+			LEFT JOIN alerts a
+			  ON a.id = f.alert_id
+			 AND a.tenant_id = $1
 		),
 		excluded_alerts AS (
 			SELECT alert_id FROM proposed_blocks WHERE alert_id IS NOT NULL
