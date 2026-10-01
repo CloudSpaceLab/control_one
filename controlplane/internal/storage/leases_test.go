@@ -24,7 +24,7 @@ import (
 // migrations (not just 0001-0006), and returns a Store. Needed for anything
 // that touches remediation_scripts, remediation_leases, or
 // compliance_results.verified.
-func setupPostgresStoreFull(t *testing.T, ctx context.Context) *Store {
+func setupPostgresStoreFull(t testing.TB, ctx context.Context) *Store {
 	t.Helper()
 
 	if testing.Short() {
