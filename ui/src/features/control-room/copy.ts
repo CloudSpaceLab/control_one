@@ -35,7 +35,10 @@ export function executiveDescription(
   if (!overview.availability.estate || !overview.availability.protection) {
     return `${prefix}Some security or infrastructure data is unavailable.`;
   }
-  return `${prefix}${overview.estate.groups_healthy} of ${overview.estate.groups_total} infrastructure groups healthy · ${formatPercent(overview.protection.percentage)} protection coverage`;
+  const protection = overview.protection.total === 0
+    ? 'no public listeners detected'
+    : `${formatPercent(overview.protection.percentage)} protection coverage`;
+  return `${prefix}${overview.estate.groups_healthy} of ${overview.estate.groups_total} infrastructure groups healthy · ${protection}`;
 }
 
 export function formatPercent(value: number): string {
@@ -43,6 +46,9 @@ export function formatPercent(value: number): string {
   return `${Math.round(value)}%`;
 }
 
-export function pluralize(value: number, singular: string, plural = `${singular}s`): string {
-  return value === 1 ? singular : plural;
+export function formatPeriodDelta(deltaPct: number, previousTotal: number): string {
+  if (previousTotal <= 0 || !Number.isFinite(deltaPct)) return '';
+  const rounded = Math.round(Math.abs(deltaPct));
+  if (rounded === 0) return 'no change';
+  return `${rounded}% ${deltaPct < 0 ? 'lower' : 'higher'}`;
 }
