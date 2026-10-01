@@ -176,7 +176,8 @@ describe('TeamActivity', () => {
     });
     expect(screen.getAllByText('Alex Rivera').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Morgan Lee').length).toBeGreaterThan(0);
-    expect(mockApi.getTeamMetrics).toHaveBeenCalledWith('tenant-1', { days: 30 });
+    expect(mockApi.getTeamMetrics).toHaveBeenCalledWith('tenant-1', { days: 1 });
+    expect(screen.getByLabelText('Analyst Alex Rivera')).toBeInTheDocument();
   });
 
   it('lists recent activity in the feed with actor and detail', async () => {
