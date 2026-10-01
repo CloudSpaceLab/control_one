@@ -157,3 +157,47 @@ func TestAutoLogSourcesRefusesMalformedApprovalRequiredProposal(t *testing.T) {
 		t.Fatalf("approval-required proposal must not become an auto log source: %#v", sources)
 	}
 }
+
+func TestDiscoverLocalProposesAWSCloudTrailFromCloudWatchAgentPackage(t *testing.T) {
+	got := DiscoverLocal(Options{
+		GOOS: "linux",
+		Packages: []Package{{
+			Name:    "amazon-cloudwatch-agent",
+			Version: "1.300050",
+			Source:  "rpm",
+		}},
+	})
+	if len(got) != 1 {
+		t.Fatalf("proposals = %#v, want one AWS cloud-audit proposal", got)
+	}
+	p := got[0]
+	if p.Program != "aws-cloudtrail" || p.Kind != KindCloudAudit || p.CollectorType != CollectorTypeVendorAPI {
+		t.Fatalf("unexpected AWS proposal: %#v", p)
+	}
+	if p.AutoConnectEligible || !p.RequiresApproval {
+		t.Fatalf("AWS cloud audit must remain approval-required: %#v", p)
+	}
+	if p.Labels["content_pack_source_id"] != "aws.cloudtrail" || p.Labels["cloud.provider"] != "aws" {
+		t.Fatalf("AWS proposal labels = %#v", p.Labels)
+	}
+}
+
+func TestDiscoverLocalNeverAutoConnectsAWSCloudTrailEvenWithHighRiskPolicy(t *testing.T) {
+	got := DiscoverLocal(Options{
+		GOOS: "linux",
+		Services: []Service{{
+			Process:     "amazon-cloudwatch-agent",
+			ServiceKind: "amazon-cloudwatch-agent",
+		}},
+		AutoConnect: AutoConnectPolicy{
+			AllowHighRisk:       true,
+			AutoConnectPrograms: []string{"aws-cloudtrail"},
+		},
+	})
+	if len(got) != 1 {
+		t.Fatalf("proposals = %#v, want one", got)
+	}
+	if got[0].AutoConnectEligible || !got[0].RequiresApproval {
+		t.Fatalf("remote AWS source must require explicit scope/credential approval: %#v", got[0])
+	}
+}

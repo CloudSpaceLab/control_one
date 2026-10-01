@@ -167,6 +167,20 @@ func presetPathCandidates(program string) []string {
 	}
 }
 
+func awsCloudTrailDefaultPaths() []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			"C:/ProgramData/Amazon/CloudTrail/*.json",
+			"C:/ProgramData/Amazon/CloudWatchAgent/logs/cloudtrail*.json",
+		}
+	}
+	return []string{
+		"/var/log/aws/cloudtrail/*.json",
+		"/var/log/aws/cloudtrail/*.jsonl",
+		"/opt/aws/cloudtrail/*.json",
+	}
+}
+
 func nginxDefaultPaths() []string {
 	if runtime.GOOS == "windows" {
 		return []string{"C:/nginx/logs/access.log", "C:/nginx/logs/error.log"}
@@ -272,6 +286,23 @@ func dedupeStrings(values []string) []string {
 
 func init() {
 	registerCatalogPresets()
+
+	RegisterPreset("aws-cloudtrail", Preset{
+		Name: "aws-cloudtrail",
+		Sources: []config.LogSourceConfig{
+			{
+				Program:   "aws-cloudtrail",
+				Type:      "file",
+				Paths:     awsCloudTrailDefaultPaths(),
+				Formatter: "generic",
+				Labels: map[string]string{
+					"cloud.provider":         "aws",
+					"content_pack_source_id": "aws.cloudtrail",
+					"parser_profile":         "aws.cloudtrail",
+				},
+			},
+		},
+	})
 
 	RegisterPreset("nginx", Preset{
 		Name: "nginx",

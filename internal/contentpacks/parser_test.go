@@ -494,6 +494,37 @@ func TestParserRuntimeJSONFieldMapRedactAndDrop(t *testing.T) {
 	}
 }
 
+func TestParserRuntimeFieldMapCoercesIntegers(t *testing.T) {
+	profile := ParserProfile{
+		ParserID:    "test.field-map-int",
+		DisplayName: "field map integer parser",
+		Stages: []ParserStage{
+			{Type: StageJSON},
+			{Type: StageFieldMap, Config: map[string]any{
+				"mappings": map[string]any{
+					"destination.port": "port",
+				},
+				"coerce_int": []any{"destination.port"},
+			}},
+		},
+	}
+	compiled, err := DefaultParserRuntimeRegistry().Compile(profile)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	out, err := compiled.Parse(ParserInput{Raw: `{"port":443}`})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	got, ok := getField(out.Event.Fields, "destination.port")
+	if !ok {
+		t.Fatal("destination.port missing")
+	}
+	if port, ok := got.(int); !ok || port != 443 {
+		t.Fatalf("destination.port = %#v (%T), want int(443)", got, got)
+	}
+}
+
 func TestParserRuntimeOnErrorKeepRawContinues(t *testing.T) {
 	profile := ParserProfile{
 		ParserID:    "test.partial",
