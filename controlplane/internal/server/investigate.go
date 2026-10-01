@@ -826,6 +826,23 @@ func (s *Server) savedSearchesList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if entityType == "ip" && action == "block" {
+		cfg := storage.DefaultTenantRemediationConfig(tenantID)
+		if stored, err := s.store.GetTenantRemediationConfig(r.Context(), tenantID); err == nil && stored != nil {
+			cfg = *stored
+		}
+		if strings.TrimSpace(p.Scope) == "" {
+			p.Scope = cfg.DefaultIPBlockScope
+		}
+		p.Scope = strings.ToLower(strings.TrimSpace(p.Scope))
+		if p.Scope != "affected" && p.Scope != "fleet" {
+			http.Error(w, "scope must be affected or fleet", http.StatusBadRequest)
+			return
+		}
+		if p.TTL <= 0 {
+			p.TTL = cfg.DefaultIPBlockTTLSeconds
+		}
+	}
 	userID := principalUserID(s, r.Context(), principal)
 	items, total, err := ib.ListSavedSearches(r.Context(), tenantID, userID, limit, offset)
 	if err != nil {
