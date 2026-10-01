@@ -902,7 +902,7 @@ function ActiveBlocksPanel(): JSX.Element {
             <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
               <tr>
                 <th className="px-3 py-2">IP</th>
-                <th className="px-3 py-2">Action</th>
+                <th className="px-3 py-2">Source</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Applied / Total</th>
                 <th className="px-3 py-2">Reason</th>
@@ -918,7 +918,7 @@ function ActiveBlocksPanel(): JSX.Element {
                 return (
                   <tr key={b.EntityActionID} className="border-t border-border hover:bg-hover">
                     <td className="px-3 py-2 font-mono text-xs">{b.EntityID}</td>
-                    <td className="px-3 py-2">{b.Action}</td>
+                    <td className="px-3 py-2"><StatusTag tone={b.Provenance === 'auto' ? 'info' : 'unknown'}>{b.Provenance === 'auto' ? 'Auto' : 'Manual'}</StatusTag></td>
                     <td className="px-3 py-2">
                       <StatusTag tone={tone}>{status}</StatusTag>
                     </td>
