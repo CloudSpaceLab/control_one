@@ -329,7 +329,7 @@ func TestControlRoomExecutiveIgnoresCrossTenantLinkedAlert(t *testing.T) {
 		blockProposals: []storage.IPBlocklistEntry{{
 			ID: uuid.New(), TenantID: tenantID, IPCIDR: "203.0.113.20/32",
 			Status: "proposed", Score: 50,
-			Reason: "Correlation response: rule=Cross tenant corruption; alert_id=" + otherAlertID.String() + "; mode=proposal",
+			Reason:    "Correlation response: rule=Cross tenant corruption; alert_id=" + otherAlertID.String() + "; mode=proposal",
 			CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
 		}},
 	}
@@ -386,7 +386,7 @@ func TestControlRoomExecutiveIgnoresCrossTenantHandledAlert(t *testing.T) {
 			State: storage.ActionPlanStateSucceeded, Risk: "medium",
 			Diff: map[string]any{
 				"auto_triggered": true,
-				"reason": "Correlation response: rule=Cross tenant corruption; alert_id=" + otherAlertID.String() + "; mode=auto_temporary_block",
+				"reason":         "Correlation response: rule=Cross tenant corruption; alert_id=" + otherAlertID.String() + "; mode=auto_temporary_block",
 			},
 			SourceRef: map[string]any{},
 			CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-10 * time.Minute),
@@ -395,7 +395,7 @@ func TestControlRoomExecutiveIgnoresCrossTenantHandledAlert(t *testing.T) {
 	base.actionReceipts = map[uuid.UUID][]storage.ActionReceipt{
 		planID: {{
 			ID: uuid.New(), ActionPlanID: planID, TenantID: tenantID,
-			State: storage.ActionPlanStateSucceeded,
+			State:   storage.ActionPlanStateSucceeded,
 			Receipt: map[string]any{"success": true}, Verification: map[string]any{"applied": true},
 			CreatedAt: now.Add(-10 * time.Minute),
 		}},
@@ -447,7 +447,7 @@ func TestControlRoomExecutiveDoesNotExposeCrossTenantApprovalNodeName(t *testing
 		remediationID: {
 			ID: remediationID, TenantID: tenantID, NodeID: otherNodeID,
 			RuleID: "cis-cross-tenant", ScriptID: uuid.New(), Severity: "high",
-			Status: storage.ApprovalStatusPending,
+			Status:    storage.ApprovalStatusPending,
 			CreatedAt: now.Add(-10 * time.Minute), ExpiresAt: now.Add(time.Hour),
 		},
 	}
