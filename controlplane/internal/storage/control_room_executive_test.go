@@ -68,7 +68,6 @@ func TestGetRuleViolationSummaryUsesExactTenantScopedTotals(t *testing.T) {
 	require.Greater(t, summary.Total, summary.TopRules[0].Count+summary.TopRules[1].Count)
 }
 
-
 func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	ctx := context.Background()
 	store := setupPostgresStoreFull(t, ctx)
