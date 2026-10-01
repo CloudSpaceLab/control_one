@@ -415,6 +415,7 @@ export interface ControlRoomExecutivePredictiveHealth {
   freshness_sla_seconds: number;
   scored_nodes: number;
   fresh_nodes: number;
+  unscored_nodes: number;
   calibrating_nodes: number;
   stale_nodes: number;
   at_risk_nodes: number;
