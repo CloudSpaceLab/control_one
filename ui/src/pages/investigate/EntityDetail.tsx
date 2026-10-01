@@ -68,6 +68,7 @@ export function EntityDetail(): JSX.Element {
   useEffect(() => {
     setAccumulated([]);
     setCursor(undefined);
+    setTab(safeType === 'ip' ? 'connections' : 'timeline');
   }, [safeType, id]);
 
   // Accumulate lifecycle items as pages arrive.
