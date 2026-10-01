@@ -1378,31 +1378,33 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 		ttlSeconds = 3600
 	}
 
-	// Do not create a second in-flight policy action for the same IP/scope.
-	if query, ok := s.store.(ipBlockProposalQueryStore); ok {
-		rows, _, queryErr := query.ListIPBlocklistEntries(ctx, storage.IPBlocklistEntryFilter{
-			TenantID: tenantID,
-			IPCIDR:   cidr,
-		}, 100, 0)
-		if queryErr == nil {
-			for _, row := range rows {
-				if !autoBlockScopeMatches(row, scope) {
-					continue
-				}
-				switch strings.ToLower(strings.TrimSpace(row.Status)) {
-				case "proposed", "approved", "canary", "dispatching", "active":
-					return
+	// Fleet policy is a single tenant-wide intent; do not start another
+	// while one is already active or in flight. Affected scope is incremental:
+	// later observations may add newly affected nodes, so rule-level coverage
+	// below is the authoritative de-duplication mechanism.
+	if scope == "fleet" {
+		if query, ok := s.store.(ipBlockProposalQueryStore); ok {
+			rows, _, queryErr := query.ListIPBlocklistEntries(ctx, storage.IPBlocklistEntryFilter{
+				TenantID: tenantID,
+				IPCIDR:   cidr,
+			}, 100, 0)
+			if queryErr == nil {
+				for _, row := range rows {
+					if !autoBlockScopeMatches(row, scope) {
+						continue
+					}
+					switch strings.ToLower(strings.TrimSpace(row.Status)) {
+					case "proposed", "approved", "canary", "dispatching", "active":
+						return
+					}
 				}
 			}
 		}
-	}
-
-	// A direct/manual block may already cover the requested policy scope.
-	if stateStore, ok := s.store.(ipBlockCurrentStateStore); ok {
-		if current, stateErr := stateStore.GetIPBlockStatus(ctx, tenantID, b.srcIP); stateErr == nil && current != nil {
-			fullyApplied := current.State == "blocked" || current.State == "blocking"
-			if fullyApplied && (scope == "affected" || current.Scope == "fleet") {
-				return
+		if stateStore, ok := s.store.(ipBlockCurrentStateStore); ok {
+			if current, stateErr := stateStore.GetIPBlockStatus(ctx, tenantID, b.srcIP); stateErr == nil && current != nil {
+				if (current.State == "blocked" || current.State == "blocking") && current.Scope == "fleet" {
+					return
+				}
 			}
 		}
 	}
