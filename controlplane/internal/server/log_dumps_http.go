@@ -349,7 +349,7 @@ func (s *Server) handleLogDumpPreview(w http.ResponseWriter, r *http.Request, du
 		http.Error(w, "log dump artifact unavailable", http.StatusGone)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, maxLogDumpPreviewBytes+1))
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -401,7 +401,7 @@ func (s *Server) handleLogDumpDownload(w http.ResponseWriter, r *http.Request, d
 		http.Error(w, "log dump artifact unavailable", http.StatusGone)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -541,7 +541,7 @@ func (s *Server) logDumpResponse(d storage.LogDump) logDumpResponse {
 
 func decodeStrictJSONDocument(r *http.Request, dst any, maxBytes int64) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, maxBytes)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {

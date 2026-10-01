@@ -289,7 +289,7 @@ func (s *Store) ListLogDumps(ctx context.Context, f LogDumpFilter, limit, offset
 	if err != nil {
 		return nil, 0, fmt.Errorf("list log dumps: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]LogDump, 0, limit)
 	for rows.Next() {
 		d, err := scanLogDump(rows)
@@ -317,7 +317,7 @@ func (s *Store) ListPendingNodeLogDumps(ctx context.Context, nodeID uuid.UUID, n
 	if err != nil {
 		return nil, fmt.Errorf("list pending node log dumps: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []LogDump
 	for rows.Next() {
 		d, err := scanLogDump(rows)
@@ -391,7 +391,7 @@ func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA st
 	if err != nil {
 		return false, fmt.Errorf("begin log dump chunk tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var expiresAt time.Time
 	var claimExpires sql.NullTime
 	var status string
@@ -444,7 +444,7 @@ func (s *Store) ListLogDumpChunks(ctx context.Context, tenantID, nodeID, dumpID,
 	if err != nil {
 		return nil, fmt.Errorf("list log dump chunks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []LogDumpChunk
 	for rows.Next() {
 		var c LogDumpChunk
@@ -475,7 +475,7 @@ func (s *Store) CompleteLogDumpAndJob(ctx context.Context, tenantID, nodeID, dum
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var status string
 	var expiresAt time.Time
 	var claimExpires sql.NullTime
@@ -524,7 +524,7 @@ func (s *Store) FailLogDumpAndJob(ctx context.Context, tenantID, nodeID, dumpID,
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `UPDATE agent_log_dumps SET status='failed',error=$5,source_available=$6,source_reason=$7,
 		claim_token_sha256=NULL,claim_expires_at=NULL WHERE tenant_id=$1 AND node_id=$2 AND id=$3 AND job_id=$4 AND status IN ('requested','capturing')`,
 		tenantID, nodeID, dumpID, jobID, nullableText(message), sourceAvailable, nullableText(sourceReason))
@@ -581,7 +581,7 @@ func (s *Store) ListLogDumpCleanupCandidates(ctx context.Context, now time.Time,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []LogDump
 	for rows.Next() {
 		d, err := scanLogDump(rows)
@@ -618,7 +618,7 @@ func (s *Store) ListTimedOutLogDumps(ctx context.Context, now, startedBefore tim
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []LogDump
 	for rows.Next() {
 		d, err := scanLogDump(rows)

@@ -43,7 +43,7 @@ func (s *Store) FailClaimedLogDumpAndJob(ctx context.Context, tenantID, nodeID, 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `UPDATE agent_log_dumps SET
 		status='failed', error=$6, source_available=$7, source_reason=$8,
 		claim_token_sha256=NULL, claim_expires_at=NULL

@@ -62,7 +62,7 @@ func (s *Store) CreateAgentLogDumpWithJob(ctx context.Context, d LogDump, job Jo
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin agent log dump request: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO jobs (id, tenant_id, type, status, payload, retries, max_retries, scheduled_at, started_at, finished_at, created_at, updated_at)
