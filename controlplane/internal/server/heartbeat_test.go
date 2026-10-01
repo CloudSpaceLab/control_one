@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
@@ -1242,4 +1243,79 @@ func TestHeartbeatNetworkObservationsStayBounded(t *testing.T) {
 	if merged[len(merged)-1]["value"] != "198.51.100.8" {
 		t.Fatalf("new observation was not retained: %+v", merged[len(merged)-1])
 	}
+}
+
+type logDumpPendingHeartbeatStore struct {
+	*fakeStore
+	pending []storage.LogDump
+}
+
+func (s *logDumpPendingHeartbeatStore) ListPendingNodeLogDumps(_ context.Context, nodeID uuid.UUID, _ time.Time, _ int) ([]storage.LogDump, error) {
+	out := make([]storage.LogDump, 0, len(s.pending))
+	for _, dump := range s.pending {
+		if dump.NodeID == nodeID {
+			out = append(out, dump)
+		}
+	}
+	return out, nil
+}
+
+func TestHeartbeatLogDumpCompatibilityRequiresAdvertisedCapability(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	jobID := uuid.New()
+	dumpID := uuid.New()
+	now := time.Now().UTC()
+
+	base := &fakeStore{
+		nodes: []storage.Node{{
+			ID:         nodeID,
+			TenantID:   tenantID,
+			Hostname:   "legacy-agent",
+			State:      storage.NodeStateActive,
+			LastSeenAt: &now,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+			Labels:     map[string]any{},
+		}},
+	}
+	store := &logDumpPendingHeartbeatStore{
+		fakeStore: base,
+		pending: []storage.LogDump{{
+			ID:       dumpID,
+			TenantID: tenantID,
+			NodeID:   nodeID,
+			JobID:    uuid.NullUUID{UUID: jobID, Valid: true},
+			Source:   storage.LogDumpSourceNodeAgent,
+			Status:   storage.LogDumpStatusRequested,
+		}},
+	}
+	srv := buildHeartbeatServer(t, base)
+	srv.store = store
+
+	req := mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	rec := httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var legacy heartbeatResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &legacy))
+	for _, action := range legacy.PendingActions {
+		require.NotContains(t, action, JobTypeLogDump+":", "legacy agent must not receive raw-log actions")
+	}
+
+	body := []byte(`{"capabilities":["log_dump.v1"]}`)
+	req = mtlsRequest(http.MethodPost, "/api/v1/nodes/"+nodeID.String()+"/heartbeat", nodeID.String())
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	rec = httptest.NewRecorder()
+	srv.handleNodeResource(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var capable heartbeatResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &capable))
+	want := JobTypeLogDump + ":" + jobID.String() + ":" + dumpID.String()
+	require.Contains(t, capable.PendingActions, want)
 }

@@ -296,6 +296,10 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// Connectivity tests probe TCP reachability from the agent host.
 			// Results are reported back via completed_actions metadata.
 			go executeConnectivityTest(ctx, client, log, action)
+		case strings.HasPrefix(action, "log_dump:"):
+			// Raw-log capture snapshots the durable spool without deleting
+			// records from the normal telemetry delivery path.
+			go executeLogDumpAction(ctx, client, log, action)
 		}
 	}
 	if ack.FullInventoryRequested {
@@ -326,6 +330,7 @@ func heartbeatAgentCapabilities() []string {
 		"app_dependency_inventory.v1",
 		"agent_update_job_status.v1",
 		"agent_update_force.v1",
+		"log_dump.v1",
 	}
 	return append(base, heartbeatRuntimeCapabilities()...)
 }

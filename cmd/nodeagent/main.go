@@ -383,6 +383,7 @@ func main() {
 		LogSpoolMaxBytes: 256 << 20,
 		LogCursorDir:     filepath.Join(durabilityDir, "log-cursors"),
 	})
+	configureLogDumpSource(telemetrySvc)
 	activeLogSourcesMu := sync.Mutex{}
 	activeLogSources := append([]config.LogSourceConfig(nil), cfg.TelemetryPrefs.LogSources...)
 	snapshotActiveLogSources := func() []config.LogSourceConfig {

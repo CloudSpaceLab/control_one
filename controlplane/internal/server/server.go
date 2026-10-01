@@ -985,6 +985,9 @@ type Server struct {
 	// alert storms. Keyed by "ruleID:nodeID".
 	metricAlertCooldowns   map[string]time.Time
 	metricAlertCooldownsMu sync.Mutex
+
+	logDumpMaintenanceCancel context.CancelFunc
+	logDumpMaintenanceWG     sync.WaitGroup
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -1159,6 +1162,9 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/mesh/rotate", s.handleMeshRotate)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/metrics", s.handleTelemetryMetrics)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/logs", s.handleTelemetryLogs)
+	s.baseRouter.HandleFunc("/api/v1/log-dumps", s.handleLogDumps)
+	s.baseRouter.HandleFunc("/api/v1/log-dumps/", s.handleLogDumpResource)
+	s.baseRouter.HandleFunc("/api/v1/agent/log-dumps/", s.handleAgentLogDumpResource)
 	s.baseRouter.HandleFunc("/api/v1/telemetry/nodes/", s.handleTelemetryNodeSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/compliance/trends", s.handleComplianceTrends)
 	s.baseRouter.HandleFunc("/api/v1/compliance/control-posture", s.handleComplianceControlPosture)
@@ -3183,6 +3189,7 @@ func (s *Server) Start() error {
 	s.startCorrelationEngine()
 	s.startBehavioralRollup()
 	s.startThreatIntelManager()
+	s.startLogDumpMaintenance()
 	s.webhookBridge.Start(context.Background())
 
 	if !s.cfg.TLS.Enabled {
@@ -3200,6 +3207,7 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
+	s.stopLogDumpMaintenance()
 	if s.webhookBridge != nil {
 		s.webhookBridge.Stop()
 	}

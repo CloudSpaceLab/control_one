@@ -449,6 +449,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	} else if !errors.Is(cerr, sql.ErrNoRows) {
 		s.logger.Warn("list pending connectivity tests", zap.Error(cerr))
 	}
+	s.appendPendingLogDumpActions(r.Context(), node, &resp)
 	writeJSON(w, http.StatusOK, resp)
 }
 

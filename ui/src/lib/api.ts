@@ -1177,6 +1177,65 @@ export interface NetworkObservationResponse {
   confidence: number;
 }
 
+export type LogDumpSource = "control_plane" | "node_agent";
+export type LogDumpStatus =
+  | "requested"
+  | "capturing"
+  | "captured"
+  | "failed"
+  | "expired"
+  | "deleting";
+
+export interface LogDump {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  job_id?: string;
+  source: LogDumpSource;
+  entity_filter: Record<string, unknown>;
+  window_start: string;
+  window_end: string;
+  retention_days: 1 | 3 | 7 | 14 | 30;
+  status: LogDumpStatus;
+  artifact_sha256?: string;
+  row_count: number;
+  size_bytes: number;
+  truncated: boolean;
+  source_available?: boolean;
+  source_reason?: string;
+  error?: string;
+  created_at: string;
+  captured_at?: string;
+  expires_at: string;
+  expired: boolean;
+  download_url?: string;
+  preview_url?: string;
+}
+
+export interface CreateLogDumpPayload {
+  tenant_id: string;
+  node_id: string;
+  source: LogDumpSource;
+  window_start: string;
+  window_end: string;
+  entity_filter?: Record<string, string>;
+  retention_days?: 1 | 3 | 7 | 14 | 30;
+}
+
+export interface LogDumpListResponse {
+  data: LogDump[];
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
+}
+
+export interface LogDumpPreview {
+  lines: string[];
+  truncated: boolean;
+}
+
 export interface NodeSummary {
   id: string;
   tenant_id: string;
@@ -2493,6 +2552,59 @@ export class APIClient {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
+  }
+
+  async createLogDump(payload: CreateLogDumpPayload): Promise<LogDump> {
+    return this.request<LogDump>("/api/v1/log-dumps", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listLogDumps(params: {
+    tenantId: string;
+    nodeId?: string;
+    source?: LogDumpSource;
+    status?: LogDumpStatus;
+    limit?: number;
+    offset?: number;
+  }): Promise<LogDumpListResponse> {
+    const search = new URLSearchParams({ tenant_id: params.tenantId });
+    if (params.nodeId) search.set("node_id", params.nodeId);
+    if (params.source) search.set("source", params.source);
+    if (params.status) search.set("status", params.status);
+    if (typeof params.limit === "number") search.set("limit", String(params.limit));
+    if (typeof params.offset === "number") search.set("offset", String(params.offset));
+    return this.request<LogDumpListResponse>(
+      `/api/v1/log-dumps?${search.toString()}`,
+    );
+  }
+
+  async getLogDump(tenantId: string, dumpId: string): Promise<LogDump> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<LogDump>(
+      `/api/v1/log-dumps/${encodeURIComponent(dumpId)}?${search.toString()}`,
+    );
+  }
+
+  async getLogDumpPreview(
+    tenantId: string,
+    dumpId: string,
+  ): Promise<LogDumpPreview> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<LogDumpPreview>(
+      `/api/v1/log-dumps/${encodeURIComponent(dumpId)}/preview?${search.toString()}`,
+    );
+  }
+
+  async downloadLogDump(
+    tenantId: string,
+    dumpId: string,
+  ): Promise<DownloadedFile> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.download(
+      `/api/v1/log-dumps/${encodeURIComponent(dumpId)}/download?${search.toString()}`,
+    );
   }
 
   async listJobs(params: ListJobsParams = {}): Promise<PaginatedResponse<Job>> {

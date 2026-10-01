@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { RepairAgentDialog } from '@/components/nodes/RepairAgentDialog';
 import { ConnectionDetailSheet } from '@/components/investigate/ConnectionDetailSheet';
+import { LogDumpPanel } from '@/features/log-dumps/LogDumpPanel';
 import {
   Dialog,
   DialogContent,
@@ -250,7 +251,7 @@ export function NodeDetail(): JSX.Element {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { node, health, telemetry, loading, error, reload } = useNode(id);
-  const [tab, setTab] = useState<'overview' | 'activity' | 'connections' | 'kg' | 'packages' | 'recommendations' | 'settings'>('overview');
+  const [tab, setTab] = useState<'overview' | 'activity' | 'connections' | 'rawlogs' | 'kg' | 'packages' | 'recommendations' | 'settings'>('overview');
   const [refreshFeedback, setRefreshFeedback] = useState(false);
   const refreshNode = useCallback(() => {
     setRefreshFeedback(true);
@@ -360,6 +361,7 @@ export function NodeDetail(): JSX.Element {
           <TabsTrigger className="w-full sm:w-auto" value="overview">Overview</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="activity">Activity</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="rawlogs">Raw logs</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="kg">Knowledge graph</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="packages">Packages</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="recommendations">Recommendations</TabsTrigger>
@@ -389,6 +391,9 @@ export function NodeDetail(): JSX.Element {
         </TabsContent>
         <TabsContent value="connections" className="pt-4">
           <ConnectionsTab nodeId={node.id} tenantId={node.tenant_id} />
+        </TabsContent>
+        <TabsContent value="rawlogs" className="pt-4">
+          <LogDumpPanel tenantId={node.tenant_id} fixedNodeId={node.id} />
         </TabsContent>
         <TabsContent value="kg" className="pt-4">
           <KnowledgeGraphTab nodeId={node.id} tenantId={node.tenant_id} />

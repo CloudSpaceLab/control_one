@@ -108,9 +108,9 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
-            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics'
-            chown 65532:65532 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics'
-            chmod 750 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics'
+            mkdir -p '$DEPLOY_PREBUILT_DIR' '$DEPLOY_AGENT_DIR' '$DEPLOY_UI_DIR' '$DEPLOY_DIR/nginx' '$DEPLOY_DIR/doris' '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps'
+            chown 65532:65532 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps'
+            chmod 750 '$DEPLOY_DIR/threat-intel' '$DEPLOY_DIR/analytics' '$DEPLOY_DIR/log-dumps'
           "
 
       - name: Ensure Doris host prerequisites
@@ -215,6 +215,16 @@ jobs:
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
             set -e
             cd '$DEPLOY_DIR'
+            # Keep one known-good generation locally before replacing :latest.
+            # Migration 0154 is additive, so the retained control-plane image
+            # remains schema-compatible for an emergency rollback.
+            if docker image inspect controlone/controlplane:latest >/dev/null 2>&1; then
+              docker tag controlone/controlplane:latest controlone/controlplane:rollback
+            fi
+            if docker image inspect controlone/console:latest >/dev/null 2>&1; then
+              docker tag controlone/console:latest controlone/console:rollback
+            fi
+
             # Free the small VPS' hottest optional memory consumer before
             # Docker assembles the two prebuilt images. Doris is only started
             # for explicit OLAP deployments.

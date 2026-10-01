@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, Panel, SectionHeader, EmptyState, KpiTile, StatusTag, type StateTone } from '@/components/kit';
 import { Button } from '@/components/ui/button';
 import { DashboardGrid, DashboardGridItem } from '@/components/shell';
+import { LogDumpDialog } from '@/features/log-dumps/LogDumpDialog';
 import {
   EntityHeader,
   InvestigateTimeline,
@@ -189,6 +190,15 @@ export function EntityDetail(): JSX.Element {
           void lifecycleQ.refetch();
         }}
       />
+
+      {currentTenantId && (
+        <div className="flex justify-end">
+          <LogDumpDialog
+            tenantId={currentTenantId}
+            entityFilter={{ [safeType]: id }}
+          />
+        </div>
+      )}
 
       {safeType === 'ip' && (
         <IPBehaviorSummaryPanel

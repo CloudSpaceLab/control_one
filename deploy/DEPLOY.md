@@ -165,6 +165,20 @@ $SSH $HOST 'cd /opt/control-one/deploy && \
   docker compose up -d --no-deps controlplane console landing'
 ```
 
+## Roll back the last application image
+
+Each production deploy preserves the previous `controlone/controlplane:latest`
+and `controlone/console:latest` as `:rollback` before building the new images.
+Migration 0154 only adds raw-log tables/indexes, so the previous control-plane
+image can run against the migrated database.
+
+```bash
+$SSH $HOST 'cd /opt/control-one/deploy && \
+  docker tag controlone/controlplane:rollback controlone/controlplane:latest && \
+  docker tag controlone/console:rollback controlone/console:latest && \
+  docker compose up -d --force-recreate --no-deps controlplane console'
+```
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -174,3 +188,15 @@ $SSH $HOST 'cd /opt/control-one/deploy && \
 | 502 on `/console/` | console image stale | `docker compose build console && docker compose up -d console`. |
 | nginx serving bootstrap text after cert issued | active.conf wasn't swapped | `cp nginx/edge.conf nginx/active.conf && docker compose exec nginx-edge nginx -s reload` |
 | Renewal fails | port 80 not free | Ensure nothing else binds 80 on the host. |
+
+
+## Raw log dump storage
+
+Raw-log artifacts are bind-mounted from
+`/opt/control-one/deploy/log-dumps` to `/var/lib/control-one/log-dumps`.
+The deploy workflow creates that host directory as uid/gid `65532:65532`
+(the distroless nonroot user) with mode `750`, so artifacts survive
+container/image replacement without making the directory world-writable. The nginx configs cap agent dump chunk
+uploads at 4 MiB; do not raise that independently of the server limit.
+
+See `docs/raw-log-dumps.md` for retention, access and cleanup behavior.
