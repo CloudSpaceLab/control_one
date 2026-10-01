@@ -61,6 +61,7 @@ type IPBlockStatus struct {
 	TargetNodes     int        `json:"target_nodes"`
 	NodesApplied    int        `json:"nodes_applied"`
 	NodesPending    int        `json:"nodes_pending"`
+	NodesRemoving   int        `json:"nodes_removing"`
 	NodesFailed     int        `json:"nodes_failed"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 }
@@ -292,10 +293,12 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			SELECT
 				r.node_id,
 				BOOL_OR(r.status = 'applied') AS applied,
-				BOOL_OR(r.status = 'pending') AS pending,
+				BOOL_OR(r.status = 'pending' AND COALESCE(j.type, '') <> 'firewall.rule_delete') AS pending,
+				BOOL_OR(r.status = 'pending' AND j.type = 'firewall.rule_delete') AS removing,
 				BOOL_OR(r.status = 'failed') AS failed
 			FROM node_firewall_rules r
 			JOIN entity_actions ea ON ea.id = r.entity_action_id
+			LEFT JOIN jobs j ON j.id = r.job_id
 			WHERE ea.tenant_id = $1
 			  AND ea.entity_type = 'ip'
 			  AND ea.entity_id = $2
@@ -307,7 +310,8 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			COUNT(*) AS target_nodes,
 			COUNT(*) FILTER (WHERE applied) AS nodes_applied,
 			COUNT(*) FILTER (WHERE NOT applied AND pending) AS nodes_pending,
-			COUNT(*) FILTER (WHERE NOT applied AND NOT pending AND failed) AS nodes_failed,
+			COUNT(*) FILTER (WHERE NOT applied AND removing) AS nodes_removing,
+			COUNT(*) FILTER (WHERE NOT applied AND NOT pending AND NOT removing AND failed) AS nodes_failed,
 			(
 				SELECT MAX(ea.expires_at)
 				FROM entity_actions ea
@@ -321,6 +325,7 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 		&status.TargetNodes,
 		&status.NodesApplied,
 		&status.NodesPending,
+		&status.NodesRemoving,
 		&status.NodesFailed,
 		&expires,
 	)
@@ -339,6 +344,8 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 		status.Scope = "fleet"
 	}
 	switch {
+	case status.NodesRemoving > 0:
+		status.State = "unblocking"
 	case status.NodesFailed > 0 && status.NodesApplied == 0 && status.NodesPending == 0:
 		status.State = "failed"
 	case status.NodesFailed > 0:
