@@ -411,6 +411,60 @@ func TestRecordBlockProposalEntityActionUsesEntryTTL(t *testing.T) {
 	}
 }
 
+func TestManualAllowCancelsDurableBlockIntentBeforeRemoval(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	actionID := uuid.New()
+	ruleID := uuid.New()
+	nodeID := uuid.New()
+	src := "203.0.113.77"
+	store := &blockProposalInvestigateStore{
+		fakeStore: &fakeStore{},
+		createdBlocks: []storage.IPBlocklistEntry{{
+			ID:             uuid.New(),
+			TenantID:       tenantID,
+			EntityActionID: uuid.NullUUID{UUID: actionID, Valid: true},
+			IPCIDR:         src + "/32",
+			Scope:          "fleet",
+			TargetType:     "tenant",
+			Enforcement:    "firewall",
+			Status:         "active",
+		}},
+		rules: []storage.NodeFirewallRule{{
+			ID:             ruleID,
+			EntityActionID: actionID,
+			NodeID:         nodeID,
+			TenantID:       tenantID,
+			Action:         "block",
+			Direction:      "in",
+			Source:         &src,
+			Tag:            "c1-" + actionID.String(),
+			Status:         "applied",
+		}},
+	}
+	s := &Server{store: store}
+
+	nodes, err := s.fanOutFirewallAllow(context.Background(), tenantID, &storage.EntityAction{Reason: "Manual IP allow"}, src)
+	if err != nil {
+		t.Fatalf("allow IP: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0] != nodeID {
+		t.Fatalf("allow nodes = %v, want [%s]", nodes, nodeID)
+	}
+	if store.createdBlocks[0].Status != "rolled_back" {
+		t.Fatalf("block intent status = %q, want rolled_back", store.createdBlocks[0].Status)
+	}
+	if len(store.queued) != 1 {
+		t.Fatalf("queued removals = %d, want 1", len(store.queued))
+	}
+	jobID := store.queued[ruleID]
+	job := store.jobs[jobID]
+	if job == nil || job.Type != JobTypeFirewallRuleDelete {
+		t.Fatalf("removal job = %#v, want firewall rule delete", job)
+	}
+}
+
 func TestQueueFirewallRemovalUsesOriginalBlockRuleShape(t *testing.T) {
 	t.Parallel()
 
@@ -1574,6 +1628,51 @@ func (f *blockProposalInvestigateStore) SetNodeFirewallRuleJobID(_ context.Conte
 		}
 	}
 	return nil
+}
+
+func (f *blockProposalInvestigateStore) GetIPBlockStatus(_ context.Context, tenantID uuid.UUID, ip string) (*storage.IPBlockStatus, error) {
+	status := &storage.IPBlockStatus{State: "unblocked", Scope: "affected", Provenance: "manual"}
+	host := strings.TrimSuffix(strings.TrimSpace(ip), "/32")
+	for _, rule := range f.rules {
+		if rule.TenantID != tenantID || rule.Source == nil {
+			continue
+		}
+		source := strings.TrimSuffix(strings.TrimSpace(*rule.Source), "/32")
+		if source != host {
+			continue
+		}
+		switch rule.Status {
+		case "applied":
+			status.Active = true
+			status.State = "blocked"
+			status.TargetNodes++
+			status.NodesApplied++
+		case "pending":
+			status.Active = true
+			status.State = "blocking"
+			status.TargetNodes++
+			status.NodesPending++
+		}
+	}
+	return status, nil
+}
+
+func (f *blockProposalInvestigateStore) ListActiveNodeFirewallRulesForIP(_ context.Context, tenantID uuid.UUID, ip string) ([]storage.NodeFirewallRule, error) {
+	host := strings.TrimSuffix(strings.TrimSpace(ip), "/32")
+	out := make([]storage.NodeFirewallRule, 0, len(f.rules))
+	for _, rule := range f.rules {
+		if rule.TenantID != tenantID || rule.Source == nil {
+			continue
+		}
+		source := strings.TrimSuffix(strings.TrimSpace(*rule.Source), "/32")
+		if source != host {
+			continue
+		}
+		if rule.Status == "pending" || rule.Status == "applied" {
+			out = append(out, rule)
+		}
+	}
+	return out, nil
 }
 
 func (f *blockProposalInvestigateStore) QueueNodeFirewallRuleRemoval(_ context.Context, ruleID, jobID uuid.UUID) error {
