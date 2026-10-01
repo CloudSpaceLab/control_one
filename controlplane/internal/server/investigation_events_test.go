@@ -150,6 +150,27 @@ func TestTimelineBuildHandlerSmallAnalyticsPending(t *testing.T) {
 	}
 }
 
+func TestTimelineBuildKeepsNonIPOLAPUnavailableLoud(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	srv := &Server{cfg: &config.Config{Analytics: config.AnalyticsConfig{Mode: "olap"}}}
+	body := bytes.NewReader([]byte(`{
+		"tenant_id":"` + tenantID.String() + `",
+		"entity_type":"process",
+		"entity_id":"nginx"
+	}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/timelines/build", body)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	srv.handleTimelineBuild(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected non-IP OLAP unavailable 503 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTimelineBuildReturnsDegradedResponseWhenAnalyticsReadFails(t *testing.T) {
 	t.Parallel()
 
