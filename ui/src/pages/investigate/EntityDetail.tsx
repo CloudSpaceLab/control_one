@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Alert, Panel, SectionHeader, EmptyState, KpiTile, StatusTag, type StateTone } from '@/components/kit';
+import { Alert, Panel, SectionHeader, EmptyState, KpiTile, StatusTag, severityTone } from '@/components/kit';
 import { Button } from '@/components/ui/button';
 import { DashboardGrid, DashboardGridItem } from '@/components/shell';
 import { LogDumpDialog } from '@/features/log-dumps/LogDumpDialog';
@@ -764,21 +764,6 @@ function confidenceTone(score: number): StateTone {
   if (score >= 70) return 'warning';
   if (score > 0) return 'info';
   return 'healthy';
-}
-
-function severityTone(severity?: string): StateTone {
-  switch ((severity ?? '').toLowerCase()) {
-    case 'critical':
-      return 'critical';
-    case 'high':
-      return 'degraded';
-    case 'medium':
-      return 'warning';
-    case 'low':
-      return 'info';
-    default:
-      return 'unknown';
-  }
 }
 
 function evidenceTopPaths(evidence?: Record<string, unknown>): Array<{ path: string; count: number }> {
