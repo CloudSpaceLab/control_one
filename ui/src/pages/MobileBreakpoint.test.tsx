@@ -32,6 +32,7 @@ const overview: ControlRoomExecutiveOverview = {
       freshness_sla_seconds: 10800,
       scored_nodes: 12,
       fresh_nodes: 12,
+      unscored_nodes: 0,
       calibrating_nodes: 12,
       stale_nodes: 0,
       at_risk_nodes: 0,
