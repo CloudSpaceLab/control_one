@@ -39,7 +39,12 @@ jobs:
 
       - name: Format check
         shell: bash
-        run: gofmt -l . && test -z "$(gofmt -l .)"
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            gofmt -d $files
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...
