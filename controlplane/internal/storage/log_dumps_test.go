@@ -183,6 +183,47 @@ func TestLogDumpExpiryAndTimeoutSelection(t *testing.T) {
 	require.Equal(t, "raw log dump expired", events[0].Message)
 }
 
+func TestLogDumpCleanupRetryLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store := setupPostgresStoreFull(t, ctx)
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "log-dump-cleanup-" + uuid.NewString()[:8]})
+	require.NoError(t, err)
+	node, err := store.CreateNode(ctx, &Node{ID: uuid.New(), TenantID: tenant.ID, Hostname: "cleanup-node-" + uuid.NewString()[:8]})
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	dump, err := store.CreateLogDump(ctx, LogDump{
+		TenantID: tenant.ID, NodeID: node.ID, Source: LogDumpSourceControlPlane,
+		WindowStart: now.Add(-time.Hour), WindowEnd: now.Add(-30 * time.Minute),
+		CreatedAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(-time.Minute), RetentionDays: 1,
+	})
+	require.NoError(t, err)
+
+	changed, err := store.ExpireLogDump(ctx, tenant.ID, node.ID, dump.ID, now)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NoError(t, store.MarkLogDumpDeleting(ctx, tenant.ID, node.ID, dump.ID))
+
+	retryAt := now.Add(5 * time.Minute)
+	require.NoError(t, store.MarkLogDumpCleanupRetry(ctx, tenant.ID, node.ID, dump.ID, "filesystem busy", retryAt))
+
+	candidates, err := store.ListLogDumpCleanupCandidates(ctx, now.Add(4*time.Minute), 10)
+	require.NoError(t, err)
+	require.Empty(t, candidates)
+
+	candidates, err = store.ListLogDumpCleanupCandidates(ctx, now.Add(6*time.Minute), 10)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	require.Equal(t, dump.ID, candidates[0].ID)
+	require.Equal(t, 1, candidates[0].CleanupAttempts)
+	require.Equal(t, "filesystem busy", candidates[0].CleanupError)
+
+	require.NoError(t, store.DeleteLogDump(ctx, tenant.ID, node.ID, dump.ID))
+	var count int
+	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM agent_log_dumps WHERE id=$1", dump.ID).Scan(&count))
+	require.Zero(t, count)
+}
+
 func shaHex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
