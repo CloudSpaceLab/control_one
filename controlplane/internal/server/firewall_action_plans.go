@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -18,6 +19,7 @@ func (s *Server) createFirewallActionPlan(ctx context.Context, tenantID, nodeID,
 	if !ok {
 		return uuid.Nil
 	}
+	autoTriggered := controlRoomAutomaticFirewallReason(payload.Reason)
 	plan, err := store.CreateActionPlan(ctx, storage.CreateActionPlanParams{
 		TenantID:   tenantID,
 		NodeID:     &nodeID,
@@ -45,8 +47,9 @@ func (s *Server) createFirewallActionPlan(ctx context.Context, tenantID, nodeID,
 			"dest":        payload.Dest,
 			"port":        payload.Port,
 			"protocol":    payload.Protocol,
-			"ttl_seconds": payload.TTLSeconds,
-			"reason":      payload.Reason,
+			"ttl_seconds":    payload.TTLSeconds,
+			"reason":         payload.Reason,
+			"auto_triggered": autoTriggered,
 		},
 		RequiredApprovals: map[string]any{
 			"gate":   "network_security_operator_action",
@@ -67,6 +70,7 @@ func (s *Server) createFirewallActionPlan(ctx context.Context, tenantID, nodeID,
 			"entity_action_id":      entityActionID.String(),
 			"node_firewall_rule_id": ruleID.String(),
 			"job_id":                jobID.String(),
+			"auto_triggered":        autoTriggered,
 		},
 	})
 	if err != nil {
@@ -139,4 +143,11 @@ func (s *Server) recordFirewallActionReceipt(ctx context.Context, planID uuid.UU
 			zap.String("job_id", jobID.String()),
 		)
 	}
+}
+
+
+func controlRoomAutomaticFirewallReason(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	return strings.HasPrefix(reason, "Auto-block:") ||
+		(strings.HasPrefix(reason, "Correlation response:") && strings.Contains(reason, "mode=auto_temporary_block"))
 }
