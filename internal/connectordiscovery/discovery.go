@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	KindLocalLog      = "local_log"
-	CollectorTypeFile = "file"
+	KindLocalLog           = "local_log"
+	KindCloudAudit         = "cloud_audit"
+	CollectorTypeFile      = "file"
+	CollectorTypeVendorAPI = "vendor_api"
 )
 
 // Package is the minimal installed-package evidence the connector discovery
@@ -75,7 +77,9 @@ type candidate struct {
 }
 
 var serviceKindPrograms = map[string]string{
-	"apache":     "apache",
+	"amazon-cloudwatch-agent": "aws-cloudtrail",
+	"aws-cloudwatch-agent":    "aws-cloudtrail",
+	"apache":                   "apache",
 	"caddy":      "caddy",
 	"envoy":      "envoy",
 	"haproxy":    "haproxy",
@@ -98,6 +102,8 @@ var packageProgramHints = []struct {
 	alias   string
 	program string
 }{
+	{"amazon-cloudwatch-agent", "aws-cloudtrail"},
+	{"aws-cloudwatch-agent", "aws-cloudtrail"},
 	{"temenos", "temenos-t24"},
 	{"t24", "temenos-t24"},
 	{"transact", "temenos-t24"},
@@ -139,6 +145,7 @@ var packageProgramHints = []struct {
 }
 
 var highRiskPrograms = map[string]bool{
+	"aws-cloudtrail":  true,
 	"finacle":         true,
 	"finastra-fusion": true,
 	"ibm-db2":         true,
@@ -185,6 +192,38 @@ func DiscoverLocal(opts Options) []Proposal {
 
 	out := make([]Proposal, 0, len(candidates))
 	for _, c := range candidates {
+		if c.program == "aws-cloudtrail" {
+			confidence := 75
+			if c.fromSvc {
+				confidence = 90
+			}
+			if c.fromPkg && c.fromSvc {
+				confidence = 95
+			}
+			out = append(out, Proposal{
+				ID:                  "cloud-audit:aws-cloudtrail",
+				Kind:                KindCloudAudit,
+				Program:             "aws-cloudtrail",
+				CollectorType:       CollectorTypeVendorAPI,
+				Formatter:           "json",
+				Confidence:          confidence,
+				Risk:                "high",
+				AutoConnectEligible: false,
+				RequiresApproval:    true,
+				Reason:              "AWS telemetry agent evidence detected; validate AWS account, trail, region, and least-privilege credential scope before enabling cloud audit collection",
+				Evidence:            dedupeStrings(c.evidence),
+				Labels: map[string]string{
+					"cloud.provider":                 "aws",
+					"connector_contract":             "control_one.cloud_audit.v1",
+					"content_pack_source_id":         "aws.cloudtrail",
+					"discovery_source":               "local_aws_agent",
+					"parser_profile":                 "aws.cloudtrail",
+					"policy_decision":                "approval_required",
+					"risk_class":                     "high",
+				},
+			})
+			continue
+		}
 		profile, ok := appcatalog.LogProfileForProgram(c.program)
 		if !ok {
 			continue
