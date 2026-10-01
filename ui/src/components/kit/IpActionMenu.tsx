@@ -153,6 +153,7 @@ export function IpActionMenu({
 
   const unblockInProgress = status?.state === 'unblocking';
   const effectiveBlocked = !!status?.active && status.state !== 'failed';
+  const actionsDisabled = !!busy || stateLoading || statusError;
 
   return (
     <DropdownMenu onOpenChange={(open) => {
@@ -196,7 +197,7 @@ export function IpActionMenu({
           </DropdownMenuItem>
         ) : !effectiveBlocked ? (
           <>
-            <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(defaultBlock)}>
+            <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(defaultBlock)}>
               <Shield className="mr-2 h-4 w-4" />
               <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
                 <span>Block IP</span>
@@ -206,7 +207,7 @@ export function IpActionMenu({
               </span>
             </DropdownMenuItem>
             {alternateBlock && (
-              <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(alternateBlock)}>
+              <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(alternateBlock)}>
                 <Shield className="mr-2 h-4 w-4" />
                 <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
                   <span>{alternateScope === 'fleet' ? 'Block fleet-wide' : 'Block affected nodes'}</span>
@@ -217,12 +218,12 @@ export function IpActionMenu({
           </>
         ) : (
           <>
-            <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(ALLOW)}>
+            <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(ALLOW)}>
               <ShieldOff className="mr-2 h-4 w-4" />
               <span>Allow IP</span>
             </DropdownMenuItem>
             {status?.scope !== 'fleet' && (
-              <DropdownMenuItem disabled={!!busy} onClick={() => void dispatch(extendFleet)}>
+              <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(extendFleet)}>
                 <Shield className="mr-2 h-4 w-4" />
                 <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
                   <span>Extend to fleet</span>
