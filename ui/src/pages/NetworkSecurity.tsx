@@ -486,171 +486,25 @@ function IPBehaviorPanel(): JSX.Element {
           )}
 
           <div className="rounded border border-border p-3">
-            <div className="mb-3 text-sm font-medium">IP profile</div>
+            <div className="mb-1 text-sm font-medium">IP investigation</div>
+            <p className="mb-3 text-xs leading-5 text-text-secondary">
+              IP lifecycle, enrichment, evidence, containment, allowlisting, and response actions live in the investigation workspace.
+            </p>
             <div className="flex gap-2">
-              <Input value={ipQuery} onChange={(e) => setIpQuery(e.target.value)} placeholder="203.0.113.10" onKeyDown={(e) => { if (e.key === 'Enter') void inspectIP(); }} />
-              <Button variant="outline" size="icon" onClick={() => void inspectIP()} aria-label="Inspect IP">
-                <Search className="h-4 w-4" />
+              <Input
+                value={ipQuery}
+                onChange={(e) => setIpQuery(e.target.value)}
+                placeholder="203.0.113.10"
+                onKeyDown={(e) => { if (e.key === 'Enter') openIPInvestigation(); }}
+              />
+              <Button variant="outline" onClick={() => openIPInvestigation()} disabled={!ipQuery.trim()}>
+                Open investigation
+                <ArrowRight className="ml-1 h-3.5 w-3.5" />
               </Button>
             </div>
-            {profileError && <p className="mt-2 text-sm text-destructive">{profileError}</p>}
-            {profile && profileInsight && (
-              <div className="mt-3 space-y-3 text-sm">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono">{profile.source_ip}</span>
-                  <StatusTag tone={riskTone(profileScore)}>{profileScore}% confidence</StatusTag>
-                </div>
-                <div className="rounded border border-border p-2">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="font-medium">Baseline explanation</span>
-                    <StatusTag tone={profileInsight.tone}>{profileInsight.label}</StatusTag>
-                  </div>
-                  <p className="text-xs text-text-secondary">{profileInsight.description}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-text-secondary">
-                  <span>{formatNumber(profile.request_count)} requests</span>
-                  <span>{formatBytes(profile.bytes_out)} out</span>
-                  <span>{formatNumber(authCount(profile.status_counts))} auth failures</span>
-                  <span>{formatNumber(serverErrorCount(profile.status_counts))} 5xx</span>
-                  <span>{compactList(profile.countries) || 'country unknown'}</span>
-                  <span>{compactList(profile.asns) || 'ASN unknown'}</span>
-                  <span>{compactList(profile.isps) || ipEnrichment?.geo?.isp || 'ISP unknown'}</span>
-                  <span>{ipEnrichment?.reputation_score !== undefined ? `reputation ${ipEnrichment.reputation_score}/100` : 'reputation unknown'}</span>
-                  <span>{compactList(profile.server_groups) || 'groups unknown'}</span>
-                  <span>{formatNumber(profile.node_ids?.length ?? 0)} servers</span>
-                  <span>{formatDateTime(profile.first_seen_at)} first seen</span>
-                  <span>{formatDateTime(profile.last_seen_at)} last seen</span>
-                </div>
-                <div className="rounded border border-border p-2">
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">Status mix</div>
-                  <div className="grid grid-cols-4 gap-2 text-xs text-text-secondary">
-                    {['2xx', '301', '401', '403', '404', '429', '500', '5xx'].map((code) => (
-                      <div key={code} className="rounded bg-surface-2 px-2 py-1">
-                        <span className="font-mono text-foreground">{formatNumber(profile.status_counts?.[code] ?? 0)}</span> {code}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                {profile.history && profile.history.length > 0 && (
-                  <div className="rounded border border-border p-2">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">Request and bytes trend</div>
-                    <div className="flex h-20 items-end gap-1">
-                      {profile.history.slice(-24).map((point) => {
-                        const maxReq = Math.max(...(profile.history ?? []).map((row) => row.request_count), 1);
-                        const height = Math.max(8, Math.round((point.request_count / maxReq) * 72));
-                        return (
-                          <div key={point.hour_ts} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                            <div
-                              className="w-full rounded-t bg-brand-500/70"
-                              style={{ height }}
-                              title={`${formatDateTime(point.hour_ts)}: ${formatNumber(point.request_count)} requests, ${formatBytes(point.bytes_out)} out`}
-                            />
-                            <span className="hidden text-[10px] text-text-muted sm:block">{new Date(point.hour_ts).getHours()}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <SelectField
-                    id="ip-behavior-enforcement"
-                    label="Enforcement"
-                    value={enforcement}
-                    onChange={(e) => setEnforcement(e.target.value as EnforcementTarget)}
-                  >
-                    <option value="firewall">Firewall</option>
-                    <option value="webserver">Webserver</option>
-                    <option value="combined">Firewall + webserver</option>
-                  </SelectField>
-                  <SelectField
-                    id="ip-behavior-block-ttl"
-                    label="Block duration"
-                    value={String(blockTTL)}
-                    onChange={(e) => setBlockTTL(Number(e.target.value) as BlockTTL)}
-                  >
-                    {Object.entries(BLOCK_TTL_LABELS).map(([seconds, label]) => (
-                      <option key={seconds} value={seconds}>{label}</option>
-                    ))}
-                  </SelectField>
-                  <Input value={filters.vhost} onChange={(e) => setFilters({ ...filters, vhost: e.target.value })} placeholder="Vhost scope" />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => queueBlockProposal('ip')}><Ban className="h-4 w-4" />Block IP</Button>
-                  <Button variant="outline" size="sm" onClick={() => queueBlockProposal('cidr')}><ShieldAlert className="h-4 w-4" />Block /24</Button>
-                  <Button variant="outline" size="sm" onClick={queueASNBlockProposal} disabled={!profile.asns?.length}><Network className="h-4 w-4" />Block ASN</Button>
-                  <Button variant="outline" size="sm" onClick={() => queueBlockProposal('vhost')} disabled={!filters.vhost.trim()}><ShieldCheck className="h-4 w-4" />Limit to vhost</Button>
-                  <Button variant="outline" size="sm" onClick={collectEvidence}><Download className="h-4 w-4" />Evidence</Button>
-                  <Button variant="outline" size="sm" onClick={() => navigate(`/ask?q=${encodeURIComponent(askAIPrompt(profile, profileInsight.description))}`)}><Sparkles className="h-4 w-4" />Ask AI</Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="ghost" size="sm" onClick={suppressProfileFindings} disabled={profileFindings.length === 0}><XCircle className="h-4 w-4" />Suppress</Button>
-                  <Button variant="ghost" size="sm" onClick={allowlistPartner}><ShieldCheck className="h-4 w-4" />Allowlist partner</Button>
-                </div>
-                {profileFindings.length > 0 && (
-                  <div className="rounded border border-border p-2">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">Open findings</div>
-                    <div className="space-y-2">
-                      {profileFindings.map((finding) => (
-                        <div key={finding.id} className="flex items-start justify-between gap-2 text-xs">
-                          <div className="min-w-0">
-                            <div className="truncate font-medium">{finding.reason || finding.metric}</div>
-                            <div className="text-text-secondary">{formatDateTime(finding.last_seen_at ?? finding.created_at)}</div>
-                          </div>
-                          <StatusTag tone={findingSeverityTone(finding.severity)}>{finding.severity || finding.status || 'open'}</StatusTag>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {proposalState && <p className="text-xs text-text-secondary">{proposalState}</p>}
-              </div>
-            )}
           </div>
         </div>
       </div>
-
-      {profile && (
-        <div className="rounded border border-border">
-          <div className="border-b border-border px-3 py-2 text-sm font-medium">Enforcement status for {profile.source_ip}</div>
-          {profileBlocks.length === 0 ? (
-            <EmptyState title="No block proposals" description="No block proposals target this IP." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
-                  <tr>
-                    <th className="px-3 py-2">Target</th>
-                    <th className="px-3 py-2">Enforcement</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2">Scope</th>
-                    <th className="px-3 py-2">Expires</th>
-                    <th className="px-3 py-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {profileBlocks.map((proposal) => (
-                    <tr key={proposal.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-mono text-xs">{displayIPCIDR(proposal.ip_cidr)}</td>
-                      <td className="px-3 py-2">{proposal.enforcement}</td>
-                      <td className="px-3 py-2"><StatusTag tone={blockStatusTone(proposal.status)}>{proposal.status}</StatusTag></td>
-                      <td className="px-3 py-2 text-text-secondary">{compactList([proposal.server_group, proposal.app, proposal.vhost]) || proposal.scope}</td>
-                      <td className="px-3 py-2 text-text-secondary">{proposal.expires_at ? formatDateTime(proposal.expires_at) : 'manual'}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-2">
-                          {proposal.status === 'proposed' && <Button variant="outline" size="sm" onClick={() => navigate(`/security/network?tab=approvals&proposal_id=${encodeURIComponent(proposal.id)}`)}>Review proposal</Button>}
-                          {proposal.status === 'active' && <Button variant="outline" size="sm" onClick={() => navigate(`/security/network?tab=blocks&proposal_id=${encodeURIComponent(proposal.id)}`)}>Review active block</Button>}
-                          {['expired', 'rolled_back', 'rejected'].includes(proposal.status) && <Button variant="ghost" size="sm" onClick={() => navigate(`/audit?q=${encodeURIComponent(proposal.id)}`)}>Review audit trail</Button>}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
 
       {webservers.length > 0 && (
         <div className="rounded border border-border">
@@ -688,15 +542,6 @@ function IPBehaviorPanel(): JSX.Element {
         </div>
       )}
 
-      <ConfirmModal
-        open={!!confirm}
-        title={confirm?.title ?? ''}
-        body={confirm?.body}
-        confirmLabel={confirming ? 'Working...' : confirm?.confirmLabel}
-        variant={confirm?.variant}
-        onConfirm={() => void runConfirmed()}
-        onCancel={() => confirming ? undefined : setConfirm(null)}
-      />
     </div>
   );
 }
