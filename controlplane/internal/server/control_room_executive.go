@@ -203,11 +203,11 @@ func (s *Server) buildControlRoomExecutiveOverview(
 		}
 	}
 
-	response, failedAutomaticPlans, responseAvailable := s.controlRoomExecutiveAutomaticResponse(ctx, tenantID, since, now)
+	response, failedAutomaticPlans, handledAlertIDs, responseAvailable := s.controlRoomExecutiveAutomaticResponse(ctx, tenantID, since, now)
 	resp.Response = response
 	resp.Availability.Response = responseAvailable
 
-	attention, attentionAvailable := s.controlRoomExecutiveAttention(ctx, tenantID, failedAutomaticPlans, response.Failed, response.FailedCritical)
+	attention, attentionAvailable := s.controlRoomExecutiveAttention(ctx, tenantID, failedAutomaticPlans, response.Failed, response.FailedCritical, handledAlertIDs)
 	resp.Attention = attention
 	resp.Availability.Attention = attentionAvailable
 
@@ -425,17 +425,22 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 	tenantID uuid.UUID,
 	since time.Time,
 	until time.Time,
-) (controlRoomExecutiveResponse, []storage.ActionPlan, bool) {
+) (controlRoomExecutiveResponse, []storage.ActionPlan, map[uuid.UUID]struct{}, bool) {
 	var out controlRoomExecutiveResponse
+	handledAlertIDs := map[uuid.UUID]struct{}{}
 	store, ok := s.store.(controlRoomExecutiveAutomaticResponseStore)
 	if !ok {
-		return out, nil, false
+		return out, nil, handledAlertIDs, false
 	}
 	summary, err := store.GetAutomaticResponseSummary(ctx, tenantID, since, until, 8)
 	if err != nil {
 		s.logger.Warn("control room executive automatic responses", zap.Error(err))
-		return out, nil, false
+		return out, nil, handledAlertIDs, false
 	}
+	for _, alertID := range summary.HandledAlertIDs {
+		if alertID != uuid.Nil {
+			handledAlertIDs[alertID] = struct{}{}
+		}
 	out = controlRoomExecutiveResponse{
 		HandledAutomatically: summary.HandledAutomatically,
 		Blocked:              summary.Blocked,
@@ -444,7 +449,7 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 		Failed:               summary.Failed,
 		FailedCritical:       summary.FailedCritical,
 	}
-	return out, summary.FailedPlans, true
+	return out, summary.FailedPlans, handledAlertIDs, true
 }
 
 func (s *Server) controlRoomExecutiveAttention(
@@ -453,6 +458,7 @@ func (s *Server) controlRoomExecutiveAttention(
 	failedAutomaticPlans []storage.ActionPlan,
 	failedAutomaticTotal int,
 	failedAutomaticCritical int,
+	handledAlertIDs map[uuid.UUID]struct{},
 ) (controlRoomExecutiveAttention, bool) {
 	out := controlRoomExecutiveAttention{Items: []controlRoomExecutiveAttentionItem{}}
 	available := true
