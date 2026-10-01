@@ -13,7 +13,7 @@ export function ProtectionCoverage({ protection, available, onOpen }: Protection
   return (
     <Panel
       eyebrow={CONTROL_ROOM_COPY.protectionCoverage.toUpperCase()}
-      title={available ? formatPercent(protection.percentage) : CONTROL_ROOM_COPY.dataUnavailable}
+      title={available ? (protection.total === 0 ? 'No public listeners' : formatPercent(protection.percentage)) : CONTROL_ROOM_COPY.dataUnavailable}
       toneAccent={!available ? 'warning' : protection.gaps > 0 ? 'warning' : 'healthy'}
       actions={
         available ? (
@@ -30,6 +30,13 @@ export function ProtectionCoverage({ protection, available, onOpen }: Protection
     >
       {!available ? (
         <EmptyState title="Protection coverage unavailable" description="Retry the dashboard." />
+      ) : protection.total === 0 ? (
+        <EmptyState
+          tone="success"
+          icon={<ShieldCheck />}
+          title="No public listeners"
+          description="No public network listeners are currently reported."
+        />
       ) : (
         <>
           <PostureBar
