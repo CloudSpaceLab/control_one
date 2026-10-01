@@ -198,7 +198,7 @@ func (s *Server) buildControlRoomExecutiveOverview(
 		if err != nil {
 			s.logger.Warn("control room executive rule violations", zap.Error(err))
 		} else {
-			resp.Violations = s.controlRoomExecutiveViolations(ctx, summary)
+			resp.Violations = s.controlRoomExecutiveViolations(ctx, tenantID, summary)
 			resp.Availability.Violations = true
 		}
 	}
@@ -367,6 +367,7 @@ func controlRoomExecutiveStateRank(state string) int {
 
 func (s *Server) controlRoomExecutiveViolations(
 	ctx context.Context,
+	tenantID uuid.UUID,
 	summary storage.RuleViolationSummary,
 ) controlRoomExecutiveViolations {
 	out := controlRoomExecutiveViolations{
@@ -382,7 +383,7 @@ func (s *Server) controlRoomExecutiveViolations(
 		TopRules:      make([]controlRoomExecutiveTopRule, 0, len(summary.TopRules)),
 	}
 	for _, rule := range summary.TopRules {
-		name, drilldown := s.controlRoomExecutiveRuleName(ctx, rule)
+		name, drilldown := s.controlRoomExecutiveRuleName(ctx, tenantID, rule)
 		out.TopRules = append(out.TopRules, controlRoomExecutiveTopRule{
 			RuleID:    rule.RuleID.String(),
 			Name:      name,
@@ -397,21 +398,22 @@ func (s *Server) controlRoomExecutiveViolations(
 
 func (s *Server) controlRoomExecutiveRuleName(
 	ctx context.Context,
+	tenantID uuid.UUID,
 	rule storage.RuleViolationTopRule,
 ) (string, string) {
 	switch rule.RuleType {
 	case "port":
-		if row, err := s.store.GetPortRule(ctx, rule.RuleID); err == nil && row != nil && strings.TrimSpace(row.Name) != "" {
+		if row, err := s.store.GetPortRule(ctx, rule.RuleID); err == nil && row != nil && row.TenantID == tenantID && strings.TrimSpace(row.Name) != "" {
 			return row.Name, "/rules"
 		}
 		return "Port rule", "/rules"
 	case "log":
-		if row, err := s.store.GetLogRule(ctx, rule.RuleID); err == nil && row != nil && strings.TrimSpace(row.Name) != "" {
+		if row, err := s.store.GetLogRule(ctx, rule.RuleID); err == nil && row != nil && row.TenantID == tenantID && strings.TrimSpace(row.Name) != "" {
 			return row.Name, "/rules"
 		}
 		return "Log rule", "/rules"
 	case "compliance":
-		if row, err := s.store.GetPolicy(ctx, rule.RuleID); err == nil && row != nil && strings.TrimSpace(row.Name) != "" {
+		if row, err := s.store.GetPolicy(ctx, rule.RuleID); err == nil && row != nil && row.TenantID == tenantID && strings.TrimSpace(row.Name) != "" {
 			return row.Name, "/compliance"
 		}
 		return "Compliance rule", "/compliance"
@@ -485,7 +487,7 @@ func (s *Server) controlRoomExecutiveAttention(
 					s.logger.Warn("control room executive linked alert", zap.Error(err), zap.String("alert_id", alertID.String()))
 					continue
 				}
-				if alert != nil && (alert.State == "open" || alert.State == "acked") {
+				if alert != nil && alert.TenantID == tenantID && (alert.State == "open" || alert.State == "acked") {
 					linkedReviewAlerts[alert.ID] = *alert
 				}
 			}
@@ -518,7 +520,7 @@ func (s *Server) controlRoomExecutiveAttention(
 			s.logger.Warn("control room executive handled alert", zap.Error(err), zap.String("alert_id", id.String()))
 			continue
 		}
-		if alert != nil && (alert.State == "open" || alert.State == "acked") {
+		if alert != nil && alert.TenantID == tenantID && (alert.State == "open" || alert.State == "acked") {
 			excludedReviewAlerts[id] = *alert
 		}
 	}
@@ -569,7 +571,7 @@ func (s *Server) controlRoomExecutiveAttention(
 		out.Approvals = approvalTotal
 		for _, approval := range approvals {
 			title := "Patch approval"
-			if node, err := s.store.GetNode(ctx, approval.NodeID); err == nil && node != nil && strings.TrimSpace(node.Hostname) != "" {
+			if node, err := s.store.GetNode(ctx, approval.NodeID); err == nil && node != nil && node.TenantID == tenantID && strings.TrimSpace(node.Hostname) != "" {
 				title = "Patch " + node.Hostname
 			}
 			out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
@@ -605,7 +607,7 @@ func (s *Server) controlRoomExecutiveAttention(
 				continue
 			}
 			title := "Remediation approval"
-			if node, err := s.store.GetNode(ctx, approval.NodeID); err == nil && node != nil && strings.TrimSpace(node.Hostname) != "" {
+			if node, err := s.store.GetNode(ctx, approval.NodeID); err == nil && node != nil && node.TenantID == tenantID && strings.TrimSpace(node.Hostname) != "" {
 				title = "Remediate " + node.Hostname
 			}
 			out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
