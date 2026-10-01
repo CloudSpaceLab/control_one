@@ -376,8 +376,7 @@ func (s *Store) GetExecutiveAttentionSummary(
 				pb.ip_cidr,
 				pb.reason,
 				pb.created_at,
-				CASE
-					WHEN GREATEST(
+				CASE GREATEST(
 						CASE
 							WHEN pb.score >= 100 THEN 5
 							WHEN pb.score >= 80 THEN 4
