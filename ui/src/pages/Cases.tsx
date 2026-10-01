@@ -321,9 +321,9 @@ export function Cases(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="SOC CASES"
+        eyebrow="INVESTIGATIONS"
         title="Cases"
-        description={`${currentTenant?.name ?? 'Current tenant'} incident packets with timeline, evidence, notes, receipts, and export guardrails.`}
+        description={`${currentTenant?.name ?? 'Current tenant'} · tracked investigations with evidence, timeline, notes, actions, and export.`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
@@ -354,7 +354,7 @@ export function Cases(): JSX.Element {
       ) : null}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.4fr)]">
-        <Panel padding="md" eyebrow="QUEUE" title="Incident packets">
+        <Panel padding="md" eyebrow="QUEUE" title="Cases">
           <div className="flex flex-col gap-3">
             <div className="relative max-w-full">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
@@ -413,7 +413,7 @@ export function Cases(): JSX.Element {
                   <EmptyState
                     icon={<ClipboardList />}
                     title="Case queue could not be loaded"
-                    description="Resolve the error above and refresh."
+                    description="Retry the case list."
                   />
                 ) : (
                   <EmptyState
@@ -515,7 +515,7 @@ export function Cases(): JSX.Element {
             <EmptyState
               icon={<ClipboardList />}
               title="Select a case"
-              description="Open a case packet to inspect citations, notes, timeline, guardrails, and export readiness."
+              description="Select a case to review evidence, timeline, notes, actions, and export status."
             />
           )}
         </Panel>
