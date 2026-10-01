@@ -265,6 +265,224 @@ func TestControlRoomExecutiveRuleViolationSummaryIsIndependentOfTopRules(t *test
 	}
 }
 
+func TestControlRoomExecutiveRejectsCrossTenantRuleEnrichment(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	otherTenantID := uuid.New()
+	ruleID := uuid.New()
+	store := &executiveRuleSummaryStore{
+		fakeStore: base,
+		summary: storage.RuleViolationSummary{
+			Total:    1,
+			Critical: 1,
+			TopRules: []storage.RuleViolationTopRule{{
+				RuleID: ruleID, RuleType: "port", Severity: "critical", Count: 1,
+			}},
+		},
+		portRule: &storage.PortMonitoringRule{
+			ID: ruleID, TenantID: otherTenantID, Name: "Other tenant restricted port",
+		},
+	}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=7d",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if len(resp.Violations.TopRules) != 1 {
+		t.Fatalf("top rules=%+v, want one row", resp.Violations.TopRules)
+	}
+	if got := resp.Violations.TopRules[0].Name; got != "Port rule" {
+		t.Fatalf("cross-tenant rule name leaked: %q", got)
+	}
+}
+
+func TestControlRoomExecutiveIgnoresCrossTenantLinkedAlert(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	otherTenantID := uuid.New()
+	now := time.Now().UTC()
+	tenantAlertID := uuid.New()
+	otherAlertID := uuid.New()
+	base.alerts = []storage.Alert{
+		{
+			ID: tenantAlertID, TenantID: tenantID, Source: "rule", Severity: "medium",
+			Title: "Tenant review", State: "open", OpenedAt: now.Add(-20 * time.Minute),
+		},
+		{
+			ID: otherAlertID, TenantID: otherTenantID, Source: "correlation", Severity: "critical",
+			Title: "Other tenant critical alert", State: "open", OpenedAt: now.Add(-15 * time.Minute),
+		},
+	}
+	store := &executiveRuleSummaryStore{
+		fakeStore: base,
+		blockProposals: []storage.IPBlocklistEntry{{
+			ID: uuid.New(), TenantID: tenantID, IPCIDR: "203.0.113.20/32",
+			Status: "proposed", Score: 50,
+			Reason: "Correlation response: rule=Cross tenant corruption; alert_id=" + otherAlertID.String() + "; mode=proposal",
+			CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
+		}},
+	}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Attention.Reviews != 1 || resp.Attention.Approvals != 1 || resp.Attention.Total != 2 {
+		t.Fatalf("cross-tenant alert altered attention totals: %+v", resp.Attention)
+	}
+	if resp.Attention.Critical != 0 {
+		t.Fatalf("cross-tenant critical severity leaked into tenant attention: %+v", resp.Attention)
+	}
+	for _, item := range resp.Attention.Items {
+		if item.Title == "Other tenant critical alert" || item.Severity == "critical" {
+			t.Fatalf("cross-tenant alert metadata leaked into attention item: %+v", item)
+		}
+	}
+}
+
+func TestControlRoomExecutiveIgnoresCrossTenantHandledAlert(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	otherTenantID := uuid.New()
+	now := time.Now().UTC()
+	tenantAlertID := uuid.New()
+	otherAlertID := uuid.New()
+	base.alerts = []storage.Alert{
+		{
+			ID: tenantAlertID, TenantID: tenantID, Source: "rule", Severity: "medium",
+			Title: "Tenant review", State: "open", OpenedAt: now.Add(-20 * time.Minute),
+		},
+		{
+			ID: otherAlertID, TenantID: otherTenantID, Source: "correlation", Severity: "critical",
+			Title: "Other tenant handled alert", State: "open", OpenedAt: now.Add(-15 * time.Minute),
+		},
+	}
+	planID := uuid.New()
+	base.actionPlans = map[uuid.UUID]storage.ActionPlan{
+		planID: {
+			ID: planID, TenantID: tenantID, Domain: "firewall", ActionKind: "block",
+			State: storage.ActionPlanStateSucceeded, Risk: "medium",
+			Diff: map[string]any{
+				"auto_triggered": true,
+				"reason": "Correlation response: rule=Cross tenant corruption; alert_id=" + otherAlertID.String() + "; mode=auto_temporary_block",
+			},
+			SourceRef: map[string]any{},
+			CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-10 * time.Minute),
+		},
+	}
+	base.actionReceipts = map[uuid.UUID][]storage.ActionReceipt{
+		planID: {{
+			ID: uuid.New(), ActionPlanID: planID, TenantID: tenantID,
+			State: storage.ActionPlanStateSucceeded,
+			Receipt: map[string]any{"success": true}, Verification: map[string]any{"applied": true},
+			CreatedAt: now.Add(-10 * time.Minute),
+		}},
+	}
+	store := &executiveRuleSummaryStore{fakeStore: base}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Response.HandledAutomatically != 1 || resp.Response.Blocked != 1 {
+		t.Fatalf("automatic response should remain tenant-scoped and counted: %+v", resp.Response)
+	}
+	if resp.Attention.Reviews != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 0 {
+		t.Fatalf("cross-tenant handled alert altered review workload: %+v", resp.Attention)
+	}
+}
+
+func TestControlRoomExecutiveDoesNotExposeCrossTenantApprovalNodeName(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	otherTenantID := uuid.New()
+	now := time.Now().UTC()
+	otherNodeID := uuid.New()
+	base.nodes = []storage.Node{{
+		ID: otherNodeID, TenantID: otherTenantID, Hostname: "other-tenant-secret-host", LastSeenAt: &now,
+	}}
+	patchID := uuid.New()
+	remediationID := uuid.New()
+	base.patchApprovals = map[uuid.UUID]storage.PatchApproval{
+		patchID: {
+			ID: patchID, TenantID: tenantID, DeploymentID: uuid.New(), NodeID: otherNodeID,
+			Mode: "direct", Status: storage.ApprovalStatusPending,
+			CreatedAt: now.Add(-20 * time.Minute), ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	base.remediationApprovals = map[uuid.UUID]storage.RemediationApproval{
+		remediationID: {
+			ID: remediationID, TenantID: tenantID, NodeID: otherNodeID,
+			RuleID: "cis-cross-tenant", ScriptID: uuid.New(), Severity: "high",
+			Status: storage.ApprovalStatusPending,
+			CreatedAt: now.Add(-10 * time.Minute), ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	store := &executiveRuleSummaryStore{fakeStore: base}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Attention.Approvals != 2 || resp.Attention.Total != 2 {
+		t.Fatalf("approval totals=%+v, want two tenant-scoped approvals", resp.Attention)
+	}
+	titles := map[string]bool{}
+	for _, item := range resp.Attention.Items {
+		titles[item.Title] = true
+		if strings.Contains(item.Title, "other-tenant-secret-host") {
+			t.Fatalf("cross-tenant node hostname leaked: %+v", item)
+		}
+	}
+	if !titles["Patch approval"] || !titles["Remediation approval"] {
+		t.Fatalf("generic approval titles missing after tenant guard: %+v", resp.Attention.Items)
+	}
+}
+
 func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
 	tenantID := base.tenants[0].ID
