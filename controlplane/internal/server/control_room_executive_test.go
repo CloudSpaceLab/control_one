@@ -180,7 +180,7 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 			{
 				ID: proposalID, TenantID: tenantID, IPCIDR: "203.0.113.10/32",
 				Status: "proposed", Score: 100,
-				Reason: "Correlation response: rule=Known bad source; alert_id=" + alertID.String() + "; mode=proposal",
+				Reason:    "Correlation response: rule=Known bad source; alert_id=" + alertID.String() + "; mode=proposal",
 				CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
 			},
 		},
