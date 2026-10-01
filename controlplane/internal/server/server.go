@@ -281,6 +281,7 @@ type Store interface {
 	ListAlerts(context.Context, storage.AlertFilter, int, int) ([]storage.Alert, int, error)
 	AckAlert(context.Context, uuid.UUID, uuid.UUID) error
 	ResolveAlert(context.Context, uuid.UUID, uuid.UUID) error
+	ReopenAlert(context.Context, uuid.UUID) error
 	UpdateAlertDisposition(context.Context, uuid.UUID, storage.UpdateAlertDispositionParams) (*storage.Alert, error)
 	// Access requests.
 	CreateAccessRequest(context.Context, storage.CreateAccessRequestParams) (*storage.AccessRequest, error)
