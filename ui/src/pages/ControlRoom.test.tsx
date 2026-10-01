@@ -19,6 +19,16 @@ const executiveOverview: ControlRoomExecutiveOverview = {
     groups_unknown: 0,
     nodes_total: 187,
     nodes_healthy: 184,
+    predictive: {
+      state: 'available',
+      freshness_sla_seconds: 10800,
+      scored_nodes: 180,
+      fresh_nodes: 176,
+      calibrating_nodes: 2,
+      stale_nodes: 4,
+      at_risk_nodes: 1,
+      latest_computed_at: '2026-10-01T16:55:00Z',
+    },
     groups: [
       {
         name: 'Payments',
@@ -28,6 +38,7 @@ const executiveOverview: ControlRoomExecutiveOverview = {
         nodes_stale: 0,
         nodes_offline: 0,
         intentionally_isolated: 0,
+        predictive_nodes_at_risk: 0,
         drilldown: '/nodes',
       },
       {
@@ -38,6 +49,8 @@ const executiveOverview: ControlRoomExecutiveOverview = {
         nodes_stale: 2,
         nodes_offline: 1,
         intentionally_isolated: 0,
+        predictive_risk: 'high',
+        predictive_nodes_at_risk: 1,
         drilldown: '/nodes',
       },
     ],
@@ -200,6 +213,8 @@ describe('ControlRoom executive dashboard', () => {
     expect(await screen.findByRole('heading', { name: 'Infrastructure health' })).toBeInTheDocument();
     expect(screen.getByText('Payments')).toBeInTheDocument();
     expect(screen.getByText('Web Edge')).toBeInTheDocument();
+    expect(screen.getByText('1 at-risk node')).toBeInTheDocument();
+    expect(screen.getByText(/predictive high/i)).toBeInTheDocument();
   });
 
   it('uses factual listener coverage copy rather than implying a node denominator', async () => {
