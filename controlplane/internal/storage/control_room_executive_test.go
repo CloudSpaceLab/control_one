@@ -189,15 +189,23 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	})
 	require.NoError(t, err)
 
+	deployment, err := store.CreatePatchDeployment(ctx, PatchDeployment{
+		TenantID: tenant.ID, Mode: "direct", TargetNodeCount: 1,
+	})
+	require.NoError(t, err)
 	_, err = store.CreatePatchApproval(ctx, CreatePatchApprovalParams{
-		TenantID: tenant.ID, DeploymentID: uuid.New(), NodeID: node.ID,
+		TenantID: tenant.ID, DeploymentID: deployment.ID, NodeID: node.ID,
 		Mode: "direct", ExpiresAt: now.Add(time.Hour),
 	})
 	require.NoError(t, err)
 
+	script, err := store.CreateRemediationScript(ctx, CreateRemediationScriptParams{
+		RuleID: "cis-1.1", Platform: "all", ScriptType: "bash", ScriptContent: "echo fix",
+	})
+	require.NoError(t, err)
 	_, err = store.CreateRemediationApproval(ctx, CreateRemediationApprovalParams{
 		TenantID: tenant.ID, NodeID: node.ID, RuleID: "cis-1.1",
-		ScriptID: uuid.New(), Severity: "critical",
+		ScriptID: script.ID, Severity: "critical",
 		TaskPayload: []byte(`{"script":"fix"}`), ExpiresAt: now.Add(time.Hour),
 	})
 	require.NoError(t, err)
