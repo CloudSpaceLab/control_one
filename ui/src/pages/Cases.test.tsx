@@ -223,7 +223,7 @@ describe('Cases', () => {
     expect(mockApi.getSOCCase).not.toHaveBeenCalledWith(caseRow.case_id, 'tenant-1');
   });
 
-  it('renders cases as evidence-backed export packets', async () => {
+  it('renders cases with evidence-backed export checks', async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -250,8 +250,9 @@ describe('Cases', () => {
     await user.click(screen.getByRole('button', { name: /preview export/i }));
 
     expect(await screen.findByText('soc-case-export-v1')).toBeInTheDocument();
-    expect(screen.getByText('evidence_refs_only')).toBeInTheDocument();
-    expect(screen.getByText('no_enforcement_execution')).toBeInTheDocument();
+    expect(screen.getByText('Export checks passed')).toBeInTheDocument();
+    expect(screen.queryByText('evidence_refs_only')).not.toBeInTheDocument();
+    expect(screen.queryByText('no_enforcement_execution')).not.toBeInTheDocument();
   });
 
   it('uses trigger type as secondary text when case title and summary match', () => {
@@ -317,7 +318,7 @@ describe('Cases', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText('Export packet');
+    await screen.findByText('Export');
     await user.click(screen.getByRole('button', { name: /preview export/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
