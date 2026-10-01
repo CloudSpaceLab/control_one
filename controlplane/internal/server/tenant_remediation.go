@@ -75,11 +75,11 @@ func (s *Server) handleTenantRemediationConfig(w http.ResponseWriter, r *http.Re
 			return
 		}
 		s.recordAudit(r.Context(), principal, tenantID, "tenant.remediation_config.updated", "tenant", tenantID.String(), map[string]any{
-			"auto_block_enabled":                  updated.AutoBlockEnabled,
-			"auto_block_min_confidence":           updated.AutoBlockMinConfidence,
-			"default_ip_block_scope":              updated.DefaultIPBlockScope,
-			"default_ip_block_ttl_seconds":        updated.DefaultIPBlockTTLSeconds,
-			"require_corroborating_threat_intel":  updated.RequireCorroboratingThreatIntel,
+			"auto_block_enabled":                 updated.AutoBlockEnabled,
+			"auto_block_min_confidence":          updated.AutoBlockMinConfidence,
+			"default_ip_block_scope":             updated.DefaultIPBlockScope,
+			"default_ip_block_ttl_seconds":       updated.DefaultIPBlockTTLSeconds,
+			"require_corroborating_threat_intel": updated.RequireCorroboratingThreatIntel,
 		})
 		writeJSON(w, http.StatusOK, updated)
 
@@ -89,20 +89,19 @@ func (s *Server) handleTenantRemediationConfig(w http.ResponseWriter, r *http.Re
 	}
 }
 
-
 type tenantRemediationConfigUpdate struct {
-	MinApprovalSeverity              *string
-	ChangeWindows                    *[]storage.ChangeWindow
-	CriticalOverride                 *bool
-	CircuitBreakerWindowMin          *int
-	CircuitBreakerFailPct            *int
-	CircuitBreakerMinSamples         *int
-	AutoBlockEnabled                 *bool
-	AutoBlockMinConfidence           *int
-	DefaultIPBlockScope              *string
-	DefaultIPBlockTTLSeconds         *int
-	RequireCorroboratingThreatIntel  *bool
-	PatchRequiresApproval            *bool
+	MinApprovalSeverity             *string
+	ChangeWindows                   *[]storage.ChangeWindow
+	CriticalOverride                *bool
+	CircuitBreakerWindowMin         *int
+	CircuitBreakerFailPct           *int
+	CircuitBreakerMinSamples        *int
+	AutoBlockEnabled                *bool
+	AutoBlockMinConfidence          *int
+	DefaultIPBlockScope             *string
+	DefaultIPBlockTTLSeconds        *int
+	RequireCorroboratingThreatIntel *bool
+	PatchRequiresApproval           *bool
 }
 
 func applyTenantRemediationConfigUpdate(cfg *storage.TenantRemediationConfig, update tenantRemediationConfigUpdate) {
