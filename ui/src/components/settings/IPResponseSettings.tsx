@@ -188,8 +188,8 @@ export function IPResponseSettings({ tenantId }: IPResponseSettingsProps): JSX.E
             Manual blocks use the same default scope and duration. Protected targets and enforcement safety limits still apply.
           </p>
 
-          {error ? <p role="alert" className="text-sm text-state-critical">{error}</p> : null}
-          {saved ? <p className="text-sm text-state-healthy">Saved</p> : null}
+          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+          {saved ? <p className="text-sm text-text-secondary">Saved</p> : null}
 
           <div>
             <Button type="button" size="sm" onClick={() => void save()} disabled={loading || saving}>
