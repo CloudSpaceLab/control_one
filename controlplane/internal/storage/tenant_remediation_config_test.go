@@ -46,16 +46,16 @@ func TestTenantRemediationConfig_UpsertRoundTrips(t *testing.T) {
 		ChangeWindows: []ChangeWindow{
 			{Days: []int{1, 2, 3, 4, 5}, StartHour: 2, EndHour: 6, Timezone: "UTC", Label: "weekday maintenance"},
 		},
-		CriticalOverride:         false,
-		CircuitBreakerWindowMin:  30,
-		CircuitBreakerFailPct:    50,
-		CircuitBreakerMinSamples: 10,
-		AutoBlockEnabled:                 true,
-		AutoBlockMinConfidence:           95,
-		DefaultIPBlockScope:              "fleet",
-		DefaultIPBlockTTLSeconds:         86400,
-		RequireCorroboratingThreatIntel:  false,
-		PatchRequiresApproval:            false, // operator opts out of the gate
+		CriticalOverride:                false,
+		CircuitBreakerWindowMin:         30,
+		CircuitBreakerFailPct:           50,
+		CircuitBreakerMinSamples:        10,
+		AutoBlockEnabled:                true,
+		AutoBlockMinConfidence:          95,
+		DefaultIPBlockScope:             "fleet",
+		DefaultIPBlockTTLSeconds:        86400,
+		RequireCorroboratingThreatIntel: false,
+		PatchRequiresApproval:           false, // operator opts out of the gate
 	}
 
 	saved, err := store.UpsertTenantRemediationConfig(ctx, in)
