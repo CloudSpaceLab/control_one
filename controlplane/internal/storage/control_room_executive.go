@@ -41,7 +41,6 @@ type AutomaticResponseSummary struct {
 	Failed               int
 	FailedCritical       int
 	FailedPlans          []ActionPlan
-	HandledAlertIDs      []uuid.UUID
 }
 
 type ExecutiveAttentionItem struct {
@@ -317,73 +316,7 @@ func (s *Store) GetAutomaticResponseSummary(
 		return out, err
 	}
 
-	handledRows, err := s.db.QueryContext(ctx, `
-		SELECT COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-		FROM action_plans p
-		JOIN LATERAL (
-			SELECT ar.state, ar.error
-			FROM action_receipts ar
-			WHERE ar.action_plan_id = p.id
-			  AND ar.created_at >= $2
-			  AND ar.created_at < $3
-			ORDER BY ar.created_at DESC, ar.id DESC
-			LIMIT 1
-		) r ON TRUE
-		WHERE p.tenant_id = $1
-		  AND p.updated_at >= $2
-		  AND p.updated_at < $3
-		  AND p.state IN ('succeeded', 'verified')
-		  AND r.state IN ('succeeded', 'verified')
-		  AND COALESCE(r.error, '') = ''
-		  AND (
-			LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
-			OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
-		  )
-	`, tenantID, since, until)
-	if err != nil {
-		return out, fmt.Errorf("query handled automatic response alerts: %w", err)
-	}
-	defer func() { _ = handledRows.Close() }()
-
-	seenAlerts := map[uuid.UUID]struct{}{}
-	for handledRows.Next() {
-		var reason string
-		if err := handledRows.Scan(&reason); err != nil {
-			return out, fmt.Errorf("scan handled automatic response alert: %w", err)
-		}
-		alertID, ok := automaticResponseAlertID(reason)
-		if !ok {
-			continue
-		}
-		if _, exists := seenAlerts[alertID]; exists {
-			continue
-		}
-		seenAlerts[alertID] = struct{}{}
-		out.HandledAlertIDs = append(out.HandledAlertIDs, alertID)
-	}
-	if err := handledRows.Err(); err != nil {
-		return out, err
-	}
 	return out, nil
-}
-
-func automaticResponseAlertID(reason string) (uuid.UUID, bool) {
-	reason = strings.TrimSpace(reason)
-	if !strings.HasPrefix(reason, "Correlation response:") {
-		return uuid.Nil, false
-	}
-	for _, part := range strings.Split(strings.TrimPrefix(reason, "Correlation response:"), ";") {
-		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if !ok || strings.TrimSpace(key) != "alert_id" {
-			continue
-		}
-		id, err := uuid.Parse(strings.TrimSpace(value))
-		if err != nil || id == uuid.Nil {
-			return uuid.Nil, false
-		}
-		return id, true
-	}
-	return uuid.Nil, false
 }
 
 // GetExecutiveAttentionSummary returns exact human-work totals plus a bounded
