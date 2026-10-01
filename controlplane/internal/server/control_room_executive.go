@@ -869,4 +869,3 @@ func controlRoomExecutiveProtectionGapLabel(state string) string {
 		return "Other protection gap"
 	}
 }
-
