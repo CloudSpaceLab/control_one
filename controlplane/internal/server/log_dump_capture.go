@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -26,9 +28,11 @@ func (s *Server) captureControlPlaneLogDump(ctx context.Context, dump *storage.L
 	}
 
 	var (
-		rowCount  int64
-		scanned   int
-		truncated bool
+		rowCount        int64
+		scanned         int
+		truncated       bool
+		sourceAvailable = true
+		sourceReason    string
 	)
 	artifact, err := writeLogDumpArtifactAtomic(dump.TenantID, dump.NodeID, dump.ID, func(dstWriter io.Writer) error {
 		encoder := json.NewEncoder(dstWriter)
@@ -40,6 +44,8 @@ func (s *Server) captureControlPlaneLogDump(ctx context.Context, dump *storage.L
 				Until:    &dump.WindowEnd,
 			}, controlPlaneLogDumpPageSize, offset)
 			if err != nil {
+				sourceAvailable = false
+				sourceReason = "control-plane telemetry source unavailable"
 				return fmt.Errorf("query telemetry logs: %w", err)
 			}
 			if len(logs) == 0 {
@@ -87,6 +93,13 @@ func (s *Server) captureControlPlaneLogDump(ctx context.Context, dump *storage.L
 	})
 	if err != nil {
 		_ = store.FailControlPlaneLogDump(ctx, dump.TenantID, dump.NodeID, dump.ID, err.Error())
+		if availabilityStore, ok := s.store.(interface {
+			MarkLogDumpSourceAvailability(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool, string) error
+		}); ok {
+			_ = availabilityStore.MarkLogDumpSourceAvailability(
+				ctx, dump.TenantID, dump.NodeID, dump.ID, sourceAvailable, sourceReason,
+			)
+		}
 		return err
 	}
 	if scanned >= maxControlPlaneLogDumpScanRows {
