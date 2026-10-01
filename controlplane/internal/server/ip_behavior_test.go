@@ -45,6 +45,93 @@ func TestCorrelationResponseCreatesTraceableProposalWithoutDispatch(t *testing.T
 	}
 }
 
+func TestAutoBlockUsesTenantIPResponsePolicy(t *testing.T) {
+	tenantID := uuid.New()
+	nodeA := uuid.New()
+	nodeB := uuid.New()
+	base := &fakeStore{
+		nodes: []storage.Node{
+			{ID: nodeA, TenantID: tenantID, Hostname: "app-1", State: storage.NodeStateActive},
+			{ID: nodeB, TenantID: tenantID, Hostname: "app-2", State: storage.NodeStateActive},
+		},
+		remediationConfigs: map[uuid.UUID]storage.TenantRemediationConfig{
+			tenantID: {
+				TenantID:                        tenantID,
+				MinApprovalSeverity:             "high",
+				AutoBlockEnabled:                true,
+				AutoBlockMinConfidence:          95,
+				DefaultIPBlockScope:             "fleet",
+				DefaultIPBlockTTLSeconds:        86400,
+				RequireCorroboratingThreatIntel: false,
+				PatchRequiresApproval:           true,
+			},
+		},
+	}
+	store := &blockProposalInvestigateStore{fakeStore: base}
+	s := &Server{store: store, logger: zap.NewNop()}
+	bucket := &ipBehaviorBucket{
+		srcIP:       "203.0.113.44",
+		serverGroup: "",
+		app:         "core-api",
+		statuses:    map[int]int{401: 10},
+		paths:       map[string]int{"/login": 10},
+	}
+
+	s.maybeAutoBlockIPBehavior(context.Background(), tenantID, nodeA, bucket, 95, "credential_attack")
+
+	if len(store.createdBlocks) != 1 {
+		t.Fatalf("created blocks = %d, want 1", len(store.createdBlocks))
+	}
+	entry := store.createdBlocks[0]
+	if entry.Scope != "fleet" || entry.TargetType != "tenant" {
+		t.Fatalf("scope/target = %s/%s, want fleet/tenant", entry.Scope, entry.TargetType)
+	}
+	if !strings.HasPrefix(entry.Reason, "policy:auto;") {
+		t.Fatalf("reason = %q, want policy provenance", entry.Reason)
+	}
+	if !entry.ExpiresAt.Valid || time.Until(entry.ExpiresAt.Time) < 23*time.Hour {
+		t.Fatalf("expiry = %v, want about 24h", entry.ExpiresAt)
+	}
+	if len(store.rules) != 2 {
+		t.Fatalf("firewall rules = %d, want 2", len(store.rules))
+	}
+	if len(store.recorded) != 1 || store.recorded[0].CreatedBy != nil {
+		t.Fatalf("automatic entity action provenance incorrect: %#v", store.recorded)
+	}
+}
+
+func TestAutoBlockPolicyCanRequireThreatIntel(t *testing.T) {
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	base := &fakeStore{
+		nodes: []storage.Node{{ID: nodeID, TenantID: tenantID, Hostname: "app-1", State: storage.NodeStateActive}},
+		remediationConfigs: map[uuid.UUID]storage.TenantRemediationConfig{
+			tenantID: {
+				TenantID:                        tenantID,
+				AutoBlockEnabled:                true,
+				AutoBlockMinConfidence:          90,
+				DefaultIPBlockScope:             "fleet",
+				DefaultIPBlockTTLSeconds:        3600,
+				RequireCorroboratingThreatIntel: true,
+			},
+		},
+	}
+	store := &blockProposalInvestigateStore{fakeStore: base}
+	s := &Server{store: store, logger: zap.NewNop()}
+	bucket := &ipBehaviorBucket{srcIP: "203.0.113.45", statuses: map[int]int{}, paths: map[string]int{}}
+
+	s.maybeAutoBlockIPBehavior(context.Background(), tenantID, nodeID, bucket, 100, "credential_attack")
+	if len(store.createdBlocks) != 0 {
+		t.Fatalf("created blocks = %d, want 0 without threat intel", len(store.createdBlocks))
+	}
+
+	bucket.threatScore = 80
+	s.maybeAutoBlockIPBehavior(context.Background(), tenantID, nodeID, bucket, 100, "known_malicious_source")
+	if len(store.createdBlocks) != 1 {
+		t.Fatalf("created blocks = %d, want 1 with threat intel", len(store.createdBlocks))
+	}
+}
+
 func TestIPBehaviorScoringRequiresCorroboration(t *testing.T) {
 	rareCountryOnly := &ipBehaviorBucket{
 		srcIP:       "203.0.113.10",
@@ -1457,6 +1544,36 @@ func (f *blockProposalInvestigateStore) ListNodeFirewallRulesForEntityAction(_ c
 		}
 	}
 	return out, nil
+}
+
+func (f *blockProposalInvestigateStore) CreateNodeFirewallRule(_ context.Context, in storage.NodeFirewallRuleInsert) (*storage.NodeFirewallRule, error) {
+	rule := storage.NodeFirewallRule{
+		ID:             uuid.New(),
+		EntityActionID: in.EntityActionID,
+		NodeID:         in.NodeID,
+		TenantID:       in.TenantID,
+		Action:         in.Action,
+		Direction:      in.Direction,
+		Protocol:       in.Protocol,
+		Port:           in.Port,
+		Source:         in.Source,
+		Dest:           in.Dest,
+		Tag:            in.Tag,
+		Status:         "pending",
+		RequestedAt:    time.Now().UTC(),
+	}
+	f.rules = append(f.rules, rule)
+	return &rule, nil
+}
+
+func (f *blockProposalInvestigateStore) SetNodeFirewallRuleJobID(_ context.Context, ruleID, jobID uuid.UUID) error {
+	for i := range f.rules {
+		if f.rules[i].ID == ruleID {
+			f.rules[i].JobID = &jobID
+			return nil
+		}
+	}
+	return nil
 }
 
 func (f *blockProposalInvestigateStore) QueueNodeFirewallRuleRemoval(_ context.Context, ruleID, jobID uuid.UUID) error {
