@@ -670,7 +670,7 @@ func (s *Server) controlRoomExecutiveAttention(
 
 	out.Approvals += blockProposalTotal
 	for index, proposal := range blockProposals {
-		severity := controlRoomExecutiveScoreSeverity(proposal.Score)
+		severity := controlRoomExecutiveProposalSeverity(proposal, linkedReviewAlerts)
 		if severity == "critical" {
 			out.Critical++
 		}
@@ -767,6 +767,26 @@ func controlRoomExecutiveProposalAlertID(reason string) (uuid.UUID, bool) {
 		return id, true
 	}
 	return uuid.Nil, false
+}
+
+func controlRoomExecutiveProposalSeverity(
+	proposal storage.IPBlocklistEntry,
+	linkedAlerts map[uuid.UUID]storage.Alert,
+) string {
+	severity := controlRoomExecutiveScoreSeverity(proposal.Score)
+	alertID, ok := controlRoomExecutiveProposalAlertID(proposal.Reason)
+	if !ok {
+		return severity
+	}
+	alert, ok := linkedAlerts[alertID]
+	if !ok {
+		return severity
+	}
+	alertSeverity := firstNonEmptyIPBehavior(alert.Severity, "medium")
+	if controlRoomSeverityRank(alertSeverity) > controlRoomSeverityRank(severity) {
+		return alertSeverity
+	}
+	return severity
 }
 
 func controlRoomExecutiveScoreSeverity(score int) string {
