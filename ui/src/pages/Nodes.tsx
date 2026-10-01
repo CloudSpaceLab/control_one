@@ -1472,12 +1472,12 @@ export function Nodes(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="INFRASTRUCTURE · FLEET"
-        title="Fleet Overview"
+        eyebrow="INFRASTRUCTURE"
+        title="Nodes"
         description={
           nodesUnavailable
             ? 'Fleet data unavailable.'
-            : `${pagination.total} agent${pagination.total === 1 ? '' : 's'} across ${tenantGroups.size} group${tenantGroups.size === 1 ? '' : 's'}`
+            : `${pagination.total} node${pagination.total === 1 ? '' : 's'} across ${tenantGroups.size} group${tenantGroups.size === 1 ? '' : 's'}`
         }
         actions={
           <div className="flex items-center gap-2">
@@ -1610,8 +1610,8 @@ export function Nodes(): JSX.Element {
       >
         {nodesUnavailable ? (
           <EmptyState
-            title="Fleet map unavailable"
-            description="Node locations could not be loaded. Refresh when the fleet API recovers."
+            title="Node locations unavailable"
+            description="Retry the node list."
             icon={<MapPin />}
           />
         ) : useNodeMap ? (
@@ -1693,8 +1693,8 @@ export function Nodes(): JSX.Element {
           <div className="flex flex-col gap-3">
             <p className="text-sm text-state-critical" role="alert">Failed to load nodes: {error}</p>
             <EmptyState
-              title="Fleet nodes could not be loaded"
-              description="The fleet list is unavailable. Existing node workflows remain intact once the API recovers."
+              title="Node list unavailable"
+              description="Retry the node list."
               icon={<Server />}
             />
           </div>
