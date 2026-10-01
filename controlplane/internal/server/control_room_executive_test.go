@@ -611,6 +611,7 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 		Verification: map[string]any{"script_success": true},
 		CreatedAt:    futureAt,
 	}}
+	srv.store = &executiveRuleSummaryStore{fakeStore: base}
 
 	got, failed, handledAlertIDs, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
 	if !available {
