@@ -69,6 +69,17 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run test --prefix ui
 
+      - name: Raw-log deployment contract
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          grep -Fq 'CONTROL_ONE_LOG_DUMPS_DIR: "/var/lib/control-one/log-dumps"' deploy/docker-compose.yaml
+          grep -Fq './log-dumps:/var/lib/control-one/log-dumps' deploy/docker-compose.yaml
+          grep -Fq "'\$DEPLOY_DIR/log-dumps'" .github/workflows/deploy.yml
+          grep -Fq "chown 65532:65532 '\$DEPLOY_DIR/threat-intel' '\$DEPLOY_DIR/analytics' '\$DEPLOY_DIR/log-dumps'" .github/workflows/deploy.yml
+          grep -Fq 'client_max_body_size 4m;' deploy/nginx/control-one.host.conf
+          grep -Fq 'client_max_body_size 4m;' deploy/nginx/edge.conf
+
       - name: Storage integration tests
         if: matrix.os == 'ubuntu-latest'
         env:
