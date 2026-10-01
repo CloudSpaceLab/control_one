@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -606,4 +605,3 @@ func minInt(a, b int) int {
 	return b
 }
 
-var _ = os.ErrNotExist

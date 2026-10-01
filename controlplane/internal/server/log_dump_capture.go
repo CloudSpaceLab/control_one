@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
@@ -29,7 +30,7 @@ func (s *Server) captureControlPlaneLogDump(ctx context.Context, dump *storage.L
 		scanned   int
 		truncated bool
 	)
-	artifact, err := writeLogDumpArtifactAtomic(dump.TenantID, dump.NodeID, dump.ID, func(dstWriter interface{ Write([]byte) (int, error) }) error {
+	artifact, err := writeLogDumpArtifactAtomic(dump.TenantID, dump.NodeID, dump.ID, func(dstWriter io.Writer) error {
 		encoder := json.NewEncoder(dstWriter)
 		for offset := 0; scanned < maxControlPlaneLogDumpScanRows && rowCount < maxControlPlaneLogDumpRows; offset += controlPlaneLogDumpPageSize {
 			logs, total, err := s.store.ListTelemetryLogs(ctx, storage.TelemetryLogFilter{
