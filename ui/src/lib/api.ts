@@ -6605,6 +6605,7 @@ export interface ActiveBlock {
   Reason?: string;
   ExpiresAt?: string;
   CreatedAt: string;
+  Provenance: "auto" | "manual";
   TotalNodes: number;
   NodesApplied: number;
   NodesFailed: number;
@@ -6619,6 +6620,7 @@ export interface IPBlockStatus {
   fleet_nodes: number;
   fleet_target_nodes: number;
   target_nodes: number;
+  provenance: "auto" | "manual";
   nodes_applied: number;
   nodes_pending: number;
   nodes_removing: number;
@@ -7733,6 +7735,12 @@ export interface TenantRemediationConfig {
   CircuitBreakerWindowMin: number;
   CircuitBreakerFailPct: number;
   CircuitBreakerMinSamples: number;
+  AutoBlockEnabled: boolean;
+  AutoBlockMinConfidence: number;
+  DefaultIPBlockScope: "affected" | "fleet";
+  DefaultIPBlockTTLSeconds: 900 | 3600 | 86400;
+  RequireCorroboratingThreatIntel: boolean;
+  PatchRequiresApproval: boolean;
   UpdatedAt?: string;
 }
 
