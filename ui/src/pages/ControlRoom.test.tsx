@@ -226,6 +226,22 @@ describe('ControlRoom executive dashboard', () => {
     expect(screen.getAllByText('Data unavailable').length).toBeGreaterThan(0);
   });
 
+  it('treats any unavailable core metric as partial and disables its detail action', async () => {
+    getExecutiveOverviewMock.mockResolvedValue({
+      ...executiveOverview,
+      availability: {
+        ...executiveOverview.availability,
+        violations: false,
+      },
+    });
+
+    renderControlRoom();
+
+    expect(await screen.findByRole('heading', { name: 'Protection status incomplete' })).toBeInTheDocument();
+    expect(screen.getByText('Bank Tenant · Some security or infrastructure data is unavailable.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rule violations: view details' })).toBeDisabled();
+  });
+
   it('does not request data before a tenant is selected', () => {
     vi.mocked(useTenantModule.useTenant).mockReturnValue({
       currentTenantId: null,
