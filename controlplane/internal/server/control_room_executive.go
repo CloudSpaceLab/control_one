@@ -17,7 +17,7 @@ import (
 )
 
 type controlRoomExecutiveRuleViolationStore interface {
-	GetRuleViolationSummary(context.Context, uuid.UUID, time.Time, time.Time, time.Time, int) (storage.RuleViolationSummary, error)
+	GetRuleViolationSummary(context.Context, uuid.UUID, time.Time, time.Time, time.Time, time.Time, int) (storage.RuleViolationSummary, error)
 }
 
 type controlRoomExecutiveOverviewResponse struct {
@@ -190,7 +190,7 @@ func (s *Server) buildControlRoomExecutiveOverview(
 	prevUntil := since
 	prevSince := since.Add(-periodDuration(period))
 	if store, ok := s.store.(controlRoomExecutiveRuleViolationStore); ok {
-		summary, err := store.GetRuleViolationSummary(ctx, tenantID, since, prevSince, prevUntil, 5)
+		summary, err := store.GetRuleViolationSummary(ctx, tenantID, since, now, prevSince, prevUntil, 5)
 		if err != nil {
 			s.logger.Warn("control room executive rule violations", zap.Error(err))
 		} else {
