@@ -258,7 +258,7 @@ function blockStatusLabel(status: IPBlockStatus): string {
 function blockStatusTone(status: IPBlockStatus): StateTone {
   switch (status.state) {
     case 'blocked':
-      return 'critical';
+      return 'healthy';
     case 'blocking':
     case 'unblocking':
       return 'warning';
@@ -267,7 +267,7 @@ function blockStatusTone(status: IPBlockStatus): StateTone {
       return 'critical';
     case 'unblocked':
     default:
-      return 'healthy';
+      return 'unknown';
   }
 }
 
