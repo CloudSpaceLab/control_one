@@ -119,6 +119,8 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	_ = createPlan("remediation", "remediation.execute", true, ActionPlanStateSucceeded)
 
 	failed := createPlan("firewall", "block", true, ActionPlanStateFailed)
+	_, err = store.db.ExecContext(ctx, `UPDATE action_plans SET risk = 'critical' WHERE id = $1`, failed.ID)
+	require.NoError(t, err)
 
 	summary, err := store.GetAutomaticResponseSummary(ctx, tenant.ID, since, until, 1)
 	require.NoError(t, err)
@@ -127,6 +129,7 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	require.Equal(t, 1, summary.Contained)
 	require.Equal(t, 1, summary.Remediated)
 	require.Equal(t, 1, summary.Failed)
+	require.Equal(t, 1, summary.FailedCritical)
 	require.Len(t, summary.FailedPlans, 1)
 	require.Equal(t, failed.ID, summary.FailedPlans[0].ID)
 }
