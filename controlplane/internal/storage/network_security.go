@@ -51,6 +51,7 @@ type ActiveBlock struct {
 	NodesApplied   int
 	NodesFailed    int
 	NodesPending   int
+	NodesRemoving  int
 	NodesRemoved   int
 }
 
@@ -410,11 +411,17 @@ func (s *Store) ListActiveBlocks(ctx context.Context, tenantID uuid.UUID, limit,
 			CASE WHEN ea.created_by IS NULL THEN 'auto' ELSE 'manual' END AS provenance,
 			COUNT(r.id) AS total_nodes,
 			COUNT(r.id) FILTER (WHERE r.status = 'applied') AS nodes_applied,
-			COUNT(r.id) FILTER (WHERE r.status = 'failed')  AS nodes_failed,
-			COUNT(r.id) FILTER (WHERE r.status = 'pending') AS nodes_pending,
+			COUNT(r.id) FILTER (WHERE r.status = 'failed') AS nodes_failed,
+			COUNT(r.id) FILTER (
+				WHERE r.status = 'pending' AND COALESCE(j.type, '') <> 'firewall.rule_delete'
+			) AS nodes_pending,
+			COUNT(r.id) FILTER (
+				WHERE r.status = 'pending' AND j.type = 'firewall.rule_delete'
+			) AS nodes_removing,
 			COUNT(r.id) FILTER (WHERE r.status = 'removed') AS nodes_removed
 		FROM entity_actions ea
 		JOIN node_firewall_rules r ON r.entity_action_id = ea.id
+		LEFT JOIN jobs j ON j.id = r.job_id
 		WHERE ea.tenant_id = $1
 		  AND ea.entity_type = 'ip'
 		  AND ea.action = 'block'
@@ -434,7 +441,7 @@ func (s *Store) ListActiveBlocks(ctx context.Context, tenantID uuid.UUID, limit,
 		if err := rows.Scan(
 			&b.EntityActionID, &b.TenantID, &b.EntityType, &b.EntityID,
 			&b.Action, &b.Reason, &b.ExpiresAt, &b.CreatedAt, &b.Provenance,
-			&b.TotalNodes, &b.NodesApplied, &b.NodesFailed, &b.NodesPending, &b.NodesRemoved,
+			&b.TotalNodes, &b.NodesApplied, &b.NodesFailed, &b.NodesPending, &b.NodesRemoving, &b.NodesRemoved,
 		); err != nil {
 			return nil, fmt.Errorf("scan active block: %w", err)
 		}
