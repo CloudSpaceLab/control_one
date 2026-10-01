@@ -21,7 +21,8 @@ export function useConnectionsByIp({
   return useQuery<ConnectionRow[]>({
     queryKey: ['connections.ip', tenantId, ip, since, until, limit],
     queryFn: () => api.listConnections({ tenantId, ip, since, until, limit }),
-    enabled: !!ip,
+    enabled: !!tenantId && !!ip,
+    retry: false,
   });
 }
 
