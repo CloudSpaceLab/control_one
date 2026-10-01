@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1040,6 +1041,158 @@ func TestControlRoomExecutiveEstateGroupsAndIntentionalIsolation(t *testing.T) {
 	}
 	if vault == nil || vault.State != "healthy" || vault.IntentionallyIsolated != 1 || vault.NodesOffline != 0 {
 		t.Fatalf("intentional isolation should remain healthy, got %+v", vault)
+	}
+}
+
+func TestControlRoomExecutivePredictiveHealthElevatesFreshRiskOnly(t *testing.T) {
+	srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	now := time.Now().UTC()
+	paymentsID := uuid.New()
+	edgeID := uuid.New()
+	vaultID := uuid.New()
+	old := now.Add(-2 * time.Hour)
+
+	base.nodes = []storage.Node{
+		{
+			ID: paymentsID, TenantID: tenantID, Hostname: "payments-01", LastSeenAt: &now,
+			Labels: map[string]any{"dashboard_group": "Payments"},
+		},
+		{
+			ID: edgeID, TenantID: tenantID, Hostname: "edge-01", LastSeenAt: &now,
+			Labels: map[string]any{"dashboard_group": "Web Edge"},
+		},
+		{
+			ID: vaultID, TenantID: tenantID, Hostname: "vault-01", LastSeenAt: &old,
+			Labels: map[string]any{
+				"dashboard_group":  "Vault",
+				isolationModeLabel: isolationModeAirgapped,
+			},
+		},
+	}
+	store := &executiveRuleSummaryStore{
+		fakeStore: base,
+		predictiveAvailability: storage.PredictiveHealthAvailability{
+			ScoredNodes: 3, FreshNodes: 3, FreshActionableNodes: 2,
+			FreshCalibratingNodes: 1, StaleNodes: 0,
+			LatestComputedAt: sql.NullTime{Time: now.Add(-10 * time.Minute), Valid: true},
+		},
+		atRiskNodes: []storage.AtRiskNodeRow{
+			{
+				NodeID: paymentsID, TenantID: tenantID, Hostname: "payments-01",
+				Score: 20, RiskLevel: "critical", ComputedAt: now.Add(-10 * time.Minute),
+			},
+			{
+				NodeID: edgeID, TenantID: tenantID, Hostname: "edge-01",
+				Score: 40, RiskLevel: "high", ComputedAt: now.Add(-15 * time.Minute),
+			},
+			{
+				NodeID: uuid.New(), TenantID: uuid.New(), Hostname: "other-tenant",
+				Score: 1, RiskLevel: "critical", ComputedAt: now,
+			},
+		},
+	}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Estate.Predictive.State != "available" || resp.Estate.Predictive.AtRiskNodes != 2 {
+		t.Fatalf("unexpected predictive state: %+v", resp.Estate.Predictive)
+	}
+	if resp.Estate.GroupsCritical != 1 || resp.Estate.GroupsDegraded != 1 || resp.Estate.GroupsHealthy != 1 {
+		t.Fatalf("unexpected predictive group totals: %+v", resp.Estate)
+	}
+
+	states := map[string]controlRoomExecutiveGroup{}
+	for _, group := range resp.Estate.Groups {
+		states[group.Name] = group
+	}
+	if states["Payments"].State != "critical" || states["Payments"].PredictiveRisk != "critical" {
+		t.Fatalf("payments predictive critical risk not applied: %+v", states["Payments"])
+	}
+	if states["Web Edge"].State != "degraded" || states["Web Edge"].PredictiveRisk != "high" {
+		t.Fatalf("web edge predictive high risk not applied: %+v", states["Web Edge"])
+	}
+	if states["Vault"].State != "healthy" || states["Vault"].IntentionallyIsolated != 1 {
+		t.Fatalf("intentional isolation should remain healthy: %+v", states["Vault"])
+	}
+}
+
+func TestControlRoomExecutivePredictiveHealthDoesNotChangeStateWhenNotActionable(t *testing.T) {
+	now := time.Now().UTC()
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	nodes := []storage.Node{{
+		ID: nodeID, TenantID: tenantID, Hostname: "app-01", LastSeenAt: &now,
+		Labels: map[string]any{"dashboard_group": "Application"},
+	}}
+
+	cases := []struct {
+		name         string
+		availability storage.PredictiveHealthAvailability
+		wantState    string
+	}{
+		{
+			name: "calibrating",
+			availability: storage.PredictiveHealthAvailability{
+				ScoredNodes: 1, FreshNodes: 1, FreshCalibratingNodes: 1,
+				LatestComputedAt: sql.NullTime{Time: now, Valid: true},
+			},
+			wantState: "calibrating",
+		},
+		{
+			name: "stale",
+			availability: storage.PredictiveHealthAvailability{
+				ScoredNodes: 1, StaleNodes: 1,
+				LatestComputedAt: sql.NullTime{Time: now.Add(-6 * time.Hour), Valid: true},
+			},
+			wantState: "stale",
+		},
+		{
+			name: "unavailable",
+			availability: storage.PredictiveHealthAvailability{},
+			wantState: "unavailable",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, base := controlRoomExecutiveHarness(t, "viewer", "viewer-token")
+			base.tenants[0].ID = tenantID
+			store := &executiveRuleSummaryStore{
+				fakeStore: base,
+				predictiveAvailability: tc.availability,
+				atRiskNodes: []storage.AtRiskNodeRow{{
+					NodeID: nodeID, TenantID: tenantID, Hostname: "app-01",
+					Score: 10, RiskLevel: "critical", ComputedAt: now,
+				}},
+			}
+			srv.store = store
+			estate := buildControlRoomExecutiveEstate(nodes, now)
+			predictive := srv.controlRoomExecutivePredictiveHealth(context.Background(), tenantID, nodes, &estate, now)
+
+			if predictive.State != tc.wantState {
+				t.Fatalf("predictive state=%q, want %q", predictive.State, tc.wantState)
+			}
+			if estate.Groups[0].State != "healthy" {
+				t.Fatalf("non-actionable predictive state changed liveness health: %+v", estate.Groups[0])
+			}
+			if estate.Groups[0].PredictiveRisk != "" || estate.Groups[0].PredictiveNodesAtRisk != 0 {
+				t.Fatalf("non-actionable predictive risk leaked into group: %+v", estate.Groups[0])
+			}
+		})
 	}
 }
 
