@@ -56,6 +56,7 @@ type logDumpFailRequest struct {
 }
 
 func (s *Server) handleAgentLogDumpResource(w http.ResponseWriter, r *http.Request) {
+	setLogDumpResponseHeaders(w)
 	store, ok := s.store.(agentLogDumpStore)
 	if !ok {
 		http.Error(w, "log dump storage unavailable", http.StatusServiceUnavailable)

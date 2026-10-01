@@ -92,6 +92,7 @@ func (s *Server) logDumpNow() time.Time {
 }
 
 func (s *Server) handleLogDumps(w http.ResponseWriter, r *http.Request) {
+	setLogDumpResponseHeaders(w)
 	switch r.Method {
 	case http.MethodPost:
 		s.handleCreateLogDump(w, r)
@@ -104,6 +105,7 @@ func (s *Server) handleLogDumps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogDumpResource(w http.ResponseWriter, r *http.Request) {
+	setLogDumpResponseHeaders(w)
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/log-dumps/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) < 1 || len(parts) > 2 || parts[0] == "" {
@@ -583,6 +585,11 @@ func logDumpPagination(r *http.Request) (int, int, error) {
 		offset = v
 	}
 	return limit, offset, nil
+}
+
+func setLogDumpResponseHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 func setLogDumpArtifactHeaders(w http.ResponseWriter) {
