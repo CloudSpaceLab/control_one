@@ -304,7 +304,7 @@ func (s *Store) GetExecutiveAttentionSummary(
 		itemLimit = 50
 	}
 
-	const query = `
+	const query = \`
 		WITH proposed_blocks AS (
 			SELECT
 				b.id,
@@ -313,27 +313,22 @@ func (s *Store) GetExecutiveAttentionSummary(
 				b.score,
 				b.created_at,
 				CASE
-					WHEN b.reason NOT LIKE 'Correlation response:%'
-						THEN NULL
-					WHEN substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
-						THEN NULL
-					ELSE substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+					WHEN b.reason LIKE 'Correlation response:%'
+						THEN substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
 				END AS alert_id
 			FROM ip_blocklist_entries b
 			WHERE b.tenant_id = $1
 			  AND b.status = 'proposed'
 		),
 		verified_handled_alerts AS (
-			SELECT DISTINCT
+			SELECT
 				CASE
 					WHEN COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						NOT LIKE 'Correlation response:%'
-						THEN NULL
-					WHEN substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
-						THEN NULL
-					ELSE substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+						LIKE 'Correlation response:%'
+						THEN substring(
+							COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+							FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+						)::uuid
 				END AS alert_id
 			FROM action_plans p
 			JOIN LATERAL (
@@ -365,13 +360,11 @@ func (s *Store) GetExecutiveAttentionSummary(
 				p.updated_at AS created_at,
 				CASE
 					WHEN COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						NOT LIKE 'Correlation response:%'
-						THEN NULL
-					WHEN substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
-						THEN NULL
-					ELSE substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+						LIKE 'Correlation response:%'
+						THEN substring(
+							COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+							FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+						)::uuid
 				END AS alert_id
 			FROM action_plans p
 			WHERE p.tenant_id = $1
@@ -428,7 +421,12 @@ func (s *Store) GetExecutiveAttentionSummary(
 			SELECT alert_id FROM auto_failed WHERE alert_id IS NOT NULL
 		),
 		review_alerts AS (
-			SELECT a.*
+			SELECT
+				a.id,
+				LOWER(COALESCE(NULLIF(a.severity, ''), 'medium')) AS severity,
+				a.title,
+				COALESCE(a.summary, '') AS summary,
+				a.opened_at
 			FROM alerts a
 			WHERE a.tenant_id = $1
 			  AND a.state IN ('open', 'acked')
@@ -485,80 +483,144 @@ func (s *Store) GetExecutiveAttentionSummary(
 			LEFT JOIN nodes n ON n.id = r.node_id AND n.tenant_id = r.tenant_id
 			WHERE r.tenant_id = $1 AND r.status = 'pending'
 		),
+		review_stats AS (
+			SELECT
+				COUNT(*)::int AS total,
+				COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM review_alerts
+		),
+		patch_stats AS (
+			SELECT COUNT(*)::int AS total
+			FROM patch_pending
+		),
+		remediation_stats AS (
+			SELECT
+				COUNT(*)::int AS total,
+				COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM remediation_pending
+		),
+		network_stats AS (
+			SELECT
+				COUNT(*)::int AS total,
+				COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM network_approvals
+		),
+		failed_stats AS (
+			SELECT
+				COUNT(*)::int AS total,
+				COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM auto_failed
+		),
 		counts AS (
 			SELECT
-				(SELECT COUNT(*) FROM review_alerts)::int AS reviews,
-				(
-					(SELECT COUNT(*) FROM patch_pending)
-					+ (SELECT COUNT(*) FROM remediation_pending)
-					+ (SELECT COUNT(*) FROM network_approvals)
-				)::int AS approvals,
-				(SELECT COUNT(*) FROM auto_failed)::int AS interventions,
-				(
-					(SELECT COUNT(*) FROM review_alerts WHERE LOWER(severity) = 'critical')
-					+ (SELECT COUNT(*) FROM remediation_pending WHERE severity = 'critical')
-					+ (SELECT COUNT(*) FROM network_approvals WHERE severity = 'critical')
-					+ (SELECT COUNT(*) FROM auto_failed WHERE severity = 'critical')
-				)::int AS critical
-		),
-		attention_items AS (
-			SELECT
-				a.id, 'review'::text AS kind, 'alert'::text AS source,
-				LOWER(COALESCE(NULLIF(a.severity, ''), 'medium')) AS severity,
-				'alerts'::text AS domain,
-				a.title AS alert_title,
-				COALESCE(a.summary, '') AS alert_summary,
-				''::text AS node_hostname,
-				''::text AS mode,
-				''::text AS rule_id,
-				''::text AS ip_cidr,
-				''::text AS reason,
-				''::text AS action_domain,
-				''::text AS action_kind,
-				a.opened_at AS created_at
-			FROM review_alerts a
-
-			UNION ALL
-
-			SELECT
-				p.id, 'approval', 'patch', 'medium', 'patch',
-				'', '', p.hostname, p.mode, '', '', '', '', '', p.created_at
-			FROM patch_pending p
-
-			UNION ALL
-
-			SELECT
-				r.id, 'approval', 'remediation', r.severity, 'compliance',
-				'', '', r.hostname, '', r.rule_id, '', '', '', '', r.created_at
-			FROM remediation_pending r
-
-			UNION ALL
-
-			SELECT
-				n.id, 'approval', 'network', n.severity, 'network',
-				'', '', '', '', '', n.ip_cidr, n.reason, '', '', n.created_at
-			FROM network_approvals n
-
-			UNION ALL
-
-			SELECT
-				f.id, 'intervention', 'automatic_response', f.severity,
-				COALESCE(NULLIF(f.domain, ''), 'automation'),
-				'', '', '', '', '', '', 'Automatic response failed',
-				f.domain, f.action_kind, f.created_at
-			FROM auto_failed f
+				r.total AS reviews,
+				(p.total + m.total + n.total)::int AS approvals,
+				f.total AS interventions,
+				(r.critical + m.critical + n.critical + f.critical)::int AS critical
+			FROM review_stats r
+			CROSS JOIN patch_stats p
+			CROSS JOIN remediation_stats m
+			CROSS JOIN network_stats n
+			CROSS JOIN failed_stats f
 		),
 		ranked_items AS (
-			SELECT *,
-				CASE severity
-					WHEN 'critical' THEN 5
-					WHEN 'high' THEN 4
-					WHEN 'medium' THEN 3
-					WHEN 'low' THEN 2
-					WHEN 'info' THEN 1
-					ELSE 0
-				END AS severity_rank
-			FROM attention_items
+			(
+				SELECT
+					a.id, 'review'::text AS kind, 'alert'::text AS source,
+					a.severity,
+					'alerts'::text AS domain,
+					a.title AS alert_title,
+					a.summary AS alert_summary,
+					''::text AS node_hostname,
+					''::text AS mode,
+					''::text AS rule_id,
+					''::text AS ip_cidr,
+					''::text AS reason,
+					''::text AS action_domain,
+					''::text AS action_kind,
+					a.opened_at AS created_at,
+					CASE a.severity
+						WHEN 'critical' THEN 5
+						WHEN 'high' THEN 4
+						WHEN 'medium' THEN 3
+						WHEN 'low' THEN 2
+						WHEN 'info' THEN 1
+						ELSE 0
+					END AS severity_rank
+				FROM review_alerts a
+				ORDER BY severity_rank DESC, a.opened_at DESC, a.id
+				LIMIT $4
+			)
+
+			UNION ALL
+
+			(
+				SELECT
+					p.id, 'approval', 'patch', 'medium', 'patch',
+					'', '', p.hostname, p.mode, '', '', '', '', '', p.created_at, 3
+				FROM patch_pending p
+				ORDER BY p.created_at DESC, p.id
+				LIMIT $4
+			)
+
+			UNION ALL
+
+			(
+				SELECT
+					r.id, 'approval', 'remediation', r.severity, 'compliance',
+					'', '', r.hostname, '', r.rule_id, '', '', '', '', r.created_at,
+					CASE r.severity
+						WHEN 'critical' THEN 5
+						WHEN 'high' THEN 4
+						WHEN 'medium' THEN 3
+						WHEN 'low' THEN 2
+						WHEN 'info' THEN 1
+						ELSE 0
+					END
+				FROM remediation_pending r
+				ORDER BY 16 DESC, r.created_at DESC, r.id
+				LIMIT $4
+			)
+
+			UNION ALL
+
+			(
+				SELECT
+					n.id, 'approval', 'network', n.severity, 'network',
+					'', '', '', '', '', n.ip_cidr, n.reason, '', '', n.created_at,
+					CASE n.severity
+						WHEN 'critical' THEN 5
+						WHEN 'high' THEN 4
+						WHEN 'medium' THEN 3
+						WHEN 'low' THEN 2
+						WHEN 'info' THEN 1
+						ELSE 0
+					END
+				FROM network_approvals n
+				ORDER BY 16 DESC, n.created_at DESC, n.id
+				LIMIT $4
+			)
+
+			UNION ALL
+
+			(
+				SELECT
+					f.id, 'intervention', 'automatic_response', f.severity,
+					COALESCE(NULLIF(f.domain, ''), 'automation'),
+					'', '', '', '', '', '', 'Automatic response failed',
+					f.domain, f.action_kind, f.created_at,
+					CASE f.severity
+						WHEN 'critical' THEN 5
+						WHEN 'high' THEN 4
+						WHEN 'medium' THEN 3
+						WHEN 'low' THEN 2
+						WHEN 'info' THEN 1
+						ELSE 0
+					END
+				FROM auto_failed f
+				ORDER BY 16 DESC, f.created_at DESC, f.id
+				LIMIT $4
+			)
 		)
 		SELECT
 			c.reviews,
@@ -589,8 +651,7 @@ func (s *Store) GetExecutiveAttentionSummary(
 			LIMIT $4
 		) i ON TRUE
 		ORDER BY i.severity_rank DESC NULLS LAST, i.created_at DESC NULLS LAST, i.id
-	`
-
+	\`
 	rows, err := s.db.QueryContext(ctx, query, tenantID, since, until, itemLimit)
 	if err != nil {
 		return out, fmt.Errorf("query executive attention summary: %w", err)
