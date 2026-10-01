@@ -245,7 +245,7 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	require.Equal(t, 4, summary.Approvals)
 	require.Equal(t, 1, summary.Interventions)
 	require.Equal(t, 6, summary.Total)
-	require.Equal(t, 2, summary.Critical)
+	require.Equal(t, 3, summary.Critical)
 	require.Len(t, summary.Items, 3, "top sample must stay bounded independently of exact total")
 
 	ids := map[uuid.UUID]bool{}
@@ -257,6 +257,16 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	require.False(t, ids[handledAlert.ID], "verified auto-handled alert remained in review work")
 	require.False(t, ids[pendingAlert.ID], "alert represented by pending approval remained in review work")
 	require.False(t, ids[failedAlert.ID], "alert represented by failed-response intervention remained in review work")
+
+	var failedResponse *ExecutiveAttentionItem
+	for i := range summary.Items {
+		if summary.Items[i].Source == "automatic_response" {
+			failedResponse = &summary.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, failedResponse)
+	require.Equal(t, "critical", failedResponse.Severity, "source-alert severity must not be downgraded by action risk")
 
 	var remediation *ExecutiveAttentionItem
 	for i := range summary.Items {
