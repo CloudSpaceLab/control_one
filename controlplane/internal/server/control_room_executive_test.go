@@ -25,6 +25,7 @@ func (s *executiveRuleSummaryStore) GetRuleViolationSummary(
 	_ time.Time,
 	_ time.Time,
 	_ time.Time,
+	_ time.Time,
 	_ int,
 ) (storage.RuleViolationSummary, error) {
 	if s.err != nil {
