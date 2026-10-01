@@ -14,8 +14,9 @@ import (
 
 type executiveRuleSummaryStore struct {
 	*fakeStore
-	summary storage.RuleViolationSummary
-	err     error
+	summary        storage.RuleViolationSummary
+	err            error
+	blockProposals []storage.IPBlocklistEntry
 }
 
 func (s *executiveRuleSummaryStore) GetRuleViolationSummary(
@@ -32,6 +33,33 @@ func (s *executiveRuleSummaryStore) GetRuleViolationSummary(
 	out := s.summary
 	out.TopRules = append([]storage.RuleViolationTopRule(nil), s.summary.TopRules...)
 	return out, nil
+}
+
+func (s *executiveRuleSummaryStore) ListIPBlocklistEntries(
+	_ context.Context,
+	filter storage.IPBlocklistEntryFilter,
+	limit int,
+	offset int,
+) ([]storage.IPBlocklistEntry, int, error) {
+	rows := make([]storage.IPBlocklistEntry, 0, len(s.blockProposals))
+	for _, row := range s.blockProposals {
+		if filter.TenantID != uuid.Nil && row.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.Status != "" && row.Status != filter.Status {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	total := len(rows)
+	if offset > total {
+		offset = total
+	}
+	rows = rows[offset:]
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, total, nil
 }
 
 func TestControlRoomExecutiveAttentionUsesExactAlertTotals(t *testing.T) {
@@ -131,6 +159,52 @@ func TestControlRoomExecutiveRuleViolationSummaryIsIndependentOfTopRules(t *test
 	}
 	if resp.Violations.Total == resp.Violations.TopRules[0].Count {
 		t.Fatalf("total must be independent of bounded top rules: %+v", resp.Violations)
+	}
+}
+
+func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
+	srv, base := dashboardAdminHarness(t, "viewer", "viewer-token")
+	tenantID := base.tenants[0].ID
+	now := time.Now().UTC()
+	proposalID := uuid.New()
+	store := &executiveRuleSummaryStore{
+		fakeStore: base,
+		blockProposals: []storage.IPBlocklistEntry{
+			{
+				ID: proposalID, TenantID: tenantID, IPCIDR: "203.0.113.10/32",
+				Status: "proposed", Score: 100, Reason: "Critical source requires approval",
+				CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
+			},
+		},
+	}
+	srv.store = store
+
+	rec := dashboardCall(
+		t,
+		srv,
+		"viewer-token",
+		http.MethodGet,
+		"/api/v1/control-room/executive-overview?tenant_id="+tenantID.String()+"&period=24h",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp controlRoomExecutiveOverviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode executive overview: %v", err)
+	}
+	if resp.Attention.Approvals != 1 || resp.Attention.Total != 1 || resp.Attention.Critical != 1 {
+		t.Fatalf("unexpected network approval totals: %+v", resp.Attention)
+	}
+	if len(resp.Attention.Items) != 1 {
+		t.Fatalf("attention sample=%+v, want one network approval", resp.Attention.Items)
+	}
+	item := resp.Attention.Items[0]
+	if item.Kind != "approval" || item.Domain != "network" || item.Title != "Block 203.0.113.10/32" {
+		t.Fatalf("unexpected network approval item: %+v", item)
+	}
+	if item.Drilldown != "/security/network?tab=approvals&proposal_id="+proposalID.String() {
+		t.Fatalf("unexpected network approval route: %s", item.Drilldown)
 	}
 }
 
