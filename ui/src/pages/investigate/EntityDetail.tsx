@@ -135,6 +135,14 @@ export function EntityDetail(): JSX.Element {
   const lifecycleLoading =
     lifecycleQ.isLoading ||
     (safeType === 'ip' && ipTimelineQ.isLoading && lifecycleItems.length === 0);
+  const ipTimelineNotice =
+    safeType === 'ip'
+      ? ipTimelineQ.error
+        ? ipTimelineErrorMessage(ipTimelineQ.error)
+        : ipTimelineQ.data?.degraded
+          ? ipTimelineQ.data.guardrails?.slice(-1)[0] ?? 'Timeline evidence unavailable.'
+          : null
+      : null;
   const headerDetail = useMemo(
     () => detailWithLifecycleEventCount(detailQ.data, lifecycleItems),
     [detailQ.data, lifecycleItems],
@@ -241,9 +249,9 @@ export function EntityDetail(): JSX.Element {
                 </TabsContent>
               )}
               <TabsContent value="timeline">
-                {safeType === 'ip' && ipTimelineQ.error ? (
+                {ipTimelineNotice ? (
                   <Alert variant="warning" className="mb-3">
-                    {ipTimelineErrorMessage(ipTimelineQ.error)}
+                    {ipTimelineNotice}
                   </Alert>
                 ) : null}
                 <InvestigateTimeline
@@ -254,9 +262,9 @@ export function EntityDetail(): JSX.Element {
                 />
               </TabsContent>
               <TabsContent value="raw">
-                {safeType === 'ip' && ipTimelineQ.error ? (
+                {ipTimelineNotice ? (
                   <Alert variant="warning" className="mb-3">
-                    {ipTimelineErrorMessage(ipTimelineQ.error)}
+                    {ipTimelineNotice}
                   </Alert>
                 ) : null}
                 {lifecycleItems.length === 0 ? (
