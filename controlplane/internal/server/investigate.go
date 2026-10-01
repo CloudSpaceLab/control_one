@@ -1384,6 +1384,33 @@ func (s *Server) fanOutFirewallAllow(
 	if err != nil {
 		return nil, fmt.Errorf("list active ip blocks: %w", err)
 	}
+
+	// Cancel any durable block proposal intent before removing agent rules.
+	// Otherwise a fleet/affected desired-state replay could immediately
+	// re-apply the block after the operator has explicitly allowed the IP.
+	if proposalStore, ok := s.store.(ipBlockProposalEntityActionStore); ok {
+		seenActions := make(map[uuid.UUID]struct{}, len(rules))
+		for _, rule := range rules {
+			if rule.EntityActionID == uuid.Nil {
+				continue
+			}
+			if _, seen := seenActions[rule.EntityActionID]; seen {
+				continue
+			}
+			seenActions[rule.EntityActionID] = struct{}{}
+			entry, err := proposalStore.GetIPBlocklistEntryByEntityAction(ctx, rule.EntityActionID)
+			if err != nil {
+				return nil, fmt.Errorf("load block intent before allow: %w", err)
+			}
+			if entry == nil || !blockProposalStatusOpen(entry.Status) {
+				continue
+			}
+			if _, err := proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "rolled_back", nil, ""); err != nil {
+				return nil, fmt.Errorf("cancel block intent before allow: %w", err)
+			}
+		}
+	}
+
 	reason := strings.TrimSpace(row.Reason)
 	if reason == "" {
 		reason = "Manual IP allow"
