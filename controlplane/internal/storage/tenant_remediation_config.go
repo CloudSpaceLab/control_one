@@ -29,13 +29,18 @@ type ChangeWindow struct {
 // auto-remediation. A "default" row is synthesised on GET when no explicit row
 // exists — that default exactly matches the migration defaults.
 type TenantRemediationConfig struct {
-	TenantID                 uuid.UUID
-	MinApprovalSeverity      string
-	ChangeWindows            []ChangeWindow
-	CriticalOverride         bool
-	CircuitBreakerWindowMin  int
-	CircuitBreakerFailPct    int
-	CircuitBreakerMinSamples int
+	TenantID                         uuid.UUID
+	MinApprovalSeverity              string
+	ChangeWindows                    []ChangeWindow
+	CriticalOverride                 bool
+	CircuitBreakerWindowMin          int
+	CircuitBreakerFailPct            int
+	CircuitBreakerMinSamples         int
+	AutoBlockEnabled                 bool
+	AutoBlockMinConfidence           int
+	DefaultIPBlockScope              string
+	DefaultIPBlockTTLSeconds         int
+	RequireCorroboratingThreatIntel  bool
 	// PatchRequiresApproval gates fleet patch deploys behind the proper
 	// approve→dispatch loop (see migration 0092). Default: true — production
 	// tenants land on the safe path. Set to false to keep the legacy
@@ -52,10 +57,15 @@ func DefaultTenantRemediationConfig(tenantID uuid.UUID) TenantRemediationConfig 
 		MinApprovalSeverity:      "high",
 		ChangeWindows:            []ChangeWindow{},
 		CriticalOverride:         true,
-		CircuitBreakerWindowMin:  15,
-		CircuitBreakerFailPct:    30,
-		CircuitBreakerMinSamples: 5,
-		PatchRequiresApproval:    true,
+		CircuitBreakerWindowMin:         15,
+		CircuitBreakerFailPct:           30,
+		CircuitBreakerMinSamples:        5,
+		AutoBlockEnabled:                true,
+		AutoBlockMinConfidence:          100,
+		DefaultIPBlockScope:             "affected",
+		DefaultIPBlockTTLSeconds:        3600,
+		RequireCorroboratingThreatIntel: true,
+		PatchRequiresApproval:           true,
 	}
 }
 
@@ -67,8 +77,13 @@ type UpdateTenantRemediationConfigParams struct {
 	CriticalOverride         *bool
 	CircuitBreakerWindowMin  *int
 	CircuitBreakerFailPct    *int
-	CircuitBreakerMinSamples *int
-	PatchRequiresApproval    *bool
+	CircuitBreakerMinSamples        *int
+	AutoBlockEnabled                *bool
+	AutoBlockMinConfidence          *int
+	DefaultIPBlockScope             *string
+	DefaultIPBlockTTLSeconds        *int
+	RequireCorroboratingThreatIntel *bool
+	PatchRequiresApproval           *bool
 }
 
 // GetTenantRemediationConfig returns the tenant's config, falling back to a
@@ -103,6 +118,11 @@ func (s *Store) GetTenantRemediationConfig(ctx context.Context, tenantID uuid.UU
 		&cfg.CircuitBreakerWindowMin,
 		&cfg.CircuitBreakerFailPct,
 		&cfg.CircuitBreakerMinSamples,
+		&cfg.AutoBlockEnabled,
+		&cfg.AutoBlockMinConfidence,
+		&cfg.DefaultIPBlockScope,
+		&cfg.DefaultIPBlockTTLSeconds,
+		&cfg.RequireCorroboratingThreatIntel,
 		&cfg.PatchRequiresApproval,
 		&cfg.UpdatedAt,
 	); err != nil {
@@ -155,6 +175,27 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 	if cfg.CircuitBreakerMinSamples <= 0 {
 		cfg.CircuitBreakerMinSamples = 5
 	}
+	if cfg.AutoBlockMinConfidence == 0 {
+		cfg.AutoBlockMinConfidence = 100
+	}
+	if cfg.AutoBlockMinConfidence < 70 || cfg.AutoBlockMinConfidence > 100 {
+		return nil, errors.New("auto_block_min_confidence must be between 70 and 100")
+	}
+	cfg.DefaultIPBlockScope = strings.ToLower(strings.TrimSpace(cfg.DefaultIPBlockScope))
+	if cfg.DefaultIPBlockScope == "" {
+		cfg.DefaultIPBlockScope = "affected"
+	}
+	if cfg.DefaultIPBlockScope != "affected" && cfg.DefaultIPBlockScope != "fleet" {
+		return nil, errors.New("default_ip_block_scope must be affected or fleet")
+	}
+	if cfg.DefaultIPBlockTTLSeconds == 0 {
+		cfg.DefaultIPBlockTTLSeconds = 3600
+	}
+	switch cfg.DefaultIPBlockTTLSeconds {
+	case 900, 3600, 86400:
+	default:
+		return nil, errors.New("default_ip_block_ttl_seconds must be 900, 3600, or 86400")
+	}
 
 	if cfg.ChangeWindows == nil {
 		cfg.ChangeWindows = []ChangeWindow{}
@@ -171,17 +212,24 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		INSERT INTO tenant_remediation_config (
 			tenant_id, min_approval_severity, change_windows, critical_override,
 			circuit_breaker_window_min, circuit_breaker_fail_pct, circuit_breaker_min_samples,
+			auto_block_enabled, auto_block_min_confidence, default_ip_block_scope,
+			default_ip_block_ttl_seconds, require_corroborating_threat_intel,
 			patch_requires_approval, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			min_approval_severity       = EXCLUDED.min_approval_severity,
 			change_windows              = EXCLUDED.change_windows,
 			critical_override           = EXCLUDED.critical_override,
 			circuit_breaker_window_min  = EXCLUDED.circuit_breaker_window_min,
 			circuit_breaker_fail_pct    = EXCLUDED.circuit_breaker_fail_pct,
-			circuit_breaker_min_samples = EXCLUDED.circuit_breaker_min_samples,
-			patch_requires_approval     = EXCLUDED.patch_requires_approval,
+			circuit_breaker_min_samples        = EXCLUDED.circuit_breaker_min_samples,
+			auto_block_enabled                = EXCLUDED.auto_block_enabled,
+			auto_block_min_confidence         = EXCLUDED.auto_block_min_confidence,
+			default_ip_block_scope            = EXCLUDED.default_ip_block_scope,
+			default_ip_block_ttl_seconds      = EXCLUDED.default_ip_block_ttl_seconds,
+			require_corroborating_threat_intel = EXCLUDED.require_corroborating_threat_intel,
+			patch_requires_approval            = EXCLUDED.patch_requires_approval,
 			updated_at                  = EXCLUDED.updated_at
 		RETURNING tenant_id, min_approval_severity, change_windows, critical_override,
 		          circuit_breaker_window_min, circuit_breaker_fail_pct,
@@ -194,6 +242,11 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		cfg.CircuitBreakerWindowMin,
 		cfg.CircuitBreakerFailPct,
 		cfg.CircuitBreakerMinSamples,
+		cfg.AutoBlockEnabled,
+		cfg.AutoBlockMinConfidence,
+		cfg.DefaultIPBlockScope,
+		cfg.DefaultIPBlockTTLSeconds,
+		cfg.RequireCorroboratingThreatIntel,
 		cfg.PatchRequiresApproval,
 		now,
 	)
@@ -211,6 +264,11 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 		&out.CircuitBreakerWindowMin,
 		&out.CircuitBreakerFailPct,
 		&out.CircuitBreakerMinSamples,
+		&out.AutoBlockEnabled,
+		&out.AutoBlockMinConfidence,
+		&out.DefaultIPBlockScope,
+		&out.DefaultIPBlockTTLSeconds,
+		&out.RequireCorroboratingThreatIntel,
 		&out.PatchRequiresApproval,
 		&out.UpdatedAt,
 	); err != nil {
