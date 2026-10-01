@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -306,16 +307,18 @@ func (r fieldMapStageRuntime) Type() string { return r.stageType }
 
 func (r fieldMapStageRuntime) Compile(stage ParserStage) (CompiledParserStage, error) {
 	return fieldMapCompiledStage{
-		stageType: r.stageType,
-		mappings:  stringMapConfig(stage.Config, "mappings"),
-		set:       anyMapConfig(stage.Config, "set"),
+		stageType:  r.stageType,
+		mappings:   stringMapConfig(stage.Config, "mappings"),
+		set:        anyMapConfig(stage.Config, "set"),
+		coerceInts: stringSliceConfig(stage.Config, "coerce_int"),
 	}, nil
 }
 
 type fieldMapCompiledStage struct {
-	stageType string
-	mappings  map[string]string
-	set       map[string]any
+	stageType  string
+	mappings   map[string]string
+	set        map[string]any
+	coerceInts []string
 }
 
 func (s fieldMapCompiledStage) Type() string { return s.stageType }
@@ -330,6 +333,17 @@ func (s fieldMapCompiledStage) Apply(event *ParserEvent) error {
 	}
 	for target, value := range s.set {
 		setField(event.Fields, target, value)
+	}
+	for _, field := range s.coerceInts {
+		value, ok := getField(event.Fields, field)
+		if !ok {
+			continue
+		}
+		parsed, err := strconv.Atoi(strings.TrimSpace(fmt.Sprint(value)))
+		if err != nil {
+			return fmt.Errorf("field %q must be integer: %w", field, err)
+		}
+		setField(event.Fields, field, parsed)
 	}
 	return nil
 }
