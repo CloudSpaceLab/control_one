@@ -617,7 +617,7 @@ func (r *redisIPBehaviorWindowStore) addAndRollupRedis(ctx context.Context, tena
 
 func redisIncrementIPBehaviorCounter(ctx context.Context, pipe redis.Pipeliner, key, scope string, b *ipBehaviorBucket, ev *IngestedEvent, ts time.Time, ttl time.Duration) {
 	pipe.HSet(ctx, key, map[string]any{
-		"scope":         scope,
+		"scope":        scope,
 		"src_ip":       b.srcIP,
 		"country_code": b.countryCode,
 		"country":      b.country,
@@ -1482,7 +1482,7 @@ func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID 
 		"ip_cidr":       cidr,
 		"score":         score,
 		"category":      category,
-		"scope":        scope,
+		"scope":         scope,
 		"ttl_seconds":   ttlSeconds,
 		"expires_at":    expiresAt.Format(time.RFC3339),
 		"dispatches":    dispatched,
