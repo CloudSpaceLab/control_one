@@ -42,6 +42,7 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   const degradedMessage = query.data?.degraded
     ? query.data.guardrails.slice(-1)[0] ?? 'Connection evidence unavailable.'
     : null;
+  const evidenceUnavailable = Boolean(query.error || query.data?.degraded);
 
   const { data: allNodes } = useNodes({ tenantId: currentTenantId ?? undefined, limit: 500, offset: 0 });
   const nodesById = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);
@@ -109,13 +110,17 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile label="Lifecycles" value={String(totals.total)} tone="brand" />
-        <KpiTile label="Distinct nodes" value={String(totals.nodes)} tone="info" />
-        <KpiTile label="Bytes in / out" value={`${formatBytes(totals.bytesIn)} / ${formatBytes(totals.bytesOut)}`} tone="accent" />
+        <KpiTile label="Lifecycles" value={evidenceUnavailable ? '—' : String(totals.total)} tone="brand" />
+        <KpiTile label="Distinct nodes" value={evidenceUnavailable ? '—' : String(totals.nodes)} tone="info" />
+        <KpiTile
+          label="Bytes in / out"
+          value={evidenceUnavailable ? '—' : `${formatBytes(totals.bytesIn)} / ${formatBytes(totals.bytesOut)}`}
+          tone="accent"
+        />
         <KpiTile
           label="Threat hits"
-          value={String(totals.threats)}
-          tone={totals.threats > 0 ? 'critical' : 'healthy'}
+          value={evidenceUnavailable ? '—' : String(totals.threats)}
+          tone={evidenceUnavailable ? 'neutral' : totals.threats > 0 ? 'critical' : 'healthy'}
         />
       </div>
 
