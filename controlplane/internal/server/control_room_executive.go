@@ -207,7 +207,7 @@ func (s *Server) buildControlRoomExecutiveOverview(
 	resp.Availability.Attention = attentionAvailable
 
 	if nodes != nil {
-		protection, protectionAvailable := s.controlRoomExecutiveProtection(ctx, nodes, now)
+		protection, protectionAvailable := s.controlRoomExecutiveProtection(ctx, tenantID, nodes, now)
 		resp.Protection = protection
 		resp.Availability.Protection = protectionAvailable
 	}
@@ -671,11 +671,12 @@ func controlRoomExecutivePlanDrilldown(plan storage.ActionPlan) string {
 
 func (s *Server) controlRoomExecutiveProtection(
 	ctx context.Context,
+	tenantID uuid.UUID,
 	nodes []storage.Node,
 	now time.Time,
 ) (controlRoomExecutiveProtection, bool) {
 	out := controlRoomExecutiveProtection{GapTypes: []controlRoomExecutiveProtectionGap{}}
-	services, err := s.store.ListNodeServicesForTenant(ctx, uuidFromNodesTenant(nodes))
+	services, err := s.store.ListNodeServicesForTenant(ctx, tenantID)
 	if err != nil {
 		s.logger.Warn("control room executive services", zap.Error(err))
 		return out, false
@@ -709,15 +710,6 @@ func (s *Server) controlRoomExecutiveProtection(
 		return out.GapTypes[i].Count > out.GapTypes[j].Count
 	})
 	return out, true
-}
-
-func uuidFromNodesTenant(nodes []storage.Node) uuid.UUID {
-	for _, node := range nodes {
-		if node.TenantID != uuid.Nil {
-			return node.TenantID
-		}
-	}
-	return uuid.Nil
 }
 
 func controlRoomExecutiveProtectionGapLabel(state string) string {
