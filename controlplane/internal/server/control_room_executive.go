@@ -199,7 +199,7 @@ func (s *Server) buildControlRoomExecutiveOverview(
 		}
 	}
 
-	response, failedAutomaticPlans, responseAvailable := s.controlRoomExecutiveAutomaticResponse(ctx, tenantID, since)
+	response, failedAutomaticPlans, responseAvailable := s.controlRoomExecutiveAutomaticResponse(ctx, tenantID, since, now)
 	resp.Response = response
 	resp.Availability.Response = responseAvailable
 
@@ -420,6 +420,7 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 	ctx context.Context,
 	tenantID uuid.UUID,
 	since time.Time,
+	until time.Time,
 ) (controlRoomExecutiveResponse, []storage.ActionPlan, bool) {
 	var out controlRoomExecutiveResponse
 	store, ok := s.store.(actionPlanStore)
@@ -438,13 +439,13 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 		if changedAt.IsZero() {
 			changedAt = plan.CreatedAt
 		}
-		if changedAt.Before(since) || !controlRoomExecutiveAutomaticPlan(plan) {
+		if changedAt.Before(since) || !changedAt.Before(until) || !controlRoomExecutiveAutomaticPlan(plan) {
 			continue
 		}
 		switch plan.State {
 		case storage.ActionPlanStateSucceeded, storage.ActionPlanStateVerified:
 			receipts, err := store.ListActionReceipts(ctx, plan.ID)
-			if err != nil || !controlRoomExecutiveSuccessfulReceipt(receipts, since) {
+			if err != nil || !controlRoomExecutiveSuccessfulReceipt(receipts, since, until) {
 				continue
 			}
 			out.HandledAutomatically++
@@ -508,10 +509,10 @@ func controlRoomExecutiveBool(value any) bool {
 	}
 }
 
-func controlRoomExecutiveSuccessfulReceipt(receipts []storage.ActionReceipt, since time.Time) bool {
+func controlRoomExecutiveSuccessfulReceipt(receipts []storage.ActionReceipt, since, until time.Time) bool {
 	for i := len(receipts) - 1; i >= 0; i-- {
 		receipt := receipts[i]
-		if receipt.CreatedAt.Before(since) {
+		if receipt.CreatedAt.Before(since) || !receipt.CreatedAt.Before(until) {
 			continue
 		}
 		if strings.TrimSpace(receipt.Error) != "" {
