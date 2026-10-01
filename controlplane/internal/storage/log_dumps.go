@@ -566,13 +566,41 @@ func (s *Store) MarkLogDumpSourceAvailability(ctx context.Context, tenantID, nod
 }
 
 func (s *Store) ExpireLogDump(ctx context.Context, tenantID, dumpID uuid.UUID, now time.Time) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE agent_log_dumps SET status='expired',claim_token_sha256=NULL,claim_expires_at=NULL
-		WHERE tenant_id=$1 AND id=$2 AND expires_at<=$3 AND status NOT IN ('expired','deleting')`, tenantID, dumpID, now)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	defer func() { _ = tx.Rollback() }()
+
+	var status string
+	var expiresAt time.Time
+	var rawJob sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status, expires_at, job_id
+		FROM agent_log_dumps WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+		tenantID, dumpID).Scan(&status, &expiresAt, &rawJob); err != nil {
+		return false, err
+	}
+	if status == LogDumpStatusExpired || status == LogDumpStatusDeleting || now.Before(expiresAt) {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_log_dumps
+		SET status='expired',claim_token_sha256=NULL,claim_expires_at=NULL
+		WHERE tenant_id=$1 AND id=$2`, tenantID, dumpID); err != nil {
+		return false, err
+	}
+	if rawJob.Valid {
+		jobID, err := uuid.Parse(rawJob.String)
+		if err != nil {
+			return false, fmt.Errorf("parse expired log dump job id: %w", err)
+		}
+		if err := setTerminalLogDumpJobTx(ctx, tx, jobID, JobStatusFailed, "raw log dump expired", now); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) ListLogDumpCleanupCandidates(ctx context.Context, now time.Time, limit int) ([]LogDump, error) {
@@ -617,8 +645,9 @@ func (s *Store) ListTimedOutLogDumps(ctx context.Context, now, startedBefore tim
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+logDumpSelect+` FROM agent_log_dumps
-		WHERE source='node_agent' AND expires_at>$1 AND status IN ('requested','capturing')
-		AND COALESCE(capture_started_at,created_at)<=$2 ORDER BY created_at ASC LIMIT $3`, now, startedBefore, limit)
+		WHERE source='node_agent' AND expires_at>$1 AND status='capturing'
+		AND capture_started_at IS NOT NULL AND capture_started_at<=$2
+		ORDER BY capture_started_at ASC LIMIT $3`, now, startedBefore, limit)
 	if err != nil {
 		return nil, err
 	}

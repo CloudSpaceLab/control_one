@@ -985,6 +985,9 @@ type Server struct {
 	// alert storms. Keyed by "ruleID:nodeID".
 	metricAlertCooldowns   map[string]time.Time
 	metricAlertCooldownsMu sync.Mutex
+
+	logDumpMaintenanceCancel context.CancelFunc
+	logDumpMaintenanceWG     sync.WaitGroup
 }
 
 // deepHealthy reports whether all critical sub-systems are reachable. Used
@@ -3186,6 +3189,7 @@ func (s *Server) Start() error {
 	s.startCorrelationEngine()
 	s.startBehavioralRollup()
 	s.startThreatIntelManager()
+	s.startLogDumpMaintenance()
 	s.webhookBridge.Start(context.Background())
 
 	if !s.cfg.TLS.Enabled {
@@ -3203,6 +3207,7 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
+	s.stopLogDumpMaintenance()
 	if s.webhookBridge != nil {
 		s.webhookBridge.Stop()
 	}
