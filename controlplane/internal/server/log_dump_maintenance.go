@@ -22,10 +22,10 @@ type logDumpMaintenanceStore interface {
 	ListTimedOutLogDumps(context.Context, time.Time, time.Time, int) ([]storage.LogDump, error)
 	FailLogDumpAndJob(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, string, *bool, string, time.Time) error
 	ListLogDumpCleanupCandidates(context.Context, time.Time, int) ([]storage.LogDump, error)
-	ExpireLogDump(context.Context, uuid.UUID, uuid.UUID, time.Time) (bool, error)
-	MarkLogDumpDeleting(context.Context, uuid.UUID) error
-	MarkLogDumpCleanupRetry(context.Context, uuid.UUID, string, time.Time) error
-	DeleteLogDump(context.Context, uuid.UUID) error
+	ExpireLogDump(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) (bool, error)
+	MarkLogDumpDeleting(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	MarkLogDumpCleanupRetry(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, time.Time) error
+	DeleteLogDump(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 }
 
 func (s *Server) startLogDumpMaintenance() {
@@ -98,12 +98,12 @@ func runLogDumpMaintenanceOnce(ctx context.Context, logger *zap.Logger, store lo
 		}
 		d := candidates[i]
 		if d.Status != storage.LogDumpStatusExpired && d.Status != storage.LogDumpStatusDeleting {
-			if _, err := store.ExpireLogDump(ctx, d.TenantID, d.ID, now); err != nil {
+			if _, err := store.ExpireLogDump(ctx, d.TenantID, d.NodeID, d.ID, now); err != nil {
 				logger.Warn("expire log dump", zap.String("dump_id", d.ID.String()), zap.Error(err))
 				continue
 			}
 		}
-		if err := store.MarkLogDumpDeleting(ctx, d.ID); err != nil {
+		if err := store.MarkLogDumpDeleting(ctx, d.TenantID, d.NodeID, d.ID); err != nil {
 			logger.Warn("mark log dump deleting", zap.String("dump_id", d.ID.String()), zap.Error(err))
 			continue
 		}
@@ -115,7 +115,7 @@ func runLogDumpMaintenanceOnce(ctx context.Context, logger *zap.Logger, store lo
 			scheduleLogDumpCleanupRetry(ctx, logger, store, d, now, err)
 			continue
 		}
-		if err := store.DeleteLogDump(ctx, d.ID); err != nil {
+		if err := store.DeleteLogDump(ctx, d.TenantID, d.NodeID, d.ID); err != nil {
 			scheduleLogDumpCleanupRetry(ctx, logger, store, d, now, fmt.Errorf("delete metadata: %w", err))
 		}
 	}
@@ -129,7 +129,7 @@ func scheduleLogDumpCleanupRetry(ctx context.Context, logger *zap.Logger, store 
 	if delay > logDumpCleanupRetryMax {
 		delay = logDumpCleanupRetryMax
 	}
-	if err := store.MarkLogDumpCleanupRetry(ctx, d.ID, cause.Error(), now.Add(delay)); err != nil {
+	if err := store.MarkLogDumpCleanupRetry(ctx, d.TenantID, d.NodeID, d.ID, cause.Error(), now.Add(delay)); err != nil {
 		logger.Warn("schedule log dump cleanup retry", zap.String("dump_id", d.ID.String()), zap.Error(err))
 	}
 }

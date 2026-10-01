@@ -34,7 +34,7 @@ type logDumpStore interface {
 	CreateAgentLogDumpWithJob(context.Context, storage.LogDump, storage.Job) (*storage.LogDump, *storage.Job, error)
 	GetLogDump(context.Context, uuid.UUID, uuid.UUID) (*storage.LogDump, error)
 	ListLogDumps(context.Context, storage.LogDumpFilter, int, int) ([]storage.LogDump, int, error)
-	ExpireLogDump(context.Context, uuid.UUID, uuid.UUID, time.Time) (bool, error)
+	ExpireLogDump(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) (bool, error)
 	MarkControlPlaneLogDumpCaptured(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, int64, int64, bool, time.Time) error
 	FailControlPlaneLogDump(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) error
 }
@@ -460,7 +460,7 @@ func (s *Server) loadReadableLogDump(w http.ResponseWriter, r *http.Request, ten
 func (s *Server) applyLogDumpReadExpiry(ctx context.Context, store logDumpStore, d storage.LogDump) storage.LogDump {
 	now := s.logDumpNow()
 	if d.Expired(now) && d.Status != storage.LogDumpStatusExpired && d.Status != storage.LogDumpStatusDeleting {
-		if changed, err := store.ExpireLogDump(ctx, d.TenantID, d.ID, now); err == nil && changed {
+		if changed, err := store.ExpireLogDump(ctx, d.TenantID, d.NodeID, d.ID, now); err == nil && changed {
 			d.Status = storage.LogDumpStatusExpired
 		}
 	}

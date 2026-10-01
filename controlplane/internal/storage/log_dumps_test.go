@@ -167,7 +167,7 @@ func TestLogDumpExpiryAndTimeoutSelection(t *testing.T) {
 	_, err = store.ClaimLogDump(ctx, tenant.ID, node.ID, dump.ID, job.ID, shaHex("late"), expiredAt, expiredAt.Add(time.Minute))
 	require.ErrorIs(t, err, ErrLogDumpExpired)
 
-	changed, err := store.ExpireLogDump(ctx, tenant.ID, dump.ID, expiredAt)
+	changed, err := store.ExpireLogDump(ctx, tenant.ID, node.ID, dump.ID, expiredAt)
 	require.NoError(t, err)
 	require.True(t, changed)
 	got, err := store.GetLogDump(ctx, tenant.ID, dump.ID)

@@ -29,7 +29,7 @@ func (f *fakeLogDumpHTTPStore) GetLogDump(context.Context, uuid.UUID, uuid.UUID)
 func (f *fakeLogDumpHTTPStore) ListLogDumps(context.Context, storage.LogDumpFilter, int, int) ([]storage.LogDump, int, error) {
 	return nil, 0, nil
 }
-func (f *fakeLogDumpHTTPStore) ExpireLogDump(_ context.Context, _ uuid.UUID, dumpID uuid.UUID, _ time.Time) (bool, error) {
+func (f *fakeLogDumpHTTPStore) ExpireLogDump(_ context.Context, _, _ uuid.UUID, dumpID uuid.UUID, _ time.Time) (bool, error) {
 	f.expired = append(f.expired, dumpID)
 	return true, nil
 }

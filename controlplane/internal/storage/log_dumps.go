@@ -565,7 +565,7 @@ func (s *Store) MarkLogDumpSourceAvailability(ctx context.Context, tenantID, nod
 	return err
 }
 
-func (s *Store) ExpireLogDump(ctx context.Context, tenantID, dumpID uuid.UUID, now time.Time) (bool, error) {
+func (s *Store) ExpireLogDump(ctx context.Context, tenantID, nodeID, dumpID uuid.UUID, now time.Time) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -576,8 +576,8 @@ func (s *Store) ExpireLogDump(ctx context.Context, tenantID, dumpID uuid.UUID, n
 	var expiresAt time.Time
 	var rawJob sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT status, expires_at, job_id
-		FROM agent_log_dumps WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
-		tenantID, dumpID).Scan(&status, &expiresAt, &rawJob); err != nil {
+		FROM agent_log_dumps WHERE tenant_id=$1 AND node_id=$2 AND id=$3 FOR UPDATE`,
+		tenantID, nodeID, dumpID).Scan(&status, &expiresAt, &rawJob); err != nil {
 		return false, err
 	}
 	if status == LogDumpStatusExpired || status == LogDumpStatusDeleting || now.Before(expiresAt) {
@@ -585,7 +585,7 @@ func (s *Store) ExpireLogDump(ctx context.Context, tenantID, dumpID uuid.UUID, n
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_log_dumps
 		SET status='expired',claim_token_sha256=NULL,claim_expires_at=NULL
-		WHERE tenant_id=$1 AND id=$2`, tenantID, dumpID); err != nil {
+		WHERE tenant_id=$1 AND node_id=$2 AND id=$3`, tenantID, nodeID, dumpID); err != nil {
 		return false, err
 	}
 	if rawJob.Valid {
@@ -625,18 +625,18 @@ func (s *Store) ListLogDumpCleanupCandidates(ctx context.Context, now time.Time,
 	return out, rows.Err()
 }
 
-func (s *Store) MarkLogDumpDeleting(ctx context.Context, dumpID uuid.UUID) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE agent_log_dumps SET status='deleting' WHERE id=$1`, dumpID)
+func (s *Store) MarkLogDumpDeleting(ctx context.Context, tenantID, nodeID, dumpID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE agent_log_dumps SET status='deleting' WHERE tenant_id=$1 AND node_id=$2 AND id=$3`, tenantID, nodeID, dumpID)
 	return err
 }
 
-func (s *Store) MarkLogDumpCleanupRetry(ctx context.Context, dumpID uuid.UUID, message string, next time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE agent_log_dumps SET status='deleting',cleanup_attempts=cleanup_attempts+1,cleanup_error=$2,next_cleanup_at=$3 WHERE id=$1`, dumpID, nullableText(message), next)
+func (s *Store) MarkLogDumpCleanupRetry(ctx context.Context, tenantID, nodeID, dumpID uuid.UUID, message string, next time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE agent_log_dumps SET status='deleting',cleanup_attempts=cleanup_attempts+1,cleanup_error=$4,next_cleanup_at=$5 WHERE tenant_id=$1 AND node_id=$2 AND id=$3`, tenantID, nodeID, dumpID, nullableText(message), next)
 	return err
 }
 
-func (s *Store) DeleteLogDump(ctx context.Context, dumpID uuid.UUID) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM agent_log_dumps WHERE id=$1`, dumpID)
+func (s *Store) DeleteLogDump(ctx context.Context, tenantID, nodeID, dumpID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM agent_log_dumps WHERE tenant_id=$1 AND node_id=$2 AND id=$3`, tenantID, nodeID, dumpID)
 	return err
 }
 

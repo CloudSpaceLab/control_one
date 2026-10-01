@@ -33,19 +33,19 @@ func (f *fakeLogDumpMaintenanceStore) FailLogDumpAndJob(_ context.Context, _, _ 
 func (f *fakeLogDumpMaintenanceStore) ListLogDumpCleanupCandidates(context.Context, time.Time, int) ([]storage.LogDump, error) {
 	return f.candidates, nil
 }
-func (f *fakeLogDumpMaintenanceStore) ExpireLogDump(_ context.Context, _ uuid.UUID, dumpID uuid.UUID, _ time.Time) (bool, error) {
+func (f *fakeLogDumpMaintenanceStore) ExpireLogDump(_ context.Context, _, _ uuid.UUID, dumpID uuid.UUID, _ time.Time) (bool, error) {
 	f.expired = append(f.expired, dumpID)
 	return true, nil
 }
-func (f *fakeLogDumpMaintenanceStore) MarkLogDumpDeleting(_ context.Context, dumpID uuid.UUID) error {
+func (f *fakeLogDumpMaintenanceStore) MarkLogDumpDeleting(_ context.Context, _, _ uuid.UUID, dumpID uuid.UUID) error {
 	f.deleting = append(f.deleting, dumpID)
 	return nil
 }
-func (f *fakeLogDumpMaintenanceStore) MarkLogDumpCleanupRetry(_ context.Context, dumpID uuid.UUID, _ string, _ time.Time) error {
+func (f *fakeLogDumpMaintenanceStore) MarkLogDumpCleanupRetry(_ context.Context, _, _ uuid.UUID, dumpID uuid.UUID, _ string, _ time.Time) error {
 	f.retries = append(f.retries, dumpID)
 	return nil
 }
-func (f *fakeLogDumpMaintenanceStore) DeleteLogDump(_ context.Context, dumpID uuid.UUID) error {
+func (f *fakeLogDumpMaintenanceStore) DeleteLogDump(_ context.Context, _, _ uuid.UUID, dumpID uuid.UUID) error {
 	f.deleted = append(f.deleted, dumpID)
 	return nil
 }
