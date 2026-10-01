@@ -1190,6 +1190,17 @@ func (s *Store) ListActiveIPBlocklistEntriesForNode(ctx context.Context, tenantI
 			(LOWER(target_type) = 'node' AND target_id = $2)
 			OR LOWER(target_type) IN ('tenant','fleet')
 			OR LOWER(scope) IN ('tenant','fleet')
+			OR (
+				LOWER(scope) = 'affected'
+				AND entity_action_id IS NOT NULL
+				AND EXISTS (
+					SELECT 1
+					FROM node_firewall_rules nfr
+					WHERE nfr.entity_action_id = ip_blocklist_entries.entity_action_id
+					  AND nfr.node_id = $2
+					  AND nfr.status IN ('pending','applied')
+				)
+			)
 		  )
 		ORDER BY created_at ASC
 		LIMIT $4

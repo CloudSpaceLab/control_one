@@ -35,6 +35,22 @@ const mocks = vi.hoisted(() => {
       beginWebAuthnEnroll: vi.fn(),
       finishWebAuthnEnroll: vi.fn(),
       generateMFARecoveryCodes: vi.fn().mockResolvedValue({ codes: [] }),
+      getTenantRemediationConfig: vi.fn().mockResolvedValue({
+        TenantID: 'tenant-a',
+        MinApprovalSeverity: 'high',
+        ChangeWindows: [],
+        CriticalOverride: true,
+        CircuitBreakerWindowMin: 15,
+        CircuitBreakerFailPct: 30,
+        CircuitBreakerMinSamples: 5,
+        AutoBlockEnabled: true,
+        AutoBlockMinConfidence: 100,
+        DefaultIPBlockScope: 'affected',
+        DefaultIPBlockTTLSeconds: 3600,
+        RequireCorroboratingThreatIntel: true,
+        PatchRequiresApproval: true,
+      }),
+      upsertTenantRemediationConfig: vi.fn(),
       getAdminCapacity: vi.fn().mockResolvedValue({
         disk_used: 64 * 1024 * 1024 * 1024,
         disk_total: 128 * 1024 * 1024 * 1024,
@@ -221,6 +237,62 @@ describe('Settings webhooks', () => {
 
     const link = screen.getByRole('link', { name: /view public trust center/i });
     expect(link).toHaveAttribute('href', '/console/trust/Tenant%20A');
+  });
+});
+
+describe('Settings IP response', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.webhooks = [];
+    const config = {
+      TenantID: 'tenant-a',
+      MinApprovalSeverity: 'high',
+      ChangeWindows: [],
+      CriticalOverride: true,
+      CircuitBreakerWindowMin: 15,
+      CircuitBreakerFailPct: 30,
+      CircuitBreakerMinSamples: 5,
+      AutoBlockEnabled: true,
+      AutoBlockMinConfidence: 100,
+      DefaultIPBlockScope: 'affected' as const,
+      DefaultIPBlockTTLSeconds: 3600 as const,
+      RequireCorroboratingThreatIntel: true,
+      PatchRequiresApproval: true,
+    };
+    mocks.apiClient.getTenantRemediationConfig.mockResolvedValue(config);
+    mocks.apiClient.upsertTenantRemediationConfig.mockImplementation(async (_tenantId, update) => ({
+      ...config,
+      ...update,
+    }));
+  });
+
+  it('loads and saves compact tenant IP response settings', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(screen.getByRole('tab', { name: /security/i }));
+
+    expect(await screen.findByText('Automatic IP blocking')).toBeInTheDocument();
+    expect(screen.getByLabelText(/auto-block high-confidence ips/i)).toBeChecked();
+    expect(screen.getByLabelText(/minimum confidence/i)).toHaveValue(100);
+
+    fireEvent.change(screen.getByLabelText(/minimum confidence/i), { target: { value: '95' } });
+    fireEvent.change(screen.getByLabelText(/default scope/i), { target: { value: 'fleet' } });
+    fireEvent.change(screen.getByLabelText(/block for/i), { target: { value: '86400' } });
+    await user.click(screen.getByLabelText(/require threat-intel match/i));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mocks.apiClient.upsertTenantRemediationConfig).toHaveBeenCalledWith(
+      'tenant-a',
+      expect.objectContaining({
+        AutoBlockEnabled: true,
+        AutoBlockMinConfidence: 95,
+        DefaultIPBlockScope: 'fleet',
+        DefaultIPBlockTTLSeconds: 86400,
+        RequireCorroboratingThreatIntel: false,
+      }),
+    ));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
   });
 });
 

@@ -1,11 +1,8 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
-  ArrowRight,
-  Clock3,
   ExternalLink,
   FileCheck2,
   MoreHorizontal,
-  RotateCcw,
   Shield,
   ShieldOff,
 } from 'lucide-react';
@@ -18,26 +15,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog';
 import { Button } from '../ui/button';
 import { useApiClient } from '../../hooks/useApiClient';
 import { useTenant } from '../../providers/TenantProvider';
 import { entityRoute } from '../../lib/entity';
 import { toast } from 'sonner';
 import { StatusTag } from './StatusTag';
+import type { IPBlockStatus, TenantRemediationConfig } from '../../lib/api';
 import type { StateTone } from './types';
 
-// Consolidated IP response menu used across investigation, alerts, and network
-// tables. It opens a review dialog before dispatching firewall work so scope,
-// TTL, receipt, and rollback expectations are visible before enforcement.
 export interface IpActionMenuProps {
   ip: string;
   /** Optional override for the trigger element. Defaults to a small icon button. */
@@ -47,60 +33,21 @@ export interface IpActionMenuProps {
   showCopyAction?: boolean;
 }
 
+type BlockScope = 'affected' | 'fleet';
+
 type IpResponseIntent = {
-  id: 'block-affected' | 'block-fleet' | 'allow';
+  id: 'block-default' | 'block-affected' | 'block-fleet' | 'allow';
   action: 'block' | 'allow';
-  scope: 'affected' | 'fleet';
-  title: string;
-  menuLabel: string;
-  description: string;
-  safetyClass: string;
+  scope?: BlockScope;
   ttlSeconds?: number;
-  ttlLabel: string;
-  tone: StateTone;
-  confirmLabel: string;
+  reason: string;
 };
 
-const RESPONSE_INTENTS: IpResponseIntent[] = [
-  {
-    id: 'block-affected',
-    action: 'block',
-    scope: 'affected',
-    title: 'Review affected-node block',
-    menuLabel: 'Review affected-node block',
-    description: 'Dispatch only to nodes that have observed this IP. Use this before fleet-wide containment when the blast radius is known.',
-    safetyClass: 'Narrow containment',
-    ttlSeconds: 86400,
-    ttlLabel: '24h TTL',
-    tone: 'warning',
-    confirmLabel: 'Dispatch affected-node block',
-  },
-  {
-    id: 'block-fleet',
-    action: 'block',
-    scope: 'fleet',
-    title: 'Review fleet-wide block',
-    menuLabel: 'Review fleet-wide block',
-    description: 'Dispatch to every enrolled node in this tenant. Reserve for high-confidence threats, blacklist hits, or active spread across groups.',
-    safetyClass: 'Broad containment',
-    ttlSeconds: 86400,
-    ttlLabel: '24h TTL',
-    tone: 'critical',
-    confirmLabel: 'Dispatch fleet-wide block',
-  },
-  {
-    id: 'allow',
-    action: 'allow',
-    scope: 'affected',
-    title: 'Review unblock',
-    menuLabel: 'Review unblock',
-    description: 'Remove the block from affected nodes and keep the audit trail. Use after evidence shows the source is approved or the block is stale.',
-    safetyClass: 'Rollback',
-    ttlLabel: 'Immediate removal',
-    tone: 'info',
-    confirmLabel: 'Dispatch unblock',
-  },
-];
+const ALLOW: IpResponseIntent = {
+  id: 'allow',
+  action: 'allow',
+  reason: 'Manual IP allow',
+};
 
 export function IpActionMenu({
   ip,
@@ -112,7 +59,33 @@ export function IpActionMenu({
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [busy, setBusy] = useState<null | IpResponseIntent['id']>(null);
-  const [reviewIntent, setReviewIntent] = useState<IpResponseIntent | null>(null);
+  const [status, setStatus] = useState<IPBlockStatus | null>(null);
+  const [policy, setPolicy] = useState<TenantRemediationConfig | null>(null);
+  const [stateLoading, setStateLoading] = useState(false);
+  const [statusError, setStatusError] = useState(false);
+
+  const loadState = useCallback(async () => {
+    if (!currentTenantId) {
+      setStatus(null);
+      setPolicy(null);
+      return;
+    }
+    setStateLoading(true);
+    setStatusError(false);
+    const [statusResult, policyResult] = await Promise.allSettled([
+      client.getIPBlockStatus(ip, currentTenantId),
+      client.getTenantRemediationConfig(currentTenantId),
+    ]);
+    if (statusResult.status === 'fulfilled') {
+      setStatus(statusResult.value);
+    } else {
+      setStatusError(true);
+    }
+    if (policyResult.status === 'fulfilled') {
+      setPolicy(policyResult.value);
+    }
+    setStateLoading(false);
+  }, [client, currentTenantId, ip]);
 
   const dispatch = async (intent: IpResponseIntent) => {
     if (!currentTenantId) {
@@ -128,174 +101,223 @@ export function IpActionMenu({
           action: intent.action,
           scope: intent.scope,
           ttl: intent.ttlSeconds,
-          reason: governedReason(intent),
+          reason: intent.reason,
         },
         { tenantId: currentTenantId },
       );
       const dispatched = resp.nodes_dispatched ?? 0;
-      const verb = intent.action === 'block' ? 'Block' : 'Unblock';
       if (dispatched === 0) {
-        toast.warning(`${verb} ${ip}: no nodes affected`, {
-          description: intent.scope === 'affected'
-            ? 'No traffic seen for this IP in the last 7 days. Try fleet-wide scope.'
-            : 'Tenant has no enrolled nodes.',
-        });
+        toast.warning(intent.action === 'block' ? 'No nodes matched this block' : 'No active block found');
       } else {
-        toast.success(`${verb} ${ip}: dispatched to ${dispatched} node${dispatched === 1 ? '' : 's'}`, {
-          description: 'Outcome will appear in Active Blocks once the agents report back.',
-        });
+        toast.success(
+          `${intent.action === 'block' ? 'Block' : 'Allow'} queued · ${dispatched} node${dispatched === 1 ? '' : 's'}`,
+        );
       }
-      setReviewIntent(null);
+      await loadState();
       onActionTaken?.();
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : 'unknown'}`);
+      toast.error(err instanceof Error ? err.message : 'IP action failed');
     } finally {
       setBusy(null);
     }
   };
 
+  const defaultScope = policy?.DefaultIPBlockScope;
+  const defaultTTL = policy?.DefaultIPBlockTTLSeconds;
+  const defaultBlock: IpResponseIntent = {
+    id: 'block-default',
+    action: 'block',
+    scope: defaultScope,
+    ttlSeconds: defaultTTL,
+    reason: 'Manual IP block',
+  };
+  const alternateScope: BlockScope | null = policy
+    ? (defaultScope === 'fleet' ? 'affected' : 'fleet')
+    : null;
+  const alternateBlock: IpResponseIntent | null = alternateScope
+    ? {
+        id: alternateScope === 'fleet' ? 'block-fleet' : 'block-affected',
+        action: 'block',
+        scope: alternateScope,
+        ttlSeconds: defaultTTL,
+        reason: alternateScope === 'fleet' ? 'Manual fleet-wide IP block' : 'Manual affected-node IP block',
+      }
+    : null;
+  const extendFleet: IpResponseIntent = {
+    id: 'block-fleet',
+    action: 'block',
+    scope: 'fleet',
+    ttlSeconds: defaultTTL,
+    reason: 'Manual fleet-wide IP block',
+  };
+
+  const unblockInProgress = status?.state === 'unblocking';
+  const effectiveBlocked = !!status?.active && status.state !== 'failed';
+  const actionsDisabled = !!busy || stateLoading || statusError;
+
   return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          {trigger ?? (
-            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for ${ip}`}>
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          )}
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-72">
-          <DropdownMenuLabel className="flex flex-col gap-1">
-            <span className="font-mono text-xs uppercase tracking-wider">{ip}</span>
-            <span className="text-[0.7rem] normal-case tracking-normal text-text-muted">
-              Governed response: review scope, TTL, receipts, and rollback before dispatch.
-            </span>
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {RESPONSE_INTENTS.map((intent) => (
-            <DropdownMenuItem
-              key={intent.id}
-              disabled={!!busy}
-              onClick={() => setReviewIntent(intent)}
-            >
-              {intent.action === 'allow' ? <ShieldOff className="mr-2 h-4 w-4" /> : <Shield className="mr-2 h-4 w-4" />}
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span>{intent.menuLabel}</span>
-                <span className="text-[0.68rem] text-text-muted">{intent.scope} / {intent.ttlLabel}</span>
+    <DropdownMenu onOpenChange={(open) => {
+      if (open) void loadState();
+    }}>
+      <DropdownMenuTrigger asChild>
+        {trigger ?? (
+          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for ${ip}`}>
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        )}
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="truncate font-mono text-xs">{ip}</span>
+            {!stateLoading && status && (
+              <StatusTag tone={blockStatusTone(status)}>
+                {blockStatusLabel(status)}
+              </StatusTag>
+            )}
+          </div>
+          <div className="text-[0.7rem] font-normal normal-case tracking-normal text-text-muted">
+            {stateLoading
+              ? 'Checking block status…'
+              : statusError
+                ? 'Block status unavailable'
+                : status
+                  ? blockStatusDetail(status)
+                  : 'Select a tenant to view block status'}
+          </div>
+        </DropdownMenuLabel>
+
+        <DropdownMenuSeparator />
+
+        {unblockInProgress ? (
+          <DropdownMenuItem disabled>
+            <ShieldOff className="mr-2 h-4 w-4" />
+            <span>Allow in progress</span>
+          </DropdownMenuItem>
+        ) : !effectiveBlocked ? (
+          <>
+            <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(defaultBlock)}>
+              <Shield className="mr-2 h-4 w-4" />
+              <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                <span>Block IP</span>
+                <span className="text-[0.68rem] text-text-muted">
+                  {policy ? `${scopeShortLabel(defaultScope!)} · ${ttlLabel(defaultTTL)}` : 'Tenant default'}
+                </span>
               </span>
             </DropdownMenuItem>
-          ))}
-          <DropdownMenuSeparator />
+            {alternateBlock && (
+              <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(alternateBlock)}>
+                <Shield className="mr-2 h-4 w-4" />
+                <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                  <span>{alternateScope === 'fleet' ? 'Block fleet-wide' : 'Block affected nodes'}</span>
+                  <span className="text-[0.68rem] text-text-muted">{ttlLabel(defaultTTL)}</span>
+                </span>
+              </DropdownMenuItem>
+            )}
+          </>
+        ) : (
+          <>
+            <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(ALLOW)}>
+              <ShieldOff className="mr-2 h-4 w-4" />
+              <span>Allow IP</span>
+            </DropdownMenuItem>
+            {status?.scope !== 'fleet' && (
+              <DropdownMenuItem disabled={actionsDisabled} onClick={() => void dispatch(extendFleet)}>
+                <Shield className="mr-2 h-4 w-4" />
+                <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                  <span>Extend to fleet</span>
+                  <span className="text-[0.68rem] text-text-muted">{policy ? ttlLabel(defaultTTL) : 'Tenant default'}</span>
+                </span>
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
+
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/security/network?tab=blocks" className="flex items-center">
+            <FileCheck2 className="mr-2 h-4 w-4" />
+            View block details
+          </Link>
+        </DropdownMenuItem>
+
+        {(showInvestigateLink || showCopyAction) && <DropdownMenuSeparator />}
+        {showInvestigateLink && (
           <DropdownMenuItem asChild>
-            <Link to="/security/network?tab=blocks" className="flex items-center">
-              <FileCheck2 className="mr-2 h-4 w-4" />
-              Active block receipts
+            <Link to={entityRoute('ip', ip)} className="flex items-center">
+              <ExternalLink className="mr-2 h-4 w-4" />
+              View in Investigate
             </Link>
           </DropdownMenuItem>
-          {(showInvestigateLink || showCopyAction) && <DropdownMenuSeparator />}
-          {showInvestigateLink && (
-            <DropdownMenuItem asChild>
-              <Link to={entityRoute('ip', ip)} className="flex items-center">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                View in Investigate
-              </Link>
-            </DropdownMenuItem>
-          )}
-          {showCopyAction && (
-            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(ip)}>
-              Copy IP
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <Dialog open={!!reviewIntent} onOpenChange={(open) => !open && setReviewIntent(null)}>
-        {reviewIntent && (
-          <DialogContent className="max-w-xl">
-            <DialogHeader>
-              <DialogTitle>{reviewIntent.title}</DialogTitle>
-              <DialogDescription>
-                {reviewIntent.description} The action is not considered remediated until agent receipts and audit evidence are visible.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <ReviewFact label="Target" value={ip} tone="info" />
-              <ReviewFact label="Scope" value={scopeLabel(reviewIntent.scope)} tone={reviewIntent.scope === 'fleet' ? 'critical' : 'warning'} />
-              <ReviewFact label="TTL" value={reviewIntent.ttlLabel} tone="info" icon={<Clock3 className="h-3.5 w-3.5" />} />
-              <ReviewFact label="Safety class" value={reviewIntent.safetyClass} tone={reviewIntent.tone} />
-            </div>
-
-            <div className="rounded-md border border-border-subtle bg-surface p-3">
-              <p className="mb-2 font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">Required before closure</p>
-              <ul className="space-y-2 text-sm text-text-secondary">
-                <li className="flex gap-2">
-                  <FileCheck2 className="mt-0.5 h-4 w-4 shrink-0 text-brand-400" />
-                  Active Blocks must show node receipts, pending or failed fan-out, and final enforcement status.
-                </li>
-                <li className="flex gap-2">
-                  <RotateCcw className="mt-0.5 h-4 w-4 shrink-0 text-brand-400" />
-                  Rollback path is explicit: dispatch unblock and verify removal receipts before closing the case.
-                </li>
-                <li className="flex gap-2">
-                  <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-brand-400" />
-                  Any fleet-wide action should be backed by blacklist, confidence, or cross-group evidence.
-                </li>
-              </ul>
-            </div>
-
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button variant="ghost" size="sm" type="button">Cancel</Button>
-              </DialogClose>
-              <Button
-                type="button"
-                variant={reviewIntent.tone === 'critical' ? 'danger' : 'primary'}
-                size="sm"
-                loading={busy === reviewIntent.id}
-                onClick={() => void dispatch(reviewIntent)}
-              >
-                {reviewIntent.confirmLabel}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
         )}
-      </Dialog>
-    </>
+        {showCopyAction && (
+          <DropdownMenuItem onClick={() => navigator.clipboard.writeText(ip)}>
+            Copy IP
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
-function ReviewFact({
-  label,
-  value,
-  tone,
-  icon,
-}: {
-  label: string;
-  value: string;
-  tone: StateTone;
-  icon?: JSX.Element;
-}): JSX.Element {
-  return (
-    <div className="rounded-md border border-border-subtle bg-surface p-3">
-      <div className="mb-1 font-mono text-[0.62rem] uppercase tracking-wider text-text-muted">{label}</div>
-      <StatusTag tone={tone} icon={icon}>{value}</StatusTag>
-    </div>
-  );
+function blockStatusLabel(status: IPBlockStatus): string {
+  switch (status.state) {
+    case 'blocking':
+      return 'Blocking';
+    case 'blocked':
+      return 'Blocked';
+    case 'unblocking':
+      return 'Unblocking';
+    case 'partial':
+      return 'Partial';
+    case 'failed':
+      return 'Failed';
+    case 'unblocked':
+    default:
+      return 'Not blocked';
+  }
 }
 
-function scopeLabel(scope: IpResponseIntent['scope']): string {
-  return scope === 'fleet' ? 'Fleet-wide' : 'Affected nodes';
+function blockStatusTone(status: IPBlockStatus): StateTone {
+  switch (status.state) {
+    case 'blocked':
+      return 'healthy';
+    case 'blocking':
+    case 'unblocking':
+      return 'warning';
+    case 'partial':
+    case 'failed':
+      return 'critical';
+    case 'unblocked':
+    default:
+      return 'unknown';
+  }
 }
 
-function governedReason(intent: IpResponseIntent): string {
-  const ttl = intent.ttlSeconds ? `ttl=${intent.ttlSeconds}s` : 'ttl=none';
-  return [
-    `Governed IP response: ${intent.title}`,
-    `scope=${intent.scope}`,
-    ttl,
-    `safety_class=${intent.safetyClass.toLowerCase().replace(/\s+/g, '_')}`,
-    'receipt_required=true',
-    'rollback_required=true',
-  ].join('; ');
+function blockStatusDetail(status: IPBlockStatus): string {
+  if (!status.active) return 'No active Control One block';
+  const provenance = status.provenance === 'auto' ? 'Auto-blocked' : 'Manually blocked';
+  const scope = status.scope === 'fleet' ? 'Fleet-wide' : 'Affected nodes';
+  const coverage = `${status.nodes_applied}/${status.target_nodes} applied`;
+  const pending = status.nodes_pending > 0 ? ` · ${status.nodes_pending} pending` : '';
+  const removing = status.nodes_removing > 0 ? ` · ${status.nodes_removing} removing` : '';
+  const failed = status.nodes_failed > 0 ? ` · ${status.nodes_failed} failed` : '';
+  return `${provenance} · ${scope} · ${coverage}${pending}${removing}${failed}`;
+}
+
+function scopeShortLabel(scope: BlockScope): string {
+  return scope === 'fleet' ? 'Fleet' : 'Affected';
+}
+
+function ttlLabel(seconds?: number): string {
+  switch (seconds) {
+    case 900:
+      return '15m';
+    case 86400:
+      return '24h';
+    case 3600:
+    default:
+      return '1h';
+  }
 }

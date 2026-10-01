@@ -42,6 +42,12 @@ type InvestigateStore interface {
 	EntitySummary(ctx context.Context, tenantID uuid.UUID, entityType, entityID string) (*storage.EntitySummary, error)
 }
 
+type ipResponseStore interface {
+	GetIPBlockStatus(context.Context, uuid.UUID, string) (*storage.IPBlockStatus, error)
+	ListActiveNodeFirewallRulesForIP(context.Context, uuid.UUID, string) ([]storage.NodeFirewallRule, error)
+	QueueNodeFirewallRuleRemoval(context.Context, uuid.UUID, uuid.UUID) error
+}
+
 // investigateBackend extracts the InvestigateStore implementation from
 // the server's main store. Returns nil when not available.
 func (s *Server) investigateBackend() InvestigateStore {
@@ -991,6 +997,12 @@ func (s *Server) handleEntitySubroutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleIPEnrich(w, r, entityID)
+	case "block-status":
+		if entityType != EntityTypeIP {
+			http.Error(w, "block status only supported for ip", http.StatusBadRequest)
+			return
+		}
+		s.handleIPBlockStatus(w, r, entityID)
 	case "tree":
 		if entityType != EntityTypeProcess {
 			http.Error(w, "tree only supported for process", http.StatusBadRequest)
@@ -1008,6 +1020,37 @@ func (s *Server) handleEntitySubroutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+func (s *Server) handleIPBlockStatus(w http.ResponseWriter, r *http.Request, ip string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	tenantID, ok := tenantFromQuery(w, r)
+	if !ok {
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+		return
+	}
+	store, ok := s.store.(ipResponseStore)
+	if !ok {
+		http.Error(w, "ip block status unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	status, err := store.GetIPBlockStatus(r.Context(), tenantID, ip)
+	if err != nil {
+		s.logger.Warn("get ip block status", zap.Error(err), zap.String("ip", ip))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // ===== Tags =====
@@ -1169,6 +1212,30 @@ func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, ent
 	if !ok {
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
+	}
+	if entityType == "ip" && action == "block" {
+		cfg, err := s.store.GetTenantRemediationConfig(r.Context(), tenantID)
+		if err != nil || cfg == nil {
+			if err != nil {
+				s.logger.Warn("load IP response policy", zap.Error(err), zap.String("tenant_id", tenantID.String()))
+			}
+			http.Error(w, "IP response policy unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.TrimSpace(p.Scope) == "" {
+			p.Scope = cfg.DefaultIPBlockScope
+		}
+		p.Scope = strings.ToLower(strings.TrimSpace(p.Scope))
+		if p.Scope != "affected" && p.Scope != "fleet" {
+			http.Error(w, "scope must be affected or fleet", http.StatusBadRequest)
+			return
+		}
+		if p.TTL <= 0 {
+			p.TTL = cfg.DefaultIPBlockTTLSeconds
+		}
+	}
 	userID := principalUserID(s, r.Context(), principal)
 	var creator *uuid.UUID
 	if userID != uuid.Nil {
@@ -1211,15 +1278,23 @@ func (s *Server) handleEntityActions(w http.ResponseWriter, r *http.Request, ent
 	// Other entity types (process, file, host, …) and quarantine remain
 	// audit-only — no node enforcement defined for them yet.
 	resp := entityActionResponse{EntityAction: row, Scope: p.Scope}
-	if entityType == "ip" && (action == "block" || action == "allow") {
+	if entityType == "ip" && action == "block" {
 		nodes, scope, ferr := s.fanOutFirewallAction(r.Context(), tenantID, row, entityID, p.Scope, p.TTL)
 		if ferr != nil {
-			s.logger.Warn("fan out firewall action", zap.Error(ferr), zap.String("entity_id", entityID))
-			// Don't fail the request — the entity_action is recorded; surface
-			// the partial state via the response so the operator can retry.
+			s.logger.Warn("fan out firewall block", zap.Error(ferr), zap.String("entity_id", entityID))
 		}
 		resp.NodesDispatched = len(nodes)
 		resp.Scope = scope
+		for _, n := range nodes {
+			resp.NodeIDs = append(resp.NodeIDs, n.String())
+		}
+	} else if entityType == "ip" && action == "allow" {
+		nodes, ferr := s.fanOutFirewallAllow(r.Context(), tenantID, row, entityID)
+		if ferr != nil {
+			s.logger.Warn("fan out firewall allow", zap.Error(ferr), zap.String("entity_id", entityID))
+		}
+		resp.NodesDispatched = len(nodes)
+		resp.Scope = ""
 		for _, n := range nodes {
 			resp.NodeIDs = append(resp.NodeIDs, n.String())
 		}
@@ -1291,6 +1366,96 @@ func (s *Server) fanOutFirewallAction(
 		dispatched = append(dispatched, nid)
 	}
 	return dispatched, scope, nil
+}
+
+// fanOutFirewallAllow removes every current Control One block rule for an IP.
+// Removal targets the original rule IDs/tags so the agent deletes the rule
+// that is actually installed rather than creating a new allow-tagged rule.
+func (s *Server) fanOutFirewallAllow(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	row *storage.EntityAction,
+	ip string,
+) ([]uuid.UUID, error) {
+	if row == nil {
+		return nil, errors.New("nil entity action row")
+	}
+	store, ok := s.store.(ipResponseStore)
+	if !ok {
+		return nil, errors.New("ip response store unavailable")
+	}
+	rules, err := store.ListActiveNodeFirewallRulesForIP(ctx, tenantID, ip)
+	if err != nil {
+		return nil, fmt.Errorf("list active ip blocks: %w", err)
+	}
+
+	// Cancel any durable block proposal intent before removing agent rules.
+	// Otherwise a fleet/affected desired-state replay could immediately
+	// re-apply the block after the operator has explicitly allowed the IP.
+	if proposalStore, ok := s.store.(ipBlockProposalEntityActionStore); ok {
+		seenActions := make(map[uuid.UUID]struct{}, len(rules))
+		for _, rule := range rules {
+			if rule.EntityActionID == uuid.Nil {
+				continue
+			}
+			if _, seen := seenActions[rule.EntityActionID]; seen {
+				continue
+			}
+			seenActions[rule.EntityActionID] = struct{}{}
+			entry, err := proposalStore.GetIPBlocklistEntryByEntityAction(ctx, rule.EntityActionID)
+			if err != nil {
+				return nil, fmt.Errorf("load block intent before allow: %w", err)
+			}
+			if entry == nil || !blockProposalStatusOpen(entry.Status) {
+				continue
+			}
+			if _, err := proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "rolled_back", nil, ""); err != nil {
+				return nil, fmt.Errorf("cancel block intent before allow: %w", err)
+			}
+		}
+	}
+
+	reason := strings.TrimSpace(row.Reason)
+	if reason == "" {
+		reason = "Manual IP allow"
+	}
+	nodes := make([]uuid.UUID, 0, len(rules))
+	seen := make(map[uuid.UUID]struct{}, len(rules))
+	for _, rule := range rules {
+		payload := firewallJobPayload{
+			NodeFirewallRuleID: rule.ID.String(),
+			NodeID:             rule.NodeID.String(),
+			EntityActionID:     rule.EntityActionID.String(),
+			Action:             "block",
+			Direction:          rule.Direction,
+			Source:             stringPtrValue(rule.Source),
+			Dest:               stringPtrValue(rule.Dest),
+			Port:               intPtrValue(rule.Port),
+			Protocol:           stringPtrValue(rule.Protocol),
+			Tag:                rule.Tag,
+			Reason:             reason,
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		job := &storage.Job{
+			ID:       uuid.New(),
+			TenantID: tenantID,
+			Type:     JobTypeFirewallRuleDelete,
+			Status:   storage.JobStatusQueued,
+			Payload:  payloadBytes,
+		}
+		created, err := s.store.CreateJob(ctx, job, nil)
+		if err != nil {
+			return nodes, fmt.Errorf("create firewall removal job: %w", err)
+		}
+		if err := store.QueueNodeFirewallRuleRemoval(ctx, rule.ID, created.ID); err != nil {
+			return nodes, err
+		}
+		if _, exists := seen[rule.NodeID]; !exists {
+			seen[rule.NodeID] = struct{}{}
+			nodes = append(nodes, rule.NodeID)
+		}
+	}
+	return nodes, nil
 }
 
 // ===== Helpers =====

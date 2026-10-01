@@ -4430,6 +4430,13 @@ export class APIClient {
     );
   }
 
+  async getIPBlockStatus(ip: string, tenantId: string): Promise<IPBlockStatus> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<IPBlockStatus>(
+      `/api/v1/entities/ip/${encodeURIComponent(ip)}/block-status?${search.toString()}`,
+    );
+  }
+
   async listBlockNodes(
     entityActionId: string,
   ): Promise<{ rules: NodeFirewallRule[] }> {
@@ -6598,11 +6605,28 @@ export interface ActiveBlock {
   Reason?: string;
   ExpiresAt?: string;
   CreatedAt: string;
+  Provenance: "auto" | "manual";
   TotalNodes: number;
   NodesApplied: number;
   NodesFailed: number;
   NodesPending: number;
+  NodesRemoving: number;
   NodesRemoved: number;
+}
+
+export interface IPBlockStatus {
+  active: boolean;
+  state: "unblocked" | "blocking" | "blocked" | "unblocking" | "partial" | "failed";
+  scope: "affected" | "fleet";
+  fleet_nodes: number;
+  fleet_target_nodes: number;
+  target_nodes: number;
+  provenance: "auto" | "manual";
+  nodes_applied: number;
+  nodes_pending: number;
+  nodes_removing: number;
+  nodes_failed: number;
+  expires_at?: string;
 }
 
 export interface IPBlockProposal {
@@ -7712,6 +7736,12 @@ export interface TenantRemediationConfig {
   CircuitBreakerWindowMin: number;
   CircuitBreakerFailPct: number;
   CircuitBreakerMinSamples: number;
+  AutoBlockEnabled: boolean;
+  AutoBlockMinConfidence: number;
+  DefaultIPBlockScope: "affected" | "fleet";
+  DefaultIPBlockTTLSeconds: 900 | 3600 | 86400;
+  RequireCorroboratingThreatIntel: boolean;
+  PatchRequiresApproval: boolean;
   UpdatedAt?: string;
 }
 

@@ -57,6 +57,11 @@ type ipBlockProposalQueryStore interface {
 	ListIPBlocklistEntries(context.Context, storage.IPBlocklistEntryFilter, int, int) ([]storage.IPBlocklistEntry, int, error)
 }
 
+type ipBlockCurrentStateStore interface {
+	GetIPBlockStatus(context.Context, uuid.UUID, string) (*storage.IPBlockStatus, error)
+	ListActiveNodeFirewallRulesForIP(context.Context, uuid.UUID, string) ([]storage.NodeFirewallRule, error)
+}
+
 type ipBlockProposalEntityActionStore interface {
 	GetIPBlocklistEntryByEntityAction(context.Context, uuid.UUID) (*storage.IPBlocklistEntry, error)
 	UpdateIPBlocklistEntryStatus(context.Context, uuid.UUID, string, *uuid.UUID, string) (*storage.IPBlocklistEntry, error)
@@ -946,6 +951,7 @@ func (s *Server) detectIPBehaviorBatch(ctx context.Context, tenantID, nodeID uui
 			DedupKey:      dedup,
 		})
 		s.recordIPBehaviorFinding(ctx, tenantID, nodeID, dedup, b, score, sev, category, msg, details)
+		s.maybeAutoBlockIPBehavior(ctx, tenantID, nodeID, b, score, category)
 		if score >= 100 {
 			s.openIPBehaviorConfidenceAlert(ctx, tenantID, nodeID, dedup, b, score, sev, category, msg, details)
 		}
@@ -1294,7 +1300,6 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 	})
 	if err != nil {
 		if errors.Is(err, storage.ErrAlertDeduped) {
-			s.ensureAutoBlockForConfidenceAlert(ctx, tenantID, nodeID, b, score, category, summary)
 			return
 		}
 		if s.logger != nil {
@@ -1320,20 +1325,30 @@ func (s *Server) openIPBehaviorConfidenceAlert(ctx context.Context, tenantID, no
 		NodeID:   nodeArg,
 		Payload:  payload,
 	})
-	s.ensureAutoBlockForConfidenceAlert(ctx, tenantID, nodeID, b, score, category, summary)
 }
 
-func (s *Server) ensureAutoBlockForConfidenceAlert(ctx context.Context, tenantID, nodeID uuid.UUID, b *ipBehaviorBucket, score int, category, summary string) {
-	if s == nil || s.store == nil || tenantID == uuid.Nil || nodeID == uuid.Nil || b == nil || score < 100 {
+func (s *Server) maybeAutoBlockIPBehavior(ctx context.Context, tenantID, nodeID uuid.UUID, b *ipBehaviorBucket, score int, category string) {
+	if s == nil || s.store == nil || tenantID == uuid.Nil || b == nil || score < 70 {
 		return
 	}
 	if strings.TrimSpace(b.srcIP) == "" || net.ParseIP(b.srcIP) == nil {
 		return
 	}
-	if !strings.EqualFold(category, "known_malicious_source") && b.threatScore < 100 {
+	cfg, err := s.store.GetTenantRemediationConfig(ctx, tenantID)
+	if err != nil || cfg == nil {
+		if s.logger != nil && err != nil {
+			s.logger.Warn("load IP auto-block policy", zap.Error(err), zap.String("tenant_id", tenantID.String()))
+		}
+		return // fail closed: never auto-enforce when tenant policy cannot be read
+	}
+	if !cfg.AutoBlockEnabled || score < cfg.AutoBlockMinConfidence {
 		return
 	}
-	store, ok := s.store.(ipBlockProposalStore)
+	if cfg.RequireCorroboratingThreatIntel && b.threatScore <= 0 {
+		return
+	}
+
+	proposalStore, ok := s.store.(ipBlockProposalStore)
 	if !ok {
 		return
 	}
@@ -1343,86 +1358,253 @@ func (s *Server) ensureAutoBlockForConfidenceAlert(ctx context.Context, tenantID
 	}
 	if protected := s.protectedIPBlockReason(ctx, tenantID, cidr); protected != "" {
 		if s.logger != nil {
-			s.logger.Warn("skip automatic threat-intel block for protected target", zap.String("ip_cidr", cidr), zap.String("reason", protected))
+			s.logger.Warn("skip automatic IP block for protected target", zap.String("ip_cidr", cidr), zap.String("reason", protected))
 		}
 		return
 	}
 	if status, msg := s.blockProposalSafetyViolation(ctx, tenantID, b.serverGroup); status != 0 {
 		if s.logger != nil {
-			s.logger.Warn("skip automatic threat-intel block: safety gate", zap.Int("status", status), zap.String("reason", msg), zap.String("ip_cidr", cidr))
+			s.logger.Warn("skip automatic IP block: safety gate", zap.Int("status", status), zap.String("reason", msg), zap.String("ip_cidr", cidr))
 		}
 		return
 	}
-	if query, ok := s.store.(ipBlockProposalQueryStore); ok {
-		rows, _, err := query.ListIPBlocklistEntries(ctx, storage.IPBlocklistEntryFilter{
-			TenantID:   tenantID,
-			IPCIDR:     cidr,
-			TargetType: "node",
-			TargetID:   nodeID,
-		}, 20, 0)
-		if err == nil {
-			for _, row := range rows {
-				switch strings.ToLower(strings.TrimSpace(row.Status)) {
-				case "proposed", "approved", "canary", "dispatching", "active":
-					return
+
+	scope := strings.ToLower(strings.TrimSpace(cfg.DefaultIPBlockScope))
+	if scope != "fleet" {
+		scope = "affected"
+	}
+	ttlSeconds := cfg.DefaultIPBlockTTLSeconds
+	if ttlSeconds <= 0 {
+		ttlSeconds = 3600
+	}
+
+	// Never race an explicit operator allow that is still removing rules.
+	// Once removal completes, new qualifying evidence may be evaluated again.
+	var currentState *storage.IPBlockStatus
+	if stateStore, ok := s.store.(ipBlockCurrentStateStore); ok {
+		currentState, _ = stateStore.GetIPBlockStatus(ctx, tenantID, b.srcIP)
+		if currentState != nil && currentState.State == "unblocking" {
+			return
+		}
+	}
+
+	// Fleet policy is a single tenant-wide intent; do not start another
+	// while one is already active or in flight. Affected scope is incremental:
+	// later observations may add newly affected nodes, so rule-level coverage
+	// below is the authoritative de-duplication mechanism.
+	if scope == "fleet" {
+		if query, ok := s.store.(ipBlockProposalQueryStore); ok {
+			rows, _, queryErr := query.ListIPBlocklistEntries(ctx, storage.IPBlocklistEntryFilter{
+				TenantID: tenantID,
+				IPCIDR:   cidr,
+			}, 100, 0)
+			if queryErr == nil {
+				for _, row := range rows {
+					if !autoBlockScopeMatches(row, scope) {
+						continue
+					}
+					switch strings.ToLower(strings.TrimSpace(row.Status)) {
+					case "proposed", "approved", "canary", "dispatching", "active":
+						return
+					}
 				}
 			}
 		}
+		if currentState != nil &&
+			(currentState.State == "blocked" || currentState.State == "blocking") &&
+			currentState.Scope == "fleet" {
+			return
+		}
 	}
+
+	targets, err := s.autoBlockTargets(ctx, tenantID, nodeID, b.srcIP, scope, b.serverGroup)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("resolve automatic IP block targets", zap.String("ip_cidr", cidr), zap.Error(err))
+		}
+		return
+	}
+	skip := s.activeIPBlockNodeIDs(ctx, tenantID, b.srcIP)
+	targets = filterAutoBlockTargets(targets, skip)
+	if len(targets) == 0 {
+		return
+	}
+
 	now := time.Now().UTC()
-	expiresAt := now.Add(time.Hour)
-	reason := strings.TrimSpace(summary)
-	if reason == "" {
-		reason = fmt.Sprintf("100%% confidence known malicious source %s", cidr)
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+	targetType := "affected"
+	if scope == "fleet" {
+		targetType = "tenant"
 	}
-	entry, err := store.CreateIPBlocklistEntry(ctx, storage.CreateIPBlocklistEntryParams{
+	reason := fmt.Sprintf("policy:auto; confidence=%d; threat_score=%d; category=%s", score, b.threatScore, category)
+	entry, err := proposalStore.CreateIPBlocklistEntry(ctx, storage.CreateIPBlocklistEntryParams{
 		TenantID:    tenantID,
 		IPCIDR:      cidr,
-		Scope:       "node",
-		TargetType:  "node",
-		TargetID:    &nodeID,
+		Scope:       scope,
+		TargetType:  targetType,
 		ServerGroup: b.serverGroup,
 		App:         b.app,
 		Enforcement: "firewall",
-		Reason:      "Auto-block: " + reason,
+		Reason:      reason,
 		Score:       score,
 		ExpiresAt:   &expiresAt,
 	})
 	if err != nil {
 		if s.logger != nil {
-			s.logger.Warn("create automatic threat-intel block", zap.String("ip_cidr", cidr), zap.Error(err))
+			s.logger.Warn("create automatic IP block", zap.String("ip_cidr", cidr), zap.Error(err))
 		}
 		return
 	}
 	action, err := s.recordBlockProposalEntityAction(ctx, entry, nil, now)
 	if err != nil {
-		_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "record entity action: "+err.Error())
+		_, _ = proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "record entity action: "+err.Error())
 		return
 	}
-	if _, err := store.SetIPBlocklistEntryEntityAction(ctx, entry.ID, action.ID); err != nil && s.logger != nil {
-		s.logger.Warn("link automatic threat-intel block action", zap.String("block_entry_id", entry.ID.String()), zap.Error(err))
+	linked, err := proposalStore.SetIPBlocklistEntryEntityAction(ctx, entry.ID, action.ID)
+	if err != nil {
+		_, _ = proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "link entity action: "+err.Error())
+		return
 	}
-	if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "dispatching", nil, ""); err != nil && s.logger != nil {
-		s.logger.Warn("mark automatic threat-intel block dispatching", zap.String("block_entry_id", entry.ID.String()), zap.Error(err))
-	}
-	if dispatched, err := s.dispatchBlockProposalToNode(ctx, entry, action.ID, nodeID); err != nil {
-		_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
-		if s.logger != nil {
-			s.logger.Warn("dispatch automatic threat-intel block", zap.String("ip_cidr", cidr), zap.Error(err))
+	entry = linked
+
+	dispatched := 0
+	groups := []string{}
+	if scope == "fleet" && s.blockProposalCanaryEnabled() {
+		dispatched, groups, err = s.dispatchAutoBlockCanary(ctx, entry, action.ID, targets)
+		if err == nil && dispatched > 0 {
+			_, err = proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "canary", nil, "")
 		}
-	} else if dispatched == 0 {
-		_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "no firewall dispatch target")
 	} else {
-		s.recordAudit(ctx, s.systemActor(), tenantID, "network.block_proposal.auto_dispatched", "ip_blocklist_entry", entry.ID.String(), map[string]any{
-			"ip_cidr":      cidr,
-			"node_id":      nodeID.String(),
-			"score":        score,
-			"category":     category,
-			"expires_at":   expiresAt.Format(time.RFC3339),
-			"dispatches":   dispatched,
-			"threat_score": b.threatScore,
-		})
+		dispatched, err = s.dispatchAutoBlockTargets(ctx, entry, action.ID, targets)
+		if err == nil && dispatched > 0 {
+			_, err = proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "dispatching", nil, "")
+		}
 	}
+	if err != nil {
+		_, _ = proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
+		return
+	}
+	if dispatched == 0 {
+		_, _ = proposalStore.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, "no eligible enforcement targets")
+		return
+	}
+	s.recordAudit(ctx, s.systemActor(), tenantID, "network.block_proposal.auto_dispatched", "ip_blocklist_entry", entry.ID.String(), map[string]any{
+		"ip_cidr":       cidr,
+		"score":         score,
+		"category":      category,
+		"scope":         scope,
+		"ttl_seconds":   ttlSeconds,
+		"expires_at":    expiresAt.Format(time.RFC3339),
+		"dispatches":    dispatched,
+		"threat_score":  b.threatScore,
+		"canary_groups": groups,
+	})
+}
+
+func autoBlockScopeMatches(entry storage.IPBlocklistEntry, desired string) bool {
+	scope := strings.ToLower(strings.TrimSpace(entry.Scope))
+	target := strings.ToLower(strings.TrimSpace(entry.TargetType))
+	if desired == "fleet" {
+		return scope == "fleet" || scope == "tenant" || target == "fleet" || target == "tenant"
+	}
+	return scope == "affected" || target == "affected"
+}
+
+func (s *Server) autoBlockTargets(ctx context.Context, tenantID, nodeID uuid.UUID, ip, scope, serverGroup string) ([]storage.Node, error) {
+	active, err := s.activeTenantNodes(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	entry := &storage.IPBlocklistEntry{ServerGroup: serverGroup}
+	active = filterNodesForBlockProposalServerGroup(active, entry)
+	if scope == "fleet" {
+		return active, nil
+	}
+
+	affectedIDs, err := s.resolveAffectedNodesForIP(ctx, tenantID.String(), ip)
+	if err != nil {
+		if nodeID == uuid.Nil {
+			return nil, err
+		}
+		affectedIDs = []uuid.UUID{nodeID}
+	}
+	if len(affectedIDs) == 0 && nodeID != uuid.Nil {
+		affectedIDs = []uuid.UUID{nodeID}
+	}
+	wanted := make(map[uuid.UUID]struct{}, len(affectedIDs))
+	for _, id := range affectedIDs {
+		wanted[id] = struct{}{}
+	}
+	out := make([]storage.Node, 0, len(wanted))
+	for _, node := range active {
+		if _, ok := wanted[node.ID]; ok {
+			out = append(out, node)
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) activeIPBlockNodeIDs(ctx context.Context, tenantID uuid.UUID, ip string) map[uuid.UUID]struct{} {
+	out := map[uuid.UUID]struct{}{}
+	store, ok := s.store.(ipBlockCurrentStateStore)
+	if !ok {
+		return out
+	}
+	rules, err := store.ListActiveNodeFirewallRulesForIP(ctx, tenantID, ip)
+	if err != nil {
+		return out
+	}
+	for _, rule := range rules {
+		if strings.EqualFold(rule.Status, "applied") || strings.EqualFold(rule.Status, "pending") {
+			out[rule.NodeID] = struct{}{}
+		}
+	}
+	return out
+}
+
+func filterAutoBlockTargets(nodes []storage.Node, skip map[uuid.UUID]struct{}) []storage.Node {
+	if len(skip) == 0 {
+		return nodes
+	}
+	out := make([]storage.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if _, exists := skip[node.ID]; !exists {
+			out = append(out, node)
+		}
+	}
+	return out
+}
+
+func (s *Server) dispatchAutoBlockTargets(ctx context.Context, entry *storage.IPBlocklistEntry, actionID uuid.UUID, targets []storage.Node) (int, error) {
+	dispatched := 0
+	for _, node := range targets {
+		n, err := s.dispatchBlockProposalToNode(ctx, entry, actionID, node.ID)
+		if err != nil {
+			return dispatched, err
+		}
+		dispatched += n
+	}
+	return dispatched, nil
+}
+
+func (s *Server) dispatchAutoBlockCanary(ctx context.Context, entry *storage.IPBlocklistEntry, actionID uuid.UUID, targets []storage.Node) (int, []string, error) {
+	selected := selectCanaryNodesByServerGroup(targets, s.blockCanaryNodesPerServerGroup())
+	groups := sortedCanaryGroups(selected)
+	dispatched := 0
+	for _, group := range groups {
+		for _, node := range selected[group] {
+			n, err := s.dispatchBlockProposalToNode(ctx, entry, actionID, node.ID)
+			if err != nil {
+				return dispatched, groups, err
+			}
+			dispatched += n
+		}
+	}
+	return dispatched, groups, nil
+}
+
+func isAutoBlockEntry(entry *storage.IPBlocklistEntry) bool {
+	return entry != nil && !entry.ApprovedBy.Valid && strings.HasPrefix(strings.TrimSpace(entry.Reason), "policy:auto;")
 }
 
 func (s *Server) backfillIPBehaviorConfidenceAlerts(ctx context.Context, findings []storage.IPBehaviorFinding) {
@@ -3380,6 +3562,33 @@ func (s *Server) refreshBlockProposalEnforcementStatus(ctx context.Context, entr
 		return
 	}
 	if strings.EqualFold(entry.Status, "canary") {
+		if !isAutoBlockEntry(entry) || counters.pending > 0 || counters.applied == 0 {
+			return
+		}
+		if reason := s.blockProposalCanaryFailureReason(ctx, entry); reason != "" {
+			_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, reason)
+			return
+		}
+		skip := s.activeIPBlockNodeIDs(ctx, entry.TenantID, entry.IPCIDR)
+		dispatched, err := s.dispatchBlockProposalToTenantNodesExcluding(ctx, entry, entry.EntityActionID.UUID, skip)
+		if err != nil {
+			_, _ = store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, "failed", nil, err.Error())
+			return
+		}
+		nextStatus := "dispatching"
+		if dispatched == 0 {
+			nextStatus = "active"
+		}
+		if _, err := store.UpdateIPBlocklistEntryStatus(ctx, entry.ID, nextStatus, nil, ""); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("promote automatic block canary", zap.String("block_entry_id", entry.ID.String()), zap.Error(err))
+			}
+			return
+		}
+		s.recordAudit(ctx, s.systemActor(), entry.TenantID, "network.block_proposal.auto_canary_promoted", "ip_blocklist_entry", entry.ID.String(), map[string]any{
+			"ip_cidr":    entry.IPCIDR,
+			"dispatched": dispatched,
+		})
 		return
 	}
 	if counters.pending == 0 && counters.applied > 0 {

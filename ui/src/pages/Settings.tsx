@@ -17,6 +17,7 @@ import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { AISettingsTab } from '../components/settings/AISettingsTab';
 import { SMTPSettingsTab } from '../components/settings/SMTPSettingsTab';
+import { IPResponseSettings } from '../components/settings/IPResponseSettings';
 import { KeyRound, Shield, Trash2 } from 'lucide-react';
 import { useHref } from 'react-router-dom';
 
@@ -963,6 +964,8 @@ export function Settings(): JSX.Element {
         </TabsContent>
 
         <TabsContent value="security" className="mt-4 flex flex-col gap-4">
+          <IPResponseSettings tenantId={currentTenantId} />
+
           <Panel
             padding="md"
             eyebrow="MFA / WEBAUTHN"
