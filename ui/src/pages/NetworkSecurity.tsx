@@ -70,7 +70,7 @@ export function NetworkSecurity(): JSX.Element {
           <TabsTrigger className="w-full sm:w-auto" value="threats">Threat feeds</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="connections">Connections</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="ip-behavior">IP behavior</TabsTrigger>
-          <TabsTrigger className="w-full sm:w-auto" value="approvals">Approval queue</TabsTrigger>
+          <TabsTrigger className="w-full sm:w-auto" value="approvals">Approvals</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="blocks">Active blocks</TabsTrigger>
           <TabsTrigger className="w-full sm:w-auto" value="firewall">Firewall</TabsTrigger>
         </TabsList>
@@ -755,7 +755,7 @@ function BlockApprovalQueue(): JSX.Element {
     }
   }, [client, decision, decisionReason, refresh]);
 
-  if (!currentTenantId) return <EmptyState title="Select a tenant" description="Choose a tenant to review pending response proposals." />;
+  if (!currentTenantId) return <EmptyState title="Select a tenant" description="Choose a tenant to review block approvals." />;
 
   return (
     <div className="space-y-4">
