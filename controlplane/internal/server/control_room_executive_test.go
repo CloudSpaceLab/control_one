@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -42,10 +43,12 @@ func controlRoomExecutiveHarness(t *testing.T, role, token string) (*Server, *fa
 
 type executiveRuleSummaryStore struct {
 	*fakeStore
-	summary        storage.RuleViolationSummary
-	err            error
-	blockProposals []storage.IPBlocklistEntry
-	portRule       *storage.PortMonitoringRule
+	summary                storage.RuleViolationSummary
+	err                    error
+	blockProposals         []storage.IPBlocklistEntry
+	portRule               *storage.PortMonitoringRule
+	predictiveAvailability storage.PredictiveHealthAvailability
+	atRiskNodes            []storage.AtRiskNodeRow
 }
 
 func (s *executiveRuleSummaryStore) GetPortRule(_ context.Context, _ uuid.UUID) (*storage.PortMonitoringRule, error) {
@@ -112,13 +115,6 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 			continue
 		}
 		out.HandledAutomatically++
-		reason := strings.TrimSpace(fmt.Sprint(plan.Diff["reason"]))
-		if reason == "" {
-			reason = strings.TrimSpace(fmt.Sprint(plan.SourceRef["reason"]))
-		}
-		if alertID, ok := controlRoomExecutiveProposalAlertID(reason); ok {
-			out.HandledAlertIDs = append(out.HandledAlertIDs, alertID)
-		}
 		domain := strings.ToLower(strings.TrimSpace(plan.Domain))
 		action := strings.ToLower(strings.TrimSpace(plan.ActionKind))
 		switch {
@@ -162,6 +158,225 @@ func fakeSuccessfulAutomaticReceipt(receipts []storage.ActionReceipt, since, unt
 		return receipt.State == storage.ActionPlanStateSucceeded || receipt.State == storage.ActionPlanStateVerified
 	}
 	return false
+}
+
+func (s *executiveRuleSummaryStore) GetExecutiveAttentionSummary(
+	_ context.Context,
+	tenantID uuid.UUID,
+	since time.Time,
+	until time.Time,
+	itemLimit int,
+) (storage.ExecutiveAttentionSummary, error) {
+	out := storage.ExecutiveAttentionSummary{Items: []storage.ExecutiveAttentionItem{}}
+	if itemLimit <= 0 {
+		itemLimit = 8
+	}
+	excluded := map[uuid.UUID]struct{}{}
+	linkedAlerts := map[uuid.UUID]storage.Alert{}
+
+	for _, proposal := range s.blockProposals {
+		if proposal.TenantID != tenantID || proposal.Status != "proposed" {
+			continue
+		}
+		if alertID, ok := fakeExecutiveAlertIDFromReason(proposal.Reason); ok {
+			excluded[alertID] = struct{}{}
+			for _, alert := range s.alerts {
+				if alert.ID == alertID && alert.TenantID == tenantID {
+					linkedAlerts[alertID] = alert
+					break
+				}
+			}
+		}
+	}
+	for _, plan := range s.actionPlans {
+		if plan.TenantID != tenantID || !fakeAutomaticResponsePlan(plan) {
+			continue
+		}
+		changedAt := plan.UpdatedAt
+		if changedAt.IsZero() {
+			changedAt = plan.CreatedAt
+		}
+		if changedAt.Before(since) || !changedAt.Before(until) {
+			continue
+		}
+		if plan.State == storage.ActionPlanStateSucceeded || plan.State == storage.ActionPlanStateVerified {
+			if fakeSuccessfulAutomaticReceipt(s.actionReceipts[plan.ID], since, until) {
+				reason := strings.TrimSpace(fmt.Sprint(plan.Diff["reason"]))
+				if reason == "" {
+					reason = strings.TrimSpace(fmt.Sprint(plan.SourceRef["reason"]))
+				}
+				if alertID, ok := fakeExecutiveAlertIDFromReason(reason); ok {
+					excluded[alertID] = struct{}{}
+				}
+			}
+		}
+	}
+
+	for _, alert := range s.alerts {
+		if alert.TenantID != tenantID || (alert.State != "open" && alert.State != "acked") {
+			continue
+		}
+		if _, skip := excluded[alert.ID]; skip {
+			continue
+		}
+		out.Reviews++
+		if strings.EqualFold(alert.Severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: alert.ID, Kind: "review", Source: "alert",
+			Severity: alert.Severity, Domain: "alerts",
+			AlertTitle: alert.Title, AlertSummary: alert.Summary.String,
+			CreatedAt: alert.OpenedAt,
+		})
+	}
+
+	for _, approval := range s.patchApprovals {
+		if approval.TenantID != tenantID || approval.Status != storage.ApprovalStatusPending {
+			continue
+		}
+		out.Approvals++
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: approval.ID, Kind: "approval", Source: "patch",
+			Severity: "medium", Domain: "patch",
+			NodeHostname: fakeExecutiveNodeHostname(s.fakeStore, tenantID, approval.NodeID),
+			Mode: approval.Mode, CreatedAt: approval.CreatedAt,
+		})
+	}
+	for _, approval := range s.remediationApprovals {
+		if approval.TenantID != tenantID || approval.Status != storage.ApprovalStatusPending {
+			continue
+		}
+		severity := firstNonEmptyIPBehavior(approval.Severity, "high")
+		out.Approvals++
+		if strings.EqualFold(severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: approval.ID, Kind: "approval", Source: "remediation",
+			Severity: severity, Domain: "compliance",
+			NodeHostname: fakeExecutiveNodeHostname(s.fakeStore, tenantID, approval.NodeID),
+			RuleID: approval.RuleID, CreatedAt: approval.CreatedAt,
+		})
+	}
+	for _, proposal := range s.blockProposals {
+		if proposal.TenantID != tenantID || proposal.Status != "proposed" {
+			continue
+		}
+		severity := fakeExecutiveScoreSeverity(proposal.Score)
+		if alertID, ok := fakeExecutiveAlertIDFromReason(proposal.Reason); ok {
+			if alert, exists := linkedAlerts[alertID]; exists &&
+				controlRoomSeverityRank(alert.Severity) > controlRoomSeverityRank(severity) {
+				severity = alert.Severity
+			}
+		}
+		out.Approvals++
+		if strings.EqualFold(severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: proposal.ID, Kind: "approval", Source: "network",
+			Severity: severity, Domain: "network",
+			IPCIDR: proposal.IPCIDR, Reason: proposal.Reason, CreatedAt: proposal.CreatedAt,
+		})
+	}
+	for _, plan := range s.actionPlans {
+		if plan.TenantID != tenantID || plan.State != storage.ActionPlanStateFailed || !fakeAutomaticResponsePlan(plan) {
+			continue
+		}
+		changedAt := plan.UpdatedAt
+		if changedAt.IsZero() {
+			changedAt = plan.CreatedAt
+		}
+		if changedAt.Before(since) || !changedAt.Before(until) {
+			continue
+		}
+		severity := firstNonEmptyIPBehavior(plan.Risk, "medium")
+		out.Interventions++
+		if strings.EqualFold(severity, "critical") {
+			out.Critical++
+		}
+		out.Items = append(out.Items, storage.ExecutiveAttentionItem{
+			ID: plan.ID, Kind: "intervention", Source: "automatic_response",
+			Severity: severity, Domain: firstNonEmptyIPBehavior(plan.Domain, "automation"),
+			ActionDomain: plan.Domain, ActionKind: plan.ActionKind, CreatedAt: changedAt,
+		})
+	}
+
+	out.Total = out.Reviews + out.Approvals + out.Interventions
+	sort.SliceStable(out.Items, func(i, j int) bool {
+		left := controlRoomSeverityRank(out.Items[i].Severity)
+		right := controlRoomSeverityRank(out.Items[j].Severity)
+		if left == right {
+			return out.Items[i].CreatedAt.After(out.Items[j].CreatedAt)
+		}
+		return left > right
+	})
+	if len(out.Items) > itemLimit {
+		out.Items = out.Items[:itemLimit]
+	}
+	return out, nil
+}
+
+func (s *executiveRuleSummaryStore) GetPredictiveHealthAvailability(
+	_ context.Context,
+	_ uuid.UUID,
+	_ time.Time,
+) (storage.PredictiveHealthAvailability, error) {
+	return s.predictiveAvailability, nil
+}
+
+func (s *executiveRuleSummaryStore) ListAtRiskNodes(
+	_ context.Context,
+	tenantID uuid.UUID,
+	_ int,
+) ([]storage.AtRiskNodeRow, error) {
+	out := make([]storage.AtRiskNodeRow, 0, len(s.atRiskNodes))
+	for _, row := range s.atRiskNodes {
+		if row.TenantID == tenantID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func fakeExecutiveAlertIDFromReason(reason string) (uuid.UUID, bool) {
+	const marker = "alert_id="
+	index := strings.Index(reason, marker)
+	if index < 0 {
+		return uuid.Nil, false
+	}
+	value := reason[index+len(marker):]
+	if end := strings.IndexByte(value, ';'); end >= 0 {
+		value = value[:end]
+	}
+	id, err := uuid.Parse(strings.TrimSpace(value))
+	return id, err == nil && id != uuid.Nil
+}
+
+func fakeExecutiveNodeHostname(store *fakeStore, tenantID, nodeID uuid.UUID) string {
+	if store == nil {
+		return ""
+	}
+	for _, node := range store.nodes {
+		if node.ID == nodeID && node.TenantID == tenantID {
+			return node.Hostname
+		}
+	}
+	return ""
+}
+
+func fakeExecutiveScoreSeverity(score int) string {
+	switch {
+	case score >= 100:
+		return "critical"
+	case score >= 80:
+		return "high"
+	case score >= 50:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func (s *executiveRuleSummaryStore) ListIPBlocklistEntries(
@@ -639,18 +854,12 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 	}}
 	srv.store = &executiveRuleSummaryStore{fakeStore: base}
 
-	got, failed, handledAlertIDs, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
+	got, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
 	if !available {
 		t.Fatal("automatic response aggregation should be available")
 	}
 	if got.HandledAutomatically != 30 || got.Remediated != 30 {
 		t.Fatalf("automatic response counts=%+v, want 30 verified remediations", got)
-	}
-	if len(failed) != 0 {
-		t.Fatalf("unexpected failed automatic plans: %#v", failed)
-	}
-	if len(handledAlertIDs) != 0 {
-		t.Fatalf("unexpected handled alert provenance: %#v", handledAlertIDs)
 	}
 }
 
