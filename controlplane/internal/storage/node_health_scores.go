@@ -120,6 +120,64 @@ type AtRiskNodeRow struct {
 	ComputedAt time.Time
 }
 
+type PredictiveHealthAvailability struct {
+	ScoredNodes           int
+	FreshNodes            int
+	FreshActionableNodes  int
+	FreshCalibratingNodes int
+	StaleNodes            int
+	LatestComputedAt      sql.NullTime
+}
+
+// GetPredictiveHealthAvailability summarizes score freshness for one tenant.
+// It does not interpret risk into executive health; callers decide whether the
+// predictive subsystem is available, calibrating, stale, or unavailable.
+func (s *Store) GetPredictiveHealthAvailability(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	freshSince time.Time,
+) (PredictiveHealthAvailability, error) {
+	var out PredictiveHealthAvailability
+	if s.db == nil {
+		return out, errors.New("store database not initialized")
+	}
+	if tenantID == uuid.Nil {
+		return out, errors.New("tenant id is required")
+	}
+	if freshSince.IsZero() {
+		return out, errors.New("freshness boundary is required")
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*)::int AS scored_nodes,
+			COUNT(*) FILTER (WHERE hs.computed_at >= $2)::int AS fresh_nodes,
+			COUNT(*) FILTER (
+				WHERE hs.computed_at >= $2
+				  AND LOWER(COALESCE(hs.risk_level, '')) <> 'calibrating'
+			)::int AS fresh_actionable_nodes,
+			COUNT(*) FILTER (
+				WHERE hs.computed_at >= $2
+				  AND LOWER(COALESCE(hs.risk_level, '')) = 'calibrating'
+			)::int AS fresh_calibrating_nodes,
+			COUNT(*) FILTER (WHERE hs.computed_at < $2)::int AS stale_nodes,
+			MAX(hs.computed_at)
+		FROM node_health_scores hs
+		JOIN nodes n ON n.id = hs.node_id
+		WHERE n.tenant_id = $1
+	`, tenantID, freshSince).Scan(
+		&out.ScoredNodes,
+		&out.FreshNodes,
+		&out.FreshActionableNodes,
+		&out.FreshCalibratingNodes,
+		&out.StaleNodes,
+		&out.LatestComputedAt,
+	)
+	if err != nil {
+		return out, fmt.Errorf("get predictive health availability: %w", err)
+	}
+	return out, nil
+}
+
 // ListAtRiskNodes returns nodes whose score is at or below the threshold
 // (i.e. higher risk), ordered by score ASC (worst first). When threshold
 // is 0 or negative, the default of 49 is used (HIGH + CRIT bands).
