@@ -2007,25 +2007,25 @@ function ResolveAlertModal({
             </div>
 
             <div className="rounded-lg border border-border-subtle bg-surface p-4">
-              <p className="text-xs uppercase tracking-wide text-text-muted">Recorded evidence</p>
+              <p className="text-xs uppercase tracking-wide text-text-muted">Evidence</p>
               {alert.disposition ? (
                 <>
                   <div className="mt-2">
                     <StatusTag tone={dispositionTone(alert.disposition.value)}>{dispositionLabel(alert.disposition.value)}</StatusTag>
                   </div>
                   <p className="mt-3 whitespace-pre-wrap text-sm text-text-secondary">
-                    {alert.disposition.reason || 'No evidence reason recorded.'}
+                    {alert.disposition.reason || 'No evidence recorded.'}
                   </p>
                 </>
               ) : (
-                <p className="mt-2 text-sm text-state-warning">No analyst disposition has been recorded yet.</p>
+                <p className="mt-2 text-sm text-state-warning">No analyst disposition yet.</p>
               )}
             </div>
 
             {associatedCase ? (
               <Button asChild variant="outline" size="sm">
                 <Link to={withAlertReturnContext(`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}`, alert.id)}>
-                  Open linked SOC case
+                  View linked case
                   <ExternalLink />
                 </Link>
               </Button>
@@ -2036,11 +2036,11 @@ function ResolveAlertModal({
                 Approve & close
               </Button>
               <Button type="button" variant="outline" disabled={alert.state !== 'resolved' || resolving} onClick={() => onReview('reopen')}>
-                Reopen for further investigation
+                Reopen
               </Button>
             </div>
             {!reviewReady ? (
-              <p className="text-xs text-state-warning">An analyst disposition and evidence reason are required before approval.</p>
+              <p className="text-xs text-state-warning">Disposition and evidence are required before approval.</p>
             ) : null}
           </div>
         ) : (
