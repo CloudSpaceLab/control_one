@@ -388,6 +388,123 @@ export interface ControlRoomOverview {
   pending_actions: ControlRoomAction[];
 }
 
+export type ExecutiveHealthState = "healthy" | "degraded" | "critical" | "unknown";
+export type ExecutiveAttentionKind = "review" | "approval" | "intervention";
+
+export interface ControlRoomExecutiveGroup {
+  name: string;
+  state: ExecutiveHealthState;
+  nodes_total: number;
+  nodes_healthy: number;
+  nodes_stale: number;
+  nodes_offline: number;
+  intentionally_isolated: number;
+  drilldown: string;
+}
+
+export interface ControlRoomExecutiveEstate {
+  groups_total: number;
+  groups_healthy: number;
+  groups_degraded: number;
+  groups_critical: number;
+  groups_unknown: number;
+  nodes_total: number;
+  nodes_healthy: number;
+  groups: ControlRoomExecutiveGroup[];
+}
+
+export interface ControlRoomExecutiveTopRule {
+  rule_id: string;
+  name: string;
+  rule_type: string;
+  severity: string;
+  count: number;
+  drilldown: string;
+}
+
+export interface ControlRoomExecutiveViolations {
+  total: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+  other: number;
+  previous_total: number;
+  delta_pct: number;
+  top_rules: ControlRoomExecutiveTopRule[];
+}
+
+export interface ControlRoomExecutiveResponse {
+  handled_automatically: number;
+  blocked: number;
+  contained: number;
+  remediated: number;
+  failed: number;
+}
+
+export interface ControlRoomExecutiveAttentionItem {
+  id: string;
+  kind: ExecutiveAttentionKind;
+  severity: string;
+  domain: string;
+  title: string;
+  reason?: string;
+  created_at: string;
+  drilldown: string;
+}
+
+export interface ControlRoomExecutiveAttention {
+  total: number;
+  critical: number;
+  reviews: number;
+  approvals: number;
+  interventions: number;
+  items: ControlRoomExecutiveAttentionItem[];
+}
+
+export interface ControlRoomExecutiveProtectionGap {
+  type: string;
+  count: number;
+}
+
+export interface ControlRoomExecutiveProtection {
+  protected: number;
+  total: number;
+  percentage: number;
+  gaps: number;
+  gap_types: ControlRoomExecutiveProtectionGap[];
+}
+
+export interface ControlRoomExecutiveActivityPoint {
+  ts: string;
+  critical: number;
+  high: number;
+  total: number;
+}
+
+export interface ControlRoomExecutiveAvailability {
+  estate: boolean;
+  violations: boolean;
+  response: boolean;
+  attention: boolean;
+  protection: boolean;
+  activity: boolean;
+}
+
+export interface ControlRoomExecutiveOverview {
+  tenant_id: string;
+  generated_at: string;
+  period: string;
+  estate: ControlRoomExecutiveEstate;
+  violations: ControlRoomExecutiveViolations;
+  response: ControlRoomExecutiveResponse;
+  attention: ControlRoomExecutiveAttention;
+  protection: ControlRoomExecutiveProtection;
+  activity: ControlRoomExecutiveActivityPoint[];
+  availability: ControlRoomExecutiveAvailability;
+}
+
 export type CoverageDomain =
   | "telemetry"
   | "parser"
@@ -3799,6 +3916,19 @@ export class APIClient {
     const qs = search.toString();
     return this.request<ControlRoomOverview>(
       `/api/v1/control-room/overview${qs ? `?${qs}` : ""}`,
+    );
+  }
+
+  async getControlRoomExecutiveOverview(
+    tenantId?: string | null,
+    period?: string,
+  ): Promise<ControlRoomExecutiveOverview> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set("tenant_id", tenantId);
+    if (period) search.set("period", period);
+    const qs = search.toString();
+    return this.request<ControlRoomExecutiveOverview>(
+      `/api/v1/control-room/executive-overview${qs ? `?${qs}` : ""}`,
     );
   }
 

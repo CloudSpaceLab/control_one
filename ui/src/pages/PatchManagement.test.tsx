@@ -139,7 +139,7 @@ describe('PatchManagement', () => {
 
     await user.click(screen.getByRole('button', { name: /Approvals \(!\)/ }));
     expect(screen.getByText('Patch approvals unavailable')).toBeInTheDocument();
-    expect(screen.queryByText('No pending approvals')).not.toBeInTheDocument();
+    expect(screen.queryByText('No approvals waiting')).not.toBeInTheDocument();
   });
 
   it('shows deployment KPIs as unavailable when deployment loading fails', async () => {

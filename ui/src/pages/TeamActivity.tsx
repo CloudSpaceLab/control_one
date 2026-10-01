@@ -386,7 +386,7 @@ export function TeamActivity(): JSX.Element {
               ) : data.trends.length ? (
                 <Chart kind="line" data={trendChart} height={240} ariaLabel="Trend of alerts reviewed, cases created and cases closed" />
               ) : (
-                <EmptyState title="No trend data" description="Nothing happened in the selected window." />
+                <EmptyState title="No trend data" description="No activity in this period." />
               )}
             </Panel>
             <Panel title="Containment" eyebrow="Block / allow / quarantine actions per period">
@@ -395,7 +395,7 @@ export function TeamActivity(): JSX.Element {
               ) : data.trends.length ? (
                 <Chart kind="bar" data={containmentChart} height={240} ariaLabel="Containment actions per period" />
               ) : (
-                <EmptyState title="No containment data" description="Nothing happened in the selected window." />
+                <EmptyState title="No containment data" description="No activity in this period." />
               )}
             </Panel>
           </div>
@@ -434,11 +434,11 @@ export function TeamActivity(): JSX.Element {
             ) : null}
           </Panel>
 
-          <Panel title="Activity feed" eyebrow="Chronological record of analyst actions">
+          <Panel title="Activity feed" eyebrow="Recent analyst activity">
             {feedEmpty ? (
               <EmptyState
                 title="No activity in this window"
-                description="Narrow the range or check back after the team takes action."
+                description="No team activity matches this period."
               />
             ) : (
               <ol className="relative flex flex-col" aria-label="Team activity feed">

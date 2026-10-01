@@ -168,7 +168,7 @@ export function WebserverAutoControl(): JSX.Element {
   const cancelPendingAction = () => setPendingAction(null);
 
   if (!currentTenantId) {
-    return <EmptyState title="Select a tenant" description="Choose a tenant to view webserver auto-control." />;
+    return <EmptyState title="Select a tenant" description="Choose a tenant to view webserver controls." />;
   }
 
   const pendingKey = pendingAction ? webserverActionKey(pendingAction.instance, pendingAction.mode) : '';
@@ -177,8 +177,8 @@ export function WebserverAutoControl(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="WEBSERVER AUTO-CONTROL"
-        title="Capture and enforcement"
+        eyebrow="WEBSERVERS"
+        title="Webserver controls"
         description={
           inventoryUnavailable
             ? `${currentTenant?.name ? `${currentTenant.name}: ` : ''}webserver inventory unavailable.`
@@ -218,7 +218,7 @@ export function WebserverAutoControl(): JSX.Element {
           {loading ? (
             <Skeleton className="h-80 rounded-lg" />
           ) : inventoryUnavailable ? (
-            <EmptyState icon={<Server />} title="Webserver inventory unavailable" description="Detected webservers could not be loaded for the selected tenant." />
+            <EmptyState icon={<Server />} title="Webserver inventory unavailable" description="Retry the webserver inventory." />
           ) : instances.length === 0 ? (
             <EmptyState icon={<Server />} title="No webserver inventory" description="No nginx, Apache, lighttpd, Tomcat, or edge proxy instances reported." />
           ) : (
@@ -238,7 +238,7 @@ export function WebserverAutoControl(): JSX.Element {
                       <p className="truncate font-mono text-xs text-text-muted">{instance.ConfigPath || instance.AccessLogPath || instance.NodeID}</p>
                     </div>
                     <StatusTag tone={webserverCaptureReady(instance) && webserverEnforceReady(instance) ? 'healthy' : 'warning'}>
-                      {webserverCaptureReady(instance) && webserverEnforceReady(instance) ? 'ready' : 'gap'}
+                      {webserverCaptureReady(instance) && webserverEnforceReady(instance) ? 'Ready' : 'Setup needed'}
                     </StatusTag>
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-text-secondary">
@@ -264,8 +264,8 @@ export function WebserverAutoControl(): JSX.Element {
                     <Fact label="Node" value={selected.NodeID} mono />
                     <Fact label="Purpose" value={compactList(instanceServerPurposes(selected), 3) || purposeFromKind(selected.Kind)} />
                     <Fact label="App roots" value={String(selected.VHosts?.length ?? 0)} tone={(selected.VHosts?.length ?? 0) > 0 ? 'info' : 'unknown'} />
-                    <Fact label="Capture" value={webserverCaptureReady(selected) ? 'ready' : 'gap'} tone={webserverCaptureReady(selected) ? 'healthy' : 'warning'} />
-                    <Fact label="Enforcement" value={webserverEnforceReady(selected) ? 'ready' : 'gap'} tone={webserverEnforceReady(selected) ? 'healthy' : 'warning'} />
+                    <Fact label="Capture" value={webserverCaptureReady(selected) ? 'Ready' : 'Not ready'} tone={webserverCaptureReady(selected) ? 'healthy' : 'warning'} />
+                    <Fact label="Enforcement" value={webserverEnforceReady(selected) ? 'Ready' : 'Not ready'} tone={webserverEnforceReady(selected) ? 'healthy' : 'warning'} />
                     <Fact label="Response headers" value={capabilityBool(selected.Capabilities, 'response_header_capture') ? 'captured' : 'not reported'} tone={capabilityBool(selected.Capabilities, 'response_header_capture') ? 'healthy' : 'unknown'} />
                     <Fact label="Drift" value={capabilityBool(selected.Capabilities, 'drift_detected') ? 'detected' : 'not reported'} tone={capabilityBool(selected.Capabilities, 'drift_detected') ? 'warning' : 'unknown'} />
                   </div>
@@ -385,7 +385,7 @@ function ApplicationContext({ instance }: { instance: WebserverInstance }) {
     return (
       <EmptyState
         title="No application roots reported"
-        description="Control One has not traced an app root from this webserver config yet."
+        description="No application root has been detected yet."
       />
     );
   }

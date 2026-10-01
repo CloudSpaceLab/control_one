@@ -278,7 +278,7 @@ export function Cases(): JSX.Element {
       });
       setNoteDraft('');
       setNoteMentions([]);
-      setNoteStatus('Note added with audit guardrails.');
+      setNoteStatus('Note added to the audit record.');
       setSelectedCase(await api.getSOCCase(selectedCase.case_id, currentTenantId));
     } catch (err) {
       setNoteStatus(`Note failed: ${errorMessage(err, 'Unable to add note.')}`);
@@ -321,9 +321,9 @@ export function Cases(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="SOC CASES"
+        eyebrow="INVESTIGATIONS"
         title="Cases"
-        description={`${currentTenant?.name ?? 'Current tenant'} incident packets with timeline, evidence, notes, receipts, and export guardrails.`}
+        description={`${currentTenant?.name ?? 'Current tenant'} · tracked investigations with evidence, timeline, notes, actions, and export.`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
@@ -354,7 +354,7 @@ export function Cases(): JSX.Element {
       ) : null}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.4fr)]">
-        <Panel padding="md" eyebrow="QUEUE" title="Incident packets">
+        <Panel padding="md" eyebrow="QUEUE" title="Cases">
           <div className="flex flex-col gap-3">
             <div className="relative max-w-full">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
@@ -413,13 +413,13 @@ export function Cases(): JSX.Element {
                   <EmptyState
                     icon={<ClipboardList />}
                     title="Case queue could not be loaded"
-                    description="Resolve the error above and refresh."
+                    description="Retry the case list."
                   />
                 ) : (
                   <EmptyState
                     icon={<ShieldCheck />}
-                    title="No SOC cases yet"
-                    description="Cases appear after AI investigations, alerts, posture gaps, or DB audit gaps are promoted into an incident packet."
+                    title="No cases yet"
+                    description="Cases appear when an alert or investigation is promoted for tracking."
                   />
                 )
               }
@@ -515,7 +515,7 @@ export function Cases(): JSX.Element {
             <EmptyState
               icon={<ClipboardList />}
               title="Select a case"
-              description="Open a case packet to inspect citations, notes, timeline, guardrails, and export readiness."
+              description="Select a case to review evidence, timeline, notes, actions, and export status."
             />
           )}
         </Panel>
@@ -921,9 +921,6 @@ function NotesPanel({
             <p className="text-sm text-text-secondary">{note.note}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <StatusTag tone="healthy" variant="outline">audit {note.audit_id.slice(0, 8)}</StatusTag>
-              {note.guardrails.map((guardrail) => (
-                <StatusTag key={guardrail} tone="info" variant="outline">{guardrail}</StatusTag>
-              ))}
             </div>
           </div>
         ))}
@@ -1002,14 +999,14 @@ function ExportPanel({
     <div className="rounded-md border border-border-subtle bg-surface p-3">
       <p className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
         <Download className="h-4 w-4 text-brand-400" />
-        Export packet
+        Export
       </p>
       <div className="grid gap-2 text-xs">
-        <Guardrail label="Tenant scoped" ok={row.tenant_id.length > 0} />
-        <Guardrail label="Source-row citations" ok={(row.citations?.length ?? 0) > 0} />
-        <Guardrail label="Evidence refs linked" ok={(row.evidence_refs?.length ?? 0) > 0} />
-        <Guardrail label="Proposal-only actions" ok={row.coverage_badges.some((badge) => badge.id === 'actions_proposal_only')} />
-        <Guardrail label="Audit export URL" ok={Boolean(row.export_url)} />
+        <ExportCheck label="Tenant verified" ok={row.tenant_id.length > 0} />
+        <ExportCheck label="Source citations" ok={(row.citations?.length ?? 0) > 0} />
+        <ExportCheck label="Evidence linked" ok={(row.evidence_refs?.length ?? 0) > 0} />
+        <ExportCheck label="Actions marked as proposals" ok={row.coverage_badges.some((badge) => badge.id === 'actions_proposal_only')} />
+        <ExportCheck label="Audit link" ok={Boolean(row.export_url)} />
       </div>
       <Button
         type="button"
@@ -1028,18 +1025,18 @@ function ExportPanel({
         <div className="mt-3 rounded-md border border-border-subtle bg-elevated p-3">
           <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">{preview.export_version}</p>
           <p className="mt-1 text-xs text-text-secondary">{preview.evidence.length} evidence refs / {preview.notes?.length ?? 0} notes</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {preview.guardrails.map((guardrail) => (
-              <StatusTag key={guardrail} tone="healthy" variant="outline">{guardrail}</StatusTag>
-            ))}
-          </div>
+          {preview.guardrails.length > 0 ? (
+            <div className="mt-2">
+              <StatusTag tone="healthy" variant="outline">Export checks passed</StatusTag>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function Guardrail({ label, ok }: { label: string; ok: boolean }): JSX.Element {
+function ExportCheck({ label, ok }: { label: string; ok: boolean }): JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 rounded-sm bg-elevated px-2.5 py-2">
       <span className="text-text-secondary">{label}</span>

@@ -353,7 +353,7 @@ describe('Alerts page failure states', () => {
 
     await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
     const dialog = await screen.findByRole('dialog', { name: /review alert disposition/i });
-    await user.click(within(dialog).getByRole('button', { name: /reopen for further investigation/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^reopen$/i }));
     expect(mocks.reviewAlert).toHaveBeenCalledWith('alert-1', 'reopen');
   });
 

@@ -192,9 +192,9 @@ export function Coverage(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="COVERAGE TRUTH"
+        eyebrow="COVERAGE"
         title="Coverage"
-        description="Tenant-scoped capability truth across telemetry, parser, detection, compliance, remediation, vulnerability, posture, AI, and cases."
+        description="Current coverage across telemetry, parsing, detection, compliance, remediation, vulnerability, posture, AI, and cases."
         actions={
           <div className="flex items-center gap-2">
             {data?.catalog_version && (
@@ -277,7 +277,7 @@ export function Coverage(): JSX.Element {
       </div>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Panel padding="md" eyebrow="#167 ATTENTION" title="Coverage attention queue">
+        <Panel padding="md" eyebrow="#167 ATTENTION" title="Coverage gaps">
           {attentionRows.length > 0 ? (
             <div className="flex flex-col gap-2">
               {attentionRows.map((row, index) => (
@@ -288,7 +288,7 @@ export function Coverage(): JSX.Element {
             <EmptyState
               icon={<ShieldCheck />}
               title="No attention states"
-              description="The selected coverage slice has no partial, raw-only, stale, manual, exception, or unsupported rows."
+              description="No coverage gaps match this view."
             />
           )}
         </Panel>

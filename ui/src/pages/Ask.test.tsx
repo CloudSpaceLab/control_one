@@ -39,7 +39,7 @@ describe('Ask', () => {
       </MemoryRouter>,
     );
 
-    await user.type(screen.getByPlaceholderText(/ask about this fleet's posture/i), 'show timeline');
+    await user.type(screen.getByPlaceholderText(/ask about infrastructure, alerts, threats, or cases/i), 'show timeline');
     await user.click(screen.getByRole('button', { name: /^ask$/i }));
 
     await waitFor(() => {
@@ -64,7 +64,7 @@ describe('Ask', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByPlaceholderText(/ask about this fleet's posture/i)).toHaveValue('show recent risk');
+    expect(screen.getByPlaceholderText(/ask about infrastructure, alerts, threats, or cases/i)).toHaveValue('show recent risk');
     expect(screen.getByRole('button', { name: /^ask$/i })).toBeEnabled();
   });
 });

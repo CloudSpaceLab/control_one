@@ -177,9 +177,9 @@ export function Compliance(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="POSTURE / COMPLIANCE"
+        eyebrow="COMPLIANCE"
         title="Compliance"
-        description="Define policies, run evaluations, prove continuous control."
+        description="Define policies, run checks, and review failures and evidence."
       />
       <Tabs value={tab} onValueChange={onTabChange}>
         <TabsList className="grid h-auto w-full grid-cols-2 gap-1 overflow-visible sm:inline-flex sm:w-auto sm:grid-cols-none">
@@ -396,7 +396,7 @@ function PostureTab(): JSX.Element {
         />
       </Panel>
 
-      <Panel padding="md" eyebrow="FILTERS" title="Refine">
+      <Panel padding="md" eyebrow="FILTERS" title="Filters">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <FilterSelect label="Tenant" value={selectedTenant ?? ''}
             onChange={(v) => { setSelectedTenant(v || undefined); setSelectedNode(undefined); setOffset(0); }}

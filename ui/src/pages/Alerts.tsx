@@ -991,9 +991,9 @@ export function Alerts(): JSX.Element {
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
-        eyebrow="VISIBILITY / ALERTS"
+        eyebrow="SECURITY"
         title="Alerts"
-        description="Deduped inbox from correlation, rules, and compliance."
+        description="Alerts requiring review or follow-up."
         actions={
           <Button variant="secondary" size="md" onClick={refresh} loading={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
@@ -1090,7 +1090,7 @@ export function Alerts(): JSX.Element {
             </div>
           )}
 
-          <Panel padding="md" eyebrow="FILTERS" title="Refine">
+          <Panel padding="md" eyebrow="FILTERS" title="Filters">
             <div className="flex flex-col gap-3">
               <div className="relative max-w-md">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
@@ -1181,14 +1181,14 @@ export function Alerts(): JSX.Element {
                   <EmptyState
                     icon={<Bell />}
                     title="Alerts could not be loaded"
-                    description="Resolve the error above and refresh."
+                    description="Retry the alert list."
                   />
                 ) : allClear ? (
                   <EmptyState
                     tone="success"
                     icon={<ShieldCheck />}
                     title="All clear"
-                    description="No open alerts match the current filters. Detection rules are healthy and the inbox is empty."
+                    description="No open alerts match the current filters."
                   />
                 ) : (
                   <EmptyState
@@ -1566,7 +1566,7 @@ export function Alerts(): JSX.Element {
                 <EmptyState
                   icon={<ShieldCheck />}
                   title="Correlation rules could not be loaded"
-                  description="Resolve the error above and refresh."
+                  description="Retry the alert list."
                 />
               ) : (
                 <EmptyState
@@ -1671,8 +1671,8 @@ function CriticalResponseCenter({
   return (
     <Panel
       padding="md"
-      eyebrow="SMART RESPONSE"
-      title="Critical response center"
+      eyebrow="CRITICAL ALERTS"
+      title="Containment required"
       toneAccent="critical"
       actions={
         <Button asChild variant="outline" size="sm">
@@ -1683,7 +1683,7 @@ function CriticalResponseCenter({
         </Button>
       }
     >
-      <div className="mb-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="mb-4">
         <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 text-state-critical" />
@@ -1692,20 +1692,10 @@ function CriticalResponseCenter({
                 {critical.length} critical alert{critical.length === 1 ? '' : 's'} need a containment decision.
               </p>
               <p className="mt-1 text-sm text-text-secondary">
-                Treat 100% confidence signals as action-ready: contain first, then relax only when audit,
-                remediation, and drift evidence show the affected scope is clean.
+                Review the highest-priority alert and confirm containment or case evidence.
               </p>
             </div>
           </div>
-        </div>
-        <div className="rounded-lg border border-border-subtle bg-surface p-3">
-          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-            Posture-template target
-          </p>
-          <p className="mt-1 text-sm text-text-secondary">
-            Use posture-template semantics: TTL emergency override, explicit ingress/egress policy, Control One/DNS/NTP/update allowlists,
-            canary rollout, rollback, and drift verification per node.
-          </p>
         </div>
       </div>
 
@@ -2017,25 +2007,25 @@ function ResolveAlertModal({
             </div>
 
             <div className="rounded-lg border border-border-subtle bg-surface p-4">
-              <p className="text-xs uppercase tracking-wide text-text-muted">Recorded evidence</p>
+              <p className="text-xs uppercase tracking-wide text-text-muted">Evidence</p>
               {alert.disposition ? (
                 <>
                   <div className="mt-2">
                     <StatusTag tone={dispositionTone(alert.disposition.value)}>{dispositionLabel(alert.disposition.value)}</StatusTag>
                   </div>
                   <p className="mt-3 whitespace-pre-wrap text-sm text-text-secondary">
-                    {alert.disposition.reason || 'No evidence reason recorded.'}
+                    {alert.disposition.reason || 'No evidence recorded.'}
                   </p>
                 </>
               ) : (
-                <p className="mt-2 text-sm text-state-warning">No analyst disposition has been recorded yet.</p>
+                <p className="mt-2 text-sm text-state-warning">No analyst disposition yet.</p>
               )}
             </div>
 
             {associatedCase ? (
               <Button asChild variant="outline" size="sm">
                 <Link to={withAlertReturnContext(`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}`, alert.id)}>
-                  Open linked SOC case
+                  View linked case
                   <ExternalLink />
                 </Link>
               </Button>
@@ -2046,11 +2036,11 @@ function ResolveAlertModal({
                 Approve & close
               </Button>
               <Button type="button" variant="outline" disabled={alert.state !== 'resolved' || resolving} onClick={() => onReview('reopen')}>
-                Reopen for further investigation
+                Reopen
               </Button>
             </div>
             {!reviewReady ? (
-              <p className="text-xs text-state-warning">An analyst disposition and evidence reason are required before approval.</p>
+              <p className="text-xs text-state-warning">Disposition and evidence are required before approval.</p>
             ) : null}
           </div>
         ) : (
