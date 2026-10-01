@@ -1683,7 +1683,7 @@ function CriticalResponseCenter({
         </Button>
       }
     >
-      <div className="mb-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="mb-4">
         <div className="rounded-lg border border-state-critical/25 bg-state-critical/5 p-3">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 text-state-critical" />
@@ -1692,20 +1692,10 @@ function CriticalResponseCenter({
                 {critical.length} critical alert{critical.length === 1 ? '' : 's'} need a containment decision.
               </p>
               <p className="mt-1 text-sm text-text-secondary">
-                Treat 100% confidence signals as action-ready: contain first, then relax only when audit,
-                remediation, and drift evidence show the affected scope is clean.
+                Review the highest-priority alert and confirm containment or case evidence.
               </p>
             </div>
           </div>
-        </div>
-        <div className="rounded-lg border border-border-subtle bg-surface p-3">
-          <p className="font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-            Posture-template target
-          </p>
-          <p className="mt-1 text-sm text-text-secondary">
-            Use posture-template semantics: TTL emergency override, explicit ingress/egress policy, Control One/DNS/NTP/update allowlists,
-            canary rollout, rollback, and drift verification per node.
-          </p>
         </div>
       </div>
 
