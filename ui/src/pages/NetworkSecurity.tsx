@@ -864,9 +864,10 @@ function ActiveBlocksPanel(): JSX.Element {
       acc.applied += b.NodesApplied;
       acc.failed += b.NodesFailed;
       acc.pending += b.NodesPending;
+      acc.removing += b.NodesRemoving;
       return acc;
     },
-    { applied: 0, failed: 0, pending: 0 },
+    { applied: 0, failed: 0, pending: 0, removing: 0 },
   );
 
   if (!currentTenantId) {
@@ -878,7 +879,12 @@ function ActiveBlocksPanel(): JSX.Element {
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <KpiTile label="Active blocks" value={String(blocks.length)} />
         <KpiTile label="Nodes applied" value={String(totals.applied)} tone="healthy" />
-        <KpiTile label="Nodes pending" value={String(totals.pending)} tone="warning" />
+        <KpiTile
+          label="Nodes pending"
+          value={String(totals.pending)}
+          tone={totals.pending > 0 || totals.removing > 0 ? 'warning' : 'unknown'}
+          hint={totals.removing > 0 ? `${totals.removing} removing` : undefined}
+        />
         <KpiTile label="Nodes failed" value={String(totals.failed)} tone={totals.failed > 0 ? 'critical' : 'unknown'} />
       </div>
 
@@ -912,8 +918,14 @@ function ActiveBlocksPanel(): JSX.Element {
             </thead>
             <tbody>
               {blocks.map((b) => {
-                const tone = b.NodesFailed > 0 ? 'critical' : b.NodesPending > 0 ? 'warning' : 'healthy';
-                const status = b.NodesFailed > 0 ? 'partial' : b.NodesPending > 0 ? 'pending' : 'applied';
+                const tone = b.NodesFailed > 0 ? 'critical' : b.NodesPending > 0 || b.NodesRemoving > 0 ? 'warning' : 'healthy';
+                const status = b.NodesFailed > 0
+                  ? 'partial'
+                  : b.NodesRemoving > 0
+                    ? 'removing'
+                    : b.NodesPending > 0
+                      ? 'pending'
+                      : 'applied';
                 const proposal = proposalsByAction[b.EntityActionID];
                 return (
                   <tr key={b.EntityActionID} className="border-t border-border hover:bg-hover">
