@@ -91,8 +91,13 @@ export function EntityDetail(): JSX.Element {
         since: ipTimelineSince,
         limit: 100,
       }),
-    enabled: safeType === 'ip' && !!id && !!currentTenantId,
+    enabled:
+      safeType === 'ip' &&
+      !!id &&
+      !!currentTenantId &&
+      (tab === 'timeline' || tab === 'raw'),
     staleTime: 30_000,
+    retry: false,
   });
 
   const relatedQ = useQuery<EntityRelated>({
