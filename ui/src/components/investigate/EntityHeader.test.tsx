@@ -6,11 +6,13 @@ import { EntityHeader } from './EntityHeader';
 
 const entityActionMock = vi.hoisted(() => vi.fn());
 const getIPBlockStatusMock = vi.hoisted(() => vi.fn());
+const getTenantRemediationConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/useApiClient', () => ({
   useApiClient: () => ({
     entityAction: entityActionMock,
     getIPBlockStatus: getIPBlockStatusMock,
+    getTenantRemediationConfig: getTenantRemediationConfigMock,
   }),
 }));
 
@@ -24,6 +26,7 @@ describe('EntityHeader', () => {
   beforeEach(() => {
     entityActionMock.mockReset();
     getIPBlockStatusMock.mockReset();
+    getTenantRemediationConfigMock.mockReset();
     entityActionMock.mockResolvedValue({ nodes_dispatched: 2 });
     getIPBlockStatusMock.mockResolvedValue({
       active: false,
@@ -34,6 +37,14 @@ describe('EntityHeader', () => {
       nodes_applied: 0,
       nodes_pending: 0,
       nodes_failed: 0,
+    });
+    getTenantRemediationConfigMock.mockResolvedValue({
+      AutoBlockEnabled: true,
+      AutoBlockMinConfidence: 100,
+      DefaultIPBlockScope: 'affected',
+      DefaultIPBlockTTLSeconds: 3600,
+      RequireCorroboratingThreatIntel: true,
+      PatchRequiresApproval: true,
     });
   });
 
@@ -76,7 +87,7 @@ describe('EntityHeader', () => {
       {
         action: 'block',
         scope: 'affected',
-        ttl: 86400,
+        ttl: 3600,
         reason: 'Manual IP block',
       },
       { tenantId: 'tenant-1' },
@@ -94,6 +105,7 @@ describe('EntityHeader', () => {
       nodes_applied: 4,
       nodes_pending: 0,
       nodes_failed: 0,
+      provenance: 'manual',
     });
 
     render(
@@ -106,7 +118,7 @@ describe('EntityHeader', () => {
 
     const menu = screen.getByRole('menu');
     await waitFor(() => expect(within(menu).getByText('Blocked')).toBeInTheDocument());
-    expect(within(menu).getByText('Fleet-wide · 4/4 applied')).toBeInTheDocument();
+    expect(within(menu).getByText('Manually blocked · Fleet-wide · 4/4 applied')).toBeInTheDocument();
     expect(within(menu).getByText('Allow IP')).toBeInTheDocument();
     expect(within(menu).queryByText('Extend to fleet')).not.toBeInTheDocument();
     expect(within(menu).queryByText('Block IP')).not.toBeInTheDocument();
