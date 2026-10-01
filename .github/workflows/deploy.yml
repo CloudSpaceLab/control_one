@@ -270,6 +270,9 @@ jobs:
               docker compose --profile olap stop -t 30 doris-be doris-fe || true
             fi
             docker compose up -d --force-recreate --no-deps controlplane console
+            # The former ipquery sidecar is no longer part of Compose. Remove
+            # its legacy container after the native provider is live.
+            docker rm -f deploy-ipq-1 >/dev/null 2>&1 || true
           "
 
       - name: Install host nginx config
