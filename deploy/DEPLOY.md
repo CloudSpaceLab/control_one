@@ -174,3 +174,13 @@ $SSH $HOST 'cd /opt/control-one/deploy && \
 | 502 on `/console/` | console image stale | `docker compose build console && docker compose up -d console`. |
 | nginx serving bootstrap text after cert issued | active.conf wasn't swapped | `cp nginx/edge.conf nginx/active.conf && docker compose exec nginx-edge nginx -s reload` |
 | Renewal fails | port 80 not free | Ensure nothing else binds 80 on the host. |
+
+
+## Raw log dump storage
+
+Raw-log artifacts use the persistent `logdumpdata` Docker volume mounted at
+`/var/lib/control-one/log-dumps`. Keep this volume when recreating or
+upgrading the control-plane container. The nginx configs cap agent dump chunk
+uploads at 4 MiB; do not raise that independently of the server limit.
+
+See `docs/raw-log-dumps.md` for retention, access and cleanup behavior.

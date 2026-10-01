@@ -73,7 +73,15 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
-        run: go test -v ./controlplane/internal/storage -run TestJobLifecycleWithPostgres -count=1
+        run: >-
+          go test -v ./controlplane/internal/storage
+          -run 'Test(JobLifecycleWithPostgres|LogDumpClaimChunkAndTerminalJobLifecycle|LogDumpExpiryAndTimeoutSelection)'
+          -count=1
+
+      - name: Raw-log agent integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -v ./cmd/nodeagent -run 'Test.*LogDump' -count=1
+
       - name: Migration integration test
         if: matrix.os == 'ubuntu-latest'
         env:
