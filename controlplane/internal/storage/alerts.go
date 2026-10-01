@@ -390,7 +390,7 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 		idx++
 	}
 	if f.NodeID != uuid.Nil {
-		where = append(where, fmt.Sprintf(`(node_id = $%d OR context->'contributing_events' @> jsonb_build_array(jsonb_build_object('node_id', $%d::text)))`, idx, idx))
+		where = append(where, fmt.Sprintf(`(node_id = $%d OR context @> jsonb_build_object('contributing_events', jsonb_build_array(jsonb_build_object('node_id', $%d::text))))`, idx, idx))
 		args = append(args, f.NodeID)
 		idx++
 	}
