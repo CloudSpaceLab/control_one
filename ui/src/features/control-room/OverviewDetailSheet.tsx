@@ -136,7 +136,9 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
     case 'protection':
       return {
         title: 'Protection coverage',
-        description: `${overview.protection.protected} of ${overview.protection.total} public listeners have verified protection evidence (${formatPercent(overview.protection.percentage)}).`,
+        description: overview.protection.total === 0
+          ? 'No public network listeners are currently reported.'
+          : `${overview.protection.protected} of ${overview.protection.total} public listeners have verified protection evidence (${formatPercent(overview.protection.percentage)}).`,
         body: (
           <div className="space-y-2">
             {overview.protection.gap_types.length > 0 ? overview.protection.gap_types.map((gap) => (
