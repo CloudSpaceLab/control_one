@@ -265,7 +265,31 @@ func TestControlRoomExecutiveAutomaticResponseIsNotCappedAt25(t *testing.T) {
 		UpdatedAt:  now.Add(-time.Minute),
 	}
 
-	got, failed, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour))
+	futureID := uuid.New()
+	futureAt := now.Add(time.Minute)
+	base.actionPlans[futureID] = storage.ActionPlan{
+		ID:         futureID,
+		TenantID:   tenantID,
+		Domain:     "remediation",
+		ActionKind: "remediation.execute",
+		State:      storage.ActionPlanStateSucceeded,
+		Risk:       "medium",
+		Diff:       map[string]any{"auto_triggered": true},
+		SourceRef:  map[string]any{},
+		CreatedAt:  futureAt,
+		UpdatedAt:  futureAt,
+	}
+	base.actionReceipts[futureID] = []storage.ActionReceipt{{
+		ID:           uuid.New(),
+		ActionPlanID: futureID,
+		TenantID:     tenantID,
+		State:        storage.ActionPlanStateSucceeded,
+		Receipt:      map[string]any{"success": true},
+		Verification: map[string]any{"script_success": true},
+		CreatedAt:    futureAt,
+	}}
+
+	got, failed, available := srv.controlRoomExecutiveAutomaticResponse(context.Background(), tenantID, now.Add(-24*time.Hour), now)
 	if !available {
 		t.Fatal("automatic response aggregation should be available")
 	}
