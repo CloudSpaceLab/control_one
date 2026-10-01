@@ -294,8 +294,8 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			FROM nodes
 			WHERE tenant_id = $1 AND state = 'active'
 		),
-		latest_per_node AS (
-			SELECT DISTINCT ON (r.node_id)
+		candidate_rules AS (
+			SELECT
 				r.node_id,
 				r.status,
 				COALESCE(j.type, '') AS job_type,
@@ -309,26 +309,43 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			  AND ea.entity_type = 'ip'
 			  AND ea.entity_id IN ($2, $3)
 			  AND ea.action = 'block'
-			  AND r.status IN ('pending','applied','failed')
-			  AND (ea.expires_at IS NULL OR ea.expires_at > NOW())
-			ORDER BY r.node_id, r.requested_at DESC, r.id DESC
+			  AND (
+				r.status IN ('pending','applied')
+				OR (
+					r.status = 'failed'
+					AND (ea.expires_at IS NULL OR ea.expires_at > NOW())
+				)
+			  )
+		),
+		per_node AS (
+			SELECT
+				node_id,
+				BOOL_OR(status = 'applied') AS applied,
+				BOOL_OR(status = 'pending' AND job_type <> 'firewall.rule_delete') AS pending,
+				BOOL_OR(status = 'pending' AND job_type = 'firewall.rule_delete') AS removing,
+				BOOL_OR(status = 'failed') AS failed
+			FROM candidate_rules
+			GROUP BY node_id
 		)
 		SELECT
 			(SELECT COUNT(*) FROM active_nodes) AS fleet_nodes,
 			COUNT(*) FILTER (WHERE node_id IN (SELECT id FROM active_nodes)) AS fleet_target_nodes,
 			COUNT(*) AS target_nodes,
-			COUNT(*) FILTER (WHERE status = 'applied') AS nodes_applied,
-			COUNT(*) FILTER (WHERE status = 'pending' AND job_type <> 'firewall.rule_delete') AS nodes_pending,
-			COUNT(*) FILTER (WHERE status = 'pending' AND job_type = 'firewall.rule_delete') AS nodes_removing,
-			COUNT(*) FILTER (WHERE status = 'failed') AS nodes_failed,
-			MAX(expires_at) AS expires_at,
+			COUNT(*) FILTER (WHERE applied) AS nodes_applied,
+			COUNT(*) FILTER (WHERE NOT applied AND pending) AS nodes_pending,
+			COUNT(*) FILTER (WHERE NOT applied AND NOT pending AND removing) AS nodes_removing,
+			COUNT(*) FILTER (WHERE NOT applied AND NOT pending AND NOT removing AND failed) AS nodes_failed,
+			(
+				SELECT MAX(expires_at)
+				FROM candidate_rules
+			) AS expires_at,
 			COALESCE((
 				SELECT CASE WHEN created_by IS NULL THEN 'auto' ELSE 'manual' END
-				FROM latest_per_node
+				FROM candidate_rules
 				ORDER BY requested_at DESC
 				LIMIT 1
 			), 'manual') AS provenance
-		FROM latest_per_node
+		FROM per_node
 	`, tenantID, host, cidr).Scan(
 		&status.FleetNodes,
 		&status.FleetTargetNodes,
