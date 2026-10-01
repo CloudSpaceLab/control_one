@@ -15,7 +15,7 @@ export const CONTROL_ROOM_COPY = {
 } as const;
 
 export function executiveHeadline(overview: ControlRoomExecutiveOverview): string {
-  if (!overview.availability.estate || !overview.availability.attention || !overview.availability.protection) {
+  if (!executiveCoreAvailable(overview)) {
     return 'Protection status incomplete';
   }
   if (overview.attention.critical > 0) {
@@ -32,13 +32,21 @@ export function executiveDescription(
   tenantName?: string,
 ): string {
   const prefix = tenantName ? `${tenantName} · ` : '';
-  if (!overview.availability.estate || !overview.availability.protection) {
+  if (!executiveCoreAvailable(overview)) {
     return `${prefix}Some security or infrastructure data is unavailable.`;
   }
   const protection = overview.protection.total === 0
     ? 'no public listeners detected'
     : `${formatPercent(overview.protection.percentage)} protection coverage`;
   return `${prefix}${overview.estate.groups_healthy} of ${overview.estate.groups_total} infrastructure groups healthy · ${protection}`;
+}
+
+export function executiveCoreAvailable(overview: ControlRoomExecutiveOverview): boolean {
+  return overview.availability.estate
+    && overview.availability.violations
+    && overview.availability.response
+    && overview.availability.attention
+    && overview.availability.protection;
 }
 
 export function formatPercent(value: number): string {
