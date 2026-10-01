@@ -195,6 +195,32 @@ describe('ControlRoom executive dashboard', () => {
     expect(screen.getByText('184 / 187 nodes healthy')).toBeInTheDocument();
   });
 
+  it('does not claim no critical action when infrastructure is critical', async () => {
+    getExecutiveOverviewMock.mockResolvedValue({
+      ...executiveOverview,
+      estate: {
+        ...executiveOverview.estate,
+        groups_healthy: 11,
+        groups_degraded: 1,
+        groups_critical: 1,
+      },
+      attention: {
+        ...executiveOverview.attention,
+        total: 0,
+        critical: 0,
+        reviews: 0,
+        approvals: 0,
+        interventions: 0,
+        items: [],
+      },
+    });
+
+    renderControlRoom();
+
+    expect(await screen.findByRole('heading', { name: '1 infrastructure group is critical' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'No critical action required' })).not.toBeInTheDocument();
+  });
+
   it('keeps human work directly actionable and semantically typed', async () => {
     renderControlRoom();
 
