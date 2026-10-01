@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -59,6 +60,10 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 					s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
 					return
 				}
+				if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+					http.Error(w, err.Error(), http.StatusServiceUnavailable)
+					return
+				}
 				s.logger.Warn("small analytics list connections", zap.Error(err))
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
@@ -93,6 +98,10 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if ip != "" {
 			s.writeConnectionsReadUnavailable(w, source, tenantID.String(), ip, nodeID, err)
+			return
+		}
+		if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		s.logger.Warn("doris list connections", zap.Error(err))
