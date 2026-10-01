@@ -137,8 +137,8 @@ describe('Nodes page production hardening', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('fleet store offline');
     expect(screen.getByText('Fleet data unavailable.')).toBeInTheDocument();
-    expect(screen.getByText('Fleet map unavailable')).toBeInTheDocument();
-    expect(screen.getByText('Fleet nodes could not be loaded')).toBeInTheDocument();
+    expect(screen.getByText('Node locations unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Node list unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/^No nodes$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/No nodes online/i)).not.toBeInTheDocument();
   });
