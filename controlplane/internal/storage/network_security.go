@@ -51,6 +51,21 @@ type ActiveBlock struct {
 	NodesRemoved   int
 }
 
+// IPBlockStatus is the current enforcement state for one IP across a tenant.
+// Scope reflects actual node coverage, not the operator's original request.
+type IPBlockStatus struct {
+	Active          bool       `json:"active"`
+	State           string     `json:"state"`
+	Scope           string     `json:"scope"`
+	FleetNodes      int        `json:"fleet_nodes"`
+	TargetNodes     int        `json:"target_nodes"`
+	NodesApplied    int        `json:"nodes_applied"`
+	NodesPending    int        `json:"nodes_pending"`
+	NodesFailed     int        `json:"nodes_failed"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+}
+
+
 // NodeFirewallRuleInsert is the payload for CreateNodeFirewallRule.
 type NodeFirewallRuleInsert struct {
 	EntityActionID uuid.UUID
@@ -231,6 +246,111 @@ func (s *Store) ListNodeFirewallRulesForEntityAction(ctx context.Context, entity
 	return scanNodeFirewallRuleRows(rows)
 }
 
+// ListActiveNodeFirewallRulesForIP returns current block-rule rows for an IP.
+// It intentionally excludes allow actions and rules already confirmed removed.
+func (s *Store) ListActiveNodeFirewallRulesForIP(ctx context.Context, tenantID uuid.UUID, ip string) ([]NodeFirewallRule, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.id, r.entity_action_id, r.node_id, r.tenant_id, r.action, r.direction,
+		       r.protocol, r.port, r.source, r.dest, r.tag, r.status, r.error, r.job_id,
+		       r.requested_at, r.applied_at, r.removed_at
+		FROM node_firewall_rules r
+		JOIN entity_actions ea ON ea.id = r.entity_action_id
+		WHERE ea.tenant_id = $1
+		  AND ea.entity_type = 'ip'
+		  AND ea.entity_id = $2
+		  AND ea.action = 'block'
+		  AND r.status IN ('pending','applied','failed')
+		ORDER BY r.requested_at ASC
+	`, tenantID, strings.TrimSpace(ip))
+	if err != nil {
+		return nil, fmt.Errorf("list active firewall rules for ip: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanNodeFirewallRuleRows(rows)
+}
+
+// GetIPBlockStatus returns one compact state used by IP response surfaces.
+func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip string) (*IPBlockStatus, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	status := &IPBlockStatus{State: "unblocked", Scope: "affected"}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM nodes
+		WHERE tenant_id = $1 AND state = 'active'
+	`, tenantID).Scan(&status.FleetNodes); err != nil {
+		return nil, fmt.Errorf("count active tenant nodes: %w", err)
+	}
+
+	var expires sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		WITH per_node AS (
+			SELECT
+				r.node_id,
+				BOOL_OR(r.status = 'applied') AS applied,
+				BOOL_OR(r.status = 'pending') AS pending,
+				BOOL_OR(r.status = 'failed') AS failed
+			FROM node_firewall_rules r
+			JOIN entity_actions ea ON ea.id = r.entity_action_id
+			WHERE ea.tenant_id = $1
+			  AND ea.entity_type = 'ip'
+			  AND ea.entity_id = $2
+			  AND ea.action = 'block'
+			  AND r.status IN ('pending','applied','failed')
+			GROUP BY r.node_id
+		)
+		SELECT
+			COUNT(*) AS target_nodes,
+			COUNT(*) FILTER (WHERE applied) AS nodes_applied,
+			COUNT(*) FILTER (WHERE NOT applied AND pending) AS nodes_pending,
+			COUNT(*) FILTER (WHERE NOT applied AND NOT pending AND failed) AS nodes_failed,
+			(
+				SELECT MAX(ea.expires_at)
+				FROM entity_actions ea
+				WHERE ea.tenant_id = $1
+				  AND ea.entity_type = 'ip'
+				  AND ea.entity_id = $2
+				  AND ea.action = 'block'
+			) AS expires_at
+		FROM per_node
+	`, tenantID, strings.TrimSpace(ip)).Scan(
+		&status.TargetNodes,
+		&status.NodesApplied,
+		&status.NodesPending,
+		&status.NodesFailed,
+		&expires,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get ip block status: %w", err)
+	}
+	if expires.Valid {
+		t := expires.Time
+		status.ExpiresAt = &t
+	}
+	status.Active = status.TargetNodes > 0
+	if !status.Active {
+		return status, nil
+	}
+	if status.FleetNodes > 0 && status.TargetNodes >= status.FleetNodes {
+		status.Scope = "fleet"
+	}
+	switch {
+	case status.NodesFailed > 0 && status.NodesApplied == 0 && status.NodesPending == 0:
+		status.State = "failed"
+	case status.NodesFailed > 0:
+		status.State = "partial"
+	case status.NodesPending > 0:
+		status.State = "blocking"
+	default:
+		status.State = "blocked"
+	}
+	return status, nil
+}
+
 // ListActiveBlocks returns the rolled-up active-blocks view for a tenant.
 // Joins entity_actions ⟕ node_firewall_rules; groups counts by status.
 // Includes blocks that are wholly removed only when keepRemoved is true.
@@ -260,6 +380,8 @@ func (s *Store) ListActiveBlocks(ctx context.Context, tenantID uuid.UUID, limit,
 		FROM entity_actions ea
 		JOIN node_firewall_rules r ON r.entity_action_id = ea.id
 		WHERE ea.tenant_id = $1
+		  AND ea.entity_type = 'ip'
+		  AND ea.action = 'block'
 		GROUP BY ea.id
 		` + havingClause + `
 		ORDER BY ea.created_at DESC
