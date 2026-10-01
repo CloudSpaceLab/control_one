@@ -120,7 +120,7 @@ export function IpLifecyclePanel({ ip }: IpLifecyclePanelProps): JSX.Element {
         <KpiTile
           label="Threat hits"
           value={evidenceUnavailable ? '—' : String(totals.threats)}
-          tone={evidenceUnavailable ? 'neutral' : totals.threats > 0 ? 'critical' : 'healthy'}
+          tone={evidenceUnavailable ? 'unknown' : totals.threats > 0 ? 'critical' : 'healthy'}
         />
       </div>
 
