@@ -9,7 +9,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 )
 
-func TestEnrichConnectionGeoWithLookupAddsSourceAndDestinationMetadata(t *testing.T) {
+func TestEnrichEventGeoWithLookupAddsSourceAndDestinationMetadata(t *testing.T) {
 	events := []IngestedEvent{{
 		Type:  "conn.open",
 		SrcIP: "8.8.8.8",
@@ -37,7 +37,7 @@ func TestEnrichConnectionGeoWithLookupAddsSourceAndDestinationMetadata(t *testin
 		}
 	}
 
-	enrichConnectionGeoWithLookup(context.Background(), events, lookup)
+	enrichEventGeoWithLookup(context.Background(), events, lookup)
 
 	details := events[0].Details
 	require.Equal(t, "US", details["src_country_code"])
@@ -53,7 +53,7 @@ func TestEnrichConnectionGeoWithLookupAddsSourceAndDestinationMetadata(t *testin
 	require.Equal(t, 1, calls["1.1.1.1"])
 }
 
-func TestEnrichConnectionGeoDoesNotOverwriteParserMetadataOrLookupPrivateIPs(t *testing.T) {
+func TestEnrichEventGeoDoesNotOverwriteParserMetadataOrLookupPrivateIPs(t *testing.T) {
 	events := []IngestedEvent{
 		{
 			Type:  "conn.open",
@@ -65,22 +65,27 @@ func TestEnrichConnectionGeoDoesNotOverwriteParserMetadataOrLookupPrivateIPs(t *
 				"asn":              "AS64500",
 			},
 		},
-		{Type: "proc.exec", SrcIP: "8.8.8.8"},
+		{Type: "web.request", SrcIP: "9.9.9.9", Details: map[string]any{}},
+		{Type: "proc.exec", SrcIP: "7.7.7.7"},
 	}
 	calls := 0
 	lookup := func(_ context.Context, _ string) (*ipintel.Enrichment, error) {
 		calls++
 		return &ipintel.Enrichment{
 			Source: "dbip-lite",
-			Geo:    ipintel.GeoInfo{Country: "United States", CountryCode: "US", ASN: "AS15169"},
+			Geo:    ipintel.GeoInfo{Country: "United States", CountryCode: "US", ASN: "AS15169", Org: "Google LLC"},
 		}, nil
 	}
 
-	enrichConnectionGeoWithLookup(context.Background(), events, lookup)
+	enrichEventGeoWithLookup(context.Background(), events, lookup)
 
-	require.Equal(t, 1, calls)
+	require.Equal(t, 2, calls)
 	require.Equal(t, "GB", events[0].Details["country_code"])
 	require.Equal(t, "GB", events[0].Details["src_country_code"])
 	require.Equal(t, "AS64500", events[0].Details["asn"])
 	require.Nil(t, events[0].Details["dst_country_code"])
+	require.Equal(t, "US", events[1].Details["country_code"])
+	require.Equal(t, "AS15169", events[1].Details["asn"])
+	require.Equal(t, "Google LLC", events[1].Details["isp"])
+	require.Nil(t, events[2].Details)
 }

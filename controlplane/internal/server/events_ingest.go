@@ -701,7 +701,7 @@ func (s *Server) prepareEventFanout(ctx context.Context, tenantID, nodeID uuid.U
 		}
 		fanoutEvents = append(fanoutEvents, normalized...)
 	}
-	s.enrichConnectionGeo(ctx, fanoutEvents)
+	s.enrichEventGeo(ctx, fanoutEvents)
 	s.enrichConnectionThreatIntel(tenantID, fanoutEvents)
 	anomalies := s.detectAnomalies(ctx, tenantID, nodeID, fanoutEvents)
 	if len(anomalies) > 0 {
@@ -1251,16 +1251,16 @@ func drainEventIngestBatchDorisOnly(ctx context.Context, batch storage.EventInge
 	return nil
 }
 
-func (s *Server) enrichConnectionGeo(ctx context.Context, events []IngestedEvent) {
+func (s *Server) enrichEventGeo(ctx context.Context, events []IngestedEvent) {
 	if s == nil || s.ipIntel == nil || len(events) == 0 {
 		return
 	}
-	enrichConnectionGeoWithLookup(ctx, events, s.ipIntel.LookupGeoLocal)
+	enrichEventGeoWithLookup(ctx, events, s.ipIntel.LookupGeoLocal)
 }
 
 type localGeoLookup func(context.Context, string) (*ipintel.Enrichment, error)
 
-func enrichConnectionGeoWithLookup(ctx context.Context, events []IngestedEvent, lookup localGeoLookup) {
+func enrichEventGeoWithLookup(ctx context.Context, events []IngestedEvent, lookup localGeoLookup) {
 	if lookup == nil || len(events) == 0 {
 		return
 	}
@@ -1290,7 +1290,8 @@ func enrichConnectionGeoWithLookup(ctx context.Context, events []IngestedEvent, 
 	for i := range events {
 		ev := &events[i]
 		switch ev.Type {
-		case "conn.open", "conn.close", "conn.state_change", "conn.summary":
+		case "conn.open", "conn.close", "conn.state_change", "conn.summary",
+			"web.request", "web.error", "security.event":
 		default:
 			continue
 		}
@@ -1304,6 +1305,7 @@ func enrichConnectionGeoWithLookup(ctx context.Context, events []IngestedEvent, 
 			setDetailIfEmpty(ev.Details, "country", src.Geo.Country)
 			setDetailIfEmpty(ev.Details, "asn", src.Geo.ASN)
 			setDetailIfEmpty(ev.Details, "as_org", src.Geo.Org)
+			setDetailIfEmpty(ev.Details, "isp", firstNonEmptyGeoString(src.Geo.ISP, src.Geo.Org))
 		}
 		if dst := lookupIP(ev.DstIP); dst != nil {
 			applyConnectionGeoDetails(ev.Details, "dst", dst)
@@ -1321,6 +1323,7 @@ func applyConnectionGeoDetails(details map[string]any, prefix string, enrichment
 	setDetailIfEmpty(details, prefix+"_city", enrichment.Geo.City)
 	setDetailIfEmpty(details, prefix+"_asn", enrichment.Geo.ASN)
 	setDetailIfEmpty(details, prefix+"_as_org", enrichment.Geo.Org)
+	setDetailIfEmpty(details, prefix+"_isp", firstNonEmptyGeoString(enrichment.Geo.ISP, enrichment.Geo.Org))
 	if enrichment.Geo.Latitude != 0 || enrichment.Geo.Longitude != 0 {
 		if _, exists := details[prefix+"_latitude"]; !exists {
 			details[prefix+"_latitude"] = enrichment.Geo.Latitude
@@ -1332,6 +1335,15 @@ func applyConnectionGeoDetails(details map[string]any, prefix string, enrichment
 	setDetailIfEmpty(details, prefix+"_geo_source", enrichment.Source)
 	setDetailIfEmpty(details, prefix+"_geo_dataset_version", enrichment.GeoDatasetVersion)
 	setDetailIfEmpty(details, prefix+"_asn_dataset_version", enrichment.ASNDatasetVersion)
+}
+
+func firstNonEmptyGeoString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func setDetailIfEmpty(details map[string]any, key, value string) {
