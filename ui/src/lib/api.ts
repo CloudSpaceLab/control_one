@@ -6617,6 +6617,7 @@ export interface IPBlockStatus {
   state: "unblocked" | "blocking" | "blocked" | "unblocking" | "partial" | "failed";
   scope: "affected" | "fleet";
   fleet_nodes: number;
+  fleet_target_nodes: number;
   target_nodes: number;
   nodes_applied: number;
   nodes_pending: number;
