@@ -170,16 +170,6 @@ function IPBehaviorPanel(): JSX.Element {
   const [selectedCountryCode, setSelectedCountryCode] = useState('');
   const [selectedCountryDetail, setSelectedCountryDetail] = useState<IPBehaviorCountrySummary | null>(null);
   const [ipQuery, setIpQuery] = useState('');
-  const [profile, setProfile] = useState<IPBehaviorIPProfile | null>(null);
-  const [profileBlocks, setProfileBlocks] = useState<IPBlockProposal[]>([]);
-  const [profileFindings, setProfileFindings] = useState<BehavioralAnomaly[]>([]);
-  const [ipEnrichment, setIpEnrichment] = useState<IpEnrichment | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [proposalState, setProposalState] = useState<string | null>(null);
-  const [enforcement, setEnforcement] = useState<EnforcementTarget>('firewall');
-  const [blockTTL, setBlockTTL] = useState<BlockTTL>(3600);
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  const [confirming, setConfirming] = useState(false);
 
   const since = useMemo(() => windowSince(filters.timeWindow), [filters.timeWindow]);
 
@@ -243,9 +233,6 @@ function IPBehaviorPanel(): JSX.Element {
   const status = overview?.status_counts ?? {};
   const authFailures = (status['401'] ?? 0) + (status['403'] ?? 0);
   const serverErrors = (status['500'] ?? 0) + (status['502'] ?? 0) + (status['503'] ?? 0) + (status['5xx'] ?? 0);
-  const profileBaseline = profile ? findIPBaseline(profile, baselines, filters) : null;
-  const profileInsight = profile ? profileBaselineInsight(profile, profileBaseline) : null;
-  const profileScore = profile ? maxBackendScore(profileFindings) : 0;
 
   const selectCountry = useCallback(async (country: IPBehaviorCountrySummary) => {
     setSelectedCountryCode(country.country_code);
@@ -259,195 +246,11 @@ function IPBehaviorPanel(): JSX.Element {
     }
   }, [client, currentTenantId, since]);
 
-  const refreshProfileBlocks = useCallback(async (sourceIP: string) => {
-    if (!currentTenantId || !sourceIP) return;
-    const cidr = ipv4Cidr24(sourceIP);
-    const exact = exactIPCIDR(sourceIP);
-    const targets = Array.from(new Set([sourceIP, exact, cidr].filter((value): value is string => !!value)));
-    const pages = await Promise.all(
-      targets.map((ipCidr) => client.listBlockProposals({ tenantId: currentTenantId, ipCidr, limit: 20 })),
-    );
-    const merged = new Map<string, IPBlockProposal>();
-    for (const page of pages) {
-      for (const proposal of page.data ?? []) merged.set(proposal.id, proposal);
-    }
-    setProfileBlocks([...merged.values()]);
-  }, [client, currentTenantId]);
-
-  const inspectIP = useCallback(async (overrideIP?: string) => {
+  const openIPInvestigation = useCallback((overrideIP?: string) => {
     const target = (overrideIP ?? ipQuery).trim();
-    if (!currentTenantId || !target) return;
-    setIpQuery(target);
-    setProfile(null);
-    setProfileBlocks([]);
-    setProfileFindings([]);
-    setIpEnrichment(null);
-    setProfileError(null);
-    setProposalState(null);
-    try {
-      const [nextProfile, enrichment] = await Promise.all([
-        client.getIPBehaviorIPProfile({ tenantId: currentTenantId, ip: target, since }),
-        client.enrichIp(target, currentTenantId).catch(() => null),
-      ]);
-      setProfile(nextProfile);
-      setIpEnrichment(enrichment);
-      const [, findings] = await Promise.all([
-        refreshProfileBlocks(nextProfile.source_ip),
-        client.listAnomalies({ tenantId: currentTenantId, sourceIp: nextProfile.source_ip, resolved: false, limit: 10 }),
-      ]);
-      setProfileFindings(findings.data ?? []);
-    } catch (err) {
-      setProfileError(err instanceof Error ? err.message : 'IP profile failed to load');
-    }
-  }, [client, currentTenantId, ipQuery, refreshProfileBlocks, since]);
-
-  const queueBlockProposal = useCallback((target: 'ip' | 'cidr' | 'vhost') => {
-    if (!currentTenantId || !profile?.source_ip) return;
-    const cidr = target === 'cidr' ? ipv4Cidr24(profile.source_ip) : exactIPCIDR(profile.source_ip);
-    if (!cidr) {
-      setProposalState('Block proposal requires a valid IP address');
-      return;
-    }
-    const scopedToVhost = target === 'vhost';
-    const scope = scopedToVhost ? 'app' : 'tenant';
-    const existing = profileBlocks.find((proposal) =>
-      displayIPCIDR(proposal.ip_cidr) === cidr
-      && proposal.enforcement === enforcement
-      && proposal.scope === scope
-      && proposal.vhost === (scopedToVhost ? filters.vhost : '')
-      && ['proposed', 'approved', 'canary', 'dispatching', 'active'].includes(proposal.status),
-    );
-    if (existing) {
-      setProposalState(`${cidr} already has an open ${existing.status} ${enforcement} proposal.`);
-      return;
-    }
-    const label = target === 'cidr' ? 'Block /24 CIDR' : scopedToVhost ? 'Limit to vhost' : 'Block IP';
-    setConfirm({
-      title: label,
-      body: `${cidr} will be proposed for ${enforcement} enforcement with a ${BLOCK_TTL_LABELS[blockTTL]} TTL.`,
-      confirmLabel: 'Create proposal',
-      variant: 'danger',
-      run: async () => {
-        setProposalState('Creating proposal...');
-        const reason = scopedBlockReason(profile, selectedCountry, profileBaseline, filters, target);
-        await client.createBlockProposal({
-          tenant_id: currentTenantId,
-          ip_cidr: cidr,
-          reason,
-          score: profileScore || undefined,
-          ttl_seconds: blockTTL,
-          scope,
-          target_type: 'tenant',
-          server_group: filters.serverGroup,
-          app: filters.app,
-          vhost: scopedToVhost ? filters.vhost : '',
-          enforcement,
-        });
-        setProposalState('Proposal queued for approval');
-        await refreshProfileBlocks(profile.source_ip);
-      },
-    });
-  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileBaseline, profileBlocks, profileScore, refreshProfileBlocks, selectedCountry]);
-
-  const queueASNBlockProposal = useCallback(() => {
-    if (!currentTenantId || !profile?.source_ip) return;
-    const asn = profile.asns?.[0];
-    if (!asn) {
-      setProposalState('ASN proposal requires ASN data for this IP');
-      return;
-    }
-    setConfirm({
-      title: 'Block observed ASN sources',
-      body: `${asn} will create capped per-IP block proposals for observed sources in the selected window. Approval is still required before enforcement.`,
-      confirmLabel: 'Create proposals',
-      variant: 'danger',
-      run: async () => {
-        setProposalState('Creating ASN proposals...');
-        const response = await client.createASNBlockProposals({
-          tenant_id: currentTenantId,
-          asn,
-          since,
-          limit: 25,
-          reason: asnBlockReason(profile, selectedCountry, profileInsight?.description),
-          score: profileScore || undefined,
-          ttl_seconds: blockTTL,
-          scope: filters.vhost ? 'app' : 'tenant',
-          target_type: 'tenant',
-          server_group: filters.serverGroup,
-          app: filters.app,
-          vhost: filters.vhost,
-          enforcement,
-        });
-        const created = response.created?.length ?? 0;
-        const skipped = response.skipped?.length ?? 0;
-        setProposalState(`${created} ASN source proposal${created === 1 ? '' : 's'} queued${skipped > 0 ? `, ${skipped} skipped by safety checks` : ''}`);
-        await refreshProfileBlocks(profile.source_ip);
-      },
-    });
-  }, [blockTTL, client, currentTenantId, enforcement, filters, profile, profileInsight?.description, profileScore, refreshProfileBlocks, selectedCountry, since]);
-
-  const runConfirmed = useCallback(async () => {
-    if (!confirm) return;
-    setConfirming(true);
-    try {
-      await confirm.run();
-    } catch (err) {
-      setProposalState(err instanceof Error ? err.message : 'action failed');
-    } finally {
-      setConfirming(false);
-      setConfirm(null);
-    }
-  }, [confirm]);
-
-  const collectEvidence = useCallback(() => {
-    if (!profile) return;
-    const blob = new Blob([JSON.stringify({ profile, enrichment: ipEnrichment, baseline: profileBaseline, blocks: profileBlocks, findings: profileFindings }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `control-one-ip-${profile.source_ip}-evidence.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setProposalState('Evidence pack generated');
-  }, [ipEnrichment, profile, profileBaseline, profileBlocks, profileFindings]);
-
-  const suppressProfileFindings = useCallback(() => {
-    if (!profile?.source_ip) return;
-    if (profileFindings.length === 0) {
-      setProposalState('No open findings for this IP');
-      return;
-    }
-    setConfirm({
-      title: 'Suppress IP findings',
-      body: `${profileFindings.length} open finding${profileFindings.length === 1 ? '' : 's'} for ${profile.source_ip} will be marked suppressed.`,
-      confirmLabel: 'Suppress',
-      variant: 'danger',
-      run: async () => {
-        setProposalState('Suppressing findings...');
-        await Promise.all(profileFindings.map((finding) => client.suppressAnomaly(finding.id)));
-        setProfileFindings([]);
-        setFindings((current) => current.filter((finding) => !profileFindings.some((profileFinding) => profileFinding.id === finding.id)));
-        setProposalState('Findings suppressed');
-      },
-    });
-  }, [client, profile?.source_ip, profileFindings]);
-
-  const allowlistPartner = useCallback(() => {
-    if (!currentTenantId || !profile?.source_ip) return;
-    const cidr = exactIPCIDR(profile.source_ip);
-    setConfirm({
-      title: 'Allowlist partner IP',
-      body: `${cidr} will be added to the tenant allowlist used by capture and enforcement safety checks.`,
-      confirmLabel: 'Allowlist',
-      run: async () => {
-        setProposalState('Updating tenant allowlist...');
-        const filters = await client.getTenantEventFilters(currentTenantId);
-        const allowlist = Array.from(new Set([...(filters.allowlist_cidrs ?? []), cidr]));
-        await client.updateTenantEventFilters(currentTenantId, { allowlist_cidrs: allowlist });
-        setProposalState('Tenant allowlist updated');
-      },
-    });
-  }, [client, currentTenantId, profile?.source_ip]);
+    if (!target) return;
+    navigate(`/investigate/ip/${encodeURIComponent(target)}`);
+  }, [ipQuery, navigate]);
 
   if (!currentTenantId) {
     return <EmptyState title="Select a tenant" description="Choose a tenant from the header to view IP behavior." />;
