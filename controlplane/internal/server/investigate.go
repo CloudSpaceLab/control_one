@@ -602,16 +602,20 @@ type ipGeoBlock struct {
 }
 
 type ipEnrichResponse struct {
-	Address         string                  `json:"addr"`
-	Classification  []ClassificationChip    `json:"classification"`
-	Geo             ipGeoBlock              `json:"geo"`
-	ThreatFeeds     []ipintel.ThreatFeedHit `json:"threat_feeds"`
-	ReputationScore int                     `json:"reputation_score"`
-	UsageType       string                  `json:"usage_type,omitempty"`
-	IsTor           bool                    `json:"is_tor,omitempty"`
-	TotalReports    int                     `json:"total_reports,omitempty"`
-	LastReportedAt  string                  `json:"last_reported_at,omitempty"`
-	Source          string                  `json:"source,omitempty"`
+	Address           string                  `json:"addr"`
+	Classification    []ClassificationChip    `json:"classification"`
+	Geo               ipGeoBlock              `json:"geo"`
+	ThreatFeeds       []ipintel.ThreatFeedHit `json:"threat_feeds"`
+	ReputationScore   int                     `json:"reputation_score"`
+	UsageType         string                  `json:"usage_type,omitempty"`
+	IsTor             bool                    `json:"is_tor,omitempty"`
+	TotalReports      int                     `json:"total_reports,omitempty"`
+	LastReportedAt    string                  `json:"last_reported_at,omitempty"`
+	Source            string                  `json:"source,omitempty"`
+	GeoDatasetVersion string                  `json:"geo_dataset_version,omitempty"`
+	ASNDatasetVersion string                  `json:"asn_dataset_version,omitempty"`
+	Attribution       string                  `json:"attribution,omitempty"`
+	AttributionURL    string                  `json:"attribution_url,omitempty"`
 }
 
 func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr string) {
@@ -688,6 +692,10 @@ func (s *Server) handleIPEnrich(w http.ResponseWriter, r *http.Request, addr str
 				resp.TotalReports = e.TotalReports
 			}
 			resp.LastReportedAt = e.LastReportedAt
+			resp.GeoDatasetVersion = e.GeoDatasetVersion
+			resp.ASNDatasetVersion = e.ASNDatasetVersion
+			resp.Attribution = e.Attribution
+			resp.AttributionURL = e.AttributionURL
 			if resp.Source == "" {
 				resp.Source = e.Source
 			} else if e.Source != "" && !strings.Contains(resp.Source, e.Source) {

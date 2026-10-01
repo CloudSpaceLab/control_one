@@ -26,6 +26,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/doris"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/eventbus"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 	"github.com/CloudSpaceLab/control_one/internal/securityschema"
@@ -700,6 +701,7 @@ func (s *Server) prepareEventFanout(ctx context.Context, tenantID, nodeID uuid.U
 		}
 		fanoutEvents = append(fanoutEvents, normalized...)
 	}
+	s.enrichEventGeo(ctx, fanoutEvents)
 	s.enrichConnectionThreatIntel(tenantID, fanoutEvents)
 	anomalies := s.detectAnomalies(ctx, tenantID, nodeID, fanoutEvents)
 	if len(anomalies) > 0 {
@@ -1247,6 +1249,112 @@ func drainEventIngestBatchDorisOnly(ctx context.Context, batch storage.EventInge
 		return err
 	}
 	return nil
+}
+
+func (s *Server) enrichEventGeo(ctx context.Context, events []IngestedEvent) {
+	if s == nil || s.ipIntel == nil || len(events) == 0 {
+		return
+	}
+	enrichEventGeoWithLookup(ctx, events, s.ipIntel.LookupGeoLocal)
+}
+
+type localGeoLookup func(context.Context, string) (*ipintel.Enrichment, error)
+
+func enrichEventGeoWithLookup(ctx context.Context, events []IngestedEvent, lookup localGeoLookup) {
+	if lookup == nil || len(events) == 0 {
+		return
+	}
+	cache := make(map[string]*ipintel.Enrichment)
+	lookupIP := func(raw string) *ipintel.Enrichment {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil
+		}
+		if hit, ok := cache[raw]; ok {
+			return hit
+		}
+		parsed := net.ParseIP(raw)
+		if parsed == nil || !isPublicRoutableIP(parsed) {
+			cache[raw] = nil
+			return nil
+		}
+		hit, err := lookup(ctx, raw)
+		if err != nil || hit == nil {
+			cache[raw] = nil
+			return nil
+		}
+		cache[raw] = hit
+		return hit
+	}
+
+	for i := range events {
+		ev := &events[i]
+		switch ev.Type {
+		case "conn.open", "conn.close", "conn.state_change", "conn.summary",
+			"web.request", "web.error", "security.event":
+		default:
+			continue
+		}
+		if ev.Details == nil {
+			ev.Details = make(map[string]any)
+		}
+		if src := lookupIP(ev.SrcIP); src != nil {
+			applyConnectionGeoDetails(ev.Details, "src", src)
+			// Existing behavior/anomaly code consumes these source aliases.
+			setDetailIfEmpty(ev.Details, "country_code", src.Geo.CountryCode)
+			setDetailIfEmpty(ev.Details, "country", src.Geo.Country)
+			setDetailIfEmpty(ev.Details, "asn", src.Geo.ASN)
+			setDetailIfEmpty(ev.Details, "as_org", src.Geo.Org)
+			setDetailIfEmpty(ev.Details, "isp", firstNonEmptyGeoString(src.Geo.ISP, src.Geo.Org))
+		}
+		if dst := lookupIP(ev.DstIP); dst != nil {
+			applyConnectionGeoDetails(ev.Details, "dst", dst)
+		}
+	}
+}
+
+func applyConnectionGeoDetails(details map[string]any, prefix string, enrichment *ipintel.Enrichment) {
+	if details == nil || enrichment == nil {
+		return
+	}
+	setDetailIfEmpty(details, prefix+"_country_code", enrichment.Geo.CountryCode)
+	setDetailIfEmpty(details, prefix+"_country", enrichment.Geo.Country)
+	setDetailIfEmpty(details, prefix+"_region", enrichment.Geo.Region)
+	setDetailIfEmpty(details, prefix+"_city", enrichment.Geo.City)
+	setDetailIfEmpty(details, prefix+"_asn", enrichment.Geo.ASN)
+	setDetailIfEmpty(details, prefix+"_as_org", enrichment.Geo.Org)
+	setDetailIfEmpty(details, prefix+"_isp", firstNonEmptyGeoString(enrichment.Geo.ISP, enrichment.Geo.Org))
+	if enrichment.Geo.Latitude != 0 || enrichment.Geo.Longitude != 0 {
+		if _, exists := details[prefix+"_latitude"]; !exists {
+			details[prefix+"_latitude"] = enrichment.Geo.Latitude
+		}
+		if _, exists := details[prefix+"_longitude"]; !exists {
+			details[prefix+"_longitude"] = enrichment.Geo.Longitude
+		}
+	}
+	setDetailIfEmpty(details, prefix+"_geo_source", enrichment.Source)
+	setDetailIfEmpty(details, prefix+"_geo_dataset_version", enrichment.GeoDatasetVersion)
+	setDetailIfEmpty(details, prefix+"_asn_dataset_version", enrichment.ASNDatasetVersion)
+}
+
+func firstNonEmptyGeoString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func setDetailIfEmpty(details map[string]any, key, value string) {
+	value = strings.TrimSpace(value)
+	if details == nil || value == "" {
+		return
+	}
+	if current, ok := details[key]; ok && strings.TrimSpace(fmt.Sprint(current)) != "" {
+		return
+	}
+	details[key] = value
 }
 
 func (s *Server) enrichConnectionThreatIntel(tenantID uuid.UUID, events []IngestedEvent) {

@@ -774,6 +774,10 @@ export interface IpEnrichment {
   threat_feeds?: { feed: string; severity?: string; first_seen?: string }[];
   reputation_score?: number;
   source?: string;
+  geo_dataset_version?: string;
+  asn_dataset_version?: string;
+  attribution?: string;
+  attribution_url?: string;
 }
 
 export interface SavedSearch {

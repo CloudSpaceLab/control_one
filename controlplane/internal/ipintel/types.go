@@ -25,16 +25,20 @@ import (
 // Enrichment is the canonical shape returned to the API. JSON tags match
 // the wire format consumed by the UI's IpEnrichment type.
 type Enrichment struct {
-	Addr            string          `json:"addr"`
-	Geo             GeoInfo         `json:"geo"`
-	ThreatFeeds     []ThreatFeedHit `json:"threat_feeds,omitempty"`
-	ReputationScore int             `json:"reputation_score"`
-	UsageType       string          `json:"usage_type,omitempty"`
-	IsTor           bool            `json:"is_tor,omitempty"`
-	TotalReports    int             `json:"total_reports,omitempty"`
-	LastReportedAt  string          `json:"last_reported_at,omitempty"`
-	Source          string          `json:"source,omitempty"` // "ipquery" | "abuseipdb" | "cache"
-	FetchedAt       time.Time       `json:"fetched_at"`
+	Addr              string          `json:"addr"`
+	Geo               GeoInfo         `json:"geo"`
+	ThreatFeeds       []ThreatFeedHit `json:"threat_feeds,omitempty"`
+	ReputationScore   int             `json:"reputation_score"`
+	UsageType         string          `json:"usage_type,omitempty"`
+	IsTor             bool            `json:"is_tor,omitempty"`
+	TotalReports      int             `json:"total_reports,omitempty"`
+	LastReportedAt    string          `json:"last_reported_at,omitempty"`
+	Source            string          `json:"source,omitempty"`
+	GeoDatasetVersion string          `json:"geo_dataset_version,omitempty"`
+	ASNDatasetVersion string          `json:"asn_dataset_version,omitempty"`
+	Attribution       string          `json:"attribution,omitempty"`
+	AttributionURL    string          `json:"attribution_url,omitempty"`
+	FetchedAt         time.Time       `json:"fetched_at"`
 }
 
 // GeoInfo captures geolocation + network-owner facts.
@@ -80,6 +84,9 @@ type httpDoer interface {
 func Validate(cfg config.IPIntelConfig) (enabled bool, primary string) {
 	if !cfg.Enabled {
 		return false, ""
+	}
+	if cfg.CityMMDBPath != "" || cfg.ASNMMDBPath != "" {
+		return true, "dbip-lite"
 	}
 	if cfg.IpqueryBaseURL != "" {
 		return true, "ipquery"

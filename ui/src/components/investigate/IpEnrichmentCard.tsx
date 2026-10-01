@@ -41,10 +41,22 @@ export function IpEnrichmentCard({ enrichment, loading }: IpEnrichmentCardProps)
             <div className="mt-2">
               <PostureBar score={score} ariaLabel="Blacklist confidence score" />
             </div>
-            {enrichment.source && (
+            {(enrichment.source || enrichment.geo_dataset_version || enrichment.asn_dataset_version) && (
               <div className="mt-2 font-mono text-[0.65rem] uppercase tracking-wider text-text-muted">
-                Source: {enrichment.source}
+                {enrichment.source ? `Source: ${enrichment.source}` : 'Offline enrichment'}
+                {enrichment.geo_dataset_version ? ` · Geo ${enrichment.geo_dataset_version}` : ''}
+                {enrichment.asn_dataset_version ? ` · ASN ${enrichment.asn_dataset_version}` : ''}
               </div>
+            )}
+            {enrichment.attribution && enrichment.attribution_url && (
+              <a
+                className="mt-1 inline-flex text-[0.7rem] text-text-muted underline underline-offset-2 hover:text-foreground"
+                href={enrichment.attribution_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {enrichment.attribution}
+              </a>
             )}
           </div>
 

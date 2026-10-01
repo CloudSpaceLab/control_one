@@ -22,18 +22,6 @@ services:
         limits:
           memory: "${REDIS_MEMORY_LIMIT:-192m}"
 
-  ipq:
-    image: akyriako78/ipquery:0.1.18
-    restart: unless-stopped
-    expose:
-      - "8080"
-    volumes:
-      - ./ipquery-geolite:/home/nonroot/geolite:ro
-    deploy:
-      resources:
-        limits:
-          memory: 128m
-
   controlplane:
     image: controlone/controlplane:${TAG:-latest}
     build:
@@ -43,8 +31,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      ipq:
-        condition: service_started
     # Doris FE redirects stream loads to the BE's 172.31.0.x address.
     # Attach the controlplane to that network too so follow-up PUTs can land.
     networks:
@@ -73,7 +59,8 @@ services:
       CONTROLPLANE_DORIS_USER: "root"
       CONTROLPLANE_DORIS_PASSWORD: "${DORIS_PASSWORD}"
       CONTROLPLANE_DORIS_APPLY_MIGRATIONS: "true"
-      IPQUERY_BASE_URL: "http://ipq:8080"
+      IP_INTEL_CITY_MMDB: "/var/lib/control-one/ip-intel/dbip-city-lite.mmdb"
+      IP_INTEL_ASN_MMDB: "/var/lib/control-one/ip-intel/dbip-asn-lite.mmdb"
       ABUSEIPDB_API_KEY: "${ABUSEIPDB_API_KEY}"
       THREAT_INTEL_SNAPSHOT_DIR: "/var/lib/control-one/threat-intel"
       CONTROL_ONE_LOG_DUMPS_DIR: "/var/lib/control-one/log-dumps"
@@ -83,6 +70,7 @@ services:
       - ./analytics:/var/lib/control-one/analytics
       - ./reports:/var/lib/control-one/reports
       - ./threat-intel:/var/lib/control-one/threat-intel
+      - ./ip-intel:/var/lib/control-one/ip-intel:ro
       - ./log-dumps:/var/lib/control-one/log-dumps
     ports:
       - "127.0.0.1:8443:8443"

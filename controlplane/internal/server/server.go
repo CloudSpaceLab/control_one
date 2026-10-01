@@ -2979,18 +2979,24 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 		logger.Warn("init aml service client", zap.Error(err))
 	}
 
-	// IP intelligence (Investigate). Wires akyriako/ipquery + AbuseIPDB with
-	// a Postgres-backed cache when *storage.Store is available; falls back
-	// to an in-memory cache otherwise (tests + minimal deployments).
+	// IP intelligence (Investigate + event ingest). Local DB-IP MMDB is
+	// preferred for offline geo/ASN; AbuseIPDB is optional reputation
+	// augmentation. ipquery remains a compatibility fallback only.
 	if enabled, primary := ipintel.Validate(cfg.IPIntel); enabled {
 		cache := ipintel.NewMemCache()
 		if concrete, ok := store.(*storage.Store); ok && concrete != nil {
 			cache = storage.NewIPIntelCache(concrete.DB())
 		}
 		s.ipIntel = ipintel.New(cfg.IPIntel, cache)
-		logger.Info("ipintel enabled", zap.String("primary_provider", primary))
+		if err := s.ipIntel.InitError(); err != nil {
+			logger.Warn("ipintel local database partially unavailable", zap.Error(err))
+		}
+		logger.Info("ipintel enabled",
+			zap.String("primary_provider", primary),
+			zap.Bool("offline_geo", s.ipIntel.OfflineGeoEnabled()),
+		)
 	} else {
-		logger.Info("ipintel disabled — set IPQUERY_BASE_URL or ABUSEIPDB_API_KEY to enable")
+		logger.Info("ipintel disabled — configure IP_INTEL_CITY_MMDB/IP_INTEL_ASN_MMDB or ABUSEIPDB_API_KEY")
 	}
 	analyticsMode := effectiveAnalyticsMode(cfg)
 	logger.Info("analytics backend selected", zap.String("mode", analyticsMode))
@@ -3240,6 +3246,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	if s.localAnalytics != nil {
 		_ = s.localAnalytics.Close()
+	}
+	if s.ipIntel != nil {
+		_ = s.ipIntel.Close()
 	}
 	s.stopEnrollmentReaper()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
