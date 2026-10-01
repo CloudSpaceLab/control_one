@@ -112,7 +112,7 @@ function feedLink(item: TeamActivityItem): string | null {
 export function TeamActivity(): JSX.Element {
   const api = useApiClient();
   const { currentTenantId, currentTenant, loading: tenantLoading } = useTenant();
-  const [days, setDays] = useState('30');
+  const [days, setDays] = useState('1');
   const [data, setData] = useState<TeamActivityState>({
     metrics: null,
     trends: [],
@@ -487,6 +487,12 @@ function FeedRow({ item }: { item: TeamActivityItem }): JSX.Element {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-sm">
+          <span
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500/10 text-[10px] font-semibold text-brand-400"
+            aria-label={`Analyst ${item.actor_name || 'Unknown analyst'}`}
+          >
+            {initials(item.actor_name || 'Unknown analyst')}
+          </span>
           <span className="font-medium text-foreground">{item.actor_name || 'Unknown analyst'}</span>
           <span className="text-text-secondary">{timeAgo(item.timestamp)}</span>
         </div>
