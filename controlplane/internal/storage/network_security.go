@@ -57,18 +57,18 @@ type ActiveBlock struct {
 // IPBlockStatus is the current enforcement state for one IP across a tenant.
 // Scope reflects actual node coverage, not the operator's original request.
 type IPBlockStatus struct {
-	Active          bool       `json:"active"`
-	State           string     `json:"state"`
-	Scope           string     `json:"scope"`
-	FleetNodes      int        `json:"fleet_nodes"`
+	Active           bool       `json:"active"`
+	State            string     `json:"state"`
+	Scope            string     `json:"scope"`
+	FleetNodes       int        `json:"fleet_nodes"`
 	FleetTargetNodes int       `json:"fleet_target_nodes"`
-	TargetNodes     int        `json:"target_nodes"`
-	Provenance      string     `json:"provenance"`
-	NodesApplied    int        `json:"nodes_applied"`
-	NodesPending    int        `json:"nodes_pending"`
-	NodesRemoving   int        `json:"nodes_removing"`
-	NodesFailed     int        `json:"nodes_failed"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	TargetNodes      int        `json:"target_nodes"`
+	Provenance       string     `json:"provenance"`
+	NodesApplied     int        `json:"nodes_applied"`
+	NodesPending     int        `json:"nodes_pending"`
+	NodesRemoving    int        `json:"nodes_removing"`
+	NodesFailed      int        `json:"nodes_failed"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
 }
 
 // NodeFirewallRuleInsert is the payload for CreateNodeFirewallRule.
@@ -503,7 +503,6 @@ func scanNodeFirewallRuleRows(rows *sql.Rows) ([]NodeFirewallRule, error) {
 	}
 	return out, rows.Err()
 }
-
 
 func ipEntityKeys(value string) (string, string) {
 	value = strings.TrimSpace(value)
