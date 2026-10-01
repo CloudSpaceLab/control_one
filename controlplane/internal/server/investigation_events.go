@@ -309,6 +309,14 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Limit:         scope.Limit,
 	})
 	if err != nil {
+		if entityType != "ip" {
+			if errors.Is(err, errInvestigationAnalyticsUnavailable) {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if s != nil && s.logger != nil {
 			s.logger.Warn("timeline analytics read unavailable",
 				zap.String("source", source),
