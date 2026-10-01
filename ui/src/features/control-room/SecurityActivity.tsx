@@ -1,5 +1,6 @@
 import type { ControlRoomExecutiveOverview } from '@/lib/api';
 import { Panel, Sparkline } from '@/components/kit';
+import { CONTROL_ROOM_COPY } from './copy';
 
 export function SecurityActivity({ overview }: { overview: ControlRoomExecutiveOverview }) {
   const available = overview.availability.activity;
@@ -15,9 +16,9 @@ export function SecurityActivity({ overview }: { overview: ControlRoomExecutiveO
         emptyLabel={available ? 'No security activity' : 'Activity unavailable'}
       />
       <div className="grid grid-cols-3 divide-x divide-border-subtle rounded-md border border-border-subtle bg-surface">
-        <ActivityFact label="Violations" value={overview.availability.violations ? overview.violations.total : 'N/A'} />
-        <ActivityFact label="Auto handled" value={overview.availability.response ? overview.response.handled_automatically : 'N/A'} />
-        <ActivityFact label="Needs attention" value={overview.availability.attention ? overview.attention.total : 'N/A'} />
+        <ActivityFact label={CONTROL_ROOM_COPY.ruleViolations} value={overview.availability.violations ? overview.violations.total : 'N/A'} />
+        <ActivityFact label={CONTROL_ROOM_COPY.handledAutomatically} value={overview.availability.response ? overview.response.handled_automatically : 'N/A'} />
+        <ActivityFact label={CONTROL_ROOM_COPY.needsAttention} value={overview.availability.attention ? overview.attention.total : 'N/A'} />
       </div>
     </Panel>
   );
