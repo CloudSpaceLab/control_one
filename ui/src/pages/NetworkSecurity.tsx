@@ -759,9 +759,9 @@ function BlockApprovalQueue(): JSX.Element {
 
   return (
     <div className="space-y-4">
-      <Panel eyebrow="GOVERNED RESPONSE" title="Approval queue" toneAccent={proposals.length > 0 ? 'warning' : 'healthy'}>
+      <Panel eyebrow="RESPONSE" title="Approvals" toneAccent={proposals.length > 0 ? 'warning' : 'healthy'}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-text-secondary">Review alert evidence and safety scope before allowing a proposed block to reach any node.</p>
+          <p className="text-sm text-text-secondary">Review scope and evidence before approving a block.</p>
 	          <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
 	            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
@@ -775,7 +775,7 @@ function BlockApprovalQueue(): JSX.Element {
         </div>
       )}
       {!loading && proposals.length === 0 ? (
-        <EmptyState title="No proposals awaiting approval" description="Correlation and manually created proposals appear here before enforcement." />
+        <EmptyState title="No approvals waiting" description="No block responses require approval." />
       ) : (
         <div className="overflow-x-auto rounded border border-border">
           <table className="w-full text-sm">
@@ -792,7 +792,7 @@ function BlockApprovalQueue(): JSX.Element {
                     <td className="max-w-md px-3 py-3"><div className="font-medium">{evidence.rule ?? 'Operator-created block proposal'}</div><div className="mt-1 text-xs text-text-secondary">{proposal.reason}</div>{evidence.alertId && <Link className="mt-2 inline-block text-xs text-brand-400 hover:underline" to={`/investigate/alert/${evidence.alertId}`}>View related alert evidence</Link>}</td>
                     <td className="px-3 py-3 text-text-secondary"><div>{proposal.target_type}{proposal.target_id ? ` · ${proposal.target_id.slice(0, 8)}` : ''}</div><div>{proposal.enforcement}</div></td>
                     <td className="px-3 py-3 text-text-secondary">{formatDateTime(proposal.expires_at)}</td>
-                    <td className="px-3 py-3"><StatusTag tone={proposal.protected_override ? 'warning' : 'healthy'}>{proposal.protected_override ? 'protected override' : 'checks run on approval'}</StatusTag></td>
+                    <td className="px-3 py-3"><StatusTag tone={proposal.protected_override ? 'warning' : 'healthy'}>{proposal.protected_override ? 'protected override' : 'safety checks pending'}</StatusTag></td>
                     <td className="px-3 py-3"><div className="flex gap-2"><Button size="sm" onClick={() => { setDecision({ proposal, action: 'approve' }); setDecisionReason(''); }}>Approve</Button><Button size="sm" variant="danger" onClick={() => { setDecision({ proposal, action: 'reject' }); setDecisionReason(''); }}>Reject</Button></div></td>
                   </tr>
                 );
@@ -1105,7 +1105,7 @@ function FirewallManagementPanel(): JSX.Element {
               <EmptyState
                 icon={<ShieldAlert className="h-8 w-8" />}
                 title="No firewall reports"
-                description="No node agent has reported host firewall state in the selected window."
+                description="Waiting for node firewall reports."
               />
             ) : (
               <div className="overflow-x-auto rounded-lg border border-border-subtle">
