@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +46,7 @@ type ActiveBlock struct {
 	Reason         *string
 	ExpiresAt      *time.Time
 	CreatedAt      time.Time
+	Provenance     string
 	TotalNodes     int
 	NodesApplied   int
 	NodesFailed    int
@@ -60,6 +63,7 @@ type IPBlockStatus struct {
 	FleetNodes      int        `json:"fleet_nodes"`
 	FleetTargetNodes int       `json:"fleet_target_nodes"`
 	TargetNodes     int        `json:"target_nodes"`
+	Provenance      string     `json:"provenance"`
 	NodesApplied    int        `json:"nodes_applied"`
 	NodesPending    int        `json:"nodes_pending"`
 	NodesRemoving   int        `json:"nodes_removing"`
@@ -253,6 +257,7 @@ func (s *Store) ListActiveNodeFirewallRulesForIP(ctx context.Context, tenantID u
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
+	host, cidr := ipEntityKeys(ip)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.id, r.entity_action_id, r.node_id, r.tenant_id, r.action, r.direction,
 		       r.protocol, r.port, r.source, r.dest, r.tag, r.status, r.error, r.job_id,
@@ -262,12 +267,12 @@ func (s *Store) ListActiveNodeFirewallRulesForIP(ctx context.Context, tenantID u
 		LEFT JOIN jobs j ON j.id = r.job_id
 		WHERE ea.tenant_id = $1
 		  AND ea.entity_type = 'ip'
-		  AND ea.entity_id = $2
+		  AND (ea.entity_id IN ($2, $3) OR r.source IN ($2, $3))
 		  AND ea.action = 'block'
 		  AND r.status IN ('pending','applied','failed')
 		  AND NOT (r.status = 'pending' AND COALESCE(j.type, '') = 'firewall.rule_delete')
 		ORDER BY r.requested_at ASC
-	`, tenantID, strings.TrimSpace(ip))
+	`, tenantID, host, cidr)
 	if err != nil {
 		return nil, fmt.Errorf("list active firewall rules for ip: %w", err)
 	}
@@ -280,7 +285,8 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
-	status := &IPBlockStatus{State: "unblocked", Scope: "affected"}
+	host, cidr := ipEntityKeys(ip)
+	status := &IPBlockStatus{State: "unblocked", Scope: "affected", Provenance: "manual"}
 	var expires sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		WITH active_nodes AS (
@@ -300,7 +306,7 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			LEFT JOIN jobs j ON j.id = r.job_id
 			WHERE ea.tenant_id = $1
 			  AND ea.entity_type = 'ip'
-			  AND ea.entity_id = $2
+			  AND ea.entity_id IN ($2, $3)
 			  AND ea.action = 'block'
 			  AND r.status IN ('pending','applied','failed')
 			GROUP BY r.node_id
@@ -318,11 +324,23 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 				FROM entity_actions ea
 				WHERE ea.tenant_id = $1
 				  AND ea.entity_type = 'ip'
-				  AND ea.entity_id = $2
+				  AND ea.entity_id IN ($2, $3)
 				  AND ea.action = 'block'
-			) AS expires_at
+			) AS expires_at,
+			COALESCE((
+				SELECT CASE WHEN ea.created_by IS NULL THEN 'auto' ELSE 'manual' END
+				FROM entity_actions ea
+				JOIN node_firewall_rules r ON r.entity_action_id = ea.id
+				WHERE ea.tenant_id = $1
+				  AND ea.entity_type = 'ip'
+				  AND ea.entity_id IN ($2, $3)
+				  AND ea.action = 'block'
+				  AND r.status IN ('pending','applied','failed')
+				ORDER BY ea.created_at DESC
+				LIMIT 1
+			), 'manual') AS provenance
 		FROM per_node
-	`, tenantID, strings.TrimSpace(ip)).Scan(
+	`, tenantID, host, cidr).Scan(
 		&status.FleetNodes,
 		&status.FleetTargetNodes,
 		&status.TargetNodes,
@@ -331,6 +349,7 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 		&status.NodesRemoving,
 		&status.NodesFailed,
 		&expires,
+		&status.Provenance,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get ip block status: %w", err)
@@ -382,6 +401,7 @@ func (s *Store) ListActiveBlocks(ctx context.Context, tenantID uuid.UUID, limit,
 		SELECT
 			ea.id, ea.tenant_id, ea.entity_type, ea.entity_id,
 			ea.action, ea.reason, ea.expires_at, ea.created_at,
+			CASE WHEN ea.created_by IS NULL THEN 'auto' ELSE 'manual' END AS provenance,
 			COUNT(r.id) AS total_nodes,
 			COUNT(r.id) FILTER (WHERE r.status = 'applied') AS nodes_applied,
 			COUNT(r.id) FILTER (WHERE r.status = 'failed')  AS nodes_failed,
@@ -407,7 +427,7 @@ func (s *Store) ListActiveBlocks(ctx context.Context, tenantID uuid.UUID, limit,
 		var b ActiveBlock
 		if err := rows.Scan(
 			&b.EntityActionID, &b.TenantID, &b.EntityType, &b.EntityID,
-			&b.Action, &b.Reason, &b.ExpiresAt, &b.CreatedAt,
+			&b.Action, &b.Reason, &b.ExpiresAt, &b.CreatedAt, &b.Provenance,
 			&b.TotalNodes, &b.NodesApplied, &b.NodesFailed, &b.NodesPending, &b.NodesRemoved,
 		); err != nil {
 			return nil, fmt.Errorf("scan active block: %w", err)
@@ -482,4 +502,33 @@ func scanNodeFirewallRuleRows(rows *sql.Rows) ([]NodeFirewallRule, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+
+func ipEntityKeys(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ""
+	}
+	if ip, network, err := net.ParseCIDR(value); err == nil {
+		bits := 128
+		if ip.To4() != nil {
+			bits = 32
+		}
+		host := ip.String()
+		if ones, total := network.Mask.Size(); ones == total {
+			return host, fmt.Sprintf("%s/%d", host, bits)
+		}
+		return host, network.String()
+	}
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return value, value
+	}
+	bits := 128
+	if ip.To4() != nil {
+		bits = 32
+	}
+	host := ip.String()
+	return host, fmt.Sprintf("%s/%d", host, bits)
 }
