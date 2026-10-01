@@ -82,6 +82,37 @@ func TestConnectionsListMarksPendingProjectionDegraded(t *testing.T) {
 	}
 }
 
+func TestConnectionsListKeepsNonIPAnalyticsFailuresLoud(t *testing.T) {
+	t.Parallel()
+
+	store, err := smallanalytics.Open(context.Background(), smallanalytics.Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open small analytics: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close small analytics: %v", err)
+	}
+
+	tenantID := uuid.New()
+	srv := &Server{
+		cfg:            &config.Config{Analytics: config.AnalyticsConfig{Mode: "small"}},
+		localAnalytics: store,
+	}
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/connections?tenant_id="+tenantID.String()+"&limit=250",
+		nil,
+	)
+	req = withPrincipal(req, &auth.Principal{Type: "user", Subject: "viewer", Roles: []string{roleViewer}})
+	rec := httptest.NewRecorder()
+
+	srv.handleConnectionsList(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected non-IP analytics failure 500 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestConnectionsListReturnsDegradedResponseWhenAnalyticsReadFails(t *testing.T) {
 	t.Parallel()
 
