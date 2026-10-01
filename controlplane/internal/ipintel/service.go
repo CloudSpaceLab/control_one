@@ -23,10 +23,11 @@ type Cache interface {
 // single-flight, and returns a canonical Enrichment.
 type Service struct {
 	cfg       config.IPIntelConfig
-	primary   Provider // ipquery or abuseipdb
-	secondary Provider // optional: abuseipdb when ipquery is primary
+	primary   Provider
+	secondary Provider
 	cache     Cache
 	inflight  singleflight
+	initErr   error
 }
 
 // New constructs a Service from config. When cfg.Enabled is false or no
@@ -41,7 +42,14 @@ func New(cfg config.IPIntelConfig, cache Cache) *Service {
 	if !cfg.Enabled {
 		return s
 	}
-	if cfg.IpqueryBaseURL != "" {
+	if cfg.CityMMDBPath != "" || cfg.ASNMMDBPath != "" {
+		provider, err := NewDBIPMMDBProvider(cfg.CityMMDBPath, cfg.ASNMMDBPath)
+		if provider != nil {
+			s.primary = provider
+		}
+		s.initErr = err
+	}
+	if s.primary == nil && cfg.IpqueryBaseURL != "" {
 		s.primary = NewIpqueryProvider(cfg.IpqueryBaseURL, httpClient)
 	}
 	if cfg.AbuseIPDBKey != "" {
@@ -58,9 +66,55 @@ func New(cfg config.IPIntelConfig, cache Cache) *Service {
 // Enabled reports whether at least one provider is wired.
 func (s *Service) Enabled() bool { return s.primary != nil }
 
+// InitError reports a local provider initialization problem without disabling
+// other configured providers (for example AbuseIPDB).
+func (s *Service) InitError() error {
+	if s == nil {
+		return nil
+	}
+	return s.initErr
+}
+
+// LookupGeoLocal performs only an offline geo/ASN lookup. It never consults
+// Postgres and never calls a network provider, making it safe for event ingest.
+func (s *Service) LookupGeoLocal(ctx context.Context, ip string) (*Enrichment, error) {
+	if s == nil {
+		return nil, ErrDisabled
+	}
+	provider, ok := s.primary.(interface {
+		Provider
+		Offline() bool
+	})
+	if !ok || !provider.Offline() {
+		return nil, ErrOfflineGeoUnavailable
+	}
+	return provider.Lookup(ctx, ip)
+}
+
+// Close releases local MMDB mappings when present.
+func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	var errs []error
+	for _, provider := range []Provider{s.primary, s.secondary} {
+		closer, ok := provider.(interface{ Close() error })
+		if !ok || closer == nil {
+			continue
+		}
+		if err := closer.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // ErrDisabled is returned when no provider is configured. Callers should
 // surface a friendly empty enrichment, not a 500.
-var ErrDisabled = errors.New("ipintel: disabled (no provider configured)")
+var (
+	ErrDisabled            = errors.New("ipintel: disabled (no provider configured)")
+	ErrOfflineGeoUnavailable = errors.New("ipintel: offline geo provider unavailable")
+)
 
 // LookupCached returns an enrichment entry only when it already exists in the
 // local cache. It never calls an external provider, so request-path callers can
@@ -188,6 +242,18 @@ func mergeEnrichment(primary, secondary *Enrichment) *Enrichment {
 		out.LastReportedAt = secondary.LastReportedAt
 	}
 	out.ThreatFeeds = mergeThreatFeedHits(out.ThreatFeeds, secondary.ThreatFeeds)
+	if out.GeoDatasetVersion == "" {
+		out.GeoDatasetVersion = secondary.GeoDatasetVersion
+	}
+	if out.ASNDatasetVersion == "" {
+		out.ASNDatasetVersion = secondary.ASNDatasetVersion
+	}
+	if out.Attribution == "" {
+		out.Attribution = secondary.Attribution
+	}
+	if out.AttributionURL == "" {
+		out.AttributionURL = secondary.AttributionURL
+	}
 	if primary.Source != "" && secondary.Source != "" && primary.Source != secondary.Source {
 		out.Source = primary.Source + "+" + secondary.Source
 	} else if out.Source == "" {

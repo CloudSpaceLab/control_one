@@ -84,21 +84,19 @@ type PolicyConfig struct {
 	SigningKeyPath string `mapstructure:"signing_key_path"`
 }
 
-// IPIntelConfig governs external IP enrichment cache fills. Behavioral
-// request-path blacklist checks use the local threat-intel snapshot first and
-// cached enrichment from this service. Explicit Investigate IP lookups fill a
-// cache miss from the configured provider. When IpqueryBaseURL is set the
-// service can call a self-hosted akyriako/ipquery instance for combined geo +
-// ASN + risk lookups; otherwise it can fall back to AbuseIPDB-only when an API
-// key is configured. Results are cached in Postgres (ip_enrichment_cache) for
-// CacheTTL; set to 0 to disable caching, default 1h.
+// IPIntelConfig governs IP enrichment. Geo/ASN should come from local MMDB
+// files so investigation and event ingest work without internet access.
+// AbuseIPDB is optional reputation augmentation. IpqueryBaseURL remains only
+// as a compatibility fallback when no local MMDB is configured.
 type IPIntelConfig struct {
 	Enabled          bool          `mapstructure:"enabled"`
+	CityMMDBPath     string        `mapstructure:"city_mmdb_path"`
+	ASNMMDBPath      string        `mapstructure:"asn_mmdb_path"`
 	IpqueryBaseURL   string        `mapstructure:"ipquery_base_url"`
 	AbuseIPDBKey     string        `mapstructure:"abuseipdb_api_key"`
 	CacheTTL         time.Duration `mapstructure:"cache_ttl"`
 	HTTPTimeout      time.Duration `mapstructure:"http_timeout"`
-	AbuseScoreCutoff int           `mapstructure:"abuse_score_cutoff"` // chip emitted when score ≥ this; default 25
+	AbuseScoreCutoff int           `mapstructure:"abuse_score_cutoff"`
 }
 
 // ThreatIntelConfig governs locally downloaded blacklist/feed snapshots.
@@ -508,9 +506,13 @@ func setDefaults(v *viper.Viper) {
 
 	// IP intelligence (Investigate)
 	v.SetDefault("ipintel.enabled", true)
+	v.SetDefault("ipintel.city_mmdb_path", "")
+	v.SetDefault("ipintel.asn_mmdb_path", "")
 	v.SetDefault("ipintel.cache_ttl", time.Hour)
 	v.SetDefault("ipintel.http_timeout", 5*time.Second)
 	v.SetDefault("ipintel.abuse_score_cutoff", 25)
+	_ = v.BindEnv("ipintel.city_mmdb_path", "IP_INTEL_CITY_MMDB")
+	_ = v.BindEnv("ipintel.asn_mmdb_path", "IP_INTEL_ASN_MMDB")
 	_ = v.BindEnv("ipintel.ipquery_base_url", "IPQUERY_BASE_URL")
 	_ = v.BindEnv("ipintel.abuseipdb_api_key", "ABUSEIPDB_API_KEY")
 

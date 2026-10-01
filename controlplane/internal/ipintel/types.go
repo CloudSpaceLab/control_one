@@ -33,8 +33,12 @@ type Enrichment struct {
 	IsTor           bool            `json:"is_tor,omitempty"`
 	TotalReports    int             `json:"total_reports,omitempty"`
 	LastReportedAt  string          `json:"last_reported_at,omitempty"`
-	Source          string          `json:"source,omitempty"` // "ipquery" | "abuseipdb" | "cache"
-	FetchedAt       time.Time       `json:"fetched_at"`
+	Source            string          `json:"source,omitempty"`
+	GeoDatasetVersion string          `json:"geo_dataset_version,omitempty"`
+	ASNDatasetVersion string          `json:"asn_dataset_version,omitempty"`
+	Attribution       string          `json:"attribution,omitempty"`
+	AttributionURL    string          `json:"attribution_url,omitempty"`
+	FetchedAt         time.Time       `json:"fetched_at"`
 }
 
 // GeoInfo captures geolocation + network-owner facts.
@@ -80,6 +84,9 @@ type httpDoer interface {
 func Validate(cfg config.IPIntelConfig) (enabled bool, primary string) {
 	if !cfg.Enabled {
 		return false, ""
+	}
+	if cfg.CityMMDBPath != "" || cfg.ASNMMDBPath != "" {
+		return true, "dbip-lite"
 	}
 	if cfg.IpqueryBaseURL != "" {
 		return true, "ipquery"

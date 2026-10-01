@@ -25,6 +25,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
 	github.com/microsoft/go-mssqldb v1.9.8
+	github.com/oschwald/maxminddb-golang/v2 v2.6.0
 	github.com/prometheus/client_golang v1.20.4
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/robfig/cron/v3 v3.0.1
