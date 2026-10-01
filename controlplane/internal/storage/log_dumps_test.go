@@ -151,12 +151,17 @@ func TestLogDumpExpiryAndTimeoutSelection(t *testing.T) {
 
 	timedOut, err := store.ListTimedOutLogDumps(ctx, now, now.Add(-10*time.Minute), 10)
 	require.NoError(t, err)
-	require.Len(t, timedOut, 1)
-	require.Equal(t, dump.ID, timedOut[0].ID)
+	require.Empty(t, timedOut, "unclaimed requests must remain available for offline agents")
 
-	claimed, err := store.ClaimLogDump(ctx, tenant.ID, node.ID, dump.ID, job.ID, shaHex("expiry-claim"), now, now.Add(time.Minute))
+	claimAt := now.Add(-20 * time.Minute)
+	claimed, err := store.ClaimLogDump(ctx, tenant.ID, node.ID, dump.ID, job.ID, shaHex("expiry-claim"), claimAt, now.Add(10*time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, LogDumpStatusCapturing, claimed.Status)
+
+	timedOut, err = store.ListTimedOutLogDumps(ctx, now, now.Add(-10*time.Minute), 10)
+	require.NoError(t, err)
+	require.Len(t, timedOut, 1)
+	require.Equal(t, dump.ID, timedOut[0].ID)
 
 	expiredAt := now.Add(2 * time.Hour)
 	_, err = store.ClaimLogDump(ctx, tenant.ID, node.ID, dump.ID, job.ID, shaHex("late"), expiredAt, expiredAt.Add(time.Minute))
@@ -168,6 +173,14 @@ func TestLogDumpExpiryAndTimeoutSelection(t *testing.T) {
 	got, err := store.GetLogDump(ctx, tenant.ID, dump.ID)
 	require.NoError(t, err)
 	require.Equal(t, LogDumpStatusExpired, got.Status)
+
+	gotJob, err := store.GetJob(ctx, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, JobStatusFailed, gotJob.Status)
+	events, err := store.ListJobEvents(ctx, job.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, "raw log dump expired", events[0].Message)
 }
 
 func shaHex(value string) string {
