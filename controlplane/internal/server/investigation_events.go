@@ -312,6 +312,9 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		if s != nil && s.logger != nil {
 			s.logger.Warn("timeline analytics read unavailable",
 				zap.String("source", source),
+				zap.String("tenant_id", scope.TenantID.String()),
+				zap.String("entity_type", entityType),
+				zap.String("entity_id", entityID),
 				zap.Error(err),
 			)
 		}
