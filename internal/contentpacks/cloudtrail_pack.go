@@ -186,6 +186,7 @@ func awsCloudParserProfiles() []ParserProfile {
 						"event.action":         "action",
 						"event.outcome":        "log_status",
 					},
+					"coerce_int": []any{"source.port", "destination.port", "network.iana_number", "network.packets", "network.bytes"},
 					"set": map[string]any{
 						"event.kind":                   "event",
 						"event.category":               "network",
@@ -214,6 +215,7 @@ func awsCloudParserProfiles() []ParserProfile {
 						"source.ip":        "service.action.networkConnectionAction.remoteIpDetails.ipAddressV4",
 						"destination.port": "service.action.networkConnectionAction.localPortDetails.port",
 					},
+					"coerce_int": []any{"destination.port"},
 					"set": map[string]any{
 						"event.kind":                   "alert",
 						"event.category":               "threat",
