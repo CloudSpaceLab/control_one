@@ -218,8 +218,7 @@ function estateTone(overview: NonNullable<ReturnType<typeof useExecutiveOverview
 
 function violationTone(overview: NonNullable<ReturnType<typeof useExecutiveOverview>['overview']>): StateTone {
   if (!overview.availability.violations) return 'unknown';
-  if (overview.violations.critical > 0) return 'critical';
-  if (overview.violations.high > 0) return 'warning';
+  if (overview.violations.critical > 0 || overview.violations.high > 0) return 'warning';
   return overview.violations.total > 0 ? 'info' : 'healthy';
 }
 
