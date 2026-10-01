@@ -14,7 +14,7 @@ export function AttentionQueue({ attention, available }: AttentionQueueProps) {
     <Panel
       eyebrow={CONTROL_ROOM_COPY.needsAttention.toUpperCase()}
       title={available ? attentionSummary(attention) : CONTROL_ROOM_COPY.dataUnavailable}
-      toneAccent={attention.critical > 0 ? 'critical' : attention.total > 0 ? 'warning' : 'healthy'}
+      toneAccent={!available ? 'warning' : attention.critical > 0 ? 'critical' : attention.total > 0 ? 'warning' : 'healthy'}
     >
       {!available ? (
         <EmptyState title="Needs attention unavailable" description="Retry the dashboard." />
