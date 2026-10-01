@@ -165,6 +165,20 @@ $SSH $HOST 'cd /opt/control-one/deploy && \
   docker compose up -d --no-deps controlplane console landing'
 ```
 
+## Roll back the last application image
+
+Each production deploy preserves the previous `controlone/controlplane:latest`
+and `controlone/console:latest` as `:rollback` before building the new images.
+Migration 0154 only adds raw-log tables/indexes, so the previous control-plane
+image can run against the migrated database.
+
+```bash
+$SSH $HOST 'cd /opt/control-one/deploy && \
+  docker tag controlone/controlplane:rollback controlone/controlplane:latest && \
+  docker tag controlone/console:rollback controlone/console:latest && \
+  docker compose up -d --force-recreate --no-deps controlplane console'
+```
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

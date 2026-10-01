@@ -215,6 +215,16 @@ jobs:
           ssh -p "${SSH_PORT:-22}" "$SSH_USERNAME@$SSH_HOST" "
             set -e
             cd '$DEPLOY_DIR'
+            # Keep one known-good generation locally before replacing :latest.
+            # Migration 0154 is additive, so the retained control-plane image
+            # remains schema-compatible for an emergency rollback.
+            if docker image inspect controlone/controlplane:latest >/dev/null 2>&1; then
+              docker tag controlone/controlplane:latest controlone/controlplane:rollback
+            fi
+            if docker image inspect controlone/console:latest >/dev/null 2>&1; then
+              docker tag controlone/console:latest controlone/console:rollback
+            fi
+
             # Free the small VPS' hottest optional memory consumer before
             # Docker assembles the two prebuilt images. Doris is only started
             # for explicit OLAP deployments.
