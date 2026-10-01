@@ -134,59 +134,166 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	require.Equal(t, failed.ID, summary.FailedPlans[0].ID)
 }
 
-func TestGetAutomaticResponseSummaryRetainsHandledAlertProvenance(t *testing.T) {
+func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T) {
 	ctx := context.Background()
 	store := setupPostgresStoreFull(t, ctx)
 
-	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "executive-auto-summary-" + uuid.NewString()[:6]})
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "executive-attention-" + uuid.NewString()[:6]})
 	require.NoError(t, err)
-
-	alertID := uuid.New()
-	reason := "Correlation response: rule=Known malicious source; alert_id=" + alertID.String() + "; mode=auto_temporary_block"
-
-	automatic, err := store.CreateActionPlan(ctx, CreateActionPlanParams{
-		TenantID:       tenant.ID,
-		Domain:         "firewall",
-		ActionKind:     "block",
-		State:          ActionPlanStateProposed,
-		Risk:           "high",
-		Diff:           map[string]any{"auto_triggered": true, "reason": reason},
-		IdempotencyKey: "executive-auto-" + uuid.NewString(),
-	})
-	require.NoError(t, err)
-	_, err = store.CreateActionReceipt(ctx, CreateActionReceiptParams{
-		ActionPlanID: automatic.ID,
-		TenantID:     tenant.ID,
-		State:        ActionPlanStateSucceeded,
-		Receipt:      map[string]any{"success": true},
-		Verification: map[string]any{"applied": true},
-	})
-	require.NoError(t, err)
-
-	manual, err := store.CreateActionPlan(ctx, CreateActionPlanParams{
-		TenantID:       tenant.ID,
-		Domain:         "firewall",
-		ActionKind:     "block",
-		State:          ActionPlanStateProposed,
-		Risk:           "high",
-		Diff:           map[string]any{"auto_triggered": false, "reason": reason},
-		IdempotencyKey: "executive-manual-" + uuid.NewString(),
-	})
-	require.NoError(t, err)
-	_, err = store.CreateActionReceipt(ctx, CreateActionReceiptParams{
-		ActionPlanID: manual.ID,
-		TenantID:     tenant.ID,
-		State:        ActionPlanStateSucceeded,
-		Receipt:      map[string]any{"success": true},
-		Verification: map[string]any{"applied": true},
-	})
+	otherTenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "executive-attention-other-" + uuid.NewString()[:6]})
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	summary, err := store.GetAutomaticResponseSummary(ctx, tenant.ID, now.Add(-time.Hour), now.Add(time.Hour), 8)
+	node, err := store.CreateNode(ctx, &Node{
+		ID: uuid.New(), TenantID: tenant.ID, Hostname: "payments-db-01",
+		Labels: map[string]any{"dashboard_group": "Payments"},
+	})
 	require.NoError(t, err)
-	require.Equal(t, 1, summary.HandledAutomatically)
-	require.Equal(t, 1, summary.Blocked)
-	require.Equal(t, 0, summary.Failed)
-	require.Equal(t, []uuid.UUID{alertID}, summary.HandledAlertIDs)
+
+	review, err := store.CreateAlert(ctx, CreateAlertParams{
+		TenantID: tenant.ID, Source: "rule", Severity: "high",
+		Title: "Review me", Summary: "Human review remains required",
+	})
+	require.NoError(t, err)
+
+	pendingAlert, err := store.CreateAlert(ctx, CreateAlertParams{
+		TenantID: tenant.ID, Source: "correlation", Severity: "critical",
+		Title: "Pending block source",
+	})
+	require.NoError(t, err)
+	proposal, err := store.CreateIPBlocklistEntry(ctx, CreateIPBlocklistEntryParams{
+		TenantID: tenant.ID, IPCIDR: "203.0.113.10/32",
+		Reason: "Correlation response: rule=Known bad source; alert_id=" + pendingAlert.ID.String() + "; mode=proposal",
+		Score: 80,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "proposed", proposal.Status)
+
+	handledAlert, err := store.CreateAlert(ctx, CreateAlertParams{
+		TenantID: tenant.ID, Source: "correlation", Severity: "critical",
+		Title: "Auto handled source",
+	})
+	require.NoError(t, err)
+	handledPlan, err := store.CreateActionPlan(ctx, CreateActionPlanParams{
+		TenantID: tenant.ID, Domain: "firewall", ActionKind: "block",
+		State: ActionPlanStateProposed, Risk: "high",
+		Diff: map[string]any{
+			"auto_triggered": true,
+			"reason": "Correlation response: rule=Auto block; alert_id=" + handledAlert.ID.String() + "; mode=auto_temporary_block",
+		},
+	})
+	require.NoError(t, err)
+	_, err = store.CreateActionReceipt(ctx, CreateActionReceiptParams{
+		ActionPlanID: handledPlan.ID, TenantID: tenant.ID,
+		State: ActionPlanStateSucceeded,
+		Receipt: map[string]any{"success": true},
+		Verification: map[string]any{"applied": true},
+	})
+	require.NoError(t, err)
+
+	_, err = store.CreatePatchApproval(ctx, CreatePatchApprovalParams{
+		TenantID: tenant.ID, DeploymentID: uuid.New(), NodeID: node.ID,
+		Mode: "direct", ExpiresAt: now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	_, err = store.CreateRemediationApproval(ctx, CreateRemediationApprovalParams{
+		TenantID: tenant.ID, NodeID: node.ID, RuleID: "cis-1.1",
+		ScriptID: uuid.New(), Severity: "critical",
+		TaskPayload: []byte(`{"script":"fix"}`), ExpiresAt: now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	_, err = store.CreateActionPlan(ctx, CreateActionPlanParams{
+		TenantID: tenant.ID, Domain: "remediation", ActionKind: "remediation.execute",
+		State: ActionPlanStateFailed, Risk: "high",
+		Diff: map[string]any{"auto_triggered": true},
+	})
+	require.NoError(t, err)
+
+	// Cross-tenant noise must not affect either counts or samples.
+	_, err = store.CreateAlert(ctx, CreateAlertParams{
+		TenantID: otherTenant.ID, Source: "rule", Severity: "critical", Title: "Other tenant",
+	})
+	require.NoError(t, err)
+
+	summary, err := store.GetExecutiveAttentionSummary(ctx, tenant.ID, now.Add(-time.Hour), now.Add(time.Hour), 3)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.Reviews)
+	require.Equal(t, 3, summary.Approvals)
+	require.Equal(t, 1, summary.Interventions)
+	require.Equal(t, 5, summary.Total)
+	require.Equal(t, 2, summary.Critical)
+	require.Len(t, summary.Items, 3, "top sample must stay bounded independently of exact total")
+
+	ids := map[uuid.UUID]bool{}
+	for _, item := range summary.Items {
+		ids[item.ID] = true
+		require.NotEqual(t, handledAlert.ID, item.ID)
+		require.NotEqual(t, pendingAlert.ID, item.ID)
+	}
+	require.False(t, ids[handledAlert.ID], "verified auto-handled alert remained in review work")
+	require.False(t, ids[pendingAlert.ID], "alert represented by pending approval remained in review work")
+
+	var remediation *ExecutiveAttentionItem
+	for i := range summary.Items {
+		if summary.Items[i].Source == "remediation" {
+			remediation = &summary.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, remediation)
+	require.Equal(t, "critical", remediation.Severity)
+	require.Equal(t, "payments-db-01", remediation.NodeHostname)
+
+	_ = review
+}
+
+func TestGetPredictiveHealthAvailabilityIsTenantScopedAndFreshnessAware(t *testing.T) {
+	ctx := context.Background()
+	store := setupPostgresStoreFull(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "predictive-health-" + uuid.NewString()[:6]})
+	require.NoError(t, err)
+	otherTenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "predictive-health-other-" + uuid.NewString()[:6]})
+	require.NoError(t, err)
+
+	makeNode := func(tenantID uuid.UUID, hostname string) *Node {
+		t.Helper()
+		node, err := store.CreateNode(ctx, &Node{ID: uuid.New(), TenantID: tenantID, Hostname: hostname})
+		require.NoError(t, err)
+		return node
+	}
+	fresh := makeNode(tenant.ID, "fresh")
+	calibrating := makeNode(tenant.ID, "calibrating")
+	stale := makeNode(tenant.ID, "stale")
+	other := makeNode(otherTenant.ID, "other")
+
+	_, err = store.UpsertNodeHealthScore(ctx, UpsertNodeHealthScoreParams{
+		NodeID: fresh.ID, Score: 35, RiskLevel: "high", Components: map[string]any{"cpu": 90},
+	})
+	require.NoError(t, err)
+	_, err = store.UpsertNodeHealthScore(ctx, UpsertNodeHealthScoreParams{
+		NodeID: calibrating.ID, Score: 100, RiskLevel: "calibrating", Components: map[string]any{},
+	})
+	require.NoError(t, err)
+	_, err = store.UpsertNodeHealthScore(ctx, UpsertNodeHealthScoreParams{
+		NodeID: stale.ID, Score: 20, RiskLevel: "critical", Components: map[string]any{},
+	})
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `UPDATE node_health_scores SET computed_at = NOW() - INTERVAL '6 hours' WHERE node_id = $1`, stale.ID)
+	require.NoError(t, err)
+	_, err = store.UpsertNodeHealthScore(ctx, UpsertNodeHealthScoreParams{
+		NodeID: other.ID, Score: 10, RiskLevel: "critical", Components: map[string]any{},
+	})
+	require.NoError(t, err)
+
+	summary, err := store.GetPredictiveHealthAvailability(ctx, tenant.ID, time.Now().UTC().Add(-3*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 3, summary.ScoredNodes)
+	require.Equal(t, 2, summary.FreshNodes)
+	require.Equal(t, 1, summary.FreshActionableNodes)
+	require.Equal(t, 1, summary.FreshCalibratingNodes)
+	require.Equal(t, 1, summary.StaleNodes)
+	require.True(t, summary.LatestComputedAt.Valid)
 }
