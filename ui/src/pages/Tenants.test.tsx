@@ -19,6 +19,12 @@ const sampleRemediation: TenantRemediationConfig = {
   CircuitBreakerWindowMin: 15,
   CircuitBreakerFailPct: 30,
   CircuitBreakerMinSamples: 5,
+  AutoBlockEnabled: true,
+  AutoBlockMinConfidence: 100,
+  DefaultIPBlockScope: 'affected',
+  DefaultIPBlockTTLSeconds: 3600,
+  RequireCorroboratingThreatIntel: true,
+  PatchRequiresApproval: true,
 };
 
 const emptyPagination = {
