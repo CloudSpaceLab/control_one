@@ -278,7 +278,7 @@ export function Cases(): JSX.Element {
       });
       setNoteDraft('');
       setNoteMentions([]);
-      setNoteStatus('Note added with audit guardrails.');
+      setNoteStatus('Note added to the audit record.');
       setSelectedCase(await api.getSOCCase(selectedCase.case_id, currentTenantId));
     } catch (err) {
       setNoteStatus(`Note failed: ${errorMessage(err, 'Unable to add note.')}`);
