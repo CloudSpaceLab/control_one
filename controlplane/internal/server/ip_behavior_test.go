@@ -71,7 +71,7 @@ func TestAutoBlockUsesTenantIPResponsePolicy(t *testing.T) {
 	s := &Server{store: store, logger: zap.NewNop()}
 	bucket := &ipBehaviorBucket{
 		srcIP:       "203.0.113.44",
-		serverGroup: "",
+		serverGroup: "observed-group",
 		app:         "core-api",
 		statuses:    map[int]int{401: 10},
 		paths:       map[string]int{"/login": 10},
@@ -85,6 +85,9 @@ func TestAutoBlockUsesTenantIPResponsePolicy(t *testing.T) {
 	entry := store.createdBlocks[0]
 	if entry.Scope != "fleet" || entry.TargetType != "tenant" {
 		t.Fatalf("scope/target = %s/%s, want fleet/tenant", entry.Scope, entry.TargetType)
+	}
+	if entry.ServerGroup != "" {
+		t.Fatalf("fleet policy retained observed server group %q; want tenant-wide scope", entry.ServerGroup)
 	}
 	if !strings.HasPrefix(entry.Reason, "policy:auto;") {
 		t.Fatalf("reason = %q, want policy provenance", entry.Reason)
