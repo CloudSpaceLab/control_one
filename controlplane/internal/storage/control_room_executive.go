@@ -356,10 +356,39 @@ func (s *Store) GetExecutiveAttentionSummary(
 				OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
 			  )
 		),
+		auto_failed AS (
+			SELECT
+				p.id,
+				LOWER(COALESCE(NULLIF(p.risk, ''), 'medium')) AS severity,
+				p.domain,
+				p.action_kind,
+				p.updated_at AS created_at,
+				CASE
+					WHEN COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+						NOT LIKE 'Correlation response:%'
+						THEN NULL
+					WHEN substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
+						THEN NULL
+					ELSE substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+				END AS alert_id
+			FROM action_plans p
+			WHERE p.tenant_id = $1
+			  AND p.updated_at >= $2
+			  AND p.updated_at < $3
+			  AND p.state = 'failed'
+			  AND (
+				LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
+				OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
+			  )
+		),
 		excluded_alerts AS (
 			SELECT alert_id FROM proposed_blocks WHERE alert_id IS NOT NULL
 			UNION
 			SELECT alert_id FROM verified_handled_alerts WHERE alert_id IS NOT NULL
+			UNION
+			SELECT alert_id FROM auto_failed WHERE alert_id IS NOT NULL
 		),
 		review_alerts AS (
 			SELECT a.*
@@ -418,19 +447,6 @@ func (s *Store) GetExecutiveAttentionSummary(
 			FROM remediation_approvals r
 			LEFT JOIN nodes n ON n.id = r.node_id AND n.tenant_id = r.tenant_id
 			WHERE r.tenant_id = $1 AND r.status = 'pending'
-		),
-		auto_failed AS (
-			SELECT p.id, LOWER(COALESCE(NULLIF(p.risk, ''), 'medium')) AS severity,
-			       p.domain, p.action_kind, p.updated_at AS created_at
-			FROM action_plans p
-			WHERE p.tenant_id = $1
-			  AND p.updated_at >= $2
-			  AND p.updated_at < $3
-			  AND p.state = 'failed'
-			  AND (
-				LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
-				OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
-			  )
 		),
 		counts AS (
 			SELECT
