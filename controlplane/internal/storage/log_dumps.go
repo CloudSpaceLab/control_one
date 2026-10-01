@@ -80,7 +80,8 @@ type LogDumpFilter struct {
 }
 
 type LogDumpChunk struct {
-	DumpID    uuid.UUID
+	DumpID          uuid.UUID
+	ClaimGeneration int64
 	TenantID  uuid.UUID
 	NodeID    uuid.UUID
 	JobID     uuid.NullUUID
@@ -384,7 +385,7 @@ func (s *Store) RenewLogDumpClaim(ctx context.Context, tenantID, nodeID, dumpID,
 }
 
 func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA string, now time.Time) (bool, error) {
-	if c.DumpID == uuid.Nil || c.TenantID == uuid.Nil || c.NodeID == uuid.Nil || !c.JobID.Valid || c.Ordinal < 0 || c.SizeBytes < 0 || !validSHA256Hex(c.SHA256) || strings.TrimSpace(c.TempPath) == "" {
+	if c.DumpID == uuid.Nil || c.TenantID == uuid.Nil || c.NodeID == uuid.Nil || !c.JobID.Valid || c.ClaimGeneration < 1 || c.Ordinal < 0 || c.SizeBytes < 0 || !validSHA256Hex(c.SHA256) || strings.TrimSpace(c.TempPath) == "" {
 		return false, errors.New("invalid log dump chunk")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -396,22 +397,23 @@ func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA st
 	var claimExpires sql.NullTime
 	var status string
 	var storedToken sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT status, expires_at, claim_expires_at, claim_token_sha256
+	var claimGeneration int64
+	if err := tx.QueryRowContext(ctx, `SELECT status, expires_at, claim_expires_at, claim_token_sha256, claim_generation
 		FROM agent_log_dumps WHERE tenant_id=$1 AND node_id=$2 AND id=$3 AND job_id=$4 FOR UPDATE`,
-		c.TenantID, c.NodeID, c.DumpID, c.JobID.UUID).Scan(&status, &expiresAt, &claimExpires, &storedToken); err != nil {
+		c.TenantID, c.NodeID, c.DumpID, c.JobID.UUID).Scan(&status, &expiresAt, &claimExpires, &storedToken, &claimGeneration); err != nil {
 		return false, err
 	}
 	if !now.Before(expiresAt) {
 		return false, ErrLogDumpExpired
 	}
 	if status != LogDumpStatusCapturing || !storedToken.Valid || storedToken.String != tokenSHA ||
-		!claimExpires.Valid || !now.Before(claimExpires.Time) {
+		!claimExpires.Valid || !now.Before(claimExpires.Time) || claimGeneration != c.ClaimGeneration {
 		return false, ErrLogDumpClaimInvalid
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO agent_log_dump_chunks
-		(dump_id, tenant_id, node_id, job_id, ordinal, sha256, size_bytes, temp_path, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (dump_id, ordinal) DO NOTHING`,
-		c.DumpID, c.TenantID, c.NodeID, c.JobID.UUID, c.Ordinal, c.SHA256, c.SizeBytes, c.TempPath, now)
+		(dump_id, tenant_id, node_id, job_id, claim_generation, ordinal, sha256, size_bytes, temp_path, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (dump_id, claim_generation, ordinal) DO NOTHING`,
+		c.DumpID, c.TenantID, c.NodeID, c.JobID.UUID, c.ClaimGeneration, c.Ordinal, c.SHA256, c.SizeBytes, c.TempPath, now)
 	if err != nil {
 		return false, fmt.Errorf("insert log dump chunk: %w", err)
 	}
@@ -423,7 +425,7 @@ func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA st
 	}
 	var existingSHA string
 	var existingSize int64
-	if err := tx.QueryRowContext(ctx, `SELECT sha256, size_bytes FROM agent_log_dump_chunks WHERE dump_id=$1 AND ordinal=$2`, c.DumpID, c.Ordinal).Scan(&existingSHA, &existingSize); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT sha256, size_bytes FROM agent_log_dump_chunks WHERE dump_id=$1 AND claim_generation=$2 AND ordinal=$3`, c.DumpID, c.ClaimGeneration, c.Ordinal).Scan(&existingSHA, &existingSize); err != nil {
 		return false, err
 	}
 	if existingSHA != c.SHA256 || existingSize != c.SizeBytes {
@@ -436,10 +438,11 @@ func (s *Store) PutLogDumpChunk(ctx context.Context, c LogDumpChunk, tokenSHA st
 }
 
 func (s *Store) ListLogDumpChunks(ctx context.Context, tenantID, nodeID, dumpID, jobID uuid.UUID) ([]LogDumpChunk, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c.dump_id,c.tenant_id,c.node_id,c.job_id,c.ordinal,c.sha256,c.size_bytes,c.temp_path,c.created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT c.dump_id,c.tenant_id,c.node_id,c.job_id,c.claim_generation,c.ordinal,c.sha256,c.size_bytes,c.temp_path,c.created_at
 		FROM agent_log_dump_chunks c JOIN agent_log_dumps d ON d.id=c.dump_id
 		WHERE c.tenant_id=$1 AND c.node_id=$2 AND c.dump_id=$3 AND c.job_id=$4
 		  AND d.tenant_id=$1 AND d.node_id=$2 AND d.job_id=$4
+		  AND c.claim_generation=d.claim_generation
 		ORDER BY c.ordinal`, tenantID, nodeID, dumpID, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("list log dump chunks: %w", err)
@@ -449,7 +452,7 @@ func (s *Store) ListLogDumpChunks(ctx context.Context, tenantID, nodeID, dumpID,
 	for rows.Next() {
 		var c LogDumpChunk
 		var rawJob sql.NullString
-		if err := rows.Scan(&c.DumpID, &c.TenantID, &c.NodeID, &rawJob, &c.Ordinal, &c.SHA256, &c.SizeBytes, &c.TempPath, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.DumpID, &c.TenantID, &c.NodeID, &rawJob, &c.ClaimGeneration, &c.Ordinal, &c.SHA256, &c.SizeBytes, &c.TempPath, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		if rawJob.Valid {
