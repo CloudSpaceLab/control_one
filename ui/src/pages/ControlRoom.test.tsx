@@ -176,7 +176,7 @@ describe('ControlRoom executive dashboard', () => {
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
 
     expect(screen.getByText('12 / 13')).toBeInTheDocument();
-    expect(screen.getByText('37')).toBeInTheDocument();
+    expect(screen.getAllByText('37').length).toBeGreaterThan(0);
     expect(screen.getAllByText('31').length).toBeGreaterThan(0);
     expect(screen.getByText('184 / 187 nodes healthy')).toBeInTheDocument();
   });
