@@ -1271,14 +1271,14 @@ func TestHeartbeatLogDumpCompatibilityRequiresAdvertisedCapability(t *testing.T)
 
 	base := &fakeStore{
 		nodes: []storage.Node{{
-			ID:        nodeID,
-			TenantID:  tenantID,
-			Hostname:  "legacy-agent",
-			State:     storage.NodeStateActive,
+			ID:         nodeID,
+			TenantID:   tenantID,
+			Hostname:   "legacy-agent",
+			State:      storage.NodeStateActive,
 			LastSeenAt: &now,
-			CreatedAt: now,
-			UpdatedAt: now,
-			Labels:    map[string]any{},
+			CreatedAt:  now,
+			UpdatedAt:  now,
+			Labels:     map[string]any{},
 		}},
 	}
 	store := &logDumpPendingHeartbeatStore{
