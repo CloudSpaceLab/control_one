@@ -18,7 +18,7 @@ type controlRoomExecutiveRuleViolationStore interface {
 }
 
 type controlRoomExecutiveAutomaticResponseStore interface {
-	GetAutomaticResponseSummary(context.Context, uuid.UUID, time.Time, time.Time, int) (storage.AutomaticResponseSummary, error)
+	GetAutomaticResponseSummary(context.Context, uuid.UUID, time.Time, time.Time) (storage.AutomaticResponseSummary, error)
 }
 
 type controlRoomExecutiveAttentionStore interface {
@@ -587,7 +587,7 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 	if !ok {
 		return out, false
 	}
-	summary, err := store.GetAutomaticResponseSummary(ctx, tenantID, since, until, 8)
+	summary, err := store.GetAutomaticResponseSummary(ctx, tenantID, since, until)
 	if err != nil {
 		s.logger.Warn("control room executive automatic responses", zap.Error(err))
 		return out, false
