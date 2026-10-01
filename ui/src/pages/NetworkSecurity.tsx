@@ -8,7 +8,7 @@ import { Input } from '../components/ui/input';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
-import { ArrowRight, Ban, Download, Filter, Globe2, Network, RefreshCw, Search, ShieldAlert, ShieldCheck, Sparkles, XCircle } from 'lucide-react';
+import { ArrowRight, Filter, Globe2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { describeIPBehaviorFinding, ipBehaviorConfidence } from '../lib/ipBehaviorPresentation';
 import type {
   ActiveBlock,
@@ -125,7 +125,6 @@ interface IPBehaviorFilters {
   criticality: string;
   serverGroup: string;
   app: string;
-  vhost: string;
 }
 
 function IPBehaviorPanel(): JSX.Element {
@@ -146,7 +145,6 @@ function IPBehaviorPanel(): JSX.Element {
     criticality: 'all',
     serverGroup: '',
     app: '',
-    vhost: '',
   });
   const [selectedCountryCode, setSelectedCountryCode] = useState('');
   const [selectedCountryDetail, setSelectedCountryDetail] = useState<IPBehaviorCountrySummary | null>(null);
