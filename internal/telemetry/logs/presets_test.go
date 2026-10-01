@@ -89,3 +89,21 @@ func TestExplicitOfflineCatalogPresetResolvesWithoutPackageInit(t *testing.T) {
 		t.Fatalf("catalog version label = %q", got.Labels["catalog_version"])
 	}
 }
+
+
+func TestExplicitAWSCloudTrailPresetCarriesContentPackMetadata(t *testing.T) {
+	sources := PrepareSources([]config.LogSourceConfig{{Program: "aws-cloudtrail"}})
+	if len(sources) != 1 {
+		t.Fatalf("sources = %#v, want one", sources)
+	}
+	got := sources[0]
+	if got.Program != "aws-cloudtrail" || got.Type != "file" || len(got.Paths) == 0 {
+		t.Fatalf("unexpected CloudTrail preset: %#v", got)
+	}
+	if got.Labels["parser_profile"] != "aws.cloudtrail" {
+		t.Fatalf("parser profile = %q", got.Labels["parser_profile"])
+	}
+	if got.Labels["content_pack_source_id"] != "aws.cloudtrail" || got.Labels["cloud.provider"] != "aws" {
+		t.Fatalf("CloudTrail labels = %#v", got.Labels)
+	}
+}
