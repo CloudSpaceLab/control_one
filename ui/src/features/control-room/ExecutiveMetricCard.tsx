@@ -10,6 +10,7 @@ interface ExecutiveMetricCardProps {
   tone?: StateTone;
   icon?: ReactNode;
   loading?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }
 
@@ -29,15 +30,18 @@ export function ExecutiveMetricCard({
   tone = 'unknown',
   icon,
   loading,
+  disabled,
   onClick,
 }: ExecutiveMetricCardProps) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         'group min-w-0 rounded-lg border border-border-subtle bg-elevated p-4 text-left shadow-[var(--shadow-panel)]',
         'transition hover:border-border-strong hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40',
+        disabled && 'cursor-default opacity-70 hover:border-border-subtle hover:bg-elevated',
       )}
       aria-label={`${label}: view details`}
     >
