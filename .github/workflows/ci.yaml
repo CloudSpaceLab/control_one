@@ -109,6 +109,115 @@ jobs:
           -run 'Test(JobLifecycleWithPostgres|LogDump|GetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated|GetPredictiveHealthAvailabilityIsTenantScopedAndFreshnessAware)'
           -count=1
 
+      - name: Executive attention scale benchmark
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: >-
+          go test ./controlplane/internal/storage
+          -run '^
+      - name: Migration integration test
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: go test -v ./controlplane/internal/migrate -run TestMigrationsUpAndDown -count=1
+
+      - name: Build agent
+        run: go build -o ${{ runner.temp }}/nodeagent ./cmd/nodeagent
+
+      - name: Build control plane
+        run: go build -o ${{ runner.temp }}/controlplane ./controlplane/cmd/controlplane
+
+      - name: Generate wizard bundle
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/wizard/setup_control_one.sh --output ./build/wizard --non-interactive --no-certs
+
+      - name: Upload wizard bundle
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-one-wizard-${{ github.sha }}
+          path: build/wizard
+          retention-days: 7
+
+  goreleaser:
+    needs: lint-test-build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          -bench '^BenchmarkExecutiveAttentionSummary100k
+      - name: Migration integration test
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: go test -v ./controlplane/internal/migrate -run TestMigrationsUpAndDown -count=1
+
+      - name: Build agent
+        run: go build -o ${{ runner.temp }}/nodeagent ./cmd/nodeagent
+
+      - name: Build control plane
+        run: go build -o ${{ runner.temp }}/controlplane ./controlplane/cmd/controlplane
+
+      - name: Generate wizard bundle
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/wizard/setup_control_one.sh --output ./build/wizard --non-interactive --no-certs
+
+      - name: Upload wizard bundle
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-one-wizard-${{ github.sha }}
+          path: build/wizard
+          retention-days: 7
+
+  goreleaser:
+    needs: lint-test-build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          -benchtime=1x
+          -count=1
+
       - name: Raw-log agent integration tests
         if: matrix.os == 'ubuntu-latest'
         run: go test -v ./cmd/nodeagent -run 'Test.*LogDump' -count=1
