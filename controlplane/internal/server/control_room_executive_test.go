@@ -180,7 +180,7 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 		blockProposals: []storage.IPBlocklistEntry{
 			{
 				ID: proposalID, TenantID: tenantID, IPCIDR: "203.0.113.10/32",
-				Status: "proposed", Score: 100,
+				Status: "proposed", Score: 80,
 				Reason:    "Correlation response: rule=Known bad source; alert_id=" + alertID.String() + "; mode=proposal",
 				CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
 			},
@@ -211,6 +211,9 @@ func TestControlRoomExecutiveIncludesNetworkBlockApprovals(t *testing.T) {
 	item := resp.Attention.Items[0]
 	if item.Kind != "approval" || item.Domain != "network" || item.Title != "Block 203.0.113.10/32" {
 		t.Fatalf("unexpected network approval item: %+v", item)
+	}
+	if item.Severity != "critical" {
+		t.Fatalf("linked critical alert must preserve critical task severity, got %+v", item)
 	}
 	if item.Drilldown != "/security/network?tab=approvals&proposal_id="+proposalID.String() {
 		t.Fatalf("unexpected network approval route: %s", item.Drilldown)
