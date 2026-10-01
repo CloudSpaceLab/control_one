@@ -57,16 +57,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_log_dumps_claim_expiry
     WHERE status = 'capturing';
 
 CREATE TABLE IF NOT EXISTS agent_log_dump_chunks (
-    dump_id      UUID NOT NULL,
-    tenant_id    UUID NOT NULL,
-    node_id      UUID NOT NULL,
-    job_id       UUID REFERENCES jobs(id) ON DELETE SET NULL,
-    claim_generation BIGINT NOT NULL CHECK (claim_generation >= 1),
-    ordinal      INTEGER NOT NULL CHECK (ordinal >= 0),
-    sha256       TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}
-    size_bytes   BIGINT NOT NULL CHECK (size_bytes >= 0),
-    temp_path    TEXT NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    dump_id             UUID NOT NULL,
+    tenant_id           UUID NOT NULL,
+    node_id             UUID NOT NULL,
+    job_id              UUID REFERENCES jobs(id) ON DELETE SET NULL,
+    claim_generation    BIGINT NOT NULL CHECK (claim_generation >= 1),
+    ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+    sha256              TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    size_bytes          BIGINT NOT NULL CHECK (size_bytes >= 0),
+    temp_path           TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (dump_id, claim_generation, ordinal),
     CONSTRAINT agent_log_dump_chunks_scope_fk
         FOREIGN KEY (dump_id, tenant_id, node_id)
@@ -76,16 +76,3 @@ CREATE TABLE IF NOT EXISTS agent_log_dump_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_agent_log_dump_chunks_scope
     ON agent_log_dump_chunks (tenant_id, node_id, dump_id, claim_generation, ordinal);
-),
-    size_bytes   BIGINT NOT NULL CHECK (size_bytes >= 0),
-    temp_path    TEXT NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (dump_id, ordinal),
-    CONSTRAINT agent_log_dump_chunks_scope_fk
-        FOREIGN KEY (dump_id, tenant_id, node_id)
-        REFERENCES agent_log_dumps (id, tenant_id, node_id)
-        ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_log_dump_chunks_scope
-    ON agent_log_dump_chunks (tenant_id, node_id, dump_id, ordinal);
