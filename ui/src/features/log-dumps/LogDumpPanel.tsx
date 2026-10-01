@@ -270,7 +270,7 @@ export function LogDumpPanel({
 
         <div className="overflow-x-auto rounded-md border border-border-subtle">
           <table className="min-w-full divide-y divide-border-subtle text-left text-xs">
-            <thead className="bg-surface-2 text-[0.65rem] uppercase text-text-muted">
+            <thead className="bg-surface text-[0.65rem] uppercase text-text-muted">
               <tr>
                 <th className="px-3 py-2 font-medium">Created</th>
                 <th className="px-3 py-2 font-medium">Source</th>
