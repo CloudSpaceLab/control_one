@@ -33,7 +33,7 @@ func BenchmarkExecutiveAttentionSummary100k(b *testing.B) {
 			'Benchmark alert ' || i::text,
 			'open',
 			'{}'::jsonb,
-			$2 - ((i % 3600)::text || ' seconds')::interval
+			$2::timestamptz - ((i % 3600)::text || ' seconds')::interval
 		FROM generate_series(1, 100000) AS i
 	`, tenant.ID, now); err != nil {
 		b.Fatal(err)
