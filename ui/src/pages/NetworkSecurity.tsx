@@ -727,7 +727,7 @@ function BlockApprovalQueue(): JSX.Element {
       const response = await client.listBlockProposals({ tenantId: currentTenantId, status: 'proposed', limit: 100 });
       setProposals(response.data ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Approval queue failed to load');
+      setError(err instanceof Error ? err.message : 'Block approvals failed to load');
     } finally {
       setLoading(false);
     }
