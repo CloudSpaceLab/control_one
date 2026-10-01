@@ -144,3 +144,61 @@ func TestGetAutomaticResponseSummaryCountsVerifiedAutomaticWork(t *testing.T) {
 	require.Equal(t, failed.ID, summary.FailedPlans[0].ID)
 	require.Equal(t, []uuid.UUID{handledAlertID}, summary.HandledAlertIDs)
 }
+
+
+func TestGetAutomaticResponseSummaryRetainsHandledAlertProvenance(t *testing.T) {
+	ctx := context.Background()
+	store := setupPostgresStoreFull(t, ctx)
+
+	tenant, err := store.CreateTenant(ctx, &Tenant{ID: uuid.New(), Name: "executive-auto-summary-" + uuid.NewString()[:6]})
+	require.NoError(t, err)
+
+	alertID := uuid.New()
+	reason := "Correlation response: rule=Known malicious source; alert_id=" + alertID.String() + "; mode=auto_temporary_block"
+
+	automatic, err := store.CreateActionPlan(ctx, CreateActionPlanParams{
+		TenantID:       tenant.ID,
+		Domain:         "firewall",
+		ActionKind:     "block",
+		State:          ActionPlanStateProposed,
+		Risk:           "high",
+		Diff:           map[string]any{"auto_triggered": true, "reason": reason},
+		IdempotencyKey: "executive-auto-" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+	_, err = store.CreateActionReceipt(ctx, CreateActionReceiptParams{
+		ActionPlanID: automatic.ID,
+		TenantID:     tenant.ID,
+		State:        ActionPlanStateSucceeded,
+		Receipt:      map[string]any{"success": true},
+		Verification: map[string]any{"applied": true},
+	})
+	require.NoError(t, err)
+
+	manual, err := store.CreateActionPlan(ctx, CreateActionPlanParams{
+		TenantID:       tenant.ID,
+		Domain:         "firewall",
+		ActionKind:     "block",
+		State:          ActionPlanStateProposed,
+		Risk:           "high",
+		Diff:           map[string]any{"auto_triggered": false, "reason": reason},
+		IdempotencyKey: "executive-manual-" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+	_, err = store.CreateActionReceipt(ctx, CreateActionReceiptParams{
+		ActionPlanID: manual.ID,
+		TenantID:     tenant.ID,
+		State:        ActionPlanStateSucceeded,
+		Receipt:      map[string]any{"success": true},
+		Verification: map[string]any{"applied": true},
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	summary, err := store.GetAutomaticResponseSummary(ctx, tenant.ID, now.Add(-time.Hour), now.Add(time.Hour), 8)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.HandledAutomatically)
+	require.Equal(t, 1, summary.Blocked)
+	require.Equal(t, 0, summary.Failed)
+	require.Equal(t, []uuid.UUID{alertID}, summary.HandledAlertIDs)
+}
