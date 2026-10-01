@@ -1,13 +1,13 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ControlRoom } from './ControlRoom';
 import * as useApiClientModule from '../hooks/useApiClient';
 import * as useTenantModule from '../providers/TenantProvider';
-import type { ControlRoomOverview } from '../lib/api';
+import type { ControlRoomExecutiveOverview } from '../lib/api';
 
 // Breakpoint smoke: jsdom cannot validate the visual grid, but this keeps the
-// Control Room render path honest across the viewport sizes operators use.
+// executive Control Room render path honest across the viewport sizes operators use.
 
 const viewports = [
   { label: 'mobile-375', width: 375, height: 667 },
@@ -15,92 +15,110 @@ const viewports = [
   { label: 'desktop-1280', width: 1280, height: 900 },
 ];
 
-const overview: ControlRoomOverview = {
+const overview: ControlRoomExecutiveOverview = {
   tenant_id: 'tenant-1',
-  generated_at: new Date().toISOString(),
-  period: '24h',
-  lanes: [
-    lane('server-health', 'Server Health', 'healthy', 'All monitored servers responding'),
-    lane('security', 'Security', 'healthy', 'No critical findings'),
-    lane('app-db-health', 'App/DB Health', 'healthy', 'Log capture healthy'),
-    {
-      ...lane('exposure', 'Exposure Confidence', 'warning', '74% confidence: 1 exposure gap, 0 protected nodes, 0 active blocks'),
-      score: 74,
-      primary_metric: { label: 'Security confidence', value: '74%', tone: 'warning', drilldown: '/control-room/exposure' },
-      secondary_metric: { label: 'Exposure gaps', value: '1', tone: 'warning', drilldown: '/control-room/exposure' },
-      metrics: [
-        { label: 'Public listeners', value: '1', tone: 'warning', drilldown: '/connections' },
-        { label: 'Protected listeners', value: '0', tone: 'healthy', drilldown: '/control-room/exposure' },
-        { label: 'Critical gaps', value: '0', tone: 'healthy', drilldown: '/control-room/exposure' },
-        { label: 'Public firewall gaps', value: '1', tone: 'warning', drilldown: '/security/network?tab=firewall' },
-      ],
-    },
-    lane('ip-behavior', 'Connection/IP Behavior', 'healthy', 'Traffic matches baseline'),
-    lane('patch-posture', 'Patch Posture', 'warning', '1 patch approval pending'),
+  generated_at: '2026-10-01T17:00:00Z',
+  period: '7d',
+  estate: {
+    groups_total: 3,
+    groups_healthy: 2,
+    groups_degraded: 1,
+    groups_critical: 0,
+    groups_unknown: 0,
+    nodes_total: 12,
+    nodes_healthy: 11,
+    groups: [
+      {
+        name: 'Payments',
+        state: 'healthy',
+        nodes_total: 4,
+        nodes_healthy: 4,
+        nodes_stale: 0,
+        nodes_offline: 0,
+        intentionally_isolated: 0,
+        drilldown: '/nodes',
+      },
+      {
+        name: 'Web Edge',
+        state: 'degraded',
+        nodes_total: 4,
+        nodes_healthy: 3,
+        nodes_stale: 1,
+        nodes_offline: 0,
+        intentionally_isolated: 0,
+        drilldown: '/nodes',
+      },
+    ],
+  },
+  violations: {
+    total: 5,
+    critical: 0,
+    high: 1,
+    medium: 4,
+    low: 0,
+    info: 0,
+    other: 0,
+    previous_total: 8,
+    delta_pct: -37.5,
+    top_rules: [],
+  },
+  response: {
+    handled_automatically: 4,
+    blocked: 2,
+    contained: 1,
+    remediated: 1,
+    failed: 0,
+  },
+  attention: {
+    total: 1,
+    critical: 0,
+    reviews: 0,
+    approvals: 1,
+    interventions: 0,
+    items: [
+      {
+        id: 'approval-1',
+        kind: 'approval',
+        severity: 'medium',
+        domain: 'patch',
+        title: 'Patch payments-db-02',
+        created_at: '2026-10-01T16:00:00Z',
+        drilldown: '/infrastructure/patch',
+      },
+    ],
+  },
+  protection: {
+    protected: 7,
+    total: 8,
+    percentage: 87.5,
+    gaps: 1,
+    gap_types: [{ type: 'Firewall state unknown', count: 1 }],
+  },
+  activity: [
+    { ts: '2026-09-30T00:00:00Z', critical: 0, high: 1, total: 2 },
+    { ts: '2026-10-01T00:00:00Z', critical: 0, high: 2, total: 3 },
   ],
-  top_incidents: [],
-  stale_warnings: [],
-  ip_behavior: {
-    request_count: 0,
-    bytes_out: 0,
-    countries: [],
-    findings: [],
+  availability: {
+    estate: true,
+    violations: true,
+    response: true,
+    attention: true,
+    protection: true,
+    activity: true,
   },
-  webservers: {
-    total: 0,
-    capture_ready: 0,
-    enforce_ready: 0,
-    instances: [],
-  },
-  isolation: {
-    online: 3,
-    whitelist: 0,
-    airgapped: 0,
-    protected: 0,
-    whitelist_gaps: 0,
-    expired: 0,
-    expiring_soon: 0,
-    nodes: [],
-  },
-  firewall: {
-    enabled: 0,
-    disabled: 0,
-    unknown: 0,
-    default_deny: 0,
-    stale: 0,
-    nodes: [],
-  },
-  pending_actions: [],
 };
-
-function lane(id: string, title: string, tone: ControlRoomOverview['lanes'][number]['tone'], summary: string): ControlRoomOverview['lanes'][number] {
-  return {
-    id,
-    title,
-    tone,
-    score: tone === 'healthy' ? 95 : 62,
-    summary,
-    primary_metric: { label: 'Status', value: summary, tone },
-    secondary_metric: { label: 'Open', value: '0', tone },
-    metrics: [],
-    items: [],
-    drilldown: `/control-room/${id}`,
-    updated_at: new Date().toISOString(),
-  };
-}
 
 describe('Control Room at multiple breakpoints', () => {
   beforeEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useApiClientModule, 'useApiClient') as any).mockReturnValue({
-      getControlRoomOverview: vi.fn().mockResolvedValue(overview),
-      setNodeIsolation: vi.fn(),
+      getControlRoomExecutiveOverview: vi.fn().mockResolvedValue(overview),
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (vi.spyOn(useTenantModule, 'useTenant') as any).mockReturnValue({
       currentTenantId: 'tenant-1',
-      currentTenant: { id: 'tenant-1', name: 't', created_at: '', updated_at: '' },
-      tenants: [{ id: 'tenant-1', name: 't', created_at: '', updated_at: '' }],
+      currentTenant: { id: 'tenant-1', name: 'Bank Tenant', created_at: '' },
+      tenants: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '' }],
       setCurrentTenantId: vi.fn(),
       refresh: vi.fn(),
       loading: false,
@@ -114,8 +132,6 @@ describe('Control Room at multiple breakpoints', () => {
 
   viewports.forEach((vp) => {
     it(`renders at ${vp.label}`, async () => {
-      // jsdom ignores window.resize, but we still set the sizes so any code
-      // that reads them gets correct values.
       Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: vp.width });
       Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: vp.height });
       window.matchMedia = ((query: string) => ({
@@ -134,8 +150,12 @@ describe('Control Room at multiple breakpoints', () => {
           <ControlRoom />
         </MemoryRouter>,
       );
-      expect(await screen.findByText(/Connection\/IP Behavior/)).toBeInTheDocument();
-      expect(screen.getByText(/Patch Posture/)).toBeInTheDocument();
+
+      expect(await screen.findByText('Infrastructure health')).toBeInTheDocument();
+      expect(screen.getByText('Rule violations')).toBeInTheDocument();
+      expect(screen.getByText('Handled automatically')).toBeInTheDocument();
+      expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
+      expect(screen.getByText('Patch payments-db-02')).toBeInTheDocument();
     });
   });
 });
