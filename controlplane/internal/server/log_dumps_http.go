@@ -135,7 +135,7 @@ func (s *Server) handleLogDumpResource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleInvestigator, roleOperator, roleCISO, roleAdmin); !ok {
+	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin); !ok {
 		return
 	}
 	dump, ok := s.loadReadableLogDump(w, r, tenantID, dumpID)
@@ -288,7 +288,7 @@ func (s *Server) handleListLogDumps(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleInvestigator, roleOperator, roleCISO, roleAdmin); !ok {
+	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin); !ok {
 		return
 	}
 	filter := storage.LogDumpFilter{TenantID: tenantID, Source: r.URL.Query().Get("source"), Status: r.URL.Query().Get("status")}
@@ -332,7 +332,7 @@ func (s *Server) handleLogDumpPreview(w http.ResponseWriter, r *http.Request, du
 	if !ok {
 		return
 	}
-	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleInvestigator, roleOperator, roleCISO, roleAdmin); !ok {
+	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin); !ok {
 		return
 	}
 	dump, ok := s.loadReadableLogDump(w, r, tenantID, dumpID)
@@ -385,7 +385,7 @@ func (s *Server) handleLogDumpDownload(w http.ResponseWriter, r *http.Request, d
 	if !ok {
 		return
 	}
-	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleInvestigator, roleOperator, roleCISO, roleAdmin); !ok {
+	if _, ok := s.authorizeTenantLogDump(w, r, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin); !ok {
 		return
 	}
 	dump, ok := s.loadReadableLogDump(w, r, tenantID, dumpID)
