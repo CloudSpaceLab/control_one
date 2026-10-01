@@ -192,9 +192,11 @@ $SSH $HOST 'cd /opt/control-one/deploy && \
 
 ## Raw log dump storage
 
-Raw-log artifacts use the persistent `logdumpdata` Docker volume mounted at
-`/var/lib/control-one/log-dumps`. Keep this volume when recreating or
-upgrading the control-plane container. The nginx configs cap agent dump chunk
+Raw-log artifacts are bind-mounted from
+`/opt/control-one/deploy/log-dumps` to `/var/lib/control-one/log-dumps`.
+The deploy workflow creates that host directory as uid/gid `65532:65532`
+(the distroless nonroot user) with mode `750`, so artifacts survive
+container/image replacement without making the directory world-writable. The nginx configs cap agent dump chunk
 uploads at 4 MiB; do not raise that independently of the server limit.
 
 See `docs/raw-log-dumps.md` for retention, access and cleanup behavior.

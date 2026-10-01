@@ -29,8 +29,11 @@ contain lifecycle/scope metadata, not dump content.
 ## Storage and cleanup
 
 The control plane stores artifacts under `CONTROL_ONE_LOG_DUMPS_DIR`, default
-`/var/lib/control-one/log-dumps`. Production Compose mounts the
-`logdumpdata` volume there so artifacts survive image/container replacement.
+`/var/lib/control-one/log-dumps`. Production Compose bind-mounts the restricted host directory
+`/opt/control-one/deploy/log-dumps` there. The deploy workflow creates it as
+uid/gid `65532:65532` with mode `750`, so artifacts survive
+image/container replacement and remain writable by the distroless nonroot
+control-plane process.
 
 The control plane runs a bounded cleanup pass on startup and hourly. Expiry is
 also enforced on every read, so content is inaccessible once `expires_at` is
