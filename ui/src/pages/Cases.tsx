@@ -73,6 +73,8 @@ export function Cases(): JSX.Element {
   const [exportError, setExportError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
+  const [sinceDate, setSinceDate] = useState('');
+  const [untilDate, setUntilDate] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sorting, setSorting] = useState<SortingState>([{ id: 'updated_at', desc: true }]);
@@ -94,7 +96,7 @@ export function Cases(): JSX.Element {
 
   useEffect(() => {
     setPage(0);
-  }, [currentTenantId, statusFilter, severityFilter, debouncedSearch, sorting]);
+  }, [currentTenantId, statusFilter, severityFilter, sinceDate, untilDate, debouncedSearch, sorting]);
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
@@ -118,6 +120,8 @@ export function Cases(): JSX.Element {
         status: statusFilter || undefined,
         severity: severityFilter || undefined,
         search: debouncedSearch || undefined,
+        since: dateBoundaryISO(sinceDate, false),
+        until: dateBoundaryISO(untilDate, true),
         sortBy: sorting[0]?.id,
         sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
       });
@@ -146,7 +150,7 @@ export function Cases(): JSX.Element {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [api, currentTenantId, requestedCaseId, page, statusFilter, severityFilter, debouncedSearch, sorting]);
+  }, [api, currentTenantId, requestedCaseId, page, statusFilter, severityFilter, sinceDate, untilDate, debouncedSearch, sorting]);
 
   useEffect(() => {
     void refresh();
@@ -383,6 +387,14 @@ export function Cases(): JSX.Element {
                   ...CASE_SEVERITIES,
                 ]}
               />
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+                From
+                <Input type="date" value={sinceDate} onChange={(event) => setSinceDate(event.target.value)} aria-label="Cases from date" />
+              </label>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+                To
+                <Input type="date" value={untilDate} min={sinceDate || undefined} onChange={(event) => setUntilDate(event.target.value)} aria-label="Cases to date" />
+              </label>
             </div>
           </div>
           <div className="mt-3">
@@ -544,6 +556,12 @@ function FilterSelect({
       ))}
     </SelectField>
   );
+}
+
+function dateBoundaryISO(value: string, endOfDay: boolean): string | undefined {
+  if (!value) return undefined;
+  const suffix = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
+  return new Date(`${value}${suffix}`).toISOString();
 }
 
 function timeAgo(dateStr: string): string {
