@@ -2,6 +2,7 @@ package contentpacks
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -99,13 +100,7 @@ func TestAWSCloudAuditParsersNormalizeExpectedFields(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s missing field %s", sample.CaseID, field)
 			}
-			if field == "destination.port" {
-				if got != expected && got != float64(22) {
-					t.Fatalf("%s %s = %#v, want %#v", sample.CaseID, field, got, expected)
-				}
-				continue
-			}
-			if got != expected {
+			if fmt.Sprint(got) != fmt.Sprint(expected) {
 				t.Fatalf("%s %s = %#v, want %#v", sample.CaseID, field, got, expected)
 			}
 		}
