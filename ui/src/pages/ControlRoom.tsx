@@ -110,7 +110,8 @@ export function ControlRoom(): JSX.Element {
           tone={overview ? estateTone(overview) : 'unknown'}
           icon={<Server />}
           loading={loading && !overview}
-          onClick={() => { if (overview) setDetail('infrastructure'); }}
+          disabled={!overview?.availability.estate}
+          onClick={() => { if (overview?.availability.estate) setDetail('infrastructure'); }}
         />
         <ExecutiveMetricCard
           label={CONTROL_ROOM_COPY.ruleViolations}
@@ -127,7 +128,8 @@ export function ControlRoom(): JSX.Element {
           tone={overview ? violationTone(overview) : 'unknown'}
           icon={<ListChecks />}
           loading={loading && !overview}
-          onClick={() => { if (overview) setDetail('violations'); }}
+          disabled={!overview?.availability.violations}
+          onClick={() => { if (overview?.availability.violations) setDetail('violations'); }}
         />
         <ExecutiveMetricCard
           label={CONTROL_ROOM_COPY.handledAutomatically}
@@ -142,7 +144,8 @@ export function ControlRoom(): JSX.Element {
           tone={overview?.availability.response ? (overview.response.failed > 0 ? 'warning' : 'info') : 'unknown'}
           icon={<ShieldCheck />}
           loading={loading && !overview}
-          onClick={() => { if (overview) setDetail('response'); }}
+          disabled={!overview?.availability.response}
+          onClick={() => { if (overview?.availability.response) setDetail('response'); }}
         />
         <ExecutiveMetricCard
           label={CONTROL_ROOM_COPY.needsAttention}
@@ -155,7 +158,8 @@ export function ControlRoom(): JSX.Element {
           tone={overview ? attentionTone(overview) : 'unknown'}
           icon={<ShieldAlert />}
           loading={loading && !overview}
-          onClick={() => { if (overview) setDetail('attention'); }}
+          disabled={!overview?.availability.attention}
+          onClick={() => { if (overview?.availability.attention) setDetail('attention'); }}
         />
       </div>
 
