@@ -4,7 +4,7 @@ import type { ControlRoomExecutiveOverview } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { StatusTag, severityTone } from '@/components/kit';
-import { formatPercent } from './copy';
+import { CONTROL_ROOM_COPY, formatPercent } from './copy';
 
 export type ExecutiveDetailKey =
   | 'infrastructure'
@@ -42,7 +42,7 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
   switch (detail) {
     case 'infrastructure':
       return {
-        title: 'Infrastructure health',
+        title: CONTROL_ROOM_COPY.infrastructureHealth,
         description: `${overview.estate.groups_healthy} of ${overview.estate.groups_total} groups healthy.`,
         body: (
           <div className="space-y-2">
@@ -68,7 +68,7 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
       };
     case 'violations':
       return {
-        title: 'Rule violations',
+        title: CONTROL_ROOM_COPY.ruleViolations,
         description: `${overview.violations.total} organisation-defined rule violations in this period.`,
         body: (
           <div className="space-y-2">
@@ -94,7 +94,7 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
       };
     case 'response':
       return {
-        title: 'Handled automatically',
+        title: CONTROL_ROOM_COPY.handledAutomatically,
         description: `${overview.response.handled_automatically} verified responses completed without a remaining human gate.`,
         body: (
           <div className="space-y-3">
@@ -108,7 +108,7 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
       };
     case 'attention':
       return {
-        title: 'Needs attention',
+        title: CONTROL_ROOM_COPY.needsAttention,
         description: `${overview.attention.total} human ${overview.attention.total === 1 ? 'action' : 'actions'} outstanding.`,
         body: (
           <div className="space-y-2">
@@ -135,7 +135,7 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
       };
     case 'protection':
       return {
-        title: 'Protection coverage',
+        title: CONTROL_ROOM_COPY.protectionCoverage,
         description: overview.protection.total === 0
           ? 'No public network listeners are currently reported.'
           : `${overview.protection.protected} of ${overview.protection.total} public listeners have verified protection evidence (${formatPercent(overview.protection.percentage)}).`,
