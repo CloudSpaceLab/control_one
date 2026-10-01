@@ -269,7 +269,7 @@ func (s *Store) ListActiveNodeFirewallRulesForIP(ctx context.Context, tenantID u
 		  AND ea.entity_type = 'ip'
 		  AND (ea.entity_id IN ($2, $3) OR r.source IN ($2, $3))
 		  AND ea.action = 'block'
-		  AND r.status IN ('pending','applied','failed')
+		  AND r.status IN ('pending','applied')
 		  AND NOT (r.status = 'pending' AND COALESCE(j.type, '') = 'firewall.rule_delete')
 		ORDER BY r.requested_at ASC
 	`, tenantID, host, cidr)
@@ -294,13 +294,14 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			FROM nodes
 			WHERE tenant_id = $1 AND state = 'active'
 		),
-		per_node AS (
-			SELECT
+		latest_per_node AS (
+			SELECT DISTINCT ON (r.node_id)
 				r.node_id,
-				BOOL_OR(r.status = 'applied') AS applied,
-				BOOL_OR(r.status = 'pending' AND COALESCE(j.type, '') <> 'firewall.rule_delete') AS pending,
-				BOOL_OR(r.status = 'pending' AND j.type = 'firewall.rule_delete') AS removing,
-				BOOL_OR(r.status = 'failed') AS failed
+				r.status,
+				COALESCE(j.type, '') AS job_type,
+				ea.created_by,
+				ea.expires_at,
+				r.requested_at
 			FROM node_firewall_rules r
 			JOIN entity_actions ea ON ea.id = r.entity_action_id
 			LEFT JOIN jobs j ON j.id = r.job_id
@@ -309,37 +310,25 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 			  AND ea.entity_id IN ($2, $3)
 			  AND ea.action = 'block'
 			  AND r.status IN ('pending','applied','failed')
-			GROUP BY r.node_id
+			  AND (ea.expires_at IS NULL OR ea.expires_at > NOW())
+			ORDER BY r.node_id, r.requested_at DESC, r.id DESC
 		)
 		SELECT
 			(SELECT COUNT(*) FROM active_nodes) AS fleet_nodes,
 			COUNT(*) FILTER (WHERE node_id IN (SELECT id FROM active_nodes)) AS fleet_target_nodes,
 			COUNT(*) AS target_nodes,
-			COUNT(*) FILTER (WHERE applied) AS nodes_applied,
-			COUNT(*) FILTER (WHERE NOT applied AND pending) AS nodes_pending,
-			COUNT(*) FILTER (WHERE NOT applied AND removing) AS nodes_removing,
-			COUNT(*) FILTER (WHERE NOT applied AND NOT pending AND NOT removing AND failed) AS nodes_failed,
-			(
-				SELECT MAX(ea.expires_at)
-				FROM entity_actions ea
-				WHERE ea.tenant_id = $1
-				  AND ea.entity_type = 'ip'
-				  AND ea.entity_id IN ($2, $3)
-				  AND ea.action = 'block'
-			) AS expires_at,
+			COUNT(*) FILTER (WHERE status = 'applied') AS nodes_applied,
+			COUNT(*) FILTER (WHERE status = 'pending' AND job_type <> 'firewall.rule_delete') AS nodes_pending,
+			COUNT(*) FILTER (WHERE status = 'pending' AND job_type = 'firewall.rule_delete') AS nodes_removing,
+			COUNT(*) FILTER (WHERE status = 'failed') AS nodes_failed,
+			MAX(expires_at) AS expires_at,
 			COALESCE((
-				SELECT CASE WHEN ea.created_by IS NULL THEN 'auto' ELSE 'manual' END
-				FROM entity_actions ea
-				JOIN node_firewall_rules r ON r.entity_action_id = ea.id
-				WHERE ea.tenant_id = $1
-				  AND ea.entity_type = 'ip'
-				  AND ea.entity_id IN ($2, $3)
-				  AND ea.action = 'block'
-				  AND r.status IN ('pending','applied','failed')
-				ORDER BY ea.created_at DESC
+				SELECT CASE WHEN created_by IS NULL THEN 'auto' ELSE 'manual' END
+				FROM latest_per_node
+				ORDER BY requested_at DESC
 				LIMIT 1
 			), 'manual') AS provenance
-		FROM per_node
+		FROM latest_per_node
 	`, tenantID, host, cidr).Scan(
 		&status.FleetNodes,
 		&status.FleetTargetNodes,
