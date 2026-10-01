@@ -443,6 +443,7 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 		if alertID != uuid.Nil {
 			handledAlertIDs[alertID] = struct{}{}
 		}
+	}
 	out = controlRoomExecutiveResponse{
 		HandledAutomatically: summary.HandledAutomatically,
 		Blocked:              summary.Blocked,
