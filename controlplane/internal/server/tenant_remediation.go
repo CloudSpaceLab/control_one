@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -70,8 +71,12 @@ func (s *Server) handleTenantRemediationConfig(w http.ResponseWriter, r *http.Re
 
 		updated, err := s.store.UpsertTenantRemediationConfig(r.Context(), *current)
 		if err != nil {
+			if errors.Is(err, storage.ErrInvalidTenantRemediationConfig) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			s.logger.Error("upsert remediation config", zap.Error(err))
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 		s.recordAudit(r.Context(), principal, tenantID, "tenant.remediation_config.updated", "tenant", tenantID.String(), map[string]any{
