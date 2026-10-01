@@ -6614,12 +6614,13 @@ export interface ActiveBlock {
 
 export interface IPBlockStatus {
   active: boolean;
-  state: "unblocked" | "blocking" | "blocked" | "partial" | "failed";
+  state: "unblocked" | "blocking" | "blocked" | "unblocking" | "partial" | "failed";
   scope: "affected" | "fleet";
   fleet_nodes: number;
   target_nodes: number;
   nodes_applied: number;
   nodes_pending: number;
+  nodes_removing: number;
   nodes_failed: number;
   expires_at?: string;
 }
