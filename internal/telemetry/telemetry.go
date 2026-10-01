@@ -44,6 +44,7 @@ type Service struct {
 	stream *eventstream.Stream
 
 	logSpool     *durablespool.Spool
+	logSpoolMu   sync.Mutex
 	logCursorDir string
 }
 
@@ -96,6 +97,8 @@ func (s *Service) LogSpoolStats() (durablespool.Stats, error) {
 	if s == nil || s.logSpool == nil {
 		return durablespool.Stats{}, nil
 	}
+	s.logSpoolMu.Lock()
+	defer s.logSpoolMu.Unlock()
 	return s.logSpool.Stats()
 }
 
@@ -551,8 +554,11 @@ func applyLogCollectMode(entry logs.StructuredLog, source config.LogSourceConfig
 func (s *Service) sendLogBatch(ctx context.Context, nodeID string, source config.LogSourceConfig, batch []logs.StructuredLog) (bool, error) {
 	payload := s.logBatchPayload(nodeID, source, batch)
 	if s.logSpool != nil {
-		if _, err := s.logSpool.AppendJSON(payload); err != nil {
-			return false, fmt.Errorf("persist log batch: %w", err)
+		s.logSpoolMu.Lock()
+		_, appendErr := s.logSpool.AppendJSON(payload)
+		s.logSpoolMu.Unlock()
+		if appendErr != nil {
+			return false, fmt.Errorf("persist log batch: %w", appendErr)
 		}
 		if err := s.drainLogSpool(ctx); err != nil {
 			return true, err
@@ -597,6 +603,8 @@ func (s *Service) drainLogSpool(ctx context.Context) error {
 	if s == nil || s.logSpool == nil || ctx.Err() != nil {
 		return nil
 	}
+	s.logSpoolMu.Lock()
+	defer s.logSpoolMu.Unlock()
 	records, err := s.logSpool.Records()
 	if err != nil {
 		return fmt.Errorf("list log spool: %w", err)
