@@ -1360,6 +1360,10 @@ func (s *Server) fanOutFirewallAllow(
 	if err != nil {
 		return nil, fmt.Errorf("list active ip blocks: %w", err)
 	}
+	reason := strings.TrimSpace(row.Reason)
+	if reason == "" {
+		reason = "Manual IP allow"
+	}
 	nodes := make([]uuid.UUID, 0, len(rules))
 	seen := make(map[uuid.UUID]struct{}, len(rules))
 	for _, rule := range rules {
@@ -1374,7 +1378,7 @@ func (s *Server) fanOutFirewallAllow(
 			Port:               intPtrValue(rule.Port),
 			Protocol:           stringPtrValue(rule.Protocol),
 			Tag:                rule.Tag,
-			Reason:             firstNonEmptyIPBehavior(strings.TrimSpace(row.Reason), "Manual allow"),
+			Reason:             reason,
 		}
 		payloadBytes, _ := json.Marshal(payload)
 		job := &storage.Job{
