@@ -76,7 +76,7 @@ export function Ask(): JSX.Element {
       <SectionHeader
         eyebrow="ASK"
         title="Ask AI"
-        description="Natural-language investigation over this tenant's knowledge graph, normalized events, evidence, posture, and case tools. Configure the LLM provider in Settings > AI."
+        description="Ask questions about this tenant's security data and investigations."
       />
 
       {turns.length === 0 && (
@@ -146,7 +146,7 @@ export function Ask(): JSX.Element {
           rows={3}
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Ask about this fleet's posture, services, threats..."
+          placeholder="Ask about infrastructure, alerts, threats, or cases…"
           className="flex-1 rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
