@@ -323,11 +323,25 @@ func (s *Server) handleTimelineBuild(w http.ResponseWriter, r *http.Request) {
 		Limit:         scope.Limit,
 	})
 	if err != nil {
-		if errors.Is(err, errInvestigationAnalyticsUnavailable) {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return
+		if s != nil && s.logger != nil {
+			s.logger.Warn("timeline analytics read unavailable",
+				zap.String("source", source),
+				zap.Error(err),
+			)
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		guardrails = append(guardrails, backendGuardrails...)
+		guardrails = append(guardrails, "Timeline evidence unavailable. Check analytics health and retry.")
+		writeJSON(w, http.StatusOK, timelineBuildResponse{
+			Source:     source,
+			TenantID:   scope.TenantID.String(),
+			Since:      scope.Since,
+			Until:      scope.Until,
+			Scope:      responseScope,
+			Items:      []timelineItemResponse{},
+			Citations:  []eventCitation{},
+			Guardrails: guardrails,
+			Degraded:   true,
+		})
 		return
 	}
 	guardrails = append(guardrails, backendGuardrails...)
