@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -871,15 +870,3 @@ func controlRoomExecutiveProtectionGapLabel(state string) string {
 	}
 }
 
-func controlRoomExecutiveDebugSummary(resp controlRoomExecutiveOverviewResponse) string {
-	return fmt.Sprintf(
-		"groups=%d/%d violations=%d handled=%d attention=%d protection=%d/%d",
-		resp.Estate.GroupsHealthy,
-		resp.Estate.GroupsTotal,
-		resp.Violations.Total,
-		resp.Response.HandledAutomatically,
-		resp.Attention.Total,
-		resp.Protection.Protected,
-		resp.Protection.Total,
-	)
-}
