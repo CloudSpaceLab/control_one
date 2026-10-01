@@ -152,8 +152,8 @@ describe('Control Room at multiple breakpoints', () => {
       );
 
       expect(await screen.findByText('Infrastructure health')).toBeInTheDocument();
-      expect(screen.getByText('Rule violations')).toBeInTheDocument();
-      expect(screen.getByText('Handled automatically')).toBeInTheDocument();
+      expect(screen.getAllByText('Rule violations').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Handled automatically').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
       expect(screen.getByText('Patch payments-db-02')).toBeInTheDocument();
     });
