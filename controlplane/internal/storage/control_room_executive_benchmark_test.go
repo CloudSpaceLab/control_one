@@ -47,7 +47,10 @@ func BenchmarkExecutiveAttentionSummary100k(b *testing.B) {
 		)
 		SELECT
 			$1,
-			'203.0.113.' || ((i % 250) + 1)::text || '/32',
+			'10.' ||
+				((i / 65536) % 256)::text || '.' ||
+				((i / 256) % 256)::text || '.' ||
+				(i % 256)::text || '/32',
 			'fleet',
 			'fleet',
 			'',
