@@ -167,6 +167,13 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, "proposed", proposal.Status)
 
+	_, err = store.CreateIPBlocklistEntry(ctx, CreateIPBlocklistEntryParams{
+		TenantID: tenant.ID, IPCIDR: "203.0.113.11/32",
+		Reason: "Analyst note: related alert_id=" + review.ID.String(),
+		Score:  50,
+	})
+	require.NoError(t, err)
+
 	handledAlert, err := store.CreateAlert(ctx, CreateAlertParams{
 		TenantID: tenant.ID, Source: "correlation", Severity: "critical",
 		Title: "Auto handled source",
@@ -226,9 +233,9 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	summary, err := store.GetExecutiveAttentionSummary(ctx, tenant.ID, now.Add(-time.Hour), now.Add(time.Hour), 3)
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.Reviews)
-	require.Equal(t, 3, summary.Approvals)
+	require.Equal(t, 4, summary.Approvals)
 	require.Equal(t, 1, summary.Interventions)
-	require.Equal(t, 5, summary.Total)
+	require.Equal(t, 6, summary.Total)
 	require.Equal(t, 2, summary.Critical)
 	require.Len(t, summary.Items, 3, "top sample must stay bounded independently of exact total")
 
@@ -252,7 +259,6 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	require.Equal(t, "critical", remediation.Severity)
 	require.Equal(t, "payments-db-01", remediation.NodeHostname)
 
-	_ = review
 }
 
 func TestGetPredictiveHealthAvailabilityIsTenantScopedAndFreshnessAware(t *testing.T) {
