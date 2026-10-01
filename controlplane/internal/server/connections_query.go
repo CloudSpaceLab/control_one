@@ -96,7 +96,6 @@ func (s *Server) handleConnectionsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-
 func (s *Server) writeConnectionsReadUnavailable(w http.ResponseWriter, source string, err error) {
 	if s != nil && s.logger != nil {
 		s.logger.Warn("connection analytics read unavailable",
