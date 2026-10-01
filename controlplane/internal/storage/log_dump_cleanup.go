@@ -76,4 +76,3 @@ func (s *Store) FailClaimedLogDumpAndJob(ctx context.Context, tenantID, nodeID, 
 	}
 	return nil
 }
-

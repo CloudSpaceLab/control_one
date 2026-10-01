@@ -597,5 +597,3 @@ func nullUUIDString(v uuid.NullUUID) any {
 	}
 	return v.UUID.String()
 }
-
-
