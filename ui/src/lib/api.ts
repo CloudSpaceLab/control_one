@@ -744,6 +744,7 @@ export interface InvestigationTimelineResult {
   items: InvestigationTimelineItem[];
   citations?: Array<Record<string, unknown>>;
   guardrails?: string[];
+  degraded?: boolean;
 }
 
 export interface RelatedEntity {
@@ -6957,6 +6958,7 @@ export interface ConnectionListResult {
   rows: ConnectionRow[];
   source?: string;
   guardrails: string[];
+  degraded?: boolean;
 }
 
 interface RawConnectionDetail {
