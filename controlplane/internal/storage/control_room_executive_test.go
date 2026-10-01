@@ -217,10 +217,19 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	})
 	require.NoError(t, err)
 
+	failedAlert, err := store.CreateAlert(ctx, CreateAlertParams{
+		TenantID: tenant.ID, Source: "correlation", Severity: "critical",
+		Title: "Failed automatic response source",
+	})
+	require.NoError(t, err)
+
 	_, err = store.CreateActionPlan(ctx, CreateActionPlanParams{
 		TenantID: tenant.ID, Domain: "remediation", ActionKind: "remediation.execute",
 		State: ActionPlanStateFailed, Risk: "high",
-		Diff: map[string]any{"auto_triggered": true},
+		Diff: map[string]any{
+			"auto_triggered": true,
+			"reason":         "Correlation response: rule=Auto remediation; alert_id=" + failedAlert.ID.String() + "; mode=auto_remediation",
+		},
 	})
 	require.NoError(t, err)
 
@@ -247,6 +256,7 @@ func TestGetExecutiveAttentionSummaryIsExactBoundedAndDeduplicated(t *testing.T)
 	}
 	require.False(t, ids[handledAlert.ID], "verified auto-handled alert remained in review work")
 	require.False(t, ids[pendingAlert.ID], "alert represented by pending approval remained in review work")
+	require.False(t, ids[failedAlert.ID], "alert represented by failed-response intervention remained in review work")
 
 	var remediation *ExecutiveAttentionItem
 	for i := range summary.Items {
