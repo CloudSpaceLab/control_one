@@ -158,7 +158,6 @@ func TestAutoLogSourcesRefusesMalformedApprovalRequiredProposal(t *testing.T) {
 	}
 }
 
-
 func TestDiscoverLocalProposesAWSCloudTrailFromCloudWatchAgentPackage(t *testing.T) {
 	got := DiscoverLocal(Options{
 		GOOS: "linux",
