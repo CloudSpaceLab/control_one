@@ -40,7 +40,10 @@ export function ProtectionCoverage({ protection, available, onOpen }: Protection
       ) : (
         <>
           <PostureBar
-            score={protection.percentage}
+            segments={[
+              { tone: 'healthy', weight: protection.protected },
+              { tone: 'warning', weight: protection.gaps },
+            ]}
             ariaLabel={`Protection coverage ${formatPercent(protection.percentage)}`}
           />
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
