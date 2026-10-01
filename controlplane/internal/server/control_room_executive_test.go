@@ -335,6 +335,9 @@ func (s *executiveRuleSummaryStore) ListAtRiskNodes(
 }
 
 func fakeExecutiveAlertIDFromReason(reason string) (uuid.UUID, bool) {
+	if !strings.HasPrefix(strings.TrimSpace(reason), "Correlation response:") {
+		return uuid.Nil, false
+	}
 	const marker = "alert_id="
 	index := strings.Index(reason, marker)
 	if index < 0 {
