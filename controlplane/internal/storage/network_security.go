@@ -373,12 +373,12 @@ func (s *Store) GetIPBlockStatus(ctx context.Context, tenantID uuid.UUID, ip str
 		status.Scope = "fleet"
 	}
 	switch {
-	case status.NodesRemoving > 0:
-		status.State = "unblocking"
-	case status.NodesFailed > 0 && status.NodesApplied == 0 && status.NodesPending == 0:
+	case status.NodesFailed > 0 && status.NodesApplied == 0 && status.NodesPending == 0 && status.NodesRemoving == 0:
 		status.State = "failed"
 	case status.NodesFailed > 0:
 		status.State = "partial"
+	case status.NodesRemoving > 0:
+		status.State = "unblocking"
 	case status.NodesPending > 0:
 		status.State = "blocking"
 	default:
