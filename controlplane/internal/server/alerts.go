@@ -321,8 +321,10 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 		userID := s.userIDForPrincipalCtx(r.Context(), principal)
 		switch action {
 		case "approve_close":
-			disposition, _ := alert.Context["disposition"].(map[string]any)
-			if strings.TrimSpace(fmt.Sprint(disposition["value"])) == "" || strings.TrimSpace(fmt.Sprint(disposition["reason"])) == "" {
+			disposition, ok := alert.Context["disposition"].(map[string]any)
+			value, valueOK := disposition["value"].(string)
+			reason, reasonOK := disposition["reason"].(string)
+			if !ok || !valueOK || !reasonOK || strings.TrimSpace(value) == "" || strings.TrimSpace(reason) == "" {
 				http.Error(w, "recorded disposition and evidence reason are required before approval", http.StatusBadRequest)
 				return
 			}
@@ -332,6 +334,10 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			}
 			s.recordAudit(r.Context(), principal, alert.TenantID, "alert.review_approved", "alert", alert.ID.String(), map[string]any{"action": action})
 		case "reopen":
+			if alert.State != "resolved" {
+				http.Error(w, "only resolved alerts can be reopened", http.StatusBadRequest)
+				return
+			}
 			if err := s.store.ReopenAlert(r.Context(), id); err != nil {
 				http.Error(w, fmt.Sprintf("reopen failed: %v", err), http.StatusBadRequest)
 				return
