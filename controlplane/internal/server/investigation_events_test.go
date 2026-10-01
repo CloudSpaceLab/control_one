@@ -145,7 +145,7 @@ func TestTimelineBuildHandlerSmallAnalyticsPending(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode pending timeline: %v", err)
 	}
-	if resp.Source != "small-analytics-pending" || len(resp.Items) != 0 || len(resp.Guardrails) == 0 {
+	if !resp.Degraded || resp.Source != analyticsSourceSmallPending || len(resp.Items) != 0 || len(resp.Guardrails) == 0 {
 		t.Fatalf("unexpected pending timeline: %+v", resp)
 	}
 }
