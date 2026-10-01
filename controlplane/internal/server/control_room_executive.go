@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"sort"
@@ -558,7 +559,7 @@ func (s *Server) controlRoomExecutiveAttention(
 			Severity:  firstNonEmptyIPBehavior(alert.Severity, "medium"),
 			Domain:    "alerts",
 			Title:     firstNonEmptyIPBehavior(alert.Title, "Alert requires review"),
-			Reason:    strings.TrimSpace(alert.Summary),
+			Reason:    nullableStringTrimmed(alert.Summary),
 			CreatedAt: formatTime(alert.OpenedAt),
 			Drilldown: "/alerts?alert_id=" + alert.ID.String(),
 		})
@@ -668,6 +669,13 @@ func controlRoomExecutiveScoreSeverity(score int) string {
 	default:
 		return "low"
 	}
+}
+
+func nullableStringTrimmed(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return strings.TrimSpace(value.String)
 }
 
 func controlRoomExecutiveRiskSeverity(risk string) string {
