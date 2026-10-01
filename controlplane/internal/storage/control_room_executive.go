@@ -202,7 +202,7 @@ func (s *Store) GetAutomaticResponseSummary(
 				WHERE ar.action_plan_id = p.id
 				  AND ar.created_at >= $2
 				  AND ar.created_at < $3
-				ORDER BY ar.created_at DESC
+				ORDER BY ar.created_at DESC, ar.id DESC
 				LIMIT 1
 			) r ON TRUE
 			WHERE p.tenant_id = $1
@@ -265,7 +265,7 @@ func (s *Store) GetAutomaticResponseSummary(
 			LOWER(COALESCE(p.diff->>'auto_triggered', '')) IN ('true', '1', 'yes')
 			OR LOWER(COALESCE(p.source_ref->>'auto_triggered', '')) IN ('true', '1', 'yes')
 		  )
-		ORDER BY p.updated_at DESC
+		ORDER BY p.updated_at DESC, p.id DESC
 		LIMIT $4
 	`, tenantID, since, until, failedLimit)
 	if err != nil {
