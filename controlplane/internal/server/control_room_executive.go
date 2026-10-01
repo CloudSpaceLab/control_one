@@ -95,6 +95,7 @@ type controlRoomExecutiveResponse struct {
 	Contained            int `json:"contained"`
 	Remediated           int `json:"remediated"`
 	Failed               int `json:"failed"`
+	FailedCritical       int `json:"-"`
 }
 
 type controlRoomExecutiveAttention struct {
@@ -206,7 +207,7 @@ func (s *Server) buildControlRoomExecutiveOverview(
 	resp.Response = response
 	resp.Availability.Response = responseAvailable
 
-	attention, attentionAvailable := s.controlRoomExecutiveAttention(ctx, tenantID, failedAutomaticPlans, response.Failed)
+	attention, attentionAvailable := s.controlRoomExecutiveAttention(ctx, tenantID, failedAutomaticPlans, response.Failed, response.FailedCritical)
 	resp.Attention = attention
 	resp.Availability.Attention = attentionAvailable
 
@@ -441,6 +442,7 @@ func (s *Server) controlRoomExecutiveAutomaticResponse(
 		Contained:            summary.Contained,
 		Remediated:           summary.Remediated,
 		Failed:               summary.Failed,
+		FailedCritical:       summary.FailedCritical,
 	}
 	return out, summary.FailedPlans, true
 }
@@ -450,6 +452,7 @@ func (s *Server) controlRoomExecutiveAttention(
 	tenantID uuid.UUID,
 	failedAutomaticPlans []storage.ActionPlan,
 	failedAutomaticTotal int,
+	failedAutomaticCritical int,
 ) (controlRoomExecutiveAttention, bool) {
 	out := controlRoomExecutiveAttention{Items: []controlRoomExecutiveAttentionItem{}}
 	available := true
@@ -561,7 +564,7 @@ func (s *Server) controlRoomExecutiveAttention(
 	remediationApprovals, remediationApprovalTotal, err := s.store.ListRemediationApprovals(
 		ctx,
 		storage.ListRemediationApprovalsFilter{TenantID: tenantID, Status: storage.ApprovalStatusPending},
-		4,
+		0,
 		0,
 	)
 	if err != nil {
@@ -569,10 +572,13 @@ func (s *Server) controlRoomExecutiveAttention(
 		s.logger.Warn("control room executive remediation approvals", zap.Error(err))
 	} else {
 		out.Approvals += remediationApprovalTotal
-		for _, approval := range remediationApprovals {
+		for index, approval := range remediationApprovals {
 			severity := firstNonEmptyIPBehavior(approval.Severity, "high")
 			if strings.EqualFold(severity, "critical") {
 				out.Critical++
+			}
+			if index >= 4 {
+				continue
 			}
 			title := "Remediation approval"
 			if node, err := s.store.GetNode(ctx, approval.NodeID); err == nil && node != nil && strings.TrimSpace(node.Hostname) != "" {
@@ -613,11 +619,9 @@ func (s *Server) controlRoomExecutiveAttention(
 	}
 
 	out.Interventions = failedAutomaticTotal
+	out.Critical += failedAutomaticCritical
 	for _, plan := range failedAutomaticPlans {
 		severity := controlRoomExecutiveRiskSeverity(plan.Risk)
-		if severity == "critical" {
-			out.Critical++
-		}
 		out.Items = append(out.Items, controlRoomExecutiveAttentionItem{
 			ID:        plan.ID.String(),
 			Kind:      "intervention",
