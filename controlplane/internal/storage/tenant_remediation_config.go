@@ -40,7 +40,7 @@ type TenantRemediationConfig struct {
 	AutoBlockMinConfidence           int
 	DefaultIPBlockScope              string
 	DefaultIPBlockTTLSeconds         int
-	RequireCorroboratingThreatIntel  bool
+	RequireCorroboratingThreatIntel bool
 	// PatchRequiresApproval gates fleet patch deploys behind the proper
 	// approve→dispatch loop (see migration 0092). Default: true — production
 	// tenants land on the safe path. Set to false to keep the legacy
@@ -53,10 +53,10 @@ type TenantRemediationConfig struct {
 // has never customised their safety gates. Matches migration 0030 + 0092 defaults.
 func DefaultTenantRemediationConfig(tenantID uuid.UUID) TenantRemediationConfig {
 	return TenantRemediationConfig{
-		TenantID:                 tenantID,
-		MinApprovalSeverity:      "high",
-		ChangeWindows:            []ChangeWindow{},
-		CriticalOverride:         true,
+		TenantID:                        tenantID,
+		MinApprovalSeverity:             "high",
+		ChangeWindows:                   []ChangeWindow{},
+		CriticalOverride:                true,
 		CircuitBreakerWindowMin:         15,
 		CircuitBreakerFailPct:           30,
 		CircuitBreakerMinSamples:        5,
@@ -77,7 +77,7 @@ type UpdateTenantRemediationConfigParams struct {
 	CriticalOverride         *bool
 	CircuitBreakerWindowMin  *int
 	CircuitBreakerFailPct    *int
-	CircuitBreakerMinSamples        *int
+	CircuitBreakerMinSamples         *int
 	AutoBlockEnabled                *bool
 	AutoBlockMinConfidence          *int
 	DefaultIPBlockScope             *string
@@ -100,7 +100,9 @@ func (s *Store) GetTenantRemediationConfig(ctx context.Context, tenantID uuid.UU
 	row := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, min_approval_severity, change_windows, critical_override,
 		       circuit_breaker_window_min, circuit_breaker_fail_pct,
-		       circuit_breaker_min_samples, patch_requires_approval, updated_at
+		       circuit_breaker_min_samples, auto_block_enabled, auto_block_min_confidence,
+		       default_ip_block_scope, default_ip_block_ttl_seconds,
+		       require_corroborating_threat_intel, patch_requires_approval, updated_at
 		FROM tenant_remediation_config
 		WHERE tenant_id = $1
 	`, tenantID)
@@ -223,17 +225,19 @@ func (s *Store) UpsertTenantRemediationConfig(ctx context.Context, cfg TenantRem
 			critical_override           = EXCLUDED.critical_override,
 			circuit_breaker_window_min  = EXCLUDED.circuit_breaker_window_min,
 			circuit_breaker_fail_pct    = EXCLUDED.circuit_breaker_fail_pct,
-			circuit_breaker_min_samples        = EXCLUDED.circuit_breaker_min_samples,
+			circuit_breaker_min_samples         = EXCLUDED.circuit_breaker_min_samples,
 			auto_block_enabled                = EXCLUDED.auto_block_enabled,
 			auto_block_min_confidence         = EXCLUDED.auto_block_min_confidence,
 			default_ip_block_scope            = EXCLUDED.default_ip_block_scope,
 			default_ip_block_ttl_seconds      = EXCLUDED.default_ip_block_ttl_seconds,
 			require_corroborating_threat_intel = EXCLUDED.require_corroborating_threat_intel,
 			patch_requires_approval            = EXCLUDED.patch_requires_approval,
-			updated_at                  = EXCLUDED.updated_at
+			updated_at                         = EXCLUDED.updated_at
 		RETURNING tenant_id, min_approval_severity, change_windows, critical_override,
 		          circuit_breaker_window_min, circuit_breaker_fail_pct,
-		          circuit_breaker_min_samples, patch_requires_approval, updated_at
+		          circuit_breaker_min_samples, auto_block_enabled, auto_block_min_confidence,
+		          default_ip_block_scope, default_ip_block_ttl_seconds,
+		          require_corroborating_threat_intel, patch_requires_approval, updated_at
 	`,
 		cfg.TenantID,
 		cfg.MinApprovalSeverity,
