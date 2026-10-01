@@ -82,12 +82,8 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 	tenantID uuid.UUID,
 	since time.Time,
 	until time.Time,
-	failedLimit int,
 ) (storage.AutomaticResponseSummary, error) {
-	out := storage.AutomaticResponseSummary{FailedPlans: []storage.ActionPlan{}}
-	if failedLimit <= 0 {
-		failedLimit = 8
-	}
+	var out storage.AutomaticResponseSummary
 	for _, plan := range s.actionPlans {
 		if plan.TenantID != tenantID {
 			continue
@@ -103,9 +99,6 @@ func (s *executiveRuleSummaryStore) GetAutomaticResponseSummary(
 			out.Failed++
 			if strings.EqualFold(strings.TrimSpace(plan.Risk), "critical") {
 				out.FailedCritical++
-			}
-			if len(out.FailedPlans) < failedLimit {
-				out.FailedPlans = append(out.FailedPlans, plan)
 			}
 			continue
 		}
