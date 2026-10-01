@@ -80,15 +80,15 @@ type controlRoomExecutiveGroup struct {
 }
 
 type controlRoomExecutivePredictiveHealth struct {
-	State              string `json:"state"`
+	State               string `json:"state"`
 	FreshnessSLASeconds int    `json:"freshness_sla_seconds"`
-	ScoredNodes        int    `json:"scored_nodes"`
-	FreshNodes         int    `json:"fresh_nodes"`
-	UnscoredNodes      int    `json:"unscored_nodes"`
-	CalibratingNodes   int    `json:"calibrating_nodes"`
-	StaleNodes         int    `json:"stale_nodes"`
-	AtRiskNodes        int    `json:"at_risk_nodes"`
-	LatestComputedAt   string `json:"latest_computed_at,omitempty"`
+	ScoredNodes         int    `json:"scored_nodes"`
+	FreshNodes          int    `json:"fresh_nodes"`
+	UnscoredNodes       int    `json:"unscored_nodes"`
+	CalibratingNodes    int    `json:"calibrating_nodes"`
+	StaleNodes          int    `json:"stale_nodes"`
+	AtRiskNodes         int    `json:"at_risk_nodes"`
+	LatestComputedAt    string `json:"latest_computed_at,omitempty"`
 }
 
 type controlRoomExecutiveViolations struct {
