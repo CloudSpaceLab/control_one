@@ -1513,7 +1513,10 @@ func (s *Server) autoBlockTargets(ctx context.Context, tenantID, nodeID uuid.UUI
 
 	affectedIDs, err := s.resolveAffectedNodesForIP(ctx, tenantID.String(), ip)
 	if err != nil {
-		return nil, err
+		if nodeID == uuid.Nil {
+			return nil, err
+		}
+		affectedIDs = []uuid.UUID{nodeID}
 	}
 	if len(affectedIDs) == 0 && nodeID != uuid.Nil {
 		affectedIDs = []uuid.UUID{nodeID}
