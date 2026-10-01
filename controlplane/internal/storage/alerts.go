@@ -438,6 +438,20 @@ func (s *Store) ResolveAlert(ctx context.Context, id uuid.UUID, by uuid.UUID) er
 	return err
 }
 
+func (s *Store) ReopenAlert(ctx context.Context, id uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE alerts
+		   SET state = CASE WHEN acked_at IS NULL THEN 'open' ELSE 'acked' END,
+		       resolved_at = NULL,
+		       resolved_by = NULL
+		 WHERE id = $1 AND state = 'resolved'
+	`, id)
+	return err
+}
+
 func (s *Store) UpdateAlertDisposition(ctx context.Context, id uuid.UUID, p UpdateAlertDispositionParams) (*Alert, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")

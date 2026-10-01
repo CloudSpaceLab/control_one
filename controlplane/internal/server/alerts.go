@@ -125,12 +125,20 @@ type alertCaseRequest struct {
 	CaseID string `json:"case_id,omitempty"`
 }
 
+type alertReviewRequest struct {
+	Action string `json:"action"`
+}
+
 type alertCaseAttacher interface {
 	AttachAlertToAIInvestigation(context.Context, uuid.UUID, uuid.UUID, json.RawMessage) (*storage.AIInvestigation, error)
 }
 
 type alertWorkflowUpdater interface {
 	UpdateAlertWorkflow(context.Context, uuid.UUID, storage.UpdateAlertWorkflowParams) (*storage.Alert, error)
+}
+
+type alertReopener interface {
+	ReopenAlert(context.Context, uuid.UUID) error
 }
 
 func (s *Server) handleAlertsCollection(w http.ResponseWriter, r *http.Request) {
@@ -292,6 +300,68 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			"reason":      reason,
 		})
 		writeJSON(w, http.StatusOK, newAlertResponse(*alert))
+	case "review":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		principal, ok := s.authorize(w, r, roleAdmin)
+		if !ok {
+			return
+		}
+		alert, ok := s.requireAlertTenantAccess(w, r, principal, id, roleAdmin)
+		if !ok {
+			return
+		}
+		var req alertReviewRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+			return
+		}
+		action := strings.ToLower(strings.TrimSpace(req.Action))
+		userID := s.userIDForPrincipalCtx(r.Context(), principal)
+		switch action {
+		case "approve_close":
+			disposition, ok := alert.Context["disposition"].(map[string]any)
+			value, valueOK := disposition["value"].(string)
+			reason, reasonOK := disposition["reason"].(string)
+			if !ok || !valueOK || !reasonOK || strings.TrimSpace(value) == "" || strings.TrimSpace(reason) == "" {
+				http.Error(w, "recorded disposition and evidence reason are required before approval", http.StatusBadRequest)
+				return
+			}
+			if err := s.store.ResolveAlert(r.Context(), id, userID); err != nil {
+				http.Error(w, fmt.Sprintf("approve close failed: %v", err), http.StatusBadRequest)
+				return
+			}
+			s.recordAudit(r.Context(), principal, alert.TenantID, "alert.review_approved", "alert", alert.ID.String(), map[string]any{"action": action})
+		case "reopen":
+			if alert.State != "resolved" {
+				http.Error(w, "only resolved alerts can be reopened", http.StatusBadRequest)
+				return
+			}
+			reopener, ok := s.store.(alertReopener)
+			if !ok {
+				http.Error(w, "alert reopen store unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if err := reopener.ReopenAlert(r.Context(), id); err != nil {
+				http.Error(w, fmt.Sprintf("reopen failed: %v", err), http.StatusBadRequest)
+				return
+			}
+			s.recordAudit(r.Context(), principal, alert.TenantID, "alert.review_reopened", "alert", alert.ID.String(), map[string]any{"action": action})
+		default:
+			http.Error(w, "action must be approve_close or reopen", http.StatusBadRequest)
+			return
+		}
+		updated, err := s.store.GetAlert(r.Context(), id)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("refresh alert failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, newAlertResponse(*updated))
 	case "case":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)

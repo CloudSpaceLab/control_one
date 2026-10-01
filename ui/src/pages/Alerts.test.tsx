@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => {
   const getAlert = vi.fn();
   const ackAlert = vi.fn();
   const updateAlertDisposition = vi.fn();
+  const reviewAlert = vi.fn();
   const listCorrelationRules = vi.fn();
   const createCorrelationRule = vi.fn();
   const deleteCorrelationRule = vi.fn();
@@ -67,6 +68,7 @@ const mocks = vi.hoisted(() => {
       getAlert,
       ackAlert,
       updateAlertDisposition,
+      reviewAlert,
       listCorrelationRules,
       createCorrelationRule,
       deleteCorrelationRule,
@@ -79,6 +81,7 @@ const mocks = vi.hoisted(() => {
     getAlert,
     ackAlert,
     updateAlertDisposition,
+    reviewAlert,
     listCorrelationRules,
     createCorrelationRule,
     deleteCorrelationRule,
@@ -87,6 +90,7 @@ const mocks = vi.hoisted(() => {
 	listSOCCases,
     updateAlertWorkflow,
     currentTenantId: 'tenant-1',
+    currentRoles: ['operator'] as string[],
     setCurrentTenantId: vi.fn(),
   };
 });
@@ -114,6 +118,12 @@ vi.mock('../providers/TenantProvider', () => ({
     tenants: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }],
     currentTenantId: mocks.currentTenantId,
     setCurrentTenantId: mocks.setCurrentTenantId,
+  }),
+}));
+
+vi.mock('../providers/AuthProvider', () => ({
+  useAuth: () => ({
+    profile: { roles: mocks.currentRoles },
   }),
 }));
 
@@ -167,10 +177,12 @@ describe('Alerts page failure states', () => {
     vi.clearAllMocks();
     mocks.apiClient.getNode.mockReset().mockResolvedValue({ id: 'node-1', tenant_id: 'tenant-1', hostname: 'demo-system.local' });
     mocks.currentTenantId = 'tenant-1';
+    mocks.currentRoles = ['operator'];
     mocks.listAlerts.mockResolvedValue(paginated([alertRow]));
     mocks.getAlert.mockResolvedValue(alertRow);
     mocks.ackAlert.mockResolvedValue(undefined);
     mocks.updateAlertDisposition.mockResolvedValue({ ...alertRow, state: 'resolved' });
+    mocks.reviewAlert.mockResolvedValue({ ...alertRow, state: 'resolved' });
     mocks.listCorrelationRules.mockResolvedValue(paginated([ruleRow]));
     mocks.createCorrelationRule.mockResolvedValue(ruleRow);
     mocks.deleteCorrelationRule.mockResolvedValue(undefined);
@@ -277,8 +289,63 @@ describe('Alerts page failure states', () => {
     await user.type(within(dialog).getByLabelText(/evidence reason/i), 'Would that the evidence gate were satisfied.');
     expect(confirm).toBeDisabled();
 
+    await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'benign_positive');
+    expect(confirm).toBeDisabled();
+
+    await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'accepted_risk');
+    expect(confirm).toBeDisabled();
+
     await user.selectOptions(within(dialog).getByLabelText(/disposition/i), 'false_positive');
     expect(confirm).toBeEnabled();
+  });
+
+  it('defaults admins to compact supervisor review and approves a recorded disposition', async () => {
+    const user = userEvent.setup();
+    mocks.currentRoles = ['admin'];
+    const reviewed = {
+      ...alertRow,
+      state: 'acked' as const,
+      acked_at: '2026-06-08T00:05:00Z',
+      acked_by: 'analyst-1',
+      disposition: {
+        value: 'true_positive' as const,
+        reason: 'Contained source and linked evidence.',
+      },
+    };
+    mocks.listAlerts.mockResolvedValue(paginated([reviewed]));
+    mocks.getAlert.mockResolvedValue(reviewed);
+
+    renderAlerts();
+
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    const dialog = await screen.findByRole('dialog', { name: /review alert disposition/i });
+    expect(within(dialog).getByText(/contained source and linked evidence/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/recommended resolution actions/i)).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /approve & close/i }));
+    expect(mocks.reviewAlert).toHaveBeenCalledWith('alert-1', 'approve_close');
+  });
+
+  it('lets an admin reopen a resolved alert for more investigation', async () => {
+    const user = userEvent.setup();
+    mocks.currentRoles = ['admin'];
+    const reviewed = {
+      ...alertRow,
+      state: 'resolved' as const,
+      disposition: {
+        value: 'false_positive' as const,
+        reason: 'Initial review marked it false positive.',
+      },
+    };
+    mocks.listAlerts.mockResolvedValue(paginated([reviewed]));
+    mocks.getAlert.mockResolvedValue(reviewed);
+
+    renderAlerts();
+
+    await user.click(await screen.findByRole('button', { name: /review alert critical ssh burst/i }));
+    const dialog = await screen.findByRole('dialog', { name: /review alert disposition/i });
+    await user.click(within(dialog).getByRole('button', { name: /reopen for further investigation/i }));
+    expect(mocks.reviewAlert).toHaveBeenCalledWith('alert-1', 'reopen');
   });
 
   it('lets an existing SOC case provide evidence for a real alert after reopening', async () => {

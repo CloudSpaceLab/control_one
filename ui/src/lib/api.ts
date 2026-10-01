@@ -4623,6 +4623,7 @@ export class APIClient {
       state?: string;
       severity?: string;
       search?: string;
+      since?: string;
       until?: string;
       sortBy?: string;
       sortOrder?: 'asc' | 'desc';
@@ -4635,6 +4636,7 @@ export class APIClient {
     if (params.state) search.set("state", params.state);
     if (params.severity) search.set("severity", params.severity);
     if (params.search) search.set("q", params.search);
+    if (params.since) search.set("since", params.since);
     if (params.until) search.set("until", params.until);
     if (params.sortBy) search.set("sort_by", params.sortBy);
     if (params.sortOrder) search.set("sort_order", params.sortOrder);
@@ -4674,6 +4676,16 @@ export class APIClient {
       {
         method: "POST",
         body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async reviewAlert(id: string, action: 'approve_close' | 'reopen'): Promise<Alert> {
+    return this.request<Alert>(
+      `/api/v1/alerts/${encodeURIComponent(id)}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({ action }),
       },
     );
   }

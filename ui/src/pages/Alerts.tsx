@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bell, CheckCircle2, ExternalLink, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bell, ExternalLink, ListChecks, Plus, RefreshCw, Search, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -30,6 +30,7 @@ import {
 import { useApiClient } from '../hooks/useApiClient';
 import { useEventStream } from '../hooks/useEventStream';
 import { useTenant } from '../providers/TenantProvider';
+import { useAuth } from '../providers/AuthProvider';
 import { classifyValue } from '../lib/entity';
 import { formatBytes } from '../lib/format';
 import { CORRELATION_RULE_TEMPLATES, correlationRuleTemplate } from '../lib/correlationTemplates';
@@ -287,6 +288,8 @@ function caseContainsAlert(socCase: SOCCase, alertId: string): boolean {
 
 export function Alerts(): JSX.Element {
   const client = useApiClient();
+  const { profile } = useAuth();
+  const canReviewAlerts = Boolean(profile?.roles?.includes('admin'));
   const location = useLocation();
   const linkedAlertId = new URLSearchParams(location.search).get('alert_id');
   const { tenants, currentTenantId, setCurrentTenantId } = useTenant();
@@ -371,11 +374,16 @@ export function Alerts(): JSX.Element {
 
   const tenantId = currentTenantId ?? '';
   const [severity, setSeverity] = useState('');
+  const [sinceDate, setSinceDate] = useState('');
+  const [untilDate, setUntilDate] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sorting, setSorting] = useState<SortingState>([{ id: 'opened_at', desc: true }]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
+  const [selectedAlertIds, setSelectedAlertIds] = useState<Set<string>>(() => new Set());
+  const [bulkReason, setBulkReason] = useState('');
+  const [bulkWorking, setBulkWorking] = useState(false);
   const pageSize = 25;
   const searchTimer = useRef<number | null>(null);
   const requestSeq = useRef(0);
@@ -392,7 +400,12 @@ export function Alerts(): JSX.Element {
 
   useEffect(() => {
     setPage(0);
-  }, [tenantId, state, severity, debouncedSearch, sorting]);
+  }, [tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting]);
+
+  useEffect(() => {
+    setSelectedAlertIds(new Set());
+    setBulkReason('');
+  }, [tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
 
   const refresh = useCallback(async () => {
     if (!tenantId) {
@@ -411,6 +424,8 @@ export function Alerts(): JSX.Element {
         state,
         severity: severity || undefined,
         search: debouncedSearch || undefined,
+        since: dateBoundaryISO(sinceDate, false),
+        until: dateBoundaryISO(untilDate, true),
         sortBy: sorting[0]?.id,
         sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
         limit: pageSize,
@@ -433,7 +448,7 @@ export function Alerts(): JSX.Element {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [client, tenantId, state, severity, debouncedSearch, sorting, page]);
+  }, [client, tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -459,6 +474,43 @@ export function Alerts(): JSX.Element {
     }
   }, [ackingId, client, refresh, resolvingAlert]);
 
+  const bulkAck = useCallback(async () => {
+    const targets = alerts.filter((alert) => selectedAlertIds.has(alert.id) && alert.state === 'open');
+    if (targets.length === 0 || bulkWorking) return;
+    setBulkWorking(true);
+    setAlertActionError(null);
+    try {
+      await Promise.all(targets.map((alert) => client.ackAlert(alert.id)));
+      setSelectedAlertIds(new Set());
+      await refresh();
+    } catch (err) {
+      setAlertActionError(errorMessage(err, 'Bulk acknowledgement failed.'));
+    } finally {
+      setBulkWorking(false);
+    }
+  }, [alerts, bulkWorking, client, refresh, selectedAlertIds]);
+
+  const bulkResolveFalsePositive = useCallback(async () => {
+    const targets = alerts.filter((alert) => selectedAlertIds.has(alert.id));
+    const reason = bulkReason.trim();
+    if (targets.length === 0 || !reason || bulkWorking) return;
+    setBulkWorking(true);
+    setAlertActionError(null);
+    try {
+      await Promise.all(targets.map((alert) => client.updateAlertDisposition(alert.id, {
+        disposition: 'false_positive',
+        reason,
+      })));
+      setSelectedAlertIds(new Set());
+      setBulkReason('');
+      await refresh();
+    } catch (err) {
+      setAlertActionError(errorMessage(err, 'Bulk resolution failed.'));
+    } finally {
+      setBulkWorking(false);
+    }
+  }, [alerts, bulkReason, bulkWorking, client, refresh, selectedAlertIds]);
+
   const resolve = async (id: string, payload: UpdateAlertDispositionPayload) => {
     setResolvingAlert(true);
     setResolveError(null);
@@ -469,6 +521,21 @@ export function Alerts(): JSX.Element {
       await refresh();
     } catch (err) {
       setResolveError(errorMessage(err, 'Resolve failed.'));
+    } finally {
+      setResolvingAlert(false);
+    }
+  };
+
+  const reviewAlert = async (id: string, action: 'approve_close' | 'reopen') => {
+    setResolvingAlert(true);
+    setResolveError(null);
+    setAlertActionError(null);
+    try {
+      await client.reviewAlert(id, action);
+      setResolveTargetId(null);
+      await refresh();
+    } catch (err) {
+      setResolveError(errorMessage(err, action === 'reopen' ? 'Reopen failed.' : 'Approval failed.'));
     } finally {
       setResolvingAlert(false);
     }
@@ -698,6 +765,33 @@ export function Alerts(): JSX.Element {
 
   const columns = useMemo<ColumnDef<Alert>[]>(() => [
     {
+      id: 'select',
+      header: () => (
+        <input
+          type="checkbox"
+          aria-label="Select all alerts on page"
+          checked={alerts.length > 0 && alerts.every((alert) => selectedAlertIds.has(alert.id))}
+          onChange={(event) => setSelectedAlertIds(event.target.checked ? new Set(alerts.map((alert) => alert.id)) : new Set())}
+        />
+      ),
+      enableSorting: false,
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          aria-label={`Select alert ${row.original.title}`}
+          checked={selectedAlertIds.has(row.original.id)}
+          onChange={(event) => {
+            setSelectedAlertIds((current) => {
+              const next = new Set(current);
+              if (event.target.checked) next.add(row.original.id);
+              else next.delete(row.original.id);
+              return next;
+            });
+          }}
+        />
+      ),
+    },
+    {
       accessorKey: 'severity',
       header: 'Severity',
       cell: ({ row }) => (
@@ -799,7 +893,7 @@ export function Alerts(): JSX.Element {
         </div>
       ),
     },
-  ], [ack, ackingId, resolvingAlert]);
+  ], [ack, ackingId, alerts, resolvingAlert, selectedAlertIds]);
 
   const ruleColumns: ColumnDef<CorrelationRule>[] = [
     {
@@ -1025,7 +1119,7 @@ export function Alerts(): JSX.Element {
                   className="pl-9"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                 <FilterSelect
                   label="Tenant"
                   value={tenantId}
@@ -1047,6 +1141,14 @@ export function Alerts(): JSX.Element {
                     ...SEVERITY_FILTERS.map((s) => ({ label: s, value: s })),
                   ]}
                 />
+                <label className="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+                  From
+                  <Input type="date" value={sinceDate} onChange={(event) => setSinceDate(event.target.value)} aria-label="Alerts from date" />
+                </label>
+                <label className="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+                  To
+                  <Input type="date" value={untilDate} min={sinceDate || undefined} onChange={(event) => setUntilDate(event.target.value)} aria-label="Alerts to date" />
+                </label>
               </div>
             </div>
           </Panel>
@@ -1064,6 +1166,24 @@ export function Alerts(): JSX.Element {
           )}
 
 <Panel padding="sm" tone="inset" eyebrow={`ALERTS / ${total}`} title="Inbox">
+            {selectedAlertIds.size > 0 ? (
+              <div className="mb-3 flex flex-wrap items-end gap-2 rounded-md border border-border-subtle bg-surface p-3">
+                <span className="mr-auto text-sm font-medium text-foreground">{selectedAlertIds.size} selected</span>
+                <Input
+                  value={bulkReason}
+                  onChange={(event) => setBulkReason(event.target.value)}
+                  placeholder="Reason for false-positive resolution"
+                  aria-label="Bulk resolution reason"
+                  className="min-w-[18rem] flex-1"
+                />
+                <Button type="button" variant="secondary" size="sm" disabled={bulkWorking || !alerts.some((alert) => selectedAlertIds.has(alert.id) && alert.state === 'open')} onClick={() => void bulkAck()}>
+                  Ack selected
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={bulkWorking || !bulkReason.trim()} onClick={() => void bulkResolveFalsePositive()}>
+                  Resolve selected as false positive
+                </Button>
+              </div>
+            ) : null}
             <DataTable
               columns={columns}
               rows={alerts}
@@ -1503,6 +1623,8 @@ export function Alerts(): JSX.Element {
         resolving={resolvingAlert}
         error={resolveError}
         onConfirm={(payload) => { if (resolveTarget) void resolve(resolveTarget.id, payload); }}
+        canReview={canReviewAlerts}
+        onReview={(action) => { if (resolveTarget) void reviewAlert(resolveTarget.id, action); }}
         onCancel={() => {
           setResolveTargetId(null);
           setResolveError(null);
@@ -1777,6 +1899,8 @@ function ResolveAlertModal({
   resolving,
   error,
   onConfirm,
+  canReview,
+  onReview,
   onCancel,
   onActionTaken,
   creatingCase,
@@ -1791,6 +1915,8 @@ function ResolveAlertModal({
   resolving: boolean;
   error?: string | null;
   onConfirm: (payload: UpdateAlertDispositionPayload) => void;
+  canReview: boolean;
+  onReview: (action: 'approve_close' | 'reopen') => void;
   onCancel: () => void;
   onActionTaken: () => void;
   creatingCase: boolean;
@@ -1833,9 +1959,11 @@ function ResolveAlertModal({
 	const [confirmCreateCase, setConfirmCreateCase] = useState(false);
   const [linkedCase, setLinkedCase] = useState<SOCCase | null>(null);
   const [containmentTaken, setContainmentTaken] = useState(false);
+  const [mode, setMode] = useState<'engineer' | 'review'>('engineer');
 
   useEffect(() => {
     if (!open) return;
+    setMode(canReview ? 'review' : 'engineer');
     setDisposition(alert?.disposition?.value ?? 'true_positive');
     setReason(alert?.disposition?.reason ?? '');
     setSuppressUntil(toDateTimeLocal(alert?.disposition?.suppress_until));
@@ -1845,15 +1973,17 @@ function ResolveAlertModal({
 	setConfirmCreateCase(false);
     setLinkedCase(null);
     setContainmentTaken(false);
-  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until, alertAssignedTo]);
+  }, [open, alert?.id, alert?.disposition?.value, alert?.disposition?.reason, alert?.disposition?.suppress_until, alertAssignedTo, canReview]);
 
   const selectedDisposition = dispositionOption(disposition);
   const associatedCase = linkedCase ?? (alert ? availableCases.find((item) => caseContainsAlert(item, alert.id)) : null);
   const reasonMissing = reason.trim().length === 0;
   const suppressMissing = disposition === 'suppressed' && suppressUntil.trim().length === 0;
   const suppressInvalid = suppressUntil.trim().length > 0 && Number.isNaN(Date.parse(suppressUntil));
-  const evidenceMissing = (disposition === 'resolved' || disposition === 'true_positive') && !containmentTaken && !associatedCase;
+  const evidenceMissing = disposition !== 'false_positive' && !containmentTaken && !associatedCase;
   const confirmDisabled = !alert || reasonMissing || suppressMissing || suppressInvalid || evidenceMissing;
+  const reviewReady = Boolean(alert?.disposition?.value && alert.disposition.reason?.trim());
+  const reviewActor = alertAssignedTo || alert?.acked_by || 'Unassigned analyst';
 
   const handleConfirm = () => {
     if (confirmDisabled) return;
@@ -1871,13 +2001,75 @@ function ResolveAlertModal({
     <Dialog open={open} onOpenChange={(next) => { if (!next && !resolving) onCancel(); }}>
       <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Resolve alert with evidence</DialogTitle>
+          <DialogTitle>{mode === 'review' && canReview ? 'Review alert disposition' : 'Resolve alert with evidence'}</DialogTitle>
           <DialogDescription>
-            Resolve should mean containment or a documented false-positive decision exists, not just inbox cleanup.
+            {mode === 'review' && canReview
+              ? 'Confirm the analyst decision or return the alert for more investigation.'
+              : 'Record what happened, what was done, and the evidence for the disposition.'}
           </DialogDescription>
         </DialogHeader>
 
-        {alert && plan ? (
+        {canReview && alert ? (
+          <div className="inline-flex w-fit rounded-md border border-border-subtle bg-surface p-1" aria-label="Alert workflow mode">
+            <Button type="button" size="sm" variant={mode === 'review' ? 'primary' : 'ghost'} onClick={() => setMode('review')}>Supervisor review</Button>
+            <Button type="button" size="sm" variant={mode === 'engineer' ? 'primary' : 'ghost'} onClick={() => setMode('engineer')}>Engineer view</Button>
+          </div>
+        ) : null}
+
+        {alert && plan ? mode === 'review' && canReview ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border-subtle bg-elevated p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-text-muted">{alert.severity} alert</p>
+                  <h3 className="mt-1 text-base font-semibold text-foreground">{alert.title}</h3>
+                </div>
+                <StatusTag tone={stateTone(alert.state)}>{alert.state}</StatusTag>
+              </div>
+              <p className="mt-2 text-sm text-text-secondary">
+                Investigated by {reviewActor}{alert.acked_at ? ` on ${formatAlertContextTime(alert.acked_at)}` : ''}.
+              </p>
+              {ip ? <p className="mt-1 font-mono text-xs text-text-muted">Source IP: {ip}</p> : null}
+            </div>
+
+            <div className="rounded-lg border border-border-subtle bg-surface p-4">
+              <p className="text-xs uppercase tracking-wide text-text-muted">Recorded evidence</p>
+              {alert.disposition ? (
+                <>
+                  <div className="mt-2">
+                    <StatusTag tone={dispositionTone(alert.disposition.value)}>{dispositionLabel(alert.disposition.value)}</StatusTag>
+                  </div>
+                  <p className="mt-3 whitespace-pre-wrap text-sm text-text-secondary">
+                    {alert.disposition.reason || 'No evidence reason recorded.'}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-state-warning">No analyst disposition has been recorded yet.</p>
+              )}
+            </div>
+
+            {associatedCase ? (
+              <Button asChild variant="outline" size="sm">
+                <Link to={withAlertReturnContext(`/cases?case_id=${encodeURIComponent(associatedCase.case_id)}`, alert.id)}>
+                  Open linked SOC case
+                  <ExternalLink />
+                </Link>
+              </Button>
+            ) : null}
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button type="button" variant="primary" loading={resolving} disabled={!reviewReady || resolving} onClick={() => onReview('approve_close')}>
+                Approve & close
+              </Button>
+              <Button type="button" variant="outline" disabled={alert.state !== 'resolved' || resolving} onClick={() => onReview('reopen')}>
+                Reopen for further investigation
+              </Button>
+            </div>
+            {!reviewReady ? (
+              <p className="text-xs text-state-warning">An analyst disposition and evidence reason are required before approval.</p>
+            ) : null}
+          </div>
+        ) : (
           <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
             <div className="space-y-3">
               <div className="rounded-lg border border-border-subtle bg-elevated p-3">
@@ -1901,23 +2093,6 @@ function ResolveAlertModal({
                     ))}
                   </div>
                 ) : null}
-              </div>
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ListChecks className="h-4 w-4 text-brand-400" />
-                  Recommended resolution actions
-                </div>
-                <ol className="space-y-2">
-                  {plan.steps.map((step, index) => (
-                    <li key={step} className="flex gap-2 text-sm text-text-secondary">
-                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-500/15 font-mono text-[0.7rem] text-brand-400">
-                        {index + 1}
-                      </span>
-                      <span>{step}</span>
-                    </li>
-                  ))}
-                </ol>
               </div>
 
               <ContributingEvents alert={alert} />
@@ -1959,33 +2134,6 @@ function ResolveAlertModal({
                   />
                 </div>
               ) : null}
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ShieldCheck className="h-4 w-4 text-brand-400" />
-                  Posture recommendation
-                </div>
-                <div className="space-y-2">
-                  {plan.posture.map((item) => (
-                    <div key={`${item.mode}:${item.scope}`} className="rounded-md border border-border-subtle bg-elevated p-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusTag tone={item.tone}>{item.mode}</StatusTag>
-                        <span className="text-xs text-text-muted">{item.scope}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-text-secondary">{item.reason}</p>
-                      <p className="mt-1 text-xs text-text-muted">{item.equivalent}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-border-subtle bg-surface p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <CheckCircle2 className="h-4 w-4 text-state-healthy" />
-                  Resolution gate
-                </div>
-                <p className="text-sm text-text-secondary">{plan.gate}</p>
-              </div>
 
               <div className="rounded-lg border border-border-subtle bg-surface p-3">
                 <SelectField
@@ -2106,6 +2254,12 @@ function ResolveAlertModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+function dateBoundaryISO(value: string, endOfDay: boolean): string | undefined {
+  if (!value) return undefined;
+  const suffix = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
+  return new Date(`${value}${suffix}`).toISOString();
 }
 
 function timeAgo(dateStr: string): string {
