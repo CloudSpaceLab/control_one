@@ -29,17 +29,17 @@ type ChangeWindow struct {
 // auto-remediation. A "default" row is synthesised on GET when no explicit row
 // exists — that default exactly matches the migration defaults.
 type TenantRemediationConfig struct {
-	TenantID                         uuid.UUID
-	MinApprovalSeverity              string
-	ChangeWindows                    []ChangeWindow
-	CriticalOverride                 bool
-	CircuitBreakerWindowMin          int
-	CircuitBreakerFailPct            int
-	CircuitBreakerMinSamples         int
-	AutoBlockEnabled                 bool
-	AutoBlockMinConfidence           int
-	DefaultIPBlockScope              string
-	DefaultIPBlockTTLSeconds         int
+	TenantID                        uuid.UUID
+	MinApprovalSeverity             string
+	ChangeWindows                   []ChangeWindow
+	CriticalOverride                bool
+	CircuitBreakerWindowMin         int
+	CircuitBreakerFailPct           int
+	CircuitBreakerMinSamples        int
+	AutoBlockEnabled                bool
+	AutoBlockMinConfidence          int
+	DefaultIPBlockScope             string
+	DefaultIPBlockTTLSeconds        int
 	RequireCorroboratingThreatIntel bool
 	// PatchRequiresApproval gates fleet patch deploys behind the proper
 	// approve→dispatch loop (see migration 0092). Default: true — production
@@ -72,12 +72,12 @@ func DefaultTenantRemediationConfig(tenantID uuid.UUID) TenantRemediationConfig 
 // UpdateTenantRemediationConfigParams narrows the patch surface for operator
 // API writes.
 type UpdateTenantRemediationConfigParams struct {
-	MinApprovalSeverity      *string
-	ChangeWindows            *[]ChangeWindow
-	CriticalOverride         *bool
-	CircuitBreakerWindowMin  *int
-	CircuitBreakerFailPct    *int
-	CircuitBreakerMinSamples         *int
+	MinApprovalSeverity             *string
+	ChangeWindows                   *[]ChangeWindow
+	CriticalOverride                *bool
+	CircuitBreakerWindowMin         *int
+	CircuitBreakerFailPct           *int
+	CircuitBreakerMinSamples        *int
 	AutoBlockEnabled                *bool
 	AutoBlockMinConfidence          *int
 	DefaultIPBlockScope             *string
