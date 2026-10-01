@@ -162,4 +162,9 @@ func init() {
 		RequiresTenant: true,
 		Validate:       nil,
 	})
+	// Raw log dumps are heartbeat-dispatched and always tenant-scoped.
+	registerJobDefinition(JobTypeLogDump, jobDefinition{
+		RequiresTenant: true,
+		Validate:       nil,
+	})
 }
