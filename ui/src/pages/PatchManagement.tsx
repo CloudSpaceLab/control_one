@@ -9,6 +9,7 @@ import { useTenant } from '../providers/TenantProvider';
 import { toast } from 'sonner';
 import type {
   PatchDeployment,
+  PatchPosture,
   NodePatchState,
   NodePatchConfig,
   MaintenanceWindow,
@@ -22,7 +23,7 @@ import type {
 // scheduling, per-node mode configuration, approval gates, per-node selection,
 // and the approval queue.
 type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals';
-type LoadErrorKey = 'deployments' | 'proxies' | 'windows' | 'approvals';
+type LoadErrorKey = 'posture' | 'deployments' | 'proxies' | 'windows' | 'approvals';
 type LoadErrors = Partial<Record<LoadErrorKey, string>>;
 
 interface InlineActionState {
@@ -39,6 +40,7 @@ export function PatchManagement(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [tab, setTab] = useState<Tab>('deployments');
+  const [posture, setPosture] = useState<PatchPosture | null>(null);
   const [deployments, setDeployments] = useState<PatchDeployment[]>([]);
   const [proxies, setProxies] = useState<SquidProxy[]>([]);
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
@@ -53,6 +55,7 @@ export function PatchManagement(): JSX.Element {
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
+      setPosture(null);
       setDeployments([]);
       setProxies([]);
       setWindows([]);
@@ -64,12 +67,20 @@ export function PatchManagement(): JSX.Element {
     setLoading(true);
     setLoadErrors({});
     const nextErrors: LoadErrors = {};
-    const [deps, proxyList, windowList, approvals] = await Promise.allSettled([
+    const [postureResult, deps, proxyList, windowList, approvals] = await Promise.allSettled([
+      client.getPatchPosture(currentTenantId),
       client.listPatchDeployments({ tenantId: currentTenantId, limit: 50 }),
       client.listSquidProxies(currentTenantId),
       client.listMaintenanceWindows(currentTenantId),
       client.listPatchApprovals({ status: 'pending', tenantId: currentTenantId, limit: 100 }),
     ]);
+
+    if (postureResult.status === 'fulfilled') {
+      setPosture(postureResult.value.data);
+    } else {
+      setPosture(null);
+      nextErrors.posture = errorMessage(postureResult.reason, 'Patch posture could not be loaded.');
+    }
 
     if (deps.status === 'fulfilled') {
       setDeployments(deps.value.deployments ?? []);
@@ -153,18 +164,65 @@ export function PatchManagement(): JSX.Element {
       />
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <KpiTile label="Recent deployments" value={loadErrors.deployments ? 'N/A' : String(totals.total)} />
         <KpiTile
-          label="Recent in flight"
-          value={loadErrors.deployments ? 'N/A' : String(totals.inFlight)}
-          tone={totals.inFlight > 0 ? 'warning' : 'unknown'}
+          label="Package inventory"
+          value={loadErrors.posture || !posture ? 'N/A' : `${posture.inventory_nodes} / ${posture.active_nodes}`}
+          hint="Active nodes with package inventory"
+          tone={
+            !posture || loadErrors.posture || posture.active_nodes === 0
+              ? 'unknown'
+              : posture.inventory_nodes === posture.active_nodes
+                ? 'healthy'
+                : 'warning'
+          }
         />
-        <KpiTile label="Recent completed" value={loadErrors.deployments ? 'N/A' : String(totals.completed)} tone="healthy" />
         <KpiTile
-          label="Recent failed / partial"
-          value={loadErrors.deployments ? 'N/A' : String(totals.failed)}
-          tone={totals.failed > 0 || loadErrors.deployments ? 'critical' : 'unknown'}
+          label="Known critical findings"
+          value={loadErrors.posture || !posture ? 'N/A' : String(posture.known_critical_findings)}
+          hint={posture && !loadErrors.posture ? `${posture.known_kev_findings} KEV findings` : undefined}
+          tone={posture && !loadErrors.posture && posture.known_critical_findings > 0 ? 'critical' : 'unknown'}
         />
+        <KpiTile
+          label="Known affected nodes"
+          value={loadErrors.posture || !posture ? 'N/A' : String(posture.known_affected_nodes)}
+          hint={posture && !loadErrors.posture ? `${posture.known_active_findings} unresolved findings` : undefined}
+          tone={posture && !loadErrors.posture && posture.known_affected_nodes > 0 ? 'warning' : 'unknown'}
+        />
+        <KpiTile
+          label="Pending approvals"
+          value={loadErrors.posture || !posture ? 'N/A' : String(posture.pending_approvals)}
+          hint={
+            posture && !loadErrors.posture && posture.expired_approvals > 0
+              ? `${posture.expired_approvals} expired pending record${posture.expired_approvals === 1 ? '' : 's'}`
+              : undefined
+          }
+          tone={posture && !loadErrors.posture && posture.pending_approvals > 0 ? 'warning' : 'healthy'}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wider text-text-secondary">Recent deployment activity · latest 50</p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <KpiTile label="Deployments" value={loadErrors.deployments ? 'N/A' : String(totals.total)} size="sm" />
+          <KpiTile
+            label="In flight"
+            value={loadErrors.deployments ? 'N/A' : String(totals.inFlight)}
+            tone={totals.inFlight > 0 ? 'warning' : 'unknown'}
+            size="sm"
+          />
+          <KpiTile
+            label="Completed"
+            value={loadErrors.deployments ? 'N/A' : String(totals.completed)}
+            tone="healthy"
+            size="sm"
+          />
+          <KpiTile
+            label="Failed / partial"
+            value={loadErrors.deployments ? 'N/A' : String(totals.failed)}
+            tone={totals.failed > 0 || loadErrors.deployments ? 'critical' : 'unknown'}
+            size="sm"
+          />
+        </div>
       </div>
 
       <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
@@ -1626,6 +1684,8 @@ function loadErrorSummary(errors: LoadErrors): string {
 
 function loadErrorName(key: LoadErrorKey): string {
   switch (key) {
+    case 'posture':
+      return 'Posture';
     case 'deployments':
       return 'Deployments';
     case 'proxies':
