@@ -363,14 +363,6 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	tenantID, err := tenantIDFromQuery(r, principal)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
-		return
-	}
 	id, err := uuid.Parse(segments[0])
 	if err != nil {
 		http.Error(w, "case id must be a UUID", http.StatusBadRequest)
@@ -387,8 +379,30 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if row == nil || row.TenantID != tenantID {
+	if row == nil {
 		http.NotFound(w, r)
+		return
+	}
+
+	var tenantID uuid.UUID
+	if strings.TrimSpace(r.URL.Query().Get("tenant_id")) != "" {
+		tenantID, err = tenantIDFromQuery(r, principal)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if row.TenantID != tenantID {
+			http.NotFound(w, r)
+			return
+		}
+	} else {
+		if r.Method != http.MethodGet {
+			http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+			return
+		}
+		tenantID = row.TenantID
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
 		return
 	}
 	if len(segments) == 2 {
