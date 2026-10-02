@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -47,10 +48,11 @@ func (s *Server) handlePatchApprovalsCollection(w http.ResponseWriter, r *http.R
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleListPatchApprovals(w, r)
+		s.handleListPatchApprovals(w, r, principal)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -85,7 +87,11 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
+			return
+		}
+		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleViewer, roleOperator, roleAdmin) {
 			return
 		}
 		s.handleGetPatchApproval(w, r, approvalID)
@@ -99,6 +105,9 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !ok {
 			return
 		}
+		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleOperator, roleAdmin) {
+			return
+		}
 		s.handleApprovePatchApproval(w, r, approvalID, principal.Subject)
 	case len(segments) == 2 && segments[1] == "deny":
 		if r.Method != http.MethodPost {
@@ -110,13 +119,16 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !ok {
 			return
 		}
+		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleOperator, roleAdmin) {
+			return
+		}
 		s.handleDenyPatchApproval(w, r, approvalID, principal.Subject)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -133,7 +145,24 @@ func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 			return
 		}
+		if !s.requireTenantAccess(w, r, principal, parsed, roleViewer, roleOperator, roleAdmin) {
+			return
+		}
 		filter.TenantID = parsed
+	} else {
+		tenantIDs, err := s.accessibleTenantIDs(r.Context(), principal, roleViewer, roleOperator, roleAdmin)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if len(tenantIDs) == 0 {
+			writeJSON(w, http.StatusOK, paginatedResponse[patchApprovalResponse]{
+				Data:       []patchApprovalResponse{},
+				Pagination: newPaginationMeta(0, limit, offset, 0),
+			})
+			return
+		}
+		filter.TenantIDs = tenantIDs
 	}
 	if v := strings.TrimSpace(r.URL.Query().Get("deployment_id")); v != "" {
 		parsed, err := uuid.Parse(v)
@@ -168,6 +197,26 @@ func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request
 		Data:       items,
 		Pagination: newPaginationMeta(total, limit, offset, len(items)),
 	})
+}
+
+func (s *Server) requirePatchApprovalTenantAccess(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal *auth.Principal,
+	id uuid.UUID,
+	roles ...string,
+) bool {
+	approval, err := s.store.GetPatchApproval(r.Context(), id)
+	if err != nil {
+		s.logger.Error("get patch approval for tenant access", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return false
+	}
+	if approval == nil {
+		http.NotFound(w, r)
+		return false
+	}
+	return s.requireTenantAccess(w, r, principal, approval.TenantID, roles...)
 }
 
 func (s *Server) handleGetPatchApproval(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
