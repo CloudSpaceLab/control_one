@@ -14,7 +14,8 @@ import {
   type StateTone,
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
-import { useTenants } from '../hooks/useTenants';
+import { useTenant } from '../providers/TenantProvider';
+import { AllTenantDataSecuritySummary } from '@/features/data-security/AllTenantDataSecuritySummary';
 import { ConfirmModal } from '../components/ConfirmModal';
 import type {
   ColumnClassification,
@@ -81,7 +82,7 @@ function FindingsTab({ tenantId }: FindingsTabProps): JSX.Element {
     if (!pendingResolve || resolving) return;
     setResolving(true);
     try {
-      await client.resolvePIIFinding(pendingResolve.finding.id);
+      await client.resolvePIIFinding(pendingResolve.finding.id, tenantId);
       setPendingResolve(null);
       await load();
     } catch (err) {
@@ -375,7 +376,7 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
     if (!pendingDelete || deleting) return;
     setDeleting(true);
     try {
-      await client.deleteDLPRule(pendingDelete.rule.id);
+      await client.deleteDLPRule(pendingDelete.rule.id, tenantId);
       setPendingDelete(null);
       await load();
     } catch (err) {
@@ -537,59 +538,37 @@ function RulesTab({ tenantId }: RulesTabProps): JSX.Element {
 // ---- Main page --------------------------------------------------------------
 
 export function DataSecurity(): JSX.Element {
-  const { data: tenants } = useTenants({ limit: 50, offset: 0 });
-  const [tenantId, setTenantId] = useState<string>('');
+  const { currentTenantId, currentTenant } = useTenant();
 
-  useEffect(() => {
-    if (!tenantId && tenants[0]?.id) setTenantId(tenants[0].id);
-  }, [tenants, tenantId]);
+  if (!currentTenantId) {
+    return <AllTenantDataSecuritySummary />;
+  }
 
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        eyebrow="DETECT & RESPOND / DATA SECURITY"
+        eyebrow={currentTenant?.name ?? "DETECT & RESPOND / DATA SECURITY"}
         title="Data security"
         description="Classify columns, detect PII exposure, and manage DLP rules."
       />
 
-      <Panel padding="md" eyebrow="TENANT" title="Select tenant">
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="ds-tenant">Tenant</Label>
-          <select
-            id="ds-tenant"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-            className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-          >
-            <option value="">- select -</option>
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </Panel>
+      <Tabs defaultValue="findings">
+        <TabsList>
+          <TabsTrigger value="findings">Findings</TabsTrigger>
+          <TabsTrigger value="columns">Columns</TabsTrigger>
+          <TabsTrigger value="rules">Rules</TabsTrigger>
+        </TabsList>
 
-      {tenantId && (
-        <Tabs defaultValue="findings">
-          <TabsList>
-            <TabsTrigger value="findings">Findings</TabsTrigger>
-            <TabsTrigger value="columns">Columns</TabsTrigger>
-            <TabsTrigger value="rules">Rules</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="findings">
-            <FindingsTab tenantId={tenantId} />
-          </TabsContent>
-          <TabsContent value="columns">
-            <ColumnsTab tenantId={tenantId} />
-          </TabsContent>
-          <TabsContent value="rules">
-            <RulesTab tenantId={tenantId} />
-          </TabsContent>
-        </Tabs>
-      )}
+        <TabsContent value="findings">
+          <FindingsTab tenantId={currentTenantId} />
+        </TabsContent>
+        <TabsContent value="columns">
+          <ColumnsTab tenantId={currentTenantId} />
+        </TabsContent>
+        <TabsContent value="rules">
+          <RulesTab tenantId={currentTenantId} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
