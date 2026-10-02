@@ -41,7 +41,8 @@ vi.mock('@/providers/TenantProvider', () => ({
 }));
 
 function expectKpi(label: string, value: string): void {
-  const labelNode = screen.getByText(label);
+  const labelNode = screen.getAllByText(label)[0];
+  expect(labelNode).toBeDefined();
   const tile = labelNode.closest('.group');
   expect(tile).not.toBeNull();
   expect(tile).toHaveTextContent(value);
