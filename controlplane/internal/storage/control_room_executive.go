@@ -313,41 +313,33 @@ func (s *Store) GetExecutiveAttentionSummary(
 				b.score,
 				b.created_at,
 				CASE
-					WHEN b.reason NOT LIKE 'Correlation response:%'
-						THEN NULL
-					WHEN substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
-						THEN NULL
-					ELSE substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+					WHEN b.reason LIKE 'Correlation response:%'
+						THEN substring(b.reason FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
 				END AS alert_id
 			FROM ip_blocklist_entries b
 			WHERE b.tenant_id = $1
 			  AND b.status = 'proposed'
 		),
-		latest_action_receipts AS (
-			SELECT DISTINCT ON (ar.action_plan_id)
-				ar.action_plan_id,
-				ar.state,
-				ar.error
-			FROM action_receipts ar
-			WHERE ar.tenant_id = $1
-			  AND ar.created_at >= $2
-			  AND ar.created_at < $3
-			ORDER BY ar.action_plan_id, ar.created_at DESC, ar.id DESC
-		),
 		verified_handled_alerts AS (
 			SELECT DISTINCT
 				CASE
 					WHEN COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						NOT LIKE 'Correlation response:%'
-						THEN NULL
-					WHEN substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
-						THEN NULL
-					ELSE substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+						LIKE 'Correlation response:%'
+						THEN substring(
+							COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+							FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+						)::uuid
 				END AS alert_id
 			FROM action_plans p
-			JOIN latest_action_receipts r ON r.action_plan_id = p.id
+			JOIN LATERAL (
+				SELECT ar.state, ar.error
+				FROM action_receipts ar
+				WHERE ar.action_plan_id = p.id
+				  AND ar.created_at >= $2
+				  AND ar.created_at < $3
+				ORDER BY ar.created_at DESC, ar.id DESC
+				LIMIT 1
+			) r ON TRUE
 			WHERE p.tenant_id = $1
 			  AND p.updated_at >= $2
 			  AND p.updated_at < $3
@@ -368,13 +360,11 @@ func (s *Store) GetExecutiveAttentionSummary(
 				p.updated_at AS created_at,
 				CASE
 					WHEN COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						NOT LIKE 'Correlation response:%'
-						THEN NULL
-					WHEN substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') IS NULL
-						THEN NULL
-					ELSE substring(COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
-						FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+						LIKE 'Correlation response:%'
+						THEN substring(
+							COALESCE(NULLIF(p.diff->>'reason', ''), NULLIF(p.source_ref->>'reason', ''), '')
+							FROM 'alert_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+						)::uuid
 				END AS alert_id
 			FROM action_plans p
 			WHERE p.tenant_id = $1
@@ -431,7 +421,12 @@ func (s *Store) GetExecutiveAttentionSummary(
 			SELECT alert_id FROM auto_failed WHERE alert_id IS NOT NULL
 		),
 		review_alerts AS (
-			SELECT a.*
+			SELECT
+				a.id,
+				LOWER(COALESCE(NULLIF(a.severity, ''), 'medium')) AS severity,
+				a.title,
+				COALESCE(a.summary, '') AS summary,
+				a.opened_at
 			FROM alerts a
 			WHERE a.tenant_id = $1
 			  AND a.state IN ('open', 'acked')
@@ -488,29 +483,48 @@ func (s *Store) GetExecutiveAttentionSummary(
 			LEFT JOIN nodes n ON n.id = r.node_id AND n.tenant_id = r.tenant_id
 			WHERE r.tenant_id = $1 AND r.status = 'pending'
 		),
+		review_stats AS (
+			SELECT COUNT(*)::int AS total,
+			       COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM review_alerts
+		),
+		patch_stats AS (
+			SELECT COUNT(*)::int AS total FROM patch_pending
+		),
+		remediation_stats AS (
+			SELECT COUNT(*)::int AS total,
+			       COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM remediation_pending
+		),
+		network_stats AS (
+			SELECT COUNT(*)::int AS total,
+			       COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM network_approvals
+		),
+		failed_stats AS (
+			SELECT COUNT(*)::int AS total,
+			       COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical
+			FROM auto_failed
+		),
 		counts AS (
 			SELECT
-				(SELECT COUNT(*) FROM review_alerts)::int AS reviews,
-				(
-					(SELECT COUNT(*) FROM patch_pending)
-					+ (SELECT COUNT(*) FROM remediation_pending)
-					+ (SELECT COUNT(*) FROM network_approvals)
-				)::int AS approvals,
-				(SELECT COUNT(*) FROM auto_failed)::int AS interventions,
-				(
-					(SELECT COUNT(*) FROM review_alerts WHERE LOWER(severity) = 'critical')
-					+ (SELECT COUNT(*) FROM remediation_pending WHERE severity = 'critical')
-					+ (SELECT COUNT(*) FROM network_approvals WHERE severity = 'critical')
-					+ (SELECT COUNT(*) FROM auto_failed WHERE severity = 'critical')
-				)::int AS critical
+				r.total AS reviews,
+				(p.total + m.total + n.total)::int AS approvals,
+				f.total AS interventions,
+				(r.critical + m.critical + n.critical + f.critical)::int AS critical
+			FROM review_stats r
+			CROSS JOIN patch_stats p
+			CROSS JOIN remediation_stats m
+			CROSS JOIN network_stats n
+			CROSS JOIN failed_stats f
 		),
 		attention_items AS (
 			SELECT
 				a.id, 'review'::text AS kind, 'alert'::text AS source,
-				LOWER(COALESCE(NULLIF(a.severity, ''), 'medium')) AS severity,
+				a.severity,
 				'alerts'::text AS domain,
 				a.title AS alert_title,
-				COALESCE(a.summary, '') AS alert_summary,
+				a.summary AS alert_summary,
 				''::text AS node_hostname,
 				''::text AS mode,
 				''::text AS rule_id,
