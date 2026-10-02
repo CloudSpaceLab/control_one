@@ -78,7 +78,7 @@ interface KnowledgeChunk {
   id: string;
   source: string;
   topic: string;
-  state: 'fresh' | 'stale' | 'failed';
+  state: 'fresh' | 'attention' | 'stale' | 'failed';
   summary: string;
   citations: string[];
   openedFrom: string[];
@@ -139,6 +139,7 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
 
 const CHUNK_TONE: Record<KnowledgeChunk['state'], StateTone> = {
   fresh: 'healthy',
+  attention: 'warning',
   stale: 'degraded',
   failed: 'critical',
 };
@@ -865,8 +866,9 @@ function effortForState(state: ObservabilityState): string {
 
 function chunkStateForService(state: ObservabilityState): KnowledgeChunk['state'] {
   if (state === 'healthy') return 'fresh';
-  if (state === 'failed' || state === 'unsupported' || state === 'policy_blocked') return 'failed';
-  return 'stale';
+  if (state === 'stale') return 'stale';
+  if (state === 'failed' || state === 'unsupported') return 'failed';
+  return 'attention';
 }
 
 function formatDateLabel(value: string): string {
