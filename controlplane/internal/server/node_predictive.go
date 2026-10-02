@@ -306,33 +306,68 @@ func (s *Server) handleAtRiskFleet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	if s.store == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	var tenantID uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		id, err := uuid.Parse(v)
+
+	var rows []storage.AtRiskNodeRow
+	if value := strings.TrimSpace(r.URL.Query().Get("tenant_id")); value != "" {
+		tenantID, err := uuid.Parse(value)
 		if err != nil {
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 			return
 		}
-		tenantID = id
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+			return
+		}
+		rows, err = s.store.ListAtRiskNodes(r.Context(), tenantID, healthScoreMediumThreshold-1)
+		if err != nil {
+			s.logger.Error("list at-risk nodes", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		tenantIDs, err := s.accessibleTenantIDs(
+			r.Context(),
+			principal,
+			roleViewer,
+			roleOperator,
+			roleInvestigator,
+			roleAdmin,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if len(tenantIDs) == 0 {
+			writeJSON(w, http.StatusOK, atRiskFleetResponse{Data: []atRiskNodeResponse{}})
+			return
+		}
+		scopedStore, ok := s.store.(interface {
+			ListAtRiskNodesForTenants(context.Context, []uuid.UUID, int) ([]storage.AtRiskNodeRow, error)
+		})
+		if !ok {
+			http.Error(w, "tenant-scoped predictive store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		rows, err = scopedStore.ListAtRiskNodesForTenants(r.Context(), tenantIDs, healthScoreMediumThreshold-1)
+		if err != nil {
+			s.logger.Error("list at-risk nodes", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 	}
-	rows, err := s.store.ListAtRiskNodes(r.Context(), tenantID, healthScoreMediumThreshold-1)
-	if err != nil {
-		s.logger.Error("list at-risk nodes", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
+
 	resp := atRiskFleetResponse{Data: make([]atRiskNodeResponse, 0, len(rows))}
 	for _, row := range rows {
-		comp := row.Components
-		if comp == nil {
-			comp = map[string]any{}
+		components := row.Components
+		if components == nil {
+			components = map[string]any{}
 		}
 		resp.Data = append(resp.Data, atRiskNodeResponse{
 			NodeID:     row.NodeID.String(),
@@ -340,7 +375,7 @@ func (s *Server) handleAtRiskFleet(w http.ResponseWriter, r *http.Request) {
 			Hostname:   row.Hostname,
 			Score:      row.Score,
 			RiskLevel:  row.RiskLevel,
-			Components: comp,
+			Components: components,
 			ComputedAt: row.ComputedAt.UTC().Format(time.RFC3339),
 		})
 		switch row.RiskLevel {
