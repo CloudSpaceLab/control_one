@@ -88,6 +88,36 @@ describe('Coverage', () => {
     expect(screen.getByText('2 attention states')).toBeInTheDocument();
   });
 
+  it('labels All tenants as the global catalog instead of a current tenant overlay', () => {
+    vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
+      tenants: [{ id: 'tenant-1', name: 'Bank Operations', created_at: '2026-05-20T00:00:00Z' }],
+      currentTenant: null,
+      currentTenantId: null,
+      loading: false,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn(),
+    } as ReturnType<typeof useTenantModule.useTenant>);
+    vi.spyOn(useCoverageMatrixModule, 'useCoverageMatrix').mockReturnValue({
+      data: { ...matrix, scope: 'global', tenant_id: '' },
+      loading: false,
+      error: null,
+      unavailable: false,
+      reload,
+    });
+
+    render(
+      <MemoryRouter>
+        <Coverage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('ALL TENANTS')).toBeInTheDocument();
+    expect(screen.getByText('Global capability catalog. Select a tenant for runtime coverage overlays.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Global catalog' })).toBeInTheDocument();
+    expect(screen.queryByText('CURRENT TENANT')).not.toBeInTheDocument();
+  });
+
   it('filters by DB audit and keeps the next action visible', async () => {
     const user = userEvent.setup();
     render(
