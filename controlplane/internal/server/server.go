@@ -1793,7 +1793,8 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 			offset,
 		)
 	} else {
-		tenants, total, err = s.store.ListTenants(r.Context(), namePrefix, limit, offset)
+		http.Error(w, "tenant access gate unavailable", http.StatusServiceUnavailable)
+		return
 	}
 	if err != nil {
 		s.logger.Error("list tenants", zap.Error(err))
