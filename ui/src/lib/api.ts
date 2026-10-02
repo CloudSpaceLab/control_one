@@ -1379,6 +1379,18 @@ export interface LogDumpPreview {
   truncated: boolean;
 }
 
+export interface NodeIPGeo {
+  ip: string;
+  country?: string;
+  country_code?: string;
+  city?: string;
+  region?: string;
+  latitude?: number;
+  longitude?: number;
+  source?: string;
+  geo_dataset_version?: string;
+}
+
 export interface NodeSummary {
   id: string;
   tenant_id: string;
@@ -1400,6 +1412,7 @@ export interface NodeSummary {
   install_context?: string;
   classification?: TargetClassificationResponse;
   network_observations?: NetworkObservationResponse[];
+  ip_geo?: NodeIPGeo;
 }
 
 export interface FleetEnrollTarget {
