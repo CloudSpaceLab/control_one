@@ -36,7 +36,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	principal, ok := s.authorize(w, r, roleViewer)
+	principal, ok := s.authorizePermission(w, r, "audit.read", roleViewer)
 	if !ok {
 		return
 	}
@@ -53,7 +53,7 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 		ResourceType: strings.TrimSpace(r.URL.Query().Get("resource_type")),
 		ResourceID:   strings.TrimSpace(r.URL.Query().Get("resource_id")),
 	}
-	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal, roleViewer, roleOperator, roleAdmin)
+	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal)
 	if !ok {
 		return
 	}

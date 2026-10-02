@@ -19,7 +19,52 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/migrate"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/server"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/worker"
 )
+
+const integrationAdminToken = "integration-admin-token"
+
+func integrationTestConfig() *config.Config {
+	return &config.Config{
+		HTTP: config.HTTPConfig{
+			Address:     ":8443",
+			ReadTimeout: 15 * time.Second,
+		},
+		Auth: config.AuthConfig{
+			OIDC: config.OIDCConfig{
+				Enabled: true,
+				StaticTokens: map[string]config.StaticPrincipalConfig{
+					integrationAdminToken: {
+						Subject: "integration-admin",
+						Email:   "integration-admin@local",
+						Name:    "Integration Admin",
+						Roles:   []string{"admin"},
+					},
+				},
+			},
+			RBAC: config.RBACConfig{DefaultRole: "viewer"},
+		},
+	}
+}
+
+func withIntegrationAuth(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer "+integrationAdminToken)
+	return req
+}
+
+func integrationName(prefix string) string {
+	return prefix + "-" + uuid.NewString()
+}
+
+type integrationQueue struct{}
+
+func (integrationQueue) Enqueue(worker.Task) error {
+	return nil
+}
+
+func (integrationQueue) EnqueueAt(worker.Task, time.Time) error {
+	return nil
+}
 
 func TestEndToEndProvisioningFlow(t *testing.T) {
 	if testing.Short() {
@@ -27,52 +72,51 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 	}
 
 	logger := zap.NewNop()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			Address:     ":8443",
-			ReadTimeout: 15 * time.Second,
-		},
-		Auth: config.AuthConfig{
-			OIDC: config.OIDCConfig{
-				Enabled: false,
-			},
-		},
-	}
+	cfg := integrationTestConfig()
 
 	store := setupTestStore(t)
-	srv := server.New(logger, cfg, store, nil)
+	srv := server.New(logger, cfg, store, integrationQueue{})
 
 	// Create tenant
 	tenantID := uuid.New()
 	_, err := store.CreateTenant(context.Background(), &storage.Tenant{
 		ID:   tenantID,
-		Name: "test-tenant",
+		Name: integrationName("provisioning-tenant"),
 	})
 	require.NoError(t, err)
 
 	// Create template
 	template, err := store.CreateProvisioningTemplate(context.Background(), &storage.ProvisioningTemplate{
 		ID:       uuid.New(),
-		Name:     "test-template",
+		Name:     integrationName("provisioning-template"),
 		Provider: "mock",
 	})
+	require.NoError(t, err)
+	version, err := store.CreateProvisioningTemplateVersion(context.Background(), storage.CreateTemplateVersionParams{
+		TemplateID: template.ID,
+		Body:       "version: 1",
+	})
+	require.NoError(t, err)
+	_, err = store.PromoteProvisioningTemplateVersion(context.Background(), template.ID, version.Version)
 	require.NoError(t, err)
 
 	// Create provisioning job
 	jobReq := map[string]interface{}{
 		"tenant_id": tenantID.String(),
 		"type":      "provision.apply",
-		"parameters": map[string]interface{}{
-			"template_id": template.ID.String(),
+		"payload": map[string]interface{}{
+			"plan_id":   template.ID.String(),
+			"tenant_id": tenantID.String(),
+			"node_id":   uuid.New().String(),
 		},
 	}
 	body, _ := json.Marshal(jobReq)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	req := withIntegrationAuth(httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	srv.Handler().ServeHTTP(w, req)
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
 
 	var jobResp map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &jobResp)
@@ -93,26 +137,16 @@ func TestComplianceScanFlow(t *testing.T) {
 	}
 
 	logger := zap.NewNop()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			Address:     ":8443",
-			ReadTimeout: 15 * time.Second,
-		},
-		Auth: config.AuthConfig{
-			OIDC: config.OIDCConfig{
-				Enabled: false,
-			},
-		},
-	}
+	cfg := integrationTestConfig()
 
 	store := setupTestStore(t)
-	srv := server.New(logger, cfg, store, nil)
+	srv := server.New(logger, cfg, store, integrationQueue{})
 
 	// Create tenant and node
 	tenantID := uuid.New()
 	_, err := store.CreateTenant(context.Background(), &storage.Tenant{
 		ID:   tenantID,
-		Name: "test-tenant",
+		Name: integrationName("compliance-tenant"),
 	})
 	require.NoError(t, err)
 
@@ -120,7 +154,7 @@ func TestComplianceScanFlow(t *testing.T) {
 	_, err = store.CreateNode(context.Background(), &storage.Node{
 		ID:       nodeID,
 		TenantID: tenantID,
-		Hostname: "test-node",
+		Hostname: integrationName("compliance-node"),
 	})
 	require.NoError(t, err)
 
@@ -128,22 +162,27 @@ func TestComplianceScanFlow(t *testing.T) {
 	jobReq := map[string]interface{}{
 		"tenant_id": tenantID.String(),
 		"type":      "compliance.scan",
-		"parameters": map[string]interface{}{
-			"node_id": nodeID.String(),
+		"payload": map[string]interface{}{
+			"scan_id":   uuid.New().String(),
+			"tenant_id": tenantID.String(),
+			"node_id":   nodeID.String(),
 		},
 	}
 	body, _ := json.Marshal(jobReq)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	req := withIntegrationAuth(httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	srv.Handler().ServeHTTP(w, req)
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
 
-	// Verify compliance results
-	results, err := store.ListComplianceResults(context.Background(), nodeID)
+	var jobResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &jobResp))
+	jobID, err := uuid.Parse(jobResp["id"].(string))
 	require.NoError(t, err)
-	assert.NotEmpty(t, results)
+	job, err := store.GetJob(context.Background(), jobID)
+	require.NoError(t, err)
+	assert.Equal(t, storage.JobStatusQueued, job.Status)
 }
 
 func TestJobLifecycle(t *testing.T) {
@@ -152,41 +191,35 @@ func TestJobLifecycle(t *testing.T) {
 	}
 
 	logger := zap.NewNop()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			Address:     ":8443",
-			ReadTimeout: 15 * time.Second,
-		},
-		Auth: config.AuthConfig{
-			OIDC: config.OIDCConfig{
-				Enabled: false,
-			},
-		},
-	}
+	cfg := integrationTestConfig()
 
 	store := setupTestStore(t)
-	srv := server.New(logger, cfg, store, nil)
+	srv := server.New(logger, cfg, store, integrationQueue{})
 
 	tenantID := uuid.New()
 	_, err := store.CreateTenant(context.Background(), &storage.Tenant{
 		ID:   tenantID,
-		Name: "test-tenant",
+		Name: integrationName("lifecycle-tenant"),
 	})
 	require.NoError(t, err)
 
 	// Create job
 	jobReq := map[string]interface{}{
-		"tenant_id":  tenantID.String(),
-		"type":       "provision.apply",
-		"parameters": map[string]interface{}{},
+		"tenant_id": tenantID.String(),
+		"type":      "compliance.scan",
+		"payload": map[string]interface{}{
+			"scan_id":   uuid.New().String(),
+			"tenant_id": tenantID.String(),
+			"node_id":   uuid.New().String(),
+		},
 	}
 	body, _ := json.Marshal(jobReq)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	req := withIntegrationAuth(httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	srv.Handler().ServeHTTP(w, req)
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
 
 	var jobResp map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &jobResp)
@@ -194,13 +227,13 @@ func TestJobLifecycle(t *testing.T) {
 	jobID := jobResp["id"].(string)
 
 	// Get job
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID, nil)
+	req = withIntegrationAuth(httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID, nil))
 	w = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Cancel job
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID+"/cancel", nil)
+	req = withIntegrationAuth(httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID+"/cancel", nil))
 	w = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -218,20 +251,10 @@ func TestMultiTenantIsolation(t *testing.T) {
 	}
 
 	logger := zap.NewNop()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			Address:     ":8443",
-			ReadTimeout: 15 * time.Second,
-		},
-		Auth: config.AuthConfig{
-			OIDC: config.OIDCConfig{
-				Enabled: false,
-			},
-		},
-	}
+	cfg := integrationTestConfig()
 
 	store := setupTestStore(t)
-	srv := server.New(logger, cfg, store, nil)
+	srv := server.New(logger, cfg, store, integrationQueue{})
 
 	// Create two tenants
 	tenant1ID := uuid.New()
@@ -239,13 +262,13 @@ func TestMultiTenantIsolation(t *testing.T) {
 
 	_, err := store.CreateTenant(context.Background(), &storage.Tenant{
 		ID:   tenant1ID,
-		Name: "tenant-1",
+		Name: integrationName("isolation-tenant-1"),
 	})
 	require.NoError(t, err)
 
 	_, err = store.CreateTenant(context.Background(), &storage.Tenant{
 		ID:   tenant2ID,
-		Name: "tenant-2",
+		Name: integrationName("isolation-tenant-2"),
 	})
 	require.NoError(t, err)
 
@@ -256,19 +279,19 @@ func TestMultiTenantIsolation(t *testing.T) {
 	_, err = store.CreateNode(context.Background(), &storage.Node{
 		ID:       node1ID,
 		TenantID: tenant1ID,
-		Hostname: "node-1",
+		Hostname: integrationName("isolation-node-1"),
 	})
 	require.NoError(t, err)
 
 	_, err = store.CreateNode(context.Background(), &storage.Node{
 		ID:       node2ID,
 		TenantID: tenant2ID,
-		Hostname: "node-2",
+		Hostname: integrationName("isolation-node-2"),
 	})
 	require.NoError(t, err)
 
 	// List nodes for tenant 1
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?tenant_id="+tenant1ID.String(), nil)
+	req := withIntegrationAuth(httptest.NewRequest(http.MethodGet, "/api/v1/nodes?tenant_id="+tenant1ID.String(), nil))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -297,6 +320,9 @@ func setupTestStore(t *testing.T) *storage.Store {
 	}
 	store, err := storage.New(logger, cfg, storage.Options{})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, store.Close())
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

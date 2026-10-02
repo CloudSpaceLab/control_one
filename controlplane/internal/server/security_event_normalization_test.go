@@ -189,6 +189,61 @@ func TestRequiredNormalizedFieldsAreValidated(t *testing.T) {
 	}
 }
 
+func TestWebRequestNormalizationAllowsMissingDestinationPort(t *testing.T) {
+	tenantID, nodeID := uuid.New(), uuid.New()
+	event := IngestedEvent{
+		Type:    "web.request",
+		TS:      time.Now().UTC(),
+		SrcIP:   "192.0.2.44",
+		Details: map[string]any{"method": "GET", "path": "/missing", "status_code": 404, "protocol": "tcp"},
+	}
+
+	got := normalizeSecurityEvents(tenantID, nodeID, []IngestedEvent{event})
+	if len(got) != 1 {
+		t.Fatalf("normalized events = %d, want one", len(got))
+	}
+	if got[0].ParserStatus == "error" || got[0].Details["event_type"] != "web.request" {
+		t.Fatalf("web request without destination port was rejected: %#v", got[0])
+	}
+	if _, ok := got[0].Details["dst_port"]; ok {
+		t.Fatalf("destination port should remain absent when the source log does not provide it: %#v", got[0].Details)
+	}
+}
+
+func TestWebRequestOptionalDestinationPortValidation(t *testing.T) {
+	now := time.Now().UTC()
+	base := func(port any) IngestedEvent {
+		return IngestedEvent{
+			Type: "security.event",
+			TS:   now,
+			Details: map[string]any{
+				"event_type":  "web.request",
+				"source":      "web.nginx",
+				"node_id":     uuid.NewString(),
+				"timestamp":   now.Format(time.RFC3339Nano),
+				"outcome":     "success",
+				"src_ip":      "192.0.2.44",
+				"protocol":    "tcp",
+				"http_method": "GET",
+				"path":        "/health",
+				"status_code": 200,
+				"dst_port":    port,
+			},
+		}
+	}
+
+	valid := base(443)
+	if err := validateNormalizedSecurityEvent(&valid); err != nil {
+		t.Fatalf("valid optional destination port rejected: %v", err)
+	}
+	for _, port := range []any{0, -1, 65536, "not-a-port"} {
+		candidate := base(port)
+		if err := validateNormalizedSecurityEvent(&candidate); err == nil {
+			t.Fatalf("invalid optional destination port %v was accepted", port)
+		}
+	}
+}
+
 func TestNormalizedFixtureContractsMatchPhase3Templates(t *testing.T) {
 	tenantID, nodeID := uuid.New(), uuid.New()
 	assert := func(name string, event IngestedEvent, eventType string, fields map[string]any) {

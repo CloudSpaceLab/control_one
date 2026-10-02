@@ -24,13 +24,14 @@ function ReturnToAlertChip(): JSX.Element | null {
 export function MainLayout(): JSX.Element {
   const { profile } = useAuth();
   const userRoles = profile?.roles ?? [];
+  const userPermissions = profile?.permissions;
 
   return (
     <div className="flex min-h-screen w-full bg-canvas">
       <CommandPalette />
-      <Sidebar userRoles={userRoles} />
+      <Sidebar userRoles={userRoles} userPermissions={userPermissions} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar mobileNav={<Sidebar userRoles={userRoles} variant="sheet" />} />
+        <TopBar mobileNav={<Sidebar userRoles={userRoles} userPermissions={userPermissions} variant="sheet" />} />
         <main className="flex-1 overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
           <Outlet />
         </main>

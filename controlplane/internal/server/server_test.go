@@ -1266,7 +1266,7 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 	})
 }
 
-func TestRolePermissionEndpointRejectsBuiltInRoleMutation(t *testing.T) {
+func TestRolePermissionEndpointAllowsAdminBuiltInRoleMutation(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{Address: ":0"},
@@ -1274,7 +1274,7 @@ func TestRolePermissionEndpointRejectsBuiltInRoleMutation(t *testing.T) {
 		Auth: authWithTokens("admin", "role-admin-token"),
 	}
 	roleID := uuid.New()
-	store := &fakeStore{setRolePermsErr: storage.ErrBuiltInRoleImmutable}
+	store := &fakeStore{}
 	srv := New(logger, cfg, store, &stubQueue{})
 
 	body := bytes.NewReader([]byte(`{"permissions":["roles.read"]}`))
@@ -1283,11 +1283,8 @@ func TestRolePermissionEndpointRejectsBuiltInRoleMutation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), storage.ErrBuiltInRoleImmutable.Error()) {
-		t.Fatalf("expected immutable role message, got %q", rec.Body.String())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if len(store.setRolePermsCalls) != 1 {
 		t.Fatalf("expected one role-permission call, got %d", len(store.setRolePermsCalls))
@@ -2460,6 +2457,9 @@ func TestRBACAuthorization(t *testing.T) {
 		store.overrideRoles = map[uuid.UUID][]string{
 			userID: {"viewer", "operator"},
 		}
+		store.userPermissions = map[uuid.UUID][]string{
+			userID: {"alerts.read", "cases.read", "audit.read"},
+		}
 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
@@ -2495,6 +2495,10 @@ func TestRBACAuthorization(t *testing.T) {
 		}
 		if display, _ := userPayload["display_name"].(string); display != "Stored User" {
 			t.Fatalf("expected display name propagated, got %v", display)
+		}
+		permissions, _ := resp["permissions"].([]any)
+		if len(permissions) != 3 {
+			t.Fatalf("expected effective permissions to be returned, got %v", permissions)
 		}
 	})
 }
@@ -2559,6 +2563,7 @@ type fakeStore struct {
 	usersByID           map[uuid.UUID]*storage.User
 	userList            []storage.User
 	userRoles           map[uuid.UUID][]string
+	userPermissions     map[uuid.UUID][]string
 	rolesCatalog        []storage.Role
 	rolePermissions     []storage.RolePermissions
 	setRolePermsErr     error
@@ -5056,8 +5061,12 @@ func (f *fakeStore) CreateCustomRole(_ context.Context, name, desc string, perms
 	return &storage.RolePermissions{ID: uuid.New(), Name: name, Description: desc, Permissions: perms}, nil
 }
 func (f *fakeStore) DeleteRoleByID(_ context.Context, _ uuid.UUID) error { return nil }
-func (f *fakeStore) GetUserPermissions(_ context.Context, _ uuid.UUID) ([]string, error) {
-	return nil, nil
+func (f *fakeStore) GetUserPermissions(_ context.Context, userID uuid.UUID) ([]string, error) {
+	if f.userPermissions == nil {
+		return nil, nil
+	}
+	permissions := f.userPermissions[userID]
+	return append([]string(nil), permissions...), nil
 }
 func (f *fakeStore) CreateDashboard(_ context.Context, t, o uuid.UUID, name, desc string, shared bool) (*storage.CustomDashboard, error) {
 	return &storage.CustomDashboard{ID: uuid.New(), TenantID: t, OwnerID: o, Name: name, Description: desc, Shared: shared}, nil

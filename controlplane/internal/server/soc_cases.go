@@ -90,7 +90,13 @@ type socCaseNoteResponse struct {
 }
 
 func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+	var principal *auth.Principal
+	var ok bool
+	if r.Method == http.MethodGet {
+		principal, ok = s.authorizePermission(w, r, "cases.read", roleInvestigator, roleOperator, roleAdmin)
+	} else {
+		principal, ok = s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+	}
 	if !ok {
 		return
 	}
@@ -99,7 +105,11 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
+	if r.Method == http.MethodGet {
+		if !s.requireTenantAccess(w, r, principal, tenantID) {
+			return
+		}
+	} else if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
 		return
 	}
 	switch r.Method {
@@ -336,7 +346,13 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	principal, ok := s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+	var principal *auth.Principal
+	var ok bool
+	if r.Method == http.MethodGet {
+		principal, ok = s.authorizePermission(w, r, "cases.read", roleInvestigator, roleOperator, roleAdmin)
+	} else {
+		principal, ok = s.authorize(w, r, roleInvestigator, roleOperator, roleAdmin)
+	}
 	if !ok {
 		return
 	}
@@ -345,7 +361,11 @@ func (s *Server) handleSOCCaseSubroutes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
+	if r.Method == http.MethodGet {
+		if !s.requireTenantAccess(w, r, principal, tenantID) {
+			return
+		}
+	} else if !s.requireTenantAccess(w, r, principal, tenantID, roleInvestigator, roleOperator, roleAdmin) {
 		return
 	}
 	id, err := uuid.Parse(segments[0])

@@ -4,11 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authState = vi.hoisted(() => ({
   isAuthenticated: false,
+  profile: null as { roles: string[] } | null,
+  loading: false,
+  error: null as string | null,
 }));
 
 vi.mock('./providers/AuthProvider', () => ({
   useAuth: () => ({
     isAuthenticated: authState.isAuthenticated,
+    profile: authState.profile,
+    loading: authState.loading,
+    error: authState.error,
   }),
 }));
 
@@ -48,6 +54,9 @@ import { App } from './App';
 describe('App routing', () => {
   beforeEach(() => {
     authState.isAuthenticated = false;
+    authState.profile = null;
+    authState.loading = false;
+    authState.error = null;
   });
 
   it('preserves protected deep links through login redirects', async () => {
@@ -80,5 +89,18 @@ describe('App routing', () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it('redirects non-admin users away from the roles route', async () => {
+    authState.isAuthenticated = true;
+    authState.profile = { roles: ['viewer'] };
+
+    render(
+      <MemoryRouter initialEntries={['/roles']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('control-room')).toBeInTheDocument();
   });
 });
