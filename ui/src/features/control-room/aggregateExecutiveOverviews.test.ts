@@ -55,7 +55,7 @@ function overview(
         rule_id: 'restricted-port',
         name: 'Restricted port',
         rule_type: 'port',
-        severity: 'critical',
+        severity: 'high',
         count: 6,
         drilldown: '/rules',
       }],
@@ -165,7 +165,7 @@ describe('aggregateExecutiveOverviews', () => {
     expect(result.violations.top_rules[0]).toMatchObject({
       rule_id: 'restricted-port',
       count: 12,
-      severity: 'high',
+      severity: 'critical',
     });
   });
 
