@@ -55,7 +55,7 @@ function overview(
         rule_id: 'restricted-port',
         name: 'Restricted port',
         rule_type: 'port',
-        severity: 'high',
+        severity: 'critical',
         count: 6,
         drilldown: '/rules',
       }],
@@ -159,9 +159,9 @@ describe('aggregateExecutiveOverviews', () => {
       'Bank A · Payments',
       'Bank B · Payments',
     ]);
-    expect(result.estate.groups[0].drilldown).toBe('/nodes?tenant_id=tenant-1');
+    expect(result.estate.groups[0].drilldown).toBe('/nodes');
     expect(result.attention.items.map((item) => item.title)).toContain('Bank A · Privileged access');
-    expect(result.attention.items[0].drilldown).toContain('tenant_id=');
+    expect(result.attention.items[0].drilldown).toBe('/alerts');
     expect(result.violations.top_rules[0]).toMatchObject({
       rule_id: 'restricted-port',
       count: 12,
