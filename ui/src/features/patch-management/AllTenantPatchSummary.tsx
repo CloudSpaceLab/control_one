@@ -46,8 +46,8 @@ export function AllTenantPatchSummary() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-foreground">Patch management</h2>
-          <p className="mt-1 text-sm text-text-secondary">All tenants · deployment and approval status.</p>
+          <h2 className="text-xl font-semibold text-foreground">Patch posture</h2>
+          <p className="mt-1 text-sm text-text-secondary">All tenants · package coverage, known risk and deployment state.</p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => setReloadToken((value) => value + 1)} loading={loading}>
           <RefreshCw className={loading ? 'animate-spin' : ''} />
@@ -61,10 +61,29 @@ export function AllTenantPatchSummary() {
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <KpiTile label="Deployments" value={summary?.total ?? '—'} loading={loading} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <KpiTile
+          label="Fresh inventory"
+          value={summary ? `${summary.fresh_inventory_nodes} / ${summary.active_nodes}` : '—'}
+          hint={summary ? `${summary.inventory_nodes} inventoried` : undefined}
+          tone={summary && summary.active_nodes > 0 && summary.fresh_inventory_nodes === summary.active_nodes ? 'healthy' : 'warning'}
+          loading={loading}
+        />
+        <KpiTile
+          label="Known critical"
+          value={summary?.known_critical_findings ?? '—'}
+          hint={summary ? `${summary.known_kev_findings} KEV` : undefined}
+          tone={(summary?.known_critical_findings ?? 0) > 0 ? 'critical' : 'healthy'}
+          loading={loading}
+        />
+        <KpiTile
+          label="Affected nodes"
+          value={summary?.known_affected_nodes ?? '—'}
+          hint={summary ? `${summary.known_active_findings} unresolved findings` : undefined}
+          tone={(summary?.known_affected_nodes ?? 0) > 0 ? 'warning' : 'healthy'}
+          loading={loading}
+        />
         <KpiTile label="In flight" value={summary ? inFlight : '—'} tone={inFlight > 0 ? 'warning' : 'healthy'} loading={loading} />
-        <KpiTile label="Completed" value={summary?.completed ?? '—'} tone="healthy" loading={loading} />
         <KpiTile label="Failed / partial" value={summary ? failed : '—'} tone={failed > 0 ? 'critical' : 'healthy'} loading={loading} />
         <KpiTile label="Needs approval" value={summary?.pending_approvals ?? '—'} tone={(summary?.pending_approvals ?? 0) > 0 ? 'warning' : 'healthy'} loading={loading} />
       </div>
