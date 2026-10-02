@@ -10,6 +10,7 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { ArrowRight, Filter, Globe2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { describeIPBehaviorFinding, ipBehaviorConfidence } from '../lib/ipBehaviorPresentation';
+import { AllTenantNetworkSummary } from '../features/network-security/AllTenantNetworkSummary';
 import type {
   ActiveBlock,
   BehavioralAnomaly,
@@ -232,7 +233,7 @@ function IPBehaviorPanel(): JSX.Element {
   }, [ipQuery, navigate]);
 
   if (!currentTenantId) {
-    return <EmptyState title="Select a tenant" description="Choose a tenant from the header to view IP behavior." />;
+    return <AllTenantNetworkSummary mode="ip-behavior" since={since} />;
   }
 
   return (
@@ -755,7 +756,7 @@ function BlockApprovalQueue(): JSX.Element {
     }
   }, [client, decision, decisionReason, refresh]);
 
-  if (!currentTenantId) return <EmptyState title="Select a tenant" description="Choose a tenant to review block approvals." />;
+  if (!currentTenantId) return <AllTenantNetworkSummary mode="approvals" />;
 
   return (
     <div className="space-y-4">
@@ -871,7 +872,7 @@ function ActiveBlocksPanel(): JSX.Element {
   );
 
   if (!currentTenantId) {
-    return <EmptyState title="Select a tenant" description="Choose a tenant from the header to view active blocks." />;
+    return <AllTenantNetworkSummary mode="blocks" />;
   }
 
   return (
@@ -1069,7 +1070,7 @@ function FirewallManagementPanel(): JSX.Element {
   }, [refresh]);
 
   if (!currentTenantId) {
-    return <EmptyState title="Select a tenant" description="Choose a tenant to view firewall posture." />;
+    return <AllTenantNetworkSummary mode="firewall" />;
   }
 
   const firewall = overview?.firewall;
