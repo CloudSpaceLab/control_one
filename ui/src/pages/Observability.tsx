@@ -7,10 +7,7 @@ import {
   CheckCircle2,
   Clipboard,
   Copy,
-  KeyRound,
   Play,
-  ShieldCheck,
-  Terminal,
   TimerReset,
   Wrench,
 } from 'lucide-react';
@@ -24,7 +21,6 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import {
-  KpiTile,
   Panel,
   SectionHeader,
   StatusTag,
@@ -235,7 +231,6 @@ export function Observability(): JSX.Element {
   );
   const selectedChunk =
     knowledgeChunks.find((chunk) => chunk.id === selectedChunkId) ?? knowledgeChunks[0] ?? null;
-  const summary = useMemo(() => summarizeServices(services), [services]);
   const dbService =
     services.find((service) => /db|postgres|mysql|mssql|database/i.test(`${service.kind} ${service.name}`)) ??
     services.find((service) => service.state === 'needs_access') ??
@@ -309,13 +304,6 @@ export function Observability(): JSX.Element {
 
       <ServiceInventory tenantId={tenantId} tenantLabel={tenantLabel} />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile label="Ready sources" value={summary.healthy.toString()} tone="healthy" icon={<ShieldCheck />} />
-        <KpiTile label="Partial sources" value={summary.partial.toString()} tone="warning" icon={<AlertTriangle />} />
-        <KpiTile label="Needs access" value={summary.needsAccess.toString()} tone="degraded" icon={<KeyRound />} />
-        <KpiTile label="Unsupported" value={summary.unsupported.toString()} tone="critical" icon={<Terminal />} />
-      </div>
-
       {services.length > 0 && selected && dbService && selectedChunk ? (
         <>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
@@ -331,7 +319,7 @@ export function Observability(): JSX.Element {
               </colgroup>
               <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-text-secondary">
                 <tr>
-                  <th className="px-3 py-2">Service</th>
+                  <th className="px-3 py-2">Source / coverage</th>
                   <th className="px-3 py-2">State</th>
                   <th className="px-3 py-2">Evidence</th>
                   <th className="px-3 py-2">Next action</th>
@@ -552,16 +540,15 @@ function buildLiveObservabilityServices({
   const safeSourceHealth = Array.isArray(sourceHealth) ? sourceHealth : [];
   const safeCoverageRows = Array.isArray(coverageRows) ? coverageRows : [];
 
-  services.push(...safeWebservers.slice(0, 8).map(serviceFromWebserver));
-  services.push(...safeSourceHealth.slice(0, 10).map(serviceFromSourceHealth));
+  services.push(...safeWebservers.map(serviceFromWebserver));
+  services.push(...safeSourceHealth.map(serviceFromSourceHealth));
 
   const attentionRows = safeCoverageRows
     .filter((row) => isAttentionCoverageState(row.coverage_state ?? row.state))
-    .slice(0, 8)
     .map(serviceFromCoverageRow);
   services.push(...attentionRows);
 
-  return dedupeServices(services).slice(0, 24);
+  return dedupeServices(services);
 }
 
 function serviceFromWebserver(instance: WebserverInstance): ObservabilityService {
@@ -765,9 +752,9 @@ function stateFromSourceHealth(state: string | undefined): ObservabilityState {
   switch ((state ?? '').toLowerCase()) {
     case 'healthy':
     case 'parser_healthy':
-    case 'collecting':
-    case 'deployed':
       return 'healthy';
+    case 'collecting':
+      return 'partial';
     case 'raw_only':
       return 'raw_only';
     case 'parser_failed':
@@ -776,15 +763,19 @@ function stateFromSourceHealth(state: string | undefined): ObservabilityState {
       return 'failed';
     case 'silent':
     case 'stale':
-    case 'backpressured':
       return 'stale';
+    case 'backpressured':
+      return 'partial';
     case 'approval_required':
-    case 'approved':
-    case 'proposed':
       return 'needs_access';
     case 'unsupported':
     case 'privacy_blocked':
       return 'unsupported';
+    case 'proposed':
+    case 'approved':
+    case 'config_rendered':
+    case 'deployed':
+    case 'discovered':
     default:
       return 'detected_only';
   }
@@ -1073,20 +1064,6 @@ function DebugInput({
         className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground"
       />
     </label>
-  );
-}
-
-function summarizeServices(services: ObservabilityService[]) {
-  return services.reduce(
-    (acc, service) => {
-      acc.total += 1;
-      if (service.state === 'healthy') acc.healthy += 1;
-      if (service.state === 'partial' || service.state === 'raw_only' || service.state === 'detected_only') acc.partial += 1;
-      if (service.state === 'needs_access') acc.needsAccess += 1;
-      if (service.state === 'unsupported') acc.unsupported += 1;
-      return acc;
-    },
-    { total: 0, healthy: 0, partial: 0, needsAccess: 0, unsupported: 0 },
   );
 }
 
