@@ -186,7 +186,7 @@ describe('Observability', () => {
     expect(screen.getByRole('heading', { name: 'Observability' })).toBeInTheDocument();
     expect((await screen.findAllByText('PostgreSQL audit')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('nginx edge').length).toBeGreaterThan(0);
-    expect(screen.getByText('Bank Tenant observability sources')).toBeInTheDocument();
+    expect(screen.getByText('Bank Tenant source setup snapshot')).toBeInTheDocument();
     expect(screen.getAllByText('live data').length).toBeGreaterThan(0);
     expect(await screen.findByText('Payments gateway')).toBeInTheDocument();
     expect(screen.getByText('staff-laptop-17')).toBeInTheDocument();
@@ -222,7 +222,7 @@ describe('Observability', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /close/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Needs access evidencestale PostgreSQL audit/i }));
+    await user.click(screen.getByRole('button', { name: /Needs approval evidencestale PostgreSQL audit/i }));
     expect(screen.getByText('observability:source-health:runtime-1')).toBeInTheDocument();
   });
 
