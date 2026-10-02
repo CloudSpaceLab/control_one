@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -638,5 +639,60 @@ func TestPatchDeny_NoDispatch(t *testing.T) {
 	}
 	if store.states[0].Error == nil || *store.states[0].Error != "patch approval denied" {
 		t.Fatalf("expected denial reason on patch state, got %+v", store.states[0])
+	}
+}
+
+
+func TestResolvePatchTargetsDeduplicatesAndRequiresActiveNodes(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	activeID := uuid.New()
+	retiredID := uuid.New()
+	store := newPatchTestStore(tenantID, activeID)
+	store.nodes = append(store.nodes, storage.Node{
+		ID: retiredID, TenantID: tenantID, Hostname: "retired-host",
+		State: storage.NodeStateRetired, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	srv := newPatchTestServer(store)
+
+	targets, err := srv.resolvePatchTargets(context.Background(), tenantID, []string{
+		activeID.String(), activeID.String(),
+	})
+	if err != nil {
+		t.Fatalf("resolve duplicate targets: %v", err)
+	}
+	if len(targets) != 1 || targets[0] != activeID {
+		t.Fatalf("expected one de-duplicated active target, got %#v", targets)
+	}
+
+	if _, err := srv.resolvePatchTargets(context.Background(), tenantID, []string{retiredID.String()}); err == nil {
+		t.Fatal("expected explicit retired target to be rejected")
+	}
+}
+
+func TestResolvePatchTargetsPagesEntireActiveFleet(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	firstID := uuid.New()
+	store := newPatchTestStore(tenantID, firstID)
+	for i := 1; i < 1005; i++ {
+		store.nodes = append(store.nodes, storage.Node{
+			ID: uuid.New(), TenantID: tenantID, Hostname: fmt.Sprintf("node-%04d", i),
+			State: storage.NodeStateActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		})
+	}
+	store.nodes = append(store.nodes, storage.Node{
+		ID: uuid.New(), TenantID: tenantID, Hostname: "retired-host",
+		State: storage.NodeStateRetired, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	targets, err := newPatchTestServer(store).resolvePatchTargets(context.Background(), tenantID, nil)
+	if err != nil {
+		t.Fatalf("resolve all targets: %v", err)
+	}
+	if len(targets) != 1005 {
+		t.Fatalf("expected all 1005 active nodes across pages, got %d", len(targets))
 	}
 }
