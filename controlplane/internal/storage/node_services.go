@@ -49,7 +49,6 @@ type NodeServiceInventoryRow struct {
 	NodeLastSeenAt *time.Time
 }
 
-
 // ReplaceNodeServices atomically swaps the listening-service set for a node.
 // Called when an agent reports a fresh inventory cycle. Empty `services`
 // means "no listening services discovered" — the table is cleared for that
@@ -120,7 +119,6 @@ func (s *Store) ListNodeServicesForTenant(ctx context.Context, tenantID uuid.UUI
 		`WHERE tenant_id = $1 ORDER BY node_id, port`, tenantID,
 	)
 }
-
 
 // ListNodeServicesForTenantPage returns the current listening-service inventory
 // across a tenant with node identity and target type attached. Search and device
