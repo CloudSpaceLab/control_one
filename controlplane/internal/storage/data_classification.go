@@ -113,6 +113,32 @@ func (s *Store) DeleteDataClassificationRule(ctx context.Context, id uuid.UUID) 
 	return err
 }
 
+// DeleteDataClassificationRuleForTenant deletes only when the rule belongs to
+// the explicit tenant. It returns sql.ErrNoRows for a mismatched or missing id.
+func (s *Store) DeleteDataClassificationRuleForTenant(ctx context.Context, id, tenantID uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil || tenantID == uuid.Nil {
+		return errors.New("rule id and tenant id are required")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`DELETE FROM data_classification_rules WHERE id = $1 AND tenant_id = $2`,
+		id, tenantID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpsertColumnClassification inserts or updates a column classification record.
 func (s *Store) UpsertColumnClassification(ctx context.Context, cc *ColumnClassification) (*ColumnClassification, error) {
 	if s.db == nil {
@@ -375,6 +401,34 @@ func (s *Store) ResolvePIIFinding(ctx context.Context, id, resolvedBy uuid.UUID)
 		WHERE id = $1 AND resolved_at IS NULL
 	`, id, resolvedBy)
 	return err
+}
+
+// ResolvePIIFindingForTenant resolves only a finding owned by the explicit
+// tenant. It returns sql.ErrNoRows when the id is missing, belongs to another
+// tenant, or is already resolved.
+func (s *Store) ResolvePIIFindingForTenant(ctx context.Context, id, tenantID, resolvedBy uuid.UUID) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	if id == uuid.Nil || tenantID == uuid.Nil {
+		return errors.New("finding id and tenant id are required")
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE pii_findings
+		SET resolved_at = NOW(), resolved_by = $3
+		WHERE id = $1 AND tenant_id = $2 AND resolved_at IS NULL
+	`, id, tenantID, resolvedBy)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // CreatePIIFinding inserts a new PII finding and returns it.

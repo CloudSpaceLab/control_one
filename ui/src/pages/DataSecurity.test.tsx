@@ -30,6 +30,9 @@ const mocks = vi.hoisted(() => {
     seedDLPRules,
     createDLPRule,
     deleteDLPRule,
+    currentTenantId: 'tenant-1' as string | null,
+    tenantList: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-06-01T00:00:00Z' }],
+    setCurrentTenantId: vi.fn(),
   };
 });
 
@@ -37,12 +40,17 @@ vi.mock('../hooks/useApiClient', () => ({
   useApiClient: () => mocks.apiClient,
 }));
 
-vi.mock('../hooks/useTenants', () => ({
-  useTenants: () => ({
-    data: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-06-01T00:00:00Z' }],
+vi.mock('../providers/TenantProvider', () => ({
+  useTenant: () => ({
+    currentTenantId: mocks.currentTenantId,
+    currentTenant: mocks.currentTenantId
+      ? mocks.tenantList.find((tenant) => tenant.id === mocks.currentTenantId) ?? null
+      : null,
+    tenants: mocks.tenantList,
     loading: false,
     error: null,
-    reload: vi.fn(),
+    setCurrentTenantId: mocks.setCurrentTenantId,
+    refresh: vi.fn(),
   }),
 }));
 
@@ -70,6 +78,8 @@ const dlpRule: DataClassificationRule = {
 describe('DataSecurity', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.currentTenantId = 'tenant-1';
+    mocks.tenantList = [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-06-01T00:00:00Z' }];
     mocks.listPIIFindings.mockResolvedValue({ data: [], pagination });
     mocks.resolvePIIFinding.mockResolvedValue(undefined);
     mocks.listColumnClassifications.mockResolvedValue({ data: [], pagination });
@@ -77,6 +87,44 @@ describe('DataSecurity', () => {
     mocks.seedDLPRules.mockResolvedValue({ seeded: 3 });
     mocks.createDLPRule.mockResolvedValue(dlpRule);
     mocks.deleteDLPRule.mockResolvedValue(undefined);
+  });
+
+  it('aggregates exact all-tenant data-security totals and keeps actions tenant-specific', async () => {
+    const user = userEvent.setup();
+    mocks.currentTenantId = null;
+    mocks.tenantList = [
+      { id: 'tenant-1', name: 'Bank A', created_at: '2026-06-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Bank B', created_at: '2026-06-02T00:00:00Z' },
+    ];
+    mocks.listPIIFindings.mockImplementation(async ({ tenantId, resolved }: { tenantId: string; resolved?: boolean }) => ({
+      data: [],
+      pagination: {
+        ...pagination,
+        total: resolved === false
+          ? tenantId === 'tenant-1' ? 2 : 3
+          : tenantId === 'tenant-1' ? 5 : 7,
+      },
+    }));
+    mocks.listColumnClassifications.mockImplementation(async ({ tenantId }: { tenantId: string }) => ({
+      data: [],
+      pagination: { ...pagination, total: tenantId === 'tenant-1' ? 10 : 12 },
+    }));
+    mocks.listDLPRules.mockImplementation(async (tenantId: string) => ({
+      data: tenantId === 'tenant-1' ? [dlpRule] : [{ ...dlpRule, id: 'rule-2', tenant_id: 'tenant-2' }],
+      pagination,
+    }));
+
+    render(<DataSecurity />);
+
+    expect(await screen.findByText('All tenants · PII findings, classified columns, and DLP rules.')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('22')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add rule/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resolve pii finding/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: /open tenant/i })[1]);
+    expect(mocks.setCurrentTenantId).toHaveBeenCalledWith('tenant-2');
   });
 
   it('surfaces findings load failures instead of showing a false empty state', async () => {
@@ -145,7 +193,7 @@ describe('DataSecurity', () => {
       'DLP rule delete failed: rule is attached to an active scan',
     );
     expect(screen.getByRole('dialog', { name: /delete rule/i })).toBeInTheDocument();
-    expect(mocks.deleteDLPRule).toHaveBeenCalledWith('rule-1');
+    expect(mocks.deleteDLPRule).toHaveBeenCalledWith('rule-1', 'tenant-1');
   });
 
   it('creates DLP rules with the selected tenant and preserves the form on validation failures', async () => {

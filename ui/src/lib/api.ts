@@ -6294,10 +6294,12 @@ export class APIClient {
 
   // ---- DLP / Data Classification (Sprint 2) --------------------------------
 
-  async deleteDLPRule(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/dlp/rules/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
+  async deleteDLPRule(id: string, tenantId: string): Promise<void> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    await this.request<void>(
+      `/api/v1/dlp/rules/${encodeURIComponent(id)}?${search.toString()}`,
+      { method: "DELETE" },
+    );
   }
 
   async listColumnClassifications(params: {
@@ -6329,12 +6331,11 @@ export class APIClient {
     );
   }
 
-  async resolvePIIFinding(id: string): Promise<void> {
+  async resolvePIIFinding(id: string, tenantId: string): Promise<void> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
     await this.request<void>(
-      `/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve`,
-      {
-        method: "POST",
-      },
+      `/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve?${search.toString()}`,
+      { method: "POST" },
     );
   }
 
