@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
   const setNodeIsolation = vi.fn();
   const updateAgent = vi.fn();
   const showToast = vi.fn();
+  const tenantScope = { currentTenantId: 'tenant-1' as string | null };
 
   return {
     listNodes,
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => {
     setNodeIsolation,
     updateAgent,
     showToast,
+    tenantScope,
     apiClient: {
       listNodes,
       fleetHealthSnapshot,
@@ -55,7 +57,7 @@ vi.mock('../hooks/useTenants', () => ({
 }));
 
 vi.mock('../providers/TenantProvider', () => ({
-  useTenant: () => ({ currentTenantId: 'tenant-1' }),
+  useTenant: () => ({ currentTenantId: mocks.tenantScope.currentTenantId }),
 }));
 
 vi.mock('../providers/ToastProvider', () => ({
@@ -118,6 +120,7 @@ function renderNodes() {
 describe('Nodes page production hardening', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.tenantScope.currentTenantId = 'tenant-1';
     mocks.listNodes.mockResolvedValue(paginated([node]));
     mocks.fleetHealthSnapshot.mockResolvedValue({
       source: 'small-analytics-postgres',
@@ -137,6 +140,16 @@ describe('Nodes page production hardening', () => {
 
     await waitFor(() => expect(mocks.listNodes).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1' })));
     await waitFor(() => expect(mocks.listAtRiskNodes).toHaveBeenCalledWith('tenant-1'));
+    expect(await screen.findByText('core-api-01')).toBeInTheDocument();
+  });
+
+  it('uses the server all-tenant scope for fleet and predictive health reads', async () => {
+    mocks.tenantScope.currentTenantId = null;
+
+    renderNodes();
+
+    await waitFor(() => expect(mocks.listNodes).toHaveBeenCalledWith(expect.objectContaining({ tenantId: undefined })));
+    await waitFor(() => expect(mocks.listAtRiskNodes).toHaveBeenCalledWith(undefined));
     expect(await screen.findByText('core-api-01')).toBeInTheDocument();
   });
 
