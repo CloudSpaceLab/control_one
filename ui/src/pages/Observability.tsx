@@ -899,10 +899,6 @@ function compact(values: Array<string | null | undefined | false>): string[] {
   return values.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean);
 }
 
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id;
-}
-
 function sanitizeKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'item';
 }
