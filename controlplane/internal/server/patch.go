@@ -294,6 +294,25 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 	awaiting := make([]map[string]string, 0)
 
 	for _, nid := range nodeIDs {
+		state, stateErr := s.store.CreateNodePatchState(r.Context(), storage.NodePatchState{
+			DeploymentID: deployment.ID,
+			NodeID:       nid,
+			TenantID:     tenantID,
+		})
+		if stateErr != nil || state == nil {
+			errMsg := "create node patch state failed"
+			if stateErr != nil {
+				errMsg = stateErr.Error()
+			}
+			failed = append(failed, map[string]string{"node_id": nid.String(), "error": errMsg})
+			s.logger.Warn("create node patch state",
+				zap.Error(stateErr),
+				zap.String("node_id", nid.String()),
+				zap.String("deployment_id", deployment.ID.String()),
+			)
+			continue
+		}
+
 		nodeMode := requestedMode
 		var proxyID, windowID *uuid.UUID
 		if requestedMode == "auto" {
@@ -335,6 +354,9 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 				"node_id": nid.String(),
 				"reason":  gate.Reason,
 			})
+			if err := s.store.MarkNodePatchFailed(r.Context(), state.ID, "safety gate blocked: "+gate.Reason, ""); err != nil {
+				s.logger.Warn("mark safety-gated patch node failed", zap.Error(err), zap.String("node_id", nid.String()))
+			}
 			s.logger.Info("patch deploy blocked by safety gate",
 				zap.String("node_id", nid.String()),
 				zap.String("reason", gate.Reason),
@@ -343,6 +365,9 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		}
 
 		if _, err := s.dispatchPatchModeToNode(r.Context(), tenantID, deployment.ID, nid, nodeMode, proxyID, windowID, policy); err != nil {
+			if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, err.Error(), ""); markErr != nil {
+				s.logger.Warn("mark patch dispatch failed", zap.Error(markErr), zap.String("node_id", nid.String()))
+			}
 			failed = append(failed, map[string]string{
 				"node_id": nid.String(),
 				"error":   err.Error(),
@@ -364,13 +389,22 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 	switch {
 	case len(succeeded) > 0:
 		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "in_progress", false)
-	case len(awaiting) > 0 && len(failed) == 0 && len(gateBlocked) == 0:
-		// Leaves the deployment in 'pending' (the default insert state) so
-		// approval-driven dispatch picks it up later. We still emit a
-		// no-op status update so updated_at advances.
+	case len(awaiting) > 0:
+		// At least one target is still actionable, so the deployment is not
+		// terminal even when another target was blocked or failed.
 		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "pending", false)
 	default:
 		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "failed", true)
+	}
+
+	// Return the persisted header instead of the pre-transition insert row.
+	if current, getErr := s.store.GetPatchDeployment(r.Context(), deployment.ID); getErr == nil && current != nil {
+		deployment = current
+	} else if getErr != nil {
+		s.logger.Warn("reload patch deployment after dispatch",
+			zap.Error(getErr),
+			zap.String("deployment_id", deployment.ID.String()),
+		)
 	}
 
 	s.recordAudit(r.Context(), principal, tenantID, "patch.deploy.queued", "patch_deployment", deployment.ID.String(), map[string]any{
@@ -829,27 +863,36 @@ func (s *Server) handleAdvancePatchDeployment(w http.ResponseWriter, r *http.Req
 
 func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, raw []string) ([]uuid.UUID, error) {
 	if len(raw) == 0 {
-		nodes, _, err := s.store.ListNodes(ctx, tenantID, "", 1000, 0)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]uuid.UUID, 0, len(nodes))
-		for i := range nodes {
-			out = append(out, nodes[i].ID)
+		const pageSize = 500
+		out := make([]uuid.UUID, 0)
+		for offset := 0; ; {
+			nodes, total, err := s.store.ListNodes(ctx, tenantID, "", pageSize, offset)
+			if err != nil {
+				return nil, err
+			}
+			for i := range nodes {
+				if nodes[i].State == storage.NodeStateActive {
+					out = append(out, nodes[i].ID)
+				}
+			}
+			offset += len(nodes)
+			if len(nodes) == 0 || offset >= total {
+				break
+			}
 		}
 		return out, nil
 	}
+
 	out := make([]uuid.UUID, 0, len(raw))
-	for _, s := range raw {
-		nid, err := uuid.Parse(strings.TrimSpace(s))
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	for _, rawID := range raw {
+		nid, err := uuid.Parse(strings.TrimSpace(rawID))
 		if err != nil {
-			return nil, fmt.Errorf("invalid node_id %q: %w", s, err)
+			return nil, fmt.Errorf("invalid node_id %q: %w", rawID, err)
 		}
-		out = append(out, nid)
-	}
-	// Enforce tenant boundary — caller can't reach into another tenant by
-	// supplying its node ids.
-	for _, nid := range out {
+		if _, exists := seen[nid]; exists {
+			continue
+		}
 		node, err := s.store.GetNode(ctx, nid)
 		if err != nil {
 			return nil, err
@@ -857,6 +900,11 @@ func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, ra
 		if node == nil || node.TenantID != tenantID {
 			return nil, fmt.Errorf("node %s does not belong to tenant", nid.String())
 		}
+		if node.State != storage.NodeStateActive {
+			return nil, fmt.Errorf("node %s is not active", nid.String())
+		}
+		seen[nid] = struct{}{}
+		out = append(out, nid)
 	}
 	return out, nil
 }
@@ -1174,6 +1222,19 @@ func (s *Server) dispatchPatchPlanWave(ctx context.Context, tenantID, deployment
 	policy := plan.PackagePolicy
 	result := patchDispatchResult{WaveNumber: waveNumber}
 	for _, nid := range patchPlanWaveNodeUUIDs(plan, waveNumber) {
+		state, stateErr := s.store.CreateNodePatchState(ctx, storage.NodePatchState{
+			DeploymentID: deploymentID,
+			NodeID:       nid,
+			TenantID:     tenantID,
+		})
+		if stateErr != nil || state == nil {
+			errMsg := "create node patch state failed"
+			if stateErr != nil {
+				errMsg = stateErr.Error()
+			}
+			result.Failed = append(result.Failed, map[string]string{"node_id": nid.String(), "error": errMsg})
+			continue
+		}
 		nodeMode, proxyID, windowID := s.resolvePatchModeForNode(ctx, nid, plan.RequestedMode)
 		gate := s.runPatchSafetyGates(ctx, tenantID, nid, deploymentID, nodeMode, proxyID, windowID)
 		switch {
@@ -1186,9 +1247,15 @@ func (s *Server) dispatchPatchPlanWave(ctx context.Context, tenantID, deployment
 			continue
 		case !gate.Allowed:
 			result.GateBlocked = append(result.GateBlocked, map[string]string{"node_id": nid.String(), "reason": gate.Reason})
+			if err := s.store.MarkNodePatchFailed(ctx, state.ID, "safety gate blocked: "+gate.Reason, ""); err != nil {
+				s.logger.Warn("mark safety-gated patch node failed", zap.Error(err), zap.String("node_id", nid.String()))
+			}
 			continue
 		}
 		if _, err := s.dispatchPatchModeToNode(ctx, tenantID, deploymentID, nid, nodeMode, proxyID, windowID, policy); err != nil {
+			if markErr := s.store.MarkNodePatchFailed(ctx, state.ID, err.Error(), ""); markErr != nil {
+				s.logger.Warn("mark patch dispatch failed", zap.Error(markErr), zap.String("node_id", nid.String()))
+			}
 			result.Failed = append(result.Failed, map[string]string{"node_id": nid.String(), "error": err.Error()})
 			continue
 		}

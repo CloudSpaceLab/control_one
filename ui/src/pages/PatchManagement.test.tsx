@@ -130,6 +130,24 @@ describe('PatchManagement', () => {
       partial: 0,
       failed: 0,
       pending_approvals: 0,
+      expired_approvals: 0,
+      active_nodes: 12,
+      inventory_nodes: 12,
+      fresh_inventory_nodes: 12,
+      direct_nodes: 10,
+      proxy_nodes: 1,
+      airgapped_nodes: 1,
+      known_affected_nodes: 0,
+      known_active_findings: 0,
+      known_critical_findings: 0,
+      known_high_findings: 0,
+      known_kev_findings: 0,
+      known_patchable_findings: 0,
+      windows_scheduled: 0,
+      windows_open: 0,
+      windows_closing: 0,
+      proxies_healthy: 1,
+      proxies_degraded: 0,
       generated_at: '2026-06-08T00:00:00Z',
     });
     mocks.listPatchDeployments.mockResolvedValue({ deployments: [], generated_at: '2026-06-08T00:00:00Z' });
@@ -161,21 +179,85 @@ describe('PatchManagement', () => {
       partial: 1,
       failed: 1,
       pending_approvals: 4,
+      expired_approvals: 1,
+      active_nodes: 20,
+      inventory_nodes: 20,
+      fresh_inventory_nodes: 19,
+      direct_nodes: 15,
+      proxy_nodes: 3,
+      airgapped_nodes: 2,
+      known_affected_nodes: 6,
+      known_active_findings: 11,
+      known_critical_findings: 2,
+      known_high_findings: 4,
+      known_kev_findings: 1,
+      known_patchable_findings: 8,
+      windows_scheduled: 2,
+      windows_open: 1,
+      windows_closing: 0,
+      proxies_healthy: 2,
+      proxies_degraded: 0,
       generated_at: '2026-06-08T00:00:00Z',
     });
 
     render(<PatchManagement />);
 
-    expect(await screen.findByText('All tenants · deployment and approval status.')).toBeInTheDocument();
-    expect(screen.getByText('14')).toBeInTheDocument();
+    expect(await screen.findByText('All tenants · package coverage, known risk and deployment state.')).toBeInTheDocument();
+    expect(screen.getByText('19 / 20')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('6')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /deploy patches/i })).not.toBeInTheDocument();
     expect(mocks.listPatchDeployments).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: /bank b/i }));
     expect(mocks.setCurrentTenantId).toHaveBeenCalledWith('tenant-2');
+  });
+
+  it('keeps measured posture separate from the latest 50 deployments', async () => {
+    mocks.getPatchSummary.mockResolvedValue({
+      total: 88,
+      pending: 2,
+      in_progress: 3,
+      completed: 80,
+      partial: 1,
+      failed: 2,
+      pending_approvals: 2,
+      expired_approvals: 1,
+      active_nodes: 12,
+      inventory_nodes: 11,
+      fresh_inventory_nodes: 10,
+      direct_nodes: 9,
+      proxy_nodes: 2,
+      airgapped_nodes: 1,
+      known_affected_nodes: 3,
+      known_active_findings: 7,
+      known_critical_findings: 2,
+      known_high_findings: 3,
+      known_kev_findings: 1,
+      known_patchable_findings: 5,
+      windows_scheduled: 1,
+      windows_open: 0,
+      windows_closing: 0,
+      proxies_healthy: 1,
+      proxies_degraded: 0,
+      generated_at: '2026-06-08T00:00:00Z',
+    });
+    const deployments = Array.from({ length: 50 }, (_, index) => ({
+      ...sampleDeployment,
+      ID: `deployment-${index}`,
+      Status: index === 0 ? 'failed' as const : 'completed' as const,
+    }));
+    mocks.listPatchDeployments.mockResolvedValue({ deployments, generated_at: '2026-06-08T00:00:00Z' });
+    mocks.listPatchApprovals.mockResolvedValue({ data: [sampleApproval], pagination: { total: 2, limit: 100, offset: 0, count: 1 } });
+
+    render(<PatchManagement />);
+
+    expect(await screen.findByText('10 / 12')).toBeInTheDocument();
+    expect(screen.getByText('Recent deployment activity · latest 50')).toBeInTheDocument();
+    expect(screen.getByText('50')).toBeInTheDocument();
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0);
   });
 
   it('shows explicit unavailable states for partial patch-management load failures', async () => {
@@ -207,7 +289,7 @@ describe('PatchManagement', () => {
 
     render(<PatchManagement />);
 
-    expect(await screen.findByText('Patch management data unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Patch deployment data unavailable')).toBeInTheDocument();
     expect(screen.getByText('Patch deployments unavailable')).toBeInTheDocument();
     expect(screen.queryByText('No deployments yet')).not.toBeInTheDocument();
     expect(screen.getAllByText('N/A')).toHaveLength(4);

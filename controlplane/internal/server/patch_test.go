@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,6 +75,12 @@ func (p *patchTestStore) UpdatePatchDeploymentStatus(_ context.Context, id uuid.
 }
 
 func (p *patchTestStore) CreateNodePatchState(_ context.Context, in storage.NodePatchState) (*storage.NodePatchState, error) {
+	for i := range p.states {
+		if p.states[i].DeploymentID == in.DeploymentID && p.states[i].NodeID == in.NodeID {
+			out := p.states[i]
+			return &out, nil
+		}
+	}
 	in.ID = uuid.New()
 	in.RequestedAt = time.Now().UTC()
 	if in.Status == "" {
@@ -239,6 +246,62 @@ func TestPatchDeployCreatesActionPlanAndHeartbeatReceipt(t *testing.T) {
 	}
 }
 
+func TestPatchApprovalsListExpiresStalePendingRows(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	nodeID := uuid.New()
+	deploymentID := uuid.New()
+	store := newPatchTestStore(tenantID, nodeID)
+	now := time.Now().UTC()
+	expiredID := uuid.New()
+	freshID := uuid.New()
+	store.patchApprovals = map[uuid.UUID]storage.PatchApproval{
+		expiredID: {
+			ID:           expiredID,
+			TenantID:     tenantID,
+			DeploymentID: deploymentID,
+			NodeID:       nodeID,
+			Mode:         patchModeDirect,
+			Status:       storage.ApprovalStatusPending,
+			CreatedAt:    now.Add(-2 * time.Hour),
+			ExpiresAt:    now.Add(-time.Hour),
+		},
+		freshID: {
+			ID:           freshID,
+			TenantID:     tenantID,
+			DeploymentID: deploymentID,
+			NodeID:       nodeID,
+			Mode:         patchModeDirect,
+			Status:       storage.ApprovalStatusPending,
+			CreatedAt:    now,
+			ExpiresAt:    now.Add(time.Hour),
+		},
+	}
+
+	srv := newPatchTestServer(store)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/patch/approvals?tenant_id="+tenantID.String()+"&status=pending", nil)
+	req = withPrincipal(req, patchOperatorPrincipal())
+	rec := httptest.NewRecorder()
+	srv.handlePatchApprovalsCollection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data []patchApprovalResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].ID != freshID.String() {
+		t.Fatalf("expected only fresh pending approval, got %+v", resp.Data)
+	}
+	if got := store.patchApprovals[expiredID].Status; got != storage.ApprovalStatusExpired {
+		t.Fatalf("expired approval status = %q, want expired", got)
+	}
+}
+
 // TestPatchDeploy_ApprovalRequired_ParksRow confirms that when a tenant has
 // patch_requires_approval=true (the production default), a deploy request
 // does NOT dispatch the underlying patch.deploy_* job. Instead it writes
@@ -294,10 +357,10 @@ func TestPatchDeploy_ApprovalRequired_ParksRow(t *testing.T) {
 		t.Fatalf("expected approval_id in awaiting entry, got %+v", resp.AwaitingApproval[0])
 	}
 
-	// No NodePatchState should have been created yet — the dispatch is
-	// gated behind the approval.
-	if len(store.states) != 0 {
-		t.Fatalf("expected 0 dispatched node patch states pre-approval, got %d", len(store.states))
+	// The target exists in per-node accounting even though no job is
+	// dispatched until the approval is resolved.
+	if len(store.states) != 1 || store.states[0].Status != "pending" || store.states[0].JobID != nil {
+		t.Fatalf("expected one pending undispatched patch state pre-approval, got %+v", store.states)
 	}
 
 	// The approval row should be pending.
@@ -316,10 +379,56 @@ func TestPatchDeploy_ApprovalRequired_ParksRow(t *testing.T) {
 	}
 }
 
+func TestPatchDeploy_MixedBlockedAndAwaitingRemainsPending(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	approvalNodeID := uuid.New()
+	blockedNodeID := uuid.New()
+	store := newPatchTestStore(tenantID, approvalNodeID)
+	store.nodes = append(store.nodes, storage.Node{
+		ID: blockedNodeID, TenantID: tenantID, Hostname: "airgapped-host",
+		State:     storage.NodeStateActive,
+		Labels:    map[string]any{isolationModeLabel: isolationModeAirgapped},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	store.remediationConfigs = map[uuid.UUID]storage.TenantRemediationConfig{
+		tenantID: {
+			TenantID: tenantID, MinApprovalSeverity: "high",
+			CriticalOverride: true, PatchRequiresApproval: true,
+		},
+	}
+
+	srv := newPatchTestServer(store)
+	body, _ := json.Marshal(patchDeployRequest{
+		TenantID: tenantID.String(),
+		NodeIDs:  []string{blockedNodeID.String(), approvalNodeID.String()},
+		Mode:     patchModeDirect,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/patch/deployments", bytes.NewReader(body))
+	req = withPrincipal(req, patchOperatorPrincipal())
+	rec := httptest.NewRecorder()
+	srv.handlePatchDeployments(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp patchDeployResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.GateBlocked) != 1 || len(resp.AwaitingApproval) != 1 {
+		t.Fatalf("expected one blocked and one awaiting target, got blocked=%d awaiting=%d", len(resp.GateBlocked), len(resp.AwaitingApproval))
+	}
+	deployment := store.deployments[resp.Deployment.ID]
+	if deployment == nil || deployment.Status != "pending" {
+		t.Fatalf("mixed unresolved deployment status = %#v, want pending", deployment)
+	}
+}
+
 // TestPatchApprove_FlipsAndDispatches confirms the operator approval flow:
 // hit /approve, the row flips to approved, and dispatchPatchModeToNode runs
-// — manifesting as a new NodePatchState row. This is the critical fix for
-// bugs §3.1 (no approval-then-redispatch loop).
+// against the already-accounted pending node state.
 func TestPatchApprove_FlipsAndDispatches(t *testing.T) {
 	t.Parallel()
 
@@ -362,9 +471,10 @@ func TestPatchApprove_FlipsAndDispatches(t *testing.T) {
 		t.Fatalf("approval_id parse: %v", err)
 	}
 
-	// Sanity: no dispatched state yet.
-	if len(store.states) != 0 {
-		t.Fatalf("step 1: expected 0 dispatched states, got %d", len(store.states))
+	// The target is already represented for deployment accounting, but no
+	// agent job has been dispatched before approval.
+	if len(store.states) != 1 || store.states[0].Status != "pending" || store.states[0].JobID != nil {
+		t.Fatalf("step 1: expected one pending undispatched state, got %+v", store.states)
 	}
 
 	// 2. Operator approves.
@@ -448,6 +558,9 @@ func TestPatchDeploy_ApprovalNotRequired_DispatchesImmediately(t *testing.T) {
 	}
 	if len(resp.Succeeded) != 1 || resp.Succeeded[0] != nodeID.String() {
 		t.Fatalf("expected succeeded=[%s], got %+v", nodeID.String(), resp.Succeeded)
+	}
+	if resp.Deployment == nil || resp.Deployment.Status != "in_progress" {
+		t.Fatalf("expected persisted response status in_progress, got %+v", resp.Deployment)
 	}
 	if len(store.states) != 1 {
 		t.Fatalf("expected 1 dispatched state on legacy path, got %d", len(store.states))
@@ -625,8 +738,66 @@ func TestPatchDeny_NoDispatch(t *testing.T) {
 		t.Fatalf("status = %q, want denied", deniedResp.Status)
 	}
 
-	// No dispatch ever happened.
-	if len(store.states) != 0 {
-		t.Fatalf("expected 0 dispatched states post-deny, got %d", len(store.states))
+	// No job was dispatched, but the denied target is terminal in deployment
+	// accounting so failed/target totals reconcile.
+	if len(store.states) != 1 || store.states[0].JobID != nil || store.states[0].Status != "failed" {
+		t.Fatalf("expected one denied terminal patch state, got %+v", store.states)
+	}
+	if store.states[0].Error == nil || *store.states[0].Error != "patch approval denied" {
+		t.Fatalf("expected denial reason on patch state, got %+v", store.states[0])
+	}
+}
+
+func TestResolvePatchTargetsDeduplicatesAndRequiresActiveNodes(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	activeID := uuid.New()
+	retiredID := uuid.New()
+	store := newPatchTestStore(tenantID, activeID)
+	store.nodes = append(store.nodes, storage.Node{
+		ID: retiredID, TenantID: tenantID, Hostname: "retired-host",
+		State: storage.NodeStateRetired, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	srv := newPatchTestServer(store)
+
+	targets, err := srv.resolvePatchTargets(context.Background(), tenantID, []string{
+		activeID.String(), activeID.String(),
+	})
+	if err != nil {
+		t.Fatalf("resolve duplicate targets: %v", err)
+	}
+	if len(targets) != 1 || targets[0] != activeID {
+		t.Fatalf("expected one de-duplicated active target, got %#v", targets)
+	}
+
+	if _, err := srv.resolvePatchTargets(context.Background(), tenantID, []string{retiredID.String()}); err == nil {
+		t.Fatal("expected explicit retired target to be rejected")
+	}
+}
+
+func TestResolvePatchTargetsPagesEntireActiveFleet(t *testing.T) {
+	t.Parallel()
+
+	tenantID := uuid.New()
+	firstID := uuid.New()
+	store := newPatchTestStore(tenantID, firstID)
+	for i := 1; i < 1005; i++ {
+		store.nodes = append(store.nodes, storage.Node{
+			ID: uuid.New(), TenantID: tenantID, Hostname: fmt.Sprintf("node-%04d", i),
+			State: storage.NodeStateActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		})
+	}
+	store.nodes = append(store.nodes, storage.Node{
+		ID: uuid.New(), TenantID: tenantID, Hostname: "retired-host",
+		State: storage.NodeStateRetired, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	targets, err := newPatchTestServer(store).resolvePatchTargets(context.Background(), tenantID, nil)
+	if err != nil {
+		t.Fatalf("resolve all targets: %v", err)
+	}
+	if len(targets) != 1005 {
+		t.Fatalf("expected all 1005 active nodes across pages, got %d", len(targets))
 	}
 }

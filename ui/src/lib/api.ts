@@ -7062,6 +7062,24 @@ export interface PatchDeploymentSummary {
   partial: number;
   failed: number;
   pending_approvals: number;
+  expired_approvals: number;
+  active_nodes: number;
+  inventory_nodes: number;
+  fresh_inventory_nodes: number;
+  direct_nodes: number;
+  proxy_nodes: number;
+  airgapped_nodes: number;
+  known_affected_nodes: number;
+  known_active_findings: number;
+  known_critical_findings: number;
+  known_high_findings: number;
+  known_kev_findings: number;
+  known_patchable_findings: number;
+  windows_scheduled: number;
+  windows_open: number;
+  windows_closing: number;
+  proxies_healthy: number;
+  proxies_degraded: number;
   generated_at: string;
 }
 

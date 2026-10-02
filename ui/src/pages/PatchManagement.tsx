@@ -10,6 +10,7 @@ import { AllTenantPatchSummary } from '../features/patch-management/AllTenantPat
 import { toast } from 'sonner';
 import type {
   PatchDeployment,
+  PatchDeploymentSummary,
   NodePatchState,
   NodePatchConfig,
   MaintenanceWindow,
@@ -18,12 +19,11 @@ import type {
   PatchApproval,
 } from '../lib/api';
 
-// PatchManagement is the operator console for fleet OS-package patching.
-// Wave C extends the page with Squid proxy management, maintenance window
-// scheduling, per-node mode configuration, approval gates, per-node selection,
-// and the approval queue.
+// PatchManagement separates measured fleet posture from bounded recent
+// deployment activity, while keeping proxy, maintenance-window and approval
+// operations tenant-scoped.
 type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals';
-type LoadErrorKey = 'deployments' | 'proxies' | 'windows' | 'approvals';
+type LoadErrorKey = 'posture' | 'deployments' | 'proxies' | 'windows' | 'approvals';
 type LoadErrors = Partial<Record<LoadErrorKey, string>>;
 
 interface InlineActionState {
@@ -40,10 +40,12 @@ export function PatchManagement(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
   const [tab, setTab] = useState<Tab>('deployments');
+  const [posture, setPosture] = useState<PatchDeploymentSummary | null>(null);
   const [deployments, setDeployments] = useState<PatchDeployment[]>([]);
   const [proxies, setProxies] = useState<SquidProxy[]>([]);
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PatchApproval[]>([]);
+  const [pendingApprovalTotal, setPendingApprovalTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loadErrors, setLoadErrors] = useState<LoadErrors>({});
   const [selected, setSelected] = useState<PatchDeployment | null>(null);
@@ -53,22 +55,32 @@ export function PatchManagement(): JSX.Element {
 
   const refresh = useCallback(async () => {
     if (!currentTenantId) {
+      setPosture(null);
       setDeployments([]);
       setProxies([]);
       setWindows([]);
       setPendingApprovals([]);
+      setPendingApprovalTotal(0);
       setLoadErrors({});
       return;
     }
     setLoading(true);
     setLoadErrors({});
     const nextErrors: LoadErrors = {};
-    const [deps, proxyList, windowList, approvals] = await Promise.allSettled([
+    const [summary, deps, proxyList, windowList, approvals] = await Promise.allSettled([
+      client.getPatchSummary(currentTenantId),
       client.listPatchDeployments({ tenantId: currentTenantId, limit: 50 }),
       client.listSquidProxies(currentTenantId),
       client.listMaintenanceWindows(currentTenantId),
       client.listPatchApprovals({ status: 'pending', tenantId: currentTenantId, limit: 100 }),
     ]);
+
+    if (summary.status === 'fulfilled') {
+      setPosture(summary.value);
+    } else {
+      setPosture(null);
+      nextErrors.posture = errorMessage(summary.reason, 'Patch posture could not be loaded.');
+    }
 
     if (deps.status === 'fulfilled') {
       setDeployments(deps.value.deployments ?? []);
@@ -92,9 +104,12 @@ export function PatchManagement(): JSX.Element {
     }
 
     if (approvals.status === 'fulfilled') {
-      setPendingApprovals(approvals.value.data ?? []);
+      const rows = approvals.value.data ?? [];
+      setPendingApprovals(rows);
+      setPendingApprovalTotal(approvals.value.pagination?.total ?? rows.length);
     } else {
       setPendingApprovals([]);
+      setPendingApprovalTotal(0);
       nextErrors.approvals = errorMessage(approvals.reason, 'Patch approvals could not be loaded.');
     }
 
@@ -127,8 +142,8 @@ export function PatchManagement(): JSX.Element {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Patch management"
-        description="Deploy and track OS package updates across the fleet."
+        title="Patch posture"
+        description="Package coverage, known patch risk and deployment state."
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
@@ -144,18 +159,52 @@ export function PatchManagement(): JSX.Element {
       />
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <KpiTile label="Total deployments" value={loadErrors.deployments ? 'N/A' : String(totals.total)} />
         <KpiTile
-          label="In flight"
-          value={loadErrors.deployments ? 'N/A' : String(totals.inFlight)}
-          tone={totals.inFlight > 0 ? 'warning' : 'unknown'}
+          label="Fresh package inventory"
+          value={loadErrors.posture || !posture ? 'N/A' : `${posture.fresh_inventory_nodes} / ${posture.active_nodes}`}
+          hint={
+            posture && !loadErrors.posture
+              ? `${posture.inventory_nodes} inventoried · ${Math.max(0, posture.inventory_nodes - posture.fresh_inventory_nodes)} stale`
+              : undefined
+          }
+          tone={
+            !posture || loadErrors.posture || posture.active_nodes === 0
+              ? 'unknown'
+              : posture.fresh_inventory_nodes === posture.active_nodes
+                ? 'healthy'
+                : 'warning'
+          }
         />
-        <KpiTile label="Completed" value={loadErrors.deployments ? 'N/A' : String(totals.completed)} tone="healthy" />
         <KpiTile
-          label="Failed / partial"
-          value={loadErrors.deployments ? 'N/A' : String(totals.failed)}
-          tone={totals.failed > 0 || loadErrors.deployments ? 'critical' : 'unknown'}
+          label="Known critical findings"
+          value={loadErrors.posture || !posture ? 'N/A' : String(posture.known_critical_findings)}
+          hint={posture && !loadErrors.posture ? `${posture.known_kev_findings} KEV · ${posture.known_patchable_findings} with known fix` : undefined}
+          tone={posture && !loadErrors.posture && posture.known_critical_findings > 0 ? 'critical' : 'healthy'}
         />
+        <KpiTile
+          label="Known affected nodes"
+          value={loadErrors.posture || !posture ? 'N/A' : String(posture.known_affected_nodes)}
+          hint={posture && !loadErrors.posture ? `${posture.known_active_findings} unresolved findings` : undefined}
+          tone={posture && !loadErrors.posture && posture.known_affected_nodes > 0 ? 'warning' : 'healthy'}
+        />
+        <KpiTile
+          label="Pending approvals"
+          value={loadErrors.posture || !posture ? 'N/A' : String(posture.pending_approvals)}
+          hint={posture && !loadErrors.posture && posture.expired_approvals > 0 ? `${posture.expired_approvals} expired` : undefined}
+          tone={posture && !loadErrors.posture && posture.pending_approvals > 0 ? 'warning' : 'healthy'}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wider text-text-secondary">
+          Recent deployment activity · latest 50
+        </p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <KpiTile label="Deployments" value={loadErrors.deployments ? 'N/A' : String(totals.total)} size="sm" />
+          <KpiTile label="In flight" value={loadErrors.deployments ? 'N/A' : String(totals.inFlight)} tone={totals.inFlight > 0 ? 'warning' : 'unknown'} size="sm" />
+          <KpiTile label="Completed" value={loadErrors.deployments ? 'N/A' : String(totals.completed)} tone="healthy" size="sm" />
+          <KpiTile label="Failed / partial" value={loadErrors.deployments ? 'N/A' : String(totals.failed)} tone={totals.failed > 0 ? 'critical' : 'healthy'} size="sm" />
+        </div>
       </div>
 
       <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
@@ -177,14 +226,20 @@ export function PatchManagement(): JSX.Element {
         <TabButton
           active={tab === 'approvals'}
           onClick={() => setTab('approvals')}
-          label={tabLabel('Approvals', pendingApprovals.length, loadErrors.approvals)}
+          label={tabLabel('Approvals', pendingApprovalTotal, loadErrors.approvals)}
         />
       </div>
 
       {hasLoadErrors ? (
         <Alert
-          variant={loadErrors.deployments ? 'critical' : 'warning'}
-          title={loadErrors.deployments ? 'Patch management data unavailable' : 'Patch management data partially unavailable'}
+          variant={loadErrors.posture || loadErrors.deployments ? 'critical' : 'warning'}
+          title={
+            loadErrors.posture
+              ? 'Patch posture unavailable'
+              : loadErrors.deployments
+                ? 'Patch deployment data unavailable'
+                : 'Patch management data partially unavailable'
+          }
           actions={
             <Button type="button" variant="secondary" size="sm" onClick={() => void refresh()} disabled={loading}>
               Retry
@@ -202,7 +257,7 @@ export function PatchManagement(): JSX.Element {
           loadError={loadErrors.deployments}
           onSelect={setSelected}
           onJumpToApprovals={() => setTab('approvals')}
-          pendingApprovalCount={pendingApprovals.length}
+          pendingApprovalCount={posture && !loadErrors.posture ? posture.pending_approvals : pendingApprovalTotal}
         />
       )}
       {tab === 'proxies' && (
@@ -226,6 +281,7 @@ export function PatchManagement(): JSX.Element {
       {tab === 'approvals' && (
         <ApprovalQueue
           approvals={pendingApprovals}
+          totalCount={pendingApprovalTotal}
           loading={loading}
           loadError={loadErrors.approvals}
           onChanged={refresh}
@@ -1196,9 +1252,17 @@ function DeployForm({
       setLoadingNodes(true);
       setLoadError(null);
       try {
-        const resp = await client.listNodes({ tenantId, limit: 500 });
-        if (cancelled) return;
-        setNodes(resp.data ?? []);
+        const activeNodes: NodeSummary[] = [];
+        let offset = 0;
+        for (;;) {
+          const resp = await client.listNodes({ tenantId, limit: 500, offset });
+          if (cancelled) return;
+          activeNodes.push(...(resp.data ?? []).filter((node) => node.state === 'active'));
+          const nextOffset = resp.pagination?.nextOffset ?? null;
+          if (nextOffset === null || nextOffset <= offset) break;
+          offset = nextOffset;
+        }
+        setNodes(activeNodes);
       } catch (err) {
         if (cancelled) return;
         setLoadError(err instanceof Error ? err.message : 'load failed');
@@ -1289,8 +1353,7 @@ function DeployForm({
         <div>
           <h3 className="text-lg font-semibold">Deploy patches</h3>
           <p className="mt-1 text-xs text-text-secondary">
-            Pick the nodes to receive this deployment. Each selected node passes through the 4-gate safety pipeline
-            (opt-out / change window / circuit breaker / approval).
+            Select active nodes for this deployment. Safety gates run before dispatch.
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose}>
@@ -1340,7 +1403,7 @@ function DeployForm({
           </Button>
         </div>
         <p className="text-xs text-text-secondary">
-          {selectedIds.size} of {nodes.length} nodes selected
+          {selectedIds.size} of {nodes.length} active nodes selected
           {filter && ` · ${visibleSelectedCount} of ${filteredNodes.length} visible`}
         </p>
       </div>
@@ -1419,11 +1482,13 @@ function DeployForm({
 // dispatch; deny lets the operator drop a parked deployment.
 function ApprovalQueue({
   approvals,
+  totalCount,
   loading,
   loadError,
   onChanged,
 }: {
   approvals: PatchApproval[];
+  totalCount: number;
   loading: boolean;
   loadError?: string;
   onChanged: () => void;
@@ -1500,6 +1565,11 @@ function ApprovalQueue({
 
   return (
     <>
+      {totalCount > approvals.length ? (
+        <p className="mb-3 text-xs text-text-secondary">
+          Showing {approvals.length} of {totalCount} pending approvals.
+        </p>
+      ) : null}
       <div className="overflow-x-auto rounded border border-border">
       <table className="w-full text-sm">
         <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
@@ -1602,6 +1672,8 @@ function loadErrorSummary(errors: LoadErrors): string {
 
 function loadErrorName(key: LoadErrorKey): string {
   switch (key) {
+    case 'posture':
+      return 'Posture';
     case 'deployments':
       return 'Deployments';
     case 'proxies':
