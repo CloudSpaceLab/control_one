@@ -92,11 +92,12 @@ export function ServiceInventory({
   }, [api, offset, query, scope, tenantId]);
 
   const resetVisibleRows = () => {
-    setState((current) => ({
-      ...current,
+    setState({
       rows: [],
-      pagination: { ...current.pagination, count: 0, offset: 0 },
-    }));
+      pagination: EMPTY_PAGINATION,
+      loading: true,
+      error: null,
+    });
   };
   const updateQuery = (value: string) => {
     setQuery(value);
