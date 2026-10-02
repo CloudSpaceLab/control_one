@@ -6,6 +6,52 @@ const HTTP_STATUS_UNAUTHORIZED = 401;
 
 export type HypervisorProvider = "aws" | "azure" | "vmware" | "libvirt";
 
+export interface NetworkTarget {
+  id: string;
+  tenant_id: string;
+  node_id?: string;
+  family: string;
+  type: string;
+  subtype: string;
+  hostname: string;
+  display_name: string;
+  site: string;
+  group: string;
+  vendor: string;
+  model: string;
+  platform: string;
+  firmware: string;
+  serial: string;
+  lifecycle_state: string;
+  reachability_state: string;
+  collection_state: string;
+  capabilities: string[];
+  classification: TargetClassificationResponse;
+  addresses: { address: string; purpose: string; source: string; confidence: number; current: boolean }[];
+  last_observed_at?: string;
+  last_successful_collection_at?: string;
+}
+
+export interface CreateNetworkTargetPayload {
+  tenant_id: string;
+  type: string;
+  display_name: string;
+  hostname?: string;
+  site?: string;
+  group?: string;
+  management_addresses: string[];
+}
+
+export interface ListNetworkTargetsParams {
+  tenantId?: string;
+  search?: string;
+  type?: string;
+  site?: string;
+  group?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ProviderCredential {
   id: string;
   tenant_id: string;
@@ -1381,6 +1427,7 @@ export interface LogDumpPreview {
 
 export interface NodeSummary {
   id: string;
+  target_id?: string;
   tenant_id: string;
   hostname: string;
   os?: string;
@@ -2668,6 +2715,26 @@ export class APIClient {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
+  }
+
+  async listNetworkTargets(options: ListNetworkTargetsParams = {}): Promise<PaginatedResponse<NetworkTarget>> {
+    const search = new URLSearchParams({ family: 'network_security' });
+    if (options.tenantId) search.set('tenant_id', options.tenantId);
+    for (const key of ['search', 'type', 'site', 'group'] as const) {
+      if (options[key]) search.set(key, options[key]!);
+    }
+    search.set('limit', String(options.limit ?? 20));
+    search.set('offset', String(options.offset ?? 0));
+    const response = await this.request<RawPaginatedResponse<NetworkTarget>>(`/api/v1/targets?${search}`);
+    return { data: response.data, pagination: normalizePagination(response.pagination) };
+  }
+
+  async createNetworkTarget(payload: CreateNetworkTargetPayload): Promise<NetworkTarget> {
+    return this.request<NetworkTarget>('/api/v1/targets', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async getNetworkTarget(id: string): Promise<NetworkTarget> {
+    return this.request<NetworkTarget>(`/api/v1/targets/${encodeURIComponent(id)}`);
   }
 
   async listNodes(

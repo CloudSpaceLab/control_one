@@ -312,6 +312,13 @@ export function Onboard(): JSX.Element {
 
       <OnboardAIPanel />
 
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="font-semibold">Network device</h2><p className="text-sm text-text-secondary">Register a router, switch or firewall as an agentless identity. Connection verification is not available yet.</p></div>
+          <Button asChild variant="secondary"><Link to="/network-devices?add=1">Add network device</Link></Button>
+        </div>
+      </Panel>
+
       {/* ── Scenario cards ───────────────────────────────────────────── */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <ScenarioCard

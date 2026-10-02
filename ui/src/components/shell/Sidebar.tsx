@@ -82,6 +82,7 @@ const NAV_GROUPS: NavGroupDef[] = [
         badge: <NodeStatusBadge />,
       },
       { to: '/security/network', label: 'Network & exposure', icon: Network },
+      { to: '/network-devices', label: 'Network devices', icon: Network, permissions: ['targets.read'], roles: ['admin', 'operator', 'viewer', 'investigator', 'ciso'] },
       { to: '/observability', label: 'Observability', icon: Database },
       { to: '/security/siem', label: 'SIEM coverage', icon: DatabaseZap },
       { to: '/rules', label: 'Detection rules', icon: ScanSearch },

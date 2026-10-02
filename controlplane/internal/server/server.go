@@ -1170,6 +1170,8 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/dashboards/", s.handleDashboardSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
+	s.baseRouter.HandleFunc("/api/v1/targets", s.handleTargetsCollection)
+	s.baseRouter.HandleFunc("/api/v1/targets/", s.handleTargetResource)
 	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
 	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
 	s.baseRouter.HandleFunc("/api/v1/ai/test", s.handleAITest)
@@ -2679,6 +2681,7 @@ type networkObservationResponse struct {
 
 type nodeResponse struct {
 	ID                  string                        `json:"id"`
+	TargetID            string                        `json:"target_id"`
 	TenantID            string                        `json:"tenant_id"`
 	Hostname            string                        `json:"hostname"`
 	OS                  *string                       `json:"os,omitempty"`
@@ -2705,6 +2708,7 @@ func nodeResponseFromModel(n storage.Node) nodeResponse {
 
 	resp := nodeResponse{
 		ID:               n.ID.String(),
+		TargetID:         n.ID.String(),
 		TenantID:         n.TenantID.String(),
 		Hostname:         n.Hostname,
 		OS:               nullStringPtr(n.OS),
