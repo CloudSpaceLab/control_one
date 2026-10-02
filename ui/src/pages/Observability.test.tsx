@@ -7,12 +7,15 @@ import { Observability } from './Observability';
 const mocks = vi.hoisted(() => {
   const listWebserverInstances = vi.fn();
   const getContentPackSourceHealth = vi.fn();
+  const listTenantNodeServices = vi.fn();
   return {
     listWebserverInstances,
     getContentPackSourceHealth,
+    listTenantNodeServices,
     apiClient: {
       listWebserverInstances,
       getContentPackSourceHealth,
+      listTenantNodeServices,
     },
   };
 });
@@ -124,6 +127,53 @@ describe('Observability', () => {
       ],
       totals: { sources: 1, collectors_reporting: 1, by_state: { approval_required: 1 } },
     });
+    mocks.listTenantNodeServices.mockResolvedValue({
+      data: [
+        {
+          id: 'service-1',
+          node_id: 'node-server',
+          tenant_id: 'tenant-1',
+          pid: 100,
+          process: 'nginx',
+          binary_path: '/usr/sbin/nginx',
+          listen_addr: '0.0.0.0',
+          port: 443,
+          service_kind: 'nginx',
+          app_name: 'Payments gateway',
+          app_profile_id: 'nginx',
+          app_confidence: 90,
+          observed_at: new Date().toISOString(),
+          node_hostname: 'prod-web-01',
+          node_target_type: 'server',
+          node_state: 'active',
+          node_last_seen_at: new Date().toISOString(),
+        },
+        {
+          id: 'service-2',
+          node_id: 'node-endpoint',
+          tenant_id: 'tenant-1',
+          pid: 200,
+          process: 'local-helper',
+          binary_path: 'C:\\Program Files\\Helper\\helper.exe',
+          listen_addr: '127.0.0.1',
+          port: 4317,
+          service_kind: 'unknown',
+          observed_at: new Date().toISOString(),
+          node_hostname: 'staff-laptop-17',
+          node_target_type: 'workstation',
+          node_state: 'active',
+          node_last_seen_at: new Date().toISOString(),
+        },
+      ],
+      pagination: {
+        total: 2,
+        count: 2,
+        limit: 50,
+        offset: 0,
+        nextOffset: null,
+        prevOffset: null,
+      },
+    });
   });
 
   it('builds the operator stack from live tenant signals', async () => {
@@ -133,11 +183,16 @@ describe('Observability', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('heading', { name: 'Guided setup' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Observability' })).toBeInTheDocument();
     expect((await screen.findAllByText('PostgreSQL audit')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('nginx edge').length).toBeGreaterThan(0);
-    expect(screen.getByText('Bank Tenant live stack')).toBeInTheDocument();
+    expect(screen.getByText('Bank Tenant source setup snapshot')).toBeInTheDocument();
     expect(screen.getAllByText('live data').length).toBeGreaterThan(0);
+    expect(await screen.findByText('Payments gateway')).toBeInTheDocument();
+    expect(screen.getByText('staff-laptop-17')).toBeInTheDocument();
+    expect(screen.getByText('Employee endpoint')).toBeInTheDocument();
+    expect(screen.getByText('Server / infrastructure')).toBeInTheDocument();
+    expect(screen.getByText(/Discovery shows presence, not application health/i)).toBeInTheDocument();
     expect(screen.queryByText(/payments-api/i)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Grant least-privilege access for PostgreSQL audit/i).length).toBeGreaterThan(0);
     expect(document.body.textContent).not.toMatch(/nginx nginx/i);
@@ -167,7 +222,7 @@ describe('Observability', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /close/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Needs access evidencestale PostgreSQL audit/i }));
+    await user.click(screen.getByRole('button', { name: /Needs approval evidenceattention PostgreSQL audit/i }));
     expect(screen.getByText('observability:source-health:runtime-1')).toBeInTheDocument();
   });
 
@@ -187,7 +242,7 @@ describe('Observability', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Guided setup' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Observability' })).toBeInTheDocument();
     expect(screen.getAllByText('live data').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Database audit coverage').length).toBeGreaterThan(0);
   });

@@ -2382,6 +2382,14 @@ export interface NodeService {
   observed_at: string;
 }
 
+export interface TenantNodeService extends NodeService {
+  node_hostname: string;
+  node_target_type: string;
+  node_state: string;
+  node_last_seen_at?: string;
+}
+
+
 export interface AtRiskNode {
   node_id: string;
   tenant_id: string;
@@ -2923,6 +2931,29 @@ export class APIClient {
     return this.request<{ data: NodeService[] }>(
       `/api/v1/nodes/${encoded}/services`,
     );
+  }
+
+  async listTenantNodeServices(params: {
+    tenantId: string;
+    query?: string;
+    targetScope?: "all" | "server" | "endpoint" | "unknown";
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<TenantNodeService>> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (params.query?.trim()) search.set("q", params.query.trim());
+    if (params.targetScope && params.targetScope !== "all")
+      search.set("target_scope", params.targetScope);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined) search.set("offset", String(params.offset));
+    const response = await this.request<RawPaginatedResponse<TenantNodeService>>(
+      `/api/v1/node-services?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
   async listNodePackages(nodeId: string): Promise<{ data: NodePackage[] }> {
