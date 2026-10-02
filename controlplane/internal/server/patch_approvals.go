@@ -47,13 +47,13 @@ func (s *Server) handlePatchApprovalsCollection(w http.ResponseWriter, r *http.R
 		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	s.expirePatchApprovals(r.Context())
 	switch r.Method {
 	case http.MethodGet:
 		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
 		if !ok {
 			return
 		}
+		s.expirePatchApprovals(r.Context())
 		s.handleListPatchApprovals(w, r, principal)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
@@ -69,7 +69,6 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	s.expirePatchApprovals(r.Context())
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/patch/approvals/")
 	trimmed = strings.Trim(trimmed, "/")
 	if trimmed == "" {
@@ -97,6 +96,7 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleViewer, roleOperator, roleAdmin) {
 			return
 		}
+		s.expirePatchApprovals(r.Context())
 		s.handleGetPatchApproval(w, r, approvalID)
 	case len(segments) == 2 && segments[1] == "approve":
 		if r.Method != http.MethodPost {
@@ -111,6 +111,7 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleOperator, roleAdmin) {
 			return
 		}
+		s.expirePatchApprovals(r.Context())
 		s.handleApprovePatchApproval(w, r, approvalID, principal.Subject)
 	case len(segments) == 2 && segments[1] == "deny":
 		if r.Method != http.MethodPost {
@@ -125,6 +126,7 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleOperator, roleAdmin) {
 			return
 		}
+		s.expirePatchApprovals(r.Context())
 		s.handleDenyPatchApproval(w, r, approvalID, principal.Subject)
 	default:
 		http.NotFound(w, r)
