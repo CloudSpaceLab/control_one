@@ -284,7 +284,36 @@ describe('ControlRoom executive dashboard', () => {
     expect(screen.getByRole('button', { name: 'Rule violations: view details' })).toBeDisabled();
   });
 
-  it('does not request data before a tenant is selected', () => {
+  it('aggregates all accessible tenants when All tenants is selected', async () => {
+    vi.mocked(useTenantModule.useTenant).mockReturnValue({
+      currentTenantId: null,
+      currentTenant: null,
+      tenants: [
+        { id: 'tenant-1', name: 'Bank A', created_at: '2024-01-01' },
+        { id: 'tenant-2', name: 'Bank B', created_at: '2024-01-01' },
+      ],
+      loading: false,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn(),
+    });
+    getExecutiveOverviewMock.mockImplementation(async (tenantId: string) => ({
+      ...executiveOverview,
+      tenant_id: tenantId,
+    }));
+
+    renderControlRoom();
+
+    await waitFor(() => {
+      expect(getExecutiveOverviewMock).toHaveBeenCalledWith('tenant-1', '7d');
+      expect(getExecutiveOverviewMock).toHaveBeenCalledWith('tenant-2', '7d');
+    });
+    expect(await screen.findByRole('heading', { name: '4 critical items need attention' })).toBeInTheDocument();
+    expect(screen.getByText('All tenants · 24 of 26 infrastructure groups healthy · 94% protection coverage')).toBeInTheDocument();
+    expect(screen.queryByText('Select a tenant')).not.toBeInTheDocument();
+  });
+
+  it('does not request dashboard data when the account has no tenant access', () => {
     vi.mocked(useTenantModule.useTenant).mockReturnValue({
       currentTenantId: null,
       currentTenant: null,
@@ -297,7 +326,7 @@ describe('ControlRoom executive dashboard', () => {
 
     renderControlRoom();
 
-    expect(screen.getByText('Select a tenant')).toBeInTheDocument();
+    expect(screen.getByText('No tenants available')).toBeInTheDocument();
     expect(getExecutiveOverviewMock).not.toHaveBeenCalled();
   });
 });
