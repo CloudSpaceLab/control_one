@@ -1761,7 +1761,8 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -1773,7 +1774,27 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 
 	namePrefix := strings.TrimSpace(r.URL.Query().Get("name_prefix"))
 
-	tenants, total, err := s.store.ListTenants(r.Context(), namePrefix, limit, offset)
+	var tenants []storage.Tenant
+	var total int
+	if accessStore, ok := s.store.(interface {
+		ListAccessibleTenants(context.Context, uuid.UUID, []string, string, int, int) ([]storage.Tenant, int, error)
+	}); ok {
+		userID := principalStorageUserID(s, r.Context(), principal)
+		if userID == uuid.Nil {
+			http.Error(w, "tenant access gate unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		tenants, total, err = accessStore.ListAccessibleTenants(
+			r.Context(),
+			userID,
+			principal.Roles,
+			namePrefix,
+			limit,
+			offset,
+		)
+	} else {
+		tenants, total, err = s.store.ListTenants(r.Context(), namePrefix, limit, offset)
+	}
 	if err != nil {
 		s.logger.Error("list tenants", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
