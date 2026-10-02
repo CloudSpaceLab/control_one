@@ -43,6 +43,7 @@ export function PatchManagement(): JSX.Element {
   const [proxies, setProxies] = useState<SquidProxy[]>([]);
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PatchApproval[]>([]);
+  const [pendingApprovalTotal, setPendingApprovalTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loadErrors, setLoadErrors] = useState<LoadErrors>({});
   const [selected, setSelected] = useState<PatchDeployment | null>(null);
@@ -56,6 +57,7 @@ export function PatchManagement(): JSX.Element {
       setProxies([]);
       setWindows([]);
       setPendingApprovals([]);
+      setPendingApprovalTotal(0);
       setLoadErrors({});
       return;
     }
@@ -91,9 +93,12 @@ export function PatchManagement(): JSX.Element {
     }
 
     if (approvals.status === 'fulfilled') {
-      setPendingApprovals(approvals.value.data ?? []);
+      const rows = approvals.value.data ?? [];
+      setPendingApprovals(rows);
+      setPendingApprovalTotal(approvals.value.pagination?.total ?? rows.length);
     } else {
       setPendingApprovals([]);
+      setPendingApprovalTotal(0);
       nextErrors.approvals = errorMessage(approvals.reason, 'Patch approvals could not be loaded.');
     }
 
@@ -148,15 +153,15 @@ export function PatchManagement(): JSX.Element {
       />
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <KpiTile label="Total deployments" value={loadErrors.deployments ? 'N/A' : String(totals.total)} />
+        <KpiTile label="Recent deployments" value={loadErrors.deployments ? 'N/A' : String(totals.total)} />
         <KpiTile
-          label="In flight"
+          label="Recent in flight"
           value={loadErrors.deployments ? 'N/A' : String(totals.inFlight)}
           tone={totals.inFlight > 0 ? 'warning' : 'unknown'}
         />
-        <KpiTile label="Completed" value={loadErrors.deployments ? 'N/A' : String(totals.completed)} tone="healthy" />
+        <KpiTile label="Recent completed" value={loadErrors.deployments ? 'N/A' : String(totals.completed)} tone="healthy" />
         <KpiTile
-          label="Failed / partial"
+          label="Recent failed / partial"
           value={loadErrors.deployments ? 'N/A' : String(totals.failed)}
           tone={totals.failed > 0 || loadErrors.deployments ? 'critical' : 'unknown'}
         />
@@ -181,7 +186,7 @@ export function PatchManagement(): JSX.Element {
         <TabButton
           active={tab === 'approvals'}
           onClick={() => setTab('approvals')}
-          label={tabLabel('Approvals', pendingApprovals.length, loadErrors.approvals)}
+          label={tabLabel('Approvals', pendingApprovalTotal, loadErrors.approvals)}
         />
       </div>
 
@@ -206,7 +211,7 @@ export function PatchManagement(): JSX.Element {
           loadError={loadErrors.deployments}
           onSelect={setSelected}
           onJumpToApprovals={() => setTab('approvals')}
-          pendingApprovalCount={pendingApprovals.length}
+          pendingApprovalCount={pendingApprovalTotal}
         />
       )}
       {tab === 'proxies' && (
@@ -230,6 +235,7 @@ export function PatchManagement(): JSX.Element {
       {tab === 'approvals' && (
         <ApprovalQueue
           approvals={pendingApprovals}
+          totalCount={pendingApprovalTotal}
           loading={loading}
           loadError={loadErrors.approvals}
           onChanged={refresh}
@@ -1423,11 +1429,13 @@ function DeployForm({
 // dispatch; deny lets the operator drop a parked deployment.
 function ApprovalQueue({
   approvals,
+  totalCount,
   loading,
   loadError,
   onChanged,
 }: {
   approvals: PatchApproval[];
+  totalCount: number;
   loading: boolean;
   loadError?: string;
   onChanged: () => void;
@@ -1504,6 +1512,11 @@ function ApprovalQueue({
 
   return (
     <>
+      {totalCount > approvals.length ? (
+        <p className="mb-3 text-xs text-text-secondary">
+          Showing {approvals.length} of {totalCount} pending approvals.
+        </p>
+      ) : null}
       <div className="overflow-x-auto rounded border border-border">
       <table className="w-full text-sm">
         <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
