@@ -42,18 +42,20 @@ func (s *Server) attachNodeGeo(ctx context.Context, resp *nodeResponse) {
 		return
 	}
 
-	lat := geo.Latitude
-	lon := geo.Longitude
 	resp.IPGeo = &nodeIPGeoResponse{
 		IP:                ip,
 		Country:           strings.TrimSpace(geo.Country),
 		CountryCode:       strings.ToUpper(strings.TrimSpace(geo.CountryCode)),
 		City:              strings.TrimSpace(geo.City),
 		Region:            strings.TrimSpace(geo.Region),
-		Latitude:          &lat,
-		Longitude:         &lon,
 		Source:            enrichment.Source,
 		GeoDatasetVersion: enrichment.GeoDatasetVersion,
+	}
+	if geo.Latitude != 0 || geo.Longitude != 0 {
+		lat := geo.Latitude
+		lon := geo.Longitude
+		resp.IPGeo.Latitude = &lat
+		resp.IPGeo.Longitude = &lon
 	}
 }
 
