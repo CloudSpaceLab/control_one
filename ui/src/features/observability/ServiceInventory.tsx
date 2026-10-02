@@ -91,13 +91,22 @@ export function ServiceInventory({
     };
   }, [api, offset, query, scope, tenantId]);
 
+  const resetVisibleRows = () => {
+    setState((current) => ({
+      ...current,
+      rows: [],
+      pagination: { ...current.pagination, count: 0, offset: 0 },
+    }));
+  };
   const updateQuery = (value: string) => {
     setQuery(value);
     setOffset(0);
+    resetVisibleRows();
   };
   const updateScope = (value: DeviceScope) => {
     setScope(value);
     setOffset(0);
+    resetVisibleRows();
   };
 
   return (
@@ -146,7 +155,7 @@ export function ServiceInventory({
           </div>
 
           {state.error ? (
-            <p role="alert" className="rounded-md border border-critical/30 bg-critical/5 p-3 text-sm text-text-secondary">
+            <p role="alert" className="rounded-md border border-border-subtle bg-surface p-3 text-sm text-text-secondary">
               {state.error}
             </p>
           ) : null}
