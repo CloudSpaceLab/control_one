@@ -11,6 +11,7 @@ import { useAuth } from './AuthProvider';
 import type { Tenant } from '@/lib/api';
 
 const STORAGE_KEY = 'co.tenant.id';
+const ALL_TENANTS_STORAGE_VALUE = '__all__';
 
 interface TenantContextValue {
   tenants: Tenant[];
@@ -29,16 +30,21 @@ export function TenantProvider({ children }: { children: ReactNode }): JSX.Eleme
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasStoredSelection, setHasStoredSelection] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(STORAGE_KEY) !== null;
+  });
   const [currentTenantId, setCurrentTenantIdState] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(STORAGE_KEY);
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return stored === ALL_TENANTS_STORAGE_VALUE ? null : stored;
   });
 
   const setCurrentTenantId = useCallback((id: string | null) => {
     setCurrentTenantIdState(id);
+    setHasStoredSelection(true);
     if (typeof window !== 'undefined') {
-      if (id) window.localStorage.setItem(STORAGE_KEY, id);
-      else window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.setItem(STORAGE_KEY, id ?? ALL_TENANTS_STORAGE_VALUE);
     }
   }, []);
 
@@ -52,7 +58,7 @@ export function TenantProvider({ children }: { children: ReactNode }): JSX.Eleme
     try {
       const result = await apiClient.listTenants({ limit: 200, offset: 0 });
       setTenants(result.data);
-      if (!currentTenantId && result.data.length > 0) {
+      if (!hasStoredSelection && !currentTenantId && result.data.length > 0) {
         setCurrentTenantId(result.data[0].id);
       } else if (currentTenantId && !result.data.some((t) => t.id === currentTenantId)) {
         setCurrentTenantId(result.data[0]?.id ?? null);
@@ -62,7 +68,7 @@ export function TenantProvider({ children }: { children: ReactNode }): JSX.Eleme
     } finally {
       setLoading(false);
     }
-  }, [apiClient, isAuthenticated, currentTenantId, setCurrentTenantId]);
+  }, [apiClient, isAuthenticated, currentTenantId, hasStoredSelection, setCurrentTenantId]);
 
   useEffect(() => {
     refresh().catch(() => {});
