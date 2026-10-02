@@ -36,84 +36,7 @@ import {
 import { WORLD_COUNTRY_PATHS, projectGeoCoordinates } from '../lib/worldMap';
 import type { ColumnDef } from '@tanstack/react-table';
 
-// ── Region types ───────────────────────────────────────────────────────────
-
-type RegionKey = 'na' | 'sa' | 'eu' | 'afme' | 'apac' | 'oce' | 'unknown';
-
-interface RegionMeta {
-  label: string;
-  lat: number;
-  lon: number;
-}
-
-const REGIONS: Record<RegionKey, RegionMeta> = {
-  na:      { label: 'N. America',  lat: 39, lon: -98 },
-  sa:      { label: 'S. America',  lat: -15, lon: -58 },
-  eu:      { label: 'Europe',      lat: 51, lon: 10 },
-  afme:    { label: 'Africa / ME', lat: 6, lon: 20 },
-  apac:    { label: 'Asia Pacific', lat: 28, lon: 104 },
-  oce:     { label: 'Oceania',     lat: -25, lon: 134 },
-  unknown: { label: 'Unknown',     lat: -52, lon: 164 },
-};
-
-// ── Region inference ───────────────────────────────────────────────────────
-
-function normalizeRegionLabel(v: string): RegionKey {
-  const s = v.toLowerCase();
-  if (/\b(us|na|north.?am|canada|canad|us-.+|nyc|dal|atl|sfo|lax|chicago)\b/.test(s)) return 'na';
-  if (/\b(sa|south.?am|brazil|latam|latin|sao)\b/.test(s)) return 'sa';
-  if (/\b(eu|europe|uk|gb|de|fr|nl|ams|lon|fra|dub|ldn|ber|par|ire)\b/.test(s)) return 'eu';
-  if (/\b(af|africa|me|middle.?east|uae|dxb|jed|riyadh|cairo)\b/.test(s)) return 'afme';
-  if (/\b(ap|asia|apac|jp|sg|hk|tok|sin|seoul|mumbai|india|china|bay|bom|del)\b/.test(s)) return 'apac';
-  if (/\b(au|nz|oceania|sydney|melbourne|auckland|syd|mel)\b/.test(s)) return 'oce';
-  return 'unknown';
-}
-
-function guessRegion(node: NodeSummary): RegionKey {
-  for (const key of ['region', 'datacenter', 'location', 'site', 'dc']) {
-    const val = node.labels?.[key];
-    if (typeof val === 'string') return normalizeRegionLabel(val);
-  }
-
-  const ip = node.public_ip;
-  if (!ip) return 'unknown';
-  const parts = ip.split('.');
-  if (parts.length !== 4) return 'unknown';
-  const [a, b] = parts.map(Number);
-
-  if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return 'unknown';
-
-  // Linode/Akamai
-  if (a === 139 && b === 162) return 'eu'; // London
-  if (a === 45 && (b === 33 || b === 56)) return 'na';
-  if (a === 173 && b === 255) return 'na';
-  if (a === 50 && b === 116) return 'na';
-  if (a === 66 && b === 228) return 'na';
-
-  // DigitalOcean
-  if (a === 165 && (b === 227 || b === 232)) return 'na';
-  if (a === 162 && b === 243) return 'na';
-  if (a === 188 && b === 166) return 'eu';
-  if (a === 178 && b === 62) return 'eu';
-  if (a === 128 && b === 199) return 'apac';
-
-  // AWS common
-  if ([3, 13, 18, 34, 44, 52, 54].includes(a)) return 'na';
-  // Azure / GCP EU
-  if (a === 20 || a === 40) return 'eu';
-  if (a === 35) return 'na';
-
-  // Rough first-octet heuristics (last resort)
-  if (a >= 1 && a <= 60) return 'apac';
-  if (a >= 61 && a <= 80) return 'apac';
-  if (a >= 81 && a <= 100) return 'eu';
-  if (a >= 101 && a <= 130) return 'na';
-  if (a >= 131 && a <= 165) return 'na';
-  if (a >= 166 && a <= 180) return 'eu';
-  if (a >= 181 && a <= 220) return 'sa';
-
-  return 'unknown';
-}
+// ── Factual node geolocation ───────────────────────────────────────────────
 
 interface NodeMapPoint {
   node: NodeSummary;
@@ -122,115 +45,61 @@ interface NodeMapPoint {
   y: number;
   lat: number;
   lon: number;
-  precision: 'exact' | 'estimated';
+  ip: string;
   label: string;
-}
-
-function numericLabel(node: NodeSummary, keys: string[]): number | null {
-  const labels = node.labels ?? {};
-  for (const key of keys) {
-    const raw = labels[key];
-    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-    if (typeof raw === 'string') {
-      const parsed = Number(raw);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return null;
-}
-
-const CITY_COORDS: Record<string, { lat: number; lon: number; label: string }> = {
-  london: { lat: 51.5072, lon: -0.1276, label: 'London' },
-  lon: { lat: 51.5072, lon: -0.1276, label: 'London' },
-  ldn: { lat: 51.5072, lon: -0.1276, label: 'London' },
-  amsterdam: { lat: 52.3676, lon: 4.9041, label: 'Amsterdam' },
-  ams: { lat: 52.3676, lon: 4.9041, label: 'Amsterdam' },
-  frankfurt: { lat: 50.1109, lon: 8.6821, label: 'Frankfurt' },
-  fra: { lat: 50.1109, lon: 8.6821, label: 'Frankfurt' },
-  newyork: { lat: 40.7128, lon: -74.006, label: 'New York' },
-  nyc: { lat: 40.7128, lon: -74.006, label: 'New York' },
-  dallas: { lat: 32.7767, lon: -96.797, label: 'Dallas' },
-  dal: { lat: 32.7767, lon: -96.797, label: 'Dallas' },
-  sfo: { lat: 37.7749, lon: -122.4194, label: 'San Francisco' },
-  lax: { lat: 34.0522, lon: -118.2437, label: 'Los Angeles' },
-  singapore: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
-  sg: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
-  sin: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
-  tokyo: { lat: 35.6762, lon: 139.6503, label: 'Tokyo' },
-  tok: { lat: 35.6762, lon: 139.6503, label: 'Tokyo' },
-  mumbai: { lat: 19.076, lon: 72.8777, label: 'Mumbai' },
-  bom: { lat: 19.076, lon: 72.8777, label: 'Mumbai' },
-  sydney: { lat: -33.8688, lon: 151.2093, label: 'Sydney' },
-  syd: { lat: -33.8688, lon: 151.2093, label: 'Sydney' },
-};
-
-function cityKey(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-function coordinatesFromLabels(node: NodeSummary): { lat: number; lon: number; label: string; precision: 'exact' | 'estimated' } | null {
-  const lat = numericLabel(node, ['lat', 'latitude', 'geo.lat', 'geo_lat']);
-  const lon = numericLabel(node, ['lon', 'lng', 'longitude', 'geo.lon', 'geo.lng', 'geo_lon']);
-  if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-    return { lat, lon, label: 'Coordinates', precision: 'exact' };
-  }
-
-  for (const key of ['city', 'location', 'site', 'datacenter', 'region', 'dc']) {
-    const value = node.labels?.[key];
-    if (typeof value !== 'string') continue;
-    const coord = CITY_COORDS[cityKey(value)];
-    if (coord) return { ...coord, precision: 'estimated' };
-  }
-  return null;
-}
-
-function coordinatesFromIP(node: NodeSummary): { lat: number; lon: number; label: string; precision: 'estimated' } | null {
-  const ip = node.public_ip;
-  if (!ip) return null;
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return null;
-  const [a, b] = parts;
-
-  if (a === 139 && b === 162) return { ...CITY_COORDS.london, precision: 'estimated' };
-  if (a === 188 && b === 166) return { ...CITY_COORDS.amsterdam, precision: 'estimated' };
-  if (a === 178 && b === 62) return { ...CITY_COORDS.frankfurt, precision: 'estimated' };
-  if (a === 128 && b === 199) return { ...CITY_COORDS.singapore, precision: 'estimated' };
-  return null;
 }
 
 function primaryObservedIP(node: NodeSummary): string | null {
-  const observations = node.network_observations ?? [];
-  const preferred = observations.find((obs) => obs.kind === 'public_ip' && obs.value)
-    ?? observations.find((obs) => obs.kind === 'private_ip' && obs.value);
-  return preferred?.value ?? node.public_ip ?? null;
+  const publicObservations = (node.network_observations ?? [])
+    .filter((observation) => observation.kind === 'public_ip' && observation.value)
+    .sort((a, b) => b.confidence - a.confidence);
+  return publicObservations[0]?.value ?? node.public_ip ?? null;
 }
 
-interface IPGeoPoint {
-  lat: number;
-  lon: number;
-  label: string;
+function nodeCountryKey(node: NodeSummary): string | null {
+  const geo = node.ip_geo;
+  if (!geo) return null;
+  const key = geo.country_code?.trim().toUpperCase() || geo.country?.trim();
+  return key || null;
 }
 
-function mapPointForNode(node: NodeSummary, state: NodeState, index: number, ipGeo?: IPGeoPoint | null): NodeMapPoint {
-  const coords = coordinatesFromLabels(node)
-    ?? (ipGeo ? { ...ipGeo, precision: 'exact' as const } : null)
-    ?? coordinatesFromIP(node);
-  const fallbackRegion = guessRegion(node);
-  const lat = coords?.lat ?? REGIONS[fallbackRegion].lat;
-  const lon = coords?.lon ?? REGIONS[fallbackRegion].lon;
+function nodeLocationLabel(node: NodeSummary): string | null {
+  const geo = node.ip_geo;
+  if (!geo) return null;
+  const parts = [geo.city, geo.region, geo.country]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  const unique = parts.filter((value, index) => parts.indexOf(value) === index);
+  return unique.join(', ') || geo.country_code?.trim() || null;
+}
+
+function mapPointForNode(node: NodeSummary, state: NodeState): NodeMapPoint | null {
+  const geo = node.ip_geo;
+  const lat = geo?.latitude;
+  const lon = geo?.longitude;
+  if (
+    lat == null
+    || lon == null
+    || !Number.isFinite(lat)
+    || !Number.isFinite(lon)
+    || lat < -90
+    || lat > 90
+    || lon < -180
+    || lon > 180
+  ) {
+    return null;
+  }
+
   const projected = projectGeoCoordinates(lon, lat);
-  const jitterAngle = index * 2.3999632297;
-  const jitterRadius = coords?.precision === 'exact' ? Math.min(index % 4, 2) * 2 : 8 + (index % 5) * 3;
-  const label = coords?.label ?? REGIONS[fallbackRegion].label;
   return {
     node,
     state,
     lat,
     lon,
-    x: projected.x + Math.cos(jitterAngle) * jitterRadius,
-    y: projected.y + Math.sin(jitterAngle) * jitterRadius,
-    precision: coords?.precision ?? 'estimated',
-    label,
+    x: projected.x,
+    y: projected.y,
+    ip: geo?.ip || primaryObservedIP(node) || '',
+    label: nodeLocationLabel(node) ?? 'IP geolocation',
   };
 }
 
@@ -420,160 +289,20 @@ function PulsingDot({ state, size = 10 }: { state: NodeState; size?: number }) {
 
 // ── World Map SVG ──────────────────────────────────────────────────────────
 
-interface WorldMapProps {
-  regionData: Record<RegionKey, { count: number; state: NodeState }>;
-  activeRegion: RegionKey | null;
-  onRegionClick: (region: RegionKey | null) => void;
-}
-
-function WorldMap({ regionData, activeRegion, onRegionClick }: WorldMapProps) {
-  const [hovered, setHovered] = useState<RegionKey | null>(null);
-
-  const entries = (Object.entries(regionData) as [RegionKey, { count: number; state: NodeState }][])
-    .filter(([, v]) => v.count > 0);
-
-  return (
-    <div className="relative w-full overflow-hidden rounded-lg bg-[#0a0f1a] border border-border-subtle">
-      <svg
-        viewBox="0 0 1000 480"
-        preserveAspectRatio="xMidYMid meet"
-        className="w-full"
-        aria-label="Fleet world map"
-      >
-        {/* Subtle grid lines */}
-        <defs>
-          <pattern id="grid" width="100" height="80" patternUnits="userSpaceOnUse">
-            <path d="M 100 0 L 0 0 0 80" fill="none" stroke="#1e293b" strokeWidth="0.5" opacity="0.6" />
-          </pattern>
-        </defs>
-        <rect width="1000" height="480" fill="url(#grid)" />
-
-        {/* Continent shapes */}
-        {WORLD_COUNTRY_PATHS.map((country: { id: string; d: string }) => (
-          <path
-            key={country.id}
-            d={country.d}
-            fill="#1e2d3d"
-            stroke="#2d4057"
-            strokeWidth="0.65"
-          />
-        ))}
-
-        {/* Region indicators */}
-        {entries.map(([key, { count, state }]) => {
-          const meta = REGIONS[key];
-          const projected = projectGeoCoordinates(meta.lon, meta.lat);
-          const color = STATE_COLOR[state];
-          const isActive = activeRegion === key;
-          const isHov = hovered === key;
-          const radius = Math.max(18, Math.min(36, 12 + count * 3));
-
-          return (
-            <g
-              key={key}
-              transform={`translate(${projected.x},${projected.y})`}
-              onClick={() => onRegionClick(isActive ? null : key)}
-              onMouseEnter={() => setHovered(key)}
-              onMouseLeave={() => setHovered(null)}
-              style={{ cursor: 'pointer' }}
-            >
-              {/* Outer pulse ring */}
-              {(state === 'critical' || state === 'degraded') && (
-                <motion.circle
-                  r={radius + 4}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth="1.5"
-                  initial={{ scale: 0.8, opacity: 0.7 }}
-                  animate={{ scale: [0.9, 1.6], opacity: [0.7, 0] }}
-                  transition={{ duration: state === 'critical' ? 1.2 : 2, repeat: Infinity, ease: 'easeOut' }}
-                />
-              )}
-
-              {/* Selection ring */}
-              {(isActive || isHov) && (
-                <circle
-                  r={radius + 8}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth="1.5"
-                  opacity="0.5"
-                />
-              )}
-
-              {/* Main dot */}
-              <circle
-                r={radius}
-                fill={color}
-                fillOpacity="0.18"
-                stroke={color}
-                strokeWidth="1.5"
-              />
-
-              {/* Count label */}
-              <text
-                textAnchor="middle"
-                dominantBaseline="central"
-                fill={color}
-                fontSize={count > 99 ? 11 : 13}
-                fontWeight="700"
-                fontFamily="monospace"
-              >
-                {count}
-              </text>
-
-              {/* Region label below */}
-              {(isActive || isHov) && (
-                <text
-                  y={radius + 14}
-                  textAnchor="middle"
-                  fill="#cbd5e1"
-                  fontSize="10"
-                  fontWeight="600"
-                >
-                  {meta.label}
-                </text>
-              )}
-            </g>
-          );
-        })}
-
-        {/* Inactive regions (empty) — subtle label only on hover */}
-        {entries.length === 0 && (
-          <text x="500" y="240" textAnchor="middle" fill="#475569" fontSize="14">
-            No nodes online
-          </text>
-        )}
-      </svg>
-
-      {/* Legend */}
-      <div className="absolute bottom-3 right-3 flex items-center gap-3 rounded-md border border-border-subtle bg-black/60 px-3 py-1.5 backdrop-blur-sm">
-        {(['healthy', 'warning', 'critical'] as NodeState[]).map((s) => (
-          <span key={s} className="flex items-center gap-1.5 text-[10px] text-text-muted capitalize">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATE_COLOR[s] }} />
-            {s}
-          </span>
-        ))}
-        <span className="flex items-center gap-1.5 text-[10px] text-text-muted">
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATE_COLOR.unknown }} />
-          offline
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// ── Node card ──────────────────────────────────────────────────────────────
+// ── Node world map ────────────────────────────────────────────────────────
 
 function NodeWorldMap({
   points,
+  totalCount,
+  unlocatedCount,
   onNodeClick,
 }: {
   points: NodeMapPoint[];
+  totalCount: number;
+  unlocatedCount: number;
   onNodeClick: (nodeId: string) => void;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
-  const exactCount = points.filter((point) => point.precision === 'exact').length;
 
   return (
     <div className="relative w-full overflow-hidden rounded-lg border border-border-subtle bg-[#080d18]">
@@ -630,10 +359,10 @@ function NodeWorldMap({
                     {point.node.hostname}
                   </text>
                   <text x="10" y="37" fill="#94a3b8" fontSize="10" fontFamily="monospace">
-                    {point.node.public_ip ?? 'no public ip'}
+                    {point.ip || 'no public IP'}
                   </text>
                   <text x="10" y="51" fill="#64748b" fontSize="9">
-                    {point.label} - {point.precision}
+                    {point.label} · IP geolocation
                   </text>
                 </g>
               )}
@@ -643,7 +372,7 @@ function NodeWorldMap({
 
         {points.length === 0 && (
           <text x="500" y="240" textAnchor="middle" fill="#475569" fontSize="14">
-            No nodes to plot
+            No factual IP locations available
           </text>
         )}
       </svg>
@@ -651,7 +380,7 @@ function NodeWorldMap({
       <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md border border-border-subtle bg-black/60 px-3 py-1.5 backdrop-blur-sm">
         <MapPin className="h-3.5 w-3.5 text-brand-300" />
         <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-muted">
-          {points.length} nodes - {exactCount} exact
+          {points.length} located of {totalCount}{unlocatedCount > 0 ? ` · ${unlocatedCount} unavailable` : ''}
         </span>
       </div>
       <div className="absolute bottom-3 right-3 flex items-center gap-3 rounded-md border border-border-subtle bg-black/60 px-3 py-1.5 backdrop-blur-sm">
@@ -790,7 +519,6 @@ interface TenantGroupRowProps {
   nodes: NodeSummary[];
   healthMap: Record<string, NodeHealthScore | null>;
   agentJobsByNode: Map<string, Job>;
-  activeRegion: RegionKey | null;
   onNodeClick: (nodeId: string) => void;
 }
 
@@ -1012,11 +740,10 @@ export function Nodes(): JSX.Element {
   const { currentTenantId } = useTenant();
 
   const [view, setView] = useState<ViewMode>('overview');
-  const [activeRegion, setActiveRegion] = useState<RegionKey | null>(null);
+  const [activeCountry, setActiveCountry] = useState<string | null>(null);
   const [hostnameFilter, setHostnameFilter] = useState('');
   const [healthMap, setHealthMap] = useState<Record<string, NodeHealthScore | null>>({});
   const [healthError, setHealthError] = useState<string | null>(null);
-  const [ipGeoMap, setIPGeoMap] = useState<Record<string, IPGeoPoint | null>>({});
   const [atRiskFleet, setAtRiskFleet] = useState<AtRiskFleetResponse | null>(null);
   const [atRiskError, setAtRiskError] = useState<string | null>(null);
   const [agentUpdateNodeId, setAgentUpdateNodeId] = useState<string | null>(null);
@@ -1108,30 +835,24 @@ export function Nodes(): JSX.Element {
     return () => { cancelled = true; };
   }, [api, currentTenantId]);
 
-  // Region grouping
-  const regionData = useMemo((): Record<RegionKey, { count: number; state: NodeState }> => {
-    const groups: Record<RegionKey, { nodes: NodeSummary[]; states: NodeState[] }> = {
-      na: { nodes: [], states: [] }, sa: { nodes: [], states: [] },
-      eu: { nodes: [], states: [] }, afme: { nodes: [], states: [] },
-      apac: { nodes: [], states: [] }, oce: { nodes: [], states: [] },
-      unknown: { nodes: [], states: [] },
-    };
-
+  // Country grouping is derived only from offline IP geolocation evidence.
+  const countryData = useMemo(() => {
+    const countries = new Map<string, { label: string; count: number; state: NodeState }>();
     for (const node of nodes) {
-      const region = guessRegion(node);
-      const h = healthMap[node.id];
-      const state: NodeState = h
-        ? riskToState(h.risk_level)
+      const key = nodeCountryKey(node);
+      if (!key) continue;
+      const health = healthMap[node.id];
+      const state: NodeState = health
+        ? riskToState(health.risk_level)
         : isOnline(node) ? 'healthy' : 'unknown';
-      groups[region].nodes.push(node);
-      groups[region].states.push(state);
+      const current = countries.get(key);
+      countries.set(key, {
+        label: node.ip_geo?.country?.trim() || node.ip_geo?.country_code?.trim() || key,
+        count: (current?.count ?? 0) + 1,
+        state: current ? worstState([current.state, state]) : state,
+      });
     }
-
-    const result = {} as Record<RegionKey, { count: number; state: NodeState }>;
-    for (const [key, g] of Object.entries(groups) as [RegionKey, typeof groups[RegionKey]][]) {
-      result[key] = { count: g.nodes.length, state: worstState(g.states) };
-    }
-    return result;
+    return countries;
   }, [nodes, healthMap]);
 
   // Tenant grouping
@@ -1145,77 +866,32 @@ export function Nodes(): JSX.Element {
     return groups;
   }, [nodes]);
 
-  // Filtered nodes for region / hostname
+  // Filtered nodes for factual country / hostname.
   const filteredNodes = useMemo(() => {
     let result = nodes;
-    if (activeRegion) result = result.filter((n) => guessRegion(n) === activeRegion);
+    if (activeCountry) result = result.filter((node) => nodeCountryKey(node) === activeCountry);
     if (hostnameFilter.trim()) {
-      const q = hostnameFilter.trim().toLowerCase();
-      result = result.filter((n) => n.hostname.toLowerCase().includes(q));
+      const query = hostnameFilter.trim().toLowerCase();
+      result = result.filter((node) => node.hostname.toLowerCase().includes(query));
     }
     return result;
-  }, [nodes, activeRegion, hostnameFilter]);
+  }, [nodes, activeCountry, hostnameFilter]);
 
-  const nodeMapPoints = useMemo(() => (
-    filteredNodes.slice(0, 49).map((node, index) => {
-      const h = healthMap[node.id];
-      const state: NodeState = h
-        ? riskToState(h.risk_level)
-        : isOnline(node) ? 'healthy' : 'unknown';
-      return mapPointForNode(node, state, index, node.public_ip ? ipGeoMap[node.public_ip] : null);
-    })
-  ), [filteredNodes, healthMap, ipGeoMap]);
+  const nodeMapPoints = useMemo(
+    () => filteredNodes
+      .map((node) => {
+        const health = healthMap[node.id];
+        const state: NodeState = health
+          ? riskToState(health.risk_level)
+          : isOnline(node) ? 'healthy' : 'unknown';
+        return mapPointForNode(node, state);
+      })
+      .filter((point): point is NodeMapPoint => point !== null),
+    [filteredNodes, healthMap],
+  );
+  const unlocatedNodeCount = filteredNodes.length - nodeMapPoints.length;
 
-  const useNodeMap = pagination.total > 0 && pagination.total < 50;
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!useNodeMap || !currentTenantId) return;
-
-    const ips = Array.from(
-      new Set(
-        filteredNodes
-          .slice(0, 49)
-          .map((node) => node.public_ip)
-          .filter((ip): ip is string => Boolean(ip)),
-      ),
-    ).filter((ip) => !(ip in ipGeoMap));
-
-    if (ips.length === 0) return;
-
-    Promise.all(
-      ips.slice(0, 24).map(async (ip) => {
-        try {
-          const enrichment = await api.enrichIp(ip, currentTenantId);
-          const lat = enrichment.geo?.latitude;
-          const lon = enrichment.geo?.longitude;
-          if (lat == null || lon == null || !Number.isFinite(lat) || !Number.isFinite(lon)) {
-            return [ip, null] as const;
-          }
-          const parts = [enrichment.geo?.city, enrichment.geo?.country].filter(Boolean);
-          const label = parts.join(', ') || enrichment.geo?.country_code || 'IP geolocation';
-          return [ip, { lat, lon, label }] as const;
-        } catch {
-          return [ip, null] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      setIPGeoMap((prev) => {
-        const next = { ...prev };
-        for (const [ip, geo] of entries) {
-          next[ip] = geo;
-        }
-        return next;
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [api, currentTenantId, filteredNodes, ipGeoMap, useNodeMap]);
-
-  // Filtered tenant groups (respects activeRegion + hostnameFilter)
+  // Filtered tenant groups (respects factual country + hostname filters)
   const filteredTenantGroups = useMemo(() => {
     const groups = new Map<string, NodeSummary[]>();
     for (const node of filteredNodes) {
@@ -1324,12 +1000,13 @@ export function Nodes(): JSX.Element {
       cell: ({ row }) => <span className="text-text-secondary">{tenantNames.get(row.original.tenant_id) ?? row.original.tenant_id}</span>,
     },
     {
-      header: 'Region',
-      id: 'region',
-      cell: ({ row }) => {
-        const r = guessRegion(row.original);
-        return <span className="text-text-muted text-xs">{REGIONS[r].label}</span>;
-      },
+      header: 'Location',
+      id: 'location',
+      cell: ({ row }) => (
+        <span className="text-text-muted text-xs">
+          {nodeLocationLabel(row.original) ?? 'Location unavailable'}
+        </span>
+      ),
     },
     {
       header: 'OS',
@@ -1591,20 +1268,19 @@ export function Nodes(): JSX.Element {
         </Panel>
       )}
 
-      {/* World map */}
-      <Panel padding="md" eyebrow="GLOBAL DISTRIBUTION" toneAccent="brand"
+      {/* Factual node map */}
+      <Panel
+        padding="md"
+        eyebrow="NODE LOCATIONS"
+        toneAccent="brand"
         actions={
           <div className="flex items-center gap-1.5">
-            {activeRegion && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRegion(null)}>
+            {activeCountry && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveCountry(null)}>
                 Clear filter
               </Button>
             )}
-            <span className="text-xs text-text-muted">
-              {useNodeMap
-                ? 'Node markers open details'
-                : activeRegion ? `Showing ${REGIONS[activeRegion].label}` : 'Click region to filter'}
-            </span>
+            <span className="text-xs text-text-muted">Offline IP geolocation</span>
           </div>
         }
       >
@@ -1614,40 +1290,41 @@ export function Nodes(): JSX.Element {
             description="Retry the node list."
             icon={<MapPin />}
           />
-        ) : useNodeMap ? (
+        ) : (
           <NodeWorldMap
             points={nodeMapPoints}
+            totalCount={filteredNodes.length}
+            unlocatedCount={unlocatedNodeCount}
             onNodeClick={(nodeId) => navigate(`/nodes/${nodeId}`)}
           />
-        ) : (
-          <WorldMap
-            regionData={regionData}
-            activeRegion={activeRegion}
-            onRegionClick={setActiveRegion}
-          />
         )}
-        {/* Region chips */}
-        {!nodesUnavailable && <div className="flex flex-wrap gap-2 pt-1">
-          {(Object.entries(regionData) as [RegionKey, { count: number; state: NodeState }][])
-            .filter(([, v]) => v.count > 0)
-            .sort(([, a], [, b]) => b.count - a.count)
-            .map(([key, { count, state }]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setActiveRegion(activeRegion === key ? null : key)}
-                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
-                  activeRegion === key
-                    ? 'border-brand-500/50 bg-brand-500/10 text-brand-300'
-                    : 'border-border-subtle bg-surface-2 text-text-secondary hover:border-border-strong'
-                }`}
-              >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: STATE_COLOR[state] }} />
-                {REGIONS[key].label}
-                <span className="font-mono text-text-muted">{count}</span>
-              </button>
-            ))}
-        </div>}
+        {!nodesUnavailable && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {[...countryData.entries()]
+              .sort(([, a], [, b]) => b.count - a.count || a.label.localeCompare(b.label))
+              .map(([key, { label, count, state }]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setActiveCountry(activeCountry === key ? null : key)}
+                  className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+                    activeCountry === key
+                      ? 'border-brand-500/50 bg-brand-500/10 text-brand-300'
+                      : 'border-border-subtle bg-surface-2 text-text-secondary hover:border-border-strong'
+                  }`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: STATE_COLOR[state] }} />
+                  {label}
+                  <span className="font-mono text-text-muted">{count}</span>
+                </button>
+              ))}
+            {unlocatedNodeCount > 0 && (
+              <span className="rounded-full border border-border-subtle bg-surface-2 px-3 py-1 text-xs text-text-muted">
+                Location unavailable <span className="font-mono">{unlocatedNodeCount}</span>
+              </span>
+            )}
+          </div>
+        )}
       </Panel>
 
       {/* Fleet groups + nodes */}
@@ -1702,7 +1379,7 @@ export function Nodes(): JSX.Element {
           filteredTenantGroups.size === 0 ? (
             <EmptyState
               title="No nodes"
-              description={activeRegion ? `No nodes in ${REGIONS[activeRegion].label}` : 'No nodes match filters'}
+              description={activeCountry ? `No nodes in ${countryData.get(activeCountry)?.label ?? activeCountry}` : 'No nodes match filters'}
               icon={<Globe />}
             />
           ) : (
@@ -1717,7 +1394,6 @@ export function Nodes(): JSX.Element {
                     nodes={tenantNodes}
                     healthMap={healthMap}
                     agentJobsByNode={latestAgentJobsByNode}
-                    activeRegion={activeRegion}
                     onNodeClick={(id) => navigate(`/nodes/${id}`)}
                   />
                 ))}
