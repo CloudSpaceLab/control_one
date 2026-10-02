@@ -10,10 +10,41 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
 type tenantRoleAccessStore interface {
 	UserHasTenantRole(context.Context, uuid.UUID, uuid.UUID, []string) (bool, error)
+}
+
+type accessibleTenantListStore interface {
+	ListAccessibleTenants(context.Context, uuid.UUID, []string, string, int, int) ([]storage.Tenant, int, error)
+}
+
+func (s *Server) accessibleTenantIDs(ctx context.Context, principal *auth.Principal, roles ...string) ([]uuid.UUID, error) {
+	if principal == nil || principal.Type != "user" {
+		return nil, errors.New("tenant access requires a user principal")
+	}
+	store, ok := s.store.(accessibleTenantListStore)
+	if !ok {
+		return nil, errTenantAccessUnavailable
+	}
+	userID := principalStorageUserID(s, ctx, principal)
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%w: principal user not found", errTenantAccessUnavailable)
+	}
+	if len(roles) == 0 {
+		roles = principal.Roles
+	}
+	tenants, _, err := store.ListAccessibleTenants(ctx, userID, roles, "", 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errTenantAccessUnavailable, err)
+	}
+	ids := make([]uuid.UUID, 0, len(tenants))
+	for _, tenant := range tenants {
+		ids = append(ids, tenant.ID)
+	}
+	return ids, nil
 }
 
 func (s *Server) requireTenantAccess(w http.ResponseWriter, r *http.Request, principal *auth.Principal, tenantID uuid.UUID, roles ...string) bool {
