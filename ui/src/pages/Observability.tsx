@@ -729,7 +729,7 @@ function deriveKnowledgeChunks(
       id: `chunk:coverage:${row.domain}:${sanitizeKey(row.title || row.name || row.subject || 'row')}`,
       source: row.title || row.name || row.subject || String(row.domain || 'coverage'),
       topic: 'Coverage gap',
-      state: 'stale' as const,
+      state: chunkStateForService(stateFromCoverage(row.coverage_state ?? row.state)),
       summary: row.reason || row.details || row.description || 'Coverage matrix row needs attention.',
       citations: compact([`coverage:${row.domain}`, ...(row.evidence ?? []).slice(0, 2), ...(row.gaps ?? []).slice(0, 1)]),
       openedFrom: ['Coverage', 'Ask AI'],
@@ -867,7 +867,7 @@ function effortForState(state: ObservabilityState): string {
 function chunkStateForService(state: ObservabilityState): KnowledgeChunk['state'] {
   if (state === 'healthy') return 'fresh';
   if (state === 'stale') return 'stale';
-  if (state === 'failed' || state === 'unsupported') return 'failed';
+  if (state === 'failed') return 'failed';
   return 'attention';
 }
 
