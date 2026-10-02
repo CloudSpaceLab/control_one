@@ -94,6 +94,23 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+
+	if r.Method == http.MethodGet && strings.TrimSpace(r.URL.Query().Get("tenant_id")) == "" {
+		tenantIDs, err := s.accessibleTenantIDs(
+			r.Context(),
+			principal,
+			roleInvestigator,
+			roleOperator,
+			roleAdmin,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		s.handleListSOCCases(w, r, principal, uuid.Nil, tenantIDs)
+		return
+	}
+
 	tenantID, err := tenantIDFromQuery(r, principal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -104,7 +121,7 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 	}
 	switch r.Method {
 	case http.MethodGet:
-		s.handleListSOCCases(w, r, principal, tenantID)
+		s.handleListSOCCases(w, r, principal, tenantID, nil)
 	case http.MethodPost:
 		s.handleCreateSOCCaseFromAlert(w, r, principal, tenantID)
 	default:
@@ -113,7 +130,7 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, principal *auth.Principal, tenantID uuid.UUID) {
+func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, principal *auth.Principal, tenantID uuid.UUID, tenantIDs []uuid.UUID) {
 	backend := s.aiOperatorBackend()
 	if backend == nil {
 		http.Error(w, "case store unavailable", http.StatusServiceUnavailable)
@@ -126,6 +143,7 @@ func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, prin
 	}
 	filter := storage.ListAIInvestigationsFilter{
 		TenantID:         tenantID,
+		TenantIDs:        tenantIDs,
 		Status:           storage.AIInvestigationStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
 		TriggerType:      strings.TrimSpace(r.URL.Query().Get("trigger_type")),
 		TriggerEventType: strings.TrimSpace(r.URL.Query().Get("trigger_event_type")),
@@ -172,18 +190,23 @@ func (s *Server) handleListSOCCases(w http.ResponseWriter, r *http.Request, prin
 	}
 	out := make([]socCaseResponse, 0, len(rows))
 	includeNotes := parseBoolQuery(r.URL.Query().Get("include_notes"))
-	teamUsers, err := s.store.ListTenantUsers(r.Context(), tenantID, "", 1000)
-	if err != nil {
-		s.logger.Warn("list tenant users for soc case collection", zap.Error(err), zap.String("tenant_id", tenantID.String()))
-		teamUsers = nil
-	}
+	teamUsersByTenant := map[uuid.UUID][]storage.TeamUser{}
 	for _, row := range rows {
 		resp := newSOCCaseResponse(row)
+		teamUsers, loaded := teamUsersByTenant[row.TenantID]
+		if !loaded {
+			teamUsers, err = s.store.ListTenantUsers(r.Context(), row.TenantID, "", 1000)
+			if err != nil {
+				s.logger.Warn("list tenant users for soc case collection", zap.Error(err), zap.String("tenant_id", row.TenantID.String()))
+				teamUsers = nil
+			}
+			teamUsersByTenant[row.TenantID] = teamUsers
+		}
 		if teamUsers != nil {
-			s.hydrateCaseCollaborationWithUsers(r.Context(), tenantID, row, &resp, teamUsers)
+			s.hydrateCaseCollaborationWithUsers(r.Context(), row.TenantID, row, &resp, teamUsers)
 		}
 		if includeNotes {
-			notes, _, err := s.listSOCCaseNotes(r.Context(), tenantID, row.ID, 3, 0)
+			notes, _, err := s.listSOCCaseNotes(r.Context(), row.TenantID, row.ID, 3, 0)
 			if err != nil {
 				s.logger.Warn("list soc case notes for collection", zap.Error(err), zap.String("case_id", row.ID.String()))
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
