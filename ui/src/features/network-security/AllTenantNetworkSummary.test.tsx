@@ -3,23 +3,29 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AllTenantNetworkSummary } from './AllTenantNetworkSummary';
 
-const mocks = vi.hoisted(() => ({
-  getIPBehaviorOverview: vi.fn(),
-  listBlockProposals: vi.fn(),
-  getControlRoomOverview: vi.fn(),
-  setCurrentTenantId: vi.fn(),
-  tenants: [
-    { id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' },
-    { id: 'tenant-2', name: 'Bank B', created_at: '2026-01-02T00:00:00Z' },
-  ],
-}));
+const mocks = vi.hoisted(() => {
+  const getIPBehaviorOverview = vi.fn();
+  const listBlockProposals = vi.fn();
+  const getControlRoomOverview = vi.fn();
+  return {
+    getIPBehaviorOverview,
+    listBlockProposals,
+    getControlRoomOverview,
+    apiClient: {
+      getIPBehaviorOverview,
+      listBlockProposals,
+      getControlRoomOverview,
+    },
+    setCurrentTenantId: vi.fn(),
+    tenants: [
+      { id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Bank B', created_at: '2026-01-02T00:00:00Z' },
+    ],
+  };
+});
 
 vi.mock('@/hooks/useApiClient', () => ({
-  useApiClient: () => ({
-    getIPBehaviorOverview: mocks.getIPBehaviorOverview,
-    listBlockProposals: mocks.listBlockProposals,
-    getControlRoomOverview: mocks.getControlRoomOverview,
-  }),
+  useApiClient: () => mocks.apiClient,
 }));
 
 vi.mock('@/providers/TenantProvider', () => ({
@@ -33,6 +39,13 @@ vi.mock('@/providers/TenantProvider', () => ({
     refresh: vi.fn(),
   }),
 }));
+
+function expectKpi(label: string, value: string): void {
+  const labelNode = screen.getByText(label);
+  const tile = labelNode.closest('.group');
+  expect(tile).not.toBeNull();
+  expect(tile).toHaveTextContent(value);
+}
 
 describe('AllTenantNetworkSummary', () => {
   beforeEach(() => {
@@ -69,9 +82,9 @@ describe('AllTenantNetworkSummary', () => {
     expect(screen.getByText('Bank B')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^approve$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^reject$/i })).not.toBeInTheDocument();
-    expect(screen.getByText('300')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expectKpi('Requests', '300');
+    expectKpi('401/403', '5');
+    expectKpi('5xx', '3');
 
     const openButtons = screen.getAllByRole('button', { name: /open tenant/i });
     await user.click(openButtons[1]);
@@ -81,8 +94,9 @@ describe('AllTenantNetworkSummary', () => {
   it('uses exact paginated proposal counts instead of merging bounded rows', async () => {
     render(<AllTenantNetworkSummary mode="approvals" />);
 
-    expect(await screen.findByText('5')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    await screen.findByText('2 of 2 tenant views loaded');
+    expectKpi('Waiting', '5');
+    expectKpi('Tenants waiting', '2');
     await waitFor(() => expect(mocks.listBlockProposals).toHaveBeenCalledTimes(2));
     expect(mocks.listBlockProposals).toHaveBeenCalledWith(expect.objectContaining({ limit: 1, offset: 0, status: 'proposed' }));
   });
