@@ -22,8 +22,19 @@ type accessibleTenantListStore interface {
 }
 
 func (s *Server) accessibleTenantIDs(ctx context.Context, principal *auth.Principal, roles ...string) ([]uuid.UUID, error) {
-	if principal == nil || principal.Type != "user" {
-		return nil, errors.New("tenant access requires a user principal")
+	if principal == nil {
+		return nil, errors.New("tenant access requires a principal")
+	}
+	if principal.Type != "user" {
+		tenants, _, err := s.store.ListTenants(ctx, "", 0, 0)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errTenantAccessUnavailable, err)
+		}
+		ids := make([]uuid.UUID, 0, len(tenants))
+		for _, tenant := range tenants {
+			ids = append(ids, tenant.ID)
+		}
+		return ids, nil
 	}
 	store, ok := s.store.(accessibleTenantListStore)
 	if !ok {
