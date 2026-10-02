@@ -275,12 +275,14 @@ const appDBCoverageOverview: ControlRoomOverview = {
 let mockedOverview: ControlRoomOverview;
 let getControlRoomOverviewMock: ReturnType<typeof vi.fn>;
 let setNodeIsolationMock: ReturnType<typeof vi.fn>;
+let setCurrentTenantIdMock: ReturnType<typeof vi.fn>;
 
 describe('ControlRoomDrilldown', () => {
   beforeEach(() => {
     mockedOverview = overview;
     getControlRoomOverviewMock = vi.fn().mockImplementation(() => Promise.resolve(mockedOverview));
     setNodeIsolationMock = vi.fn().mockResolvedValue({ id: 'node-2' });
+    setCurrentTenantIdMock = vi.fn();
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue({
       getControlRoomOverview: getControlRoomOverviewMock,
       setNodeIsolation: setNodeIsolationMock,
@@ -292,7 +294,7 @@ describe('ControlRoomDrilldown', () => {
       tenants: [],
       loading: false,
       error: null,
-      setCurrentTenantId: vi.fn(),
+      setCurrentTenantId: setCurrentTenantIdMock,
       refresh: vi.fn(),
     });
   });
@@ -322,6 +324,51 @@ describe('ControlRoomDrilldown', () => {
 
     expect(getControlRoomOverviewMock).not.toHaveBeenCalled();
     expect(screen.queryByText('Control Room data unavailable')).not.toBeInTheDocument();
+  });
+
+  it('shows exact tenant-by-tenant drilldown data in All tenants scope', async () => {
+    getControlRoomOverviewMock.mockImplementation((tenantId: string) => Promise.resolve({
+      ...overview,
+      tenant_id: tenantId,
+      lanes: overview.lanes.map((lane) => ({
+        ...lane,
+        summary: tenantId === 'tenant-1'
+          ? '2 public listeners need review'
+          : '1 public listener needs review',
+      })),
+    }));
+    vi.mocked(useTenantModule.useTenant).mockReturnValue({
+      currentTenantId: null,
+      currentTenant: null,
+      tenants: [
+        { id: 'tenant-1', name: 'Bank A', created_at: '2024-01-01' },
+        { id: 'tenant-2', name: 'Bank B', created_at: '2024-01-01' },
+      ],
+      loading: false,
+      error: null,
+      setCurrentTenantId: setCurrentTenantIdMock,
+      refresh: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/control-room/exposure']}>
+        <Routes>
+          <Route path="/control-room/:laneId" element={<ControlRoomDrilldown />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getControlRoomOverviewMock).toHaveBeenCalledWith('tenant-1', '24h');
+      expect(getControlRoomOverviewMock).toHaveBeenCalledWith('tenant-2', '24h');
+    });
+    expect(await screen.findByText('All tenants · 2 tenant views · 24h window.')).toBeInTheDocument();
+    expect(screen.getByText('Bank A')).toBeInTheDocument();
+    expect(screen.getByText('Bank B')).toBeInTheDocument();
+    expect(screen.getByText('1 public listener needs review')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open tenant detail' })[1]);
+    expect(setCurrentTenantIdMock).toHaveBeenCalledWith('tenant-2');
   });
 
   it('shows firewall and isolation posture inside the exposure drilldown', async () => {
