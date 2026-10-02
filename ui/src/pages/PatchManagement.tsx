@@ -19,10 +19,9 @@ import type {
   PatchApproval,
 } from '../lib/api';
 
-// PatchManagement is the operator console for fleet OS-package patching.
-// Wave C extends the page with Squid proxy management, maintenance window
-// scheduling, per-node mode configuration, approval gates, per-node selection,
-// and the approval queue.
+// PatchManagement separates measured fleet posture from bounded recent
+// deployment activity, while keeping proxy, maintenance-window and approval
+// operations tenant-scoped.
 type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals';
 type LoadErrorKey = 'posture' | 'deployments' | 'proxies' | 'windows' | 'approvals';
 type LoadErrors = Partial<Record<LoadErrorKey, string>>;
