@@ -149,7 +149,7 @@ describe('aggregateExecutiveOverviews', () => {
     ]);
   });
 
-  it('retains tenant context in drilldowns and merges top-rule counts', () => {
+  it('retains tenant context and does not present bounded rule samples as a global ranking', () => {
     const result = aggregateExecutiveOverviews([
       { tenantId: 'tenant-1', tenantName: 'Bank A', overview: overview('tenant-1') },
       { tenantId: 'tenant-2', tenantName: 'Bank B', overview: overview('tenant-2') },
@@ -162,11 +162,20 @@ describe('aggregateExecutiveOverviews', () => {
     expect(result.estate.groups[0].drilldown).toBe('/nodes');
     expect(result.attention.items.map((item) => item.title)).toContain('Bank A · Privileged access');
     expect(result.attention.items[0].drilldown).toBe('/alerts');
-    expect(result.violations.top_rules[0]).toMatchObject({
-      rule_id: 'restricted-port',
-      count: 12,
-      severity: 'critical',
-    });
+    expect(result.violations.top_rules).toEqual([
+      expect.objectContaining({
+        rule_id: 'tenant-1:restricted-port',
+        name: 'Bank A · Restricted port',
+        count: 6,
+        severity: 'high',
+      }),
+      expect.objectContaining({
+        rule_id: 'tenant-2:restricted-port',
+        name: 'Bank B · Restricted port',
+        count: 6,
+        severity: 'high',
+      }),
+    ]);
   });
 
   it('marks aggregate domains unavailable when any tenant request failed', () => {
