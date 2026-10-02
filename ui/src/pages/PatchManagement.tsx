@@ -6,6 +6,7 @@ import { Skeleton } from '../components/ui/skeleton';
 import { Alert, SectionHeader, EmptyState, StatusTag, KpiTile, type StateTone } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
+import { AllTenantPatchSummary } from '../features/patch-management/AllTenantPatchSummary';
 import { toast } from 'sonner';
 import type {
   PatchDeployment,
@@ -120,12 +121,7 @@ export function PatchManagement(): JSX.Element {
   const hasLoadErrors = Object.keys(loadErrors).length > 0;
 
   if (!currentTenantId) {
-    return (
-      <div className="space-y-6">
-        <SectionHeader title="Patch management" description="Fleet OS-package upgrades dispatched via the agent." />
-        <EmptyState title="Select a tenant" description="Choose a tenant from the header to view patch deployments." />
-      </div>
-    );
+    return <AllTenantPatchSummary />;
   }
 
   return (
