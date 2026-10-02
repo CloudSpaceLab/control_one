@@ -140,25 +140,17 @@ function aggregatePredictiveHealth(
 }
 
 function aggregateTopRules(entries: TenantExecutiveOverview[]): ControlRoomExecutiveTopRule[] {
-  const rules = new Map<string, ControlRoomExecutiveTopRule>();
-
-  for (const { overview } of entries) {
-    for (const rule of overview.violations.top_rules) {
-      const key = `${rule.rule_id}\u0000${rule.rule_type}`;
-      const current = rules.get(key);
-      if (!current) {
-        rules.set(key, { ...rule });
-        continue;
-      }
-
-      current.count += rule.count;
-      if (severityRank(rule.severity) > severityRank(current.severity)) {
-        current.severity = rule.severity;
-      }
-    }
-  }
-
-  return [...rules.values()]
+  // Each tenant endpoint intentionally returns only a bounded top-rule sample.
+  // Keep those samples tenant-qualified rather than pretending their union is
+  // an exact organisation-wide ranking.
+  return entries
+    .flatMap(({ tenantId, tenantName, overview }) =>
+      overview.violations.top_rules.map((rule) => ({
+        ...rule,
+        rule_id: `${tenantId}:${rule.rule_id}`,
+        name: `${tenantName} · ${rule.name}`,
+      })),
+    )
     .sort((a, b) =>
       b.count - a.count
       || severityRank(b.severity) - severityRank(a.severity)
