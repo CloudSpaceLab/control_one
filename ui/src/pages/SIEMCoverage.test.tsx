@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
   const toastSuccess = vi.fn();
   const toastError = vi.fn();
   const saveBlob = vi.fn();
+  const setCurrentTenantId = vi.fn();
 
   return {
     listContentPackSourceProposals,
@@ -51,6 +52,16 @@ const mocks = vi.hoisted(() => {
     toastSuccess,
     toastError,
     saveBlob,
+    setCurrentTenantId,
+    currentTenantId: "tenant-1" as string | null,
+    tenantList: [
+      {
+        id: "tenant-1",
+        name: "Bank Tenant",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ],
     apiClient: {
       listContentPackSourceProposals: (params: unknown) =>
         listContentPackSourceProposals(params),
@@ -118,13 +129,15 @@ vi.mock("@/providers/AuthProvider", () => ({
 
 vi.mock("@/providers/TenantProvider", () => ({
   useTenant: () => ({
-    currentTenantId: "tenant-1",
-    currentTenant: {
-      id: "tenant-1",
-      name: "Bank Tenant",
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z",
-    },
+    currentTenantId: mocks.currentTenantId,
+    currentTenant: mocks.currentTenantId
+      ? mocks.tenantList.find((tenant) => tenant.id === mocks.currentTenantId) ?? null
+      : null,
+    tenants: mocks.tenantList,
+    loading: false,
+    error: null,
+    setCurrentTenantId: mocks.setCurrentTenantId,
+    refresh: vi.fn(),
   }),
 }));
 
@@ -314,6 +327,16 @@ const sampleSourceHealthCase = {
 
 describe("SIEMCoverage", () => {
   beforeEach(() => {
+    mocks.currentTenantId = "tenant-1";
+    mocks.tenantList = [
+      {
+        id: "tenant-1",
+        name: "Bank Tenant",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mocks.setCurrentTenantId.mockReset();
     mocks.listContentPackSourceProposals.mockReset();
     mocks.listContentPackSourceProposals.mockResolvedValue({
       data: [sampleProposal],
@@ -459,6 +482,87 @@ describe("SIEMCoverage", () => {
     mocks.toastSuccess.mockReset();
     mocks.toastError.mockReset();
     mocks.saveBlob.mockReset();
+  });
+
+  it("aggregates exact SIEM coverage totals across All tenants and requires tenant selection for actions", async () => {
+    const user = userEvent.setup();
+    mocks.currentTenantId = null;
+    mocks.tenantList = [
+      {
+        id: "tenant-1",
+        name: "Bank A",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "tenant-2",
+        name: "Bank B",
+        created_at: "2026-01-02T00:00:00Z",
+        updated_at: "2026-01-02T00:00:00Z",
+      },
+    ];
+    mocks.listContentPackSourceProposals.mockImplementation(
+      async ({ tenantId }: { tenantId: string }) => ({
+        data: [],
+        pagination: {
+          total: tenantId === "tenant-1" ? 10 : 20,
+          count: 0,
+          limit: 1,
+          offset: 0,
+          nextOffset: null,
+          prevOffset: null,
+        },
+        summary: {
+          total: tenantId === "tenant-1" ? 10 : 20,
+          by_status: {
+            approval_required: tenantId === "tenant-1" ? 3 : 4,
+          },
+        },
+      }),
+    );
+    mocks.getContentPackSourceHealth.mockImplementation(
+      async (tenantId: string) => ({
+        tenant_id: tenantId,
+        generated_at: "2026-10-02T08:00:00Z",
+        items: [],
+        totals: tenantId === "tenant-1"
+          ? {
+              sources: 5,
+              collectors_reporting: 2,
+              by_state: { collecting: 2, deployed: 1, parser_failed: 1 },
+              metrics: { events_received: 100 },
+            }
+          : {
+              sources: 7,
+              collectors_reporting: 3,
+              by_state: { collecting: 4, silent: 2 },
+              metrics: { events_received: 200 },
+            },
+        pagination: {
+          total: tenantId === "tenant-1" ? 5 : 7,
+          count: 0,
+          limit: 1,
+          offset: 0,
+          nextOffset: null,
+          prevOffset: null,
+        },
+      }),
+    );
+
+    render(<SIEMCoverage />);
+
+    expect(await screen.findByText("All tenants · source coverage and connector decisions.")).toBeInTheDocument();
+    expectKpiValue("Sources", "12");
+    expectKpiValue("Collecting", "7");
+    expectKpiValue("Degraded", "3");
+    expectKpiValue("Proposals", "30");
+    expectKpiValue("Needs approval", "7");
+    expect(mocks.getTenantConnectorPolicy).not.toHaveBeenCalled();
+    expect(mocks.listContentPackEdgeCollectors).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: /open tenant/i })[1]);
+    expect(mocks.setCurrentTenantId).toHaveBeenCalledWith("tenant-2");
   });
 
   it("loads policy, proposals, and source health for the active tenant", async () => {
