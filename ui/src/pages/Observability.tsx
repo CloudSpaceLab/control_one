@@ -45,6 +45,7 @@ type ObservabilityState =
   | 'detected_only'
   | 'raw_only'
   | 'unsupported'
+  | 'policy_blocked'
   | 'stale'
   | 'failed';
 
@@ -92,12 +93,12 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
   partial: {
     label: 'Partial',
     tone: 'warning',
-    plain: 'Some evidence is usable, but a stronger signal is missing.',
+    plain: 'Evidence exists, but collection or parser readiness is incomplete.',
   },
   needs_access: {
-    label: 'Needs access',
+    label: 'Needs approval',
     tone: 'warning',
-    plain: 'The service was found, but audit access is missing.',
+    plain: 'Collection is blocked until the required approval or policy grant exists.',
   },
   fallback_active: {
     label: 'Fallback active',
@@ -107,7 +108,7 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
   detected_only: {
     label: 'Detected only',
     tone: 'info',
-    plain: 'Inventory found the service before telemetry was enabled.',
+    plain: 'The source or setup is known, but verified event flow is not proven.',
   },
   raw_only: {
     label: 'Raw only',
@@ -117,7 +118,12 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
   unsupported: {
     label: 'Unsupported',
     tone: 'critical',
-    plain: 'This cannot count as healthy coverage.',
+    plain: 'No supported first-party collection or parsing path exists.',
+  },
+  policy_blocked: {
+    label: 'Policy blocked',
+    tone: 'warning',
+    plain: 'Collection is intentionally blocked by privacy, sensitivity, or policy.',
   },
   stale: {
     label: 'Stale data',
@@ -127,7 +133,7 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
   failed: {
     label: 'Failed',
     tone: 'critical',
-    plain: 'The last verification job failed.',
+    plain: 'Collection or parser verification reported a failure.',
   },
 };
 
@@ -307,7 +313,7 @@ export function Observability(): JSX.Element {
       {services.length > 0 && selected && dbService && selectedChunk ? (
         <>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Panel padding="md" eyebrow="COVERAGE SOURCES" title={`${tenantLabel} observability sources`}>
+        <Panel padding="md" eyebrow="COVERAGE SOURCES" title={`${tenantLabel} source setup snapshot`}>
           <div className="overflow-x-auto rounded-lg border border-border-subtle">
             <table className="w-full min-w-[640px] table-fixed text-sm xl:min-w-0">
               <colgroup>
@@ -764,8 +770,9 @@ function stateFromSourceHealth(state: string | undefined): ObservabilityState {
       return 'raw_only';
     case 'parser_failed':
     case 'failed':
-    case 'collection_conflict':
       return 'failed';
+    case 'collection_conflict':
+      return 'partial';
     case 'silent':
     case 'stale':
       return 'stale';
@@ -774,8 +781,9 @@ function stateFromSourceHealth(state: string | undefined): ObservabilityState {
     case 'approval_required':
       return 'needs_access';
     case 'unsupported':
-    case 'privacy_blocked':
       return 'unsupported';
+    case 'privacy_blocked':
+      return 'policy_blocked';
     case 'proposed':
     case 'approved':
     case 'config_rendered':
@@ -829,6 +837,8 @@ function actionForState(state: ObservabilityState, name: string): string {
       return `Attach parser coverage for ${name}`;
     case 'unsupported':
       return `Create connector contract for ${name}`;
+    case 'policy_blocked':
+      return `Review collection policy for ${name}`;
     case 'stale':
       return `Refresh stale observability evidence for ${name}`;
     case 'failed':
@@ -849,13 +859,13 @@ function firstRecommendedAction(item: ContentPackSourceHealth): string | undefin
 
 function effortForState(state: ObservabilityState): string {
   if (state === 'unsupported' || state === 'failed') return 'High';
-  if (state === 'needs_access' || state === 'stale') return 'Medium';
+  if (state === 'needs_access' || state === 'policy_blocked' || state === 'stale') return 'Medium';
   return 'Low';
 }
 
 function chunkStateForService(state: ObservabilityState): KnowledgeChunk['state'] {
   if (state === 'healthy') return 'fresh';
-  if (state === 'failed' || state === 'unsupported') return 'failed';
+  if (state === 'failed' || state === 'unsupported' || state === 'policy_blocked') return 'failed';
   return 'stale';
 }
 
