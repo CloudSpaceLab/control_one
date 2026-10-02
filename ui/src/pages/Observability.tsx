@@ -33,11 +33,9 @@ import {
 import { useApiClient } from '@/hooks/useApiClient';
 import { useCoverageMatrix } from '@/hooks/useCoverageMatrix';
 import { ServiceInventory } from '@/features/observability/ServiceInventory';
-import { useNodes } from '@/hooks/useNodes';
 import type {
   ContentPackSourceHealth,
   CoverageMatrixRow,
-  NodeSummary,
   WebserverInstance,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -172,11 +170,6 @@ export function Observability(): JSX.Element {
 
   const tenantId = currentTenantId ?? undefined;
   const tenantLabel = currentTenant?.name ?? 'Current tenant';
-  const {
-    data: nodes,
-    loading: nodesLoading,
-    error: nodesError,
-  } = useNodes({ tenantId, limit: 200, offset: 0 });
   const coverage = useCoverageMatrix({ tenantId, enabled: Boolean(tenantId) });
 
   useEffect(() => {
@@ -227,12 +220,11 @@ export function Observability(): JSX.Element {
   const liveServices = useMemo(
     () =>
       buildLiveObservabilityServices({
-        nodes,
         webservers: liveState.webservers,
         sourceHealth: liveState.sourceHealth,
         coverageRows: coverage.data?.rows ?? [],
       }),
-    [coverage.data?.rows, liveState.sourceHealth, liveState.webservers, nodes],
+    [coverage.data?.rows, liveState.sourceHealth, liveState.webservers],
   );
   const services = liveServices;
   const selected = services.find((service) => service.id === selectedId) ?? services[0] ?? null;
@@ -248,8 +240,8 @@ export function Observability(): JSX.Element {
     services.find((service) => /db|postgres|mysql|mssql|database/i.test(`${service.kind} ${service.name}`)) ??
     services.find((service) => service.state === 'needs_access') ??
     selected;
-  const loading = nodesLoading || liveState.loading || coverage.loading;
-  const loadErrors = [nodesError, liveState.error, coverage.error].filter(Boolean);
+  const loading = liveState.loading || coverage.loading;
+  const loadErrors = [liveState.error, coverage.error].filter(Boolean);
   const debugReady = Boolean(
     debug.scope.trim() &&
       Number(debug.ttl) > 0 &&
@@ -547,12 +539,10 @@ export function Observability(): JSX.Element {
 }
 
 function buildLiveObservabilityServices({
-  nodes,
   webservers,
   sourceHealth,
   coverageRows,
 }: {
-  nodes: NodeSummary[];
   webservers: WebserverInstance[];
   sourceHealth: ContentPackSourceHealth[];
   coverageRows: CoverageMatrixRow[];
@@ -561,7 +551,6 @@ function buildLiveObservabilityServices({
   const safeWebservers = Array.isArray(webservers) ? webservers : [];
   const safeSourceHealth = Array.isArray(sourceHealth) ? sourceHealth : [];
   const safeCoverageRows = Array.isArray(coverageRows) ? coverageRows : [];
-  const safeNodes = Array.isArray(nodes) ? nodes : [];
 
   services.push(...safeWebservers.slice(0, 8).map(serviceFromWebserver));
   services.push(...safeSourceHealth.slice(0, 10).map(serviceFromSourceHealth));
@@ -571,12 +560,6 @@ function buildLiveObservabilityServices({
     .slice(0, 8)
     .map(serviceFromCoverageRow);
   services.push(...attentionRows);
-
-  const nodeRows = safeNodes
-    .slice(0, 6)
-    .map(serviceFromNode)
-    .filter((service) => !services.some((candidate) => candidate.id === service.id));
-  services.push(...nodeRows);
 
   return dedupeServices(services).slice(0, 24);
 }
@@ -694,31 +677,6 @@ function serviceFromCoverageRow(row: CoverageMatrixRow): ObservabilityService {
     setup: ['Review coverage row', 'Attach source evidence', 'Refresh tenant overlay'],
     verification: ['coverage state updated', 'evidence count current', 'gaps cleared'],
     href: `/coverage?domain=${encodeURIComponent(String(row.domain || ''))}`,
-  };
-}
-
-function serviceFromNode(node: NodeSummary): ObservabilityService {
-  const fresh = isFresh(node.last_seen_at);
-  return {
-    id: `node:${node.id}`,
-    name: node.hostname || shortId(node.id),
-    kind: 'node agent',
-    state: fresh ? 'healthy' : 'stale',
-    evidence: compact([
-      node.os,
-      node.agent_version ? `agent ${node.agent_version}` : '',
-      node.public_ip,
-      node.last_seen_at ? `last seen ${formatDateLabel(node.last_seen_at)}` : '',
-    ]),
-    missing: fresh ? [] : ['fresh heartbeat'],
-    why: fresh
-      ? 'Node agent is reporting current inventory and can anchor observability evidence.'
-      : 'Node agent heartbeat is outside the freshness window for live observability proof.',
-    nextAction: fresh ? 'Keep node telemetry policy current.' : 'Repair or re-enroll the stale node agent.',
-    cta: 'Open node',
-    setup: ['Confirm agent service', 'Review telemetry profile', 'Check source labels'],
-    verification: ['heartbeat current', 'services discovered', 'coverage rows linked'],
-    href: `/nodes/${node.id}`,
   };
 }
 
@@ -903,13 +861,6 @@ function chunkStateForService(state: ObservabilityState): KnowledgeChunk['state'
   if (state === 'healthy') return 'fresh';
   if (state === 'failed' || state === 'unsupported') return 'failed';
   return 'stale';
-}
-
-function isFresh(value?: string, hours = 24): boolean {
-  if (!value) return false;
-  const ts = Date.parse(value);
-  if (!Number.isFinite(ts)) return false;
-  return Date.now() - ts <= hours * 60 * 60 * 1000;
 }
 
 function formatDateLabel(value: string): string {
