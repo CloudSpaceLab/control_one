@@ -674,10 +674,9 @@ func (s *Server) handleListPatchDeploymentNodes(w http.ResponseWriter, r *http.R
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-// resolvePatchTargets validates the operator-supplied node ids against the
-// tenant boundary, or — when the list is empty — pulls every enrolled node
-// in the tenant. Bounded at 1000 to keep one operator click from
-// accidentally fanning out to the entire fleet of a megatenant.
+// resolvePatchTargets validates and de-duplicates operator-supplied node IDs.
+// An empty list means every active node in the tenant; paging avoids silently
+// truncating large fleets. New deployments never target inactive nodes.
 func (s *Server) handlePatchDeploymentPlan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
