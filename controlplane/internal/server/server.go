@@ -2053,7 +2053,9 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]nodeResponse, 0, len(nodes))
 	for _, n := range nodes {
-		resp = append(resp, nodeResponseFromModel(n))
+		nodeResp := nodeResponseFromModel(n)
+		s.attachNodeGeo(r.Context(), &nodeResp)
+		resp = append(resp, nodeResp)
 	}
 
 	payload := paginatedResponse[nodeResponse]{
@@ -2282,8 +2284,10 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request, nodeID uu
 		return
 	}
 
+	resp := nodeResponseFromModel(*node)
+	s.attachNodeGeo(r.Context(), &resp)
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(nodeResponseFromModel(*node)); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Warn("encode node response", zap.Error(err))
 	}
 }
@@ -2628,6 +2632,7 @@ type nodeResponse struct {
 	MachineID           string                        `json:"machine_id,omitempty"`
 	Classification      *targetClassificationResponse `json:"classification,omitempty"`
 	NetworkObservations []networkObservationResponse  `json:"network_observations,omitempty"`
+	IPGeo               *nodeIPGeoResponse            `json:"ip_geo,omitempty"`
 }
 
 func nodeResponseFromModel(n storage.Node) nodeResponse {
