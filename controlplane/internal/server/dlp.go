@@ -1,7 +1,10 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -125,13 +128,17 @@ func (s *Server) handleDLPRulesCollection(w http.ResponseWriter, r *http.Request
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer); !ok {
+		principal, ok := s.authorize(w, r, roleViewer)
+		if !ok {
 			return
 		}
 		tenantIDStr := r.URL.Query().Get("tenant_id")
 		tenantID, err := uuid.Parse(tenantIDStr)
 		if err != nil {
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 			return
 		}
 		rules, err := s.store.ListDataClassificationRules(r.Context(), tenantID)
@@ -168,6 +175,9 @@ func (s *Server) handleDLPRulesCollection(w http.ResponseWriter, r *http.Request
 		tenantID, err := uuid.Parse(req.TenantID)
 		if err != nil {
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 			return
 		}
 		rule := &storage.DataClassificationRule{
@@ -216,12 +226,31 @@ func (s *Server) handleDLPRulesResource(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			return
 		}
-		if err := s.store.DeleteDataClassificationRule(r.Context(), id); err != nil {
+		tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
+		if err != nil {
+			http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+			return
+		}
+		scopedStore, ok := s.store.(interface {
+			DeleteDataClassificationRuleForTenant(context.Context, uuid.UUID, uuid.UUID) error
+		})
+		if !ok {
+			http.Error(w, "tenant-scoped DLP rule store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if err := scopedStore.DeleteDataClassificationRuleForTenant(r.Context(), id, tenantID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
 			s.logger.Error("delete dlp rule", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		s.recordAudit(r.Context(), principal, uuid.Nil, "dlp.rule.delete", "dlp_rule", id.String(), nil)
+		s.recordAudit(r.Context(), principal, tenantID, "dlp.rule.delete", "dlp_rule", id.String(), nil)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", http.MethodDelete)
@@ -241,12 +270,16 @@ func (s *Server) handleDLPColumnsCollection(w http.ResponseWriter, r *http.Reque
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	tenantID, err := uuid.Parse(r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	limit, offset, err := parseLimitOffset(r.URL.Query())
@@ -290,12 +323,16 @@ func (s *Server) handleDLPFindingsCollection(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleListDLPFindings(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	tenantID, err := uuid.Parse(r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 
@@ -375,6 +412,8 @@ func (s *Server) handleCreateDLPFindings(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "agent can only report findings for its own node", http.StatusForbidden)
 			return
 		}
+	} else if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
 	}
 
 	created := 0
@@ -447,13 +486,32 @@ func (s *Server) handleDLPFindingsResource(w http.ResponseWriter, r *http.Reques
 		if !ok {
 			return
 		}
+		tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
+		if err != nil {
+			http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+			return
+		}
+		scopedStore, ok := s.store.(interface {
+			ResolvePIIFindingForTenant(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+		})
+		if !ok {
+			http.Error(w, "tenant-scoped PII finding store unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		resolverID := s.userIDForPrincipalCtx(r.Context(), principal)
-		if err := s.store.ResolvePIIFinding(r.Context(), id, resolverID); err != nil {
+		if err := scopedStore.ResolvePIIFindingForTenant(r.Context(), id, tenantID, resolverID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
 			s.logger.Error("resolve pii finding", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		s.recordAudit(r.Context(), principal, uuid.Nil, "dlp.finding.resolve", "pii_finding", id.String(), nil)
+		s.recordAudit(r.Context(), principal, tenantID, "dlp.finding.resolve", "pii_finding", id.String(), nil)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(w, r)
@@ -487,6 +545,9 @@ func (s *Server) handleDLPSeedRules(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := uuid.Parse(req.TenantID)
 	if err != nil {
 		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 
