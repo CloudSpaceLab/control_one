@@ -222,7 +222,7 @@ describe('Observability', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /close/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Needs approval evidencestale PostgreSQL audit/i }));
+    await user.click(screen.getByRole('button', { name: /Needs approval evidenceattention PostgreSQL audit/i }));
     expect(screen.getByText('observability:source-health:runtime-1')).toBeInTheDocument();
   });
 
