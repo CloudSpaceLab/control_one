@@ -77,6 +77,17 @@ const node: NodeSummary = {
     { kind: 'public_ip', value: '198.51.100.44', source: 'agent_heartbeat', confidence: 95 },
     { kind: 'private_ip', value: '10.0.0.44', source: 'agent_interface', confidence: 80 },
   ],
+  ip_geo: {
+    ip: '198.51.100.44',
+    country: 'United Kingdom',
+    country_code: 'GB',
+    city: 'London',
+    region: 'England',
+    latitude: 51.5072,
+    longitude: -0.1276,
+    source: 'dbip-lite',
+    geo_dataset_version: '2026-10',
+  },
   created_at: '2026-06-08T00:00:00Z',
   updated_at: '2026-06-08T00:00:00Z',
 };
@@ -117,7 +128,6 @@ describe('Nodes page production hardening', () => {
     mocks.listJobs.mockResolvedValue(paginated([]));
     mocks.getNodeHealth.mockResolvedValue(health);
     mocks.listAtRiskNodes.mockResolvedValue({ data: [], total_count: 0, critical: 0, high: 0 });
-    mocks.enrichIp.mockResolvedValue({ geo: { latitude: 51.5, longitude: -0.1, city: 'London', country: 'United Kingdom' } });
     mocks.setNodeIsolation.mockResolvedValue({ ...node, labels: { 'control_one.isolation.mode': 'airgapped' } });
     mocks.updateAgent.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
   });
@@ -162,6 +172,29 @@ describe('Nodes page production hardening', () => {
     expect(await screen.findByText('Observed IP')).toBeInTheDocument();
     expect(screen.getByText('198.51.100.44')).toBeInTheDocument();
     expect(screen.queryByText('203.0.113.10')).not.toBeInTheDocument();
+  });
+
+  it('plots only backend IP geolocation evidence and does not call per-node enrichment', async () => {
+    renderNodes();
+
+    expect(await screen.findByText('1 located of 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /united kingdom/i })).toHaveTextContent('1');
+    expect(mocks.enrichIp).not.toHaveBeenCalled();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /show node table/i }));
+    expect(await screen.findByText('Location')).toBeInTheDocument();
+    expect(screen.getByText('London, England, United Kingdom')).toBeInTheDocument();
+  });
+
+  it('reports nodes without geo evidence as unavailable instead of guessing a location', async () => {
+    mocks.listNodes.mockResolvedValueOnce(paginated([{ ...node, ip_geo: undefined }]));
+
+    renderNodes();
+
+    expect(await screen.findByText('0 located of 1 · 1 unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/Location unavailable/)).toBeInTheDocument();
+    expect(mocks.enrichIp).not.toHaveBeenCalled();
   });
 
   it('uses an in-app confirmation and keeps failed isolation changes visible', async () => {
