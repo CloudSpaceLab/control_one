@@ -34,17 +34,17 @@ const CONTROL_ROOM_RANGES = [
 ];
 
 export function ControlRoom(): JSX.Element {
-  const { currentTenantId, currentTenant, loading: tenantLoading } = useTenant();
+  const { currentTenantId, currentTenant, tenants, loading: tenantLoading } = useTenant();
   const [period, setPeriod] = useState('7d');
   const [detail, setDetail] = useState<ExecutiveDetailKey | null>(null);
-  const { overview, loading, error, stale, refresh } = useExecutiveOverview(currentTenantId, period);
+  const { overview, loading, error, stale, refresh } = useExecutiveOverview(currentTenantId, tenants, period);
 
-  if (!currentTenantId && !tenantLoading) {
+  if (!currentTenantId && !tenantLoading && tenants.length === 0) {
     return (
       <EmptyState
         icon={<Server />}
-        title="Select a tenant"
-        description="Choose a tenant to view the Control Room."
+        title="No tenants available"
+        description="No tenant access is available for this account."
       />
     );
   }
@@ -56,12 +56,14 @@ export function ControlRoom(): JSX.Element {
         title={overview ? executiveHeadline(overview) : loading ? 'Loading Control Room' : 'Dashboard unavailable'}
         description={
           overview
-            ? executiveDescription(overview, currentTenant?.name)
+            ? executiveDescription(overview, currentTenant?.name ?? (currentTenantId ? undefined : 'All tenants'))
             : currentTenant?.name
               ? `${currentTenant.name} · ${loading ? 'Loading current status.' : 'Control Room data is unavailable.'}`
-              : loading
-                ? 'Loading current status.'
-                : 'Control Room data is unavailable.'
+              : !currentTenantId && tenants.length > 0
+                ? `All tenants · ${loading ? 'Loading current status.' : 'Control Room data is unavailable.'}`
+                : loading
+                  ? 'Loading current status.'
+                  : 'Control Room data is unavailable.'
         }
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
