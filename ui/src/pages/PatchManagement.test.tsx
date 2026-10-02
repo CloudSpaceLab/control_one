@@ -5,6 +5,7 @@ import type { MaintenanceWindow, PatchApproval, PatchDeployment, SquidProxy } fr
 import { PatchManagement } from './PatchManagement';
 
 const mocks = vi.hoisted(() => {
+  const getPatchSummary = vi.fn();
   const listPatchDeployments = vi.fn();
   const listSquidProxies = vi.fn();
   const listMaintenanceWindows = vi.fn();
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => {
   const toastError = vi.fn();
 
   return {
+    getPatchSummary,
     listPatchDeployments,
     listSquidProxies,
     listMaintenanceWindows,
@@ -27,7 +29,11 @@ const mocks = vi.hoisted(() => {
     denyPatchApproval,
     toastSuccess,
     toastError,
+    currentTenantId: 'tenant-1' as string | null,
+    tenantList: [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }],
+    setCurrentTenantId: vi.fn(),
     apiClient: {
+      getPatchSummary: (tenantId?: string) => getPatchSummary(tenantId),
       listPatchDeployments: (params: unknown) => listPatchDeployments(params),
       listSquidProxies: (tenantId: string) => listSquidProxies(tenantId),
       listMaintenanceWindows: (tenantId: string) => listMaintenanceWindows(tenantId),
@@ -45,7 +51,17 @@ vi.mock('../hooks/useApiClient', () => ({
 }));
 
 vi.mock('../providers/TenantProvider', () => ({
-  useTenant: () => ({ currentTenantId: 'tenant-1' }),
+  useTenant: () => ({
+    currentTenantId: mocks.currentTenantId,
+    currentTenant: mocks.currentTenantId
+      ? mocks.tenantList.find((tenant) => tenant.id === mocks.currentTenantId) ?? null
+      : null,
+    tenants: mocks.tenantList,
+    loading: false,
+    error: null,
+    setCurrentTenantId: mocks.setCurrentTenantId,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock('sonner', () => ({
@@ -104,6 +120,18 @@ const sampleApproval: PatchApproval = {
 describe('PatchManagement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.currentTenantId = 'tenant-1';
+    mocks.tenantList = [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }];
+    mocks.getPatchSummary.mockResolvedValue({
+      total: 0,
+      pending: 0,
+      in_progress: 0,
+      completed: 0,
+      partial: 0,
+      failed: 0,
+      pending_approvals: 0,
+      generated_at: '2026-06-08T00:00:00Z',
+    });
     mocks.listPatchDeployments.mockResolvedValue({ deployments: [], generated_at: '2026-06-08T00:00:00Z' });
     mocks.listSquidProxies.mockResolvedValue({ proxies: [] });
     mocks.listMaintenanceWindows.mockResolvedValue({ windows: [] });
@@ -116,6 +144,38 @@ describe('PatchManagement', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('shows exact all-tenant patch totals and requires tenant selection before changes', async () => {
+    const user = userEvent.setup();
+    mocks.currentTenantId = null;
+    mocks.tenantList = [
+      { id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Bank B', created_at: '2026-01-02T00:00:00Z' },
+    ];
+    mocks.getPatchSummary.mockResolvedValue({
+      total: 14,
+      pending: 2,
+      in_progress: 3,
+      completed: 7,
+      partial: 1,
+      failed: 1,
+      pending_approvals: 4,
+      generated_at: '2026-06-08T00:00:00Z',
+    });
+
+    render(<PatchManagement />);
+
+    expect(await screen.findByText('All tenants · deployment and approval status.')).toBeInTheDocument();
+    expect(screen.getByText('14')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /deploy patches/i })).not.toBeInTheDocument();
+    expect(mocks.listPatchDeployments).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /bank b/i }));
+    expect(mocks.setCurrentTenantId).toHaveBeenCalledWith('tenant-2');
   });
 
   it('shows explicit unavailable states for partial patch-management load failures', async () => {
