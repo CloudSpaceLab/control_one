@@ -555,7 +555,9 @@ function buildLiveObservabilityServices({
     .map(serviceFromCoverageRow);
   services.push(...attentionRows);
 
-  return dedupeServices(services);
+  return dedupeServices(services)
+    .sort((left, right) => sourceStatePriority(left.state) - sourceStatePriority(right.state))
+    .slice(0, 24);
 }
 
 function serviceFromWebserver(instance: WebserverInstance): ObservabilityService {
@@ -828,6 +830,22 @@ function isAttentionCoverageState(state: string | undefined): boolean {
     normalized &&
       !['supported', 'healthy', 'passing', 'not_applicable', 'exception'].includes(normalized),
   );
+}
+
+function sourceStatePriority(state: ObservabilityState): number {
+  const priority: Record<ObservabilityState, number> = {
+    failed: 0,
+    unsupported: 1,
+    policy_blocked: 2,
+    needs_access: 3,
+    stale: 4,
+    partial: 5,
+    raw_only: 6,
+    detected_only: 7,
+    fallback_active: 8,
+    healthy: 9,
+  };
+  return priority[state];
 }
 
 function actionForState(state: ObservabilityState, name: string): string {
