@@ -4641,6 +4641,15 @@ export class APIClient {
     );
   }
 
+  async getPatchSummary(tenantId?: string): Promise<PatchDeploymentSummary> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set("tenant_id", tenantId);
+    const query = search.toString();
+    return this.request<PatchDeploymentSummary>(
+      `/api/v1/patch/summary${query ? `?${query}` : ""}`,
+    );
+  }
+
   async listPatchDeployments(params: {
     tenantId: string;
     limit?: number;
@@ -7043,6 +7052,17 @@ export interface NodeFirewallRule {
 }
 
 // ── Patch Management (PR 4) ────────────────────────────────────────────────
+
+export interface PatchDeploymentSummary {
+  total: number;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  partial: number;
+  failed: number;
+  pending_approvals: number;
+  generated_at: string;
+}
 
 export interface PatchDeployment {
   ID: string;
