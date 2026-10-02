@@ -1128,6 +1128,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
 	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
+	s.baseRouter.HandleFunc("/api/v1/node-services", s.handleTenantNodeServices)
 	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
 	s.baseRouter.HandleFunc("/api/v1/ai/test", s.handleAITest)
 	s.baseRouter.HandleFunc("/api/v1/ai/ask", s.handleAIAsk)
