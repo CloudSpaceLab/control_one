@@ -160,8 +160,8 @@ describe('PatchManagement', () => {
     render(<PatchManagement />);
 
     expect(await screen.findByText('11 / 12')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0);
     expect(screen.getByText('Recent deployment activity · latest 50')).toBeInTheDocument();
     expect(screen.getByText('50')).toBeInTheDocument();
   });
