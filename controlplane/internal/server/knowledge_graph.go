@@ -561,7 +561,6 @@ func (s *Server) handleNodeServicesList(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
-
 // handleTenantNodeServices exposes the latest listening-service inventory across
 // every node in a tenant. It is intentionally separate from source/coverage
 // health: discovery proves presence, not application health.
