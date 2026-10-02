@@ -74,6 +74,12 @@ func (p *patchTestStore) UpdatePatchDeploymentStatus(_ context.Context, id uuid.
 }
 
 func (p *patchTestStore) CreateNodePatchState(_ context.Context, in storage.NodePatchState) (*storage.NodePatchState, error) {
+	for i := range p.states {
+		if p.states[i].DeploymentID == in.DeploymentID && p.states[i].NodeID == in.NodeID {
+			out := p.states[i]
+			return &out, nil
+		}
+	}
 	in.ID = uuid.New()
 	in.RequestedAt = time.Now().UTC()
 	if in.Status == "" {
@@ -294,10 +300,10 @@ func TestPatchDeploy_ApprovalRequired_ParksRow(t *testing.T) {
 		t.Fatalf("expected approval_id in awaiting entry, got %+v", resp.AwaitingApproval[0])
 	}
 
-	// No NodePatchState should have been created yet — the dispatch is
-	// gated behind the approval.
-	if len(store.states) != 0 {
-		t.Fatalf("expected 0 dispatched node patch states pre-approval, got %d", len(store.states))
+	// The target exists in per-node accounting even though no job is
+	// dispatched until the approval is resolved.
+	if len(store.states) != 1 || store.states[0].Status != "pending" || store.states[0].JobID != nil {
+		t.Fatalf("expected one pending undispatched patch state pre-approval, got %+v", store.states)
 	}
 
 	// The approval row should be pending.
@@ -625,8 +631,12 @@ func TestPatchDeny_NoDispatch(t *testing.T) {
 		t.Fatalf("status = %q, want denied", deniedResp.Status)
 	}
 
-	// No dispatch ever happened.
-	if len(store.states) != 0 {
-		t.Fatalf("expected 0 dispatched states post-deny, got %d", len(store.states))
+	// No job was dispatched, but the denied target is terminal in deployment
+	// accounting so failed/target totals reconcile.
+	if len(store.states) != 1 || store.states[0].JobID != nil || store.states[0].Status != "failed" {
+		t.Fatalf("expected one denied terminal patch state, got %+v", store.states)
+	}
+	if store.states[0].Error == nil || *store.states[0].Error != "patch approval denied" {
+		t.Fatalf("expected denial reason on patch state, got %+v", store.states[0])
 	}
 }
