@@ -1206,9 +1206,17 @@ function DeployForm({
       setLoadingNodes(true);
       setLoadError(null);
       try {
-        const resp = await client.listNodes({ tenantId, limit: 500 });
-        if (cancelled) return;
-        setNodes(resp.data ?? []);
+        const activeNodes: NodeSummary[] = [];
+        let offset = 0;
+        for (;;) {
+          const resp = await client.listNodes({ tenantId, limit: 500, offset });
+          if (cancelled) return;
+          activeNodes.push(...(resp.data ?? []).filter((node) => node.state === 'active'));
+          const nextOffset = resp.pagination?.nextOffset ?? null;
+          if (nextOffset === null || nextOffset <= offset) break;
+          offset = nextOffset;
+        }
+        setNodes(activeNodes);
       } catch (err) {
         if (cancelled) return;
         setLoadError(err instanceof Error ? err.message : 'load failed');
@@ -1299,8 +1307,7 @@ function DeployForm({
         <div>
           <h3 className="text-lg font-semibold">Deploy patches</h3>
           <p className="mt-1 text-xs text-text-secondary">
-            Pick the nodes to receive this deployment. Each selected node passes through the 4-gate safety pipeline
-            (opt-out / change window / circuit breaker / approval).
+            Select active nodes for this deployment. Safety gates run before dispatch.
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose}>
@@ -1350,7 +1357,7 @@ function DeployForm({
           </Button>
         </div>
         <p className="text-xs text-text-secondary">
-          {selectedIds.size} of {nodes.length} nodes selected
+          {selectedIds.size} of {nodes.length} active nodes selected
           {filter && ` · ${visibleSelectedCount} of ${filteredNodes.length} visible`}
         </p>
       </div>
