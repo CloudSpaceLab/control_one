@@ -98,7 +98,8 @@ const mocks = vi.hoisted(() => {
 	attachAlertSOCCase,
 	listSOCCases,
     updateAlertWorkflow,
-    currentTenantId: 'tenant-1',
+    currentTenantId: 'tenant-1' as string | null,
+    tenantList: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }],
     currentRoles: ['operator'] as string[],
     setCurrentTenantId: vi.fn(),
   };
@@ -124,7 +125,7 @@ vi.mock('../hooks/useEventStream', () => ({
 
 vi.mock('../providers/TenantProvider', () => ({
   useTenant: () => ({
-    tenants: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }],
+    tenants: mocks.tenantList,
     currentTenantId: mocks.currentTenantId,
     setCurrentTenantId: mocks.setCurrentTenantId,
   }),
@@ -186,6 +187,7 @@ describe('Alerts page failure states', () => {
     vi.clearAllMocks();
     mocks.apiClient.getNode.mockReset().mockResolvedValue({ id: 'node-1', tenant_id: 'tenant-1', hostname: 'demo-system.local' });
     mocks.currentTenantId = 'tenant-1';
+    mocks.tenantList = [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }];
     mocks.currentRoles = ['operator'];
     mocks.listAlerts.mockResolvedValue(paginated([alertRow]));
     mocks.getAlert.mockResolvedValue(alertRow);
@@ -237,6 +239,50 @@ describe('Alerts page failure states', () => {
       expect(access.searchParams.get('from')).toBe(row.opened_at);
       expect(access.searchParams.get('to')).toBe(row.opened_at);
     }
+  });
+
+  it('loads exact All tenants alert totals and keeps tenant identity visible', async () => {
+    mocks.currentTenantId = null;
+    mocks.tenantList = [
+      { id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Bank B', created_at: '2026-01-02T00:00:00Z' },
+    ];
+    const second = {
+      ...alertRow,
+      id: 'alert-2',
+      tenant_id: 'tenant-2',
+      severity: 'high',
+      title: 'Suspicious outbound transfer',
+    };
+    mocks.listAlerts.mockImplementation(async (params: { severity?: string; tenantId?: string }) => {
+      expect(params.tenantId).toBeUndefined();
+      if (params.severity === 'critical') {
+        return {
+          data: [alertRow],
+          pagination: { total: 3, count: 1, limit: 1, offset: 0, nextOffset: null, prevOffset: null },
+        };
+      }
+      if (params.severity === 'high') {
+        return {
+          data: [second],
+          pagination: { total: 5, count: 1, limit: 1, offset: 0, nextOffset: null, prevOffset: null },
+        };
+      }
+      return {
+        data: [alertRow, second],
+        pagination: { total: 18, count: 2, limit: 25, offset: 0, nextOffset: 25, prevOffset: null },
+      };
+    });
+
+    renderAlerts();
+
+    expect(await screen.findByText('Bank A')).toBeInTheDocument();
+    expect(screen.getByText('Bank B')).toBeInTheDocument();
+    expect(screen.getByText('Suspicious outbound transfer')).toBeInTheDocument();
+    expect(screen.getByText('18')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(mocks.listAlerts).toHaveBeenCalledWith(expect.objectContaining({ tenantId: undefined, limit: 25, offset: 0 }));
   });
 
   it('does not show all-clear or empty inbox copy when alerts fail to load', async () => {
