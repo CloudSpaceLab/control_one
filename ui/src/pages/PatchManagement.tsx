@@ -269,7 +269,7 @@ export function PatchManagement(): JSX.Element {
           loadError={loadErrors.deployments}
           onSelect={setSelected}
           onJumpToApprovals={() => setTab('approvals')}
-          pendingApprovalCount={pendingApprovalTotal}
+          pendingApprovalCount={posture && !loadErrors.posture ? posture.pending_approvals : 0}
         />
       )}
       {tab === 'proxies' && (
@@ -1579,7 +1579,7 @@ function ApprovalQueue({
     <>
       {totalCount > approvals.length ? (
         <p className="mb-3 text-xs text-text-secondary">
-          Showing {approvals.length} of {totalCount} pending approvals.
+          Showing {approvals.length} of {totalCount} pending approval records.
         </p>
       ) : null}
       <div className="overflow-x-auto rounded border border-border">
