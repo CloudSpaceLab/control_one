@@ -228,6 +228,13 @@ function ServiceRow({ service }: { service: TenantNodeService }): JSX.Element {
     <tr className="border-t border-border-subtle">
       <td className="px-3 py-3 align-top">
         <div className="font-medium text-foreground">{name}</div>
+        {service.app_name?.trim() ? (
+          <div className="mt-0.5 text-xs text-text-muted">
+            {service.app_confidence && service.app_confidence > 0
+              ? `Detected app · ${service.app_confidence}% confidence`
+              : 'Detected app'}
+          </div>
+        ) : null}
         {detail ? <div className="mt-0.5 text-xs text-text-muted">{detail}</div> : null}
       </td>
       <td className="px-3 py-3 align-top">
@@ -235,7 +242,8 @@ function ServiceRow({ service }: { service: TenantNodeService }): JSX.Element {
           {service.node_hostname || service.node_id.slice(0, 8)}
         </Link>
         <div className="mt-0.5 text-xs text-text-muted">
-          {service.node_last_seen_at ? `Node seen ${relativeAge(service.node_last_seen_at)}` : service.node_state}
+          {service.node_state || 'unknown'}
+          {service.node_last_seen_at ? ` · seen ${relativeAge(service.node_last_seen_at)}` : ''}
         </div>
       </td>
       <td className="px-3 py-3 align-top">
@@ -257,6 +265,9 @@ function listenerLabel(address: string, port: number): string {
   const host = address?.trim();
   if (!host || host === '0.0.0.0' || host === '::' || host === '[::]') {
     return `all interfaces:${port}`;
+  }
+  if (host.includes(':') && !host.startsWith('[')) {
+    return `[${host}]:${port}`;
   }
   return `${host}:${port}`;
 }
@@ -287,7 +298,9 @@ function deviceGroupLabel(value: string): string {
 function relativeAge(value: string): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return 'unknown';
-  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  const deltaSeconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (deltaSeconds < -60) return 'clock skew';
+  const seconds = Math.max(0, deltaSeconds);
   if (seconds < 60) return 'just now';
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
