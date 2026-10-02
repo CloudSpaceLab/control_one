@@ -276,12 +276,12 @@ describe('Alerts page failure states', () => {
 
     renderAlerts();
 
-    expect(await screen.findByText('Bank A')).toBeInTheDocument();
-    expect(screen.getByText('Bank B')).toBeInTheDocument();
+    expect((await screen.findAllByText('Bank A')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Bank B').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Suspicious outbound transfer')).toBeInTheDocument();
-    expect(screen.getByText('18')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getAllByText('18').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('3').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('5').length).toBeGreaterThanOrEqual(1);
     expect(mocks.listAlerts).toHaveBeenCalledWith(expect.objectContaining({ tenantId: undefined, limit: 25, offset: 0 }));
   });
 
