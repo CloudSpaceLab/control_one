@@ -8,7 +8,6 @@ import {
   Clipboard,
   Copy,
   KeyRound,
-  Network,
   Play,
   ShieldCheck,
   Terminal,
@@ -33,6 +32,7 @@ import {
 } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useCoverageMatrix } from '@/hooks/useCoverageMatrix';
+import { ServiceInventory } from '@/features/observability/ServiceInventory';
 import { useNodes } from '@/hooks/useNodes';
 import type {
   ContentPackSourceHealth,
@@ -89,161 +89,11 @@ interface KnowledgeChunk {
   openedFrom: string[];
 }
 
-const REFERENCE_SERVICES: ObservabilityService[] = [
-  {
-    id: 'svc-nginx',
-    name: 'nginx edge',
-    kind: 'webserver',
-    state: 'healthy',
-    evidence: ['access log parsed', 'error log parsed', 'vhost inventory'],
-    missing: [],
-    why: 'HTTP evidence is ready for timelines, source-row citations, and webserver control receipts.',
-    nextAction: 'Keep parser version and retention visible in investigations.',
-    cta: 'Open webserver controls',
-    setup: ['Confirm access log path', 'Confirm error log path', 'Verify parser version'],
-    verification: ['logs parsed', 'source rows cited', 'receipt path linked'],
-  },
-  {
-    id: 'svc-fastapi',
-    name: 'Example FastAPI service',
-    kind: 'app framework',
-    state: 'partial',
-    evidence: ['application logs', 'request IDs'],
-    missing: ['native middleware', 'stack traces'],
-    why: 'AI can cite request logs, but incident timelines lose stack traces and handler spans.',
-    nextAction: 'Add middleware instrumentation and verify request correlation.',
-    cta: 'Copy middleware snippet',
-    setup: ['Install package', 'Register middleware', 'Deploy one canary instance'],
-    verification: ['trace ID appears', 'error span appears', 'fallback state clears'],
-    snippet: 'pip install controlone-fastapi\napp.add_middleware(ControlOneMiddleware, redact="strict")',
-  },
-  {
-    id: 'svc-postgres',
-    name: 'PostgreSQL core',
-    kind: 'DBMS',
-    state: 'needs_access',
-    evidence: ['port 5432', 'postgres process', 'app connection fingerprint'],
-    missing: ['audit logs', 'slow query logs', 'role metadata'],
-    why: 'Investigations cannot prove database-level changes without audit evidence.',
-    nextAction: 'Create a read-only audit user and test access without storing raw secrets.',
-    cta: 'Copy SQL grant',
-    setup: ['Create read-only audit role', 'Store credential reference', 'Run access test'],
-    verification: ['audit source reachable', 'role metadata visible', 'query evidence cited'],
-    snippet:
-      'CREATE ROLE controlone_audit LOGIN;\nGRANT pg_read_all_stats TO controlone_audit;\nGRANT SELECT ON pg_catalog.pg_authid TO controlone_audit;',
-  },
-  {
-    id: 'svc-redis',
-    name: 'Redis cache',
-    kind: 'cache',
-    state: 'detected_only',
-    evidence: ['process inventory', 'port 6379'],
-    missing: ['slowlog collection', 'parser pack'],
-    why: 'Latency incidents will be inferred from side channels until slowlog evidence is enabled.',
-    nextAction: 'Enable slowlog collection or mark Redis not applicable for this tenant.',
-    cta: 'Show slowlog command',
-    setup: ['Enable slowlog threshold', 'Register log path', 'Verify parser pack'],
-    verification: ['slowlog event appears', 'parser state normalized', 'AI citation uses Redis source'],
-    snippet: 'CONFIG SET slowlog-log-slower-than 10000\nSLOWLOG GET 128',
-  },
-  {
-    id: 'svc-celery',
-    name: 'Celery worker',
-    kind: 'worker',
-    state: 'raw_only',
-    evidence: ['raw log path'],
-    missing: ['typed parser', 'task correlation'],
-    why: 'Worker failures can be searched, but Control One cannot yet group task IDs into cases.',
-    nextAction: 'Attach parser pack or route raw-only status into the investigation limitation.',
-    cta: 'Open parser gap',
-    setup: ['Confirm log format', 'Map task ID field', 'Register parser version'],
-    verification: ['task ID normalized', 'retry count visible', 'case evidence linked'],
-  },
-  {
-    id: 'svc-legacy',
-    name: 'Legacy SOAP gateway',
-    kind: 'custom app',
-    state: 'unsupported',
-    evidence: ['node inventory'],
-    missing: ['supported parser', 'instrumentation package'],
-    why: 'Unsupported sources must stay visible but cannot count as healthy coverage.',
-    nextAction: 'Request a custom connector contract from ai-logfixer or mark not applicable.',
-    cta: 'Open adapter tracker',
-    setup: ['Capture sample transcript', 'Define redaction expectations', 'Create fixture contract'],
-    verification: ['fixture passes contract', 'state no longer unsupported', 'operator copy updated'],
-  },
-];
-
-const REFERENCE_ACTIONS: ActionItem[] = [
-  {
-    id: 'postgres-audit',
-    title: 'Create PostgreSQL read-only audit user',
-    impact: 'Unlocks DB-level AI citations, compliance evidence, and case exports.',
-    serviceId: 'svc-postgres',
-    effort: 'Medium',
-    risk: 'warning',
-  },
-  {
-    id: 'fastapi-middleware',
-    title: 'Add FastAPI instrumentation middleware',
-    impact: 'Adds stack traces and request-span evidence to incident timelines.',
-    serviceId: 'svc-fastapi',
-    effort: 'Low',
-    risk: 'info',
-  },
-  {
-    id: 'redis-slowlog',
-    title: 'Enable Redis slowlog collection',
-    impact: 'Turns cache latency from inferred side-channel signal into cited evidence.',
-    serviceId: 'svc-redis',
-    effort: 'Low',
-    risk: 'info',
-  },
-  {
-    id: 'legacy-contract',
-    title: 'Create custom connector fixture',
-    impact: 'Moves the SOAP gateway from unsupported to contract-reviewed.',
-    serviceId: 'svc-legacy',
-    effort: 'High',
-    risk: 'degraded',
-  },
-];
-
-const REFERENCE_KNOWLEDGE_CHUNKS: KnowledgeChunk[] = [
-  {
-    id: 'kt-postgres-audit-001',
-    source: 'PostgreSQL core',
-    topic: 'DB audit gap',
-    state: 'fresh',
-    summary: 'Port and process evidence confirm PostgreSQL, but audit log access is missing.',
-    citations: ['coverage:db_audit:postgres', 'db_audit_discovery:postgres-core'],
-    openedFrom: ['Ask AI', 'Timeline', 'Case'],
-  },
-  {
-    id: 'kt-fastapi-trace-007',
-    source: 'Example FastAPI service',
-    topic: 'Instrumentation fallback',
-    state: 'stale',
-    summary: 'Application logs are present; middleware verification has not refreshed after the latest deploy.',
-    citations: ['events:fastapi:error-rate', 'coverage:parser:fastapi'],
-    openedFrom: ['Ask AI', 'Timeline'],
-  },
-  {
-    id: 'kt-celery-parser-003',
-    source: 'Celery worker',
-    topic: 'Raw-only parser state',
-    state: 'failed',
-    summary: 'Chunk job retained the raw source but skipped summary generation because the sample was low signal.',
-    citations: ['raw_logs:celery:task-retry', 'knowledge_job:celery-parser'],
-    openedFrom: ['Case'],
-  },
-];
-
 const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; plain: string }> = {
   healthy: {
-    label: 'Healthy',
+    label: 'Ready',
     tone: 'healthy',
-    plain: 'Control One can cite this source in investigations.',
+    plain: 'Collection and citation evidence are ready. This is not application health.',
   },
   partial: {
     label: 'Partial',
@@ -276,9 +126,9 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
     plain: 'This cannot count as healthy coverage.',
   },
   stale: {
-    label: 'Stale',
+    label: 'Stale data',
     tone: 'degraded',
-    plain: 'The last verification is outside the freshness window.',
+    plain: 'Observability evidence has not refreshed. This does not mean the service is down.',
   },
   failed: {
     label: 'Failed',
@@ -384,22 +234,15 @@ export function Observability(): JSX.Element {
       }),
     [coverage.data?.rows, liveState.sourceHealth, liveState.webservers, nodes],
   );
-  const referenceMode = liveServices.length === 0;
-  const services = referenceMode ? REFERENCE_SERVICES : liveServices;
-  const selected = services.find((service) => service.id === selectedId) ?? services[0];
-  const actions = useMemo(
-    () => (referenceMode ? REFERENCE_ACTIONS : deriveActions(services)),
-    [referenceMode, services],
-  );
+  const services = liveServices;
+  const selected = services.find((service) => service.id === selectedId) ?? services[0] ?? null;
+  const actions = useMemo(() => deriveActions(services), [services]);
   const knowledgeChunks = useMemo(
-    () =>
-      referenceMode
-        ? REFERENCE_KNOWLEDGE_CHUNKS
-        : deriveKnowledgeChunks(services, coverage.data?.rows ?? []),
-    [coverage.data?.rows, referenceMode, services],
+    () => deriveKnowledgeChunks(services, coverage.data?.rows ?? []),
+    [coverage.data?.rows, services],
   );
   const selectedChunk =
-    knowledgeChunks.find((chunk) => chunk.id === selectedChunkId) ?? knowledgeChunks[0];
+    knowledgeChunks.find((chunk) => chunk.id === selectedChunkId) ?? knowledgeChunks[0] ?? null;
   const summary = useMemo(() => summarizeServices(services), [services]);
   const dbService =
     services.find((service) => /db|postgres|mysql|mssql|database/i.test(`${service.kind} ${service.name}`)) ??
@@ -441,12 +284,12 @@ export function Observability(): JSX.Element {
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="OBSERVABILITY"
-        title="Guided setup"
-        description={`${tenantLabel} connector, instrumentation, debug, and knowledge states translated into operator decisions.`}
+        title="Observability"
+        description={`${tenantLabel} service inventory and telemetry coverage.`}
         actions={
           <div className="flex flex-wrap gap-2">
-            <StatusTag tone={referenceMode ? 'warning' : 'healthy'}>
-              {referenceMode ? 'reference' : 'live data'}
+            <StatusTag tone={tenantId ? 'healthy' : 'warning'}>
+              {tenantId ? 'live data' : 'select tenant'}
             </StatusTag>
             {loading ? <StatusTag tone="info">loading</StatusTag> : null}
             <Button asChild variant="outline" size="sm">
@@ -472,16 +315,19 @@ export function Observability(): JSX.Element {
         </Panel>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <KpiTile label="Detected services" value={summary.total.toString()} tone="info" icon={<Network />} />
-        <KpiTile label="Healthy" value={summary.healthy.toString()} tone="healthy" icon={<ShieldCheck />} />
-        <KpiTile label="Partial" value={summary.partial.toString()} tone="warning" icon={<AlertTriangle />} />
+      <ServiceInventory tenantId={tenantId} tenantLabel={tenantLabel} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <KpiTile label="Ready sources" value={summary.healthy.toString()} tone="healthy" icon={<ShieldCheck />} />
+        <KpiTile label="Partial sources" value={summary.partial.toString()} tone="warning" icon={<AlertTriangle />} />
         <KpiTile label="Needs access" value={summary.needsAccess.toString()} tone="degraded" icon={<KeyRound />} />
         <KpiTile label="Unsupported" value={summary.unsupported.toString()} tone="critical" icon={<Terminal />} />
       </div>
 
+      {services.length > 0 && selected && dbService && selectedChunk ? (
+        <>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Panel padding="md" eyebrow="STACK MAP" title={referenceMode ? 'Reference blueprint' : `${tenantLabel} live stack`}>
+        <Panel padding="md" eyebrow="COVERAGE SOURCES" title={`${tenantLabel} observability sources`}>
           <div className="overflow-x-auto rounded-lg border border-border-subtle">
             <table className="w-full min-w-[640px] table-fixed text-sm xl:min-w-0">
               <colgroup>
@@ -688,6 +534,14 @@ export function Observability(): JSX.Element {
           </div>
         </Panel>
       </div>
+        </>
+      ) : (
+        <Panel padding="md" eyebrow="COVERAGE SOURCES" title="No observability sources reported">
+          <p className="text-sm text-text-secondary">
+            Service discovery is listed above. Telemetry source readiness will appear here after collectors or coverage sources report.
+          </p>
+        </Panel>
+      )}
     </div>
   );
 }
