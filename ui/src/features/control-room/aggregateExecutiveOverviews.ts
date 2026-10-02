@@ -50,11 +50,10 @@ export function aggregateExecutiveOverviews(
       nodes_total: sum(entries, ({ overview }) => overview.estate.nodes_total),
       nodes_healthy: sum(entries, ({ overview }) => overview.estate.nodes_healthy),
       predictive: aggregatePredictiveHealth(entries, complete),
-      groups: entries.flatMap(({ tenantId, tenantName, overview }) =>
+      groups: entries.flatMap(({ tenantName, overview }) =>
         overview.estate.groups.map((group) => ({
           ...group,
           name: `${tenantName} · ${group.name}`,
-          drilldown: withTenantScope(group.drilldown, tenantId),
         })),
       ),
     },
@@ -86,11 +85,10 @@ export function aggregateExecutiveOverviews(
       approvals: sum(entries, ({ overview }) => overview.attention.approvals),
       interventions: sum(entries, ({ overview }) => overview.attention.interventions),
       items: entries
-        .flatMap(({ tenantId, tenantName, overview }) =>
+        .flatMap(({ tenantName, overview }) =>
           overview.attention.items.map((item) => ({
             ...item,
             title: `${tenantName} · ${item.title}`,
-            drilldown: withTenantScope(item.drilldown, tenantId),
           })),
         )
         .sort(compareAttention)
@@ -144,15 +142,12 @@ function aggregatePredictiveHealth(
 function aggregateTopRules(entries: TenantExecutiveOverview[]): ControlRoomExecutiveTopRule[] {
   const rules = new Map<string, ControlRoomExecutiveTopRule>();
 
-  for (const { tenantId, overview } of entries) {
+  for (const { overview } of entries) {
     for (const rule of overview.violations.top_rules) {
       const key = `${rule.rule_id}\u0000${rule.rule_type}`;
       const current = rules.get(key);
       if (!current) {
-        rules.set(key, {
-          ...rule,
-          drilldown: withTenantScope(rule.drilldown, tenantId),
-        });
+        rules.set(key, { ...rule });
         continue;
       }
 
@@ -216,15 +211,6 @@ function severityRank(value: string): number {
     case 'info': return 1;
     default: return 0;
   }
-}
-
-function withTenantScope(path: string, tenantId: string): string {
-  if (!path || path.startsWith('http://') || path.startsWith('https://')) return path;
-  const [pathname, query = ''] = path.split('?', 2);
-  const params = new URLSearchParams(query);
-  params.set('tenant_id', tenantId);
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
 }
 
 function sum(
