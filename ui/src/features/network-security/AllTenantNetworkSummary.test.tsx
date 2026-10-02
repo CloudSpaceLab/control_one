@@ -67,6 +67,8 @@ describe('AllTenantNetworkSummary', () => {
 
     expect(await screen.findByText('Bank A')).toBeInTheDocument();
     expect(screen.getByText('Bank B')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^approve$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^reject$/i })).not.toBeInTheDocument();
     expect(screen.getByText('300')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
