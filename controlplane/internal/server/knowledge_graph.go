@@ -69,6 +69,32 @@ type nodeServiceResponse struct {
 	ObservedAt       string   `json:"observed_at"`
 }
 
+
+type tenantNodeServiceResponse struct {
+	nodeServiceResponse
+	NodeHostname   string `json:"node_hostname"`
+	NodeTargetType string `json:"node_target_type"`
+	NodeState      string `json:"node_state"`
+	NodeLastSeenAt string `json:"node_last_seen_at,omitempty"`
+}
+
+type tenantNodeServiceStore interface {
+	ListNodeServicesForTenantPage(context.Context, uuid.UUID, string, string, int, int) ([]storage.NodeServiceInventoryRow, int, error)
+}
+
+func newTenantNodeServiceResponse(row storage.NodeServiceInventoryRow) tenantNodeServiceResponse {
+	resp := tenantNodeServiceResponse{
+		nodeServiceResponse: newNodeServiceResponse(row.NodeService),
+		NodeHostname:        row.NodeHostname,
+		NodeTargetType:      row.NodeTargetType,
+		NodeState:           row.NodeState,
+	}
+	if row.NodeLastSeenAt != nil {
+		resp.NodeLastSeenAt = row.NodeLastSeenAt.UTC().Format(time.RFC3339)
+	}
+	return resp
+}
+
 type nodeApprovedLogSourcesResponse struct {
 	NodeID      string                  `json:"node_id"`
 	GeneratedAt string                  `json:"generated_at"`
@@ -540,6 +566,70 @@ func (s *Server) handleNodeServicesList(w http.ResponseWriter, r *http.Request, 
 		out = append(out, newNodeServiceResponse(svc))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+}
+
+
+// handleTenantNodeServices exposes the latest listening-service inventory across
+// every node in a tenant. It is intentionally separate from source/coverage
+// health: discovery proves presence, not application health.
+func (s *Server) handleTenantNodeServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
+		return
+	}
+	store, ok := s.store.(tenantNodeServiceStore)
+	if !ok {
+		http.Error(w, "node service inventory unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
+	if err != nil {
+		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(query)) > 200 {
+		http.Error(w, "q is too long", http.StatusBadRequest)
+		return
+	}
+	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("target_scope")))
+	switch scope {
+	case "", "all", "server", "endpoint", "unknown":
+	default:
+		http.Error(w, "target_scope must be all, server, endpoint, or unknown", http.StatusBadRequest)
+		return
+	}
+
+	limit, offset, err := parseLimitOffset(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rows, total, err := store.ListNodeServicesForTenantPage(r.Context(), tenantID, query, scope, limit, offset)
+	if err != nil {
+		s.logger.Error("list tenant node services", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]tenantNodeServiceResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, newTenantNodeServiceResponse(row))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":       out,
+		"pagination": newPaginationMeta(total, limit, offset, len(out)),
+	})
 }
 
 // handleKnowledgeGraph returns a per-tenant markdown document the LLM-Ask
