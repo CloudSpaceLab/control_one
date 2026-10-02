@@ -310,13 +310,17 @@ export function Alerts(): JSX.Element {
   }, [client, linkedAlertId]);
 
 	useEffect(() => {
-		if (!resolveTargetId || !currentTenantId) return;
+		if (!resolveTargetId) return;
+		const target = alerts.find((alert) => alert.id === resolveTargetId)
+			?? (focusedAlert?.id === resolveTargetId ? focusedAlert : null);
+		const caseTenantId = target?.tenant_id ?? currentTenantId;
+		if (!caseTenantId) return;
 		let cancelled = false;
-		client.listSOCCases({ tenantId: currentTenantId, limit: 50, offset: 0 })
+		client.listSOCCases({ tenantId: caseTenantId, limit: 50, offset: 0 })
 			.then((response) => { if (!cancelled) setAvailableCases(response.data.filter((item) => item.status !== 'closed')); })
 			.catch(() => { if (!cancelled) setAvailableCases([]); });
 		return () => { cancelled = true; };
-	}, [client, currentTenantId, resolveTargetId]);
+	}, [alerts, client, currentTenantId, focusedAlert, resolveTargetId]);
 
   // Correlation rules state
   const [rules, setRules] = useState<CorrelationRule[]>([]);
@@ -365,6 +369,8 @@ export function Alerts(): JSX.Element {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'opened_at', desc: true }]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
+  const [criticalTotal, setCriticalTotal] = useState(0);
+  const [highTotal, setHighTotal] = useState(0);
   const [selectedAlertIds, setSelectedAlertIds] = useState<Set<string>>(() => new Set());
   const [bulkReason, setBulkReason] = useState('');
   const [bulkWorking, setBulkWorking] = useState(false);
@@ -392,32 +398,45 @@ export function Alerts(): JSX.Element {
   }, [tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
 
   const refresh = useCallback(async () => {
-    if (!tenantId) {
-      setAlerts([]);
-      setTotal(0);
-      setLoading(false);
-      setAlertsError(null);
-      setAlertActionError(null);
-      return;
-    }
     const seq = ++requestSeq.current;
     setLoading(true);
     try {
-      const resp = await client.listAlerts({
-        tenantId,
+      const common = {
+        tenantId: currentTenantId ?? undefined,
         state,
-        severity: severity || undefined,
         search: debouncedSearch || undefined,
         since: dateBoundaryISO(sinceDate, false),
         until: dateBoundaryISO(untilDate, true),
-        sortBy: sorting[0]?.id,
-        sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
-        limit: pageSize,
-        offset: page * pageSize,
-      });
+      };
+      const [resp, criticalResp, highResp] = await Promise.all([
+        client.listAlerts({
+          ...common,
+          severity: severity || undefined,
+          sortBy: sorting[0]?.id,
+          sortOrder: sorting[0]?.desc ? 'desc' : 'asc',
+          limit: pageSize,
+          offset: page * pageSize,
+        }),
+        severity && severity !== 'critical'
+          ? Promise.resolve(null)
+          : client.listAlerts({ ...common, severity: 'critical', limit: 1, offset: 0 }),
+        severity && severity !== 'high'
+          ? Promise.resolve(null)
+          : client.listAlerts({ ...common, severity: 'high', limit: 1, offset: 0 }),
+      ]);
       if (seq !== requestSeq.current) return;
       const nextTotal = resp.pagination?.total ?? resp.data.length;
       setTotal(nextTotal);
+      setCriticalTotal(
+        severity === 'critical'
+          ? nextTotal
+          : criticalResp?.pagination?.total ?? criticalResp?.data.length ?? 0,
+      );
+      setHighTotal(
+        severity === 'high'
+          ? nextTotal
+          : highResp?.pagination?.total ?? highResp?.data.length ?? 0,
+      );
       if (resp.data.length === 0 && nextTotal > 0 && page > 0) {
         setPage(Math.max(0, Math.ceil(nextTotal / pageSize) - 1));
         return;
@@ -428,11 +447,13 @@ export function Alerts(): JSX.Element {
       if (seq !== requestSeq.current) return;
       setAlerts([]);
       setTotal(0);
+      setCriticalTotal(0);
+      setHighTotal(0);
       setAlertsError(errorMessage(err, 'Alert list failed.'));
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [client, tenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
+  }, [client, currentTenantId, state, severity, sinceDate, untilDate, debouncedSearch, sorting, page]);
 
   useEffect(() => {
     void refresh();
@@ -729,15 +750,11 @@ export function Alerts(): JSX.Element {
     }
   };
 
-  const counts = useMemo(() => {
-    const c = { critical: 0, high: 0, total: alerts.length };
-    for (const a of alerts) {
-      const sev = (a.severity ?? '').toLowerCase();
-      if (sev === 'critical') c.critical += 1;
-      else if (sev === 'high') c.high += 1;
-    }
-    return c;
-  }, [alerts]);
+  const counts = useMemo(() => ({
+    critical: criticalTotal,
+    high: highTotal,
+    total,
+  }), [criticalTotal, highTotal, total]);
   const resolveTarget = useMemo(
     () => alerts.find((alert) => alert.id === resolveTargetId) ?? (focusedAlert?.id === resolveTargetId ? focusedAlert : null),
     [alerts, focusedAlert, resolveTargetId],
@@ -775,6 +792,16 @@ export function Alerts(): JSX.Element {
         />
       ),
     },
+    ...(!currentTenantId ? [{
+      id: 'tenant',
+      header: 'Tenant',
+      enableSorting: false,
+      cell: ({ row }: { row: { original: Alert } }) => (
+        <span className="text-xs text-text-secondary">
+          {tenants.find((tenant) => tenant.id === row.original.tenant_id)?.name ?? row.original.tenant_id}
+        </span>
+      ),
+    } as ColumnDef<Alert>] : []),
     {
       accessorKey: 'severity',
       header: 'Severity',
@@ -877,7 +904,7 @@ export function Alerts(): JSX.Element {
         </div>
       ),
     },
-  ], [ack, ackingId, alerts, resolvingAlert, selectedAlertIds]);
+  ], [ack, ackingId, alerts, currentTenantId, resolvingAlert, selectedAlertIds, tenants]);
 
   const ruleColumns: ColumnDef<CorrelationRule>[] = [
     {
@@ -1107,8 +1134,11 @@ export function Alerts(): JSX.Element {
                 <FilterSelect
                   label="Tenant"
                   value={tenantId}
-                  onChange={(v) => setCurrentTenantId(v)}
-                  options={tenants.map((t) => ({ label: t.name, value: t.id }))}
+                  onChange={(v) => setCurrentTenantId(v || null)}
+                  options={[
+                    { label: 'All tenants', value: '' },
+                    ...tenants.map((t) => ({ label: t.name, value: t.id })),
+                  ]}
                 />
                 <FilterSelect
                   label="State"
@@ -1228,7 +1258,7 @@ export function Alerts(): JSX.Element {
                   <option key={template.id} value={template.id}>{template.name}</option>
                 ))}
               </select>
-              <Button variant="primary" size="sm" onClick={() => { resetRuleForm(); setCreateRuleError(null); setShowCreateRule(true); }}>
+              <Button variant="primary" size="sm" disabled={!tenantId} onClick={() => { resetRuleForm(); setCreateRuleError(null); setShowCreateRule(true); }}>
                 <Plus className="h-3.5 w-3.5" /> New rule
               </Button>
             </div>
@@ -1567,6 +1597,12 @@ export function Alerts(): JSX.Element {
                   icon={<ShieldCheck />}
                   title="Correlation rules could not be loaded"
                   description="Retry the alert list."
+                />
+              ) : !tenantId ? (
+                <EmptyState
+                  icon={<ShieldCheck />}
+                  title="Select a tenant"
+                  description="Correlation rules are managed per tenant."
                 />
               ) : (
                 <EmptyState
