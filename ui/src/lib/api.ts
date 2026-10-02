@@ -2934,9 +2934,13 @@ export class APIClient {
       search.set("target_scope", params.targetScope);
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     if (params.offset !== undefined) search.set("offset", String(params.offset));
-    return this.request<PaginatedResponse<TenantNodeService>>(
+    const response = await this.request<RawPaginatedResponse<TenantNodeService>>(
       `/api/v1/node-services?${search.toString()}`,
     );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
   async listNodePackages(nodeId: string): Promise<{ data: NodePackage[] }> {
