@@ -287,8 +287,6 @@ function PulsingDot({ state, size = 10 }: { state: NodeState; size?: number }) {
   );
 }
 
-// ── World Map SVG ──────────────────────────────────────────────────────────
-
 // ── Node world map ────────────────────────────────────────────────────────
 
 function NodeWorldMap({
@@ -816,17 +814,12 @@ export function Nodes(): JSX.Element {
     return () => { cancelled = true; };
   }, [api, nodes]);
 
-  // At-risk fleet
+  // At-risk fleet. Omitting tenant_id is the server's explicit all-tenant scope.
   useEffect(() => {
     let cancelled = false;
-    if (!currentTenantId) {
-      setAtRiskFleet(null);
-      setAtRiskError(null);
-      return () => { cancelled = true; };
-    }
     setAtRiskError(null);
-    api.listAtRiskNodes(currentTenantId).then((r) => {
-      if (!cancelled) setAtRiskFleet(r);
+    api.listAtRiskNodes(currentTenantId ?? undefined).then((response) => {
+      if (!cancelled) setAtRiskFleet(response);
     }).catch((err) => {
       if (cancelled) return;
       setAtRiskFleet(null);
