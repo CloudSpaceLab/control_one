@@ -194,7 +194,11 @@ export function Coverage(): JSX.Element {
       <SectionHeader
         eyebrow="COVERAGE"
         title="Coverage"
-        description="Current coverage across telemetry, parsing, detection, compliance, remediation, vulnerability, posture, AI, and cases."
+        description={
+          currentTenantId
+            ? "Current coverage across telemetry, parsing, detection, compliance, remediation, vulnerability, posture, AI, and cases."
+            : "Global capability catalog. Select a tenant for runtime coverage overlays."
+        }
         actions={
           <div className="flex items-center gap-2">
             {data?.catalog_version && (
@@ -213,7 +217,7 @@ export function Coverage(): JSX.Element {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <Panel
           padding="md"
-          eyebrow={currentTenant?.name ?? 'CURRENT TENANT'}
+          eyebrow={currentTenantId ? currentTenant?.name ?? 'TENANT' : 'ALL TENANTS'}
           title="Coverage matrix"
           actions={
             <StatusTag tone={attentionRows.length > 0 ? 'warning' : 'healthy'}>
