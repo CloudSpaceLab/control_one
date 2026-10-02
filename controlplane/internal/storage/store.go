@@ -92,105 +92,115 @@ func scanNodeRow(row interface {
 
 // ListJobs returns jobs filtered by tenant, type, and status with pagination.
 func (s *Store) ListJobs(ctx context.Context, tenantID uuid.UUID, jobType string, status JobStatus, limit, offset int) ([]Job, int, error) {
+	if tenantID == uuid.Nil {
+		return s.listJobsScoped(ctx, nil, jobType, status, limit, offset)
+	}
+	return s.listJobsScoped(ctx, []uuid.UUID{tenantID}, jobType, status, limit, offset)
+}
+
+// ListJobsForTenants returns exact pagination across the supplied tenant set.
+// Empty scope returns no jobs.
+func (s *Store) ListJobsForTenants(ctx context.Context, tenantIDs []uuid.UUID, jobType string, status JobStatus, limit, offset int) ([]Job, int, error) {
+	if len(tenantIDs) == 0 {
+		return []Job{}, 0, nil
+	}
+	return s.listJobsScoped(ctx, tenantIDs, jobType, status, limit, offset)
+}
+
+func (s *Store) listJobsScoped(ctx context.Context, tenantIDs []uuid.UUID, jobType string, status JobStatus, limit, offset int) ([]Job, int, error) {
 	if s.db == nil {
 		return nil, 0, errors.New("store database not initialized")
 	}
-
 	if limit < 0 || offset < 0 {
 		return nil, 0, errors.New("limit and offset must be non-negative")
 	}
 
 	jobType = strings.TrimSpace(jobType)
-
-	var (
-		clauses = []string{"TRUE"}
-		args    []any
-	)
-
-	if tenantID != uuid.Nil {
-		args = append(args, tenantID)
-		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	clauses := []string{"TRUE"}
+	args := []any{}
+	if len(tenantIDs) > 0 {
+		values := make([]string, 0, len(tenantIDs))
+		for _, tenantID := range tenantIDs {
+			if tenantID != uuid.Nil {
+				values = append(values, tenantID.String())
+			}
+		}
+		if len(values) == 0 {
+			return []Job{}, 0, nil
+		}
+		args = append(args, pq.Array(values))
+		clauses = append(clauses, fmt.Sprintf("tenant_id = ANY($%d::uuid[])", len(args)))
 	}
-
 	if jobType != "" {
 		args = append(args, jobType)
 		clauses = append(clauses, fmt.Sprintf("type = $%d", len(args)))
 	}
-
 	if status != "" {
 		args = append(args, status)
 		clauses = append(clauses, fmt.Sprintf("status = $%d", len(args)))
 	}
-
-	query := fmt.Sprintf(`
-		SELECT id, tenant_id, type, status, payload, retries, max_retries, scheduled_at, started_at, finished_at, created_at, updated_at
-		FROM jobs
-		WHERE %s
-		ORDER BY created_at DESC
-	`, strings.Join(clauses, " AND "))
-
-	if limit > 0 {
-		args = append(args, limit)
-		query += fmt.Sprintf(" LIMIT $%d", len(args))
-	}
-	if offset > 0 {
-		args = append(args, offset)
-		query += fmt.Sprintf(" OFFSET $%d", len(args))
-	}
-
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM jobs WHERE %s`, strings.Join(clauses, " AND "))
-	countRow := s.db.QueryRowContext(ctx, countQuery, args[:len(args)-(func() int {
-		if limit > 0 {
-			return 1
-		}
-		return 0
-	}())-(func() int {
-		if offset > 0 {
-			return 1
-		}
-		return 0
-	}())]...)
+	whereSQL := strings.Join(clauses, " AND ")
 
 	var total int
-	if err := countRow.Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM jobs WHERE "+whereSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count jobs: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, type, status, payload, retries, max_retries,
+		       scheduled_at, started_at, finished_at, created_at, updated_at
+		FROM jobs
+		WHERE %s
+		ORDER BY created_at DESC
+	`, whereSQL)
+	queryArgs := append([]any(nil), args...)
+	if limit > 0 {
+		queryArgs = append(queryArgs, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(queryArgs))
+	}
+	if offset > 0 {
+		queryArgs = append(queryArgs, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(queryArgs))
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query jobs: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var jobs []Job
+	jobs := make([]Job, 0)
 	for rows.Next() {
 		var job Job
 		var tenant sql.NullString
 		var scheduled, started, finished sql.NullTime
-		if err := rows.Scan(&job.ID, &tenant, &job.Type, &job.Status, &job.Payload, &job.Retries, &job.MaxRetries, &scheduled, &started, &finished, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&job.ID, &tenant, &job.Type, &job.Status, &job.Payload,
+			&job.Retries, &job.MaxRetries, &scheduled, &started, &finished,
+			&job.CreatedAt, &job.UpdatedAt,
+		); err != nil {
 			return nil, 0, fmt.Errorf("scan job: %w", err)
 		}
 		if tenant.Valid {
 			job.TenantID, _ = uuid.Parse(tenant.String)
 		}
 		if scheduled.Valid {
-			t := scheduled.Time
-			job.ScheduledAt = &t
+			value := scheduled.Time
+			job.ScheduledAt = &value
 		}
 		if started.Valid {
-			t := started.Time
-			job.StartedAt = &t
+			value := started.Time
+			job.StartedAt = &value
 		}
 		if finished.Valid {
-			t := finished.Time
-			job.FinishedAt = &t
+			value := finished.Time
+			job.FinishedAt = &value
 		}
 		jobs = append(jobs, job)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate jobs: %w", err)
 	}
-
 	return jobs, total, nil
 }
 
