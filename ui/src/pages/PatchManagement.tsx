@@ -138,7 +138,7 @@ export function PatchManagement(): JSX.Element {
   if (!currentTenantId) {
     return (
       <div className="space-y-6">
-        <SectionHeader title="Patch management" description="Fleet OS-package upgrades dispatched via the agent." />
+        <SectionHeader title="Patch posture" description="Package coverage, known patch risk and deployment state." />
         <EmptyState title="Select a tenant" description="Choose a tenant from the header to view patch deployments." />
       </div>
     );
@@ -147,8 +147,8 @@ export function PatchManagement(): JSX.Element {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Patch management"
-        description="Deploy and track OS package updates across the fleet."
+        title="Patch posture"
+        description="Package coverage, known patch risk and deployment state."
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
@@ -250,8 +250,14 @@ export function PatchManagement(): JSX.Element {
 
       {hasLoadErrors ? (
         <Alert
-          variant={loadErrors.deployments ? 'critical' : 'warning'}
-          title={loadErrors.deployments ? 'Patch management data unavailable' : 'Patch management data partially unavailable'}
+          variant={loadErrors.posture || loadErrors.deployments ? 'critical' : 'warning'}
+          title={
+            loadErrors.posture
+              ? 'Patch posture unavailable'
+              : loadErrors.deployments
+                ? 'Patch deployment data unavailable'
+                : 'Patch management data partially unavailable'
+          }
           actions={
             <Button type="button" variant="secondary" size="sm" onClick={() => void refresh()} disabled={loading}>
               Retry
