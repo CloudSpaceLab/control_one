@@ -67,28 +67,21 @@ type nodeServiceResponse struct {
 	AppConfidence    int      `json:"app_confidence,omitempty"`
 	AppEvidence      []string `json:"app_evidence,omitempty"`
 	ObservedAt       string   `json:"observed_at"`
-}
-
-
-type tenantNodeServiceResponse struct {
-	nodeServiceResponse
-	NodeHostname   string `json:"node_hostname"`
-	NodeTargetType string `json:"node_target_type"`
-	NodeState      string `json:"node_state"`
-	NodeLastSeenAt string `json:"node_last_seen_at,omitempty"`
+	NodeHostname     string   `json:"node_hostname,omitempty"`
+	NodeTargetType   string   `json:"node_target_type,omitempty"`
+	NodeState        string   `json:"node_state,omitempty"`
+	NodeLastSeenAt   string   `json:"node_last_seen_at,omitempty"`
 }
 
 type tenantNodeServiceStore interface {
 	ListNodeServicesForTenantPage(context.Context, uuid.UUID, string, string, int, int) ([]storage.NodeServiceInventoryRow, int, error)
 }
 
-func newTenantNodeServiceResponse(row storage.NodeServiceInventoryRow) tenantNodeServiceResponse {
-	resp := tenantNodeServiceResponse{
-		nodeServiceResponse: newNodeServiceResponse(row.NodeService),
-		NodeHostname:        row.NodeHostname,
-		NodeTargetType:      row.NodeTargetType,
-		NodeState:           row.NodeState,
-	}
+func newTenantNodeServiceResponse(row storage.NodeServiceInventoryRow) nodeServiceResponse {
+	resp := newNodeServiceResponse(row.NodeService)
+	resp.NodeHostname = row.NodeHostname
+	resp.NodeTargetType = row.NodeTargetType
+	resp.NodeState = row.NodeState
 	if row.NodeLastSeenAt != nil {
 		resp.NodeLastSeenAt = row.NodeLastSeenAt.UTC().Format(time.RFC3339)
 	}
@@ -622,7 +615,7 @@ func (s *Server) handleTenantNodeServices(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	out := make([]tenantNodeServiceResponse, 0, len(rows))
+	out := make([]nodeServiceResponse, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, newTenantNodeServiceResponse(row))
 	}
