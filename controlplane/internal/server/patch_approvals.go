@@ -245,17 +245,21 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 			zap.String("deployment_id", updated.DeploymentID.String()),
 			zap.String("node_id", updated.NodeID.String()),
 		)
-		// We deliberately don't 500 here — the approval flip is durable and
-		// the operator can retry by inspecting the deployment row. Returning
-		// 200 with status=approved + missing job_id signals the failure.
-	} else if state != nil && state.JobID != nil && *state.JobID != uuid.Nil {
-		id := *state.JobID
-		jobID = &id
+		if state != nil {
+			if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, dispErr.Error(), ""); markErr != nil {
+				s.logger.Warn("mark approved patch dispatch failed", zap.Error(markErr), zap.String("node_id", updated.NodeID.String()))
+			}
+		}
+		s.maybeRollupPatchDeployment(r.Context(), updated.DeploymentID)
+	} else {
+		if state != nil && state.JobID != nil && *state.JobID != uuid.Nil {
+			id := *state.JobID
+			jobID = &id
+		}
+		// Only an actually dispatched job is in progress. A durable approval
+		// with a failed dispatch must remain failed/partial after roll-up.
+		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), updated.DeploymentID, "in_progress", false)
 	}
-
-	// Flip the deployment header so the dashboard moves the row out of
-	// pending. Best-effort; failures don't block the response.
-	_ = s.store.UpdatePatchDeploymentStatus(r.Context(), updated.DeploymentID, "in_progress", false)
 
 	s.emitRemediationSafetyEvent(r.Context(), updated.TenantID, EventPatchApprovalApproved, map[string]any{
 		"approval_id":   updated.ID.String(),
@@ -309,6 +313,22 @@ func (s *Server) handleDenyPatchApproval(w http.ResponseWriter, r *http.Request,
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+
+	// A denied target is terminal for deployment accounting. Persist a
+	// per-node failure row so target/applied/failed totals reconcile and the
+	// parent deployment can leave pending/in_progress.
+	if state, stateErr := s.store.CreateNodePatchState(r.Context(), storage.NodePatchState{
+		DeploymentID: updated.DeploymentID,
+		NodeID:       updated.NodeID,
+		TenantID:     updated.TenantID,
+	}); stateErr != nil {
+		s.logger.Warn("create denied patch state", zap.Error(stateErr), zap.String("node_id", updated.NodeID.String()))
+	} else if state != nil {
+		if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, "patch approval denied", ""); markErr != nil {
+			s.logger.Warn("mark denied patch state failed", zap.Error(markErr), zap.String("node_id", updated.NodeID.String()))
+		}
+	}
+	s.maybeRollupPatchDeployment(r.Context(), updated.DeploymentID)
 
 	s.emitRemediationSafetyEvent(r.Context(), updated.TenantID, EventPatchApprovalDenied, map[string]any{
 		"approval_id":   updated.ID.String(),
