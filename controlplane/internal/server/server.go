@@ -437,6 +437,7 @@ type Store interface {
 	GetAgentRolloutState(context.Context, uuid.UUID) (*storage.AgentRolloutState, error)
 	UpsertAgentRolloutState(context.Context, uuid.UUID, storage.AgentRolloutUpdate) (*storage.AgentRolloutState, error)
 	// Patch management — fleet OS package patching (PR 4).
+	GetPatchPosture(context.Context, uuid.UUID) (storage.PatchPosture, error)
 	CreatePatchDeployment(context.Context, storage.PatchDeployment) (*storage.PatchDeployment, error)
 	ListPatchDeployments(context.Context, uuid.UUID, int, int) ([]storage.PatchDeployment, error)
 	GetPatchDeployment(context.Context, uuid.UUID) (*storage.PatchDeployment, error)
@@ -1330,6 +1331,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/network/active-blocks", s.handleListActiveBlocks)
 	s.baseRouter.HandleFunc("/api/v1/network/blocks/", s.handleNetworkBlocksSubroute)
 	// Patch management — fleet OS package patching (PR 4).
+	s.baseRouter.HandleFunc("/api/v1/patch/posture", s.handlePatchPosture)
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments", s.handlePatchDeployments)
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments/", s.handlePatchDeploymentSubroute)
 	// Patch approval gate — operator approve→dispatch loop (S4 row 8 / D1
