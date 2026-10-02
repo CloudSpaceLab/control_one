@@ -4597,6 +4597,13 @@ export class APIClient {
     );
   }
 
+  async getPatchPosture(tenantId: string): Promise<PatchPostureResponse> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    return this.request<PatchPostureResponse>(
+      `/api/v1/patch/posture?${search.toString()}`,
+    );
+  }
+
   async listPatchDeployments(params: {
     tenantId: string;
     limit?: number;
@@ -6999,6 +7006,38 @@ export interface NodeFirewallRule {
 }
 
 // ── Patch Management (PR 4) ────────────────────────────────────────────────
+
+export interface PatchPosture {
+  active_nodes: number;
+  inventory_nodes: number;
+  known_affected_nodes: number;
+  known_active_findings: number;
+  known_critical_findings: number;
+  known_high_findings: number;
+  known_kev_findings: number;
+  known_patchable_findings: number;
+  deployments_total: number;
+  deployments_pending: number;
+  deployments_in_progress: number;
+  deployments_completed: number;
+  deployments_partial: number;
+  deployments_failed: number;
+  pending_approvals: number;
+  expired_approvals: number;
+  windows_scheduled: number;
+  windows_open: number;
+  windows_closing: number;
+  proxies_healthy: number;
+  proxies_degraded: number;
+  direct_nodes: number;
+  proxy_nodes: number;
+  airgapped_nodes: number;
+}
+
+export interface PatchPostureResponse {
+  data: PatchPosture;
+  generated_at: string;
+}
 
 export interface PatchDeployment {
   ID: string;
