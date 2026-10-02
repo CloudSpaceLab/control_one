@@ -107,6 +107,18 @@ func (s *Server) handleSOCCasesCollection(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
+		if len(tenantIDs) == 0 {
+			limit, offset, parseErr := parseLimitOffset(r.URL.Query())
+			if parseErr != nil {
+				http.Error(w, parseErr.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, paginatedResponse[socCaseResponse]{
+				Data:       []socCaseResponse{},
+				Pagination: newPaginationMeta(0, limit, offset, 0),
+			})
+			return
+		}
 		s.handleListSOCCases(w, r, principal, uuid.Nil, tenantIDs)
 		return
 	}
