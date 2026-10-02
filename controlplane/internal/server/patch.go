@@ -790,27 +790,36 @@ func (s *Server) handleAdvancePatchDeployment(w http.ResponseWriter, r *http.Req
 
 func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, raw []string) ([]uuid.UUID, error) {
 	if len(raw) == 0 {
-		nodes, _, err := s.store.ListNodes(ctx, tenantID, "", 1000, 0)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]uuid.UUID, 0, len(nodes))
-		for i := range nodes {
-			out = append(out, nodes[i].ID)
+		const pageSize = 500
+		out := make([]uuid.UUID, 0)
+		for offset := 0; ; {
+			nodes, total, err := s.store.ListNodes(ctx, tenantID, "", pageSize, offset)
+			if err != nil {
+				return nil, err
+			}
+			for i := range nodes {
+				if nodes[i].State == storage.NodeStateActive {
+					out = append(out, nodes[i].ID)
+				}
+			}
+			offset += len(nodes)
+			if len(nodes) == 0 || offset >= total {
+				break
+			}
 		}
 		return out, nil
 	}
+
 	out := make([]uuid.UUID, 0, len(raw))
-	for _, s := range raw {
-		nid, err := uuid.Parse(strings.TrimSpace(s))
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	for _, rawID := range raw {
+		nid, err := uuid.Parse(strings.TrimSpace(rawID))
 		if err != nil {
-			return nil, fmt.Errorf("invalid node_id %q: %w", s, err)
+			return nil, fmt.Errorf("invalid node_id %q: %w", rawID, err)
 		}
-		out = append(out, nid)
-	}
-	// Enforce tenant boundary — caller can't reach into another tenant by
-	// supplying its node ids.
-	for _, nid := range out {
+		if _, exists := seen[nid]; exists {
+			continue
+		}
 		node, err := s.store.GetNode(ctx, nid)
 		if err != nil {
 			return nil, err
@@ -818,6 +827,11 @@ func (s *Server) resolvePatchTargets(ctx context.Context, tenantID uuid.UUID, ra
 		if node == nil || node.TenantID != tenantID {
 			return nil, fmt.Errorf("node %s does not belong to tenant", nid.String())
 		}
+		if node.State != storage.NodeStateActive {
+			return nil, fmt.Errorf("node %s is not active", nid.String())
+		}
+		seen[nid] = struct{}{}
+		out = append(out, nid)
 	}
 	return out, nil
 }
