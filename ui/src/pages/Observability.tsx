@@ -556,12 +556,13 @@ function serviceFromWebserver(instance: WebserverInstance): ObservabilityService
   const vhostCount = Array.isArray(instance.VHosts) ? instance.VHosts.length : 0;
   const hasAccess = Boolean(instance.AccessLogPath);
   const hasError = Boolean(instance.ErrorLogPath);
-  const state: ObservabilityState = hasAccess && hasError ? 'healthy' : 'partial';
+  // A discovered log path proves configuration, not that events are flowing.
+  const state: ObservabilityState = hasAccess && hasError ? 'partial' : 'detected_only';
 
   return {
     id: `webserver:${instance.ID}`,
     name,
-    kind: 'webserver',
+    kind: 'webserver setup',
     state,
     evidence: compact([
       versionEvidence(instance.Version),
@@ -571,18 +572,22 @@ function serviceFromWebserver(instance: WebserverInstance): ObservabilityService
       vhostCount ? `${vhostCount} vhosts` : '',
       instance.ObservedAt ? `observed ${formatDateLabel(instance.ObservedAt)}` : '',
     ]),
-    missing: compact([!hasAccess ? 'access log path' : '', !hasError ? 'error log path' : '']),
+    missing: compact([
+      !hasAccess ? 'access log path' : '',
+      !hasError ? 'error log path' : '',
+      hasAccess && hasError ? 'event flow verification' : '',
+    ]),
     why:
-      state === 'healthy'
-        ? 'Webserver inventory includes config and log paths that can back investigations and receipts.'
-        : 'Webserver inventory exists, but capture evidence is not complete enough for full citation coverage.',
+      hasAccess && hasError
+        ? 'Webserver config and log paths are discovered, but event flow and parser health still require runtime verification.'
+        : 'Webserver inventory exists, but one or more log paths required for collection are missing.',
     nextAction:
-      state === 'healthy'
-        ? 'Keep parser version, vhost, and retention evidence fresh.'
+      hasAccess && hasError
+        ? 'Verify log collection and parser health for this webserver.'
         : 'Run capture setup for missing webserver log paths.',
     cta: 'Open webserver controls',
-    setup: ['Review discovered config', 'Confirm managed capture policy', 'Keep parser evidence fresh'],
-    verification: ['inventory current', 'log path cited', 'receipt path linked'],
+    setup: ['Review discovered config', 'Confirm managed capture policy', 'Verify runtime collection'],
+    verification: ['inventory current', 'events arriving', 'parser health proven'],
     href: '/security/webservers',
   };
 }
