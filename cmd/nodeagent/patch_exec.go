@@ -398,12 +398,14 @@ func countUpgradableLines(out string) int {
 		if line == "" || strings.HasPrefix(line, "Listing") || strings.HasPrefix(line, "WARNING") {
 			continue
 		}
-		if strings.Contains(line, "/") || strings.HasPrefix(line, "Last metadata") {
-			continue
-		}
-		// apt: "package/codename version arch [upgradable from: ...]"
+		// apt: "package/codename version arch [upgradable from: ...]".
+		// The package/repository separator is part of every apt result, so
+		// recognize apt rows before applying dnf/yum header filtering.
 		if strings.Contains(line, "[upgradable") {
 			count++
+			continue
+		}
+		if strings.HasPrefix(line, "Last metadata") {
 			continue
 		}
 		// dnf/yum: "name.arch version repo"
